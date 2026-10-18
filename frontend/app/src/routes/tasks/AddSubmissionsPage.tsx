@@ -114,6 +114,15 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       && !selectedFile,
   );
   const needsRosterUpload = (!canRetryOriginal || hasStoredFile) && identityMode === "roster" && !rosterFile && !hasSavedRoster;
+  const showRosterError = needsRosterUpload && (missingUpload === "roster" || Boolean(draft.value.rosterFileName));
+
+  useEffect(() => {
+    // Draft restore/reset can change the mode or supply a roster without a click.
+    if (!needsRosterUpload) {
+      setMissingUpload((current) => current === "roster" ? null : current);
+    }
+  }, [needsRosterUpload]);
+
   const retryLabel = canRetryOriginal && !hasStoredFile
     ? task?.status === "submissions_paused" ? localText(locale, "继续识别", "Continue Recognition") : workflowRetryLabel(locale)
     : localText(locale, "重新识别全部作答", "Recognize All Submissions Again");
@@ -124,6 +133,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
   const missingRosterMessage = localText(locale,
     draft.value.rosterFileName ? `“${draft.value.rosterFileName}” 当前没有可用名单，请重新选择名单文件。` : "尚未选择学生名单，请先选择名单文件。",
     draft.value.rosterFileName ? `“${draft.value.rosterFileName}” is unavailable. Reselect the roster file.` : "No roster is selected. Choose a roster file first.");
+  const actionError = formError ?? (showRosterError ? missingRosterMessage : null);
   const visibleFileName = selectedFile?.name ?? (
     hasStoredFile ? draft.value.selectedFileName : canRetryOriginal ? task?.pending_submission_file_name ?? null : null
   );
@@ -219,7 +229,8 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       return;
     }
     if (uploadDisabledReason) {
-      setFormError(uploadDisabledReason);
+      // Keep roster validation tied to the current input, not a stale message.
+      setFormError(uploadDisabledReason === missingRosterMessage ? null : uploadDisabledReason);
       window.alert(uploadDisabledReason);
       if (!recognitionProviderId) {
         setNeedsModel(true);
@@ -441,7 +452,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
                 <button
                   ref={rosterChooseRef}
                   type="button"
-                  aria-describedby={missingUpload === "roster" ? "submission-roster-required" : undefined}
+                  aria-describedby={showRosterError ? "submission-roster-required" : undefined}
                   className="inline-flex h-7 items-center rounded-[6px] border bg-card px-2.5 text-[12px] font-semibold text-foreground hover:bg-muted"
                   onClick={() => rosterInputRef.current?.click()}
                 >
@@ -451,14 +462,14 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
             ) : null}
           </div>
           {identityMode === "roster" && (rosterFile || hasSavedRoster) ? <p role="status" className="mt-2 text-xs text-muted-foreground">{localText(locale, "名单已就绪，无需重新选择。", "The roster is ready. No need to select it again.")}</p> : null}
-          {missingUpload === "roster" || (identityMode === "roster" && !rosterFile && !hasSavedRoster && draft.value.rosterFileName) ? <p id="submission-roster-required" role="alert" className="mt-2 text-sm text-danger">{missingRosterMessage}</p> : null}
+          {showRosterError ? <p id="submission-roster-required" role="alert" className="mt-2 text-sm text-danger">{missingRosterMessage}</p> : null}
         </section>
 
         <div className="mt-[31px] flex min-h-10 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0 text-[13px] leading-5">
-            {formError ? (
+            {actionError ? (
               <p id="submission-upload-action-message" role="alert" className="text-danger">
-                {formError}
+                {actionError}
                 {needsModel && taskId ? (
                   <Link
                     ref={byokLinkRef}
@@ -485,7 +496,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
             className="inline-flex h-10 w-full shrink-0 items-center justify-center rounded-[8px] bg-primary px-4 text-[14px] font-semibold leading-[18px] text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:w-[180px]"
             disabled={isPending}
             title={uploadDisabledReason ?? undefined}
-            aria-describedby={formError || hasExistingSubmissions || uploadDisabledReason ? "submission-upload-action-message" : undefined}
+            aria-describedby={actionError || hasExistingSubmissions || uploadDisabledReason ? "submission-upload-action-message" : undefined}
             onClick={() => void handleStart()}
           >
             {isPending ? (

@@ -679,11 +679,13 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, prev
             <h2 className="text-[20px] font-bold text-foreground">{question.label}</h2>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground dark:bg-slate-800">{questionTypeLabel(question.type, locale)}</span>
           </div>
-          <p className="mt-1 text-[11px] text-muted-foreground">{tx(locale, "题目、作答、SmarTAI 结果和教师最终结果在同一卡片内连续复核。", "Review the question, student response, SmarTAI result, and teacher result in one card.")}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <p className="text-[11px] text-muted-foreground">{tx(locale, "题目、作答、SmarTAI 结果和教师最终结果在同一卡片内连续复核。", "Review the question, student response, SmarTAI result, and teacher result in one card.")}</p>
+            {!alreadyConfirmed && correction ? <ReviewIssueNotes issues={correctionReviewNotes(correction, locale)} /> : null}
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 max-sm:[&_button]:px-2 max-sm:[&_button]:text-xs! sm:shrink-0">
           <ReviewConfirmButton title={question.label} locale={locale} confirmed={alreadyConfirmed} blocked={Boolean(correction && correctionReviewBlocked(correction))} busy={saving} disabled={!correction} onClick={onConfirm} />
-          {!alreadyConfirmed && correction ? <ReviewIssueNotes issues={correctionReviewNotes(correction, locale)} /> : null}
           <QuestionButtons locale={locale} previous={previous} next={next} onSelect={onNavigate} />
         </div>
       </header>

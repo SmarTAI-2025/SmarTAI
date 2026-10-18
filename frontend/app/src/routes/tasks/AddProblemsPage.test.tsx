@@ -40,6 +40,8 @@ const capabilityState = vi.hoisted(() => ({
 const providerState = vi.hoisted(() => ({ enabled: true, imageState: "unverified" }));
 
 const inputState = vi.hoisted(() => ({ input: null as unknown }));
+const languageState = vi.hoisted(() => ({ locale: "zh-CN", initial: "zh" }));
+vi.mock("@/hooks/useTaskContentLanguage", () => ({ useTaskContentLanguage: () => ({ language: languageState.initial, error: null, retry: vi.fn() }) }));
 vi.mock("@/api/workflowInputs", () => ({ useWorkflowInput: () => ({ data: { input: inputState.input }, isError: false, isLoading: false }) }));
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({
@@ -90,7 +92,7 @@ vi.mock("@/components/new-task/NewTaskStepper", () => ({
 }));
 
 vi.mock("@/i18n/I18nProvider", () => ({
-  useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }),
+  useI18n: () => ({ locale: languageState.locale, t: (key: string) => key }),
 }));
 
 vi.mock("sonner", () => ({
@@ -118,6 +120,7 @@ async function uploadProblemFile(user: ReturnType<typeof userEvent.setup>) {
 beforeEach(() => { vi.spyOn(window, "alert").mockImplementation(() => {}); });
 
 beforeEach(async () => {
+  languageState.locale = "zh-CN"; languageState.initial = "zh";
   inputState.input = null;
   vi.stubGlobal("Blob", Blob); vi.stubGlobal("File", File);
   await clearPageDrafts();
@@ -143,6 +146,17 @@ beforeEach(async () => {
 });
 
 describe("AddProblemsPage score configuration", () => {
+  it("selects the task's English default in Chinese UI and submits an independent generation choice", async () => {
+    languageState.initial = "en";
+    const user = userEvent.setup();
+    renderPage();
+    expect(screen.getByLabelText("生成语言")).toHaveValue("en");
+    await uploadProblemFile(user);
+    await user.selectOptions(screen.getByLabelText("生成语言"), "zh");
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await waitFor(() => expect(startMutateAsync).toHaveBeenCalledWith(expect.objectContaining({ generationLanguage: "zh" })));
+  });
+
   it.each([
     ["", "", ""],
     ["", "1.1.5, 1.1.7, 1.1.20, 1.1.29, 1.1.31, 1.2.3, 1.2.16", ""],

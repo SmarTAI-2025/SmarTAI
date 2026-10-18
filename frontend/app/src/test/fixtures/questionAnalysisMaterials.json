@@ -1,0 +1,249 @@
+{
+  "functionCases": [
+    {
+      "input": "",
+      "expected_output": "",
+      "description": "Synthetic function case 0",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "function",
+      "source": "llm_generated",
+      "sandbox_feasible": true,
+      "function_name": "synthetic_function",
+      "function_args": [
+        0
+      ],
+      "expected_return": "0"
+    },
+    {
+      "input": "",
+      "expected_output": "",
+      "description": "Synthetic function case 1",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "function",
+      "source": "llm_generated",
+      "sandbox_feasible": true,
+      "function_name": "synthetic_function",
+      "function_args": [
+        1
+      ],
+      "expected_return": "False"
+    },
+    {
+      "input": "",
+      "expected_output": "",
+      "description": "Synthetic function case 2",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "function",
+      "source": "llm_generated",
+      "sandbox_feasible": true,
+      "function_name": "synthetic_function",
+      "function_args": [
+        2
+      ],
+      "expected_return": "''"
+    },
+    {
+      "input": "",
+      "expected_output": "",
+      "description": "Synthetic function case 3",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "function",
+      "source": "llm_generated",
+      "sandbox_feasible": true,
+      "function_name": "synthetic_function",
+      "function_args": [
+        3
+      ],
+      "expected_return": "None"
+    },
+    {
+      "input": "",
+      "expected_output": "",
+      "description": "Synthetic function case 4",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "function",
+      "source": "llm_generated",
+      "sandbox_feasible": true,
+      "function_name": "synthetic_function",
+      "function_args": [
+        4
+      ],
+      "expected_return": "5"
+    },
+    {
+      "input": "",
+      "expected_output": "",
+      "description": "Synthetic function case 5",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "function",
+      "source": "llm_generated",
+      "sandbox_feasible": true,
+      "function_name": "synthetic_function",
+      "function_args": [
+        5
+      ],
+      "expected_return": "6"
+    }
+  ],
+  "functionBoundaries": [
+    {
+      "input": "",
+      "expected_output": "",
+      "description": "",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "function",
+      "source": "teacher",
+      "sandbox_feasible": true,
+      "function_name": "no_arguments",
+      "function_args": [],
+      "expected_return": ""
+    },
+    {
+      "input": "",
+      "expected_output": "",
+      "description": "",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "function",
+      "source": "teacher",
+      "sandbox_feasible": true,
+      "function_name": "nested_arguments",
+      "function_args": [
+        0,
+        false,
+        null,
+        "",
+        {
+          "nested": [
+            1,
+            {
+              "value": "text"
+            }
+          ]
+        },
+        [
+          "a",
+          "b"
+        ]
+      ],
+      "expected_return": "{'ok': False}"
+    },
+    {
+      "input": "",
+      "expected_output": "",
+      "description": "",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "function",
+      "source": "teacher",
+      "sandbox_feasible": true,
+      "function_name": null,
+      "function_args": null,
+      "expected_return": null
+    }
+  ],
+  "stdinCases": [
+    {
+      "input": "4 4",
+      "expected_output": "8",
+      "description": "",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "stdin",
+      "source": "teacher",
+      "sandbox_feasible": true,
+      "function_name": null,
+      "function_args": null,
+      "expected_return": null
+    },
+    {
+      "input": "",
+      "expected_output": "",
+      "description": "",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "stdin",
+      "source": "teacher",
+      "sandbox_feasible": true,
+      "function_name": null,
+      "function_args": null,
+      "expected_return": null
+    },
+    {
+      "input": "line one\nline two",
+      "expected_output": "first\nsecond",
+      "description": "",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "stdin",
+      "source": "teacher",
+      "sandbox_feasible": true,
+      "function_name": null,
+      "function_args": null,
+      "expected_return": null
+    },
+    {
+      "input": "long-abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij",
+      "expected_output": "end-01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789",
+      "description": "",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "stdin",
+      "source": "teacher",
+      "sandbox_feasible": true,
+      "function_name": null,
+      "function_args": null,
+      "expected_return": null
+    },
+    {
+      "input": "0",
+      "expected_output": "False",
+      "description": "",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "stdin",
+      "source": "teacher",
+      "sandbox_feasible": true,
+      "function_name": "ignored_function",
+      "function_args": [
+        99
+      ],
+      "expected_return": "ignored_return"
+    },
+    {
+      "input": "None",
+      "expected_output": "''",
+      "description": "",
+      "title": "",
+      "visibility": "example",
+      "purpose": "normal",
+      "io_mode": "stdin",
+      "source": "teacher",
+      "sandbox_feasible": true,
+      "function_name": null,
+      "function_args": null,
+      "expected_return": null
+    }
+  ]
+}

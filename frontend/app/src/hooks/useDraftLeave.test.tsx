@@ -27,6 +27,26 @@ function type(name: string) { fireEvent.change(screen.getByLabelText("name"), { 
 async function save() { await ready(); fireEvent.click(screen.getByRole("button", { name: "暂存" })); await screen.findByText(/已暂存 ·/); }
 beforeEach(async () => { vi.restoreAllMocks(); vi.stubGlobal("Blob", Blob); vi.stubGlobal("File", File); await store.clearPageDrafts(); version = "1"; busy = false; secret = false; closed.mockReset(); formalSubmit.mockClear(); });
 
+it("keeps saving disabled during delayed hydration and preserves input entered before it completes", async () => {
+  const original = store.readPageDraft;
+  let release!: () => void;
+  const hydration = new Promise<void>(resolve => { release = resolve; });
+  const read = vi.spyOn(store, "readPageDraft").mockImplementationOnce(async (...args) => {
+    await hydration;
+    return original(...args);
+  });
+  setup();
+  const saveDraft = screen.getByRole("button", { name: "暂存" });
+  type("entered while loading");
+  expect(saveDraft).toBeDisabled();
+  expect(formalSubmit).not.toHaveBeenCalled();
+  await act(async () => { release(); await read.mock.results[0].value; });
+  expect(saveDraft).toBeEnabled();
+  expect(screen.getByLabelText("name")).toHaveValue("entered while loading");
+  await save();
+  expect((await store.readPageDraft("draft-teacher", "test:task:field", store.objectDraftCodec())).value).toMatchObject({ name: "entered while loading" });
+});
+
 it("keeps the original destination and previous explicit snapshot for all three choices", async () => {
   const { router } = setup(); await ready(); type("explicit"); await save(); type("unwritten");
   fireEvent.click(screen.getByText("next")); fireEvent.click(await screen.findByRole("button", { name: "继续编辑" })); expect(screen.getByLabelText("name")).toHaveValue("unwritten");

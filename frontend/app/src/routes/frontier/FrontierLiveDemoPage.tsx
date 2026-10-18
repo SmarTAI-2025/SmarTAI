@@ -29,6 +29,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { getGradingSetup, saveGradingSetup } from "@/api/gradingSetup";
 import { preflightProblemSource, startQuestionPreparation } from "@/api/problemSources";
+import { contentLanguageFromLocale, initializeContentLanguage, type ContentLanguage } from "@/api/contentLanguage";
 import {
   createTask,
   getTask,
@@ -66,6 +67,7 @@ type RunStepId = "task" | "questions" | "submissions" | "grading";
 type RunStepState = "waiting" | "active" | "complete" | "error";
 
 interface DemoRun {
+  contentLanguage?: ContentLanguage;
   taskId: string | null;
   isCurrent: () => boolean;
   step: <T>(operation: () => Promise<T>) => Promise<T>;
@@ -271,11 +273,14 @@ export function FrontierLiveDemoPage() {
       run.taskId = task.task_id;
       setTaskId(task.task_id);
       markStep("task", "complete", tx(locale, `任务 ${shortId(task.task_id)} 已创建`, `Task ${shortId(task.task_id)} created`));
+      // Keep the created task reachable if saving its language needs a retry.
+      navigate(`/frontier/live?taskId=${encodeURIComponent(task.task_id)}`, { replace: true });
+      const language = await run.step(() => initializeContentLanguage(task.task_id, contentLanguageFromLocale(locale)));
+      run.contentLanguage = language.language;
       if (fullWorkflow) {
         navigate(`/tasks/${encodeURIComponent(task.task_id)}/edit`, { replace: true });
         return;
       }
-      navigate(`/frontier/live?taskId=${encodeURIComponent(task.task_id)}`, { replace: true });
       await continueWorkflow(run, task.task_id, task.status);
     } catch (caught) {
       if (run.isCurrent()) {
@@ -351,6 +356,7 @@ export function FrontierLiveDemoPage() {
     let status = startingStatus;
 
     if (status === "draft") {
+      const language = run.contentLanguage ?? (await run.step(() => initializeContentLanguage(currentTaskId, contentLanguageFromLocale(locale)))).language;
       const recognitionProviderId = await run.step(() => demoRecognitionProvider(currentTaskId));
       markStep("questions", "active", tx(locale, "正在上传原始题目并运行完整题目准备…", "Uploading the raw source and running full question preparation…"));
       const questionSource = await run.step(() => fixtureFile(QUESTION_FIXTURE, "question_source.pdf", "application/pdf"));
@@ -373,6 +379,7 @@ export function FrontierLiveDemoPage() {
         sourceTokens: [preflight.source_token],
         expectedWorkflowRevision,
         scorePolicy: { mode: "per_question", perQuestionText: DEMO_SCORE_POLICY },
+        generationLanguage: language,
         recognitionProviderId,
       }));
       markStep("questions", "active", tx(locale, "正在识别题目并生成标答、评分依据与代码题材料…", "Recognizing questions and generating answers, rubrics, and programming materials…"), response.job_id);

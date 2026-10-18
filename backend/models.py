@@ -430,6 +430,9 @@ ProviderType = Literal[
     "deepseek",
     "moonshot",
     "qwen",
+    "tencent",
+    "doubao",
+    "minimax",
 ]
 WireProtocol = Literal[
     "openai_chat_completions",

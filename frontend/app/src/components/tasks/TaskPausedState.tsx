@@ -19,12 +19,14 @@ export function TaskPausedState({ status, onContinue, onManual, busy, disabled, 
       <h2 className="text-2xl font-bold">{t(TASK_STAGE_KEYS[status])}</h2>
       <p className="text-sm leading-6 text-muted-foreground">{t("taskPausedDescription")}</p>
       {children}
-      <Button onClick={onContinue} disabled={busy || disabled} aria-busy={busy || undefined}>
-        {t(TASK_ACTION_KEYS[status])}
-      </Button>
-      {onManual ? <Button variant="secondary" onClick={onManual} disabled={busy}>
-        {locale === "zh-CN" ? "人工继续处理" : "Continue manually"}
-      </Button> : null}
+      <div className="flex flex-wrap items-center gap-2 max-sm:[&_button]:px-2 max-sm:[&_button]:text-xs!">
+        <Button onClick={onContinue} disabled={busy || disabled} aria-busy={busy || undefined}>
+          {t(TASK_ACTION_KEYS[status])}
+        </Button>
+        {onManual ? <Button variant="secondary" onClick={onManual} disabled={busy}>
+          {locale === "zh-CN" ? "人工继续处理" : "Continue manually"}
+        </Button> : null}
+      </div>
     </section>
   );
 }

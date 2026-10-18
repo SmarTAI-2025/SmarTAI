@@ -268,6 +268,7 @@ def test_catalog_describes_all_supported_vendors_without_frontend_hardcoding(mon
 
     assert {item["provider_type"] for item in catalog} == {
         "openai", "zhipu", "deepseek", "moonshot", "qwen", "anthropic", "gemini",
+        "tencent", "doubao", "minimax",
     }
     expected_protocols = {
         "openai": "openai_chat_completions",
@@ -275,6 +276,9 @@ def test_catalog_describes_all_supported_vendors_without_frontend_hardcoding(mon
         "deepseek": "openai_chat_completions",
         "moonshot": "openai_chat_completions",
         "qwen": "openai_chat_completions",
+        "tencent": "openai_chat_completions",
+        "doubao": "openai_chat_completions",
+        "minimax": "openai_chat_completions",
         "anthropic": "anthropic_messages",
         "gemini": "gemini_generate_content",
     }
@@ -299,6 +303,33 @@ def test_production_flag_hides_editing_and_rejects_non_official_url(monkeypatch)
     assert deepseek["base_url_editable"] is False
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "custom_provider_endpoints_disabled"
+
+
+@pytest.mark.parametrize("provider_type,model,base_url", [
+    ("tencent", "hy-vision-2.0-instruct", "https://tokenhub.tencentmaas.com/v1"),
+    ("doubao", "doubao-seed-2-1-pro-260915", "https://ark.cn-beijing.volces.com/api/v3"),
+    ("minimax", "MiniMax-M3", "https://api.minimax.cn/v1"),
+])
+def test_guide_vendors_save_and_reload_without_a_probe(monkeypatch, provider_type, model, base_url):
+    owner = f"guide-{provider_type}"
+    headers = _teacher(owner)
+    other_headers = _teacher(f"other-{provider_type}")
+    monkeypatch.setattr(settings, "custom_provider_endpoints_enabled", False)
+    client = TestClient(app)
+    response = client.post("/experts/keys", headers=headers, json={
+        "provider_type": provider_type, "model": model,
+        "base_url": base_url, "api_key": "guide-synthetic-key",
+    })
+    assert response.status_code == 200, response.text
+    # Each request rebuilds the owner registry from persisted configurations.
+    listed = client.get("/experts/available", headers=headers).json()
+    assert len(listed) == 1
+    assert listed[0]["provider_type"] == provider_type
+    assert listed[0]["model"] == model
+    assert listed[0]["base_url"] == base_url
+    assert listed[0]["verification_status"] == "unverified"
+    assert "guide-synthetic-key" not in str(listed)
+    assert all(item["provider_id"] != listed[0]["provider_id"] for item in client.get("/experts/available", headers=other_headers).json())
 
 
 def test_ustc_url_is_saved_as_enabled_deepseek_without_verification(monkeypatch):
