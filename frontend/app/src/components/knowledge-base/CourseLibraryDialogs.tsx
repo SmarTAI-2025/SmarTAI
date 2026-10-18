@@ -226,7 +226,13 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!file) return;
+    if (upload.isPending) return;
+    if (!file) {
+      const message = uploadError ?? tx(locale, "尚未选择可上传的文件，请先选择一份资料文件。", "No uploadable file is selected. Choose a material file first.");
+      setUploadError(message);
+      window.alert(message);
+      return;
+    }
     setUploadError(null);
     try {
       const result = await upload.mutateAsync({
@@ -268,14 +274,14 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
       description={tx(locale, "PDF / TXT / Markdown · 64 MiB", "PDF / TXT / Markdown · 64 MiB")}
       closeLabel={tx(locale, "关闭", "Close")}
       onClose={onClose}
-      footer={<><Button type="button" variant="secondary" onClick={() => leave.request(onClose)} disabled={upload.isPending}>{tx(locale, "取消", "Cancel")}</Button><Button type="submit" form="course-material-upload-form" disabled={upload.isPending || !file}>{upload.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}{upload.isPending ? tx(locale, "正在上传…", "Uploading…") : tx(locale, "上传资料", "Upload")}</Button></>}
+      footer={<><Button type="button" variant="secondary" onClick={() => leave.request(onClose)} disabled={upload.isPending}>{tx(locale, "取消", "Cancel")}</Button><Button type="submit" form="course-material-upload-form" disabled={upload.isPending} title={!file ? tx(locale, "请先选择一份资料文件。", "Choose a material file first.") : undefined}>{upload.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}{upload.isPending ? tx(locale, "正在上传…", "Uploading…") : tx(locale, "上传资料", "Upload")}</Button></>}
     >
       <form id="course-material-upload-form" className="grid gap-4" onSubmit={(event) => void submit(event)}>
         <div>
           <label htmlFor={inputId} className="flex min-h-[92px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed bg-slate-50/60 px-4 py-4 text-center outline-none hover:border-primary dark:bg-slate-900/30">
             <FileUp className="h-5 w-5 text-primary" />
             <span className="mt-2 max-w-full truncate text-sm font-semibold">{file?.name ?? tx(locale, "选择一份资料文件", "Choose a material file")}</span>
-            <span className="mt-1 text-xs text-muted-foreground">{file ? formatBytes(file.size) : "PDF / TXT / Markdown"}</span>
+            <span className="mt-1 text-xs text-muted-foreground">{file ? `${formatBytes(file.size)} · ${tx(locale, "文件已就绪，无需重新选择", "File ready; no need to reselect")}` : tx(locale, "尚未选择文件 · PDF / TXT / Markdown", "No file selected · PDF / TXT / Markdown")}</span>
           </label>
           <input id={inputId} className="sr-only" type="file" accept=".pdf,.txt,.md,.markdown" aria-invalid={Boolean(uploadError)} aria-describedby={uploadError ? `${inputId}-error` : undefined} onChange={(event) => { selectFile(event.target.files?.[0]); event.target.value = ""; }} />
         </div>

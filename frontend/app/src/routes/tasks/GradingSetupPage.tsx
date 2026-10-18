@@ -738,8 +738,14 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
         </div>}
         <button
           type="button"
-          disabled={frontier || atLimit || isBusy}
-          onClick={() => fileInputRef.current?.click()}
+          disabled={frontier || isBusy}
+          onClick={() => {
+            if (atLimit) {
+              window.alert(locale === "zh-CN" ? "本任务最多选择 20 份资料。已加入的资料无需重复上传；请先移除不再需要的资料。" : "This task allows up to 20 documents. Existing documents do not need another upload; remove an unneeded document first.");
+              return;
+            }
+            fileInputRef.current?.click();
+          }}
           className="inline-flex h-11 items-center justify-center gap-2 rounded-[8px] border bg-card px-4 text-[14px] font-semibold text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
           title={frontier ? demoLockedText(locale) : atLimit ? (locale === "zh-CN" ? "本任务最多选择 20 份资料" : "Up to 20 task documents") : undefined}
         >
@@ -769,6 +775,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
         </span>
       </div>
 
+      {docs.length > 0 ? <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "以下资料已加入本任务，无需重复上传；解析状态见各资料提示。" : "The documents below are already attached; no duplicate upload is needed. See each document's processing status."}</p> : null}
       <div className={cn("mt-3 overflow-hidden rounded-[8px] border bg-card", !docsQuery.isLoading && docs.length === 0 && "border-dashed")}>
         {docsQuery.isLoading ? (
           <div className="flex min-h-[58px] items-center justify-center"><LoaderCircle aria-hidden="true" className="h-5 w-5 animate-spin text-primary" /></div>
