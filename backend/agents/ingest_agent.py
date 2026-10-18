@@ -1764,6 +1764,7 @@ async def generate_missing_question_materials(
     reporter: Optional["ProgressReporter"] = None,
     *,
     manage_progress_lifecycle: bool = True,
+    generation_language: str | None = None,
     validate_candidates: Callable[[List[AICompletionCandidateOutput]], None] | None = None,
 ) -> List[AICompletionCandidateOutput]:
     """Generate Q-09 values in one structured call; this function never stores them."""
@@ -1822,8 +1823,20 @@ async def generate_missing_question_materials(
         "test_case_count": max(1, min(12, int(test_case_count))),
         "known_problems": problem_context,
     }
+    language_instruction = ""
+    if generation_language is not None:
+        if generation_language not in {"zh", "en"}:
+            raise ValueError("Invalid generation language.")
+        language = "Simplified Chinese" if generation_language == "zh" else "English"
+        language_instruction = (
+            f"\nOUTPUT LANGUAGE: Write all newly generated reference answers, solution explanations, "
+            f"rubrics and other explanatory prose in {language}, regardless of the source language. "
+            "Do not add a second-language translation. Preserve quoted source text, mathematical "
+            "notation, identifiers, executable code, JSON keys and test input/output values. "
+            "Language selection must not change the question, grading criteria, point allocations or answers."
+        )
     messages = [
-        SystemMessage(content=AI_COMPLETION_SYSTEM_PROMPT),
+        SystemMessage(content=AI_COMPLETION_SYSTEM_PROMPT + language_instruction),
         HumanMessage(content=(
             "[Generation request]\n"
             f"{json.dumps(request_context, ensure_ascii=False)}"

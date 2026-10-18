@@ -124,6 +124,10 @@ class ReviewRowMutationRequest(BaseModel):
     expected_workflow_revision: int = Field(ge=0)
 
 
+class InitializeContentLanguageRequest(BaseModel):
+    language: Literal["zh", "en"]
+
+
 class UpdateProblemRequest(BaseModel):
     expected_workflow_revision: int | None = Field(default=None, ge=0)
     number: str | None = Field(default=None, min_length=1, max_length=64)
@@ -843,6 +847,14 @@ def get_grading_setup(
         return domain_error_response(exc)
 
 
+@router.put("/{task_id}/content-language/default")
+def initialize_content_language(task_id: str, request: InitializeContentLanguageRequest,
+                                current: User = Depends(require_teacher)):
+    return _domain(lambda: {"language": workflow_repository.initialize_content_language(
+        task_id, owner_id=current.id, language=request.language,
+    )})
+
+
 @router.put("/{task_id}/grading-setup")
 def save_grading_setup(
     task_id: str,
@@ -940,6 +952,7 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
         suggested = TaskGradingSetup(
             selected_provider_ids=[default_id],
             primary_provider_id=default_id,
+            feedback_language=workflow.initial_content_language or "zh",
             knowledge_scope="all_task_docs" if task["kb_doc_count"] else "none",
         ).model_dump(mode="json")
     blocking = []

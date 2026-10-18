@@ -33,6 +33,18 @@ def chat_stream():
     ("deepseek", "deepseek-flash"), ("zhipu", "glm-5.2"),
     ("moonshot", "kimi-k3"), ("moonshot", "kimi-k2.5"),
     ("qwen", "qwen-plus"), ("qwen", "qwen3-32b"),
+    # Remaining Model IDs in the 2026-10-17 BYOK guide; no real requests.
+    ("gemini", "gemini-3.8-flash"), ("gemini", "gemma-4-31b-it"),
+    ("gemini", "gemma-4-26b-a4b-it"),
+    ("anthropic", "claude-opus-5-5"), ("anthropic", "claude-haiku-5-5"),
+    ("deepseek", "deepseek-v4-pro"),
+    ("zhipu", "glm-4.7-flash"), ("zhipu", "glm-4.6v-flash"),
+    ("zhipu", "glm-5.3"), ("zhipu", "glm-5.3-flash"),
+    ("moonshot", "kimi-k2.6"),
+    ("qwen", "qwen3.8-max"), ("qwen", "qwen3.8-flash"),
+    ("tencent", "hy3"), ("tencent", "hy-vision-2.0-instruct"),
+    ("doubao", "doubao-seed-2-1-pro-260915"),
+    ("doubao", "doubao-seed-2-1-lite-260915"), ("minimax", "MiniMax-M3"),
 ])
 @pytest.mark.parametrize("vision", [False, True])
 async def test_actual_sdk_wire_defaults(monkeypatch, provider_type, model, vision):
@@ -62,6 +74,10 @@ async def test_actual_sdk_wire_defaults(monkeypatch, provider_type, model, visio
     assert response.content == "OK"
     assert len(sent) == 1
     url, body = sent[0]
+    if provider_type != "gemini":
+        assert body["model"] == model
+    if provider_type == "minimax":
+        assert body["reasoning_split"] is True
     params = body.get("generationConfig", body)
     assert params.get("temperature") is None
     assert "reasoning_effort" not in body and "thinking" not in body
@@ -86,6 +102,8 @@ def test_relays_use_same_sampling_defaults_and_vendor_limits(provider_type):
     field = "maxOutputTokens" if provider_type == "gemini" else "max_completion_tokens" if provider_type == "openai" else "max_tokens"
     assert params[field] == 512
     assert body.get("stream", False) == (provider_type == "qwen")
+    if provider_type == "minimax":
+        assert body["reasoning_split"] is True
 
 
 def test_qwen_stream_keeps_answer_usage_and_ignores_reasoning():

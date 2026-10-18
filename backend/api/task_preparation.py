@@ -341,6 +341,7 @@ class StartQuestionPreparationRequest(BaseModel):
     expected_workflow_revision: int = Field(ge=0)
     replace_confirmed: bool = False
     generation_policy: Literal["complete_required_materials"] = "complete_required_materials"
+    generation_language: Literal["zh", "en"] | None = None
     score_policy: QuestionScorePolicy = Field(default_factory=QuestionScorePolicy)
     recognition_provider_id: str | None = Field(default=None, max_length=240)
 
@@ -375,6 +376,7 @@ def _question_preparation_input_hash(
     recognition_provider_id: str,
     provider_configuration_fingerprint: str,
     acknowledged_restart_from: str | None = None,
+    generation_language: str | None = None,
 ) -> str:
     """Hash the ordered logical input independently of retry claim revisions."""
 
@@ -385,6 +387,7 @@ def _question_preparation_input_hash(
                 "base_revision": logical_input_revision,
                 "replace_confirmed": replace_confirmed,
                 "generation_policy": generation_policy,
+                **({"generation_language": generation_language} if generation_language else {}),
                 "score_policy": dict(score_policy),
                 "recognition_provider_id": recognition_provider_id,
                 "provider_configuration_fingerprint": (
@@ -1702,6 +1705,7 @@ async def _start_question_preparation(
             logical_input_revision=logical_input_revision,
             replace_confirmed=request.replace_confirmed,
             generation_policy=request.generation_policy,
+            generation_language=request.generation_language,
             score_policy=request.score_policy.model_dump(mode="json"),
             recognition_provider_id=recognition_provider_id,
             provider_configuration_fingerprint=(
@@ -1769,6 +1773,7 @@ async def _start_question_preparation(
             "claimed_workflow_revision": claim_base_revision + 1,
             "replace_confirmed": request.replace_confirmed,
             "generation_policy": request.generation_policy,
+            **({"generation_language": request.generation_language} if request.generation_language else {}),
             "score_policy": request.score_policy.model_dump(mode="json"),
             "recognition_provider_id": recognition_provider_id,
             "provider_configuration_fingerprint": (
@@ -2000,6 +2005,7 @@ async def retry_question_preparation(
                 code="question_preparation_retry_source_unavailable",
             )
         retry_request = StartQuestionPreparationRequest(
+            generation_language=payload.get("generation_language"),
             source_tokens=source_tokens,
             expected_workflow_revision=workflow.workflow_revision,
             replace_confirmed=bool(payload.get("replace_confirmed")),
@@ -2105,6 +2111,7 @@ def _rehydrate_question_preparation_inputs(operation):
     source_hashes = payload.get("source_content_hashes")
     source_text_hashes = payload.get("source_text_hashes")
     generation_policy = payload.get("generation_policy")
+    generation_language = payload.get("generation_language")
     replace_confirmed = payload.get("replace_confirmed")
     if (
         not isinstance(source_tokens, list)
@@ -2116,6 +2123,7 @@ def _rehydrate_question_preparation_inputs(operation):
         or not isinstance(source_hashes, dict)
         or not isinstance(source_text_hashes, dict)
         or generation_policy != "complete_required_materials"
+        or generation_language not in {None, "zh", "en"}
         or not isinstance(replace_confirmed, bool)
     ):
         raise _question_preparation_recovery_error(
@@ -2312,6 +2320,7 @@ def _rehydrate_question_preparation_inputs(operation):
         logical_input_revision=requested_revision,
         replace_confirmed=replace_confirmed,
         generation_policy=generation_policy,
+        generation_language=generation_language,
         score_policy=score_policy.model_dump(mode="json"),
         recognition_provider_id=recognition_provider_id,
         provider_configuration_fingerprint=frozen_provider_fingerprint,
@@ -2330,6 +2339,7 @@ def _rehydrate_question_preparation_inputs(operation):
         "claimed_workflow_revision": claimed_revision,
         "replace_confirmed": replace_confirmed,
         "score_policy": score_policy,
+        "generation_language": generation_language,
     }
 
 
@@ -2430,7 +2440,7 @@ async def run_durable_question_preparation(operation) -> None:
             old_payload, old_checkpoint = origin.payload or {}, origin.checkpoint or {}
             if (origin.assignment_id != operation.assignment_id or origin.operation_type != "question_preparation"
                     or origin.status != "error" or any(old_payload.get(key) != payload.get(key)
-                        for key in ("source_content_hashes", "source_text_hashes", "source_refs", "score_policy", "generation_policy"))):
+                        for key in ("source_content_hashes", "source_text_hashes", "source_refs", "score_policy", "generation_policy", "generation_language"))):
                 raise _question_preparation_recovery_error("Retry sources changed.")
             copied = {}
             refs = []
@@ -2654,6 +2664,7 @@ async def run_durable_question_preparation(operation) -> None:
                 ],
                 replace_confirmed=inputs["replace_confirmed"],
                 score_policy=inputs["score_policy"],
+                generation_language=inputs["generation_language"],
                 recognition_provider_id=recognition_provider_id,
                 ocr_only=route.is_baidu_ocr,
                 durable_operation=operation,
@@ -3092,6 +3103,7 @@ async def run_durable_question_preparation(operation) -> None:
             claimed_workflow_revision=inputs["claimed_workflow_revision"],
             replace_confirmed=inputs["replace_confirmed"],
             score_policy=inputs["score_policy"],
+            generation_language=inputs["generation_language"],
             recognition_provider_id=recognition_provider_id,
             ocr_only=route.is_baidu_ocr,
             durable_operation=operation,
@@ -3168,6 +3180,7 @@ async def _run_question_preparation(
     score_policy: QuestionScorePolicy,
     recognition_provider_id: str,
     ocr_only: bool = False,
+    generation_language: str | None = None,
     source_checkpoint: dict | None = None,
     source_artifact_refs: list[str] | None = None,
     durable_operation=None,
@@ -3225,6 +3238,7 @@ async def _run_question_preparation(
                 provider_id=recognition_provider_id,
                 reporter=reporter,
                 score_policy=score_policy,
+                generation_language=generation_language,
                 recovered_extracted_problem_data=(
                     recovered_extracted_problem_data
                 ),
@@ -4068,6 +4082,8 @@ async def confirm_ai_completion(
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     try:
+        from backend.services.workflow_inputs import question_generation_language
+        generation_language = question_generation_language(task_id=task_id, owner_id=current.id)
         task = task_facade.get_task(task_id=task_id, owner_id=current.id, full=True)
         requested_ids = list(dict.fromkeys(request.target_ids))
         provider_id, route = _resolve_recognition_provider(
@@ -4077,6 +4093,7 @@ async def confirm_ai_completion(
         )
         input_hash = hashlib.sha256(json.dumps({
             "target_ids": sorted(requested_ids),
+            **({"generation_language": generation_language} if generation_language else {}),
             "test_case_count": request.test_case_count,
             "base_revision": request.expected_workflow_revision,
             "provider_id": provider_id,
@@ -4123,6 +4140,7 @@ async def confirm_ai_completion(
             operation_type="ai_completion", input_hash=input_hash,
             payload={
                 "target_ids": requested_ids,
+                **({"generation_language": generation_language} if generation_language else {}),
                 "test_case_count": request.test_case_count,
                 "base_workflow_revision": claim_base_revision,
                 "provider_id": provider_id,
@@ -4166,6 +4184,7 @@ async def _run_ai_completion(
     problems_data: dict[str, dict], selected: list[dict],
     requested_ids: list[str], test_case_count: int, provider,
     claimed_workflow_revision: int,
+    generation_language: str | None = None,
     expected_lease_token: str | None = None,
     durable_operation=None,
     recovered_candidates: list[AICompletionCandidateOutput] | None = None,
@@ -4184,6 +4203,7 @@ async def _run_ai_completion(
                 problems_data=problems_data, requested_targets=selected,
                 test_case_count=test_case_count, provider=provider,
                 reporter=reporter,
+                generation_language=generation_language,
             )
             result_provider_id = provider.provider_id
             if durable_operation is not None:
@@ -4327,6 +4347,7 @@ async def run_durable_ai_completion(operation) -> None:
         job_id=operation.operation_id, job_attempt=operation.attempt,
         problems_data=task["problem_data"], selected=selected,
         requested_ids=requested_ids,
+        generation_language=(operation.payload or {}).get("generation_language"),
         test_case_count=int((operation.payload or {}).get("test_case_count") or 5),
         provider=provider,
         claimed_workflow_revision=int((operation.payload or {}).get("base_workflow_revision") or 0) + 1,

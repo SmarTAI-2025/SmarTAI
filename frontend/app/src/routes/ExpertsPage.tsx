@@ -66,6 +66,9 @@ const providerOptions: Array<{ value: ProviderType; label: string; defaultModel:
   { value: "zhipu", label: "Zhipu (智谱)", defaultModel: "glm-5.3-flash" },
   { value: "moonshot", label: "Kimi (Moonshot)", defaultModel: "kimi-k3" },
   { value: "qwen", label: "Qwen (通义千问)", defaultModel: "qwen3.8-flash" },
+  { value: "tencent", label: "腾讯混元 (TokenHub)", defaultModel: "hy3" },
+  { value: "doubao", label: "豆包 (火山方舟)", defaultModel: "doubao-seed-2-1-lite-260915" },
+  { value: "minimax", label: "MiniMax", defaultModel: "MiniMax-M3" },
 ];
 
 type EditorTarget =
@@ -1033,32 +1036,26 @@ function OfficialProviderLinks({
         ) : null}
       </div>
       {catalog.length ? (
-        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-          {sortByProvider(catalog).map((provider) => (
+        <div className="mt-3 grid auto-rows-fr gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {sortByProvider([...catalog, {
+            provider_type: "baidu_unlimited_ocr",
+            display_name: zh ? "百度 Unlimited-OCR" : "Baidu Unlimited-OCR",
+            console_url: "https://console.bce.baidu.com/ai-engine/ocr/overview/index",
+            docs_url: "https://ai.baidu.com/ai-doc/OCR/fmr1p39gb",
+            usage_url: undefined,
+          }]).map((provider) => (
             <div
               key={provider.provider_type}
               className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2.5 dark:bg-slate-900/45"
             >
               <span className="text-xs font-semibold">{provider.display_name}</span>
               <div className="flex shrink-0 items-center gap-2 text-[11px] font-semibold text-primary">
-                <OfficialLink href={provider.console_url!} label={zh ? "密钥" : "Keys"} />
-                <OfficialLink href={provider.usage_url!} label={zh ? "用量" : "Usage"} />
+                <OfficialLink href={provider.console_url!} label={provider.provider_type === "baidu_unlimited_ocr" ? (zh ? "控制台" : "Console") : (zh ? "密钥" : "Keys")} />
+                {provider.usage_url ? <OfficialLink href={provider.usage_url} label={zh ? "用量" : "Usage"} /> : null}
                 <OfficialLink href={provider.docs_url!} label={zh ? "文档" : "Docs"} />
               </div>
             </div>
           ))}
-          <div className="min-w-0 rounded-lg bg-slate-50 px-3 py-2.5 dark:bg-slate-900/45">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-semibold">{zh ? "百度 Unlimited-OCR" : "Baidu Unlimited-OCR"}</span>
-              <div className="flex shrink-0 items-center gap-2 text-[11px] font-semibold text-primary">
-                <OfficialLink href="https://console.bce.baidu.com/ai-engine/ocr/overview/index" label={zh ? "控制台" : "Console"} />
-                <OfficialLink href="https://ai.baidu.com/ai-doc/OCR/fmr1p39gb" label={zh ? "文档" : "Docs"} />
-              </div>
-            </div>
-            <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
-              {zh ? "文档解析与文字识别；API Key / Secret Key、用量及计费请在控制台查看。" : "Document parsing and OCR. Manage API Key / Secret Key, usage and billing in the console."}
-            </p>
-          </div>
         </div>
       ) : null}
     </section>

@@ -178,6 +178,7 @@ async def _queue_question_preparation(
     *,
     source_text: str = "1. (a) Explain A. (b) Explain B.",
     registry: _RecoveryRegistry | None = None,
+    generation_language: str | None = None,
 ):
     registry = registry or _RecoveryRegistry()
     source = await task_preparation.preflight_problem_source(
@@ -198,6 +199,7 @@ async def _queue_question_preparation(
     response = await task_preparation._start_question_preparation(
         task_id=task_id,
         request=task_preparation.StartQuestionPreparationRequest(
+            generation_language=generation_language,
             source_tokens=[source["source_token"]],
             expected_workflow_revision=0,
             score_policy=QuestionScorePolicy(

@@ -99,6 +99,7 @@ export interface StartProblemExtractionInput {
 export type StartProblemExtractionResponse = TaskMutationResponse;
 
 export interface StartQuestionPreparationInput {
+  generationLanguage?: "zh" | "en";
   taskId: string;
   sourceTokens: string[];
   expectedWorkflowRevision: number;

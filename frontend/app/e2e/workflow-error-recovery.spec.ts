@@ -23,6 +23,7 @@ async function fixture(page: Page, stage: "problems" | "submissions" | "grading"
     if (method === "OPTIONS") return route.fulfill({ status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" } });
     // Session renewal is expected on human input, but is not a task/model mutation.
     if (path === "/auth/activity" && method === "POST") return json({ token: "synthetic-recovery-token" });
+    if (path.endsWith("/content-language/default")) return json({ language: "zh" });
     if (method === "POST" || method === "PUT") {
       calls.push({ path, body: req.postData() ?? "" });
       if (path.endsWith("/question-preparation/sources/preflight")) return json({ source_token: "new-source", source: { stored_file_id: "stored-pdf" } });

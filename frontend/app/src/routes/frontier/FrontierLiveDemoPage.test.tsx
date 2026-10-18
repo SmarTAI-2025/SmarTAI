@@ -5,6 +5,8 @@ import { StrictMode, useState, type ReactNode } from "react";
 import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getGradingSetup, saveGradingSetup } from "@/api/gradingSetup";
+import { initializeContentLanguage } from "@/api/contentLanguage";
+import * as fixtures from "@/lib/frontierFixtures";
 import { preflightProblemSource, startQuestionPreparation } from "@/api/problemSources";
 import { createTask, getTask, getTaskResult, getTaskState, parseSubmissions, startGrading, updateProblem, updateStudentAnswer, updateStudentIdentity } from "@/api/tasks";
 import { demoQuestions } from "@/test/fixtures/frontierQuestions";
@@ -42,6 +44,7 @@ vi.mock("@/api/gradingSetup", () => ({
   getGradingSetup: vi.fn(),
   saveGradingSetup: vi.fn(),
 }));
+vi.mock("@/api/contentLanguage", async original => ({ ...await original<object>(), initializeContentLanguage: vi.fn() }));
 
 vi.mock("@/components/tasks/PdfDocumentPreview", () => ({
   PdfDocumentPreview: ({ title }: { title: string }) => <div role="document" aria-label={title} />,
@@ -50,6 +53,7 @@ vi.mock("@/components/tasks/PdfDocumentPreview", () => ({
 describe("FrontierLiveDemoPage", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(initializeContentLanguage).mockImplementation(async (_taskId, language) => ({ language }));
     sessionStorage.clear();
     setFrontierExitPending(false);
     window.localStorage.setItem("smartai_locale", "en-US");
@@ -60,6 +64,27 @@ describe("FrontierLiveDemoPage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it.each(["en-US", "zh-CN"])("freezes %s on first click even when UI changes while task creation is pending", async initialLocale => {
+    localStorage.setItem("smartai_locale", initialLocale);
+    const creation = deferred<TaskStateSnapshot>();
+    vi.mocked(createTask).mockReturnValue(creation.promise);
+    vi.spyOn(fixtures, "fixtureFile").mockResolvedValue(new File(["synthetic"], "questions.pdf"));
+    vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
+    vi.mocked(preflightProblemSource).mockResolvedValue({ source_token: "source", workflow_revision: 0 } as any);
+    vi.mocked(startQuestionPreparation).mockResolvedValue({ status: "started", job_id: "questions" });
+    vi.mocked(getTaskState).mockResolvedValue(taskState("problems_ready"));
+    vi.mocked(getTask).mockResolvedValue(taskWithQuestions());
+    const user = userEvent.setup();
+    renderLive();
+    await user.click(screen.getByRole("button", { name: /Start real OCR \+ grading|开始真实 OCR.*批改/ }));
+    await user.click(screen.getByRole("button", { name: "Change language" }));
+    await act(async () => creation.resolve(taskState("draft")));
+    await waitFor(() => expect(startQuestionPreparation).toHaveBeenCalledTimes(1));
+    const language = initialLocale === "en-US" ? "en" : "zh";
+    expect(initializeContentLanguage).toHaveBeenCalledExactlyOnceWith("asg_demo123", language);
+    expect(startQuestionPreparation).toHaveBeenCalledWith(expect.objectContaining({ generationLanguage: language }));
   });
 
   it.each([false, true])("ignores late creation during confirmed exit (cleanup complete: %s)", async (cleanupComplete) => {
@@ -628,6 +653,8 @@ describe("FrontierLiveDemoPage", () => {
     await user.click(screen.getByRole("button", { name: /start real OCR \+ grading/i }));
 
     await waitFor(() => expect(startQuestionPreparation).toHaveBeenCalledTimes(1));
+    expect(initializeContentLanguage).toHaveBeenCalledWith("asg_demo123", "en");
+    expect(startQuestionPreparation).toHaveBeenCalledWith(expect.objectContaining({ generationLanguage: "en" }));
     const confirmTeacherMaterials = await screen.findByRole("button", { name: /continue to submissions/i });
     expect(parseSubmissions).not.toHaveBeenCalled();
     expect(screen.getByText(/were generated live/i)).toBeInTheDocument();
@@ -670,8 +697,8 @@ function deferred<T>() {
 }
 
 function ChangeLocale() {
-  const { setLocale } = useI18n();
-  return <button onClick={() => setLocale("zh-CN")}>Change language</button>;
+  const { locale, setLocale } = useI18n();
+  return <button onClick={() => setLocale(locale === "en-US" ? "zh-CN" : "en-US")}>Change language</button>;
 }
 
 function renderLive(taskId?: string) {

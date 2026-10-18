@@ -9,6 +9,7 @@ import { APIError } from "@/api/client";
 const addExpert = vi.fn();
 const updateExpert = vi.fn();
 const verifyImage = vi.fn();
+const verifyExpert = vi.fn();
 const saveBaiduOCRCredentials = vi.fn();
 const verifyBaiduOCRCredentials = vi.fn();
 const deleteBaiduOCRCredentials = vi.fn();
@@ -36,7 +37,7 @@ vi.mock("@/api/hooks", () => ({
   useUpdateExpert: () => ({ isPending: false, mutateAsync: updateExpert }),
   useSelectExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useSetDefaultExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
-  useVerifyExpert: () => ({ isPending: hookState.textPending, mutateAsync: vi.fn() }),
+  useVerifyExpert: () => ({ isPending: hookState.textPending, mutateAsync: verifyExpert }),
   useRemoveExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useBaiduOCRConfiguration: () => ({
     data: hookState.baiduOCR,
@@ -77,6 +78,9 @@ function providerCatalog(editable = true) {
     catalogItem("deepseek", "DeepSeek", "https://api.deepseek.com/v1", "openai_chat_completions", editable),
     catalogItem("moonshot", "Moonshot (Kimi)", "https://api.moonshot.cn/v1", "openai_chat_completions", editable),
     catalogItem("qwen", "Qwen (通义千问)", "https://dashscope.aliyuncs.com/compatible-mode/v1", "openai_chat_completions", editable),
+    catalogItem("tencent", "Tencent (TokenHub)", "https://tokenhub.tencentmaas.com/v1", "openai_chat_completions", editable),
+    catalogItem("doubao", "Doubao (火山方舟)", "https://ark.cn-beijing.volces.com/api/v3", "openai_chat_completions", editable),
+    catalogItem("minimax", "MiniMax", "https://api.minimax.cn/v1", "openai_chat_completions", editable),
   ];
 }
 
@@ -132,7 +136,7 @@ describe("ExpertsPage editable vendor Base URL", () => {
     const dialog = screen.getByRole("dialog");
     const provider = within(dialog).getByRole("combobox", { name: "服务商" });
     expect(within(provider).getAllByRole("option").map((item) => (item as HTMLOptionElement).value))
-      .toEqual(["gemini", "openai", "anthropic", "deepseek", "zhipu", "moonshot", "qwen"]);
+      .toEqual(["gemini", "openai", "anthropic", "deepseek", "zhipu", "moonshot", "qwen", "tencent", "doubao", "minimax"]);
     await user.selectOptions(provider, "openai");
     expect(within(dialog).getByDisplayValue("gpt-6-luna")).toBeInTheDocument();
     expect(within(dialog).getByDisplayValue("https://api.openai.com/v1")).toBeInTheDocument();
@@ -143,9 +147,29 @@ describe("ExpertsPage editable vendor Base URL", () => {
     renderPage();
     const section = screen.getByRole("heading", { name: "服务商官方入口" }).closest("section")!;
     const labels = [...section.querySelectorAll("span.font-semibold")].map((item) => item.textContent);
-    expect(labels).toEqual(["Google Gemini", "OpenAI", "Anthropic", "DeepSeek", "Zhipu AI", "Moonshot (Kimi)", "Qwen (通义千问)", "百度 Unlimited-OCR"]);
+    expect(labels).toEqual(["Google Gemini", "OpenAI", "Anthropic", "DeepSeek", "Zhipu AI", "Moonshot (Kimi)", "Qwen (通义千问)", "百度 Unlimited-OCR", "Tencent (TokenHub)", "Doubao (火山方舟)", "MiniMax"]);
     expect(within(section).getByRole("link", { name: "控制台" })).toHaveAttribute("href", "https://console.bce.baidu.com/ai-engine/ocr/overview/index");
     expect([...section.querySelectorAll("a")].some((link) => link.href === "https://ai.baidu.com/ai-doc/OCR/fmr1p39gb")).toBe(true);
+  });
+
+  it.each([
+    ["tencent", "hy3", "https://tokenhub.tencentmaas.com/v1"],
+    ["doubao", "doubao-seed-2-1-lite-260915", "https://ark.cn-beijing.volces.com/api/v3"],
+    ["minimax", "MiniMax-M3", "https://api.minimax.cn/v1"],
+  ])("saves %s with its official defaults without testing automatically", async (providerType, model, baseUrl) => {
+    const user = userEvent.setup(); renderPage();
+    await user.click(screen.getByRole("button", { name: "添加模型配置" }));
+    const dialog = screen.getByRole("dialog");
+    await user.selectOptions(within(dialog).getByLabelText("服务商"), providerType);
+    expect(within(dialog).getByDisplayValue(model)).toBeInTheDocument();
+    expect(within(dialog).getByDisplayValue(baseUrl)).toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText(/API key/i), "synthetic-key");
+    await user.click(within(dialog).getByRole("button", { name: "保存配置" }));
+    await waitFor(() => expect(addExpert).toHaveBeenCalledWith(expect.objectContaining({
+      provider_type: providerType, model, base_url: baseUrl, api_key: "synthetic-key",
+    })));
+    expect(verifyExpert).not.toHaveBeenCalled();
+    expect(verifyImage).not.toHaveBeenCalled();
   });
 
   it.each([0, 1])("only sends an image probe after confirmation from row %i", async (row) => {

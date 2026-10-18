@@ -50,6 +50,7 @@ async function fixture(page: Page, stage: Stage) {
     if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" } });
     if (path === "/auth/me") return json({ id: "teacher", username: "test", role: "teacher", is_active: true });
     if (path === "/auth/activity") return json({ token: "synthetic-navigation-token" });
+    if (path.endsWith("/content-language/default")) return json({ language: "zh" });
     if (path.startsWith("/experts")) return json([provider]);
     if (path === "/tags/") return json([]);
     if (path === "/tasks/") return json({ items: [task], total: 1, page: 1, page_size: 20,

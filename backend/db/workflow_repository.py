@@ -194,6 +194,8 @@ class AssignmentWorkflowRecord(Base):
     reference_file_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
     test_cases_file_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
     grading_setup: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Captured once on first question-upload entry (or simple Demo start).
+    initial_content_language: Mapped[str | None] = mapped_column(String(2), nullable=True)
     grading_setup_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     grading_setup_updated_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     final_result_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -610,6 +612,28 @@ def list_workflows(owner_id: str) -> list[AssignmentWorkflowRecord]:
             .order_by(AssignmentWorkflowRecord.updated_at.desc())
         ).all()
         return [_detach_workflow(row) for row in rows]
+
+
+def initialize_content_language(assignment_id: str, *, owner_id: str, language: str) -> str:
+    """First writer wins; this default does not mutate inputs or saved grading setup."""
+    if language not in {"zh", "en"}:
+        raise ValidationError("Invalid content language.", code="invalid_content_language")
+    with session_scope() as session:
+        # Lock W before A, including repeated initializations and task deletion.
+        session.execute(update(AssignmentWorkflowRecord).where(
+            AssignmentWorkflowRecord.assignment_id == assignment_id,
+            AssignmentWorkflowRecord.owner_id == owner_id,
+        ).values(updated_at=AssignmentWorkflowRecord.updated_at))
+        _lock_live_assignment(session, assignment_id=assignment_id, owner_id=owner_id)
+        row = session.scalar(select(AssignmentWorkflowRecord).where(
+            AssignmentWorkflowRecord.assignment_id == assignment_id,
+            AssignmentWorkflowRecord.owner_id == owner_id,
+        ))
+        if row is None:
+            raise NotFound("workflow")
+        if row.initial_content_language is None:
+            row.initial_content_language = language
+        return row.initial_content_language
 
 
 def update_workflow(

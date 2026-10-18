@@ -404,11 +404,13 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
             {problem.question_structure?.subparts.length ? <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 dark:bg-violet-950/30 dark:text-violet-300">{tx(locale, `含 ${problem.question_structure.subparts.length} 个小问 · ${problem.question_structure.subparts.map((part) => part.label).join(" ")}`, `${problem.question_structure.subparts.length} subparts · ${problem.question_structure.subparts.map((part) => part.label).join(" ")}`)}</span> : null}
             {risks.length ? <span tabIndex={0} title={risks.map(issue => recognitionIssueLabel(issue, locale) ?? riskShortLabel(issue.code, locale)).join("；")} className={cn("cursor-help rounded-full px-2.5 py-1 text-xs font-semibold", risks.some(issue => issue.severity === "blocking") ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800")}>{tx(locale, `${risks.length} 项待确认`, `${risks.length} to confirm`)}</span> : null}
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">{tx(locale, `筛选结果中的第 ${index + 1} / ${total} 题`, `${index + 1} of ${total}`)}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <p className="text-xs text-muted-foreground">{tx(locale, `筛选结果中的第 ${index + 1} / ${total} 题`, `${index + 1} of ${total}`)}</p>
+            <ReviewIssueNotes issues={risks.map(issue => ({ label: recognitionIssueLabel(issue, locale) ?? riskShortLabel(issue.code, locale), severity: issue.severity === "blocking" ? "blocking" : "advisory" }))} />
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 max-sm:[&_button]:px-2 max-sm:[&_button]:text-xs! sm:shrink-0">
           <ReviewConfirmButton title={tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)} locale={locale} confirmed={questionReviewConfirmed(problem)} blocked={questionReviewNextBlocked(problem)} busy={saving} onClick={() => onConfirm(problem)} />
-          <ReviewIssueNotes issues={risks.map(issue => ({ label: recognitionIssueLabel(issue, locale) ?? riskShortLabel(issue.code, locale), severity: issue.severity === "blocking" ? "blocking" : "advisory" }))} />
           <QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} />
         </div>
       </header>

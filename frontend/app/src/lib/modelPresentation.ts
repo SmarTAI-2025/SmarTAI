@@ -18,6 +18,9 @@ const PROVIDER_NAMES: Record<string, string> = {
   deepseek: "DeepSeek",
   moonshot: "Kimi (Moonshot)",
   qwen: "Qwen (通义千问)",
+  tencent: "Tencent (TokenHub)",
+  doubao: "Doubao (火山方舟)",
+  minimax: "MiniMax",
 };
 
 export function providerDisplayName(providerType: string): string {
@@ -54,7 +57,7 @@ export function modelSecondaryLabel(expert: ModelPresentationSource): string {
 }
 
 // Stable within each provider; sorting must not change the selected/default model.
-export const PROVIDER_ORDER = ["gemini", "openai", "anthropic", "deepseek", "zhipu", "moonshot", "qwen", "baidu_unlimited_ocr"] as const;
+export const PROVIDER_ORDER = ["gemini", "openai", "anthropic", "deepseek", "zhipu", "moonshot", "qwen", "baidu_unlimited_ocr", "tencent", "doubao", "minimax"] as const;
 
 export function sortByProvider<T extends { provider_type?: string | null }>(items: readonly T[]): T[] {
   const rank = (item: T) => {

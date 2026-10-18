@@ -5,7 +5,10 @@ export type ProviderType =
   | "zhipu"
   | "deepseek"
   | "moonshot"
-  | "qwen";
+  | "qwen"
+  | "tencent"
+  | "doubao"
+  | "minimax";
 
 export type WireProtocol =
   | "openai_chat_completions"
