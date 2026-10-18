@@ -2,7 +2,7 @@ import { confidenceValue } from "@/lib/confidencePolicy";
 import { correctionReviewLabels } from "@/components/tasks/resultsReviewModel";
 import { ResultQuestionQuery, useResultQuestionFilter } from "@/components/tasks/ResultQuestionQuery";
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, UserRound } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   hasReviewSignal as correctionNeedsFormalReview,
@@ -176,7 +176,7 @@ export function QuestionAnalysisDetail({
         </MaterialPanel>
         {showTestMaterials ? (
           <MaterialPanel className="xl:col-span-2" title={tx(locale, "代码 / 测试资料", "Code / test materials")} source={fieldSource(question.problem, "test_cases", locale)}>
-            <TestMaterialSummary locale={locale} problem={question.problem} />
+            <TestMaterialSummary key={question.id} locale={locale} problem={question.problem} />
           </MaterialPanel>
         ) : null}
       </div>
@@ -311,16 +311,44 @@ function StudentPreview({ locale, taskId, question, entry }: { locale: Locale; t
 }
 
 function TestMaterialSummary({ locale, problem }: { locale: Locale; problem?: ProblemInfo }) {
+  const [expanded, setExpanded] = useState(false);
+  const listId = useId();
   const testCases = problem?.test_cases ?? [];
-  if (!testCases.length) return <MissingText locale={locale} />;
+  const preview = !expanded && testCases.length > 2;
   return (
     <div className="grid gap-2">
-      <p className="text-[11px] font-semibold text-foreground">{tx(locale, `${testCases.length} 个测试样例`, `${testCases.length} test cases`)}</p>
-      {testCases.slice(0, 2).map((testCase, index) => (
-        <div key={`${testCase.input}-${index}`} className="rounded-[6px] border bg-background px-2.5 py-2 text-[10px] text-muted-foreground">
-          <span className="font-semibold text-foreground">#{index + 1}</span> · {tx(locale, "输入", "Input")} {testCase.input || "—"} · {tx(locale, "期望", "Expected")} {testCase.expected_output || "—"}
-        </div>
-      ))}
+      {testCases.length ? <p className="text-[11px] font-semibold text-foreground">{preview
+        ? tx(locale, `前 2 项 / 共 ${testCases.length} 项`, `First 2 of ${testCases.length} test cases`)
+        : tx(locale, `共 ${testCases.length} 个测试样例`, `${testCases.length} test cases`)}</p> : <MissingText locale={locale} />}
+      <div id={listId} className="grid min-w-0 gap-2">
+        {(preview ? testCases.slice(0, 2) : testCases).map((testCase, index) => {
+          const fields: [string, string | unknown[] | null | undefined][] = testCase.io_mode === "function"
+            ? [[tx(locale, "函数名", "Function"), testCase.function_name],
+              [tx(locale, "调用参数", "Arguments"), testCase.function_args],
+              [tx(locale, "预期返回", "Expected return"), testCase.expected_return]]
+            : [[tx(locale, "输入", "Input"), testCase.input],
+              [tx(locale, "期望输出", "Expected output"), testCase.expected_output]];
+          return (
+            <article key={index} aria-label={tx(locale, `测试样例 ${index + 1}`, `Test case ${index + 1}`)} className="min-w-0 rounded-[6px] border bg-background px-2.5 py-2 text-[10px] text-muted-foreground">
+              <p className="break-words font-semibold text-foreground">#{index + 1}{testCase.title ? ` · ${testCase.title}` : ""}</p>
+              <dl className="mt-1 grid min-w-0 gap-2">
+                {fields.map(([label, value]) => (
+                  <div key={label} className="min-w-0">
+                    <dt className="font-semibold">{label}</dt>
+                    <dd><pre className="max-h-48 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-foreground">{value == null
+                      ? tx(locale, "未提供", "Not provided")
+                      : Array.isArray(value) ? JSON.stringify(value, null, 2) : value === "" ? '""' : value}</pre></dd>
+                  </div>
+                ))}
+              </dl>
+              {testCase.description ? <p className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{testCase.description}</p> : null}
+            </article>
+          );
+        })}
+      </div>
+      {testCases.length > 2 ? <button type="button" aria-expanded={expanded} aria-controls={listId} onClick={() => setExpanded(value => !value)} className="w-fit rounded-[6px] border px-3 py-1.5 text-[11px] font-semibold text-primary hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
+        {expanded ? tx(locale, "收起", "Show fewer") : tx(locale, `查看全部 ${testCases.length} 项`, `View all ${testCases.length} test cases`)}
+      </button> : null}
       {problem?.solution_code ? <pre className="max-h-20 overflow-auto whitespace-pre rounded-[6px] bg-slate-950 p-2 text-[10px] text-slate-100">{normalizeCodeLineBreaks(problem.solution_code)}</pre> : null}
     </div>
   );
@@ -412,7 +440,8 @@ function fieldSource(problem: ProblemInfo | undefined, field: "stem" | "criterio
     const imported = problem.material_provenance?.[field as keyof typeof problem.material_provenance];
     if (imported?.source_filename) return tx(locale, `资料导入 · ${imported.source_filename}`, `Imported · ${imported.source_filename}`);
     const generated = problem.ai_completion_provenance?.[field as keyof typeof problem.ai_completion_provenance];
-    if (generated) return tx(locale, "SmarTAI 补全 · 教师已确认版本", "SmarTAI completion · teacher-confirmed version");
+    // Provenance identifies the source, not a confirmation of this material version.
+    if (generated) return tx(locale, "SmarTAI 补全", "SmarTAI completion");
   }
   const value = field === "stem" ? problem.stem : field === "criterion" ? problem.criterion : field === "reference_answer" ? problem.reference_answer : problem.test_cases;
   if (Array.isArray(value) ? value.length > 0 : Boolean(value)) return tx(locale, "题目识别 / 教师维护", "Recognition / teacher maintained");
