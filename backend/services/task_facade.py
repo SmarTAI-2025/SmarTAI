@@ -4827,7 +4827,7 @@ def update_problem(
         raise InvalidTransition("The task is busy.", code="workflow_busy")
     now = time.time()
     substantive = bool({
-        "number", "stem", "criterion", "max_score", "reference_answer",
+        "number", "type", "stem", "criterion", "max_score", "reference_answer",
         "solution_code", "test_cases",
     }.intersection(patch))
     with session_scope() as session:
@@ -4928,6 +4928,11 @@ def update_problem(
             if not number or len(number) > 64:
                 raise ValidationError("Question number is required.", code="invalid_question_number")
             patch["number"] = number
+        if "type" in patch:
+            question_type = str(patch["type"] or "").strip()
+            if not question_type or len(question_type) > 64:
+                raise ValidationError("Question type is required.", code="invalid_question_type")
+            patch["type"] = question_type
         if "stem" in patch or "number" in patch:
             structure = build_major_question_structure(
                 {"number": patch.get("number", question.number), "stem": patch.get("stem", question.stem)},
@@ -4967,7 +4972,7 @@ def update_problem(
             })
         source["presentation"] = presentation
         for key in (
-            "number", "stem", "criterion", "max_score", "reference_answer", "test_cases"
+            "number", "type", "stem", "criterion", "max_score", "reference_answer", "test_cases"
         ):
             if key in patch:
                 setattr(question, key, patch[key])

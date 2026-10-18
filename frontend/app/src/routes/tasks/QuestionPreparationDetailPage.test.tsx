@@ -190,6 +190,7 @@ it("keeps exactly one review-confirm button per question", () => {
 
 beforeEach(() => {
   testState.locale = "zh-CN";
+  taskData.problem_data.Q1.type = "Proof";
   mutateAsync.mockReset();
   taskData.workflow_revision = 7;
   taskData.status = "problems_ready";
@@ -228,6 +229,26 @@ beforeEach(() => {
       toJSON: () => ({}),
     };
   });
+});
+
+it("edits type beside number through the existing versioned field save, including Other", async () => {
+  taskData.problem_data.Q1.type = "short";
+  mutateAsync.mockResolvedValue({ workflow_revision: 8 });
+  renderPage();
+  const card = within(document.querySelector('[data-question-id="Q1"]') as HTMLElement);
+  expect(card.queryByText("short")).not.toBeInTheDocument();
+  expect(card.getAllByText("简答题")).toHaveLength(2);
+  await userEvent.click(card.getByRole("button", { name: "题型 · 修改" }));
+  expect(card.getByRole("combobox", { name: "题型" })).toHaveValue("short_answer");
+  await userEvent.selectOptions(card.getByRole("combobox", { name: "题型" }), "other");
+  await userEvent.click(card.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({ taskId: "task-1", qId: "Q1", type: "other", expectedWorkflowRevision: 7 }));
+  await waitFor(() => expect(card.queryByRole("combobox", { name: "题型" })).not.toBeInTheDocument());
+  await userEvent.click(card.getByRole("button", { name: "题号 · 修改" }));
+  await userEvent.clear(card.getByRole("textbox", { name: "题号" }));
+  await userEvent.type(card.getByRole("textbox", { name: "题号" }), "1.1.5");
+  await userEvent.click(card.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(mutateAsync).toHaveBeenLastCalledWith({ taskId: "task-1", qId: "Q1", number: "1.1.5", expectedWorkflowRevision: 8 }));
 });
 
 describe("QuestionPreparationDetailPage navigation", () => {

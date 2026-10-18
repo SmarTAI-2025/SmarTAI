@@ -56,6 +56,7 @@ export function normalizeFilterType(value: string): string {
   const aliases: Record<string, string> = {
     "计算题": "calculation", "计算": "calculation", "编程题": "programming", "编程": "programming", "coding": "programming",
     "证明题": "proof", "证明": "proof", "概念题": "concept", "选择题": "choice", "填空题": "fill_blank", "简答题": "short_answer", "问答题": "short_answer",
+    "short": "short_answer", "其他": "other",
   };
   const key = normalizeFilterText(value);
   return aliases[key] ?? key;

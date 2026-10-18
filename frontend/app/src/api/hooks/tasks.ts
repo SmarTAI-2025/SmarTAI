@@ -334,6 +334,7 @@ export function useUpdateProblem() {
       taskId: string;
       qId: string;
       number?: string;
+      type?: string;
       stem?: string;
       criterion?: string;
       max_score?: number;

@@ -149,6 +149,14 @@ for (const paused of [false, true]) test(`early ${paused ? "pause" : "failure"} 
   await card.getByRole("textbox", { name: "题号", exact: true }).fill("1.1.5");
   await card.getByRole("button", { name: "保存", exact: true }).click();
   await expect(card.getByRole("heading", { name: "第 1.1.5 题" })).toBeVisible();
+  await card.getByRole("button", { name: "题型 · 修改", exact: true }).click();
+  await card.getByRole("combobox", { name: "题型" }).selectOption("other");
+  await card.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(card.getByText("其他", { exact: true })).toHaveCount(2);
+  await page.reload();
+  await expect(card.getByText("其他", { exact: true })).toHaveCount(2);
+  await card.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `/private/tmp/smartai-question-type-${paused ? "pause" : "failure"}.png` });
   await card.getByRole("button", { name: "题目 · 修改", exact: true }).click();
   await card.getByRole("textbox", { name: "题目", exact: true }).fill("What is 2 + 2?");
   await card.getByRole("button", { name: "保存", exact: true }).click();
@@ -160,6 +168,6 @@ for (const paused of [false, true]) test(`early ${paused ? "pause" : "failure"} 
   await page.goto("/tasks/early-manual/questions?manualJob=early-job");
   await expect(page.getByRole("heading", { name: "题目资料总览" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "人工补齐题目" })).toHaveCount(0);
-  expect(mutations).toHaveLength(6);
+  expect(mutations).toHaveLength(7);
   expect(errors).toEqual([]);
 });
