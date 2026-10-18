@@ -369,6 +369,7 @@ describe("AddSubmissionsPage OCR uploads", () => {
     expect(screen.getByText(/原文件已保留/)).toBeInTheDocument();
     expect(screen.queryByText("submissionUploadExisting")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
     fireEvent.click(screen.getByRole("button", { name: "重试失败项" }));
 
     await waitFor(() => expect(retryMutateAsync).toHaveBeenCalledWith({
@@ -424,6 +425,43 @@ it("keeps unsubmitted local files through task navigation but clears after a nor
 
 describe("submitted input recovery", () => {
   beforeEach(async () => { inputState.input = null; await clearPageDrafts(); mutateAsync.mockReset(); retryMutateAsync.mockReset(); mutateAsync.mockResolvedValue({ status: "started" }); taskState.data = { ...taskState.data, status: "problems_ready", pending_submission_file_name: null, submission_file_name: null, last_failed_job_id: null, student_count: 0 }; });
+  it.each(["error", "submissions_paused"])("requires a roster before reparsing a stored file from %s", async (status) => {
+    taskState.data = { ...taskState.data, status, pending_submission_file_name: "saved.pdf", last_failed_job_id: "prior" };
+    inputState.input = { job_id: "prior", stored_file_id: "saved-pdf", filename: "saved.pdf", available: true, identity_mode: "filename", recognition_provider_id: "provider-default" };
+    const { container } = renderPage();
+    await screen.findByText("saved.pdf");
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新识别全部作答" }));
+
+    expect(mutateAsync).not.toHaveBeenCalled();
+    expect(retryMutateAsync).not.toHaveBeenCalled();
+    expect(container.querySelector("#submission-roster-required")).toHaveTextContent("submissionUploadRosterRequired");
+    expect(screen.getByRole("button", { name: "submissionUploadRosterChoose" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "submissionUploadRosterChoose" })).toHaveAttribute("aria-describedby", "submission-roster-required");
+    expect(screen.getByText("saved.pdf")).toBeInTheDocument();
+
+    const roster = new File(["student_id,name\nS1,Alex"], "roster.csv", { type: "text/csv" });
+    fireEvent.change(container.querySelectorAll('input[type="file"]')[1]!, { target: { files: [roster] } });
+    expect(screen.queryByText("submissionUploadRosterRequired")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新识别全部作答" }));
+    await screen.findByText("progress page");
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ file: null, storedFileId: "saved-pdf", identityMode: "roster", rosterFile: roster, reuseRosterFromJobId: null }));
+    expect(retryMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it.each(["error", "submissions_paused"])("reuses the saved roster when reparsing a stored file from %s", async (status) => {
+    taskState.data = { ...taskState.data, status, pending_submission_file_name: "saved.pdf", last_failed_job_id: "prior" };
+    inputState.input = { job_id: "prior", stored_file_id: "saved-pdf", filename: "saved.pdf", available: true, identity_mode: "roster", roster_name: "saved-roster.csv", roster_count: 2, recognition_provider_id: "provider-default" };
+    renderPage();
+    await screen.findByText("saved-roster.csv (2)");
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    fireEvent.click(screen.getByRole("button", { name: "重新识别全部作答" }));
+    await screen.findByText("progress page");
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ file: null, storedFileId: "saved-pdf", identityMode: "roster", rosterFile: null, reuseRosterFromJobId: "prior" }));
+    expect(retryMutateAsync).not.toHaveBeenCalled();
+  });
+
   it("labels restored failed-job inputs as a full restart and applies edited identity options", async () => {
     taskState.data = { ...taskState.data, status: "error", pending_submission_file_name: "saved.zip", last_failed_job_id: "prior" };
     inputState.input = { job_id: "prior", stored_file_id: "saved-zip", filename: "saved.zip", available: true, identity_mode: "roster", roster_name: "saved-roster.csv", roster_count: 2, recognition_provider_id: "provider-default" };

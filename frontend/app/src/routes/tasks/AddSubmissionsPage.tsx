@@ -108,7 +108,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       && task.pending_submission_file_name
       && !selectedFile,
   );
-  const needsRosterUpload = !canRetryOriginal && identityMode === "roster" && !rosterFile && !hasSavedRoster;
+  const needsRosterUpload = (!canRetryOriginal || hasStoredFile) && identityMode === "roster" && !rosterFile && !hasSavedRoster;
   const showRosterError = missingUpload === "roster" && needsRosterUpload;
   const actionError = formError ?? (showRosterError ? t("submissionUploadRosterRequired") : null);
 

@@ -48,11 +48,12 @@ const copy = {
   },
 } as const;
 
-async function setup(page: Page, locale: keyof typeof copy, uploadReceiver: UploadReceiver) {
+async function setup(page: Page, locale: keyof typeof copy, uploadReceiver: UploadReceiver, recoveryStatus?: "error" | "submissions_paused") {
   const { requests } = uploadReceiver;
   const errors: string[] = [];
   const task = {
-    task_id: "roster-audit", owner_id: "teacher", name: "Roster validation", status: "problems_ready",
+    task_id: "roster-audit", owner_id: "teacher", name: "Roster validation", status: recoveryStatus ?? "problems_ready",
+    ...(recoveryStatus ? { parse_job_id: "prior-job", last_failed_job_id: "prior-job", pending_submission_file_name: "saved.pdf" } : {}),
     workflow_revision: 1, problem_count: 1, student_count: 0, created_at: 1, updated_at: 1, kb_docs: {}, student_data: {},
     problem_data: { q1: { q_id: "q1", number: "1", stem: "What is 4 + 4?", max_score: 10, criterion: "Eight", reference_answer: "8", review_status: "confirmed" } },
   };
@@ -73,7 +74,10 @@ async function setup(page: Page, locale: keyof typeof copy, uploadReceiver: Uplo
       return route.continue({ url: `${uploadReceiver.url}/parse_submissions` });
     }
     if (path === "/tasks/roster-audit/state") return json({ ...task, progress: { phase: "parsing", job_id: "local-mock-job", current_step: "recognition", total_steps: 2, completed_steps: 0, active: [], messages: [] } });
-    if (path.endsWith("/input")) return json({ task_id: task.task_id, workflow_revision: 1, input: null });
+    if (path.endsWith("/input")) return json({ task_id: task.task_id, workflow_revision: 1, input: recoveryStatus ? {
+      job_id: "prior-job", stored_file_id: "saved-pdf", filename: "saved.pdf", available: true,
+      identity_mode: "filename", recognition_provider_id: "test-provider", roster_count: 0, roster_name: null,
+    } : null });
     if (path.endsWith("/source-files")) return json({ task_id: task.task_id, workflow_revision: 1, problem_source: null, submission_sources: {} });
     if (path === "/tasks/roster-audit") return json(task);
     throw new Error(`Unexpected request ${request.method()} ${path}`);
@@ -83,6 +87,34 @@ async function setup(page: Page, locale: keyof typeof copy, uploadReceiver: Uplo
   await expect(page.getByRole("heading", { name: copy[locale].title, exact: true })).toBeVisible();
   await expect(page.getByLabel(copy[locale].model)).toHaveValue("test-provider");
   return { requests, errors };
+}
+
+for (const status of ["error", "submissions_paused"] as const) {
+  test(`restored ${status} file requires a roster before full recognition`, async ({ page, uploadReceiver }, info) => {
+    const { requests, errors } = await setup(page, "zh-CN", uploadReceiver, status);
+    await expect(page.getByText("saved.pdf", { exact: true })).toBeVisible();
+    await page.getByRole("radio", { name: copy["zh-CN"].roster, exact: true }).click();
+    const start = page.getByRole("button", { name: "重新识别全部作答", exact: true });
+    await start.click();
+    await expect(page.locator("#submission-roster-required")).toHaveText(copy["zh-CN"].required);
+    await expect(page.locator('[aria-describedby="submission-roster-required"]')).toBeFocused();
+    expect(requests).toHaveLength(0);
+    await expect(page).toHaveURL(new RegExp(`${uploadPath}$`));
+    await expect(page.getByText("saved.pdf", { exact: true })).toBeVisible();
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+    await page.screenshot({ path: info.outputPath("restored-file-roster-required.png"), fullPage: true, animations: "disabled" });
+
+    await page.locator('input[type="file"]').nth(1).setInputFiles(roster);
+    await expect(page.locator("#submission-roster-required")).toHaveCount(0);
+    await start.click();
+    await expect(page).toHaveURL(/\/tasks\/roster-audit\/submissions\/progress$/);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toContain('name="stored_file_id"\r\n\r\nsaved-pdf\r\n');
+    expect(requests[0]).toContain('name="identity_mode"\r\n\r\nroster\r\n');
+    expect(requests[0]).toContain('name="roster_file"; filename="roster.csv"');
+    expect(requests[0]).toContain(roster.buffer.toString());
+    expect(errors).toEqual([]);
+  });
 }
 
 for (const locale of ["en-US", "zh-CN"] as const) {
