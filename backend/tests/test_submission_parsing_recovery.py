@@ -25,7 +25,8 @@ def _archive_bytes() -> bytes:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("saved_filename", [None, "S1.txt", "S2.txt"])
-async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinished_source(monkeypatch, saved_filename):
+@pytest.mark.parametrize("paused_run", [False, True])
+async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinished_source(monkeypatch, saved_filename, paused_run):
     import asyncio
     import json
     from types import SimpleNamespace
@@ -68,7 +69,12 @@ async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinishe
         with pytest.raises(asyncio.CancelledError):
             await task_facade.run_durable_submission_recognition(LeasedOperation(row, worker_id="test", lease_seconds=60))
     workflow = workflow_repository.get_workflow(task, owner_id=owner)
-    stop_task_run(task_id=task, owner_id=owner, job_id=queued["job_id"], expected_revision=workflow.workflow_revision)
+    if paused_run:
+        stop_task_run(task_id=task, owner_id=owner, job_id=queued["job_id"], expected_revision=workflow.workflow_revision)
+    else:
+        operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
+        task_facade._fail_operation(task, owner, operation.id, operation.attempt, "submission_parse_failed",
+            expected_lease_token=operation.lease_token)
     paused = task_facade.get_task(task_id=task, owner_id=owner)
     origin = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
     saved_calls = list(calls)
@@ -87,7 +93,12 @@ async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinishe
                                      expected_revision=paused["workflow_revision"])
     assert result["status"] == "ready_for_review" and calls == saved_calls
     after = task_facade.get_task(task_id=task, owner_id=owner)
-    assert after["status"] == "submissions_ready"
+    for _ in range(2):
+        for data in (task_facade.get_task(task_id=task, owner_id=owner),
+                     await task_facade.async_task_state(task_id=task, owner_id=owner),
+                     task_facade.list_tasks(owner_id=owner)[task]):
+            assert data["status"] == "submissions_ready"
+            assert data["error"] is None and data["last_failed_job_id"] is None
     students = list(after["student_data"].values())
     assert len(students) == 2 and len(after["submission_sources"]) == 2
     answers = [student["stu_ans"][0] for student in students]
@@ -97,9 +108,9 @@ async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinishe
         assert saved_student["stu_id"] == "S1" and saved_student["identity_status"] == "matched"
     pending = [student for student in students if "recognition_manual_pending" in student["stu_ans"][0]["flag"]]
     assert len(pending) == 2 - int(started)
-    assert all("recognition_paused" in student["stu_ans"][0]["flag"] for student in pending)
+    assert all(("recognition_paused" if paused_run else "recognition_incomplete") in student["stu_ans"][0]["flag"] for student in pending)
     assert all(student["identity_status"] == "needs_review" and student["stu_name"] == "[Unknown Student]" for student in pending)
-    assert all(source["recognition_reason_code"] == "operation_cancelled" for source in after["submission_sources"] if source["status"] == "manual_review"), after["submission_sources"]
+    assert all(source["recognition_reason_code"] == ("operation_cancelled" if paused_run else "submission_parse_failed") for source in after["submission_sources"] if source["status"] == "manual_review"), after["submission_sources"]
     assert "submission_recognition_blocked" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
     target = pending[0]
     with pytest.raises(DomainError) as blocked:
@@ -131,7 +142,7 @@ async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinishe
     from backend.services.workflow_inputs import submission_inputs
     assert submission_inputs(task_id=task, owner_id=owner)["input"]["stored_file_id"] == origin.payload["input_file_id"]
     original = workflow_repository.get_operation(origin.id, owner_id=owner)
-    assert original.status == "error" and original.error_code == "operation_cancelled"
+    assert original.status == "error" and original.error_code == ("operation_cancelled" if paused_run else "submission_parse_failed")
     assert original.checkpoint == origin.checkpoint and original.artifact_refs == origin.artifact_refs
     with pytest.raises(DomainError):
         await continue_manually(task_id=task, owner_id=owner, job_id=origin.id,

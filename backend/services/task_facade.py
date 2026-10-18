@@ -803,6 +803,14 @@ def _workflow_grading_failure_code(workflow, run) -> str | None:
     """
     if run is None:
         return None
+    # Failed execution remains in the run for audit, but an explicit handoff
+    # makes its missing scores review work. Never infer this from "graded":
+    # ordinary partial failures also have that status and a null failure marker.
+    if (workflow.presentation_status == "grading_manual_review"
+            and workflow.grading_job_id == run.id and run.status == "partial_failed"
+            and not workflow.active_job_id and not workflow.last_failed_job_id
+            and not workflow.error_code):
+        return None
     # Normalized/legacy callers can create a grading run without a façade
     # pointer, so a null failure marker still allows the selected run's error.
     # A non-null marker naming another job is authoritative and must win.
@@ -3971,9 +3979,12 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
         if job_id:
             try:
                 operation = workflow_repository.get_operation(job_id, owner_id=owner_id)
-                progress = dict(operation.progress or {}) or None
-                if progress is not None:
-                    progress.setdefault("job_id", operation.id)
+                # Manual recovery retains failed recognition for audit, not as
+                # the current task's progress after its failure marker is cleared.
+                if operation.status != "error" or workflow.last_failed_job_id == job_id:
+                    progress = dict(operation.progress or {}) or None
+                    if progress is not None:
+                        progress.setdefault("job_id", operation.id)
             except NotFound:
                 pass
     if progress and payload["status"] in {"problems_paused", "submissions_paused"}:

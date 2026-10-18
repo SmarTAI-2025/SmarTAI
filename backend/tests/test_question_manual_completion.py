@@ -12,22 +12,31 @@ from backend.tests.test_question_preparation_recovery import (
 )
 
 
-async def failed_preparation(monkeypatch):
+async def failed_preparation(monkeypatch, failed_question="q2"):
     owner, task = _seed_task()
     _, response, _ = await _queue_question_preparation(owner, task, source_text="1. First.\n2. Second.")
     calls = []
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _RecoveryRegistry())
     monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls,
-        question_count=2, known_failure_question="q2", record_base_provider_calls=True))
+        question_count=2, known_failure_question=failed_question, record_base_provider_calls=True))
     await task_preparation.run_durable_question_preparation(_claim(owner, response["job_id"], "manual-test"))
     workflow = workflow_repository.get_workflow(task, owner_id=owner)
     return owner, task, response["job_id"], workflow.workflow_revision, calls
 
 
 async def manual(owner, task, job, revision):
-    return await task_preparation.manually_complete_question_preparation(task, job,
+    result = await task_preparation.manually_complete_question_preparation(task, job,
         task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=revision),
         current=SimpleNamespace(id=owner))
+    if isinstance(result, dict) and result["status"] == "ready_for_review":
+        for _ in range(2):
+            for data in (task_facade.get_task(task_id=task, owner_id=owner),
+                         await task_facade.async_task_state(task_id=task, owner_id=owner),
+                         task_facade.list_tasks(owner_id=owner)[task]):
+                assert data["status"] == "problems_ready"
+                assert data["error"] is None and data["last_failed_job_id"] is None
+                assert (data.get("progress") or {}).get("phase") != "error"
+    return result
 
 
 @pytest.mark.asyncio
@@ -157,3 +166,14 @@ async def test_manual_completion_rejects_stale_foreign_or_unverified_results(mon
     assert response.status_code in {404, 409, 422}, response.body
     assert not assignment_repository.list_questions(task, teacher_id=owner)
     assert calls == before_calls
+
+
+@pytest.mark.asyncio
+async def test_all_question_units_failed_can_enter_manual_review(monkeypatch):
+    owner, task, job, revision, calls = await failed_preparation(monkeypatch, failed_question="q1")
+    before_calls = list(calls)
+    result = await manual(owner, task, job, revision)
+    assert result["status"] == "ready_for_review" and calls == before_calls
+    questions = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]
+    assert len(questions) == 2 and all(not q["criterion"] for q in questions.values())
+    assert "question_manual_completion_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
