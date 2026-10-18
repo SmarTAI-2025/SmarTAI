@@ -102,10 +102,10 @@ def test_uncalibrated_low_labels_do_not_require_confirmation(low_flag):
     assert task_facade.grading_readiness(**args)["blocking_issues"] == []
 
 
-def test_numeric_very_low_answer_can_be_confirmed_without_rewriting():
+def test_numeric_very_low_answer_is_advisory_and_can_be_confirmed_without_rewriting():
     _seeded, args = _case(flags=["recognition_very_low_confidence"])
     before = task_facade.get_task(**args, full=True)
-    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    assert "submission_recognition_blocked" not in task_facade.grading_readiness(**args)["blocking_issues"]
     task_facade.update_student_answer(**args, display_student_id="S001", q_id="q1",
         patch={"review_status": "confirmed"}, expected_revision=before["workflow_revision"])
     assert task_facade.grading_readiness(**args)["ready"]
@@ -156,7 +156,7 @@ def test_question_unverified_target_is_not_proof_of_missing_content():
     assert task_facade.grading_readiness(**args)["blocking_issues"] == []
 
 
-def test_question_low_confidence_edit_still_requires_confirmation():
+def test_question_low_confidence_edit_remains_advisory():
     _seeded, args = _case(flags=[])
     with session_scope() as session:
         question = session.scalar(select(AssignmentQuestionRecord))
@@ -167,18 +167,18 @@ def test_question_low_confidence_edit_still_requires_confirmation():
     before = task_facade.get_task(**args, full=True)
     task_facade.update_problem(**args, q_id="q1", patch={"stem": "Corrected question text", "review_status": "edited"},
                                expected_revision=before["workflow_revision"])
-    assert "question_review_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    assert "question_review_blocked" not in task_facade.grading_readiness(**args)["blocking_issues"]
     current = task_facade.get_task(**args, full=True)
     task_facade.update_problem(**args, q_id="q1", patch={"preparation_issues": []},
                                expected_revision=current["workflow_revision"])
-    assert "question_review_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    assert "question_review_blocked" not in task_facade.grading_readiness(**args)["blocking_issues"]
     current = task_facade.get_task(**args, full=True)
     task_facade.update_problem(**args, q_id="q1", patch={"review_status": "confirmed"},
                                expected_revision=current["workflow_revision"])
     assert "question_review_blocked" not in task_facade.grading_readiness(**args)["blocking_issues"]
 
 
-@pytest.mark.parametrize("confidence,required", [(None, False), ("low", False), (.2499, True), (.25, False), (.5999, False), (.6, False)])
+@pytest.mark.parametrize("confidence,required", [(None, False), ("low", False), (.2499, False), (.25, False), (.5999, False), (.6, False)])
 def test_source_confidence_reaches_persisted_question_gate(confidence, required):
     from backend.services.question_sources import attach_recognition_review
     _seeded, args = _case(flags=[])
@@ -199,3 +199,84 @@ def test_source_failure_is_required_even_with_high_confidence():
         question = session.scalar(select(AssignmentQuestionRecord))
         question.source = {"presentation": packages["q1"]}
     assert "question_review_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+
+
+def test_recognition_confidence_is_numeric_metadata_and_survives_teacher_edit():
+    _seeded, args = _case(flags=["recognition_confidence:0.72", "recognition_low_confidence"])
+    before = task_facade.get_task(**args, full=True)
+    answer = before["student_data"]["S001"]["stu_ans"][0]
+    assert answer["recognition_confidence"] == .72
+    assert not any(flag.startswith("recognition_confidence:") for flag in answer["flag"])
+    changed = task_facade.update_student_answer(**args, display_student_id="S001", q_id="q1",
+        patch={"content": "Teacher transcribed content", "flag": [], "review_status": "confirmed"},
+        expected_revision=before["workflow_revision"])
+    assert changed["answer"]["recognition_confidence"] == .72 and changed["answer"]["flag"] == []
+    assert task_facade.get_task(**args, full=True)["student_data"]["S001"]["stu_ans"][0]["recognition_confidence"] == .72
+
+
+def test_old_blocking_low_confidence_and_missing_answer_are_advisory_but_empty_rubric_blocks():
+    _seeded, args = _case(flags=[])
+    with session_scope() as session:
+        question = session.scalar(select(AssignmentQuestionRecord))
+        question.reference_answer = ""
+        question.source = {"presentation": {"preparation_issues": [
+            {"issue_id": "low", "field": "stem", "code": "low_confidence", "status": "open", "severity": "blocking", "details": {"confidence": .1}},
+            {"issue_id": "answer", "field": "answer", "code": "generation_failed", "status": "open", "severity": "blocking"},
+            {"issue_id": "answer-partial", "field": "answer", "code": "recognition_partial", "status": "open", "severity": "blocking", "details": {"coverage": {"failed_pages": [2]}}},
+            {"issue_id": "manual", "field": "source", "code": "manual_completion_required", "status": "open", "severity": "warning", "details": {"required_fields": ["reference_answer"]}},
+        ]}}
+    before = task_facade.get_task(**args, full=True)
+    assert task_facade.grading_readiness(**args)["ready"]
+    confirmed = task_facade.update_problem(**args, q_id="q1", patch={"review_status": "confirmed", "review_fields": ["stem"]}, expected_revision=before["workflow_revision"])
+    assert confirmed["problem"]["review_status"] == "confirmed"
+    assert all(issue["status"] == "acknowledged" for issue in confirmed["problem"]["preparation_issues"])
+    with session_scope() as session:
+        question = session.scalar(select(AssignmentQuestionRecord))
+        question.criterion = ""
+    current = task_facade.get_task(**args, full=True)
+    assert not task_facade.grading_readiness(**args)["ready"]
+    with pytest.raises(ValidationError):
+        task_facade.update_problem(**args, q_id="q1", patch={"review_status": "confirmed"}, expected_revision=current["workflow_revision"])
+
+
+def test_import_fills_omitted_question_but_preserves_explicit_blank_answer():
+    from backend.db import assignment_repository
+    seeded = _seed_legacy_structured_case(question_count=2)
+    args = {"task_id": seeded["assignment_id"], "owner_id": seeded["owner_id"]}
+    assignment = assignment_repository.get_assignment(args["task_id"], actor_id=args["owner_id"])
+    before = task_facade.get_task(**args)
+    task_facade._commit_imported_submissions(**args, course_id=assignment.course_id,
+        students=[{"stu_id": "S001", "stu_name": "Known Student", "identity_status": "matched",
+                   "stu_ans": [{"q_id": "q1", "content": "", "flag": []}]}],
+        replace_existing=True, expected_workflow_revision=before["workflow_revision"])
+    current = task_facade.get_task(**args, full=True)
+    answers = {answer["q_id"]: answer for answer in current["student_data"]["S001"]["stu_ans"]}
+    assert answers["q1"]["content"] == "" and answers["q1"]["flag"] == []
+    assert answers["q2"]["content"] == "" and "recognition_manual_pending" in answers["q2"]["flag"]
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    with pytest.raises(ValidationError):
+        task_facade.update_student_answer(**args, display_student_id="S001", q_id="q2",
+            patch={"review_status": "confirmed"}, expected_revision=current["workflow_revision"])
+    task_facade.update_student_answer(**args, display_student_id="S001", q_id="q2",
+        patch={"content": "", "flag": ["manual_blank_confirmed"], "review_status": "confirmed"},
+        expected_revision=current["workflow_revision"])
+    assert task_facade.grading_readiness(**args)["ready"]
+
+
+def test_historical_missing_answer_row_cannot_bypass_grading_gate():
+    seeded = _seed_legacy_structured_case(question_count=2)
+    args = {"task_id": seeded["assignment_id"], "owner_id": seeded["owner_id"]}
+    with session_scope() as session:
+        answer = session.scalar(select(SubmissionAnswerRecord).where(SubmissionAnswerRecord.q_id == "q2"))
+        session.delete(answer)
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    current = task_facade.get_task(**args, full=True)
+    missing = next(answer for answer in current["student_data"]["S001"]["stu_ans"] if answer["q_id"] == "q2")
+    assert missing["content"] == "" and "recognition_manual_pending" in missing["flag"]
+    with pytest.raises(ValidationError):
+        task_facade.update_student_answer(**args, display_student_id="S001", q_id="q2",
+            patch={"review_status": "confirmed"}, expected_revision=current["workflow_revision"])
+    task_facade.update_student_answer(**args, display_student_id="S001", q_id="q2",
+        patch={"content": "Teacher transcribed q2", "review_status": "confirmed"},
+        expected_revision=current["workflow_revision"])
+    assert task_facade.grading_readiness(**args)["ready"]

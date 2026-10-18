@@ -1606,14 +1606,6 @@ def release(run_id: str, *, teacher_id: str) -> education.GradingRunDTO:
         )
         if session.scalar(select(unresolved)):
             raise ResultNotReleasable("unresolved_failures")
-        # A stop-time partial score is provisional even if its surviving model
-        # was confident. Keep this gate in the repository for direct releases.
-        for row in session.scalars(select(GradeResultRecord).where(
-            GradeResultRecord.grading_run_id == run_id,
-            GradeResultRecord.requires_review.is_(True),
-        )):
-            if "grading_paused" in (row.initial_review_reasons or []):
-                raise ResultNotReleasable("paused_grading_requires_confirmation")
         revision_ids, question_ids = _result_matrix_axes(session, run)
         actual_pairs = {
             (revision_id, question_id)

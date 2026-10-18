@@ -99,7 +99,7 @@ def test_stop_preserves_each_sample_and_resume_only_calls_missing_samples(case, 
     assert len(grades.list_results_for_run(third)) == 2
 
 
-def test_manual_handoff_requires_confirmation_of_partial_score_and_missing_score(case):
+def test_manual_handoff_requires_only_missing_score_to_be_filled_and_confirmed(case):
     run_id = start(case, "manual-start")["job_id"]
     checkpoints, _, revisions, setup = prepare(case, run_id)
     student = revisions[0][1]
@@ -111,18 +111,18 @@ def test_manual_handoff_requires_confirmation_of_partial_score_and_missing_score
     with pytest.raises(VersionConflict):
         continue_manual_grading(task_id=case[0], owner_id=case[1], job_id=run_id, expected_revision=revision - 1)
     continue_manual_grading(task_id=case[0], owner_id=case[1], job_id=run_id, expected_revision=revision)
-    assert task_facade.finalization(task_id=case[0], owner_id=case[1])["remaining_review_count"] == 2
+    assert task_facade.finalization(task_id=case[0], owner_id=case[1])["remaining_review_count"] == 1
     assert len(task_facade.task_results(task_id=case[0], owner_id=case[1])["results"][0]["corrections"]) == 2
     rows = sorted(grades.list_results_for_run(run_id), key=lambda row: row.q_id, reverse=True)
-    for row in rows:
-        if row.q_id == "q1":
-            with pytest.raises(ResultNotReleasable, match="paused_grading_requires_confirmation"):
-                grades.release(run_id, teacher_id=case[1])
-        grades.add_teacher_review(row.id, teacher_id=case[1], new_score=8,
-                                  new_comment="Manually checked", confirm=True)
+    with pytest.raises(ResultNotReleasable, match="unresolved_failures"):
+        grades.release(run_id, teacher_id=case[1])
+    missing = next(row for row in rows if row.q_id == "q2")
+    grades.add_teacher_review(missing.id, teacher_id=case[1], new_score=8,
+                              new_comment="Manually checked", confirm=True)
+    grades.release(run_id, teacher_id=case[1])
     finalization = task_facade.finalization(task_id=case[0], owner_id=case[1])
     assert finalization["ready_for_confirmation"]
-    assert finalization["required_review_count"] == finalization["confirmed_required_count"] == 2
+    assert finalization["required_review_count"] == finalization["confirmed_required_count"] == 1
 
 
 def test_changed_model_config_does_not_mix_old_partial_votes(case, monkeypatch):
@@ -195,3 +195,41 @@ def test_live_stop_after_one_sample_survives_before_whole_question_completes(cas
         assert sum(e.get("error_kind") == "operation_cancelled" for row in rows for e in row.ai_expert_results) == 5
         assert task_facade._grading_progress(run_id, case[1])["completed_units"] == 0
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("value", [0, 8])
+@pytest.mark.parametrize("saved_count", [1, 2])
+def test_paused_valid_scores_release_without_teacher_confirmation(case, value, saved_count):
+    flow = workflows.get_live_workflow(case[0], owner_id=case[1])
+    config = {**flow.grading_setup, "multi_sample_n": 2, "aggregation_method": "weighted_average"}
+    workflows.update_workflow(case[0], owner_id=case[1], grading_setup=config)
+    run_id = start(case, "release-valid-paused")["job_id"]
+    checkpoints, questions, revisions, _ = prepare(case, run_id)
+    provider = config["selected_provider_ids"][0]
+    for question in questions:
+        for sample in range(1, saved_count + 1):
+            checkpoints.save_expert(revisions[0][1], question.q_id, provider, sample,
+                ExpertResult(provider=provider, provider_id=provider, score=value, confidence=0,
+                             comment="A valid score with uncertain confidence"))
+    stop(case, run_id)
+    assert grades.get_run(run_id).status == "cancelled"
+    continue_manual_grading(task_id=case[0], owner_id=case[1], job_id=run_id,
+        expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
+    final = task_facade.finalization(task_id=case[0], owner_id=case[1])
+    assert final["remaining_review_count"] == 0 and final["ready_for_confirmation"]
+    assert all(row.ai_score == value and not row.teacher_review for row in grades.list_results_for_run(run_id))
+    assert grades.release(run_id, teacher_id=case[1]).released_at is not None
+
+
+@pytest.mark.parametrize("status", ["failed", "partial_failed"])
+def test_failed_grading_can_explicitly_continue_manually_without_model(case, status):
+    from backend.db.models import GradingRunRecord
+    from backend.db.session import session_scope
+    run_id = start(case, "failed-manual")["job_id"]
+    stop(case, run_id)
+    with session_scope() as session:
+        row = session.get(GradingRunRecord, run_id)
+        row.status, row.error_message = status, "provider_unavailable"
+    continue_manual_grading(task_id=case[0], owner_id=case[1], job_id=run_id,
+        expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
+    assert task_facade.finalization(task_id=case[0], owner_id=case[1])["remaining_review_count"] == 2

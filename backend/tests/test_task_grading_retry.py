@@ -447,7 +447,7 @@ def test_failed_only_rejects_changed_grading_content(case, monkeypatch):
     assert len(grading.list_runs_for_assignment(case[0], actor_id=case[1])) == 1
 
 
-def test_question_fields_confirm_independently_and_block_failed_content(case):
+def test_one_confirmation_acknowledges_all_advice_but_blocks_failed_content(case):
     from backend.db.models import AssignmentQuestionRecord
     from backend.domain.errors import ValidationError
     with session_scope() as session:
@@ -462,8 +462,8 @@ def test_question_fields_confirm_independently_and_block_failed_content(case):
             patch={"review_status": "confirmed", **({"review_fields": fields} if fields else {})})["problem"]
     score = confirm(["max_score"])
     assert score["max_score_review_status"] == "confirmed"
-    assert score["review_status"] == "needs_review"
-    assert [i["field"] for i in score["preparation_issues"] if i["status"] == "open"] == ["stem"]
+    assert score["review_status"] == "confirmed"
+    assert not [i for i in score["preparation_issues"] if i["status"] == "open"]
     assert confirm(["stem"])["review_status"] == "confirmed"
     with session_scope() as session:
         row = session.scalar(select(AssignmentQuestionRecord).where(AssignmentQuestionRecord.assignment_id == case[0], AssignmentQuestionRecord.q_id == "q1"))

@@ -85,7 +85,8 @@ async def test_paused_question_handoff_keeps_completed_questions_and_sources(mon
 
 
 @pytest.mark.asyncio
-async def test_manual_completion_preserves_success_and_requires_filling_then_confirmation(monkeypatch):
+@pytest.mark.parametrize("fill_reference", [False, True])
+async def test_manual_completion_preserves_success_and_requires_filling_then_confirmation(monkeypatch, fill_reference):
     owner, task, job, revision, calls = await failed_preparation(monkeypatch)
     before_calls = list(calls)
     result = await manual(owner, task, job, revision)
@@ -96,7 +97,7 @@ async def test_manual_completion_preserves_success_and_requires_filling_then_con
 
     q1, q2 = assignment_repository.list_questions(task, teacher_id=owner)
     assert q1.reference_answer and q1.criterion
-    assert q2.reference_answer == "" and q2.criterion == ""
+    assert not q2.reference_answer and q2.criterion == ""
     assert workflow_repository.get_workflow(task, owner_id=owner).presentation_status == "problems_ready"
     failed = workflow_repository.get_operation(job, owner_id=owner)
     assert failed.status == "error" and failed.error_code
@@ -105,7 +106,7 @@ async def test_manual_completion_preserves_success_and_requires_filling_then_con
     with pytest.raises(ValidationError, match="Fix the failed recognition"):
         task_facade.update_problem(task_id=task, owner_id=owner, q_id="q2", patch={"review_status": "confirmed"})
     task_facade.update_problem(task_id=task, owner_id=owner, q_id="q2",
-        patch={"reference_answer": "Teacher solution", "criterion": "Award 10 points for the solution."})
+        patch={"criterion": "Award 10 points for the solution.", **({"reference_answer": "Teacher solution"} if fill_reference else {})})
     assert "question_manual_completion_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
     task_facade.update_problem(task_id=task, owner_id=owner, q_id="q2", patch={"review_status": "confirmed"})
     assert "question_manual_completion_required" not in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]

@@ -1100,7 +1100,7 @@ async def test_outcome_and_finalizer_failures_still_leave_terminal_failed_projec
         order_index=0,
         type="short",
         stem="Question one",
-        criterion="",
+        criterion="Award up to 10 points for the method and result.",
         max_score=10,
     )
     queued = task_facade.queue_task_submission_parsing(
@@ -1195,7 +1195,7 @@ async def test_archive_member_persistence_failure_is_terminal_and_does_not_skip_
         order_index=0,
         type="short",
         stem="Question one",
-        criterion="",
+        criterion="Award up to 10 points for the method and result.",
         max_score=10,
     )
     archive = _zip_sources({
@@ -1309,7 +1309,7 @@ async def test_equal_size_zip_replacement_survives_old_delete_retry_and_keeps_pr
         order_index=0,
         type="short",
         stem="Question one",
-        criterion="",
+        criterion="Award up to 10 points for the method and result.",
         max_score=10,
     )
     old_member_bytes = b"\x89PNG\r\n\x1a\nold-preview"

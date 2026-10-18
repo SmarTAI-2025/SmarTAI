@@ -330,12 +330,7 @@ async def run_multi_expert(
             synthesis_method="degraded_to_single",
             extra_experts=failures,
         )
-        # Failed siblings stay visible, but a usable survivor is not a failed
-        # grade. Only confidence below .25 requires confirmation.
-        from backend.domain.confidence_policy import confidence_requires_review
-        if confidence_requires_review(successes[0].confidence):
-            correction.requires_human_review = True
-            correction.review_reasons = ["degraded_to_single"]
+        correction.review_reasons = ["partial_experts"]
         return correction
 
     # ── Synthesis (≥ 2 successes) ─────────────────────────────────────────
@@ -388,7 +383,7 @@ async def run_multi_expert(
     is_score, requires_review, reasons = _compute_review_signal(successes)
     correction.is_score = is_score
     correction.requires_human_review = requires_review
-    correction.review_reasons = reasons
+    correction.review_reasons = reasons + (["partial_experts"] if failures else [])
     if requires_review:
         is_str = f"{is_score:.3f}" if is_score is not None else "n/a"
         logger.info(

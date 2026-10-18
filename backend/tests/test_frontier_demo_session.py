@@ -394,6 +394,7 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(e
     assignment_repository.add_question(
         assignment_id=task_id, teacher_id=owner_id, q_id="q1", order_index=0,
         type="short", stem="Explain a synthetic concept.", max_score=5,
+        criterion="Award up to 5 points for a correct explanation of the concept.",
     )
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     # Seed only the recognition output boundary. Everything from setup through

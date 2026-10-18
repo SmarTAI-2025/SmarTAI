@@ -56,7 +56,7 @@ from backend.db.models import (
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.confidence_policy import confidence_requires_review, question_issue_requires_confirmation
+from backend.domain.confidence_policy import question_issue_requires_confirmation
 from backend.domain.errors import (
     DomainError,
     DuplicateActiveRun,
@@ -856,6 +856,7 @@ def _serialize_problem(question) -> dict:
 
 
 def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[str, dict]:
+    questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
     presentations = workflow_repository.list_student_presentations(task_id)
     revision_sources = defaultdict(list)
     for stored in file_repository.list_current_submission_originals(assignment_id=task_id, teacher_id=owner_id):
@@ -884,10 +885,14 @@ def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[st
                     "type": answer.type,
                     "content": answer.content,
                     "flag": _public_answer_flags(answer.flag),
+                    "recognition_confidence": _answer_recognition_confidence(answer.flag),
                     "review_status": review_statuses.get(answer.id, "pending"),
                 }
                 for answer in revision.answers
-            ],
+            ] + [{"q_id": question.q_id, "number": question.number, "type": question.type,
+                  "content": "", "flag": ["recognition_manual_pending", "recognition_failed"],
+                  "recognition_confidence": None, "review_status": "pending"}
+                 for question in questions if question.q_id not in {answer.q_id for answer in revision.answers}],
             "source_filename": (
                 presentation.source_filename if presentation else revision.file_name
             ),
@@ -2680,7 +2685,7 @@ def _load_submission_results(artifact) -> list[SubmissionSourceParseResult]:
     ) for item in payload if isinstance(item, dict)]
 
 
-def _reusable_submission_results(*, owner_id, task_id, payload, questions):
+def _reusable_submission_results(*, owner_id, task_id, payload, questions, include_incomplete=False):
     """Reuse only complete sources on an explicit failed-item retry.
 
     Match the immutable original bytes, not a student name or model choice.
@@ -2723,7 +2728,7 @@ def _reusable_submission_results(*, owner_id, task_id, payload, questions):
     for result in results:
         if result.status not in {"parsed", "identity_conflict"} or result.student is None:
             continue
-        if _submission_result_incomplete(result):
+        if not include_incomplete and _submission_result_incomplete(result):
             # Older parsers marked a partial document parsed when its known
             # question IDs matched. It is not complete evidence to reuse.
             continue
@@ -3410,6 +3415,24 @@ def apply_question_patches_atomic(
                     presentation[key] = merged
                 else:
                     presentation[key] = value
+            # A successful completion/import repairs only the supplied target;
+            # unrelated recognition failures remain evidence for teacher review.
+            filled = {key for key, value in fields.items()
+                      if value and (not isinstance(value, str) or value.strip())}
+            issues = _effective_question_issues(presentation)
+            for issue in issues:
+                target = (issue.get("details") or {}).get("target") or {
+                    "rubric": "criterion", "answer": "reference_answer", "stem": "stem",
+                }.get(issue.get("field"))
+                if issue.get("code") == "generation_failed" and target in filled:
+                    issue.update(status="resolved", severity="warning")
+                if issue.get("code") == "manual_completion_required":
+                    remaining = [field for field in (issue.get("details") or {}).get("required_fields", [])
+                                 if field not in filled]
+                    issue["details"] = {**(issue.get("details") or {}), "required_fields": remaining}
+                    if not remaining:
+                        issue.update(status="resolved", severity="warning")
+            presentation["preparation_issues"] = issues
             source["presentation"] = presentation
             for key, value in fields.items():
                 setattr(question, key, value)
@@ -3724,7 +3747,12 @@ def _commit_imported_submissions(
             session.add(revision)
             session.flush()
 
-            for raw in student.get("stu_ans") or []:
+            answers = list(student.get("stu_ans") or [])
+            present_ids = {str(answer.get("q_id") or "") for answer in answers}
+            # An omitted model item is not evidence that the student left it blank.
+            answers.extend({"q_id": q_id, "content": "", "flag": ["recognition_manual_pending"]}
+                           for q_id in question_map if q_id not in present_ids)
+            for raw in answers:
                 question = question_map.get(str(raw.get("q_id") or ""))
                 if question is None:
                     continue
@@ -4162,6 +4190,8 @@ def grading_readiness(
             if revision is None or not revision.answers:
                 issues.append("answers_required")
             elif revision is not None:
+                if {question.q_id for question in questions} - {answer.q_id for answer in revision.answers}:
+                    issues.append("submission_recognition_blocked")
                 recognition_review_ids.extend(answer.id for answer in revision.answers
                                               if "recognition_needs_review" in (answer.flag or []))
                 for answer in revision.answers:
@@ -4203,7 +4233,7 @@ def grading_readiness(
 
 _FAILED_ANSWER_REVIEW_FLAGS = frozenset({"recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending"})
 _REQUIRED_ANSWER_CONFIRMATION_FLAGS = frozenset({
-    "recognition_repaired_needs_confirmation", "recognition_very_low_confidence",
+    "recognition_repaired_needs_confirmation",
 })
 
 
@@ -4213,10 +4243,21 @@ def _answer_recognition_failures(flags):
             or flag.startswith(("recognition_failed_pages:", "recognition_unprocessed_pages:"))}
 
 
+def _answer_recognition_confidence(flags):
+    from backend.domain.confidence_policy import confidence_value
+    for flag in flags or []:
+        if flag.startswith("recognition_confidence:"):
+            try:
+                return confidence_value(float(flag.split(":", 1)[1]))
+            except ValueError:
+                pass
+    return None
+
+
 def _public_answer_flags(flags):
     # Existing clients understand recognition_failed. Preserve the precise
     # source evidence too; projecting it must not mutate the stored answer.
-    result = list(flags or [])
+    result = [flag for flag in flags or [] if not flag.startswith("recognition_confidence:")]
     if _answer_recognition_failures(result) and "recognition_failed" not in result:
         result.append("recognition_failed")
     return result
@@ -4226,10 +4267,19 @@ def _effective_question_issues(presentation):
     issues = []
     for issue in presentation.get("preparation_issues", []):
         coverage = (issue.get("details") or {}).get("coverage") or {}
-        if (issue.get("code") in {"recognition_partial", "recognition_needs_review"} and issue.get("status") != "resolved"
+        if (issue.get("field") != "answer" and issue.get("code") in {"recognition_partial", "recognition_needs_review"} and issue.get("status") != "resolved"
                 and ((issue.get("details") or {}).get("error_code")
                      or any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets")))):
             issue = {**issue, "severity": "blocking", "status": "open"}
+        if issue.get("code") == "manual_completion_required":
+            issue = {**issue, "details": {**(issue.get("details") or {}), "required_fields": [
+                field for field in (issue.get("details") or {}).get("required_fields", []) if field in {"stem", "criterion"}]}}
+        if issue.get("field") == "answer" or (issue.get("code") == "generation_failed" and issue.get("field") == "programming_tests") or (
+            issue.get("code") in {"low_confidence", "recognition_needs_review"}
+            and not (issue.get("details") or {}).get("error_code")
+            and not any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
+        ):
+            issue = {**issue, "severity": "warning"}
         issues.append(issue)
     return issues
 
@@ -4243,12 +4293,12 @@ def _question_review_blockers(questions) -> list[str]:
             question_issue_requires_confirmation(issue, presentation) for issue in review_issues
         ):
             issues.append("question_review_blocked")
-        if (any(issue.get("code") == "manual_completion_required" for issue in review_issues)
+        if (any(issue.get("code") == "manual_completion_required" and (issue.get("details") or {}).get("required_fields") for issue in review_issues)
                 and (presentation.get("review_status") != "confirmed"
                      or _manual_question_fields_missing(question, presentation))):
             issues.append("question_manual_completion_required")
         problem = _serialize_problem(question)
-        if (not str(question.stem or "").strip()
+        if (not str(question.stem or "").strip() or not str(question.criterion or "").strip()
                 or not problem["rubric_point_summary"]["is_valid"]
                 or any(issue.get("severity") == "blocking"
                        and (issue.get("status") == "open"
@@ -4269,7 +4319,7 @@ def _manual_question_fields_missing(question, presentation, patch=None):
     patch = patch or {}
     fields = {field for issue in presentation.get("preparation_issues", [])
               if issue.get("code") == "manual_completion_required"
-              for field in (issue.get("details") or {}).get("required_fields", [])}
+              for field in (issue.get("details") or {}).get("required_fields", []) if field in {"stem", "criterion"}}
     for field in fields:
         value = patch.get(field, presentation.get(field) if field == "solution_code" else getattr(question, field, None))
         if not value or (isinstance(value, str) and not value.strip()):
@@ -4689,9 +4739,9 @@ def update_problem(
                 else issue for issue in presentation.get("preparation_issues", [])
             ]
         if patch.get("review_status") == "confirmed":
-            fields = set(patch.get("review_fields") or ["stem", "answer", "rubric", "programming_tests", "source", "max_score"])
+            fields = {"stem", "answer", "rubric", "programming_tests", "source", "max_score"}
             issues = presentation.get("preparation_issues", [])
-            if _manual_question_fields_missing(question, presentation, patch) or not str(patch.get("stem", question.stem) or "").strip() or any(
+            if _manual_question_fields_missing(question, presentation, patch) or not str(patch.get("stem", question.stem) or "").strip() or not str(patch.get("criterion", question.criterion) or "").strip() or any(
                 issue.get("status") == "open" and issue.get("severity") == "blocking"
                 for issue in issues
             ):
@@ -4869,12 +4919,20 @@ def update_student_answer(
             .order_by(SubmissionAnswerRecord.id)
         ).all()
         target = next((answer for answer in answer_rows if answer.q_id == q_id), None)
-        question_exists = session.scalar(select(AssignmentQuestionRecord.id).where(
+        question = session.scalar(select(AssignmentQuestionRecord).where(
             AssignmentQuestionRecord.assignment_id == task_id,
             AssignmentQuestionRecord.q_id == q_id,
         ))
-        if target is None or question_exists is None:
+        if question is None:
             raise NotFound("answer")
+        missing_target = target is None
+        if missing_target:
+            # Historical imports may predate placeholders. Only the explicit
+            # teacher edit below persists this missing known question.
+            target = SubmissionAnswerRecord(id=f"pending-{question.id}", question_id=question.id,
+                q_id=q_id, number=question.number, type=question.type, content="",
+                flag=["recognition_manual_pending"])
+            answer_rows.append(target)
 
         # Confirming recognition is metadata-only. Keep the submission revision,
         # grading generation and analysis intact when the recognized text/flags
@@ -4905,13 +4963,16 @@ def update_student_answer(
             patch["flag"] = list(dict.fromkeys([
                 *patch["flag"], *sorted(_REQUIRED_ANSWER_CONFIRMATION_FLAGS.intersection(target.flag or [])),
             ]))
+        if patch.get("flag") is not None:
+            patch = {**patch, "flag": [*[flag for flag in patch["flag"] if not flag.startswith("recognition_confidence:")],
+                                       *[flag for flag in target.flag or [] if flag.startswith("recognition_confidence:")]]}
         flags_changed = patch.get("flag") is not None and list(patch["flag"]) != list(target.flag or [])
         if patch.get("review_status") == "confirmed" and any(
             flag in failed_flags
             for flag in (patch.get("flag", target.flag) or [])
         ):
             raise ValidationError("Retry or correct the failed recognition before confirming.", code="answer_review_blocked")
-        if not content_changed and not flags_changed and patch.get("review_status") is not None:
+        if not missing_target and not content_changed and not flags_changed and patch.get("review_status") is not None:
             review = session.get(
                 workflow_repository.SubmissionAnswerPresentationRecord, target.id
             )
@@ -4927,7 +4988,8 @@ def update_student_answer(
                 "status": "ok", "stu_id": display_student_id, "q_id": q_id,
                 "answer": {
                     "q_id": target.q_id, "number": target.number, "type": target.type,
-                    "content": target.content, "flag": list(target.flag or []),
+                    "content": target.content, "flag": _public_answer_flags(target.flag),
+                    "recognition_confidence": _answer_recognition_confidence(target.flag),
                     "review_status": review.review_status,
                 },
                 "workflow_revision": workflow_row.workflow_revision,
@@ -5001,7 +5063,8 @@ def update_student_answer(
                     "number": answer.number,
                     "type": answer.type,
                     "content": content,
-                    "flag": list(flags or []),
+                    "flag": _public_answer_flags(flags),
+                    "recognition_confidence": _answer_recognition_confidence(flags),
                     "review_status": patch.get("review_status") or "pending",
                 }
                 next_review_status = str(patch.get("review_status") or "pending")
@@ -5173,11 +5236,7 @@ def _correction_review_blocks_finalization(result) -> bool:
     return (
         result.result_status in education.NON_SCOREABLE_RESULT_STATUSES
         or not valid_score(result.effective_score)
-        or (confidence_requires_review(result.ai_confidence)
-            and (result.teacher_review or {}).get("confirmed") is not True)
         or (not valid_score(result.ai_score)
-            and (result.teacher_review or {}).get("confirmed") is not True)
-        or ("grading_paused" in (getattr(result, "initial_review_reasons", None) or [])
             and (result.teacher_review or {}).get("confirmed") is not True)
     )
 
@@ -5202,9 +5261,7 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
     if run is not None:
         for result in grading_repository.list_results_for_run(run.id):
             if (_correction_review_blocks_finalization(result)
-                    or confidence_requires_review(result.ai_confidence)
-                    or result.ai_score is None
-                    or "grading_paused" in result.initial_review_reasons):
+                    or result.ai_score is None):
                 required_review_count += 1
                 review = result.teacher_review or {}
                 if (

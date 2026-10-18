@@ -10,7 +10,9 @@ from backend.agents.ingest_agent import (
     AICompletionCandidateOutput,
     MaterialImportCandidateOutput,
 )
-from backend.db import file_repository, workflow_repository
+from backend.db import assignment_repository, file_repository, workflow_repository
+from backend.db.models import AssignmentQuestionRecord
+from backend.db.session import session_scope
 from backend.domain.errors import LeaseLost
 from backend.services import task_facade
 from backend.services.workflow_worker import LeasedOperation
@@ -20,7 +22,7 @@ from backend.tests.test_task_background_workflows import _BackgroundTasks, _Regi
 
 @pytest.mark.asyncio
 async def test_ai_completion_queues_for_durable_worker():
-    owner_id, task_id = _seed_task(with_question=True)
+    owner_id, task_id = _seed_task(with_question=True, criterion="")
     background = _BackgroundTasks()
     response = await task_preparation.confirm_ai_completion(
         task_id=task_id,
@@ -39,7 +41,7 @@ async def test_ai_completion_queues_for_durable_worker():
 
 @pytest.mark.asyncio
 async def test_ai_completion_is_not_claimable_before_workflow_activation(monkeypatch):
-    owner_id, task_id = _seed_task(with_question=True)
+    owner_id, task_id = _seed_task(with_question=True, criterion="")
     original_activate = task_facade.activate_workflow_operation_atomic
     observed = {}
 
@@ -162,8 +164,22 @@ async def test_fresh_material_worker_reads_artifact_and_keeps_text_out_of_payloa
 
 
 @pytest.mark.asyncio
-async def test_fresh_ai_worker_applies_generated_patch_once(monkeypatch):
-    owner_id, task_id = _seed_task(with_question=True)
+@pytest.mark.parametrize("unresolved_stem", [False, True])
+async def test_fresh_ai_worker_applies_generated_patch_once(monkeypatch, unresolved_stem):
+    owner_id, task_id = _seed_task(with_question=True, criterion="")
+    question = assignment_repository.list_questions(task_id, teacher_id=owner_id)[0]
+    with session_scope() as session:
+        row = session.get(AssignmentQuestionRecord, question.id)
+        row.source = {"presentation": {"preparation_issues": [
+            {"issue_id": "rubric-failed", "q_id": "q1", "field": "rubric", "code": "generation_failed",
+             "severity": "blocking", "status": "open", "details": {"target": "criterion"} if unresolved_stem else {}},
+            {"issue_id": "manual", "q_id": "q1", "field": "source", "code": "manual_completion_required",
+             "severity": "warning", "status": "open", "details": {"required_fields": ["criterion", *(["stem"] if unresolved_stem else [])]}},
+            *([{"issue_id": "stem-page", "q_id": "q1", "field": "stem", "code": "recognition_partial",
+                "severity": "blocking", "status": "open", "details": {"coverage": {"failed_pages": [2]}}}]
+              if unresolved_stem else []),
+        ]}}
+    assert "question_review_blocked" in task_facade.grading_readiness(task_id=task_id, owner_id=owner_id)["blocking_issues"]
     response = await task_preparation.confirm_ai_completion(
         task_id=task_id,
         request=task_preparation.ConfirmAICompletionRequest(
@@ -190,6 +206,18 @@ async def test_fresh_ai_worker_applies_generated_patch_once(monkeypatch):
     )[0]
     assert completed.status == "done"
     assert question.criterion == "100% correct"
+    problem = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=True)["problem_data"]["q1"]
+    issues = {issue["issue_id"]: issue for issue in problem["preparation_issues"]}
+    assert issues["rubric-failed"]["status"] == "resolved"
+    assert issues["manual"]["details"]["required_fields"] == (["stem"] if unresolved_stem else [])
+    blockers = task_facade.grading_readiness(task_id=task_id, owner_id=owner_id)["blocking_issues"]
+    assert ("question_review_blocked" in blockers) is unresolved_stem
+    assert ("question_manual_completion_required" in blockers) is unresolved_stem
+    if unresolved_stem:
+        assert issues["stem-page"]["details"]["coverage"]["failed_pages"] == [2]
+        assert issues["stem-page"]["status"] == "open"
+    else:
+        task_facade.update_problem(task_id=task_id, owner_id=owner_id, q_id="q1", patch={"review_status": "confirmed"})
 
 
 @pytest.mark.asyncio
@@ -217,7 +245,7 @@ async def test_fresh_ai_worker_applies_generated_patch_once(monkeypatch):
 async def test_auxiliary_worker_discovers_result_saved_before_checkpoint(
     monkeypatch, operation_type, artifact_kind, artifact_suffix, artifact_body,
 ):
-    owner_id, task_id = _seed_task(with_question=True)
+    owner_id, task_id = _seed_task(with_question=True, criterion="")
     if operation_type == "material_import":
         text_artifact = file_repository.save_file(
             storage=get_storage(), owner_id=owner_id, kind="material_import_text",

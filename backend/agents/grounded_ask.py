@@ -138,10 +138,12 @@ Schema and data semantics:
   Pass/fail counts refer to STUDENTS with overall score_percent >=60 / <60; NULL is unscored.
   Do NOT count grades.is_incorrect as pass/fail: that means full/partial credit per question.
   Review groups use students.pending_review_count>0 for pending review, review_count>0 for
-  the remaining grading-review queue. Confirmed grades and routine uncertainty are not
-  pending. Do not pick an arbitrary grades.review_status from a GROUP BY student.
-  low_confidence_count counts not-yet-teacher-confirmed grades with confidence <0.60, not a boolean test
-  of average confidence. This is independent of the required-review queue (<0.25 or failed grading).
+  the remaining grading-review queue. Pending includes required review and advisory items;
+  teacher-confirmed grades are not pending. Do not pick an arbitrary grades.review_status from a GROUP BY student.
+  low_confidence_count counts not-yet-teacher-confirmed low-confidence grades (any valid expert
+  confidence <0.60; aggregate confidence only when no valid expert details exist), not a test of
+  average confidence. Confidence is advisory. Required review is for missing or invalid essential
+  content, including grading without a usable score; partial experts with a usable score are advisory.
   Use the stored count unless the user specifies another threshold.
   Comparing counts across ALL questions/students includes zero-count groups. Do not add
   WHERE confidence < threshold unless the user asks to exclude other records; for custom

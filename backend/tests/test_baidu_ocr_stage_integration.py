@@ -21,7 +21,7 @@ from backend.db import (
 from backend.db.ocr_provider_repository import (
     upsert_baidu_unlimited_ocr_credential,
 )
-from backend.domain.errors import ValidationError
+from backend.domain.errors import InvalidTransition, ValidationError
 from backend.models import QuestionScorePolicy, TaskGradingSetup
 from backend.services import task_facade
 from backend.services.stage_provider_routing import (
@@ -262,6 +262,16 @@ async def test_question_ocr_success_reuses_artifact_and_freezes_three_stage_rout
     assert question_job.status == "done"
     assert len(questions) == 1
     assert "Explain dependency injection" in questions[0].stem
+    # OCR has no grading rubric; completing the question package is a separate
+    # teacher action before the submission stage can use the saved routes.
+    assert not questions[0].criterion
+    with pytest.raises(InvalidTransition, match="question_review_blocked"):
+        task_facade.queue_task_submission_parsing(
+            task_id=task_id, owner_id=owner_id, filename="S001_Student.txt",
+            content=b"answer", content_type="text/plain", registry=registry,
+            recognition_provider_id="llm-question")
+    task_facade.update_problem(task_id=task_id, owner_id=owner_id, q_id=questions[0].q_id,
+        patch={"criterion": "Award 10 points for explaining constructor injection.", "review_status": "confirmed"})
 
     async def fake_submission_parse(sources, _problems, _provider, **_kwargs):
         source = sources[0]

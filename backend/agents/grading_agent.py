@@ -42,16 +42,17 @@ def _apply_low_confidence_policy(
     grading_setup: Optional[TaskGradingSetup],
 ) -> Correction:
     """Apply the shared policy, independent of legacy saved slider values."""
-    from backend.domain.confidence_policy import confidence_needs_attention, confidence_requires_review
+    from backend.domain.confidence_policy import confidence_needs_attention
 
     other_reasons = [reason for reason in correction.review_reasons if reason != "low_confidence"]
     if correction.review_reasons and not other_reasons:
         correction.requires_human_review = False
     correction.review_reasons = other_reasons
-    if confidence_needs_attention(correction.confidence):
+    valid_experts = [expert for expert in correction.expert_results
+                     if not expert.error_kind and 0 <= expert.score <= expert.max_score]
+    if (any(confidence_needs_attention(expert.confidence) for expert in valid_experts)
+            if valid_experts else confidence_needs_attention(correction.confidence)):
         correction.review_reasons.append("low_confidence")
-    if confidence_requires_review(correction.confidence):
-        correction.requires_human_review = True
     return correction
 
 

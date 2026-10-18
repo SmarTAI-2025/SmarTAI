@@ -73,11 +73,11 @@ def recover_manual_question_packages(operation):
                 field = target["target"]
                 # Keep supplied teacher material, including a short reference answer.
                 # Unverified generated material is not promoted from partial responses.
-                if field not in (problem.get("material_provenance") or {}):
-                    problem[field] = [] if field == "test_cases" else ""
-                required_fields.append(field)
+                if field in {"stem", "criterion"}:
+                    required_fields.append(field)
                 if not problem.get(field):
-                    issue = _issue(q_id, _issue_field(field), "generation_failed", "blocking", [])
+                    issue = _issue(q_id, _issue_field(field), "generation_failed",
+                                   "blocking" if field in {"stem", "criterion"} else "warning", [])
                     issue["details"] = {"target": field}
                     issues.append(issue)
             marker = _issue(q_id, "source", "manual_completion_required", "warning", [])
@@ -105,8 +105,8 @@ def validate_manual_source_questions(operation, questions, completed_sources):
     for index, question in enumerate(questions):
         raw = question.model_dump()
         q_id = raw["q_id"].strip()
-        if not q_id or q_id in packages or any(not raw[field].strip() for field in ("stem", "criterion", "reference_answer")):
-            raise ValidationError("Each question needs a unique ID, stem, answer and rubric.", code="question_review_blocked")
+        if not q_id or q_id in packages or any(not raw[field].strip() for field in ("stem", "criterion")):
+            raise ValidationError("Each question needs a unique ID, stem and rubric.", code="question_review_blocked")
         raw.update(q_id=q_id, review_status="needs_review", max_score_source="teacher_input")
         structure = build_major_question_structure(raw, major_order=index, structure_source="deterministic", review_status="needs_review")
         try:
@@ -114,7 +114,7 @@ def validate_manual_source_questions(operation, questions, completed_sources):
         except QuestionRubricValidationError:
             raise ValidationError("Rubric points must match the maximum score.", code="question_review_blocked") from None
         marker = _issue(q_id, "source", "manual_completion_required", "warning", [])
-        marker["details"] = {"required_fields": ["stem", "reference_answer", "criterion"], "reason": operation.error_code}
+        marker["details"] = {"required_fields": ["stem", "criterion"], "reason": operation.error_code}
         raw["preparation_issues"] = [marker]
         packages[q_id] = raw
     return packages

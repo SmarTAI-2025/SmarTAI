@@ -12,9 +12,9 @@ from backend.services.submission_source_pipeline import attach_submission_recogn
     ({"confidence": "low"}, ["recognition_needs_review", "recognition_low_confidence"]),
     ({"confidence": "high", "error_code": "partial"}, ["recognition_needs_review", "recognition_failed"]),
     ({"confidence": "medium", "coverage": {"missing_targets": ["Q2"]}}, ["recognition_needs_review", "recognition_failed"]),
-    ({"confidence": .2499}, ["recognition_needs_review", "recognition_very_low_confidence"]),
-    ({"confidence": .25}, ["recognition_needs_review"]),
-    ({"confidence": .6}, []),
+    ({"confidence": .2499}, ["recognition_needs_review", "recognition_confidence:0.2499"]),
+    ({"confidence": .25}, ["recognition_needs_review", "recognition_confidence:0.25"]),
+    ({"confidence": .6}, ["recognition_confidence:0.6"]),
     ({"confidence": "medium", "coverage": {"failed_pages": [2]}}, ["recognition_needs_review", "recognition_failed_pages:2"]),
 ])
 def test_only_specific_uncertainty_requires_answer_review(summary, expected):

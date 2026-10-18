@@ -5,7 +5,6 @@ import math
 from typing import Any
 
 LOW_CONFIDENCE_THRESHOLD = 0.60
-REQUIRED_REVIEW_CONFIDENCE_THRESHOLD = 0.25
 
 
 def confidence_value(value: Any) -> float | None:
@@ -21,8 +20,8 @@ def confidence_needs_attention(value: Any) -> bool:
 
 
 def confidence_requires_review(value: Any) -> bool:
-    confidence = confidence_value(value)
-    return confidence is not None and confidence < REQUIRED_REVIEW_CONFIDENCE_THRESHOLD
+    # Numeric uncertainty is advisory; only missing/invalid evidence can block.
+    return False
 
 
 def question_issue_confidence(issue, presentation):
@@ -34,6 +33,10 @@ def question_issue_confidence(issue, presentation):
 
 
 def question_issue_requires_confirmation(issue, presentation):
+    if issue.get("field") == "answer":
+        return False
     return (issue.get("severity") == "blocking"
-            or issue.get("code") in {"manual_completion_required", "source_conflict", "ambiguous_question_match"}
+            or issue.get("code") in {"source_conflict", "ambiguous_question_match"}
+            or (issue.get("code") == "manual_completion_required"
+                and set((issue.get("details") or {}).get("required_fields", [])) & {"stem", "criterion"})
             or confidence_requires_review(question_issue_confidence(issue, presentation)))

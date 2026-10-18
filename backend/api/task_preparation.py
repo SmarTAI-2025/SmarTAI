@@ -365,7 +365,7 @@ class ManualQuestionDraft(BaseModel):
     type: str = Field(default="short", min_length=1, max_length=80)
     stem: str = Field(min_length=1, max_length=100_000)
     criterion: str = Field(min_length=1, max_length=100_000)
-    reference_answer: str = Field(min_length=1, max_length=100_000)
+    reference_answer: str = Field(default="", max_length=100_000)
     max_score: float = Field(default=10, gt=0, le=10_000, allow_inf_nan=False)
     test_cases: list[dict] = Field(default_factory=list, max_length=100)
 

@@ -164,7 +164,7 @@ def persist_paused_results(session, run):
                 experts.append(ExpertResult.model_validate(item["result"]) if item else ExpertResult(
                     provider=labels.get(provider, provider) + (f"#sample{index}" if index else ""), provider_id=provider,
                     score=0, max_score=question.max_score, confidence=0,
-                    comment="已暂停，尚未完成批改", error_kind="operation_cancelled"))
+                    comment="尚未完成批改", error_kind=("operation_cancelled" if run.status not in {"failed", "partial_failed"} else "not_completed")))
             successes = [item for item in experts if _is_successful_expert(item)]
             if successes:
                 problem = ProblemInfo(q_id=question.q_id, number=question.number, type=question.type,
@@ -179,7 +179,9 @@ def persist_paused_results(session, run):
                     synthesis_method="paused")
             correction.expert_results = experts
             correction.requires_human_review = True
-            correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, "grading_paused"]))
+            correction.review_reasons = list(dict.fromkeys([*correction.review_reasons,
+                "grading_paused" if run.status not in {"failed", "partial_failed"} else "grading_incomplete",
+                *(["partial_experts"] if successes and len(successes) < len(experts) else [])]))
             result = correction_to_result(run_id=run.id, revision_id=frozen.submission_revision_id,
                 question=question, student_id=frozen.student_id, correction=correction)
             preserved = inherited.get(pair)

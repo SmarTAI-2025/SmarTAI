@@ -213,7 +213,7 @@ async def test_partial_failure_degrades_to_single(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_partial_failure_high_confidence_survivor_is_not_flagged(monkeypatch):
+async def test_partial_failure_high_confidence_survivor_is_advisory(monkeypatch):
     p1 = _FakeProvider("zhipu:glm-4.5-air")
     p2 = _FakeProvider("gemini:gemini-3-flash-preview")
     _patch_skill_returning(monkeypatch, {
@@ -233,11 +233,11 @@ async def test_partial_failure_high_confidence_survivor_is_not_flagged(monkeypat
     assert correction.confidence == pytest.approx(0.9)
     # One confident model is enough: no forced human review.
     assert correction.requires_human_review is False
-    assert correction.review_reasons == []
+    assert correction.review_reasons == ["partial_experts"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("confidence, required", [(0.2499, True), (0.25, False), (0.35, False), (0.60, False)])
+@pytest.mark.parametrize("confidence, required", [(0.2499, False), (0.25, False), (0.35, False), (0.60, False)])
 async def test_partial_failure_low_confidence_survivor_is_flagged(monkeypatch, confidence, required):
     p1 = _FakeProvider("zhipu:glm-4.5-air")
     p2 = _FakeProvider("gemini:gemini-3-flash-preview")
@@ -256,7 +256,7 @@ async def test_partial_failure_low_confidence_survivor_is_flagged(monkeypatch, c
     )
     assert correction.synthesis_method == "degraded_to_single"
     assert correction.requires_human_review is required
-    assert ("degraded_to_single" in correction.review_reasons) is required
+    assert "partial_experts" in correction.review_reasons
 
 
 def test_weighted_average_confidence_uses_best_expert():
@@ -307,7 +307,7 @@ async def test_transient_network_failure_is_not_a_confidence_vote(monkeypatch):
     assert correction.synthesis_method == "degraded_to_single"
     assert correction.confidence == pytest.approx(0.9)
     assert correction.requires_human_review is False
-    assert correction.review_reasons == []
+    assert correction.review_reasons == ["partial_experts"]
     # The failed expert stays visible for triage but cast no vote.
     assert [er.provider for er in correction.expert_results] == [
         p2.provider_id, p1.provider_id,
@@ -339,7 +339,7 @@ async def test_transient_error_is_non_vote_even_with_spurious_confidence(monkeyp
     assert correction.synthesis_method == "degraded_to_single"
     assert correction.confidence == pytest.approx(0.9)
     assert correction.requires_human_review is False
-    assert correction.review_reasons == []
+    assert correction.review_reasons == ["partial_experts"]
 
 
 # ─── 3. Weighted average no longer leaks failed experts ──────────────────────

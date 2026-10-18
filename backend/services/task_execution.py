@@ -22,8 +22,7 @@ def continue_manual_grading(*, task_id: str, owner_id: str, job_id: str, expecte
         if run is None or workflow is None:
             raise NotFound("task_run")
         if (workflow.active_job_id or workflow.workflow_revision != expected_revision
-                or workflow.grading_job_id != job_id or run.status != "cancelled"
-                or run.error_message != "operation_cancelled"):
+                or workflow.grading_job_id != job_id or run.status not in {"cancelled", "failed", "partial_failed"}):
             raise VersionConflict("The stopped run changed.", code="workflow_revision_conflict")
         # Older stopped runs have no stop-time matrix. Build only from their
         # verified frozen inputs; unavailable old model outputs remain ungraded.

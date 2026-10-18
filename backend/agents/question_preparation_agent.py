@@ -867,7 +867,8 @@ async def prepare_question_packages(
                 value = (candidate.text_value or "").strip()
             if not value:
                 issues[candidate.q_id].append(
-                    _issue(candidate.q_id, _issue_field(candidate.target), "generation_failed", "blocking", [])
+                    _issue(candidate.q_id, _issue_field(candidate.target), "generation_failed",
+                           "blocking" if candidate.target == "criterion" else "warning", [])
                 )
                 continue
             problem[candidate.target] = value
@@ -890,7 +891,7 @@ async def prepare_question_packages(
                     target["q_id"],
                     _issue_field(target["target"]),
                     "generation_failed",
-                    "blocking",
+                    "blocking" if target["target"] == "criterion" else "warning",
                     [],
                 )
             )
