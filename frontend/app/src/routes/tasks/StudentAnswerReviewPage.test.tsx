@@ -152,16 +152,18 @@ beforeEach(() => {
 });
 
 describe("StudentAnswerReviewPage review shortcuts", () => {
-  it("requires an explicit no-answer action for a manually pending blank", async () => {
+  it.each([false, true])("uses individual confirmation for a pending blank (editing=%s), never bulk confirmation", async editing => {
     const user = userEvent.setup();
     taskData.student_data.S001.stu_ans[0].content = "";
     taskData.student_data.S001.stu_ans[0].flag = ["recognition_manual_pending", "recognition_paused"];
     renderPage();
-    await user.click(screen.getByRole("button", { name: "全部确认" }));
+    expect(screen.queryByRole("button", { name: "全部确认" })).not.toBeInTheDocument();
     expect(mutations.answer).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "返回" }));
-    await user.click(screen.getByRole("button", { name: "修改" }));
-    await user.click(screen.getByRole("button", { name: "确认本题未作答" }));
+    if (editing) {
+      await user.click(screen.getByRole("button", { name: "修改" }));
+      await user.type(screen.getByPlaceholderText(/未识别到作答/), "   ");
+    }
+    await user.click(screen.getByRole("button", { name: editing ? /第 1 题 · 保存并确认/ : /第 1 题 · 待确认/ }));
     expect(mutations.answer).toHaveBeenCalledWith(expect.objectContaining({ content: "", reviewStatus: "confirmed",
       flag: ["recognition_manual_pending", "recognition_paused", "manual_blank_confirmed"] }));
   });

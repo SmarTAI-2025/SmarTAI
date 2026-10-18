@@ -74,6 +74,24 @@ def test_formatting_only_edit_does_not_repair_failed_recognition():
             expected_revision=before["workflow_revision"])
 
 
+@pytest.mark.parametrize("content", ["", " \n\t "])
+@pytest.mark.parametrize("flags", [["recognition_manual_pending"], ["recognition_failed"],
+                                  ["recognition_failed_pages:2", "recognition_incomplete"]])
+def test_individual_blank_confirmation_clears_required_failure_but_preserves_evidence(content, flags):
+    _seeded, args = _case(flags=flags, content="")
+    before = task_facade.get_task(**args, full=True)
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    result = task_facade.update_student_answer(**args, display_student_id="S001", q_id="q1",
+        patch={"content": content, "flag": [*flags, "manual_blank_confirmed"], "review_status": "confirmed"},
+        expected_revision=before["workflow_revision"])
+    answer = result["answer"]
+    assert answer["content"] == "" and answer["review_status"] == "confirmed"
+    assert answer["flag"] == ["manual_blank_confirmed"]
+    assert task_facade.grading_readiness(**args)["ready"]
+    after = task_facade.get_task(**args, full=True)
+    assert after["student_data"]["S001"]["stu_ans"][0]["review_status"] == "confirmed"
+
+
 @pytest.mark.parametrize("content", ["", "Visible student work"], ids=["genuine-blank", "nonempty"])
 @pytest.mark.parametrize("flags", [[], ["recognition_needs_review"]], ids=["no-flags", "generic-review"])
 def test_blank_or_uncalibrated_review_is_not_a_recognition_failure(content, flags):

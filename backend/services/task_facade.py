@@ -5094,9 +5094,13 @@ def update_student_answer(
         content_changed = patch.get("content") is not None and patch["content"] != target.content
         failed_flags = _FAILED_ANSWER_REVIEW_FLAGS | _answer_recognition_failures(target.flag)
         original_failures = _answer_recognition_failures(target.flag)
-        manual_blank = ("recognition_manual_pending" in (target.flag or [])
+        manual_blank = (bool(original_failures)
                         and "manual_blank_confirmed" in (patch.get("flag") or [])
-                        and patch.get("content") == "" and patch.get("review_status") == "confirmed")
+                        and patch.get("content") is not None and not str(patch["content"]).strip()
+                        and patch.get("review_status") == "confirmed")
+        if manual_blank:
+            patch = {**patch, "content": ""}
+            content_changed = target.content != ""
         if manual_blank or (content_changed and str(patch.get("content") or "").strip()
                 and str(patch["content"]).strip() != str(target.content or "").strip()):
             # A teacher's replacement text repairs recognition failures while
