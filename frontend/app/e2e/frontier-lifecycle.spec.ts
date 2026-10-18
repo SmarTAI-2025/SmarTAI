@@ -103,6 +103,7 @@ test('Full Workflow opens fixed metadata and preloaded source pages without impl
   const draft = { ...task, name: 'Preset Demo', status: 'draft', problem_count: 0, student_count: 0, problem_data: {}, semester_id: '2026-fall' };
   await page.route(`${backend}/**`, async route => {
     const request = route.request(), path = new URL(request.url()).pathname;
+    if (path.endsWith('/content-language/default')) return route.fulfill({ json: { language: 'en' } });
     if (request.method() === 'POST' || request.method() === 'PUT') writes.push(path);
     if (path === '/auth/me') return route.fulfill({ json: { id: 'guest-owner', username: 'Guest', role: 'teacher', is_active: true } });
     if (path === '/tasks/' || path === `/tasks/${task.task_id}` || path === `/tasks/${task.task_id}/state`) return route.fulfill({ json: draft });

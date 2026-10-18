@@ -204,6 +204,7 @@ async def generate_major_question_materials(
     test_case_count: int,
     provider: BaseProvider,
     reporter: ProgressReporter,
+    generation_language: str | None = None,
     recovered_candidates_by_question: Mapping[
         str, Sequence[AICompletionCandidateOutput]
     ] | None = None,
@@ -334,6 +335,7 @@ async def generate_major_question_materials(
                     provider=provider,
                     reporter=reporter,
                     manage_progress_lifecycle=False,
+                    generation_language=generation_language,
                     validate_candidates=validate_generated,
                 )
                 validated = _validate_major_question_candidates(
@@ -525,6 +527,7 @@ async def prepare_question_packages(
     provider_id: str,
     reporter: ProgressReporter,
     score_policy: QuestionScorePolicy,
+    generation_language: str | None = None,
     recovered_extracted_problem_data: Mapping[
         str, Mapping[str, Any]
     ] | None = None,
@@ -848,6 +851,7 @@ async def prepare_question_packages(
             test_case_count=6,
             provider=provider,
             reporter=reporter,
+            generation_language=generation_language,
             recovered_candidates_by_question=recovered_candidates_by_question,
             completed_question_ids=completed_question_ids,
             on_question_started=on_question_started,
