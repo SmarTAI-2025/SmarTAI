@@ -4831,24 +4831,14 @@ def update_problem(
         "solution_code", "test_cases",
     }.intersection(patch))
     with session_scope() as session:
-        workflow_row = session.scalar(select(
-            workflow_repository.AssignmentWorkflowRecord
-        ).where(
-            workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-            workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-        ).with_for_update())
-        if workflow_row is None:
-            raise NotFound("workflow")
+        workflow_row = workflow_repository.lock_workflow_revision(
+            session, assignment_id=task_id, owner_id=owner_id, expected_revision=expected_revision,
+        )
         assignment = workflow_repository._lock_live_assignment(
             session, assignment_id=task_id, owner_id=owner_id
         )
         if workflow_row.active_job_id:
             raise InvalidTransition("The task is busy.", code="workflow_busy")
-        if (
-            expected_revision is not None
-            and workflow_row.workflow_revision != expected_revision
-        ):
-            _raise_stale_revision()
         question = session.scalar(select(AssignmentQuestionRecord).where(
             assignment_repository.active_question_clause(),
             AssignmentQuestionRecord.assignment_id == task_id,
@@ -5038,27 +5028,14 @@ def update_student_answer(
     now = time.time()
     target_payload: dict[str, Any] | None = None
     with session_scope() as session:
-        workflow_row = session.scalar(
-            select(workflow_repository.AssignmentWorkflowRecord)
-            .where(
-                workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-            )
-            .with_for_update()
+        workflow_row = workflow_repository.lock_workflow_revision(
+            session, assignment_id=task_id, owner_id=owner_id, expected_revision=expected_revision,
         )
-        if workflow_row is None:
-            raise NotFound("workflow")
         assignment = workflow_repository._lock_live_assignment(
             session, assignment_id=task_id, owner_id=owner_id
         )
         if workflow_row.active_job_id:
             raise InvalidTransition("The task is busy.", code="workflow_busy")
-        if (
-            expected_revision is not None
-            and workflow_row.workflow_revision != expected_revision
-        ):
-            _raise_stale_revision()
-
         presentation = session.scalar(
             select(workflow_repository.AssignmentStudentPresentationRecord).where(
                 workflow_repository.AssignmentStudentPresentationRecord.assignment_id
@@ -5301,21 +5278,14 @@ def update_student_identity(
     # Serialize identity confirmation/editing with other workflow mutations.
     # A failed or busy item must not consume a revision during bulk review.
     with session_scope() as session:
-        workflow_row = session.scalar(
-            select(workflow_repository.AssignmentWorkflowRecord).where(
-                workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-            ).with_for_update()
+        workflow_row = workflow_repository.lock_workflow_revision(
+            session, assignment_id=task_id, owner_id=owner_id, expected_revision=expected_revision,
         )
-        if workflow_row is None:
-            raise NotFound("workflow")
         workflow_repository._lock_live_assignment(
             session, assignment_id=task_id, owner_id=owner_id
         )
         if workflow_row.active_job_id:
             raise InvalidTransition("The task is busy.", code="workflow_busy")
-        if workflow_row.workflow_revision != expected_revision:
-            _raise_stale_revision()
         presentations = session.scalars(
             select(workflow_repository.AssignmentStudentPresentationRecord).where(
                 workflow_repository.AssignmentStudentPresentationRecord.assignment_id == task_id,

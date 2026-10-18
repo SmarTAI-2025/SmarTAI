@@ -85,6 +85,13 @@ def test_postgres_review_row_mutations_have_one_winner(pg_database, kind, action
     assert_concurrent_row_mutations(kind, actions, attempts=3)
 
 
+@pytest.mark.parametrize("kind", ["question", "question_confirm", "answer", "answer_confirm", "identity"])
+@pytest.mark.parametrize("action", ["add", "delete"])
+def test_postgres_detail_and_row_mutation_share_revision(pg_database, kind, action):
+    from backend.tests.test_review_row_concurrency import assert_detail_and_row_mutation_share_revision
+    assert_detail_and_row_mutation_share_revision(kind, action)
+
+
 def test_postgres_task_identity_migration_preserves_existing_results(pg_database, monkeypatch):
     from sqlalchemy import select
     from alembic import command

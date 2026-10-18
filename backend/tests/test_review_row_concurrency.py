@@ -1,11 +1,13 @@
 """Real transactions on separate connections, with no mocked service internals."""
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Event, local
 
 import pytest
 from sqlalchemy import event
+from sqlalchemy.orm import Session
 
-from backend.db import workflow_repository
+from backend.db import assignment_repository, workflow_repository
+from backend.db.models import AssignmentQuestionRecord, SubmissionAnswerRecord
 from backend.db.session import get_engine
 from backend.domain.errors import NotFound, VersionConflict
 from backend.services import question_review_rows, student_review_rows, task_facade
@@ -115,3 +117,113 @@ def test_language_and_row_request_contracts_coexist(kind, path):
         json={"expected_workflow_revision": created.json()["workflow_revision"]})
     assert removed.status_code == 200
     assert client.put(language_path, json={"language": "zh"}).json() == {"language": "en"}
+
+
+DETAIL_KINDS = ("question", "question_confirm", "answer", "answer_confirm", "identity")
+
+
+def assert_detail_and_row_mutation_share_revision(kind, action, *, with_revision=True):
+    is_question = kind.startswith("question")
+    owner, task, add, delete, key, data_key, before = _case("question" if is_question else "student")
+    target = "q1" if is_question else next(iter(before[data_key]))
+    if not is_question:
+        assignment = assignment_repository.get_assignment(task, actor_id=owner)
+        assignment_repository.publish(task, teacher_id=owner, expected_version=assignment.version)
+        task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id=target,
+            q_id="q1", patch={"content": "Original answer"}, expected_revision=before["workflow_revision"])
+        before = task_facade.get_task(task_id=task, owner_id=owner)
+    revision = before["workflow_revision"]
+    snapshot_read, release_editor, row_started = Event(), Event(), Event()
+    role = local()
+    connections = set()
+    engine = get_engine()
+    model = (AssignmentQuestionRecord if is_question else SubmissionAnswerRecord
+             if kind.startswith("answer") else workflow_repository.AssignmentStudentPresentationRecord)
+
+    def pause_after_detail_read(session, instance):
+        if getattr(role, "value", None) == "detail" and isinstance(instance, model) and not snapshot_read.is_set():
+            connections.add(id(session.connection().connection.driver_connection))
+            snapshot_read.set()
+            assert release_editor.wait(timeout=10)
+
+    def observe_row_write(connection, cursor, statement, parameters, context, executemany):
+        sql = context.compiled.statement if context.compiled else None
+        if (getattr(role, "value", None) == "row" and getattr(sql, "is_update", False)
+                and sql.table.name == workflow_repository.AssignmentWorkflowRecord.__tablename__):
+            connections.add(id(connection.connection.driver_connection))
+            row_started.set()
+
+    def edit():
+        kwargs = dict(task_id=task, owner_id=owner, expected_revision=revision if with_revision else None)
+        if is_question:
+            return task_facade.update_problem(**kwargs, q_id=target,
+                patch={"review_status": "confirmed"} if kind.endswith("confirm") else {"stem": "Edited question"})
+        if kind.startswith("answer"):
+            return task_facade.update_student_answer(**kwargs, display_student_id=target, q_id="q1",
+                patch={"review_status": "confirmed"} if kind.endswith("confirm") else {"content": "Edited answer"})
+        return task_facade.update_student_identity(**kwargs, current_display_id=target,
+            new_display_id="S-edited", new_display_name="Edited student")
+
+    def mutate_row():
+        kwargs = dict(task_id=task, owner_id=owner, expected_revision=revision)
+        return add(**kwargs) if action == "add" else delete(**kwargs, **{key: target})
+
+    def run(name, operation):
+        role.value = name
+        try:
+            return operation()
+        except VersionConflict as exc:
+            assert exc.code == "stale_revision" and exc.status_code == 409
+            return None
+
+    event.listen(Session, "loaded_as_persistent", pause_after_detail_read)
+    event.listen(engine, "before_cursor_execute", observe_row_write)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            detail_future = pool.submit(run, "detail", edit)
+            try:
+                assert snapshot_read.wait(timeout=10)
+                row_future = pool.submit(run, "row", mutate_row)
+                assert row_started.wait(timeout=10)
+                # Old SQLite code lets the row mutation commit while the
+                # detail holds an old snapshot. Fixed code holds the workflow
+                # write lock, so the other connection waits until we release.
+                try:
+                    row_future.result(timeout=1)
+                except TimeoutError:
+                    pass
+            finally:
+                release_editor.set()
+            detail_result, row_result = detail_future.result(), row_future.result()
+    finally:
+        event.remove(Session, "loaded_as_persistent", pause_after_detail_read)
+        event.remove(engine, "before_cursor_execute", observe_row_write)
+    assert len(connections) == 2
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    if action == "delete" and row_result is not None:
+        assert target not in after[data_key], "A completed delete was undone by a stale detail save"
+    assert sum(result is not None for result in (detail_result, row_result)) == 1
+    winner = detail_result or row_result
+    assert after["workflow_revision"] == winner["workflow_revision"] == revision + 1
+    if detail_result:
+        assert row_result is None
+        if kind == "identity":
+            assert set(after[data_key]) == (set(before[data_key]) - {target}) | {"S-edited"}
+        else:
+            assert set(after[data_key]) == set(before[data_key])
+    else:
+        expected_ids = (set(before[data_key]) | {row_result[key]}) if action == "add" else (set(before[data_key]) - {target})
+        assert set(after[data_key]) == expected_ids
+        for row_id in expected_ids.intersection(before[data_key]):
+            assert after[data_key][row_id] == before[data_key][row_id]
+
+
+@pytest.mark.parametrize("kind", DETAIL_KINDS)
+@pytest.mark.parametrize("action", ["add", "delete"])
+def test_detail_and_row_mutation_share_revision(kind, action):
+    assert_detail_and_row_mutation_share_revision(kind, action)
+
+
+@pytest.mark.parametrize("kind", ["question", "answer"])
+def test_legacy_detail_without_revision_still_serializes_with_delete(kind):
+    assert_detail_and_row_mutation_share_revision(kind, "delete", with_revision=False)
