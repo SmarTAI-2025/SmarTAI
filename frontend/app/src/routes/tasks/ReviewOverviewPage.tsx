@@ -359,11 +359,11 @@ function ReviewHeatmap({
             <thead className="sticky top-0 z-20 bg-slate-100/95 text-[12px] font-semibold text-muted-foreground backdrop-blur-sm dark:bg-slate-800/95">
               <tr className="h-[42px] border-b">
                 <SortableTableHead
-                  className="sticky left-0 z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
+                  className="sm:sticky left-0 z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
                   style={{ width: identityLayout.studentIdWidth, minWidth: identityLayout.studentIdWidth, maxWidth: identityLayout.studentIdWidth }}
                  direction={directionFor(columnSort, "id")} onSort={() => onSort("id")} locale={locale}>{studentIdLabel}</SortableTableHead>
                 <SortableTableHead
-                  className="sticky z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
+                  className="sm:sticky z-30 whitespace-nowrap bg-slate-100/95 px-3 dark:bg-slate-800/95"
                   style={{ left: identityLayout.studentIdWidth, width: identityLayout.studentNameWidth, minWidth: identityLayout.studentNameWidth, maxWidth: identityLayout.studentNameWidth }}
                  direction={directionFor(columnSort, "name")} onSort={() => onSort("name")} locale={locale}>{studentNameLabel}</SortableTableHead>
                 {questions.map((question) => (
@@ -387,14 +387,14 @@ function ReviewHeatmap({
                 return (
                   <tr key={student.id} className="h-[52px] bg-card transition-colors hover:bg-muted/25">
                     <th
-                      className="sticky left-0 z-10 whitespace-nowrap bg-card px-3 text-[12px] font-semibold text-foreground"
+                      className="sm:sticky left-0 z-10 whitespace-nowrap bg-card px-3 text-[12px] font-semibold text-foreground"
                       style={{ width: identityLayout.studentIdWidth, minWidth: identityLayout.studentIdWidth, maxWidth: identityLayout.studentIdWidth }}
                       title={student.id}
                     >
                       {student.id}
                     </th>
                     <td
-                      className="sticky z-10 whitespace-nowrap bg-card px-3 text-[12px] text-muted-foreground"
+                      className="sm:sticky z-10 whitespace-nowrap bg-card px-3 text-[12px] text-muted-foreground"
                       style={{ left: identityLayout.studentIdWidth, width: identityLayout.studentNameWidth, minWidth: identityLayout.studentNameWidth, maxWidth: identityLayout.studentNameWidth }}
                       title={student.name}
                     >
