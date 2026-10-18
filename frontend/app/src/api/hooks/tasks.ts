@@ -209,6 +209,18 @@ export function useParseSubmissions() {
   });
 }
 
+export function useAddTaskStudent() {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: tasksApi.addTaskStudent,
+    onSuccess: (_data, variables) => invalidateTask(queryClient, variables.taskId) });
+}
+
+export function useDeleteTaskStudent() {
+  const queryClient = useQueryClient();
+  return useMutation({ mutationFn: tasksApi.deleteTaskStudent,
+    onSuccess: (_data, variables) => invalidateTask(queryClient, variables.taskId) });
+}
+
 export function useManuallyCompleteSubmissionRecognition() {
   const queryClient = useQueryClient();
   return useMutation({ mutationFn: tasksApi.manuallyCompleteSubmissionRecognition,
@@ -303,6 +315,15 @@ export function useStartGrading() {
       return invalidateTask(queryClient, variables.taskId);
     },
   });
+}
+
+export function useAddTaskQuestion() {
+  const client = useQueryClient();
+  return useMutation({ mutationFn: tasksApi.addTaskQuestion, onSuccess: (_data, input) => invalidateTask(client, input.taskId) });
+}
+export function useDeleteTaskQuestion() {
+  const client = useQueryClient();
+  return useMutation({ mutationFn: tasksApi.deleteTaskQuestion, onSuccess: (_data, input) => invalidateTask(client, input.taskId) });
 }
 
 export function useUpdateProblem() {

@@ -587,6 +587,34 @@ def get_live_workflow(
         return _detach_workflow(row)
 
 
+def lock_workflow_revision(
+    session, *, assignment_id: str, owner_id: str, expected_revision: int | None,
+) -> AssignmentWorkflowRecord:
+    """Fence a mutation in its existing transaction on both SQLite and PostgreSQL."""
+    # FOR UPDATE is ignored by SQLite. A revision-matched no-op UPDATE takes
+    # its write lock before reading mutable state or writing any child rows.
+    # The caller advances the revision on success; rollback releases the
+    # claim without consuming a revision if later validation fails.
+    claim = update(AssignmentWorkflowRecord).where(
+        AssignmentWorkflowRecord.assignment_id == assignment_id,
+        AssignmentWorkflowRecord.owner_id == owner_id,
+    )
+    # Legacy detail requests may omit the version, but still must acquire the
+    # same lock before reading a row that another request can edit or retire.
+    if expected_revision is not None:
+        claim = claim.where(AssignmentWorkflowRecord.workflow_revision == expected_revision)
+    claimed = session.execute(claim.values(workflow_revision=AssignmentWorkflowRecord.workflow_revision))
+    workflow = session.scalar(select(AssignmentWorkflowRecord).where(
+        AssignmentWorkflowRecord.assignment_id == assignment_id,
+        AssignmentWorkflowRecord.owner_id == owner_id,
+    ))
+    if workflow is None:
+        raise NotFound("workflow")
+    if claimed.rowcount != 1:
+        raise VersionConflict("The task changed before editing review rows.", code="stale_revision")
+    return workflow
+
+
 def _lock_live_assignment(
     session, *, assignment_id: str, owner_id: str
 ) -> AssignmentRecord:

@@ -3,13 +3,14 @@ import { ReviewQueue as ReviewQueuePanel } from "@/components/tasks/ReviewQueue"
 import { questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
-import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { reviewActionClass, ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { groundedRows, hasGroundedOrder } from "@/lib/groundedAsk";
 import { SortButton as HeaderSortButton, SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
-import { CheckCircle2, ChevronRight, Filter, X } from "lucide-react";
+import { CheckCircle2, ChevronRight, Filter, Plus, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useManuallyCompleteQuestionPreparation, useTask } from "@/api/hooks/tasks";
+import { useAddTaskQuestion, useDeleteTaskQuestion, useManuallyCompleteQuestionPreparation, useTask } from "@/api/hooks/tasks";
 import { useQuestionReview } from "@/hooks/useQuestionReview";
 import { toast } from "sonner";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
@@ -41,6 +42,11 @@ export function QuestionPreparationOverviewPage() {
   const { taskId } = useParams();
   const navigate = useNavigate();
   const createRows = useManuallyCompleteQuestionPreparation();
+  const addQuestion = useAddTaskQuestion();
+  const deleteQuestion = useDeleteTaskQuestion();
+  const [deletingQuestion, setDeletingQuestion] = useState<ProblemInfo | null>(null);
+  const [rowError, setRowError] = useState(false);
+  const rowBusy = addQuestion.isPending || deleteQuestion.isPending;
   const [questionCount, setQuestionCount] = useState("");
   const [countError, setCountError] = useState(false);
   const [nextBlockers, setNextBlockers] = useState<ReviewBlocker[]>([]);
@@ -96,6 +102,21 @@ export function QuestionPreparationOverviewPage() {
 
   function toggleSort(key: MatrixSortKey) { headerSort.toggle(key); }
 
+  const canEditRows = taskQuery.data?.status === "problems_ready" && !taskQuery.data.manual_question_count_required;
+  async function changeQuestionRow(problem?: ProblemInfo) {
+    if (!taskId || !taskQuery.data || rowBusy) return;
+    setRowError(false);
+    try {
+      const input = { taskId, expectedWorkflowRevision: taskQuery.data.workflow_revision };
+      if (problem) await deleteQuestion.mutateAsync({ ...input, qId: problem.q_id });
+      else {
+        await addQuestion.mutateAsync(input);
+        smartFilter.setQuery("");
+      }
+      setDeletingQuestion(null);
+    } catch { setRowError(true); }
+  }
+  const addButton = canEditRows ? <button type="button" disabled={rowBusy} onClick={() => void changeQuestionRow()} className={reviewActionClass}><Plus aria-hidden="true" className="h-4 w-4" />{tx(locale, "添加题目", "Add question")}</button> : null;
   const firstQuestionId = rows[0]?.problem.q_id ?? problems[0]?.q_id;
   const totalMaxScore = problems.reduce((total, problem) => total + (problem.max_score ?? 10), 0);
   return (
@@ -103,6 +124,10 @@ export function QuestionPreparationOverviewPage() {
       <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
         {tx(locale, "题目资料总览", "Question Material Overview")}
       </h1>
+      {deletingQuestion ? <UnsavedChangesDialog title={tx(locale, "删除题目？", "Delete question?")} description={tx(locale, `将从当前复核矩阵移除第 ${deletingQuestion.number || deletingQuestion.q_id} 题。`, `Remove question ${deletingQuestion.number || deletingQuestion.q_id} from the current review matrix.`)} stayLabel={tx(locale, "取消", "Cancel")} leaveLabel={tx(locale, "删除", "Delete")} saving={rowBusy} onStay={() => { if (!rowBusy) setDeletingQuestion(null); }} onLeave={() => void changeQuestionRow(deletingQuestion)}>
+        {rowError ? <p role="alert" className="text-sm text-danger">{tx(locale, "修改失败，请刷新后重试。", "Could not update rows. Refresh and retry.")}</p> : null}
+      </UnsavedChangesDialog> : null}
+      {rowError && !deletingQuestion ? <p role="alert" className="mt-3 text-sm text-danger">{tx(locale, "修改失败，请刷新后重试。", "Could not update rows. Refresh and retry.")}</p> : null}
       <ReviewBlockDialog locale={locale} issues={nextBlockers.length ? nextBlockers : blocked} onClose={() => { clearBlocked(); setNextBlockers([]); }} />
       <NewTaskStepper currentStep={2} blockedFromStep={questionReviewBlockers(problems, taskId ?? "", locale).length ? 3 : undefined} lockedStepReason={tx(locale, "请先处理并确认关键问题", "Resolve and confirm required items first")} onLockedStepActivate={() => setNextBlockers(questionReviewBlockers(problems, taskId ?? "", locale))} />
 
@@ -143,6 +168,8 @@ export function QuestionPreparationOverviewPage() {
               sortKey={preserveGroundedOrder ? undefined : sortKey}
               sortDirection={sortDirection}
               onSort={toggleSort}
+              onDelete={canEditRows ? setDeletingQuestion : undefined}
+              busy={rowBusy}
             />
           ) : !problems.length && taskQuery.data?.manual_question_count_required && taskQuery.data.extract_job_id ? (
             <form className="p-5" onSubmit={async event => {
@@ -163,12 +190,13 @@ export function QuestionPreparationOverviewPage() {
             </form>
           ) : <MatrixEmpty filtered={Boolean(query)} locale={locale} />}
         </div>} />
-          {taskId && firstQuestionId ? <ReviewStageActions
+          {taskId ? <ReviewStageActions
+            leftAction={addButton}
             note={locale === "zh-CN"
               ? `显示 ${rows.length} / ${problems.length} 道题 · 作业总分 ${formatScore(totalMaxScore)} · ${allRisks.length} 个复核项`
               : `Showing ${rows.length} of ${problems.length} questions · ${formatScore(totalMaxScore)} total points · ${allRisks.length} review items`}
 
-            back={{ href: `/tasks/${taskId}/questions/${encodeURIComponent(firstQuestionId)}/content`, label: tx(locale, "查看题目详情", "View Question Details") }}
+            back={{ disabled: !firstQuestionId, href: firstQuestionId ? `/tasks/${taskId}/questions/${encodeURIComponent(firstQuestionId)}/content` : undefined, label: tx(locale, "查看题目详情", "View Question Details") }}
             next={{ label: tx(locale, "进入上传作答", "Continue to Upload Submissions"), disabled: confirming || updateProblem.isPending, onClick: () => {
               const issues = questionReviewBlockers(problems, taskId, locale);
               if (issues.length) setNextBlockers(issues);
@@ -195,8 +223,10 @@ function QuestionReviewQueue({ risks, taskId, locale, confirmation }: { confirma
   })} />;
 }
 
-function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort }: {
+function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort, onDelete, busy }: {
   rows: QuestionMatrixRow[];
+  onDelete?: (problem: ProblemInfo) => void;
+  busy?: boolean;
   taskId: string;
   locale: string;
   sortKey: MatrixSortKey | undefined;
@@ -234,8 +264,9 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort }
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="rubric" locale={locale} /></td>
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="tests" locale={locale} /></td>
               <td className="px-3 py-3"><AttentionStatus issues={issues} locale={locale} /></td>
-              <td className="px-5 py-3 text-right"><div className="flex flex-col items-end gap-2">
-                <MatrixViewLink to={`/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`} locale={locale} />
+              <td className="px-5 py-3 text-right"><div className="flex items-center justify-end gap-1">
+                <MatrixViewLink iconOnly to={`/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`} locale={locale} />
+                {onDelete ? <button type="button" title={tx(locale, "删除", "Delete")} aria-label={tx(locale, "删除", "Delete")} disabled={busy} onClick={() => onDelete(problem)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-danger/10 hover:text-danger disabled:opacity-50"><Trash2 aria-hidden="true" className="h-4 w-4" /></button> : null}
               </div></td>
             </tr>
           ))}

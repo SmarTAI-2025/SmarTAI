@@ -541,6 +541,8 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
         return empty, []
 
     presentations = workflow_repository.list_student_presentations(workflow.assignment_id)
+    inactive_sources = {item.source_id for item in presentations.values() if not item.is_active and item.source_id}
+    inactive_sources -= {item.source_id for item in presentations.values() if item.is_active and item.source_id}
     resolved_identity_sources = {
         presentation.source_id
         for presentation in presentations.values()
@@ -563,6 +565,8 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
     rows: list[dict] = []
     summary = dict(empty)
     for result in results:
+        if result.source.id in inactive_sources:
+            continue
         outcome = result.outcome
         terminal_without_outcome = (
             outcome is None and operation.status not in {"pending", "running"}
@@ -710,11 +714,11 @@ def _presentation_status(workflow, questions, submissions, latest_run) -> str:
             return "finalized"
         if latest_run.status in {"completed", "partial_failed"}:
             return "graded"
-    if not submissions and _manual_count_required(workflow, "student"):
+    if not submissions and workflow.presentation_status in {"submissions_ready", "grading_setup"}:
         return "submissions_ready"
     if submissions:
         return "grading_setup" if workflow.grading_setup is not None else "submissions_ready"
-    if questions or _manual_count_required(workflow, "question"):
+    if questions or workflow.presentation_status == "problems_ready":
         return "problems_ready"
     return "draft"
 
@@ -1869,7 +1873,7 @@ def _has_draft_questions(task_id: str) -> bool:
     with session_scope() as session:
         return bool(session.scalar(
             select(AssignmentQuestionRecord.id)
-            .where(AssignmentQuestionRecord.assignment_id == task_id)
+            .where(assignment_repository.active_question_clause(), AssignmentQuestionRecord.assignment_id == task_id)
             .limit(1)
         ))
 
@@ -2247,7 +2251,13 @@ def _replace_draft_questions(
             allowed_statuses.append(education.AssignmentStatus.PUBLISHED.value)
         if assignment.status not in allowed_statuses:
             raise InvalidTransition("assignment_not_editable")
+        retained_versions = dict(session.execute(select(
+            AssignmentQuestionRecord.q_id, func.max(AssignmentQuestionRecord.version)
+        ).where(AssignmentQuestionRecord.assignment_id == task_id,
+            AssignmentQuestionRecord.source["removed_from_review"].as_boolean().is_(True)
+        ).group_by(AssignmentQuestionRecord.q_id)).all())
         existing = session.scalars(select(AssignmentQuestionRecord).where(
+            assignment_repository.active_question_clause(),
             AssignmentQuestionRecord.assignment_id == task_id
         )).all()
         if existing and not replace_confirmed:
@@ -2295,6 +2305,7 @@ def _replace_draft_questions(
         workflow.error_code = None
         workflow.updated_at = now
         session.execute(delete(AssignmentQuestionRecord).where(
+            assignment_repository.active_question_clause(),
             AssignmentQuestionRecord.assignment_id == task_id
         ))
         # A new question set invalidates every recognized submission and every
@@ -2360,7 +2371,7 @@ def _replace_draft_questions(
                 max_score=float(raw.get("max_score") or 10),
                 reference_answer=raw.get("reference_answer"),
                 test_cases=raw.get("test_cases"), source=source,
-                version=1, created_at=now, updated_at=now,
+                version=retained_versions.get(str(raw.get("q_id") or q_id), 0) + 1, created_at=now, updated_at=now,
             ))
         assignment.status = education.AssignmentStatus.READY.value
         assignment.published_at = None
@@ -3454,6 +3465,7 @@ def apply_question_patches_atomic(
             raise InvalidTransition("assignment_not_editable")
 
         questions = session.scalars(select(AssignmentQuestionRecord).where(
+            assignment_repository.active_question_clause(),
             AssignmentQuestionRecord.assignment_id == task_id
         )).all()
         question_map = {question.q_id: question for question in questions}
@@ -3765,6 +3777,7 @@ def _commit_imported_submissions(
 
         questions = session.scalars(
             select(AssignmentQuestionRecord).where(
+                assignment_repository.active_question_clause(),
                 AssignmentQuestionRecord.assignment_id == task_id
             )
         ).all()
@@ -4818,25 +4831,16 @@ def update_problem(
         "solution_code", "test_cases",
     }.intersection(patch))
     with session_scope() as session:
-        workflow_row = session.scalar(select(
-            workflow_repository.AssignmentWorkflowRecord
-        ).where(
-            workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-            workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-        ).with_for_update())
-        if workflow_row is None:
-            raise NotFound("workflow")
+        workflow_row = workflow_repository.lock_workflow_revision(
+            session, assignment_id=task_id, owner_id=owner_id, expected_revision=expected_revision,
+        )
         assignment = workflow_repository._lock_live_assignment(
             session, assignment_id=task_id, owner_id=owner_id
         )
         if workflow_row.active_job_id:
             raise InvalidTransition("The task is busy.", code="workflow_busy")
-        if (
-            expected_revision is not None
-            and workflow_row.workflow_revision != expected_revision
-        ):
-            _raise_stale_revision()
         question = session.scalar(select(AssignmentQuestionRecord).where(
+            assignment_repository.active_question_clause(),
             AssignmentQuestionRecord.assignment_id == task_id,
             AssignmentQuestionRecord.q_id == q_id,
         ))
@@ -5024,27 +5028,14 @@ def update_student_answer(
     now = time.time()
     target_payload: dict[str, Any] | None = None
     with session_scope() as session:
-        workflow_row = session.scalar(
-            select(workflow_repository.AssignmentWorkflowRecord)
-            .where(
-                workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-            )
-            .with_for_update()
+        workflow_row = workflow_repository.lock_workflow_revision(
+            session, assignment_id=task_id, owner_id=owner_id, expected_revision=expected_revision,
         )
-        if workflow_row is None:
-            raise NotFound("workflow")
         assignment = workflow_repository._lock_live_assignment(
             session, assignment_id=task_id, owner_id=owner_id
         )
         if workflow_row.active_job_id:
             raise InvalidTransition("The task is busy.", code="workflow_busy")
-        if (
-            expected_revision is not None
-            and workflow_row.workflow_revision != expected_revision
-        ):
-            _raise_stale_revision()
-
         presentation = session.scalar(
             select(workflow_repository.AssignmentStudentPresentationRecord).where(
                 workflow_repository.AssignmentStudentPresentationRecord.assignment_id
@@ -5054,6 +5045,15 @@ def update_student_answer(
                 workflow_repository.AssignmentStudentPresentationRecord.is_active.is_(True),
             )
         )
+        if presentation is None:
+            retired = session.scalar(select(workflow_repository.AssignmentStudentPresentationRecord.id).where(
+                workflow_repository.AssignmentStudentPresentationRecord.assignment_id == task_id,
+                workflow_repository.AssignmentStudentPresentationRecord.is_active.is_(False),
+                (workflow_repository.AssignmentStudentPresentationRecord.display_student_id == display_student_id)
+                | (workflow_repository.AssignmentStudentPresentationRecord.student_id == display_student_id),
+            ).limit(1))
+            if retired is not None:
+                raise NotFound("submission")
         internal_id = presentation.student_id if presentation else display_student_id
         submission = session.scalar(select(SubmissionRecord).where(
             SubmissionRecord.assignment_id == task_id,
@@ -5073,6 +5073,7 @@ def update_student_answer(
         ).all()
         target = next((answer for answer in answer_rows if answer.q_id == q_id), None)
         question = session.scalar(select(AssignmentQuestionRecord).where(
+            assignment_repository.active_question_clause(),
             AssignmentQuestionRecord.assignment_id == task_id,
             AssignmentQuestionRecord.q_id == q_id,
         ))
@@ -5277,21 +5278,14 @@ def update_student_identity(
     # Serialize identity confirmation/editing with other workflow mutations.
     # A failed or busy item must not consume a revision during bulk review.
     with session_scope() as session:
-        workflow_row = session.scalar(
-            select(workflow_repository.AssignmentWorkflowRecord).where(
-                workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-            ).with_for_update()
+        workflow_row = workflow_repository.lock_workflow_revision(
+            session, assignment_id=task_id, owner_id=owner_id, expected_revision=expected_revision,
         )
-        if workflow_row is None:
-            raise NotFound("workflow")
         workflow_repository._lock_live_assignment(
             session, assignment_id=task_id, owner_id=owner_id
         )
         if workflow_row.active_job_id:
             raise InvalidTransition("The task is busy.", code="workflow_busy")
-        if workflow_row.workflow_revision != expected_revision:
-            _raise_stale_revision()
         presentations = session.scalars(
             select(workflow_repository.AssignmentStudentPresentationRecord).where(
                 workflow_repository.AssignmentStudentPresentationRecord.assignment_id == task_id,

@@ -38,6 +38,11 @@ from backend.services.question_structure import (
 )
 
 
+def active_question_clause():
+    """Exclude removed review rows while retaining their historical result FKs."""
+    return AssignmentQuestionRecord.source["removed_from_review"].as_boolean().is_not(True)
+
+
 def _new_assignment_id() -> str:
     return f"asg_{uuid.uuid4().hex[:12]}"
 
@@ -140,6 +145,7 @@ def _dto_from_session(session, record: AssignmentRecord) -> education.Assignment
     """
     count = session.scalar(
         select(func.count()).select_from(AssignmentQuestionRecord).where(
+            active_question_clause(),
             AssignmentQuestionRecord.assignment_id == record.id
         )
     ) or 0
@@ -194,6 +200,7 @@ def get_assignment(assignment_id: str, *, actor_id: str) -> education.Assignment
             raise NotFound("assignment")
         count = session.scalar(
             select(func.count()).select_from(AssignmentQuestionRecord).where(
+                active_question_clause(),
                 AssignmentQuestionRecord.assignment_id == assignment_id
             )
         ) or 0
@@ -215,6 +222,7 @@ def list_assignments(course_id: str, *, actor_id: str) -> list[education.Assignm
         for r in records:
             count = session.scalar(
                 select(func.count()).select_from(AssignmentQuestionRecord).where(
+                    active_question_clause(),
                     AssignmentQuestionRecord.assignment_id == r.id
                 )
             ) or 0
@@ -248,6 +256,7 @@ def list_assignments_for_student(student_id: str) -> list[education.AssignmentDT
         for r in records:
             count = session.scalar(
                 select(func.count()).select_from(AssignmentQuestionRecord).where(
+                    active_question_clause(),
                     AssignmentQuestionRecord.assignment_id == r.id
                 )
             ) or 0
@@ -266,6 +275,7 @@ def get_assignment_unscoped(assignment_id: str) -> education.AssignmentDTO:
             raise NotFound("assignment")
         count = session.scalar(
             select(func.count()).select_from(AssignmentQuestionRecord).where(
+                active_question_clause(),
                 AssignmentQuestionRecord.assignment_id == assignment_id
             )
         ) or 0
@@ -286,6 +296,7 @@ def list_assignments_unscoped(course_id: str) -> list[education.AssignmentDTO]:
         for r in records:
             count = session.scalar(
                 select(func.count()).select_from(AssignmentQuestionRecord).where(
+                    active_question_clause(),
                     AssignmentQuestionRecord.assignment_id == r.id
                 )
             ) or 0
@@ -317,6 +328,7 @@ def set_question_order(assignment_id: str, *, teacher_id: str,
             session.execute(
                 update(AssignmentQuestionRecord)
                 .where(
+                    active_question_clause(),
                     AssignmentQuestionRecord.assignment_id == assignment_id,
                     AssignmentQuestionRecord.q_id == q_id,
                 )
@@ -381,6 +393,7 @@ def list_questions(assignment_id: str, *, teacher_id: str) -> list[education.Que
             select(AssignmentQuestionRecord)
             .join(AssignmentRecord, AssignmentRecord.id == AssignmentQuestionRecord.assignment_id)
             .where(
+                active_question_clause(),
                 AssignmentQuestionRecord.assignment_id == assignment_id,
                 AssignmentRecord.teacher_id == teacher_id,
                 AssignmentRecord.deletion_requested_at.is_(None),
@@ -395,7 +408,7 @@ def get_questions_by_assignment(assignment_id: str) -> list[education.QuestionDT
     with session_scope() as session:
         records = session.scalars(
             select(AssignmentQuestionRecord)
-            .where(AssignmentQuestionRecord.assignment_id == assignment_id)
+            .where(active_question_clause(), AssignmentQuestionRecord.assignment_id == assignment_id)
             .order_by(AssignmentQuestionRecord.order_index, AssignmentQuestionRecord.created_at)
         ).all()
         return [_question_to_dto(r) for r in records]
@@ -420,6 +433,7 @@ def update_question(assignment_id: str, *, teacher_id: str, q_id: str, expected_
         changes = {k: v for k, v in fields.items() if k in allowed}
         existing = session.scalar(
             select(AssignmentQuestionRecord).where(
+                active_question_clause(),
                 AssignmentQuestionRecord.assignment_id == assignment_id,
                 AssignmentQuestionRecord.q_id == q_id,
             )
@@ -437,6 +451,7 @@ def update_question(assignment_id: str, *, teacher_id: str, q_id: str, expected_
         result = session.execute(
             update(AssignmentQuestionRecord)
             .where(
+                active_question_clause(),
                 AssignmentQuestionRecord.assignment_id == assignment_id,
                 AssignmentQuestionRecord.q_id == q_id,
                 AssignmentQuestionRecord.version == expected_version,
@@ -446,6 +461,7 @@ def update_question(assignment_id: str, *, teacher_id: str, q_id: str, expected_
         if result.rowcount != 1:
             existing = session.scalar(
                 select(AssignmentQuestionRecord).where(
+                    active_question_clause(),
                     AssignmentQuestionRecord.assignment_id == assignment_id,
                     AssignmentQuestionRecord.q_id == q_id,
                 )
@@ -455,6 +471,7 @@ def update_question(assignment_id: str, *, teacher_id: str, q_id: str, expected_
             raise VersionConflict("question_version_conflict")
         record = session.scalar(
             select(AssignmentQuestionRecord).where(
+                active_question_clause(),
                 AssignmentQuestionRecord.assignment_id == assignment_id,
                 AssignmentQuestionRecord.q_id == q_id,
             )
@@ -508,6 +525,7 @@ def publish(assignment_id: str, *, teacher_id: str, expected_version: int) -> ed
         # a version check, so it raises InvalidTransition before any UPDATE.
         qcount = session.scalar(
             select(func.count()).select_from(AssignmentQuestionRecord).where(
+                active_question_clause(),
                 AssignmentQuestionRecord.assignment_id == assignment_id
             )
         ) or 0

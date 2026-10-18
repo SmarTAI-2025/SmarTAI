@@ -5,7 +5,7 @@ import time
 
 from sqlalchemy import func, select
 
-from backend.db import submission_repository as submissions
+from backend.db import assignment_repository, submission_repository as submissions
 from backend.db.models import AssignmentQuestionRecord, SubmissionAnswerRecord, SubmissionRecord, SubmissionRevisionRecord
 from backend.db.session import session_scope
 from backend.db.source_outcome_repository import _lock_source_write_operation
@@ -61,7 +61,7 @@ def publish_revision(*, operation, student_id, answers, expected_questions):
     with session_scope() as session:
         row, submission = _locked(session, operation, student_id)
         current_questions = session.execute(select(AssignmentQuestionRecord.id, AssignmentQuestionRecord.version)
-            .where(AssignmentQuestionRecord.assignment_id == operation.assignment_id).with_for_update()).all()
+            .where(assignment_repository.active_question_clause(), AssignmentQuestionRecord.assignment_id == operation.assignment_id).with_for_update()).all()
         if sorted(tuple(item) for item in current_questions) != sorted(expected_questions):
             raise VersionConflict("Questions changed during recognition.", code="recognition_plan_changed")
         checkpoint = dict(row.checkpoint or {})

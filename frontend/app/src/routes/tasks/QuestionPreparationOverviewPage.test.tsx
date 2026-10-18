@@ -8,9 +8,14 @@ const extraIssues = vi.hoisted(() => [] as Array<Record<string, string>>);
 const mutateAsync = vi.hoisted(() => vi.fn());
 const manualTask = vi.hoisted(() => ({} as Record<string, unknown>));
 const createRows = vi.hoisted(() => vi.fn());
+const addRow = vi.hoisted(() => vi.fn());
+const deleteRow = vi.hoisted(() => vi.fn());
+beforeEach(() => { addRow.mockReset().mockResolvedValue({ workflow_revision: 8 }); deleteRow.mockReset().mockResolvedValue({ workflow_revision: 8 }); });
 beforeEach(() => { Object.keys(manualTask).forEach(key => delete manualTask[key]); createRows.mockReset().mockResolvedValue({ workflow_revision: 8 }); extraIssues.length = 0; mutateAsync.mockReset().mockResolvedValue({ workflow_revision: 8 }); });
 
 vi.mock("@/api/hooks/tasks", () => ({
+  useAddTaskQuestion: () => ({ isPending: false, mutateAsync: addRow }),
+  useDeleteTaskQuestion: () => ({ isPending: false, mutateAsync: deleteRow }),
   useManuallyCompleteQuestionPreparation: () => ({ isPending: false, mutateAsync: createRows }),
   useUpdateProblem: () => ({ isPending: false, mutateAsync }),
   useTask: () => ({
@@ -108,10 +113,13 @@ describe("QuestionPreparationOverviewPage smart search", () => {
     expect(screen.getByText("Upload submissions")).toBeInTheDocument();
     expect(mutateAsync).not.toHaveBeenCalled();
   });
-  it("keeps only a details link in each matrix action cell", () => {
+  it("keeps the details link and delete icon in each matrix action cell", () => {
     renderPage("/tasks/task-1/questions");
     expect(screen.queryByRole("button", { name: /确认第/ })).not.toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "查看" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "删除" })).toHaveLength(2);
+    expect(screen.getAllByTitle("查看")).toHaveLength(2);
+    expect(screen.getAllByTitle("删除")).toHaveLength(2);
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 
@@ -217,6 +225,45 @@ describe("QuestionPreparationOverviewPage smart search", () => {
       expect(input).toHaveFocus();
     }
   });
+});
+
+it("adds beside the statistics with the same control height and confirms deletion before sending", async () => {
+  renderPage("/tasks/task-1/questions");
+  const add = screen.getByRole("button", { name: "添加题目" });
+  expect(add).toHaveClass("h-10");
+  expect(add.closest("[data-review-stage-note]")).toHaveTextContent("作业总分 16");
+  expect(screen.getByRole("button", { name: "进入上传作答" })).toHaveClass("h-10");
+  await userEvent.click(add);
+  expect(addRow).toHaveBeenCalledWith({ taskId: "task-1", expectedWorkflowRevision: 7 });
+  await userEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
+  expect(deleteRow).not.toHaveBeenCalled();
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "取消" }));
+  expect(deleteRow).not.toHaveBeenCalled();
+  await userEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "删除" }));
+  expect(deleteRow).toHaveBeenCalledWith({ taskId: "task-1", qId: "Q1", expectedWorkflowRevision: 7 });
+});
+
+it("allows adding after the last row was removed and blocks the next stage", async () => {
+  Object.assign(manualTask, { problem_data: {} });
+  renderPage("/tasks/task-1/questions");
+  expect(screen.getByRole("button", { name: "添加题目" })).toBeEnabled();
+  await userEvent.click(screen.getByRole("button", { name: "进入上传作答" }));
+  expect(screen.getByRole("alertdialog")).toBeVisible();
+  expect(screen.queryByText("Upload submissions")).not.toBeInTheDocument();
+});
+
+it("does not offer row mutations after grading", () => {
+  Object.assign(manualTask, { status: "graded" });
+  renderPage("/tasks/task-1/questions");
+  expect(screen.queryByRole("button", { name: "添加题目" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();
+});
+
+it("clears a filter after adding so the new blank row can be seen", async () => {
+  renderPage("/tasks/task-1/questions?q=no-match&sort=max_score_desc&column_sort=max_score:desc");
+  await userEvent.click(screen.getByRole("button", { name: "添加题目" }));
+  await waitFor(() => expect(screen.getByTestId("location-search")).toBeEmptyDOMElement());
 });
 
 it("keeps early manual recovery inside the existing matrix and creates only the requested blank rows", async () => {

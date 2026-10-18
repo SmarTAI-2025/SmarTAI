@@ -156,9 +156,9 @@ describe("review hard failures", () => {
     expect(submissionConfirmationBlockers(task, "en-US")).toHaveLength(1);
   });
 
-  it("routes an unresolved source without a student record back to source recovery", () => {
+  it("keeps an empty manual review in the matrix so student rows can be created", () => {
     const task = { task_id: "T1", submission_sources: [{ source_id: "source-1", file_name: "sample.pdf", status: "identity_needs_review", internal_status: "identity_conflict" }], student_data: {} } as unknown as Task;
-    expect(submissionReviewBlockers(task, "zh-CN")[0].href).toBe("/tasks/T1/submissions/upload#source-source-1");
+    expect(submissionReviewBlockers(task, "zh-CN")[0].href).toBe("/tasks/T1/submissions#student-count");
     expect(submissionConfirmationBlockers(task, "zh-CN")).toHaveLength(1);
   });
 });

@@ -14,11 +14,13 @@ const state = vi.hoisted(() => ({
       stu_ans: [{ q_id: "Q1", content: "Original answer", flag: [] as string[], review_status: "pending" }],
     }])),
   },
-  identity: vi.fn(), answer: vi.fn(), manual: vi.fn(), refetch: vi.fn(),
+  identity: vi.fn(), answer: vi.fn(), manual: vi.fn(), add: vi.fn(), remove: vi.fn(), refetch: vi.fn(),
 }));
 vi.mock("@/api/hooks/tasks", () => ({
   useTask: () => ({ data: state.data, isLoading: false, isSuccess: true, refetch: state.refetch }),
   useUpdateStudentIdentity: () => ({ mutateAsync: state.identity }),
+  useAddTaskStudent: () => ({ mutateAsync: state.add, isPending: false }),
+  useDeleteTaskStudent: () => ({ mutateAsync: state.remove, isPending: false }),
   useManuallyCompleteSubmissionRecognition: () => ({ mutateAsync: state.manual, isPending: false }),
   useUpdateStudentAnswer: () => ({ mutateAsync: state.answer }),
 }));
@@ -34,6 +36,8 @@ beforeEach(() => {
   state.data.status = "submissions_ready";
   state.data.manual_student_count_required = false;
   state.manual.mockReset().mockResolvedValue({ status: "ready_for_review" });
+  state.add.mockReset().mockResolvedValue({ status: "ok", student_id: "manual-1", workflow_revision: 4 });
+  state.remove.mockReset().mockResolvedValue({ status: "ok", workflow_revision: 4 });
   for (const student of Object.values(state.data.student_data)) {
     student.identity_status = "needs_review";
     student.stu_ans[0].flag = [];
@@ -142,4 +146,60 @@ it("keeps a rejected student-count save on the original matrix without hiding th
   } finally {
     state.data.student_data = originalStudents;
   }
+});
+
+
+it("adds a blank student from the action row beside the matrix count", async () => {
+  renderPage();
+  const add = screen.getByRole("button", { name: "添加学生" });
+  expect(add).toHaveClass("h-10");
+  expect(add.parentElement).toHaveTextContent("显示 3/3 位学生");
+  await userEvent.click(add);
+  await waitFor(() => expect(state.add).toHaveBeenCalledWith({ taskId: "task-1", expectedWorkflowRevision: 3 }));
+  expect(state.refetch).toHaveBeenCalled();
+});
+
+it("requires confirmation before deleting one student through the original matrix", async () => {
+  renderPage();
+  const remove = screen.getByRole("button", { name: "删除学生 S001" });
+  expect(remove).toHaveAttribute("title", "删除");
+  expect(remove.parentElement?.querySelector("a")).toHaveAttribute("title", "查看");
+  await userEvent.click(remove);
+  expect(state.remove).not.toHaveBeenCalled();
+  expect(screen.getByRole("alertdialog")).toHaveTextContent("Student S001");
+  await userEvent.click(screen.getByRole("button", { name: "取消" }));
+  expect(state.remove).not.toHaveBeenCalled();
+  await userEvent.click(remove);
+  await userEvent.click(screen.getByRole("button", { name: "删除" }));
+  await waitFor(() => expect(state.remove).toHaveBeenCalledWith({ taskId: "task-1", studentId: "S001", expectedWorkflowRevision: 3 }));
+});
+
+it("keeps adding students available when the review matrix has no students", async () => {
+  const originalStudents = state.data.student_data;
+  state.data.student_data = {};
+  try {
+    renderPage();
+    await userEvent.click(screen.getByRole("button", { name: "添加学生" }));
+    expect(state.add).toHaveBeenCalledWith({ taskId: "task-1", expectedWorkflowRevision: 3 });
+    expect(screen.queryByRole("link", { name: "submissionReviewUploadAgain" })).not.toBeInTheDocument();
+  } finally {
+    state.data.student_data = originalStudents;
+  }
+});
+
+it("does not expose row mutation controls when viewing completed grading", () => {
+  state.data.status = "graded";
+  renderPage();
+  expect(screen.queryByRole("button", { name: "添加学生" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^删除学生/ })).not.toBeInTheDocument();
+});
+
+
+it("clears the matrix filter after adding so the new blank student is visible", async () => {
+  renderPage("?q=S001&sort=name_desc");
+  const query = screen.getByRole("textbox", { name: "Ask SmarTAI：学生作答" });
+  expect(query).toHaveValue("S001");
+  await userEvent.click(screen.getByRole("button", { name: "添加学生" }));
+  await waitFor(() => expect(state.add).toHaveBeenCalledWith({ taskId: "task-1", expectedWorkflowRevision: 3 }));
+  await waitFor(() => expect(query).toHaveValue(""));
 });

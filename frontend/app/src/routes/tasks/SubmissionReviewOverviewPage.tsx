@@ -1,11 +1,12 @@
 import { ReviewQueue as ReviewQueuePanel } from "@/components/tasks/ReviewQueue";
-import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
+import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions, reviewActionClass } from "@/components/tasks/ReviewConfirmation";
 import { submissionReviewBlockers, submissionRecognitionIncomplete, answerReviewBlocked, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
-import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw } from "lucide-react";
+import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { useTask, useUpdateStudentAnswer, useManuallyCompleteSubmissionRecognition } from "@/api/hooks/tasks";
+import { useTask, useUpdateStudentAnswer, useManuallyCompleteSubmissionRecognition, useAddTaskStudent, useDeleteTaskStudent } from "@/api/hooks/tasks";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { getAPIErrorCode } from "@/api/client";
 import { confirmSubmissionBatch } from "@/lib/submissionReviewBatch";
 import { answerNeedsConfirmation, answerReviewAttention, answerReviewLabels } from "@/lib/submissionReview";
@@ -69,6 +70,13 @@ export function SubmissionReviewOverviewPage() {
   const readingCompletion = taskQuery.isFetching && !hasTaskReachedStep(taskQuery.data, 4);
   const answerMutation = useUpdateStudentAnswer();
   const manualMutation = useManuallyCompleteSubmissionRecognition();
+  const addStudent = useAddTaskStudent();
+  const deleteStudent = useDeleteTaskStudent();
+  const [deletingStudent, setDeletingStudent] = useState<StudentSubmission | null>(null);
+  const [rowError, setRowError] = useState<string | null>(null);
+  const rowBusy = addStudent.isPending || deleteStudent.isPending;
+  const canEditRows = isTaskAwaitingGrading(taskQuery.data?.status) && !taskQuery.data?.manual_student_count_required;
+
   const [studentCount, setStudentCount] = useState("");
   const [countError, setCountError] = useState<string | null>(null);
   const [blocked, setBlocked] = useState<ReviewBlocker[]>([]);
@@ -149,6 +157,28 @@ export function SubmissionReviewOverviewPage() {
     : [];
   const pendingReviews = advisoryCandidates.filter(({ student, answer }) => queueItems.some(item => item.key === `${student.stu_id}:${answer.q_id}` && item.severity === "advisory"));
 
+  async function changeStudentRow(student?: StudentSubmission) {
+    if (!taskId || !taskQuery.data || rowBusy) return;
+    setRowError(null);
+    try {
+      const input = { taskId, expectedWorkflowRevision: taskQuery.data.workflow_revision };
+      if (student) await deleteStudent.mutateAsync({ ...input, studentId: student.stu_id });
+      else {
+        await addStudent.mutateAsync(input);
+        smartFilter.cancel();
+        latestSearchParamsRef.current = new URLSearchParams();
+        setSearchParams({}, { replace: true });
+      }
+      setDeletingStudent(null);
+      await taskQuery.refetch();
+    } catch {
+      setRowError(locale === "zh-CN" ? "修改学生行失败，请刷新核对任务后重试。" : "Could not update student rows. Refresh the task and retry.");
+    }
+  }
+  const addStudentButton = canEditRows ? <button type="button" disabled={rowBusy || !questions.length} onClick={() => void changeStudentRow()} className={reviewActionClass}>
+    <Plus aria-hidden="true" className="h-4 w-4" />{locale === "zh-CN" ? "添加学生" : "Add student"}
+  </button> : null;
+
   async function createStudentRows() {
     if (!taskId || !taskQuery.data?.parse_job_id || manualMutation.isPending) return;
     const count = Number(studentCount);
@@ -202,6 +232,13 @@ export function SubmissionReviewOverviewPage() {
       <h1 className="min-h-9 text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
         {t("submissionReviewTitle")}
       </h1>
+      {deletingStudent ? <UnsavedChangesDialog title={locale === "zh-CN" ? "删除此学生行？" : "Delete this student row?"}
+        description={locale === "zh-CN" ? `将从当前复核矩阵移除 ${deletingStudent.stu_name || ""}（${deletingStudent.stu_id}）。` : `Remove ${deletingStudent.stu_name || ""} (${deletingStudent.stu_id}) from the current review matrix.`}
+        stayLabel={locale === "zh-CN" ? "取消" : "Cancel"} leaveLabel={locale === "zh-CN" ? "删除" : "Delete"}
+        saving={rowBusy} onStay={() => { if (!rowBusy) setDeletingStudent(null); }} onLeave={() => void changeStudentRow(deletingStudent)}>
+        {rowError ? <p role="alert" className="text-sm text-danger">{rowError}</p> : null}
+      </UnsavedChangesDialog> : null}
+      {rowError && !deletingStudent ? <p role="alert" className="mt-3 text-sm text-danger">{rowError}</p> : null}
       <ReviewBlockDialog locale={locale} issues={blocked} onClose={() => setBlocked([])} />
       <NewTaskStepper currentStep={4} blockedFromStep={submissionReviewBlockers(taskQuery.data, locale).length ? 5 : undefined} lockedStepReason={locale === "zh-CN" ? "请先处理并确认关键问题" : "Resolve and confirm required items first"} onLockedStepActivate={() => setBlocked(submissionReviewBlockers(taskQuery.data, locale))} />
 
@@ -305,9 +342,10 @@ export function SubmissionReviewOverviewPage() {
               <MatrixState
                 title={t("submissionReviewEmptyTitle")}
                 description={t("submissionReviewEmptyDescription")}
-                href={`/tasks/${taskId}/submissions/upload`}
-                action={t("submissionReviewUploadAgain")}
+                href={canEditRows ? undefined : `/tasks/${taskId}/submissions/upload`}
+                action={canEditRows ? undefined : t("submissionReviewUploadAgain")}
               />
+              {addStudentButton ? <div className="flex items-center gap-3 border-t px-4 py-3"><span className="text-xs text-muted-foreground">{locale === "zh-CN" ? "0 位学生" : "0 students"}</span>{addStudentButton}</div> : null}
             </section>
           ) : (
             <>
@@ -320,6 +358,8 @@ export function SubmissionReviewOverviewPage() {
                       taskId={taskId}
                       sources={taskQuery.data?.submission_sources}
                       returnSearch={returnSearch}
+                      onDelete={canEditRows ? (student) => { setRowError(null); setDeletingStudent(student); } : undefined}
+                      rowBusy={rowBusy}
                       columnSort={headerSort.current}
                       onSort={headerSort.toggle}
                       t={t}
@@ -333,6 +373,7 @@ export function SubmissionReviewOverviewPage() {
 
               <ReviewStageActions
                 note={locale === "zh-CN" ? `显示 ${selection.students.length}/${students.length} 位学生 · ${selection.questions.length}/${questions.length} 道题` : `Showing ${selection.students.length}/${students.length} students · ${selection.questions.length}/${questions.length} questions`}
+                leftAction={addStudentButton}
 
                 back={{ href: `/tasks/${taskId}/students/${encodeURIComponent(Object.values(taskQuery.data?.student_data ?? {})[0]?.stu_id ?? "")}`, label: locale === "zh-CN" ? "查看作答详情" : "View Submission Details" }}
                 next={{ label: t("submissionReviewEnterGradingSetup"), disabled: batchProgress !== null, onClick: () => {
@@ -356,6 +397,8 @@ function SubmissionMatrix({
   questions,
   taskId,
   returnSearch,
+  onDelete,
+  rowBusy,
   columnSort,
   onSort,
   t,
@@ -365,6 +408,8 @@ function SubmissionMatrix({
   questions: SubmissionQuestion[];
   taskId: string;
   returnSearch: string;
+  onDelete?: (student: StudentSubmission) => void;
+  rowBusy?: boolean;
   columnSort: ColumnSort | null;
   onSort: (key: string) => void;
   t: (key: MessageKey) => string;
@@ -389,11 +434,12 @@ function SubmissionMatrix({
     studentNameLabel,
     reserveIdStatusIcon: students.some((student) => studentIdentityReviewBlocked(student, sources)),
   });
+  const actionColumnWidth = onDelete ? 96 : MATRIX_ACTION_COLUMN_WIDTH;
   const tableMinWidth = Math.max(
     740,
     identityLayout.studentIdWidth
       + identityLayout.studentNameWidth
-      + MATRIX_ACTION_COLUMN_WIDTH
+      + actionColumnWidth
       + questions.length * MATRIX_QUESTION_COLUMN_WIDTH,
   );
 
@@ -418,7 +464,7 @@ function SubmissionMatrix({
                 {question.label}
               </SortableTableHead>
             ))}
-            <th className="w-[72px] px-3 text-right">{t("submissionReviewColumnAction")}</th>
+            <th className="px-3 text-right" style={{ width: actionColumnWidth }}>{t("submissionReviewColumnAction")}</th>
           </tr>
         </thead>
         <tbody className="divide-y">
@@ -461,8 +507,11 @@ function SubmissionMatrix({
                     />
                   </td>
                 ))}
-                <td className="w-[72px] px-3 text-right">
-                  <MatrixViewLink to={entryHref} locale={locale} />
+                <td className="px-3 text-right" style={{ width: actionColumnWidth }}>
+                  <div className="inline-flex items-center gap-1">
+                    <MatrixViewLink to={entryHref} locale={locale} iconOnly />
+                    {onDelete ? <button type="button" disabled={rowBusy} onClick={() => onDelete(student)} title={locale === "zh-CN" ? "删除" : "Delete"} aria-label={`${locale === "zh-CN" ? "删除学生" : "Delete student"} ${student.stu_id}`} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-red-50 hover:text-red-700 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"><Trash2 aria-hidden="true" className="h-4 w-4" /></button> : null}
+                  </div>
                 </td>
               </tr>
             );
