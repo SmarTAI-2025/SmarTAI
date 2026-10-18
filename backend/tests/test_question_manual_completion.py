@@ -85,6 +85,18 @@ async def test_paused_question_handoff_keeps_completed_questions_and_sources(mon
         assert result["first_question_id"] == "teacher-q"
         assert "question_manual_completion_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
         assert assignment_repository.list_questions(task, teacher_id=owner)[0].stem == question.stem
+        assert task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]["teacher-q"]["max_score_source"] == "teacher_edited"
+        # Previously saved manual drafts must use the same public score-source
+        # contract without changing the teacher's content or rewriting history.
+        from backend.db.models import AssignmentQuestionRecord
+        created = assignment_repository.list_questions(task, teacher_id=owner)[0]
+        with session_scope() as session:
+            stored = session.get(AssignmentQuestionRecord, created.id)
+            stored.source = {**stored.source, "presentation": {
+                **stored.source["presentation"], "max_score_source": "teacher_input"}}
+        projected = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]["teacher-q"]
+        assert projected["max_score_source"] == "teacher_edited" and projected["stem"] == question.stem
+        assert assignment_repository.list_questions(task, teacher_id=owner)[0].source["presentation"]["max_score_source"] == "teacher_input"
     else:
         questions = assignment_repository.list_questions(task, teacher_id=owner)
         assert questions[0].reference_answer

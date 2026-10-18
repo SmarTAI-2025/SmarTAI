@@ -107,7 +107,7 @@ def validate_manual_source_questions(operation, questions, completed_sources):
         q_id = raw["q_id"].strip()
         if not q_id or q_id in packages or any(not raw[field].strip() for field in ("stem", "criterion")):
             raise ValidationError("Each question needs a unique ID, stem and rubric.", code="question_review_blocked")
-        raw.update(q_id=q_id, review_status="needs_review", max_score_source="teacher_input")
+        raw.update(q_id=q_id, review_status="needs_review", max_score_source="teacher_edited")
         structure = build_major_question_structure(raw, major_order=index, structure_source="deterministic", review_status="needs_review")
         try:
             validate_rubric_points(raw["criterion"], raw["max_score"], structure)
