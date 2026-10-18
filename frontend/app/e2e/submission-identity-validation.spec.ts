@@ -38,12 +38,12 @@ const roster = { name: "roster.csv", mimeType: "text/csv", buffer: Buffer.from("
 const copy = {
   "en-US": {
     title: "Upload Student Submissions", roster: "Import Roster", manual_review: "Manual Review", filename: "Match IDs from filenames",
-    start: "Start Submission Recognition", required: "Upload a roster when “Import Roster” is selected.",
+    start: "Start Submission Recognition", required: "No roster is selected. Choose a roster file first.",
     save: "Save draft", saved: /Draft saved ·/, model: "Submission recognition model", deleteDraft: "Delete page draft",
   },
   "zh-CN": {
     title: "上传学生作答", roster: "导入名单", manual_review: "手动校正", filename: "按文件名识别学号",
-    start: "开始识别作答", required: "选择“导入名单”时，请同时上传名单文件。",
+    start: "开始识别作答", required: "尚未选择学生名单，请先选择名单文件。",
     save: "暂存", saved: /已暂存 ·/, model: "作答识别模型", deleteDraft: "删除本页草稿",
   },
 } as const;
@@ -51,6 +51,10 @@ const copy = {
 async function setup(page: Page, locale: keyof typeof copy, uploadReceiver: UploadReceiver, recoveryStatus?: "error" | "submissions_paused") {
   const { requests } = uploadReceiver;
   const errors: string[] = [];
+  const alerts: string[] = [];
+  page.on("dialog", async dialog => {
+    if (dialog.type() === "alert") { alerts.push(dialog.message()); await dialog.accept(); }
+  });
   const task = {
     task_id: "roster-audit", owner_id: "teacher", name: "Roster validation", status: recoveryStatus ?? "problems_ready",
     ...(recoveryStatus ? { parse_job_id: "prior-job", last_failed_job_id: "prior-job", pending_submission_file_name: "saved.pdf" } : {}),
@@ -86,17 +90,18 @@ async function setup(page: Page, locale: keyof typeof copy, uploadReceiver: Uplo
   await expect(page).toHaveTitle("SmarTAI");
   await expect(page.getByRole("heading", { name: copy[locale].title, exact: true })).toBeVisible();
   await expect(page.getByLabel(copy[locale].model)).toHaveValue("test-provider");
-  return { requests, errors };
+  return { requests, errors, alerts };
 }
 
 for (const status of ["error", "submissions_paused"] as const) {
   test(`restored ${status} file requires a roster before full recognition`, async ({ page, uploadReceiver }, info) => {
-    const { requests, errors } = await setup(page, "zh-CN", uploadReceiver, status);
+    const { requests, errors, alerts } = await setup(page, "zh-CN", uploadReceiver, status);
     await expect(page.getByText("saved.pdf", { exact: true })).toBeVisible();
     await page.getByRole("radio", { name: copy["zh-CN"].roster, exact: true }).click();
     const start = page.getByRole("button", { name: "重新识别全部作答", exact: true });
     await start.click();
     await expect(page.locator("#submission-roster-required")).toHaveText(copy["zh-CN"].required);
+    expect(alerts).toEqual([copy["zh-CN"].required]);
     await expect(page.locator('[aria-describedby="submission-roster-required"]')).toBeFocused();
     expect(requests).toHaveLength(0);
     await expect(page).toHaveURL(new RegExp(`${uploadPath}$`));
@@ -158,7 +163,7 @@ for (const locale of ["en-US", "zh-CN"] as const) {
   for (const mode of ["manual_review", "filename"] as const) {
     test(`${locale}: roster error clears on ${mode} and is revalidated after switching back`, async ({ page, uploadReceiver }, info) => {
       const text = copy[locale];
-      const { requests, errors } = await setup(page, locale, uploadReceiver);
+      const { requests, errors, alerts } = await setup(page, locale, uploadReceiver);
       const file = mode === "manual_review" ? pdf : zip;
       await page.locator('input[type="file"]').first().setInputFiles(file);
       const chooseMode = (value: "roster" | typeof mode) => page.getByRole("radio", { name: text[value], exact: true }).click();
@@ -167,11 +172,13 @@ for (const locale of ["en-US", "zh-CN"] as const) {
       await chooseMode("roster");
       await start.click();
       await expect(error).toHaveText(text.required);
+      expect(alerts).toEqual([text.required]);
       await expect(page.locator('[aria-describedby="submission-roster-required"]')).toBeFocused();
       expect(requests).toHaveLength(0);
       await chooseMode(mode);
       await expect(page.getByRole("radio", { name: text[mode], exact: true })).toHaveAttribute("aria-checked", "true");
       await expect(error).toHaveCount(0);
+      await expect(page.getByText(text.required, { exact: true })).toHaveCount(0);
       await expect(page.locator('[aria-describedby="submission-roster-required"]')).toHaveCount(0);
       await expect(page.getByText(file.name, { exact: true })).toBeVisible();
       await expect(page.getByLabel(text.model)).toHaveValue("test-provider");

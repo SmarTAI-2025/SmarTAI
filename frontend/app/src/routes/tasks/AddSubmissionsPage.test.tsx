@@ -29,6 +29,7 @@ const taskState = vi.hoisted(() => ({
 }));
 
 const inputState = vi.hoisted(() => ({ input: null as unknown }));
+beforeEach(() => { vi.spyOn(window, "alert").mockImplementation(() => {}); });
 vi.mock("@/api/workflowInputs", () => ({ useWorkflowInput: () => ({ data: { input: inputState.input }, isError: false, isLoading: false }) }));
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({
@@ -129,7 +130,8 @@ describe("AddSubmissionsPage OCR uploads", () => {
     await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
     fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
     expect(screen.getByRole("button", { name: "submissionUploadChoose" })).toHaveFocus();
-    expect(screen.getAllByRole("alert").some((item) => item.textContent?.includes("submissionUploadFileRequired"))).toBe(true);
+    expect(screen.getAllByRole("alert").some((item) => item.textContent?.includes("尚未选择作答文件"))).toBe(true);
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining("尚未选择作答文件"));
     expect(mutateAsync).not.toHaveBeenCalled();
   });
   it("links a missing model directly to BYOK while retaining the task return path", async () => {
@@ -161,6 +163,7 @@ describe("AddSubmissionsPage OCR uploads", () => {
     fireEvent.click(screen.getByRole("radio", { name: mode }));
     expect(screen.getByRole("radio", { name: mode })).toHaveAttribute("aria-checked", "true");
     expect(container.querySelector("#submission-roster-required")).not.toBeInTheDocument();
+    expect(screen.queryByText(/尚未选择学生名单/)).not.toBeInTheDocument();
     expect(screen.getByText(filename)).toBeInTheDocument();
     expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default");
 
@@ -200,7 +203,7 @@ describe("AddSubmissionsPage OCR uploads", () => {
       fireEvent.click(screen.getByRole("button", { name: "删除本页草稿" }));
       await waitFor(() => expect(screen.getByRole("radio", { name: "submissionUploadIdentityFilename" })).toHaveAttribute("aria-checked", "true"));
       expect(container.querySelector("#submission-roster-required")).not.toBeInTheDocument();
-      expect(screen.queryByText("submissionUploadRosterRequired")).not.toBeInTheDocument();
+      expect(screen.queryByText(/尚未选择学生名单/)).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
       expect(container.querySelector("#submission-roster-required")).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
@@ -226,7 +229,7 @@ describe("AddSubmissionsPage OCR uploads", () => {
     fireEvent.click(screen.getByRole("button", { name: "核对后恢复旧草稿" }));
     await screen.findByText("saved.pdf");
     expect(container.querySelector("#submission-roster-required")).not.toBeInTheDocument();
-    expect(screen.queryByText("submissionUploadRosterRequired")).not.toBeInTheDocument();
+    expect(screen.queryByText(/尚未选择学生名单/)).not.toBeInTheDocument();
     expect(container.querySelector('[aria-describedby="submission-roster-required"]')).not.toBeInTheDocument();
     expect(mutateAsync).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
@@ -433,17 +436,17 @@ describe("submitted input recovery", () => {
     await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
     fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
     fireEvent.click(screen.getByRole("button", { name: "重新识别全部作答" }));
-
     expect(mutateAsync).not.toHaveBeenCalled();
     expect(retryMutateAsync).not.toHaveBeenCalled();
-    expect(container.querySelector("#submission-roster-required")).toHaveTextContent("submissionUploadRosterRequired");
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining("尚未选择学生名单"));
+    expect(container.querySelector("#submission-roster-required")).toHaveTextContent("尚未选择学生名单");
     expect(screen.getByRole("button", { name: "submissionUploadRosterChoose" })).toHaveFocus();
     expect(screen.getByRole("button", { name: "submissionUploadRosterChoose" })).toHaveAttribute("aria-describedby", "submission-roster-required");
     expect(screen.getByText("saved.pdf")).toBeInTheDocument();
 
     const roster = new File(["student_id,name\nS1,Alex"], "roster.csv", { type: "text/csv" });
     fireEvent.change(container.querySelectorAll('input[type="file"]')[1]!, { target: { files: [roster] } });
-    expect(screen.queryByText("submissionUploadRosterRequired")).not.toBeInTheDocument();
+    expect(screen.queryByText(/尚未选择学生名单/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "重新识别全部作答" }));
     await screen.findByText("progress page");
     expect(mutateAsync).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ file: null, storedFileId: "saved-pdf", identityMode: "roster", rosterFile: roster, reuseRosterFromJobId: null }));
@@ -462,12 +465,46 @@ describe("submitted input recovery", () => {
     expect(retryMutateAsync).not.toHaveBeenCalled();
   });
 
+  it("requires reselection when the server says the failed job's original is unavailable", async () => {
+    taskState.data = { ...taskState.data, status: "error", pending_submission_file_name: "saved.zip", last_failed_job_id: "prior" };
+    inputState.input = { job_id: "prior", stored_file_id: null, filename: "saved.zip", available: false, identity_mode: "filename", roster_count: 0, recognition_provider_id: "provider-default" };
+    const { container } = renderPage();
+    await screen.findAllByText(/saved.zip.*请重新选择作答文件/);
+    expect(screen.queryByText(/原文件已保留/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining("请重新选择作答文件"));
+    expect(mutateAsync).not.toHaveBeenCalled();
+    expect(retryMutateAsync).not.toHaveBeenCalled();
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["answer"], "saved.zip")] } });
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    await screen.findByText("progress page");
+    expect(mutateAsync).toHaveBeenCalledTimes(1);
+  });
+  it("keeps filename-only roster guidance relevant to the current mode and file", async () => {
+    inputState.input = { job_id: "prior", stored_file_id: "saved-pdf", filename: "saved.pdf", available: true, identity_mode: "roster", roster_name: "missing-roster.csv", roster_count: 0, recognition_provider_id: "provider-default" };
+    const { container } = renderPage();
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    expect(container.querySelector("#submission-roster-required")).toHaveTextContent("missing-roster.csv");
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining("请重新选择名单文件"));
+    expect(mutateAsync).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityManual" }));
+    expect(screen.queryByText(/请重新选择名单文件/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
+    expect(container.querySelector("#submission-roster-required")).toHaveTextContent("missing-roster.csv");
+    fireEvent.change(container.querySelectorAll('input[type="file"]')[1]!, { target: { files: [new File(["student_id,name\nS1,Alex"], "roster.csv")] } });
+    expect(screen.queryByText(/请重新选择名单文件/)).not.toBeInTheDocument();
+    expect(screen.getByText("名单已就绪，无需重新选择。")).toBeInTheDocument();
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
   it("labels restored failed-job inputs as a full restart and applies edited identity options", async () => {
     taskState.data = { ...taskState.data, status: "error", pending_submission_file_name: "saved.zip", last_failed_job_id: "prior" };
     inputState.input = { job_id: "prior", stored_file_id: "saved-zip", filename: "saved.zip", available: true, identity_mode: "roster", roster_name: "saved-roster.csv", roster_count: 2, recognition_provider_id: "provider-default" };
     const { router } = renderPage();
     await screen.findByText("saved.zip");
     expect(screen.getByText("saved-roster.csv (2)")).toBeInTheDocument();
+    expect(screen.getByText(/可直接重试，无需重新上传/)).toBeInTheDocument();
+    expect(screen.getByText("名单已就绪，无需重新选择。")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" })).toHaveAttribute("aria-checked", "true");
     expect(mutateAsync).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityManual" }));

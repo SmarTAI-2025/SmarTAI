@@ -67,7 +67,25 @@ vi.mock("sonner", () => ({
 describe("KnowledgeBasePage storage quota", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(window, "alert").mockImplementation(() => {});
     mocks.uploadCourseMaterial.mockResolvedValue({ created: true });
+  });
+
+  it("explains the missing library file and retains a selected file after an upload failure", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter><KnowledgeBasePage /></MemoryRouter>);
+    await user.click(screen.getByRole("button", { name: "上传资料" }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "上传资料" }));
+    expect(window.alert).toHaveBeenCalledWith(expect.stringContaining("尚未选择可上传的文件"));
+    expect(mocks.uploadCourseMaterial).not.toHaveBeenCalled();
+    const file = new File(["chapter"], "chapter.md", { type: "text/markdown" });
+    await user.upload(within(dialog).getByLabelText(/选择一份资料文件/), file);
+    mocks.uploadCourseMaterial.mockRejectedValueOnce(new APIError(503, "Retry later"));
+    await user.click(within(dialog).getByRole("button", { name: "上传资料" }));
+    await waitFor(() => expect(mocks.uploadCourseMaterial).toHaveBeenCalledTimes(1));
+    expect(within(dialog).getByText(/文件已就绪，无需重新选择/)).toBeInTheDocument();
+    expect(within(dialog).getByText("chapter.md")).toBeInTheDocument();
   });
 
   it("shows independent usage and automatic cleanup retry without a retry action", () => {

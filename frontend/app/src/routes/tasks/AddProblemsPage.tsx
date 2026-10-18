@@ -121,7 +121,10 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
   const hasExistingProblems = Boolean(taskQuery.data?.problem_file_name || taskQuery.data?.problem_count);
   const hasRecognizedProblems = (taskQuery.data?.problem_count ?? 0) > 0;
   const hasProblemSource = configuredSources.some((source) => source.role === "problem");
-  const missingLocalFiles = sources.some((source) => source.sourceMode === "upload" && source.fileName && !source.file && !source.storedFileId);
+  const missingFileNames = sources.filter((source) => source.sourceMode === "upload" && source.fileName && !source.file && !source.storedFileId).map((source) => source.fileName);
+  const missingLocalFiles = missingFileNames.length > 0;
+  const missingReferences = sources.some((source) => references.status(source.id) === "missing");
+  const unavailableReferences = sources.some((source) => references.status(source.id) === "unavailable");
   const taskReturnPath = taskId ? `/tasks/${taskId}/upload/problems` : "/tasks/new";
   const routeState: AddProblemsRouteState = {};
 
@@ -141,9 +144,13 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
   const primaryDisabledReason = taskQuery.isError || !taskQuery.data
     ? tx(locale, "任务信息不可用，请刷新后重试。", "Task details are unavailable. Refresh and retry.")
     : missingLocalFiles
-    ? tx(locale, "未上传文件需要重新选择；也可删除不再需要的资料。", "Reselect unuploaded files, or remove sources you no longer need.")
+    ? tx(locale, `“${missingFileNames.join("、")}” 仅保留了文件名，尚未选中可上传的文件。请重新选择文件，或从课程资料库选择；不再需要的资料可删除。`, `Only the filename is retained for “${missingFileNames.join(", ")}”. Reselect the file or choose it from the course library; remove any source you no longer need.`)
     : references.blocked
-    ? tx(locale, "请先核对草稿中的文件状态。", "Check the draft file status first.")
+    ? missingReferences
+      ? tx(locale, "原文件已过期、删除或不可访问，请重新选择文件或资料库条目。", "The original file expired, was deleted, or is inaccessible. Reselect a file or library item.")
+      : unavailableReferences
+        ? tx(locale, "暂时无法核对文件，尚不能确定是否需要重传。请点击资料卡片中的“重试检查”。", "The file could not be checked, so it is not yet known whether another upload is needed. Use Retry check on the source card.")
+        : tx(locale, "正在核对已上传文件，请稍候；暂时无需重新上传。", "Checking the uploaded file. Please wait; no new upload is needed yet.")
     : expertsQuery.isLoading
     ? tx(locale, "正在读取模型配置。", "Loading model configuration.")
     : expertsQuery.isError
@@ -187,12 +194,14 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
     setFormError(null);
     setPreparationFailure(null);
     if (!taskId || !taskQuery.data) {
-      setFormError(tx(locale, "任务信息不可用，请刷新后重试。", "Task details are unavailable. Refresh and retry."));
+      const message = tx(locale, "任务信息不可用，请刷新后重试。", "Task details are unavailable. Refresh and retry.");
+      setFormError(message);
+      window.alert(message);
       return;
     }
     if (primaryDisabledReason) {
-      if (startBlocked) setShowStartRequirements(true);
-      else setFormError(primaryDisabledReason);
+      if (startBlocked && !missingLocalFiles && !references.blocked && !taskQuery.isError && !expertsQuery.isLoading && !expertsQuery.isError) setShowStartRequirements(true);
+      else window.alert(primaryDisabledReason);
       return;
     }
     for (const source of configuredSources) {
@@ -497,11 +506,11 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
           <button
             type="button"
             onClick={() => void handleStart()}
-            disabled={isBusy || expertsQuery.isLoading || expertsQuery.isError || references.blocked || missingLocalFiles || taskQuery.isError}
+            disabled={isBusy}
             title={primaryDisabledReason ?? undefined}
             className={cn(
               "inline-flex h-10 w-full shrink-0 items-center justify-center rounded-[8px] bg-primary px-5 text-sm font-semibold text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45 sm:w-[210px]",
-              startBlocked && "cursor-help opacity-50 hover:opacity-65",
+              primaryDisabledReason && "cursor-help opacity-50 hover:opacity-65",
             )}
           >
             {isBusy ? <LoaderCircle aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" /> : null}
@@ -682,6 +691,7 @@ function SourceEditor({
     ? advertised
     : [...new Set([...advertised, ...IMAGE_SOURCE_EXTENSIONS])];
   const accept = accepted.join(",");
+  const needsFileReselection = source.sourceMode === "upload" && Boolean(source.fileName) && !source.file && !source.storedFileId;
 
   function selectFile(file?: File) {
     if (!file || disabled) return;
@@ -722,8 +732,9 @@ function SourceEditor({
         {referenceStatus === "checking" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "正在核对已上传文件…", "Checking uploaded files…")}</p> : null}
         {referenceStatus === "missing" ? <p role="alert" className="mb-3 text-xs text-danger">{tx(locale, "原文件已过期、删除或不可用，请重新选择文件或资料库条目。填写的信息仍保留。", "The original file expired, was deleted, or is unavailable. Reselect a file or library item; your form is preserved.")}</p> : null}
         {referenceStatus === "unavailable" ? <p role="alert" className="mb-3 text-xs text-danger">{tx(locale, "暂时无法核对文件，请重试；不会自动上传或识别。", "Unable to check the file. Retry; no upload or recognition will start automatically.")} <button type="button" className="underline" onClick={onRetryReference}>{tx(locale, "重试检查", "Retry check")}</button></p> : null}
-        {source.sourceMode === "upload" && source.fileName && !source.file && !source.storedFileId ? <p role="alert" className="mb-3 text-xs text-warning">{tx(locale, `“${source.fileName}” 尚未上传，刷新后请重新选择。`, `“${source.fileName}” was not uploaded. Reselect it after reloading.`)}</p> : null}
+        {needsFileReselection ? <p role="alert" className="mb-3 text-xs text-warning">{tx(locale, `“${source.fileName}” 仅保留了文件名，请重新选择文件，或从课程资料库选择。`, `Only the filename “${source.fileName}” is retained. Reselect the file or choose it from the course library.`)}</p> : null}
         {source.sourceMode === "upload" && source.storedFileId && referenceStatus === "ready" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "已上传文件可继续使用，无需重新选择。", "Uploaded file is available. No need to select it again.")}</p> : null}
+        {source.sourceMode === "library" && source.libraryMaterial && referenceStatus === "ready" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "资料库文件可直接使用，无需重新上传。", "The library file is available. No need to upload it again.")}</p> : null}
         <div className={cn("grid gap-2 rounded-[8px] bg-muted/60 p-1", source.role === "rubric" ? "grid-cols-3" : "grid-cols-2")}>
           <ModeButton active={source.sourceMode === "upload"} disabled={disabled} onClick={() => onUpdate({ sourceMode: "upload", libraryMaterial: null })} icon={<UploadCloud className="h-4 w-4" />} label={tx(locale, "上传新文件", "Upload File")} />
           {source.role === "rubric" ? (
@@ -757,7 +768,7 @@ function SourceEditor({
             className={cn("mt-3 flex min-h-[112px] flex-col items-center justify-center rounded-[9px] border border-dashed px-5 text-center transition-colors", dragging ? "border-primary bg-blue-50/60 dark:bg-blue-950/20" : "bg-slate-50/70 dark:bg-slate-950/20")}
           >
             <FileText aria-hidden="true" className="h-6 w-6 text-primary" />
-            <p className="mt-1.5 max-w-full truncate text-sm font-semibold text-foreground">{source.file?.name || source.fileName || tx(locale, "拖入或选择文件", "Drop or choose a file")}</p>
+            <p className="mt-1.5 max-w-full truncate text-sm font-semibold text-foreground">{needsFileReselection ? tx(locale, `待重新选择：${source.fileName}`, `Reselect: ${source.fileName}`) : source.file?.name || source.fileName || tx(locale, "拖入或选择文件", "Drop or choose a file")}</p>
             <p className="mt-1 text-xs text-muted-foreground">
               {accept.replaceAll(".", "").toUpperCase().replaceAll(",", " / ")}
               {maxFileBytes

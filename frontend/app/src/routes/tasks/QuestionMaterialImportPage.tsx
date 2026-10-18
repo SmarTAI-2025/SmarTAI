@@ -86,9 +86,11 @@ function QuestionMaterialImportPageForm() {
       if (cancelled) return;
       if ([403, 404, 410].includes(normalizeAPIError(error).status)) {
         setPrepared(null); setPreparedStatus("ready");
-        setPreparedNotice("已上传的资料引用已过期、删除或版本变化。原本地文件仍保留；请核对后手动重新开始，恢复不会自动上传。");
+        setPreparedNotice(locale === "zh-CN"
+          ? "上次上传的资料引用已失效。请核对当前来源后重新开始；已选文件仍在时无需重新选择。"
+          : "The previous upload reference expired. Check the current source and start again; a file that is still selected does not need to be reselected.");
       } else {
-        setPreparedStatus("unavailable"); setPreparedNotice("暂时无法检查已上传资料，请重试；未重复上传或启动提取。");
+        setPreparedStatus("unavailable"); setPreparedNotice(locale === "zh-CN" ? "暂时无法检查已上传资料，请重试检查，暂时无需重传。" : "The uploaded material could not be checked. Retry validation; no new upload is needed yet.");
       }
     });
     return () => { cancelled = true; };
@@ -110,8 +112,12 @@ function QuestionMaterialImportPageForm() {
   const isDirty = hasUserChanges;
 
   const localDraft = useDraftProtection({ scope: `material-import:${taskId}`, value: { targets, sourceMode, scope, librarySearch, selectedMaterial, selectedFile, saveToLibrary, enableMaterialOcr, structureMode, extractionHint, prepared }, version: taskInputVersion(taskQuery.data, "material-import"), enabled: taskQuery.isSuccess, busy: isSubmitting, onRestore: (draft) => { setTargets(draft.targets); setSourceMode(draft.sourceMode); setScope(draft.scope); setLibrarySearch(draft.librarySearch); setSelectedMaterial(draft.selectedMaterial); setSelectedFile(draft.selectedFile); setSaveToLibrary(draft.saveToLibrary); setEnableMaterialOcr(draft.enableMaterialOcr); setStructureMode(draft.structureMode); setExtractionHint(draft.extractionHint); setPrepared(draft.prepared); setHasUserChanges(true); } });
-  const references = useProblemDraftReferences(taskId, selectedMaterial ? [{ ...createSourceDraft("problem"), id: "material-import", sourceMode: "library", libraryMaterial: selectedMaterial }] : [], () => {});
-  const referenceError = references.blocked ? (references.status("material-import") === "missing" ? "已暂存的资料已删除或不可访问，请重新选择。" : "正在检查资料引用；若网络不可用，请重试，未自动上传或识别。") : null;
+  const references = useProblemDraftReferences(taskId, sourceMode === "library" && selectedMaterial ? [{ ...createSourceDraft("problem"), id: "material-import", sourceMode: "library", libraryMaterial: selectedMaterial }] : [], () => {});
+  const referenceError = !references.blocked ? null : references.status("material-import") === "missing"
+    ? (locale === "zh-CN" ? "资料库文件已删除或不可访问，请重新选择资料来源。" : "The library file was deleted or is inaccessible. Choose a source again.")
+    : references.status("material-import") === "unavailable"
+      ? (locale === "zh-CN" ? "暂时无法核对资料，请重试检查，暂时无需重传。" : "The material could not be checked. Retry validation; no new upload is needed yet.")
+      : (locale === "zh-CN" ? "正在检查资料引用，请稍候，暂时无需重传。" : "Checking the material reference. Please wait; no new upload is needed yet.");
   const taskReady = taskQuery.data?.status === "problems_ready";
   const hasSource = sourceMode === "library" ? Boolean(selectedMaterial) : Boolean(selectedFile);
   const gateMessage = taskQuery.isError
@@ -131,6 +137,8 @@ function QuestionMaterialImportPageForm() {
     || targets.length === 0
     || !hasSource;
   const actionMessage = formError
+    ?? (taskQuery.isLoading || expertsQuery.isLoading || preparedStatus === "checking" ? (locale === "zh-CN" ? "正在检查任务、模型或文件，请稍候，暂时无需重传。" : "Checking the task, model or file. Please wait; no new upload is needed yet.") : null)
+    ?? (localDraft.conflict ? (locale === "zh-CN" ? "任务已有更新，请先处理下方草稿冲突提示。" : "The task has changed. Resolve the draft conflict below first.") : null)
     ?? referenceError
     ?? preparedNotice
     ?? gateMessage
@@ -169,6 +177,11 @@ function QuestionMaterialImportPageForm() {
   }
 
   async function handlePrimaryAction() {
+    if (isSubmitting) return;
+    if (actionDisabled) {
+      if (actionMessage) window.alert(actionMessage);
+      return;
+    }
     setFormError(null);
     if (targets.length === 0) {
       setFormError(materialImportText(locale, "targetRequired"));
@@ -365,7 +378,8 @@ function QuestionMaterialImportPageForm() {
           </p>
           <button
             type="submit"
-            disabled={actionDisabled}
+            disabled={isSubmitting}
+            title={actionDisabled ? actionMessage ?? undefined : undefined}
             aria-describedby="material-import-action-message"
             className="inline-flex h-10 w-full shrink-0 items-center justify-center rounded-[8px] bg-primary px-4 text-[15px] font-semibold leading-[19px] text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:w-[230px]"
           >
@@ -536,6 +550,7 @@ function UploadSourcePicker({ locale, file, inputRef, saveToLibrary, onChoose, o
         </button>
         <input ref={inputRef} type="file" className="sr-only" accept={ACCEPTED_EXTENSIONS.join(",")} onChange={onFileChange} />
       </div>
+      {file ? <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "文件已就绪，无需重新选择。" : "File ready; no need to reselect."}</p> : null}
       <label className="mt-3 inline-flex items-center gap-2 text-[12px] text-muted-foreground">
         <input type="checkbox" checked={saveToLibrary} onChange={(event) => onSaveChange(event.target.checked)} className="h-4 w-4 rounded border-border accent-primary" />
         {materialImportText(locale, "saveToLibrary")}

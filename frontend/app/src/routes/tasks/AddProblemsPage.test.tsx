@@ -117,6 +117,8 @@ async function uploadProblemFile(user: ReturnType<typeof userEvent.setup>) {
   if (providerState.enabled) await waitFor(() => expect(screen.getByLabelText("题目识别模型")).toHaveValue("mock:test"));
 }
 
+beforeEach(() => { vi.spyOn(window, "alert").mockImplementation(() => {}); });
+
 beforeEach(async () => {
   languageState.locale = "zh-CN"; languageState.initial = "zh";
   inputState.input = null;
@@ -511,6 +513,41 @@ it("restores formally submitted files, scope, hints and policy without an explic
   expect(preflightMutateAsync).toHaveBeenCalledTimes(2);
 });
 
+
+it("explains a filename-only source after switching from the library and accepts a reselected file", async () => {
+  inputState.input = { recognition_provider_id: "mock:test", score_policy: { mode: "default_10" }, sources: [
+    { source_token: "original-source", role: "problem", source_kind: "library", filename: "saved.pdf", stored_file_id: null, library_material_id: "material-1", inline_text: "", structure_mode: "organized", extraction_hint: "", recognition_options: {}, enable_material_ocr: false, save_to_library: false, available: true },
+  ] };
+  const user = userEvent.setup();
+  renderPage();
+  await waitFor(() => expect(screen.getByLabelText("题目识别模型")).toHaveValue("mock:test"));
+  await user.click(screen.getByRole("button", { name: "上传新文件" }));
+  const start = screen.getByRole("button", { name: "识别并准备题目资料" });
+  expect(start).toBeEnabled();
+  await user.click(start);
+  expect(window.alert).toHaveBeenCalledWith(expect.stringMatching(/saved\.pdf.*重新选择/));
+  expect(screen.getByText("待重新选择：saved.pdf")).toBeInTheDocument();
+  expect(preflightMutateAsync).not.toHaveBeenCalled();
+  expect(startMutateAsync).not.toHaveBeenCalled();
+  await uploadProblemFile(user);
+  await user.click(start);
+  await screen.findByText("Preparation started");
+  expect(preflightMutateAsync).toHaveBeenCalledTimes(1);
+});
+
+it.each([[404, "重新选择"], [503, "重试检查"]])("explains reference failure %s without starting recognition", async (status, guidance) => {
+  inputState.input = { recognition_provider_id: "mock:test", score_policy: { mode: "default_10" }, sources: [
+    { source_token: "original-source", role: "problem", source_kind: "upload", filename: "saved.pdf", stored_file_id: "stored-1", library_material_id: null, inline_text: "", structure_mode: "organized", extraction_hint: "", recognition_options: {}, enable_material_ocr: false, save_to_library: false, available: true },
+  ] };
+  vi.mocked(client.getJSON).mockRejectedValue(new APIError(status, "reference check failed"));
+  const user = userEvent.setup();
+  renderPage();
+  await screen.findByText(status === 404 ? /原文件已过期/ : /暂时无法核对文件/);
+  await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+  expect(window.alert).toHaveBeenCalledWith(expect.stringContaining(guidance));
+  expect(preflightMutateAsync).not.toHaveBeenCalled();
+  expect(startMutateAsync).not.toHaveBeenCalled();
+});
 
 it("background prepared-reference invalidation cannot dismiss a fresh start failure", async () => {
   vi.mocked(client.getJSON).mockResolvedValue({ available: true, prepared: false, filename: "questions.pdf" });
