@@ -1,4 +1,6 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
+import { act, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GradingPreflightPage } from "./GradingPreflightPage";
@@ -340,3 +342,5 @@ describe("GradingPreflightPage regrade mode", () => {
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
   });
 });
+
+function render(ui: ReactElement) { return rtlRender(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{ui}</QueryClientProvider>); }

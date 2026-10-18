@@ -125,7 +125,7 @@ export function ProblemRecognitionProgressPage() {
         const result = await manualPreparation.mutateAsync({ taskId, jobId: failedJobId,
           expectedWorkflowRevision: taskState.workflow_revision });
         navigate(result.first_question_id
-          ? `/tasks/${taskId}/questions/${encodeURIComponent(result.first_question_id)}/content?manual=1#question-${encodeURIComponent(result.first_question_id)}`
+          ? `/tasks/${taskId}/questions`
           : `/tasks/${taskId}/questions?manualJob=${encodeURIComponent(failedJobId)}`, { replace: true });
       } catch (error) { setRetryFailure(error); setOpeningManual(false); }
     };
@@ -207,8 +207,8 @@ export function ProblemRecognitionProgressPage() {
               configurationState: { imageRecoveryModel: recognitionProviderId },
             }}
             additionalActions={[
-              ...((progressQuery.progress?.failed_question_ids?.length || Object.values(progressQuery.progress?.question_error_codes ?? {}).includes("provider_submit_uncertain")) && failedJobId ? [{
-                label: locale === "zh-CN" ? "手动补全失败题目" : "Complete failed questions manually",
+              ...(failedJobId ? [{
+                label: locale === "zh-CN" ? "人工继续处理" : "Continue manually",
                 busy: manualPreparation.isPending,
                 disabled: retryPreparation.isPending || openingManual,
                 onClick: openManualReview,

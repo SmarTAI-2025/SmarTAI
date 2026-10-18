@@ -18,7 +18,7 @@ it("keeps every stopped source in review and requires teacher content plus every
     <Route path="/tasks/task/questions" element={<div>Saved question review</div>} />
   </Routes></MemoryRouter></I18nProvider>);
   expect(screen.getByText("Blocked from step 3")).toBeInTheDocument();
-  expect(screen.getByRole("list", { name: "未完成来源复核队列" })).toHaveTextContent("first.pdf");
+  expect(screen.getByRole("list", { name: "对照原资料" })).toHaveTextContent("first.pdf");
   expect(screen.getAllByRole("checkbox")).toHaveLength(2);
   const submit = screen.getByRole("button", { name: "保存题目并继续复核" });
   expect(submit).toBeDisabled();

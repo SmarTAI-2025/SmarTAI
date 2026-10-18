@@ -1,3 +1,4 @@
+import { ManualReviewButton } from "@/components/tasks/ManualReviewButton";
 import { getTaskDestination, isTaskAwaitingGrading, isTaskPaused } from "@/lib/taskFlow";
 import { TASK_ACTION_KEYS, TASK_STAGE_KEYS } from "@/lib/taskPresentation";
 import { QUESTION_FIXTURE, SUBMISSION_FIXTURE, DEMO_SCORE_POLICY, fixtureFile } from "@/lib/frontierFixtures";
@@ -523,10 +524,11 @@ export function FrontierLiveDemoPage() {
               } : taskId && submissionReviewTask && isTaskAwaitingGrading(snapshot?.status) ? {
                 retry: { onClick: () => void confirmSubmissionReview(), busy, label: tx(locale, "重试批改", "Retry grading") }, configurationHref: `/tasks/${taskId}/grading-setup`,
               } : undefined}
-              additionalActions={taskId ? [{ label: tx(locale, "查看进度与恢复", "View progress and recovery"), href: snapshot?.grading_job_id ? `/tasks/${taskId}/grading/progress` : `/tasks/${taskId}/${snapshot?.parse_job_id ? "submissions" : "problems"}/progress` }, ...(snapshot?.grading_job_id ? [{ label: tx(locale, "查看已有结果与补分", "Review saved results and missing scores"), href: `/tasks/${taskId}/review?resolveFailures=1` }] : [])] : []}
+              additionalActions={taskId ? [{ label: tx(locale, "查看进度与恢复", "View progress and recovery"), href: snapshot?.grading_job_id ? `/tasks/${taskId}/grading/progress` : `/tasks/${taskId}/${snapshot?.parse_job_id ? "submissions" : "problems"}/progress` }] : []}
             />
           ) : null}
 
+          {error || (snapshot && isTaskPaused(snapshot.status)) ? <ManualReviewButton taskId={taskId} task={snapshot} /> : null}
           <div className="mt-6 flex flex-wrap items-center gap-3">
             {!error && snapshot && isTaskPaused(snapshot.status) ? (
               <Link to={getTaskDestination(snapshot)} className="rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground">

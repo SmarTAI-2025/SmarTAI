@@ -143,12 +143,12 @@ export function GradingProgressPage() {
         <PageState title={copy(locale, "reading")} busy />
       ) : (
         <div>
+              {manualError ? <p role="alert">{locale === "zh-CN" ? "暂时无法进入复核，请刷新状态后重试。" : "Could not open review. Refresh and try again."}</p> : null}
           {status === "error" ? <p className="mb-4 text-sm text-muted-foreground">{locale === "zh-CN" ? "仅重试缺少有效结果的题次，保留成功结果及教师修改。可先在模型配置中调整模型；返回批改设置再开始会重新批改整批。" : "Retry only items without a valid result; keep successful results and teacher edits. You can adjust models first. Starting from grading settings reruns the full batch."}</p> : null}
           {status === "grading_paused" && !retryGrading.error ? (
             <TaskPausedState status="grading_paused" onContinue={() => void handleRetry()} onManual={() => void handleManual()} busy={retryGrading.isPending || manualBusy}>
               <p className="text-sm text-muted-foreground">{locale === "zh-CN" ? "已保存 AI 评分" : "Saved AI grades"} {progress?.saved_units ?? queue.completed} / {queue.total} {copy(locale, "unitSuffix")} · {locale === "zh-CN" ? "已汇总" : "Aggregated"} {queue.completed} / {queue.total}</p>
               <ModelProgressRows models={progress?.model_progress ?? []} locale={locale} stopped />
-              {manualError ? <p role="alert">{locale === "zh-CN" ? "暂时无法进入复核，请刷新状态后重试。" : "Could not open review. Refresh and try again."}</p> : null}
             </TaskPausedState>
           ) : recoveryInfo ? (
             <RecoverableActionState
@@ -157,7 +157,7 @@ export function GradingProgressPage() {
               usageContext={{ gradingTaskId: taskId }}
               className="min-h-[300px]"
               workflowRecovery={{ retry: { onClick: () => void handleRetry(), busy: retryGrading.isPending }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`) }}
-              additionalActions={[{ label: copy(locale, "refresh"), onClick: refresh, busy: retryGrading.isPending }, { label: locale === "zh-CN" ? "人工补齐分数" : "Enter missing scores", href: `/tasks/${taskId}/review?resolveFailures=1` }]}
+              additionalActions={[{ label: copy(locale, "refresh"), onClick: refresh, busy: retryGrading.isPending }, { label: locale === "zh-CN" ? "人工继续处理" : "Continue manually", onClick: () => void handleManual(), busy: manualBusy, disabled: retryGrading.isPending }]}
             />
           ) : (
             <>

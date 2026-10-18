@@ -156,7 +156,7 @@ export function SubmissionRecognitionProgressPage() {
             usageContext={{ providerIds: [providerId], providers: expertsQuery.data ?? [] }}
             className="min-h-[300px]"
             workflowRecovery={{ retry: { onClick: () => void retry(), busy: retryRecognition.isPending || refreshing, disabled: !failedJobId || !providerId || (uncertain && acknowledgedJobId !== failedJobId) }, configurationHref: `/tasks/${taskId}/submissions/upload`, configurationState: { imageRecoveryModel: providerId } }}
-            additionalActions={[{ label: t("submissionProgressRefresh"), onClick: () => void refresh(), busy: retryRecognition.isPending || refreshing }]}
+            additionalActions={[...(failedJobId ? [{ label: locale === "zh-CN" ? "人工继续处理" : "Continue manually", onClick: () => void continueManually(), busy: manualRecognition.isPending, disabled: retryRecognition.isPending || refreshing }] : []), { label: t("submissionProgressRefresh"), onClick: () => void refresh(), busy: retryRecognition.isPending || refreshing }]}
           />}
           {!paused && <SubmissionSourceOutcomePanel
             summary={progressQuery.data?.submission_source_summary ?? taskQuery.data?.submission_source_summary}

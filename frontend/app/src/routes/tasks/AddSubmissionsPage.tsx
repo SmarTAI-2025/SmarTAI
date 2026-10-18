@@ -1,3 +1,4 @@
+import { ManualReviewButton } from "@/components/tasks/ManualReviewButton";
 import { DemoSourceUpload } from "@/components/tasks/DemoSourceUpload";
 import { useFrontierWorkspace } from "@/lib/frontierContext";
 import { taskInputVersion } from "@/lib/editorVersions";
@@ -488,6 +489,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
           </button>
         </div>
         <ImageRecognitionRecovery error={recognitionError ?? (canRetryOriginal ? task?.error : undefined)} expert={enabledExperts.find(e => e.provider_id === recognitionProviderId)} returnTo={`/tasks/${taskId}/submissions/upload`} controller={draft.protection.controller} isCurrent={draft.protection.isCurrent} locale={locale} />
+        <ManualReviewButton taskId={taskId} task={taskQuery.data} stage="submissions" />
         {recognitionError ? <RecoverableActionState usageContext={{ providerIds: [recognitionProviderId], providers: expertsQuery.data ?? [] }} info={classifyRecoverableError(recognitionError, { locale, taskId, returnTo: `/tasks/${taskId}/submissions/upload` })} locale={locale} compact className="mt-4" workflowRecovery={{ retry: { label: retryLabel, onClick: () => void handleStart(), busy: isPending }, configurationHref: `/tasks/${taskId}/submissions/upload` }} /> : null}
       </div>
     </div>

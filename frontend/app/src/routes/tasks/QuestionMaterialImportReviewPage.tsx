@@ -176,6 +176,7 @@ function QuestionMaterialImportReviewPageForm() {
                 ? (locale === "zh-CN" ? "匹配计划已过期，请重新选择资料并生成候选。" : "The match plan expired. Choose the material and generate candidates again.")
                 : (plan?.error ?? "")}
             </p>
+            {taskId ? <div className="mt-3"><Link to={`/tasks/${taskId}/questions`} className="inline-flex h-9 items-center justify-center rounded-lg border bg-card px-4 text-sm font-semibold hover:bg-muted">{locale === "zh-CN" ? "人工继续处理" : "Continue manually"}</Link></div> : null}
             {planExpired ? (
               <Link
                 to={`/tasks/${taskId ?? ""}/questions/import`}

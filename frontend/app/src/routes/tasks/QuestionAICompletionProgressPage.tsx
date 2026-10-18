@@ -162,6 +162,7 @@ function RecoveryState({ locale, title, description, taskId, onRefresh, refreshi
       <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">{description}</p>
       <div className="mt-6 flex w-full max-w-lg flex-col justify-center gap-3 sm:flex-row">
         <Link to={`/tasks/${taskId ?? ""}/questions/ai-complete`} className="inline-flex h-10 items-center justify-center rounded-[8px] bg-primary px-5 text-sm font-semibold text-primary-foreground hover:opacity-90">{aiCompletionText(locale, "chooseAgain")}</Link>
+        {taskId ? <Link to={`/tasks/${taskId}/questions`} className="inline-flex h-9 items-center justify-center rounded-lg border bg-card px-4 text-sm font-semibold hover:bg-muted">{locale === "zh-CN" ? "人工继续处理" : "Continue manually"}</Link> : null}
         <Link to="/settings/byok" className="inline-flex h-10 items-center justify-center rounded-[8px] border bg-card px-5 text-sm font-semibold text-foreground hover:bg-muted">{aiCompletionText(locale, "configureModels")}</Link>
         {onRefresh ? <button type="button" disabled={refreshing} onClick={onRefresh} className="inline-flex h-10 items-center justify-center gap-2 rounded-[8px] border bg-card px-5 text-sm font-semibold text-foreground hover:bg-muted disabled:opacity-50"><RefreshCw aria-hidden="true" className={cn("h-4 w-4", refreshing && "animate-spin")} />{aiCompletionText(locale, "refresh")}</button> : null}
       </div>

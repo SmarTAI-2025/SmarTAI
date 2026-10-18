@@ -1,3 +1,4 @@
+import { ManualReviewLoader } from "@/components/tasks/ManualReviewButton";
 import { LOW_CONFIDENCE_THRESHOLD } from "@/lib/confidencePolicy";
 import { demoLockedText } from "@/lib/frontierFixtures";
 import { taskWorkspacePath } from "@/lib/frontierSession";
@@ -338,6 +339,7 @@ function GradingSetupPageForm() {
                 </p>
               ) : null}
               {actionError && actionError !== validationMessage ? <p role="alert" className="mt-2 text-[11px] leading-4 text-danger">{actionError}</p> : null}
+        {response?.task_status === "error" || response?.task_status === "grading_paused" ? <ManualReviewLoader taskId={taskId} stage="grading" /> : null}
               {saveFailure ? <RecoverableActionState info={classifyRecoverableError(saveFailure, { locale, taskId, returnTo: setupHref ?? undefined })} locale={locale} compact workflowRecovery={{ retry: { onClick: () => void handleSubmit(), busy: isSaving }, configurationHref: setupHref ?? backHref }} /> : null}
             </div>
 
@@ -846,8 +848,8 @@ function StrategySection({
       : "lengthMedium";
   const languageKey = setup.feedback_language === "en" ? "languageEnglish" : "languageChinese";
   const advancedSummary = locale === "zh-CN"
-    ? `${gradingSetupText(locale, toneKey)}评语 · ${gradingSetupText(locale, lengthKey)}长度 · ${gradingSetupText(locale, languageKey)} · ${setup.multi_sample_n === 1 ? "单次采样" : `${setup.multi_sample_n} 次采样`} · 低于 0.60 提示 · 低于 0.25 必须确认`
-    : `${gradingSetupText(locale, toneKey)} feedback · ${gradingSetupText(locale, lengthKey)} length · ${gradingSetupText(locale, languageKey)} · ${setup.multi_sample_n} sample${setup.multi_sample_n === 1 ? "" : "s"} · below 0.60 advisory · below 0.25 confirmation required`;
+    ? `${gradingSetupText(locale, toneKey)}评语 · ${gradingSetupText(locale, lengthKey)}长度 · ${gradingSetupText(locale, languageKey)} · ${setup.multi_sample_n === 1 ? "单次采样" : `${setup.multi_sample_n} 次采样`} · 任一专家置信度低于 0.60 建议处理`
+    : `${gradingSetupText(locale, toneKey)} feedback · ${gradingSetupText(locale, lengthKey)} length · ${gradingSetupText(locale, languageKey)} · ${setup.multi_sample_n} sample${setup.multi_sample_n === 1 ? "" : "s"} · any expert confidence below 0.60: suggested review`;
 
   return (
     <section aria-labelledby="grading-strategy-title">

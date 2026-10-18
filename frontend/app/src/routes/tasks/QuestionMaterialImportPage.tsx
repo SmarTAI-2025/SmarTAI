@@ -358,6 +358,7 @@ function QuestionMaterialImportPageForm() {
             formError ? "text-danger" : "text-muted-foreground",
           )}>
             {actionMessage ?? ""}
+            {formError && taskId ? <> {" "}<Link to={`/tasks/${taskId}/questions`} className="font-semibold text-primary hover:underline">{locale === "zh-CN" ? "人工继续处理" : "Continue manually"}</Link></> : null}
             {gateMessage === materialImportText(locale, "modelRequired") ? (
               <>{" "}<Link className="font-semibold text-primary hover:underline" to={`/settings/byok?returnTo=${encodeURIComponent(`/tasks/${taskId ?? ""}/questions/import`)}`}>{materialImportText(locale, "openByok")}</Link></>
             ) : null}

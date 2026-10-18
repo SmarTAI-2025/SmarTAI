@@ -1,7 +1,9 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
 import "fake-indexeddb/auto";
 import { Blob, File } from "node:buffer";
 import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider, Outlet } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -508,3 +510,5 @@ it("background prepared-reference invalidation cannot dismiss a fresh start fail
   await waitFor(() => expect(screen.getByRole("button", { name: "重新识别全部资料" })).toBeInTheDocument());
   expect(screen.getByRole("link", { name: "返回修改配置" })).toHaveAttribute("href", "/tasks/task-1/upload/problems");
 });
+
+function render(ui: ReactElement) { return rtlRender(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{ui}</QueryClientProvider>); }

@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useState, useRef } from "react";
 import { continueTaskRun } from "@/api/tasks";
@@ -27,6 +28,7 @@ export function TaskExecutionStatus({ taskId, jobId, onChanged }: {
         catch { setError(true); }
         finally { busy.current = false; setResuming(false); }
       }}>{zh ? "继续处理" : "Continue processing"}</Button>
+      {taskId ? <Link to={`/tasks/${taskId}/questions`} className="ml-2 inline-flex h-9 items-center rounded-lg border px-4 text-sm font-semibold">{zh ? "人工继续处理" : "Continue manually"}</Link> : null}
       {error && <p role="alert">{zh ? "未能继续，请刷新状态后重试。" : "Could not continue. Refresh the status and retry."}</p>}
     </div>;
   }

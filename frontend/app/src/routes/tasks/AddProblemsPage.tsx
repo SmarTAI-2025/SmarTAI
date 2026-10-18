@@ -1,3 +1,4 @@
+import { ManualReviewButton } from "@/components/tasks/ManualReviewButton";
 import { DemoSourceUpload } from "@/components/tasks/DemoSourceUpload";
 import { useFrontierWorkspace } from "@/lib/frontierContext";
 import { taskInputVersion } from "@/lib/editorVersions";
@@ -500,6 +501,7 @@ function AddProblemsForm({ taskQuery, submittedInput }: { taskQuery: ReturnType<
               : tx(locale, "识别并准备题目资料", "Prepare Question Materials"))}
           </button>
         </section>
+        <ManualReviewButton taskId={taskId} task={taskQuery.data} stage="questions" />
         {formError ? <p role="alert" className="mt-3 text-sm text-danger">{formError}</p> : null}
         <ImageRecognitionRecovery error={preparationFailure?.error} expert={enabledExperts.find(e => e.provider_id === recognitionProviderId)} returnTo={taskReturnPath} controller={draft.protection.controller} isCurrent={draft.protection.isCurrent} locale={locale} />
         {recoveryInfo ? (

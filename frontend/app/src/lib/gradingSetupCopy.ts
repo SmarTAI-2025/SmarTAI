@@ -64,7 +64,7 @@ const COPY = {
   languageChinese: ["中文", "Chinese"],
   languageEnglish: ["英文", "English"],
   lowConfidenceThreshold: ["统一置信度标准", "Confidence policy"],
-  lowConfidenceDescription: ["低于 0.60 仅在核对详情旁提示，不进入复核队列；低于 0.25 必须确认。真实失败仍须处理。", "Below 0.60: a note beside confirmation in the detail view, with no review-queue entry. Below 0.25: confirmation required. Actual failures still need action."],
+  lowConfidenceDescription: ["任一有效专家置信度低于 0.60，进入建议处理，不阻止继续；没有有效分数才需要处理。", "Any valid expert confidence below 0.60 adds a suggested review without blocking progress. Missing valid scores require action."],
   multiSample: ["单模型采样次数", "Single-model sample count"],
   multiSampleSuffix: [" 次", ""],
   multiSampleSharedDescription: ["平台共享模型固定为单次采样。", "Shared-pool models are limited to one sample."],
