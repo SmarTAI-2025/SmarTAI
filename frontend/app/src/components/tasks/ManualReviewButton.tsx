@@ -11,7 +11,7 @@ type RecoveryTask = Pick<import("@/types").Task, "status" | "workflow_revision" 
 type Stage = "questions" | "submissions" | "grading";
 type Props = { taskId?: string | null; task?: RecoveryTask | null; stage?: Stage };
 
-/** Recovery does not require an available model or resubmit a provider request. */
+/** Reuse completed rows; saved text may first need organization in the existing worker. */
 export function ManualReviewButton(props: Props) {
   // Most entry pages already have the authoritative task; avoid another read.
   return props.task ? <LoadedManualReviewButton {...props} task={props.task} /> : null;
@@ -43,11 +43,11 @@ function ManualReviewAction({ taskId, task, jobId, failedStage }: { taskId: stri
     try {
       let href: string;
       if (failedStage === "questions") {
-        await manuallyCompleteQuestionPreparation({ taskId, jobId, expectedWorkflowRevision: task.workflow_revision });
-        href = `/tasks/${taskId}/questions`;
+        const result = await manuallyCompleteQuestionPreparation({ taskId, jobId, expectedWorkflowRevision: task.workflow_revision });
+        href = `/tasks/${taskId}/${result.status === "ready_for_review" ? "questions" : "problems/progress"}`;
       } else if (failedStage === "submissions") {
-        await manuallyCompleteSubmissionRecognition({ taskId, jobId, expectedWorkflowRevision: task.workflow_revision });
-        href = `/tasks/${taskId}/submissions`;
+        const result = await manuallyCompleteSubmissionRecognition({ taskId, jobId, expectedWorkflowRevision: task.workflow_revision });
+        href = `/tasks/${taskId}/${["started", "already_running"].includes(result.status) ? "submissions/progress" : "submissions"}`;
       } else {
         await continueTaskRun(taskId, jobId, task.workflow_revision, true);
         href = `/tasks/${taskId}/review`;

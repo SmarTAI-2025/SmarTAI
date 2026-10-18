@@ -125,6 +125,40 @@ def test_manual_handoff_requires_only_missing_score_to_be_filled_and_confirmed(c
     assert finalization["required_review_count"] == finalization["confirmed_required_count"] == 1
 
 
+@pytest.mark.parametrize("status", ["cancelled", "failed", "partial_failed"])
+@pytest.mark.parametrize("sample_count", [1, 3])
+def test_handoff_recovers_expert_checkpoint_before_question_aggregation(case, status, sample_count):
+    from backend.db.models import GradingRunRecord
+    from backend.db.session import session_scope
+    flow = workflows.get_live_workflow(case[0], owner_id=case[1])
+    workflows.update_workflow(case[0], owner_id=case[1], grading_setup={**flow.grading_setup,
+        "multi_sample_n": sample_count, "aggregation_method": "weighted_average"})
+    run_id = start(case, "expert-before-aggregate")["job_id"]
+    checkpoints, _, revisions, setup = prepare(case, run_id)
+    provider = setup.setup["selected_provider_ids"][0]
+    checkpoints.save_expert(revisions[0][1], "q1", provider, 1 if sample_count > 1 else 0,
+        ExpertResult(provider=provider, provider_id=provider, score=0, confidence=.9,
+            comment="Valid zero score, already completed", steps=[]))
+    assert grades.list_results_for_run(run_id) == []
+    # Terminate without the stop-time aggregation: handoff itself must recover.
+    with session_scope() as session:
+        run = session.get(GradingRunRecord, run_id)
+        run.status, run.lease_owner, run.lease_expires_at = status, None, None
+        workflow = session.get(workflows.AssignmentWorkflowRecord, case[0])
+        workflow.active_job_id, workflow.active_operation = None, None
+        workflow.presentation_status, workflow.last_failed_job_id = "error", run_id
+    continue_manual_grading(task_id=case[0], owner_id=case[1], job_id=run_id,
+        expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
+    rows = {row.q_id: row for row in grades.list_results_for_run(run_id)}
+    assert rows["q1"].ai_score == 0 and rows["q1"].ai_comment == "Valid zero score, already completed"
+    assert rows["q2"].ai_score is None
+    assert task_facade.finalization(task_id=case[0], owner_id=case[1])["remaining_review_count"] == 1
+    if sample_count > 1:
+        assert "partial_experts" in rows["q1"].review_reasons
+        assert [item["error_kind"] for item in rows["q1"].ai_expert_results] == [None] + [
+            "operation_cancelled" if status == "cancelled" else "not_completed"] * 2
+
+
 def test_changed_model_config_does_not_mix_old_partial_votes(case, monkeypatch):
     run_id = start(case, "before-config-change")["job_id"]
     checkpoints, _, revisions, setup = prepare(case, run_id)

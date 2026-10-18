@@ -331,6 +331,7 @@ async def _extract_problems_call(
     confirmed_candidates: Optional[List[Dict[str, Any]]] = None,
     manage_progress_lifecycle: bool = True,
     allow_empty: bool = False,
+    partial_source: bool = False,
 ) -> Dict[str, Dict[str, Any]]:
     """Run one bounded LLM extraction call on a single chunk of source text.
 
@@ -382,8 +383,17 @@ async def _extract_problems_call(
         f"**[Source Handling Configuration]**\n{source_guidance}\n\n"
         f"**[Problem Source Document]**\n---\n{text}\n---"
     )
+    recovery_guidance = ("\nThis is manual recovery of SAVED recognition text. Do not read or reconstruct missing pages. "
+        "Retain every available question fragment, even when incomplete. Add boolean source_incomplete=true "
+        "only for a question whose opening, continuation, condition or subpart is missing. "
+        "A missing page does not make unrelated complete questions incomplete. "
+        "Combine distinct saved fragments only when their question identity is supported; retain alternatives. "
+        "Extract questions only from saved problem sources. Supporting material must never fill a missing stem. "
+        "Match supplied rubric/reference material by explicit question identity and copy it literally without alteration. "
+        "Copy a supplied reference_answer literally if present; otherwise leave it empty. Never solve or generate material."
+        if partial_source else "")
     messages = [
-        SystemMessage(content=PROB_SYSTEM_PROMPT),
+        SystemMessage(content=PROB_SYSTEM_PROMPT + recovery_guidance),
         HumanMessage(content=user_content),
     ]
 
@@ -414,7 +424,7 @@ async def _extract_problems_call(
             )
         await reporter._emit_message(f"Parsing JSON ({len(raw_output)} chars)...")
 
-    parsed = extract_and_parse_json(raw_output, ProblemSet)
+    parsed = extract_and_parse_json(raw_output, _PartialProblemSet if partial_source else ProblemSet)
 
     if not parsed.problems and not allow_empty:
         if reporter and manage_progress_lifecycle:
@@ -424,11 +434,20 @@ async def _extract_problems_call(
     prob_dict = {q.q_id: q.model_dump() for q in parsed.problems}
     # A parser-generated rubric is not an uploaded teacher instruction.
     for problem in prob_dict.values():
-        criterion = str(problem.get("criterion") or "")
-        if criterion and criterion not in text:
-            problem["criterion"] = ""
+        for field in (("criterion", "reference_answer") if partial_source else ("criterion",)):
+            supplied = str(problem.get(field) or "")
+            if supplied and supplied not in text:
+                problem[field] = ""
     logger.info(f"extract_problems: stored {len(prob_dict)} problems")
     return prob_dict
+
+
+class _PartialProblem(ProblemInfo):
+    source_incomplete: bool = False
+
+
+class _PartialProblemSet(BaseModel):
+    problems: list[_PartialProblem]
 
 
 def _chunk_problem_text(
@@ -606,7 +625,12 @@ async def parse_student_answer_sources(
                 f"**[Student Submission Content]**:\n---\n{source.text}\n---"
             )
             messages = [
-                SystemMessage(content=HW_SYSTEM_PROMPT),
+                SystemMessage(content=HW_SYSTEM_PROMPT + (
+                    "\nManual recovery: this is saved, possibly partial recognition text. "
+                    "Never reconstruct missing pages or assume unread work is blank. "
+                    "Preserve every available answer fragment. Use recognition_incomplete in flag "
+                    "for an answer whose continuation or steps are missing; do not flag unrelated complete answers."
+                    if (getattr(source, "recognition", None) or {}).get("manual_saved_text") else "")),
                 HumanMessage(content=user_message),
             ]
             try:
