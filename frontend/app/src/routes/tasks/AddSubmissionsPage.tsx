@@ -108,6 +108,17 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       && task.pending_submission_file_name
       && !selectedFile,
   );
+  const needsRosterUpload = !canRetryOriginal && identityMode === "roster" && !rosterFile && !hasSavedRoster;
+  const showRosterError = missingUpload === "roster" && needsRosterUpload;
+  const actionError = formError ?? (showRosterError ? t("submissionUploadRosterRequired") : null);
+
+  useEffect(() => {
+    // Draft restore/reset can change the mode or supply a roster without a click.
+    if (!needsRosterUpload) {
+      setMissingUpload((current) => current === "roster" ? null : current);
+    }
+  }, [needsRosterUpload]);
+
   const retryLabel = canRetryOriginal && !hasStoredFile
     ? task?.status === "submissions_paused" ? localText(locale, "继续识别", "Continue Recognition") : workflowRetryLabel(locale)
     : localText(locale, "重新识别全部作答", "Recognize All Submissions Again");
@@ -140,7 +151,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
             ? localText(locale, "需要先添加或选择一个已启用模型。", "Add or select an enabled model first.")
           : !selectedFile && !hasStoredFile && !canRetryOriginal
             ? t("submissionUploadFileRequired")
-            : !canRetryOriginal && identityMode === "roster" && !rosterFile && !hasSavedRoster
+            : needsRosterUpload
               ? t("submissionUploadRosterRequired")
               : null;
 
@@ -207,14 +218,15 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       return;
     }
     if (uploadDisabledReason) {
-      setFormError(uploadDisabledReason);
+      // Keep roster validation tied to the current input, not a stale message.
+      setFormError(uploadDisabledReason === t("submissionUploadRosterRequired") ? null : uploadDisabledReason);
       if (!recognitionProviderId) {
         setNeedsModel(true);
         window.requestAnimationFrame(() => focusUploadControl(byokLinkRef.current));
       } else if (!selectedFile && !hasStoredFile && !canRetryOriginal) {
         setMissingUpload("submission");
         focusUploadControl(submissionChooseRef.current);
-      } else if (!canRetryOriginal && identityMode === "roster" && !rosterFile && !hasSavedRoster) {
+      } else if (needsRosterUpload) {
         setMissingUpload("roster");
         focusUploadControl(rosterChooseRef.current);
       }
@@ -389,9 +401,6 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
                 disabled={isPending}
                 onClick={() => {
                   setIdentityMode(option.mode);
-                  if (option.mode !== "roster") {
-                    setMissingUpload((current) => current === "roster" ? null : current);
-                  }
                   setFormError(null);
                   setNeedsModel(false);
                 }}
@@ -431,7 +440,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
                 <button
                   ref={rosterChooseRef}
                   type="button"
-                  aria-describedby={missingUpload === "roster" ? "submission-roster-required" : undefined}
+                  aria-describedby={showRosterError ? "submission-roster-required" : undefined}
                   className="inline-flex h-7 items-center rounded-[6px] border bg-card px-2.5 text-[12px] font-semibold text-foreground hover:bg-muted"
                   onClick={() => rosterInputRef.current?.click()}
                 >
@@ -440,14 +449,14 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
               </div>
             ) : null}
           </div>
-          {missingUpload === "roster" ? <p id="submission-roster-required" role="alert" className="mt-2 text-sm text-danger">{t("submissionUploadRosterRequired")}</p> : null}
+          {showRosterError ? <p id="submission-roster-required" role="alert" className="mt-2 text-sm text-danger">{t("submissionUploadRosterRequired")}</p> : null}
         </section>
 
         <div className="mt-[31px] flex min-h-10 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0 text-[13px] leading-5">
-            {formError ? (
+            {actionError ? (
               <p id="submission-upload-action-message" role="alert" className="text-danger">
-                {formError}
+                {actionError}
                 {needsModel && taskId ? (
                   <Link
                     ref={byokLinkRef}
@@ -476,7 +485,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
             className="inline-flex h-10 w-full shrink-0 items-center justify-center rounded-[8px] bg-primary px-4 text-[14px] font-semibold leading-[18px] text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:w-[180px]"
             disabled={isPending || isWorkflowBusy}
             title={uploadDisabledReason ?? undefined}
-            aria-describedby={formError || hasExistingSubmissions || uploadDisabledReason ? "submission-upload-action-message" : undefined}
+            aria-describedby={actionError || hasExistingSubmissions || uploadDisabledReason ? "submission-upload-action-message" : undefined}
             onClick={() => void handleStart()}
           >
             {isPending ? (
