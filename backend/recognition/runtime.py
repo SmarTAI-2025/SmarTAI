@@ -170,6 +170,10 @@ async def _dispatch(
         )
     ticket = None
     uncertain = False
+    failure_pages = (
+        sorted(number for image in request.images for number in image.page_numbers)
+        if isinstance(request, EngineLocateInputV1) else request.document_pages or [request.page_number]
+    ) if source.content_type == "application/pdf" else []
     try:
         lease = capacity.lease(source.owner_id, background=True) if source.scope == "knowledge_document" else capacity.lease(source.owner_id)
         async with asyncio.timeout(budget.remaining(phase)), lease:
@@ -185,6 +189,11 @@ async def _dispatch(
                 raise RecognitionError("recognition_response_invalid", submission_may_exist=True)
             if candidate.status != "error" and candidate.safe_error_code is not None:
                 raise RecognitionError("recognition_response_invalid", submission_may_exist=True)
+            if candidate.status == "error" and progress:
+                await progress.record_provider_failure(
+                    RecognitionError(candidate.safe_error_code or "recognition_response_invalid"),
+                    pages=failure_pages,
+                )
             if candidate.safe_error_code == "provider_submit_uncertain":
                 uncertain = True
     except TimeoutError as exc:
@@ -203,7 +212,7 @@ async def _dispatch(
         if rejected_wait:
             control.block(provider, "provider_rate_limited")
         elif progress:
-            await progress.record_provider_failure(exc)
+            await progress.record_provider_failure(exc, pages=failure_pages)
         candidate = RecognitionCandidateV1(
             kind=capabilities.candidate_kind, status="error", provider_route_id=capabilities.route_id,
             safe_error_code="provider_rate_limited" if rejected_wait else "provider_submit_uncertain",
@@ -212,7 +221,7 @@ async def _dispatch(
         if ticket is None:
             raise
         if progress:
-            await progress.record_provider_failure(exc)
+            await progress.record_provider_failure(exc, pages=failure_pages)
         uncertain = exc.submission_may_exist or exc.code == "provider_submit_uncertain"
         candidate = RecognitionCandidateV1(
             kind=capabilities.candidate_kind, status="error", provider_route_id=capabilities.route_id,
@@ -223,6 +232,10 @@ async def _dispatch(
         if ticket is None:
             raise RecognitionError("recognition_response_invalid") from None
         uncertain = True
+        if progress:
+            await progress.record_provider_failure(
+                RecognitionError("recognition_response_invalid", submission_may_exist=True), pages=failure_pages,
+            )
         candidate = RecognitionCandidateV1(
             kind=capabilities.candidate_kind, status="error", provider_route_id=capabilities.route_id,
             safe_error_code="recognition_response_invalid",

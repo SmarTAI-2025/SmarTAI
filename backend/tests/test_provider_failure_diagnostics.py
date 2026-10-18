@@ -28,6 +28,41 @@ def gemini_unavailable():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["", "PRIVATE_BLOCKED_PARTIAL_TEXT"])
+@pytest.mark.parametrize("reason", ["provider_recitation_blocked", "provider_content_blocked"])
+async def test_refusal_survives_runtime_validation_with_page_and_no_replay(text, reason):
+    from backend.tests.test_recognition_reader import llm, request
+    provider, engine = llm(text, finish_reason="refused", refusal_code=reason)
+    source = RecognitionSourceRefV1(owner_id="owner", scope="assignment_source", business_id="fixture",
+                                   content_type="application/pdf", input_sha256="a" * 64)
+    policy = RecognitionPolicyV1()
+    budget = RecognitionBudget(source, policy, engine.capabilities)
+    progress = ProgressReporter("fixture")
+    kwargs = dict(source=source, policy=policy, capabilities=engine.capabilities,
+                  region_keys=(region_budget_key(8, NormalizedRegionV1()),), budget=budget,
+                  capacity=RecognitionCapacity(), progress=progress)
+    result = await run_initial_read(engine, request(page_number=8), **kwargs)
+    assert result.candidate.safe_error_code == reason
+    assert result.candidate.status == "error" and result.candidate.text == ""
+    assert result.candidate.finish_reason == "refused"
+    assert result.candidate.input_tokens == 50
+    assert not result.submission_may_exist
+    assert budget.snapshot().pending_calls == 0
+    with pytest.raises(RecognitionError):
+        await run_initial_read(engine, request(page_number=8), **kwargs)
+    provider.ainvoke_vision.assert_awaited_once()
+    snapshot = (await progress.snapshot()).model_dump(mode="json")
+    assert snapshot["provider_failures"] == [{"code": reason, "http_status": None, "pages": [8]}]
+    assert "PRIVATE" not in str(snapshot)
+
+
+def test_invalid_recognition_diagnostic_is_not_discarded_or_mislabelled_as_provider_http():
+    failure = provider_failure_diagnostic(RecognitionError("recognition_response_invalid", submission_may_exist=True))
+    assert failure is not None
+    assert failure.code == "recognition_response_invalid" and failure.http_status is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("purpose", ["problems", "submissions"])
 async def test_gemini_503_is_visible_without_replaying_uncertain_recognition(purpose):
     provider = SimpleNamespace(provider_id="gemini:fixture", supports_vision=True,
@@ -153,12 +188,15 @@ def test_public_recognition_diagnostics_validate_legacy_snapshots():
         {"code": "provider_timeout", "http_status": True},
         {"code": "provider_timeout", "http_status": "503"},
         {"code": "provider_timeout", "http_status": 200},
+        {"code": "provider_recitation_blocked", "pages": [8], "body": "PRIVATE_BODY"},
+        {"code": "provider_content_blocked", "pages": [True]},
         "PRIVATE_ROW",
     ]}
     result = public_progress(snapshot, terminal=True)
+    # Only the newest eight source rows are considered, including invalid rows.
     assert result["provider_failures"] == [
-        {"code": "provider_upstream_unavailable", "http_status": 503},
         {"code": "provider_timeout", "http_status": None},
+        {"code": "provider_recitation_blocked", "http_status": None, "pages": [8]},
     ]
     assert "PRIVATE" not in str(result)
     assert public_progress(result, terminal=True) == result
@@ -167,7 +205,8 @@ def test_public_recognition_diagnostics_validate_legacy_snapshots():
 
 
 @pytest.mark.asyncio
-async def test_submission_failure_diagnostics_survive_reporter_eviction(monkeypatch):
+@pytest.mark.parametrize("reason", [None, "recognition_response_invalid", "provider_recitation_blocked", "provider_content_blocked"])
+async def test_submission_failure_diagnostics_survive_reporter_eviction(monkeypatch, reason):
     from backend.db import workflow_repository
     from backend.progress.tracker import remove_reporter
     from backend.services import task_facade
@@ -176,7 +215,9 @@ async def test_submission_failure_diagnostics_survive_reporter_eviction(monkeypa
 
     owner, task = _seed_task(with_question=True)
     async def failed_read(**kwargs):
-        await kwargs["reporter"].record_provider_failure(gemini_unavailable())
+        await kwargs["reporter"].record_provider_failure(
+            RecognitionError(reason) if reason else gemini_unavailable(), pages=[8] if reason else None,
+        )
         raise RecognitionError("provider_submit_uncertain", submission_may_exist=True)
 
     monkeypatch.setattr(task_facade, "read_question_source", failed_read)
@@ -188,12 +229,15 @@ async def test_submission_failure_diagnostics_survive_reporter_eviction(monkeypa
     remove_reporter(row.id)
     state = task_facade.task_state(task_id=task, owner_id=owner)
     assert state["error"] == "provider_submit_uncertain"
-    assert state["progress"]["provider_failures"] == [{"code": "provider_upstream_unavailable", "http_status": 503}]
+    assert state["progress"]["provider_failures"] == [
+        {"code": reason, "http_status": None, "pages": [8]} if reason
+        else {"code": "provider_upstream_unavailable", "http_status": 503}]
     assert "PRIVATE_PROVIDER_BODY" not in str(state)
 
 
 @pytest.mark.asyncio
-async def test_question_failure_diagnostics_survive_reporter_eviction(monkeypatch):
+@pytest.mark.parametrize("reason", [None, "recognition_response_invalid", "provider_recitation_blocked", "provider_content_blocked"])
+async def test_question_failure_diagnostics_survive_reporter_eviction(monkeypatch, reason):
     from backend.api import task_preparation
     from backend.progress.tracker import remove_reporter
     from backend.services import task_facade
@@ -204,6 +248,9 @@ async def test_question_failure_diagnostics_survive_reporter_eviction(monkeypatc
     _, queued, _ = await _queue_question_preparation(owner, task)
 
     async def failed_prepare(_sources, _provider, **kwargs):
+        if reason:
+            await kwargs["reporter"].record_provider_failure(RecognitionError(reason), pages=[8])
+            raise RecognitionError("provider_submit_uncertain", submission_may_exist=True)
         provider = SimpleNamespace(ainvoke=AsyncMock(side_effect=gemini_unavailable()))
         await _SubmissionSafeProvider(provider, reporter=kwargs["reporter"]).ainvoke("fixture")
 
@@ -213,5 +260,42 @@ async def test_question_failure_diagnostics_survive_reporter_eviction(monkeypatc
     remove_reporter(queued["job_id"])
     state = await task_facade.async_task_state(task_id=task, owner_id=owner)
     assert state["error"] == "provider_submit_uncertain"
-    assert state["progress"]["provider_failures"] == [{"code": "provider_upstream_unavailable", "http_status": 503}]
+    assert state["progress"]["provider_failures"] == [
+        {"code": reason, "http_status": None, "pages": [8]} if reason
+        else {"code": "provider_upstream_unavailable", "http_status": 503}]
     assert "PRIVATE_PROVIDER_BODY" not in str(state)
+
+
+@pytest.mark.asyncio
+async def test_refused_page_is_persisted_and_only_explicit_retry_reads_it_again(tmp_path):
+    from backend.llm.providers import LLMResponse
+    from backend.tests.test_recognition_durable_runs import runner, run
+    from backend.tests.test_recognition_reader import llm
+
+    service, request, data, _ = runner(tmp_path, pdf=True, pages=2)
+    request = request.model_copy(update={"policy": request.policy.model_copy(update={"enable_repair": False})})
+    provider, engine = llm("literal 1 + 1 = 3", finish_reason="stop")
+    success = provider.ainvoke_vision.return_value
+    provider.ainvoke_vision.side_effect = [
+        success, LLMResponse(content="", provider=success.provider, model=success.model, duration_ms=1,
+                             input_tokens=50, output_tokens=0, finish_reason="refused",
+                             refusal_code="provider_recitation_blocked"), success,
+    ]
+    service.progress = ProgressReporter("fixture")
+    first = await run(service, request, data, engine)
+    assert first.safe_error_code == "provider_recitation_blocked"
+    assert first.assembly.document.coverage.failed_pages == [2]
+    assert provider.ainvoke_vision.await_count == 2
+    restored = await run(service, request, None, engine)
+    assert restored.safe_error_code == first.safe_error_code
+    assert provider.ainvoke_vision.await_count == 2
+    last = restored.assembly.raw.read_batch.units[-1].candidate
+    assert last.safe_error_code == "provider_recitation_blocked" and last.finish_reason == "refused"
+    retry = await service.run(request, data, engine=engine, prompt_version="faithful-reader-v1",
+                              authorized_owner_id=request.source.owner_id, retry_key="explicit-retry:1",
+                              acknowledge_pending_retry=True)
+    assert retry.status == "completed", (retry.safe_error_code, provider.ainvoke_vision.await_count,
+                                        retry.assembly.document.coverage if retry.assembly else None)
+    assert provider.ainvoke_vision.await_count == 3
+    assert retry.assembly.raw.read_batch.provenance[0].origin == "cache_hit"
+    assert (await service.progress.snapshot()).provider_failures[-1].pages == [2]
