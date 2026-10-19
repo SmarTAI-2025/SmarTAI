@@ -143,19 +143,22 @@ async def test_question_saved_pages_are_organized_without_rereading_or_generatin
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("retry_after_save_failure", [False, True])
-async def test_requested_missing_questions_remain_editable_after_organization_and_retry(monkeypatch, retry_after_save_failure):
+@pytest.mark.parametrize("recovery", ["initial", "retry", "manual"])
+@pytest.mark.parametrize("target_source", ["options", "hint"])
+async def test_requested_missing_questions_remain_editable_after_organization_and_retry(monkeypatch, recovery, target_source):
     from backend.db import assignment_repository
     from backend.domain.errors import ValidationError
 
     owner, task = _seed_task()
     registry = _RecoveryRegistry()
     data, mime = source_file(pdf=True, pages=1)
-    numbers = [str(i) for i in range(1, 8)]
+    numbers = ["1.1.5", "1.1.7", "1.1.20", "1.1.29", "1.1.31", "1.2.3", "1.2.16"]
+    recognized = [numbers[0], numbers[1], numbers[5]]
     draft = await task_preparation.preflight_problem_source(task_id=task,
         file=UploadFile(io.BytesIO(data), filename="questions.pdf", headers=Headers({"content-type": mime})),
         inline_text=None, library_material_id=None, stored_file_id=None, structure_mode="organized", role="problem",
-        extraction_hint="", recognition_options=json.dumps({"targets": numbers}), save_to_library=False,
+        extraction_hint="题号: " + ", ".join(numbers) if target_source == "hint" else "",
+        recognition_options=json.dumps({"targets": numbers}) if target_source == "options" else None, save_to_library=False,
         recognition_provider_id="test-provider", current=SimpleNamespace(id=owner), registry=registry)
     queued = await task_preparation._start_question_preparation(task_id=task,
         request=task_preparation.StartQuestionPreparationRequest(source_tokens=[draft["source_token"]],
@@ -163,12 +166,12 @@ async def test_requested_missing_questions_remain_editable_after_organization_an
         current=SimpleNamespace(id=owner), registry=registry, background_tasks=None, allow_prepared_source_reuse=False)
     origin = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
     stored = file_repository.get_file(file_id=origin.payload["source_refs"][0]["stored_file_id"], owner_id=owner)
-    literal = "\n".join(f"{i}. Saved literal question {i}." for i in range(1, 4))
+    literal = "\n".join(f"{number}. Saved literal question {number}." for number in recognized)
     await save_pages(owner, task, stored, data, text=[literal])
     task_facade._fail_operation(task, owner, origin.id, origin.attempt, "question_source_incomplete")
     organize = AsyncMock(return_value=SimpleNamespace(content=json.dumps({"problems": [
-        dict(q_id=f"q{i}", number=str(i), type="short", stem=f"Saved literal question {i}.", criterion="")
-        for i in range(1, 4)]})))
+        dict(q_id=f"q{i}", number=number, type="short", stem=f"Saved literal question {number}.", criterion="")
+        for i, number in enumerate(recognized, start=1)]})))
     registry.provider = SimpleNamespace(provider_id="test-provider", supports_vision=False, ainvoke=organize)
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
     forbidden = AsyncMock(side_effect=AssertionError("must not reread or generate"))
@@ -178,7 +181,7 @@ async def test_requested_missing_questions_remain_editable_after_organization_an
     response = await task_preparation.manually_complete_question_preparation(task, origin.id,
         task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=revision), current=SimpleNamespace(id=owner))
     assert response["status"] == "started"
-    if retry_after_save_failure:
+    if recovery != "initial":
         # Keep the three extracted rows, but fail before the final package can be saved.
         with monkeypatch.context() as failed_save:
             def fail_save(**_):
@@ -189,24 +192,38 @@ async def test_requested_missing_questions_remain_editable_after_organization_an
         assert failed.status == "error" and failed.checkpoint["questions_extracted_artifact_id"]
         assert not assignment_repository.list_questions(task, teacher_id=owner)
         revision = workflow_repository.get_workflow(task, owner_id=owner).workflow_revision
-        response = await task_preparation.retry_question_preparation(task_id=task, job_id=failed.id,
-            request=task_preparation.RetryQuestionPreparationRequest(expected_workflow_revision=revision),
-            background_tasks=None, current=SimpleNamespace(id=owner), registry=registry)
-        assert response["status"] == "started"
-    await task_preparation.run_durable_question_preparation(_claim(owner, response["job_id"], "complete-seven"))
-    operation = workflow_repository.get_operation(response["job_id"], owner_id=owner)
-    assert operation.status == "done", (operation.error_code, operation.checkpoint)
+        if recovery == "manual":
+            response = await task_preparation.manually_complete_question_preparation(task, failed.id,
+                task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=revision), current=SimpleNamespace(id=owner))
+            assert response["status"] == "ready_for_review"
+            # Manual review is now the recovery path; the old retry must not overwrite edits.
+            rejected = await task_preparation.retry_question_preparation(task_id=task, job_id=failed.id,
+                request=task_preparation.RetryQuestionPreparationRequest(expected_workflow_revision=response["workflow_revision"]),
+                background_tasks=None, current=SimpleNamespace(id=owner), registry=registry)
+            assert rejected.status_code == 409
+            assert json.loads(rejected.body)["error"]["code"] == "question_preparation_retry_not_available"
+        else:
+            response = await task_preparation.retry_question_preparation(task_id=task, job_id=failed.id,
+                request=task_preparation.RetryQuestionPreparationRequest(expected_workflow_revision=revision),
+                background_tasks=None, current=SimpleNamespace(id=owner), registry=registry)
+            assert response["status"] == "started"
+    if recovery != "manual":
+        await task_preparation.run_durable_question_preparation(_claim(owner, response["job_id"], "complete-seven"))
+        operation = workflow_repository.get_operation(response["job_id"], owner_id=owner)
+        assert operation.status == "done", (operation.error_code, operation.checkpoint)
     assert organize.await_count == 1 and forbidden.await_count == 0
     assert len(assignment_repository.list_questions(task, teacher_id=owner)) == 7
     for read in (task_facade.get_task(task_id=task, owner_id=owner), await task_facade.async_task_state(task_id=task, owner_id=owner)):
         assert read["status"] == "problems_ready" and read["problem_count"] == 7
     problems = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]
-    assert [row["number"] for row in problems.values()] == numbers
-    assert [problems[f"q{i}"]["stem"] for i in range(1, 4)] == [f"Saved literal question {i}." for i in range(1, 4)]
+    assert {row["number"] for row in problems.values()} == set(numbers)
+    assert [row["question_structure"]["major_order"] for row in problems.values()] == list(range(7))
+    assert [problems[f"q{i}"]["stem"] for i in range(1, 4)] == [f"Saved literal question {number}." for number in recognized]
     for i in range(4, 8):
         row = problems[f"q{i}"]
         assert not row["stem"] and not row["criterion"] and not row.get("reference_answer")
-        assert row["question_structure"]["major_number"] == str(i)
+        assert row["question_structure"]["major_number"] == row["number"]
+        assert row["number"] in set(numbers) - set(recognized)
         assert row["review_status"] == "needs_review"
         marker = next(issue for issue in row["preparation_issues"] if issue["code"] == "manual_completion_required")
         assert marker["details"]["required_fields"] == ["stem", "criterion"]
