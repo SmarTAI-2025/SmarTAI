@@ -1,3 +1,4 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { ManualReviewButton } from "@/components/tasks/ManualReviewButton";
 import { DemoSourceUpload } from "@/components/tasks/DemoSourceUpload";
 import { useFrontierWorkspace } from "@/lib/frontierContext";
@@ -599,8 +600,8 @@ function localizeSubmissionError(
   if (["invalid_state", "stale_revision", "replacement_confirmation_required"].includes(code)) {
     return t("submissionUploadErrorConflict");
   }
-  return normalized.status === 0 && normalized.message
-    ? normalized.message
+  return normalized.status === 0
+    ? userFacingError(error, locale)
     : t("submissionUploadErrorGeneric");
 }
 

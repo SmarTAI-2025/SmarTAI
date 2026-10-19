@@ -30,6 +30,19 @@ beforeEach(() => {
 });
 
 describe("login modes", () => {
+  it.each(["zh-CN", "en-US"])("localizes the private-admin redirect notice (%s)", async locale => {
+    localStorage.setItem("smartai_locale", locale);
+    vi.stubEnv("VITE_SMARTAI_ADMIN_URL", "");
+    mutateAsync.mockResolvedValueOnce({ id: "admin", role: "admin" });
+    try {
+      page();
+      fireEvent.change(screen.getByRole("textbox", { name: locale === "zh-CN" ? "用户名" : "Username" }), { target: { value: "admin" } });
+      fireEvent.change(screen.getByPlaceholderText(locale === "zh-CN" ? "输入密码" : "Enter password"), { target: { value: "test-password" } });
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: locale === "zh-CN" ? "登录" : "Sign in" })));
+      expect(screen.getByRole("alert")).toHaveTextContent(locale === "zh-CN" ? "请通过私有管理站点登录" : "Sign in through the private admin site.");
+      expect(screen.getByPlaceholderText(locale === "zh-CN" ? "输入密码" : "Enter password")).toHaveValue("");
+    } finally { vi.unstubAllEnvs(); }
+  });
   it.each(["username", "email"])("submits an explicit unambiguous %s identity and retains the return path", async (mode) => {
     page();
     if (mode === "email") fireEvent.click(screen.getByRole("radio", { name: "邮箱登录" }));

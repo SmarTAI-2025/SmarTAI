@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useDraftLeave, type DraftController } from "@/hooks/useDraftLeave";
 import { useDraftOwner } from "@/hooks/useDraftProtection";
 import { rememberImageReturn, takeImageReturn } from "@/lib/imageRecoveryNavigation";
-import { draftError } from "@/lib/pageDraftStore";
+import { draftErrorCode, draftMessage } from "@/lib/draftMessages";
 import { getAPIErrorCode } from "@/api/client";
 import type { ExpertConfig } from "@/types";
 
@@ -47,13 +47,13 @@ export function ImageRecognitionRecovery({ error, expert, returnTo, controller, 
       const original = controller();
       await leave.save([original.id]);
       const current = controller();
-      if (!isCurrent() || current.id !== original.id || current.dirty || current.busy || current.savedAt === null) throw new Error(zh ? "内容有修改或尚未暂存成功，请再次暂存；输入仍保留。" : "Input changed or could not be saved. Your input is preserved.");
+      if (!isCurrent() || current.id !== original.id || current.dirty || current.busy || current.savedAt === null) throw new Error("changedDuringSave");
       const params = new URLSearchParams({ returnTo, imageRecovery: "1", mode });
       if (expert) params.set("providerId", expert.provider_id);
       rememberImageReturn(owner, returnTo, expert?.provider_id ?? "");
       navigate(`/settings/byok?${params}`);
     } catch (failure) {
-      setSaveError(draftError(failure));
+      setSaveError(draftErrorCode(failure));
     } finally { busy.current = false; setSaving(false); }
   }
   return <div role="alert" className="mt-4 rounded-lg border border-amber-300 bg-card p-4 text-sm">
@@ -68,6 +68,6 @@ export function ImageRecognitionRecovery({ error, expert, returnTo, controller, 
       <button type="button" disabled={saving} onClick={() => setDismissed(true)} className="rounded border px-3 py-2">{zh ? "留在当前页" : "Stay here"}</button>
     </div>
     {saving ? <p role="status">{zh ? "正在暂存…" : "Saving…"}</p> : null}
-    {saveError ? <p className="mt-2 text-danger">{saveError}</p> : null}
+    {saveError ? <p className="mt-2 text-danger">{draftMessage(saveError, locale)}</p> : null}
   </div>;
 }

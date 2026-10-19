@@ -457,7 +457,7 @@ describe("image failure recovery uses explicit drafts", () => {
     await screen.findByRole("button", { name: "暂存并更换模型" });
     const spy = vi.spyOn(draftStore, "writePageDrafts").mockRejectedValueOnce(new Error("quota save failure"));
     await user.click(screen.getByRole("button", { name: "暂存并更换模型" }));
-    expect((await screen.findAllByText("quota save failure")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("本地暂存失败，当前输入已保留，请重试。")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("questions.pdf").length).toBeGreaterThan(0);
     expect(screen.queryByText("BYOK configuration")).not.toBeInTheDocument();
     spy.mockRestore();

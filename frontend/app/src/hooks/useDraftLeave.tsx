@@ -1,7 +1,9 @@
+import { draftErrorCode, draftMessage } from "@/lib/draftMessages";
+import { useI18n } from "@/i18n/I18nProvider";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { UNSAFE_DataRouterContext, useBlocker } from "react-router-dom";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
-import { draftError, subscribeDraftChanges, writePageDrafts } from "@/lib/pageDraftStore";
+import { subscribeDraftChanges, writePageDrafts } from "@/lib/pageDraftStore";
 import type { PreparedDraft } from "@/hooks/useDraftProtection";
 import { isSessionExpired, useSessionExpired } from "@/lib/sessionExpiry";
 export interface DraftController {
@@ -12,10 +14,15 @@ export interface DraftController {
 type Getter = () => DraftController;
 type Intent = { run: () => void; cancel: () => void; controllers: DraftController[] };
 const noop = () => {};
-const LeaveContext = createContext({ register: (_getter: Getter): (() => void) => noop, changed: noop, request: (run: () => void, _ids?: symbol[]) => run(), discardAndLeave: (run: () => void) => run(), controllers: [] as DraftController[], save: async (_ids?: symbol[]) => {}, saving: false, error: null as string | null });
+const LeaveContext = createContext({ locale: "zh-CN", register: (_getter: Getter): (() => void) => noop, changed: noop, request: (run: () => void, _ids?: symbol[]) => run(), discardAndLeave: (run: () => void) => run(), controllers: [] as DraftController[], save: async (_ids?: symbol[]) => {}, saving: false, error: null as string | null });
 export function useDraftLeave() { return useContext(LeaveContext); }
-export function DraftLeaveProvider({ children }: { children: ReactNode }) {
+export function LocalizedDraftLeaveProvider({ children }: { children: ReactNode }) {
+  const { locale } = useI18n();
+  return <DraftLeaveProvider locale={locale}>{children}</DraftLeaveProvider>;
+}
+export function DraftLeaveProvider({ children, locale = "zh-CN" }: { children: ReactNode; locale?: string }) {
   const expired = useSessionExpired();
+  const tx = (zh: string, en: string) => locale === "zh-CN" ? zh : en;
   const registry = useRef(new Map<symbol, Getter>());
   const [, render] = useState(0);
   const [intent, setIntent] = useState<Intent | null>(null);
@@ -42,11 +49,11 @@ export function DraftLeaveProvider({ children }: { children: ReactNode }) {
     savingRef.current = true; setSaving(true); setError(null);
     try {
       const controllers = all().filter((item) => !item.secret && (!ids || ids.includes(item.id)) && (Boolean(ids) || item.dirty || item.savedAt !== null));
-      if (controllers.some((item) => item.busy)) throw new Error("业务保存正在进行，请等完成后再暂存或离开。");
+      if (controllers.some((item) => item.busy)) throw new Error("busy");
       const prepared = controllers.map((item) => item.prepare());
       await writePageDrafts(prepared.map((item) => item.write));
       prepared.forEach((item) => item.commit());
-    } catch (failure) { setError(draftError(failure)); throw failure; }
+    } catch (failure) { setError(draftErrorCode(failure)); throw failure; }
     finally { savingRef.current = false; setSaving(false); }
   }, [all]);
   const controllers = all();
@@ -79,13 +86,13 @@ export function DraftLeaveProvider({ children }: { children: ReactNode }) {
     const original = pending.current; if (!original || savingRef.current) return;
     try {
       const registeredIds = all().map((item) => item.id);
-      if (original.controllers.some((item) => !registeredIds.includes(item.id))) throw new Error("编辑对象已变化，原离开操作已取消。请核对当前页面。");
+      if (original.controllers.some((item) => !registeredIds.includes(item.id))) throw new Error("editorChanged");
       await save(original.controllers.map((item) => item.id));
       // Set-state commits are asynchronous; defer the check to the next render boundary.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
       if (pending.current !== original) return;
-      if (original.controllers.some((item) => !all().some((registered) => registered.id === item.id))) { setError("编辑对象已变化，请核对当前页面；原离开操作未继续。"); return; }
-      if (all().filter((item) => original.controllers.some((originalItem) => originalItem.id === item.id)).some((item) => item.dirty || item.busy)) { setError("暂存期间内容又有修改，已保留输入；请再次暂存后离开。"); return; }
+      if (original.controllers.some((item) => !all().some((registered) => registered.id === item.id))) { setError("editorChanged"); return; }
+      if (all().filter((item) => original.controllers.some((originalItem) => originalItem.id === item.id)).some((item) => item.dirty || item.busy)) { setError("changedDuringSave"); return; }
       pending.current = null; setIntent(null); original.run();
     } catch { /* Preserve the original intent and all input for retry. */ }
   }
@@ -100,10 +107,10 @@ export function DraftLeaveProvider({ children }: { children: ReactNode }) {
     try { run(); } finally { confirmedLeave.current = false; }
   }
   const dataRouter = useContext(UNSAFE_DataRouterContext);
-  return <LeaveContext.Provider value={{ register, changed, request: ask, discardAndLeave, controllers, save, saving, error }}>
+  return <LeaveContext.Provider value={{ locale, register, changed, request: ask, discardAndLeave, controllers, save, saving, error: error ? draftMessage(error, locale) : null }}>
     {dataRouter ? <RouterLeaveGuard shouldBlock={() => !confirmedLeave.current && !isSessionExpired() && all().some((item) => item.dirty || item.busy)} ask={routeAsk} /> : null}
     {children}
-    {intent && !expired ? <UnsavedChangesDialog title="有未暂存修改" description={controllers.some((item) => item.busy) ? "业务保存正在进行，请等待完成；当前输入仍保留。" : intent.controllers.some((item) => item.secret) ? "认证秘密不会写入本地草稿。请继续编辑并使用原有保存操作，或放弃本次输入离开。" : "暂存仅保存在当前浏览器，不会上传、识别、批改或确认复核。"} stayLabel="继续编辑" leaveLabel="不暂存并离开" saveLabel={intent.controllers.some((item) => item.secret) ? undefined : "暂存并离开"} savingLabel="正在暂存…" saving={saving || controllers.some((item) => item.busy)} saveError={error ?? undefined} onStay={() => finish(false)} onLeave={() => finish(true)} onSave={() => void saveAndLeave()} /> : null}
+    {intent && !expired ? <UnsavedChangesDialog title={tx("有未暂存修改", "Unsaved changes")} description={controllers.some((item) => item.busy) ? tx("正在保存，请稍后。", "Saving changes. Please wait.") : intent.controllers.some((item) => item.secret) ? tx("密码和密钥不能暂存。请保存后离开，或放弃本次输入。", "Passwords and keys cannot be saved as drafts. Save your changes or leave without saving.") : tx("草稿仅保存在此浏览器，暂存不会开始上传、识别或批改。", "Drafts stay in this browser. Saving a draft does not start uploading, recognition or grading.")} stayLabel={tx("继续编辑", "Keep editing")} leaveLabel={tx("不暂存并离开", "Leave without saving")} saveLabel={intent.controllers.some((item) => item.secret) ? undefined : tx("暂存并离开", "Save draft and leave")} savingLabel={tx("正在暂存…", "Saving draft…")} saving={saving || controllers.some((item) => item.busy)} saveError={error ? draftMessage(error, locale) : undefined} onStay={() => finish(false)} onLeave={() => finish(true)} onSave={() => void saveAndLeave()} /> : null}
   </LeaveContext.Provider>;
 }
 function RouterLeaveGuard({ shouldBlock, ask }: { shouldBlock: () => boolean; ask: (run: () => void, cancel?: () => void) => void }) {
@@ -125,9 +132,10 @@ function RouterLeaveGuard({ shouldBlock, ask }: { shouldBlock: () => boolean; as
   }, [blocker, dataRouter, ask]);
   return null;
 }
-export function DraftActions({ locale = "zh-CN" }: { locale?: string }) {
+export function DraftActions({ locale: displayLocale }: { locale?: string }) {
+  const { controllers, save, saving, error, locale: currentLocale } = useDraftLeave();
+  const locale = displayLocale ?? currentLocale;
   const tx = (zh: string, en: string) => locale === "zh-CN" ? zh : en;
-  const { controllers, save, saving, error } = useDraftLeave();
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const editable = controllers.filter((item) => !item.secret);
   if (!editable.length) return null;
@@ -136,14 +144,14 @@ export function DraftActions({ locale = "zh-CN" }: { locale?: string }) {
   return <section aria-label={tx("本地草稿", "Local draft")} className="my-5 w-full rounded-[10px] border bg-card px-4 py-3 text-sm">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <p role="status">{dirty ? tx("有未暂存修改", "Unsaved changes") : savedAt ? `${tx("已暂存", "Draft saved")} · ${new Date(savedAt).toLocaleString(locale)}` : tx("尚未暂存", "No saved draft")}</p>
-      <div className="flex flex-wrap gap-2"><button type="button" disabled={busy} onClick={() => void save().catch(() => {})} className="rounded-md bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-50">{saving ? tx("正在暂存…", "Saving draft…") : tx("暂存", "Save draft")}</button><button type="button" disabled={busy} onClick={() => { if (window.confirm(tx("删除本页已暂存草稿并重置输入？正式业务结果不受影响。", "Delete this page’s saved draft and reset the input? Saved task results will not change."))) { setDeleteError(null); void Promise.all(editable.map((item) => item.remove())).catch((failure) => setDeleteError(draftError(failure))); } }} className="rounded-md border px-3 py-2">{tx("删除本页草稿", "Delete page draft")}</button></div>
+      <div className="flex flex-wrap gap-2"><button type="button" disabled={busy} onClick={() => void save().catch(() => {})} className="rounded-md bg-primary px-4 py-2 font-semibold text-primary-foreground disabled:opacity-50">{saving ? tx("正在暂存…", "Saving draft…") : tx("暂存", "Save draft")}</button><button type="button" disabled={busy} onClick={() => { if (window.confirm(tx("删除本页已暂存草稿并重置输入？正式业务结果不受影响。", "Delete this page’s saved draft and reset the input? Saved task results will not change."))) { setDeleteError(null); void Promise.all(editable.map((item) => item.remove())).catch((failure) => setDeleteError(draftErrorCode(failure))); } }} className="rounded-md border px-3 py-2">{tx("删除本页草稿", "Delete page draft")}</button></div>
     </div>
     <div className="mt-2 flex flex-wrap items-start gap-x-3 gap-y-1 text-xs text-muted-foreground">
       <p>{tx("仅保存在此浏览器，7 天内可恢复。", "Stored only in this browser and recoverable for 7 days.")}</p>
       <details><summary className="cursor-pointer">{tx("保存说明", "Storage details")}</summary><p className="mt-1 max-w-lg">{tx("退出登录或清理浏览器数据会清除草稿。每页最多 64 MiB，总计 128 MiB、30 份。", "Signing out or clearing browser data removes drafts. Limits: 64 MiB per page, 128 MiB total, and 30 drafts.")}</p></details>
     </div>
-    {editable.map((item) => <div key={item.scope}>{item.notice ? <p role="status" className="mt-2 text-xs">{item.notice}</p> : null}{item.hasConflict ? <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={item.keepCurrent} className="rounded border px-3 py-2 text-sm">{tx("保留当前输入", "Keep current input")}</button><button type="button" onClick={item.restore} className="rounded border px-3 py-2 text-sm">{tx("核对后恢复旧草稿", "Review and restore saved draft")}</button></div> : null}</div>)}
+    {editable.map((item) => <div key={item.scope}>{item.notice ? <p role="status" className="mt-2 text-xs">{draftMessage(item.notice, locale)}</p> : null}{item.hasConflict ? <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={item.keepCurrent} className="rounded border px-3 py-2 text-sm">{tx("保留当前输入", "Keep current input")}</button><button type="button" onClick={item.restore} className="rounded border px-3 py-2 text-sm">{tx("核对后恢复旧草稿", "Review and restore saved draft")}</button></div> : null}</div>)}
     {error ? <p role="alert" className="mt-2 text-danger">{error}</p> : null}
-    {deleteError ? <p role="alert" className="mt-2 text-danger">{deleteError}</p> : null}
+    {deleteError ? <p role="alert" className="mt-2 text-danger">{draftMessage(deleteError, locale)}</p> : null}
   </section>;
 }

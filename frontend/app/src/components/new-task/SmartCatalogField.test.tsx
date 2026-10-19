@@ -3,9 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { SmartCatalogField } from "./SmartCatalogField";
+import { APIError } from "@/api/client";
+import { userFacingError } from "@/lib/taskActionGuards";
 
+const copy = vi.hoisted(() => ({ locale: "zh-CN" }));
 vi.mock("@/i18n/I18nProvider", () => ({
-  useI18n: () => ({ t: (key: string) => key }),
+  useI18n: () => ({ locale: copy.locale, t: (key: string) => key }),
 }));
 
 interface TestItem {
@@ -13,7 +16,21 @@ interface TestItem {
   name: string;
 }
 
-function renderField(query: string, onQueryChange = vi.fn()) {
+it.each(["zh-CN", "en-US"])("localizes catalog creation failures without exposing raw errors (%s)", async locale => {
+  copy.locale = locale;
+  const error = new APIError(0, "Network Error");
+  const onCreate = vi.fn().mockRejectedValue(error);
+  const { input } = renderField("New course", vi.fn(), onCreate);
+  fireEvent.focus(input);
+  fireEvent.click(screen.getByRole("option", { name: /newTaskCreateCourse/ }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(userFacingError(error, locale));
+  expect(screen.getByRole("alert")).not.toHaveTextContent("Network Error");
+  expect(onCreate).toHaveBeenCalledOnce();
+  expect(input).toHaveValue("New course");
+  copy.locale = "zh-CN";
+});
+
+function renderField(query: string, onQueryChange = vi.fn(), onCreate = vi.fn()) {
   render(
     <SmartCatalogField<TestItem>
       label="Course"
@@ -31,7 +48,7 @@ function renderField(query: string, onQueryChange = vi.fn()) {
       getLabel={(item) => item.name}
       onSelect={vi.fn()}
       onRemove={vi.fn()}
-      onCreate={vi.fn()}
+      onCreate={onCreate}
     />,
   );
   return { input: screen.getByRole("combobox") as HTMLInputElement, onQueryChange };

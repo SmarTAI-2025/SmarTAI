@@ -1,3 +1,4 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { Check, ChevronDown, LoaderCircle, Plus, Search, X } from "lucide-react";
 import {
   useEffect,
@@ -59,7 +60,7 @@ export function SmartCatalogField<T>({
   onRemove,
   onCreate,
 }: SmartCatalogFieldProps<T>) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const fieldId = useId();
   const listId = `${fieldId}-listbox`;
   const rootRef = useRef<HTMLDivElement>(null);
@@ -69,7 +70,7 @@ export function SmartCatalogField<T>({
   const [inputValue, setInputValue] = useState(query);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [createError, setCreateError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<unknown>(null);
   const [conflictCandidates, setConflictCandidates] = useState<CatalogCandidate<T>[]>([]);
   const trimmedQuery = query.trim();
 
@@ -157,7 +158,7 @@ export function SmartCatalogField<T>({
         setOpen(true);
         return;
       }
-      setCreateError(normalized.message);
+      setCreateError(normalized);
     }
   }
 
@@ -347,7 +348,7 @@ export function SmartCatalogField<T>({
           ) : null}
         </div>
       ) : null}
-      {createError ? <p className="mt-1 text-xs text-danger" role="alert">{createError}</p> : null}
+      {createError ? <p className="mt-1 text-xs text-danger" role="alert">{userFacingError(createError, locale)}</p> : null}
     </div>
   );
 }

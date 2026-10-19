@@ -7,6 +7,7 @@ import type { KnowledgeStorageUsage } from "@/types";
 import { KnowledgeBasePage } from "./KnowledgeBasePage";
 
 const mocks = vi.hoisted(() => ({
+  locale: "zh-CN",
   uploadCourseMaterial: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
@@ -27,12 +28,14 @@ const retryingUsage: KnowledgeStorageUsage = {
 
 vi.mock("@/api/hooks", () => ({
   useCourseMaterials: () => ({
+    isSuccess: true,
     data: { items: [], summary: { materials: 0, groups: 0, referenced: 0 } },
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
   }),
   useCourseMaterialGroups: () => ({
+    isSuccess: true,
     data: { items: [] },
     isLoading: false,
     isError: false,
@@ -57,7 +60,7 @@ vi.mock("@/components/knowledge-base/CourseLibraryTable", () => ({
 vi.mock("@/components/knowledge-base/KnowledgeSearchPanel", () => ({ KnowledgeSearchPanel: () => null }));
 
 vi.mock("@/i18n/I18nProvider", () => ({
-  useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }),
+  useI18n: () => ({ locale: mocks.locale, t: (key: string) => key }),
 }));
 
 vi.mock("sonner", () => ({
@@ -65,6 +68,15 @@ vi.mock("sonner", () => ({
 }));
 
 describe("KnowledgeBasePage storage quota", () => {
+  it.each(["library-group:missing", "library-material:missing"])("localizes an unavailable draft target (%s)", async scope => {
+    mocks.locale = "en-US";
+    try {
+      render(<MemoryRouter initialEntries={["/knowledge-base?localDraft=" + encodeURIComponent(scope)]}><KnowledgeBasePage /></MemoryRouter>);
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toMatch(/unavailable/i);
+      expect(alert.textContent).not.toMatch(/[\u3400-\u9fff]/);
+    } finally { mocks.locale = "zh-CN"; }
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(window, "alert").mockImplementation(() => {});

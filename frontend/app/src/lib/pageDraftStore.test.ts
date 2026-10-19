@@ -45,13 +45,13 @@ describe("explicit IndexedDB draft transactions", () => {
   it("rejects a concurrent tab's stale snapshot and rolls back ALL fields/files", async () => {
     const tab1 = await prepare("tab1"); const tab2 = await prepare("tab2"); const another = await prepare("other", "a", "other");
     await writePageDrafts([tab1]);
-    await expect(writePageDrafts([another, tab2])).rejects.toThrow("其他标签页");
+    await expect(writePageDrafts([another, tab2])).rejects.toThrow("staleWrite");
     expect((await readPageDraft("a", "form", codec)).value?.name).toBe("tab1");
     expect((await readPageDraft("a", "other", codec)).value).toBeNull();
   });
   it("submit/delete tombstones fence late writes", async () => {
     await writePageDrafts([await prepare()]); const late = await prepare("late");
-    await removePageDraft("a", "form"); await expect(writePageDrafts([late])).rejects.toThrow("其他标签页");
+    await removePageDraft("a", "form"); await expect(writePageDrafts([late])).rejects.toThrow("staleWrite");
     expect((await readPageDraft("a", "form", codec)).value).toBeNull();
   });
   it("submission cleanup preserves a newer draft saved by another tab", async () => {
@@ -63,20 +63,20 @@ describe("explicit IndexedDB draft transactions", () => {
   });
   it("logout fences prepared writes and purges drafts", async () => {
     await writePageDrafts([await prepare()]); const late = await prepare("late");
-    await clearPageDrafts(); await expect(writePageDrafts([late])).rejects.toThrow("登录状态");
+    await clearPageDrafts(); await expect(writePageDrafts([late])).rejects.toThrow("sessionChanged");
     expect((await readPageDraft("a", "form", codec)).value).toBeNull();
   });
   it.each([0, 999])("rejects incompatible schema %s", async (version) => {
     await writePageDrafts([await prepare()]); await mutateRecord((row) => { row.version = version; });
-    expect((await readPageDraft("a", "form", codec)).notice).toContain("版本不兼容");
+    expect((await readPageDraft("a", "form", codec)).notice).toBe("expired");
   });
   it("expires snapshots and reports why they cannot restore", async () => {
     await writePageDrafts([await prepare()]); await mutateRecord((row) => { row.expires = Date.now() - 1; row.savedAt = Date.now() - PAGE_DRAFT_TTL - 1; });
-    expect((await readPageDraft("a", "form", codec)).notice).toContain("过期");
+    expect((await readPageDraft("a", "form", codec)).notice).toBe("expired");
   });
   it("discards corrupt actual file records instead of pretending to restore", async () => {
     await writePageDrafts([await prepare()]); await mutateRecord((row) => { row.files = [{ path: ["file"], blob: "not file bytes", name: "ghost.txt" }]; });
-    expect((await readPageDraft("a", "form", codec)).notice).toContain("损坏");
+    expect((await readPageDraft("a", "form", codec)).notice).toBe("corrupt");
   });
   it("detects corrupted file bytes even when filename and size are still valid", async () => {
     const loaded = await readPageDraft("a", "form", codec);
@@ -84,11 +84,11 @@ describe("explicit IndexedDB draft transactions", () => {
     await writePageDrafts([preparePageDraft("a", "form", "1", { name: "saved", file }, codec, loaded.epoch, null)]);
     await mutateRecord(row => { const files = row.files as Array<{ bytes: ArrayBuffer }>; new Uint8Array(files[0].bytes)[0] ^= 1; });
     const restored = await readPageDraft("a", "form", codec);
-    expect(restored.value).toBeNull(); expect(restored.notice).toContain("损坏");
+    expect(restored.value).toBeNull(); expect(restored.notice).toBe("corrupt");
   });
   it("rejects oversized snapshots before writing anything", async () => {
     const loaded = await readPageDraft("a", "form", codec);
-    expect(() => preparePageDraft("a", "form", "1", { name: "large", file: new File([new Uint8Array(MAX_DRAFT_BYTES + 1)], "large.bin") as unknown as globalThis.File }, codec, loaded.epoch, null)).toThrow("64 MiB");
+    expect(() => preparePageDraft("a", "form", "1", { name: "large", file: new File([new Uint8Array(MAX_DRAFT_BYTES + 1)], "large.bin") as unknown as globalThis.File }, codec, loaded.epoch, null)).toThrow("tooLarge");
     expect((await readPageDraft("a", "form", codec)).value).toBeNull();
   });
   it("reports storage quota failure and leaves the old version intact", async () => {

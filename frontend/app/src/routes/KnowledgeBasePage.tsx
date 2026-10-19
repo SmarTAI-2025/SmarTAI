@@ -78,11 +78,11 @@ export function KnowledgeBasePage() {
     else if (requested.startsWith("library-group:")) {
       if (!allGroupsQuery.isSuccess) return;
       const group = groups.find((item) => item.group_id === requested.slice("library-group:".length));
-      if (group) setDialog({ kind: "edit-group", group }); else setDraftOpenError("此分组已删除或不可访问，未恢复旧草稿；可在账户设置删除它。");
+      if (group) setDialog({ kind: "edit-group", group }); else setDraftOpenError("group");
     } else if (requested.startsWith("library-material:")) {
       if (!materialsQuery.isSuccess) return;
       const material = materials.find((item) => item.material_id === requested.slice("library-material:".length));
-      if (material) setDialog({ kind: "edit-material", material }); else setDraftOpenError("未在当前资料列表找到此文件，请搜索并打开后恢复；文件可能已删除或不再可访问。");
+      if (material) setDialog({ kind: "edit-material", material }); else setDraftOpenError("material");
     }
     const next = new URLSearchParams(searchParams); next.delete("localDraft"); setSearchParams(next, { replace: true });
   }, [searchParams, allGroupsQuery.isSuccess, materialsQuery.isSuccess]);
@@ -120,7 +120,7 @@ export function KnowledgeBasePage() {
         </div>
       </div>
 
-      {draftOpenError ? <p role="alert" className="my-3 text-danger">{draftOpenError}</p> : null}
+      {draftOpenError ? <p role="alert" className="my-3 text-danger">{draftOpenError === "group" ? tx(locale, "分组已删除或不可访问，无法恢复草稿。可在历史任务的暂存草稿中删除它。", "This group was deleted or is unavailable, so its draft cannot be restored. You can delete it in Task history → Saved drafts.") : tx(locale, "当前列表中未找到此资料，请搜索后打开；资料可能已删除或不可访问。", "This material is not in the current list. Search for it and open it; it may have been deleted or become unavailable.")}</p> : null}
 
       <div className="relative mt-8">
         <Search aria-hidden="true" className="pointer-events-none absolute left-5 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground" />

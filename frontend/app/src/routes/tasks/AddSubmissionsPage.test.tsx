@@ -8,12 +8,14 @@ import { PageDraftSession } from "@/hooks/usePageDraft";
 import { clearPageDrafts, preparePageDraft, readPageDraft, writePageDrafts } from "@/lib/pageDraftStore";
 import { initialSubmissionDraft, submissionDraftCodec } from "@/lib/taskPageDrafts";
 import { APIError } from "@/api/client";
+import { userFacingError } from "@/lib/taskActionGuards";
 import { rememberImageReturn } from "@/lib/imageRecoveryNavigation";
 import { AddSubmissionsPage } from "./AddSubmissionsPage";
 
 const mutateAsync = vi.fn();
 const retryMutateAsync = vi.fn();
 const providers = vi.hoisted(() => ({ enabled: true }));
+const copy = vi.hoisted(() => ({ locale: "zh-CN" }));
 const taskState = vi.hoisted(() => ({
   data: {
     task_id: "task-1",
@@ -63,7 +65,7 @@ vi.mock("@/components/new-task/NewTaskStepper", () => ({
 }));
 
 vi.mock("@/i18n/I18nProvider", () => ({
-  useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }),
+  useI18n: () => ({ locale: copy.locale, t: (key: string) => key }),
 }));
 
 function renderPage(taskId = "task-1", owner = "submission-teacher") {
@@ -76,6 +78,21 @@ function renderPage(taskId = "task-1", owner = "submission-teacher") {
 }
 
 describe("AddSubmissionsPage OCR uploads", () => {
+  it.each(["zh-CN", "en-US"])("localizes upload network errors and keeps selected input (%s)", async locale => {
+    copy.locale = locale;
+    try {
+      const { container } = renderPage();
+      fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["answers"], "S003_Li.png", { type: "image/png" })] } });
+      await waitFor(() => expect(screen.getByLabelText(locale === "zh-CN" ? "作答识别模型" : "Submission recognition model")).toHaveValue("provider-default"));
+      mutateAsync.mockRejectedValueOnce(new APIError(0, "Network Error"));
+      fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+      const alert = await screen.findByText(userFacingError(new APIError(0, "Network Error"), locale), { selector: "p[role='alert']" });
+      expect(alert).not.toHaveTextContent("Network Error");
+      expect(alert.textContent).toMatch(locale === "zh-CN" ? /网络|连接/ : /connect|network|reach/i);
+      expect(screen.getByText("S003_Li.png")).toBeInTheDocument();
+      expect(mutateAsync).toHaveBeenCalledOnce();
+    } finally { copy.locale = "zh-CN"; }
+  });
   beforeEach(async () => {
   inputState.input = null;
     vi.stubGlobal("Blob", Blob); vi.stubGlobal("File", File);

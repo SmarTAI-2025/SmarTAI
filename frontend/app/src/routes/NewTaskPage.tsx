@@ -1,3 +1,4 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { useFrontierWorkspace } from "@/lib/frontierContext";
 import { demoLockedText } from "@/lib/frontierFixtures";
 import { ArrowRight, LoaderCircle, Save } from "lucide-react";
@@ -17,7 +18,7 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { toast } from "sonner";
-import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
+import { getAPIErrorCode } from "@/api/client";
 import { taskMetadataSnapshot } from "@/api/tasks";
 import {
   useCourses,
@@ -119,7 +120,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
     if (isSaving) return;
     setFormError(null);
     if (frontier && taskId) { navigate(`/tasks/${taskId}/upload/problems`); return; }
-    if (draft.protection.conflict) { setFormError("请先核对服务器变化，明确恢复或删除旧草稿。"); return; }
+    if (draft.protection.conflict) { setFormError(locale === "zh-CN" ? "请先选择保留当前输入或恢复旧草稿。" : "Choose to keep your current input or restore the saved draft first."); return; }
     const trimmedName = name.trim();
     if (!trimmedName) {
       setFormError(t("newTaskNameRequired"));
@@ -155,7 +156,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
           setFormError(locale === "zh-CN" ? "任务信息已在其他页面修改，当前输入已保留，请核对后再保存。" : "Task details changed in another page. Your input is preserved; review before saving again.");
           return;
         }
-        setFormError(normalizeAPIError(error).message);
+        setFormError(userFacingError(error, locale));
       }
       return;
     }
@@ -177,7 +178,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
       toast.success(t("newTaskCreateSuccess"));
       navigate(`/tasks/${task.task_id}/upload/problems`);
     } catch (error) {
-      setFormError(normalizeAPIError(error).message);
+      setFormError(userFacingError(error, locale));
     }
   }
 

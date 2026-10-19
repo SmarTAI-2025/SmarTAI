@@ -1,5 +1,6 @@
+import { draftErrorCode, draftMessage } from "@/lib/draftMessages";
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { draftError, draftFingerprint, draftGeneration, draftKey, objectDraftCodec, preparePageDraft, readPageDraft, removePageDraft, subscribeDraftChanges, type DraftCodec, type DraftLoad, type DraftWrite } from "@/lib/pageDraftStore";
+import { draftFingerprint, draftGeneration, draftKey, objectDraftCodec, preparePageDraft, readPageDraft, removePageDraft, subscribeDraftChanges, type DraftCodec, type DraftLoad, type DraftWrite } from "@/lib/pageDraftStore";
 import { useDraftLeave, type DraftController } from "@/hooks/useDraftLeave";
 import { toast } from "sonner";
 
@@ -18,6 +19,8 @@ type Options<T extends object> = {
 export function useDraftProtection<T extends object>({ scope, value, onRestore, baseline, version = "", enabled = true, busy = false, secret = false, codec, versionsMatch }: Options<T>) {
   const owner = useContext(DraftOwner);
   const leave = useDraftLeave();
+  const locale = leave.locale;
+  const currentLocale = useRef(locale); currentLocale.current = locale;
   const [formalPending, setFormalPending] = useState(false);
   const formalActive = useRef(false);
   const [loaded, setLoaded] = useState(false);
@@ -73,11 +76,11 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
       const hydratedBaseline = latest.current.baseline && draftFingerprint(latest.current.baseline);
       const compatible = latest.current.versionsMatch?.(result.record.businessVersion, latest.current.version) ?? result.record.businessVersion === latest.current.version;
       if (!compatible || (currentFingerprint !== startValue && currentFingerprint !== hydratedBaseline)) {
-        setConflict(result.value); setNotice("发现旧草稿，当前内容已变化。请核对后选择是否恢复。"); return;
+        setConflict(result.value); setNotice("restoreConflict"); return;
       }
       saved.current = draftFingerprint(result.value); setSavedAt(result.record.savedAt);
       latest.current.onRestore(result.value);
-    }).catch((error) => { if (!cancelled) { setLoaded(true); setNotice(draftError(error)); } });
+    }).catch((error) => { if (!cancelled) { setLoaded(true); setNotice(draftErrorCode(error)); } });
     return () => { cancelled = true; disposed.current = true; };
     // Business version changes are conflicts, not a new editor identity.
   }, [enabled, owner, scope, secret]);
@@ -92,19 +95,19 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
     if (cleared.current) return;
     if (load.current?.value || isDirty()) {
       setConflict(load.current?.value ?? latest.current.value);
-      setNotice("任务内容已更新，当前输入已保留。请选择保留当前输入或恢复旧草稿，再暂存。");
+      setNotice("versionConflict");
     } else if (latest.current.baseline) latest.current.onRestore(latest.current.baseline);
   }, [version, enabled]);
 
   useEffect(() => subscribeDraftChanges((event) => {
     const detail = (event as CustomEvent<{ type: string; key?: string; remote?: boolean }>).detail;
     if (detail.remote && detail.type === "write" && owner && detail.key === draftKey(owner, scope)) {
-      setNotice("另一标签页已更新草稿。当前输入已保留，请重新打开页面核对。");
+      setNotice("remoteChange");
     }
     if (detail.type === "clear") {
       saved.current = null; load.current = null; setSavedAt(null); setConflict(null);
       latest.current.onRestore(latest.current.baseline ?? initialValue.current);
-      setNotice("已退出或切换账号，本机草稿已清除。");
+      setNotice("cleared");
     }
   }), [owner, scope]);
 
@@ -121,10 +124,10 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
       if (owner) {
         try { await removePageDraft(owner, scope, load.current?.record?.revision ?? null); load.current = await readPageDraft(owner, scope, codecRef.current); }
         catch {
-          const message = "正式内容已保存，但本地草稿清理失败。无需重复提交；旧草稿恢复前仍会核对业务版本。";
+          const message = "cleanupFailed";
           setNotice(message);
           // The form may navigate immediately; keep this outcome visible there.
-          toast.warning(message);
+          toast.warning(draftMessage(message, currentLocale.current));
         }
       }
       return submitted === draftFingerprint(latest.current.value);
@@ -154,18 +157,18 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
   function restoreConflict() {
     if (!conflict) return;
     latest.current.onRestore(conflict); saved.current = null; setConflict(null); setSavedAt(null);
-    setNotice("已恢复旧草稿，尚未正式保存。请核对后暂存或提交。");
+    setNotice("conflictRestored");
   }
   function keepCurrent() {
     saved.current = null; setConflict(null); setSavedAt(null);
-    setNotice("已保留当前输入，请重新暂存。");
+    setNotice("keptCurrent");
   }
   function resetWorking(value: T) {
     incarnation.current += 1;
     if (load.current) load.current = { ...load.current, value: null };
     saved.current = draftFingerprint(value); cleared.current = null; setSavedAt(null); setConflict(null);
     latest.current.onRestore(value);
-    setNotice("已载入最新内容，之前暂存的草稿已保留。");
+    setNotice("latestLoaded");
   }
   const controller = useRef<DraftController>(null!);
   controller.current = {
@@ -181,14 +184,14 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
       load.current = await readPageDraft(owner, scope, codecRef.current);
       saved.current = null; cleared.current = null; setSavedAt(null); setConflict(null);
       latest.current.onRestore(latest.current.baseline ?? initialValue.current);
-      setNotice("已删除本页本地草稿。");
+      setNotice("deleted");
     },
     prepare: () => {
       cleared.current = null;
-      if (secret || !owner) throw new Error("认证秘密仅保留在当前表单，不能作为普通草稿暂存。请使用原有保存操作或不暂存离开。");
-      if (!state.current.loaded) throw new Error("正在读取本地草稿，请稍后再暂存。");
-      if (epoch.current !== draftGeneration() || disposed.current) throw new Error("此编辑页面已失效，本次未暂存。");
-      if (state.current.conflict) throw new Error("请先核对服务器变化，选择保留当前输入或恢复旧草稿后再暂存。");
+      if (secret || !owner) throw new Error("secret");
+      if (!state.current.loaded) throw new Error("loading");
+      if (epoch.current !== draftGeneration() || disposed.current) throw new Error("invalidEditor");
+      if (state.current.conflict) throw new Error("unresolvedConflict");
       const snapshot = latest.current.value; const snapshotFingerprint = draftFingerprint(snapshot);
       const capturedIncarnation = incarnation.current;
       const write = preparePageDraft(owner, scope, latest.current.version, snapshot, codecRef.current, load.current?.epoch ?? "initial", load.current?.record?.revision ?? null);
@@ -199,12 +202,12 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
         // Navigation continues after the durable write, before React may render.
         // Publish the same saved snapshot to imperative guards immediately.
         state.current.savedAt = write.record.savedAt;
-        setSavedAt(write.record.savedAt); setNotice("草稿已保存。");
+        setSavedAt(write.record.savedAt); setNotice("saved");
       } };
     },
   };
   useEffect(() => leave.register(() => controller.current), [leave.register]);
   useEffect(() => { leave.changed(); }, [fingerprint, dirty, loaded, busy, formalPending, savedAt, notice, conflict, leave.changed]);
-  return { dirty, loaded, savedAt, notice, conflict, isCurrent, clear, runFormal, formalPending, resetWorking, discardEdits, restoreConflict, requestLeave: (run: () => void) => leave.request(run, [id.current]), controller: () => controller.current };
+  return { dirty, loaded, savedAt, notice: notice ? draftMessage(notice, locale) : null, conflict, isCurrent, clear, runFormal, formalPending, resetWorking, discardEdits, restoreConflict, requestLeave: (run: () => void) => leave.request(run, [id.current]), controller: () => controller.current };
 }
 export type PreparedDraft = { write: DraftWrite; commit: () => void };

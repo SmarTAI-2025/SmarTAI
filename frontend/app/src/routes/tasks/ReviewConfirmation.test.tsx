@@ -324,7 +324,7 @@ describe("one-click grading review", () => {
     expect(router.state.location.pathname).toBe("/tasks/T1/review/S1/Q1");
     await act(async () => { await router.navigate("/tasks/T1/review/S2/Q1"); });
     expect(router.state.location.pathname).toBe("/tasks/T1/review/S1/Q1");
-    expect(screen.getByRole("alertdialog")).toHaveTextContent("业务保存正在进行");
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("正在保存，请稍后。");
     expect(screen.getByRole("button", { name: "不暂存并离开" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "正在暂存…" })).toBeDisabled();
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("7"));
