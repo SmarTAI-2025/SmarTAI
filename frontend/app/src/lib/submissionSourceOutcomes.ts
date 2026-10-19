@@ -415,7 +415,7 @@ function recognitionLimitCopy(locale: Locale): SubmissionSourceReasonCopy {
 }
 
 function recognitionProcessingCopy(locale: Locale): SubmissionSourceReasonCopy {
-  return fileCopy(locale, "本地文件处理未完成", "Local source processing incomplete", "稍后重试本地读取；若反复失败，请核对原件或携带任务编号联系管理员。", "Retry local reading later. If it repeats, inspect the original or contact an administrator with the job ID.");
+  return fileCopy(locale, "本次文件处理未完成", "File processing did not complete", "请稍后重试读取；若仍失败，请核对原件或联系管理员。", "Please try reading the file again later. If it still fails, check the original or contact an administrator.");
 }
 
 function recognitionOptInCopy(locale: Locale): SubmissionSourceReasonCopy {
