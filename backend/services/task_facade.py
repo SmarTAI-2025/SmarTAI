@@ -82,6 +82,7 @@ from backend.llm.registry import (
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import grading_runs
 from backend.services.question_sources import read_question_source
+from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE
 from backend.services.background_errors import (
     SAFE_BACKGROUND_ERROR_CODES,
     classify_background_error,
@@ -2491,6 +2492,25 @@ def queue_task_submission_parsing(
         # Retiring those files here would invalidate OCR caches before recovery.
         replacement_file_ids = ()
         replacement_group_id = None
+    # Freeze this choice on the parent operation. Old or retried work must
+    # keep its child OCR identity and any uncertain-submission checkpoint.
+    timeout_profile = SOURCE_TIMEOUT_PROFILE
+    if replay is not None:
+        timeout_profile = (replay.payload or {}).get("recognition_timeout_profile")
+    elif retry_from or acknowledged_restart_from:
+        if retry_from:
+            origin_id, origin_attempt = retry_from.get("operation_id"), retry_from.get("attempt")
+        else:
+            try:
+                origin_id, attempt_text = acknowledged_restart_from.rsplit(":", 1)
+                origin_attempt = int(attempt_text)
+            except (ValueError, AttributeError):
+                raise ValidationError("Recognition inputs changed.", code="recognition_plan_changed") from None
+        origin = workflow_repository.get_operation(origin_id, owner_id=owner_id)
+        if (origin.assignment_id != task_id or origin.operation_type != "submission_recognition"
+                or origin.attempt != origin_attempt):
+            raise ValidationError("Recognition inputs changed.", code="recognition_plan_changed")
+        timeout_profile = (origin.payload or {}).get("recognition_timeout_profile")
     workflow, active = _ensure_no_other_active_operation(
         task_id=task_id, owner_id=owner_id,
         operation_type="submission_recognition", input_hash=digest,
@@ -2597,6 +2617,7 @@ def queue_task_submission_parsing(
                 "roster_entries": roster_entries or [],
                 "roster_name": roster_name,
                 "recognition_provider_id": resolved_provider_id,
+                "recognition_timeout_profile": timeout_profile,
                 "provider_configuration_fingerprint": route_fingerprint,
                 "question_snapshot": question_snapshot,
                 "replace_confirmed": replace_confirmed,
@@ -3025,6 +3046,7 @@ async def run_task_submission_parsing(
                         retry_key=(f"{job_id}:{job_attempt}" if
                                    frozen.get("retry_from") or frozen.get("acknowledged_restart_from") else None),
                         acknowledge_pending_retry=bool(frozen.get("acknowledged_restart_from")),
+                        timeout_profile=frozen.get("recognition_timeout_profile"),
                     )
                 except DomainError as exc:
                     await save_pages((exc.details or {}).get("page_diagnostics"))

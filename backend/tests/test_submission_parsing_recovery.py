@@ -430,10 +430,11 @@ async def test_submission_queue_persists_archive_and_has_no_request_task():
     assert operation.status == "pending"
     assert set(operation.payload) == {
         "input_file_id", "source_ids", "base_workflow_revision", "identity_mode",
-        "roster_entries", "roster_name", "recognition_provider_id",
+        "roster_entries", "roster_name", "recognition_provider_id", "recognition_timeout_profile",
         "replace_confirmed",
         "provider_configuration_fingerprint", "question_snapshot",
     }
+    assert operation.payload["recognition_timeout_profile"] == "source-300-v1"
     sources = source_outcome_repository.list_sources(
         operation_id=operation.id, owner_id=owner_id, attempt=operation.attempt,
     )

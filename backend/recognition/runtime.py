@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 import hashlib
 import json
 from typing import Literal, TYPE_CHECKING
 
 from backend.domain.errors import RecognitionError
+from backend.llm.request_timeouts import response_timeout_scope
 from backend.recognition.budget import RecognitionBudget
 from backend.recognition.engine import EngineLocateInputV1, EngineReadInputV1, EngineRepairInputV1, RecognitionEngine, freeze_engine_input
 from backend.recognition.models import (
@@ -181,7 +182,14 @@ async def _dispatch(
             seconds = min(policy.per_call_seconds, budget.remaining(phase))
             ticket = budget.reserve(kind, max_output_tokens=request.max_output_tokens, region_keys=region_keys)
             async with asyncio.timeout(seconds):
-                candidate = await dispatch(request)
+                # Only extended task OCR policies opt in. Legacy policies and
+                # knowledge reads retain their configured relay I/O limits.
+                scope = response_timeout_scope(seconds) if (
+                    policy.per_call_seconds > 120 and capabilities.candidate_kind == "vision"
+                    and source.scope != "knowledge_document" and request.purpose != "knowledge"
+                ) else nullcontext()
+                with scope:
+                    candidate = await dispatch(request)
             candidate = RecognitionCandidateV1.model_validate(candidate.model_dump(warnings=False))
             if engine.capabilities != capabilities:
                 raise RecognitionError("recognition_route_changed", submission_may_exist=True)

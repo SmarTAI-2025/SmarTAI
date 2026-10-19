@@ -40,6 +40,7 @@ from backend.llm.endpoint_policy import (
 )
 from backend.llm.provider_catalog import effective_wire_protocol
 from backend.llm.image_capability import is_explicit_image_rejection, explicitly_rejects_images
+from backend.llm.request_timeouts import current_response_timeout_seconds
 from backend.models import ProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -1052,7 +1053,11 @@ class SafeRelayProvider(BaseProvider):
     def _response_timeout_override() -> float | None:
         from backend.services.execution_control import current_execution
         control = current_execution()
-        return control.response_timeout_seconds if control is not None else None
+        run_seconds = control.response_timeout_seconds if control is not None else None
+        call_seconds = current_response_timeout_seconds()
+        if call_seconds is None:
+            return run_seconds
+        return call_seconds if run_seconds is None else min(call_seconds, run_seconds)
 
     def __init__(self, config: ProviderConfig):
         super().__init__(config)
@@ -1196,7 +1201,7 @@ class SafeRelayProvider(BaseProvider):
         request_options = {}
         seconds = self._response_timeout_override()
         if seconds is not None:
-            # Override only this grading request, not the cached client: other
+            # Override only this scoped request, not the cached client: other
             # workflows keep their existing relay timeout. The outer deadline
             # still caps total time even if chunks continue arriving.
             request_options["timeout"] = httpx.Timeout(seconds, connect=min(seconds, 15.0))

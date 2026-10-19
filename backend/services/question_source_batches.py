@@ -2,6 +2,7 @@
 from backend.domain.errors import RecognitionError
 from backend.llm.image_capability import image_quality_failure
 from backend.recognition.models import RecognitionCoverageV1, RecognitionUsageV1
+from backend.services.recognition_timeouts import apply_source_timeout_profile
 from backend.skills.recognition_reader import PROMPT_VERSION
 
 
@@ -16,7 +17,8 @@ def _usage(runs, attribute):
 
 
 async def read_question_pdf_batches(*, service, request, content, engine, total_pages, reporter, binding=None,
-                                    allow_native_partial=False, retry_key=None, acknowledge_pending_retry=False):
+                                    allow_native_partial=False, retry_key=None, acknowledge_pending_retry=False,
+                                    timeout_profile=None):
     requested = request.pages or list(range(1, total_pages + 1))
     # Twelve full-page reads fit the existing per-run call budget. Native text
     # still costs no model call. A budget-deferred page gets its own smaller run;
@@ -29,6 +31,8 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
         await reporter.set_current_step("recognition_document_batch", message=(
             f"Reading PDF pages {batch[0]}–{batch[-1]}; {len(pages)}/{len(requested)} pages completed"))
         scoped = request.model_copy(update={"scope": "pages", "pages": batch})
+        scoped = apply_source_timeout_profile(scoped, engine=engine, timeout_profile=timeout_profile,
+                                              total_pages=total_pages)
         run = await service.run(scoped, content, engine=engine, prompt_version=PROMPT_VERSION,
                                 authorized_owner_id=request.source.owner_id, binding=binding, retry_key=retry_key,
                                 acknowledge_pending_retry=acknowledge_pending_retry)
