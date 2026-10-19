@@ -120,7 +120,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
     if (isSaving) return;
     setFormError(null);
     if (frontier && taskId) { navigate(`/tasks/${taskId}/upload/problems`); return; }
-    if (draft.protection.conflict) { setFormError(locale === "zh-CN" ? "请先选择保留当前输入或恢复旧草稿。" : "Choose to keep your current input or restore the saved draft first."); return; }
+    if (draft.protection.conflict) { setFormError(locale === "zh-CN" ? "请先选择保留当前输入或恢复保留的内容。" : "Choose to keep your current input or restore the preserved content first."); return; }
     const trimmedName = name.trim();
     if (!trimmedName) {
       setFormError(t("newTaskNameRequired"));

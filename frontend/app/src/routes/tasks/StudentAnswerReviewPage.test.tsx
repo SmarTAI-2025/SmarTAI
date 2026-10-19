@@ -170,7 +170,7 @@ describe("StudentAnswerReviewPage review shortcuts", () => {
   it("keeps ordinary recognition advice beside confirmation without blocking continuation", async () => {
     taskData.student_data.S001.stu_ans[0].flag = ["recognition_needs_review", "recognition_low_confidence"];
     renderPage();
-    const advice = await screen.findByText("来源识别存在不确定性，可继续");
+    const advice = await screen.findByText("作答文件识别可能有误，请对照原件核对文字和公式。");
     expect(within(advice.closest("header")!).getByRole("button", { name: /待确认/ })).toBeEnabled();
     expect(screen.queryByTitle(/置信度偏低，可选核对，可继续/)).not.toBeInTheDocument();
   });

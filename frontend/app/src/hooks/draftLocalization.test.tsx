@@ -47,7 +47,7 @@ it("renders an English conflict and keeps current input until the user resolves 
   expect(await screen.findByRole("alert")).toHaveTextContent(draftMessage("unresolvedConflict", "en-US"));
   expect(screen.getByLabelText("input")).toHaveValue("current");
   expect(document.body.textContent).not.toMatch(/[\u3400-\u9fff]/);
-  fireEvent.click(screen.getByRole("button", { name: "Review and restore saved draft" }));
+  fireEvent.click(screen.getByRole("button", { name: "Restore preserved content" }));
   expect(screen.getByLabelText("input")).toHaveValue("saved");
   await save();
   expect((await store.readPageDraft("bilingual-owner", "bilingual", store.objectDraftCodec())).value).toEqual({ name: "saved" });

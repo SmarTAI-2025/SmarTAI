@@ -81,7 +81,7 @@ describe("SubmissionSourceOutcomePanel", () => {
     expect(screen.getByText(zh ? "尚未读取页码：" : "Unread pages:").parentElement).toHaveTextContent(zh ? "尚未读取页码：3" : "Unread pages: 3");
     expect(screen.getByText(zh ? "第 2 页：模型服务暂时不可用 (HTTP 503)" : "Page 2: The model service is temporarily unavailable (HTTP 503)")).toBeInTheDocument();
     expect(screen.getByText(zh ? "成功页结果已保留；文件与模型设置未变时，重试会复用可用结果，补读其余页面。" : "Successful page results are retained. If the file and model settings are unchanged, retry reuses eligible results and reads the remaining pages.")).toBeInTheDocument();
-    expect(screen.getByText(zh ? /上次调用是否计费尚无法确认/ : /billing status is unknown/)).toBeInTheDocument();
+    expect(screen.getByText(zh ? /再次调用可能重复消耗额度/ : /Calling again may use quota twice/)).toBeInTheDocument();
     expect(screen.queryByText(/学生未作答|内容为空|student left.*blank/i)).not.toBeInTheDocument();
   });
 

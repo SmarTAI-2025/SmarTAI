@@ -53,7 +53,7 @@ export function formatSubmissionFlag(flag: string, locale: Locale): string {
     recognition_repaired_needs_confirmation: ["识别问题已修正，请确认作答", "Recognition issue corrected; confirm the answer"],
     recognition_very_low_confidence: ["识别置信度较低，建议核对确认", "Low recognition confidence; review suggested"],
     very_low_confidence: ["识别结果建议核对，可继续", "Checking the transcription is optional; you can continue"],
-    recognition_low_confidence: ["来源识别存在不确定性，可继续", "Source transcription is uncertain; you can continue"],
+    recognition_low_confidence: ["作答文件识别可能有误，请对照原件核对文字和公式。", "The submission file may have been transcribed incorrectly. Check the text and formulas against the original."],
     low_confidence: ["识别结果建议核对，可继续", "Checking the transcription is optional; you can continue"],
   };
   const label = labels[flag];

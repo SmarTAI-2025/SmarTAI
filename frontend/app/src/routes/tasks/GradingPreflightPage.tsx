@@ -525,7 +525,7 @@ function gradingBlockerMessage(code: string | null, locale: Locale): string | nu
     question_review_blocked: ["题目存在关键缺项或冲突。请修正并确认后再开始批改。", "Questions have required missing information or conflicts. Resolve and confirm them before grading."],
     submission_recognition_blocked: ["学生身份或作答识别存在关键问题。请修正并确认后再开始批改。", "Student identities or recognized responses have blocking issues. Resolve and confirm them before grading."],
     submission_sources_failed: ["仍有文件识别失败。请在上方查看具体原因并重新处理后再开始批改。", "Some files failed recognition. Review the exact reasons above and resolve them before grading."],
-    submission_sources_pending: ["仍有文件正在处理。全部来源得到终态后才能开始批改。", "Some files are still processing. Grading can start only after every source has a terminal result."],
+    submission_sources_pending: ["还有作答文件未处理完，请稍后再检查。", "Some submission files are still being processed. Please check again later."],
     submission_source_evidence_missing: ["作答来源状态需要重新确认。请刷新；若结构化题目和作答仍在，可直接重试批改。", "The submission source state needs confirmation. Refresh; if the structured questions and answers remain, retry grading directly."],
     submissions_required: ["当前没有可批改的学生作答。", "There are no student submissions to grade."],
     answers_required: ["至少一名学生缺少当前结构化作答。请先检查作答校对结果。", "At least one student has no current structured answers. Review the submission results first."],

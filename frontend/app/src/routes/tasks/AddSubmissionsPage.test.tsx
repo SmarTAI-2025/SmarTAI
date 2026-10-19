@@ -237,13 +237,13 @@ describe("AddSubmissionsPage OCR uploads", () => {
     const prior = await readPageDraft(owner, scope, submissionDraftCodec);
     await writePageDrafts([preparePageDraft(owner, scope, "older-input-version", saved, submissionDraftCodec, prior.epoch, null)]);
     const { container } = renderPage();
-    await screen.findByRole("button", { name: "核对后恢复旧草稿" });
+    await screen.findByRole("button", { name: "恢复保留的内容" });
     await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
     fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["current"], "current.pdf")] } });
     fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
     fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
     expect(container.querySelector("#submission-roster-required")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "核对后恢复旧草稿" }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复保留的内容" }));
     await screen.findByText("saved.pdf");
     expect(container.querySelector("#submission-roster-required")).not.toBeInTheDocument();
     expect(screen.queryByText(/尚未选择学生名单/)).not.toBeInTheDocument();
