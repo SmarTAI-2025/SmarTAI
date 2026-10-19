@@ -129,6 +129,53 @@ test('Full Workflow opens fixed metadata and preloaded source pages without impl
 });
 
 for (const locale of ["zh-CN", "en-US"]) {
+  test(`simple Demo keeps model errors and failed-item retries on the same page (${locale})`, async ({ page }, testInfo) => {
+    const errors = await guest(page), zh = locale === "zh-CN";
+    await page.setViewportSize(zh ? { width: 1440, height: 1000 } : { width: 390, height: 844 });
+    await page.addInitScript(value => localStorage.setItem("smartai_locale", value), locale);
+    const writes: { path: string; body: Record<string, unknown> }[] = [];
+    let completed = false;
+    await page.route(`${backend}/**`, async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === "/auth/me") return route.fulfill({ json: { id: "guest-owner", username: "Guest", role: "teacher", is_active: true } });
+      if (request.method() !== "GET") {
+        writes.push({ path, body: request.postDataJSON() });
+        if (path.endsWith("/grade")) {
+          if (writes.length === 1) return route.fulfill({ status: 503, json: { detail: { code: "provider_upstream_unavailable" } } });
+          completed = true;
+          return route.fulfill({ json: { status: "started", job_id: "retry-job" } });
+        }
+        throw new Error(`Unexpected mutation ${path}`);
+      }
+      if (path.endsWith("/state")) return route.fulfill({ json: { ...task, status: completed ? "graded" : "error", grading_job_id: "failed-job", last_failed_job_id: "failed-job", error: completed ? null : "provider_rate_limited" } });
+      if (path.endsWith("/result")) return route.fulfill({ json: { ...task, results: [], timestamp: 1 } });
+      return route.fulfill({ json: [] });
+    });
+    await page.goto(`/frontier/live?taskId=${task.task_id}`);
+    const alert = page.getByRole("alert"), retry = alert.getByRole("button", { name: zh ? "重试失败项" : "Retry failed items", exact: true });
+    await expect(retry).toBeEnabled();
+    await expect(alert.getByRole("button")).toHaveCount(1);
+    await expect(alert.getByRole("link")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /返回修改配置|Back to edit settings|查看进度与恢复|View progress and recovery|人工继续处理|Continue manually/ })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: zh ? "打开任务" : "Open task", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: zh ? "重新开始" : "Start over", exact: true })).toBeEnabled();
+    await alert.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`demo-error-${locale}.png`) });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await retry.click();
+    await expect(retry).toBeEnabled();
+    await expect(page).toHaveURL(new RegExp(`/frontier/live\\?taskId=${task.task_id}`));
+    await retry.click();
+    await expect(page.getByRole("heading", { name: zh ? "从真实分数看到班级表现" : "See class performance from live scores", exact: true })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/frontier/live\\?taskId=${task.task_id}`));
+    expect(writes).toHaveLength(2);
+    for (const write of writes) {
+      expect(write.path).toBe(`/tasks/${task.task_id}/grade`);
+      expect(write.body.retry_scope).toBe("failed_only");
+    }
+    expect(errors).toEqual([]);
+  });
+
   test(`simple Demo continues through ordinary confidence with live progress (${locale})`, async ({ page }, testInfo) => {
     const errors = await guest(page), zh = locale === "zh-CN";
     await page.setViewportSize(zh ? { width: 1440, height: 1000 } : { width: 390, height: 844 });

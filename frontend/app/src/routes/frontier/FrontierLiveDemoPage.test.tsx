@@ -8,7 +8,7 @@ import { getGradingSetup, saveGradingSetup } from "@/api/gradingSetup";
 import { initializeContentLanguage } from "@/api/contentLanguage";
 import * as fixtures from "@/lib/frontierFixtures";
 import { preflightProblemSource, startQuestionPreparation } from "@/api/problemSources";
-import { createTask, getTask, getTaskResult, getTaskState, parseSubmissions, startGrading, updateProblem, updateStudentAnswer, updateStudentIdentity } from "@/api/tasks";
+import { createTask, getTask, getTaskResult, getTaskState, parseSubmissions, retryQuestionPreparation, retrySubmissionRecognition, startGrading, updateProblem, updateStudentAnswer, updateStudentIdentity } from "@/api/tasks";
 import { demoQuestions } from "@/test/fixtures/frontierQuestions";
 import { I18nProvider as LocaleProvider, useI18n } from "@/i18n/I18nProvider";
 import { beginFrontierSession, getFrontierToken, isFrontierTaskPath, rememberFrontierTask, setFrontierExitPending } from "@/lib/frontierSession";
@@ -29,6 +29,8 @@ vi.mock("@/api/tasks", () => ({
   getTaskResult: vi.fn(),
   getTaskState: vi.fn(),
   parseSubmissions: vi.fn(),
+  retryQuestionPreparation: vi.fn(),
+  retrySubmissionRecognition: vi.fn(),
   startGrading: vi.fn(),
   updateProblem: vi.fn(),
   updateStudentAnswer: vi.fn(),
@@ -232,7 +234,7 @@ describe("FrontierLiveDemoPage", () => {
     }
   });
 
-  it.each(["zh-CN", "en-US"])("keeps the submission review and precise recovery link after a real recognition failure (%s)", async (locale) => {
+  it.each(["zh-CN", "en-US"])("keeps blocking details and retry on the Demo after a real recognition failure (%s)", async (locale) => {
     window.localStorage.setItem("smartai_locale", locale);
     const zh = locale === "zh-CN";
     const initial = { ...taskWithQuestions(), student_data: recognizedStudents() };
@@ -246,7 +248,10 @@ describe("FrontierLiveDemoPage", () => {
     const alert = await screen.findByRole("alert");
     expect(screen.queryByRole("heading", { name: zh ? "本次识别的学生作答" : "Recognized submissions" })).toBeVisible();
     expect(screen.getByRole("link", { name: zh ? "在作答校对页查看" : "Open submission review" })).toHaveAttribute("href", "/tasks/asg_demo123/submissions");
-    expect(within(alert).getByRole("link", { name: /Alex Chen/ })).toHaveAttribute("href", `/tasks/asg_demo123/students/demo-1?question=${current.student_data["demo-1"].stu_ans[0].q_id}`);
+    expect(within(alert).getByText(/Alex Chen/)).toBeVisible();
+    expect(within(alert).queryByRole("link")).not.toBeInTheDocument();
+    await user.click(within(alert).getByRole("button", { name: zh ? "重试失败项" : "Retry failed items" }));
+    expect(await screen.findByRole("alert")).toBeVisible();
     expect(screen.queryByRole("link", { name: zh ? "返回修改配置" : "Back to edit settings" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: zh ? "开始批改" : "Start grading" })).toBeDisabled();
     expect(saveGradingSetup).not.toHaveBeenCalled();
@@ -336,14 +341,14 @@ describe("FrontierLiveDemoPage", () => {
     expect(updateStudentIdentity).not.toHaveBeenCalled();
   });
 
-  it("retries a failed grading run in the same task without recognition or confirmation writes", async () => {
-    const failed = { ...taskState("error"), grading_job_id: "grading-job", last_failed_job_id: "grading-job", error: "provider_upstream_unavailable" };
+  it.each(["error", "grading_paused"] as const)("retries %s grading in the same task without recognition or confirmation writes", async status => {
+    const failed = { ...taskState(status), grading_job_id: "grading-job", last_failed_job_id: "grading-job", error: status === "error" ? "provider_upstream_unavailable" : null };
     vi.mocked(getTaskState).mockResolvedValueOnce(failed).mockResolvedValueOnce(failed).mockResolvedValue(taskState("graded"));
     vi.mocked(startGrading).mockResolvedValue({ status: "running", task_id: "asg_demo123", job_id: "retry-job" });
     vi.mocked(getTaskResult).mockResolvedValue(gradedResult({ ...taskWithQuestions(), student_data: recognizedStudents() }));
     const user = userEvent.setup();
     renderLive("asg_demo123");
-    await user.click(await screen.findByRole("button", { name: "Retry failed items" }));
+    await user.click(await screen.findByRole("button", { name: status === "error" ? "Retry failed items" : "Continue grading" }));
     await waitFor(() => expect(startGrading).toHaveBeenCalledExactlyOnceWith("asg_demo123", expect.objectContaining({ retryScope: "failed_only", expectedWorkflowRevision: failed.workflow_revision, requestId: expect.any(String) })));
     expect(await screen.findByRole("heading", { name: "See class performance from live scores" })).toBeVisible();
     expect(createTask).not.toHaveBeenCalled();
@@ -351,6 +356,56 @@ describe("FrontierLiveDemoPage", () => {
     expect(parseSubmissions).not.toHaveBeenCalled();
     expect(updateProblem).not.toHaveBeenCalled();
     expect(updateStudentAnswer).not.toHaveBeenCalled();
+  });
+
+  it.each(["zh-CN", "en-US"])("shows only an inline retry in the error card and keeps bottom task controls (%s)", async locale => {
+    localStorage.setItem("smartai_locale", locale);
+    vi.mocked(getTaskState).mockResolvedValue({ ...taskState("error"), error: "provider_rate_limited", grading_job_id: "failed", last_failed_job_id: "failed" });
+    renderLive("asg_demo123");
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getAllByRole("button")).toHaveLength(1);
+    expect(within(alert).getByRole("button", { name: locale === "zh-CN" ? "重试失败项" : "Retry failed items" })).toBeEnabled();
+    expect(within(alert).queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /返回修改配置|Back to edit settings|查看进度与恢复|View progress and recovery|人工继续处理|Continue manually/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: locale === "zh-CN" ? "打开任务" : "Open task" })).toBeVisible();
+    expect(screen.getByRole("button", { name: locale === "zh-CN" ? "重新开始" : "Start over" })).toBeEnabled();
+  });
+
+  it.each([ ["questions", false], ["submissions", false], ["questions", true], ["submissions", true] ] as const)("retries %s using the existing job without reuploading or leaving the Demo (paused: %s)", async (stage, paused) => {
+    const submissions = stage === "submissions";
+    const retry = submissions ? retrySubmissionRecognition : retryQuestionPreparation;
+    const failed = { ...taskState(paused ? submissions ? "submissions_paused" : "problems_paused" : "error"), error: paused ? null : "provider_upstream_unavailable", last_failed_job_id: "failed", extract_job_id: submissions ? "done" : "failed", parse_job_id: submissions ? "failed" : null };
+    const request = deferred<{ status: string; job_id: string }>();
+    vi.mocked(getTaskState).mockResolvedValueOnce(failed).mockResolvedValueOnce({ ...failed, workflow_revision: 7 })
+      .mockResolvedValue(taskState(submissions ? "submissions_ready" : "problems_ready"));
+    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(), student_data: submissions ? recognizedStudents() : {} });
+    vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
+    vi.mocked(retry).mockReturnValue(request.promise);
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.dblClick(await screen.findByRole("button", { name: paused ? "Continue recognition" : "Retry failed items" }));
+    await waitFor(() => expect(retry).toHaveBeenCalledExactlyOnceWith({ taskId: "asg_demo123", jobId: "failed", recognitionProviderId: "demo:vision", expectedWorkflowRevision: 7, ...(paused ? { acknowledgePossibleDuplicateCall: true } : {}) }));
+    await act(async () => request.resolve({ status: "started", job_id: "retry" }));
+    expect((await screen.findAllByRole("button", { name: submissions ? "Start grading" : "Continue to submissions" }))[0]).toBeEnabled();
+    expect(screen.getByRole("heading", { name: "Live grading run" })).toBeVisible();
+    expect(createTask).not.toHaveBeenCalled();
+    expect(preflightProblemSource).not.toHaveBeenCalled();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+  });
+
+  it("keeps a rejected retry recoverable without acknowledging an uncertain provider submission", async () => {
+    vi.mocked(getTaskState).mockResolvedValue({ ...taskState("error"), error: "provider_submit_uncertain", extract_job_id: "failed", last_failed_job_id: "failed" });
+    vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
+    vi.mocked(retryQuestionPreparation).mockRejectedValue(new client.APIError(409, "Conflict", { detail: { code: "provider_submit_uncertain" } }));
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click(await screen.findByRole("button", { name: "Retry failed items" }));
+    await waitFor(() => expect(retryQuestionPreparation).toHaveBeenCalledTimes(1));
+    expect(retryQuestionPreparation).toHaveBeenCalledWith(expect.not.objectContaining({ acknowledgePossibleDuplicateCall: true }));
+    expect(await screen.findByRole("button", { name: "Retry failed items" })).toBeEnabled();
+    expect(screen.getByRole("heading", { name: "Live grading run" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Start over" })).toBeEnabled();
   });
 
   it("keeps a failed setup save on the Demo and starts only after an explicit successful retry", async () => {
@@ -365,7 +420,7 @@ describe("FrontierLiveDemoPage", () => {
     const user = userEvent.setup();
     renderLive("asg_demo123");
     await user.click((await screen.findAllByRole("button", { name: "Start grading" }))[0]);
-    const retry = await screen.findByRole("button", { name: "Retry grading" });
+    const retry = await screen.findByRole("button", { name: "Retry failed items" });
     expect(screen.getByRole("heading", { name: "Live grading run" })).toBeVisible();
     expect(startGrading).not.toHaveBeenCalled();
     await user.click(retry);
@@ -421,12 +476,12 @@ describe("FrontierLiveDemoPage", () => {
       grading_job_id: "stopped-run", last_failed_job_id: "stopped-run", problem_count: 4, student_count: 4 });
     const user = userEvent.setup();
     renderLive("asg_demo123");
-    expect(await screen.findByRole("link", { name: "Continue grading" })).toHaveAttribute("href", "/tasks/asg_demo123/grading/progress");
+    expect(await screen.findByRole("button", { name: "Continue grading" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Change language" }));
     expect(screen.getByText("运行 AI 批改").closest("li")).not.toHaveClass("border-danger/30");
     expect(screen.getByText("创建专属 Demo 任务")).toBeInTheDocument();
     expect(screen.queryByText("Create a dedicated demo task")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "继续批改" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "继续批改" })).toBeInTheDocument();
     expect(screen.getByText("批改暂停", { exact: true })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(getTaskState).toHaveBeenCalledTimes(1);
