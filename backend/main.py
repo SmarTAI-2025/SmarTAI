@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 
 def create_app() -> FastAPI:
     app = FastAPI(title="SmarTAI")
+    from backend.services.demo_logging import DemoLoggingMiddleware, install_demo_log_redaction
+    install_demo_log_redaction()
+    app.add_middleware(DemoLoggingMiddleware)
 
     # ─── Engine guard ─────────────────────────────────────────────────────
     # V1 routers were removed in the post-migration cleanup. We refuse to
@@ -166,6 +169,25 @@ def create_app() -> FastAPI:
             seed_test_users()
         except Exception as e:
             logger.warning(f"test users seeding skipped: {e}")
+
+    # Guest expiry must work even when the private admin service is disabled.
+    _frontier_cleanup = {"task": None}
+
+    @app.on_event("startup")
+    async def _start_frontier_cleanup():
+        import asyncio
+        from backend.services.account_closure import account_closure_loop
+        _frontier_cleanup["task"] = asyncio.create_task(account_closure_loop(frontier_only=True))
+
+    @app.on_event("shutdown")
+    async def _stop_frontier_cleanup():
+        import asyncio
+        from contextlib import suppress
+        task = _frontier_cleanup["task"]
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
     # ─── Grading worker lifecycle (Task 7) ────────────────────────────────
     # One poller per process claims queued grading runs through the DB lease

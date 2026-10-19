@@ -465,6 +465,11 @@ class WorkflowWorker:
     # ─── Per-claim lifecycle ─────────────────────────────────────────────
 
     async def _run_claim(self, operation) -> None:
+        from backend.services.demo_logging import demo_log_context
+        with demo_log_context(operation.owner_id):
+            await self._run_claim_with_logging(operation)
+
+    async def _run_claim_with_logging(self, operation) -> None:
         """Run one handler for a claimed row under a heartbeat lifecycle."""
         ctx = LeasedOperation(
             operation,

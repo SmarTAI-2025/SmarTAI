@@ -363,17 +363,11 @@ def create_frontier_demo_session(request: Request, response: Response):
 @router.post("/frontier-demo-session/end")
 def end_frontier_demo_session(response: Response, current: User = Depends(get_frontier_cleanup_user)):
     """Discard only this guest's tasks through the normal durable cleanup path."""
-    from backend.services import task_facade
+    from backend.services import frontier_demo, task_facade
+    frontier_demo.queue_cleanup(owner_id=current.id)
     tasks = task_facade.list_tasks(owner_id=current.id)
     for task_id in tasks:
         task_facade.delete_task(task_id=task_id, owner_id=current.id)
-    with session_scope() as session:
-        row = session.scalar(select(UserRecord).where(UserRecord.id == current.id).with_for_update())
-        if row is not None:
-            row.is_active = False
-            row.auth_version += 1
-            row.auth_invalid_before = time.time()
-            row.updated_at = row.auth_invalid_before
     response.headers["Cache-Control"] = "no-store"
     return {"status": "ended", "cleanup": "queued", "tasks_removed": len(tasks)}
 

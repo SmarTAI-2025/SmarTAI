@@ -1,0 +1,12 @@
+/var/log/postgresql/*.log {
+    daily
+    maxsize 10M
+    maxage 14
+    rotate 14
+    copytruncate
+    delaycompress
+    compress
+    notifempty
+    missingok
+    su root root
+}

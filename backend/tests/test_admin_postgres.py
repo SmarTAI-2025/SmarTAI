@@ -8,6 +8,34 @@ from backend.tests.test_postgres_integration import pg_database
 pytestmark = pytest.mark.skipif(not os.environ.get("SMARTAI_TEST_POSTGRES_URL"), reason="Requires disposable PostgreSQL")
 
 
+def test_demo_expiry_serializes_reclaims_and_preserves_global_budget(pg_database, monkeypatch, tmp_path):
+    from sqlalchemy import select
+    from backend.config import settings
+    from backend.db.session import session_scope
+    from backend.db.models import UserRecord, AccountClosureRecord
+    from backend.db.frontier_demo_models import FrontierDemoDailyUsageRecord
+    from backend.services import frontier_demo, account_closure
+    from backend.storage.local import LocalStorage
+    monkeypatch.setattr(settings, "frontier_demo_session_cooldown_seconds", 0)
+    guest = frontier_demo.issue_user()
+    with session_scope() as session:
+        session.get(UserRecord, guest.id).created_at = 1
+        session.add(UserRecord(id="formal", username="formal", email="test@example.edu",
+                              password_hash="hash", role="teacher", created_at=1, updated_at=1))
+    storage = LocalStorage(tmp_path)
+    storage.save(f"users/{guest.id}/orphan", b"synthetic")
+    monkeypatch.setattr(account_closure, "get_storage", lambda: storage)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        assert sum(pool.map(lambda _: frontier_demo.queue_cleanup(), range(4))) == 1
+    assert account_closure.process_one_closure(frontier_only=True, raise_errors=True)
+    assert storage.list_keys("") == []
+    with session_scope() as session:
+        assert session.get(UserRecord, guest.id) is None
+        assert session.get(UserRecord, "formal").is_active
+        assert session.scalar(select(AccountClosureRecord)) is None
+        assert session.scalar(select(FrontierDemoDailyUsageRecord)).sessions == 1
+
+
 @pytest.mark.parametrize("previous", ["base", "0018_knowledge_ingestion", "0019_admin_usage_events", "0022_account_closures", "0023_business_configuration"])
 def test_existing_postgres_branches_upgrade_with_legacy_identity(pg_database, monkeypatch, previous):
     from alembic import command

@@ -504,11 +504,13 @@ class KnowledgeStorageWorker:
             if claim is None and guard_claim is None:
                 break
             self._prefer_guard = not self._prefer_guard
-            if guard_claim is not None:
-                await self._process_guard_claim(guard_claim)
-            else:
-                assert claim is not None
-                await self._process_cleanup_claim(claim)
+            from backend.services.demo_logging import demo_log_context
+            with demo_log_context((guard_claim or claim).owner_id):
+                if guard_claim is not None:
+                    await self._process_guard_claim(guard_claim)
+                else:
+                    assert claim is not None
+                    await self._process_cleanup_claim(claim)
             processed += 1
         return processed
 
