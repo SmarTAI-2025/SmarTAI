@@ -16,7 +16,8 @@ for (const language of ['zh', 'en'] as const) {
     const guideBrand = await page.locator('.brand-image').boundingBox();
     expect(homeBrand).not.toBeNull();
     expect(guideBrand).not.toBeNull();
-    expect(Math.abs(homeBrand!.x - guideBrand!.x)).toBeLessThanOrEqual(1);
+    const contents = await page.locator("#sidebar").boundingBox();
+    expect(Math.abs(guideBrand!.x + guideBrand!.width / 2 - (contents!.x + contents!.width / 2))).toBeLessThanOrEqual(1);
     expect(Math.abs(homeBrand!.y - guideBrand!.y)).toBeLessThanOrEqual(2);
     expect(Math.abs(homeBrand!.width - guideBrand!.width)).toBeLessThanOrEqual(1);
     await expect(page.locator('.topbar a[href="/login"]')).toHaveText(language === 'zh' ? '注册/登录' : 'Register / Sign in');
@@ -86,6 +87,11 @@ for (const width of [320, 390, 820, 1024, 1920]) {
     await page.goto('/guide/?lang=en#api-google');
     await expect(page.locator('body')).toHaveAttribute('data-language', 'en');
     await expect(page.locator('.chapter:visible')).toHaveCount(1);
+    if (width > 700) {
+      const brand = await page.locator('.brand-image').boundingBox();
+      const sidebar = await page.locator('#sidebar').boundingBox();
+      expect(Math.abs(brand!.x + brand!.width / 2 - (sidebar!.x + sidebar!.width / 2))).toBeLessThanOrEqual(1);
+    }
     const clipped = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     expect(clipped).toBe(false);
     const boxes = await page.locator('.topbar a, .topbar button').evaluateAll(nodes => nodes.filter(n => n.getBoundingClientRect().width > 0).map(n => {
