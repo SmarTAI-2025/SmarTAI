@@ -17,6 +17,7 @@ import re
 import time
 import uuid
 from collections import defaultdict
+from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
@@ -548,7 +549,8 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
         for presentation in presentations.values()
         if presentation.source_id and presentation.identity_status == "matched"
     }
-    manual_review = operation.operation_type == "submission_manual_review"
+    manual_review = (operation.operation_type == "submission_manual_review"
+        or (operation.status == "done" and bool((operation.payload or {}).get("manual_saved_sources"))))
     manually_resolved_sources = set()
     unresolved_sources = set()
     if manual_review:
@@ -2336,10 +2338,15 @@ def _replace_draft_questions(
                     structure,
                 )
             except QuestionRubricValidationError as exc:
-                raise ValidationError(
-                    "Explicit subpart rubric points must add up to the major-question maximum.",
-                    code=exc.summary.issue_code or "rubric_subpart_points_mismatch",
-                ) from exc
+                if manual_recovery or (operation is not None and (operation.payload or {}).get("manual_saved_sources")):
+                    # An incomplete saved rubric is an editable draft. Keep its
+                    # literal content; existing review gates still reject it.
+                    rubric_summary = exc.summary
+                else:
+                    raise ValidationError(
+                        "Explicit subpart rubric points must add up to the major-question maximum.",
+                        code=exc.summary.issue_code or "rubric_subpart_points_mismatch",
+                    ) from exc
             source = {
                 "origin": "figma_task_facade",
                 "filename": filename,
@@ -2414,6 +2421,7 @@ def queue_task_submission_parsing(
     acknowledged_restart_from: str | None = None,
     retry_from: dict | None = None,
     expected_workflow_revision: int | None = None,
+    manual_saved_sources: dict | None = None,
 ) -> dict:
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
     questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
@@ -2456,6 +2464,7 @@ def queue_task_submission_parsing(
         "provider_configuration_fingerprint": route_fingerprint,
         "question_snapshot": question_snapshot,
         "replace_confirmed": replace_confirmed,
+        **({"manual_saved_sources": manual_saved_sources} if manual_saved_sources else {}),
         **({"acknowledged_restart_from": acknowledged_restart_from} if acknowledged_restart_from else {}),
         **({"retry_from": retry_from} if retry_from else {}),
     })
@@ -2581,6 +2590,7 @@ def queue_task_submission_parsing(
             expected_workflow_revision=workflow.workflow_revision,
             operation_payload={
                 "input_file_id": stored.id,
+                **({"manual_saved_sources": manual_saved_sources} if manual_saved_sources else {}),
                 "source_ids": source_ids,
                 "base_workflow_revision": workflow.workflow_revision,
                 "identity_mode": identity_mode,
@@ -2925,6 +2935,7 @@ async def run_task_submission_parsing(
     current_failure_phase = "source_persistence"
     parsed_artifact = None
     document_ocr_skill = None
+    manual_saved = (leased_operation.payload or {}).get("manual_saved_sources") if leased_operation else None
     try:
         if leased_operation is None:
             current_operation = workflow_repository.get_operation(
@@ -2955,7 +2966,7 @@ async def run_task_submission_parsing(
                 results = [replace(result, status="parse_failed", student=None, matched_answer_count=0,
                     stable_error_code=(result.student.get("recognition") or {}).get("error_code") or "provider_submit_uncertain",
                     failure_phase="recognition", retryable=False)
-                    if _submission_result_incomplete(result) else result for result in results]
+                    if _submission_result_incomplete(result) and not manual_saved else result for result in results]
         if results is None:
             route = resolve_stage_provider_route(
                 owner_id=owner_id,
@@ -2988,6 +2999,15 @@ async def run_task_submission_parsing(
                     blocked_source_ids.add(inflight)
 
             async def read_submission_source(raw, stored_file_id):
+                if manual_saved:
+                    from backend.services.recognition_recovery import saved_recognition
+                    from backend.services.question_sources import QuestionSourceRead
+                    ids = manual_saved["artifacts"].get(stored_file_id)
+                    if not ids:
+                        raise ValidationError("No saved recognition text.", code="submission_source_empty")
+                    recovered = await run_in_threadpool(saved_recognition, owner_id=owner_id, task_id=task_id,
+                        stored_file_id=stored_file_id, purpose="submissions", before=manual_saved["before"], artifact_ids=ids)
+                    return QuestionSourceRead(recovered.text, {"manual_saved_text": True}, stored_file_id)
                 async def save_pages(diagnostics):
                     if diagnostics is not None and leased_operation is not None:
                         checkpoint = dict(leased_operation.checkpoint_data)
@@ -3189,6 +3209,25 @@ async def run_task_submission_parsing(
                 )
 
         current_failure_phase = "outcome_persistence"
+        if manual_saved:
+            from backend.agents.ingest_agent import _ocr_identity_candidate
+            from backend.services.submission_manual_review import fill_manual_answers
+            normalized = []
+            used_ids = {result.student["stu_id"] for result in results if result.student}
+            for result in results:
+                student = deepcopy(result.student) if result.student else None
+                if student is None:
+                    candidate, name, _ = _ocr_identity_candidate("", result.filename)
+                    if candidate in used_ids:
+                        candidate += "-" + result.source_id[-8:]
+                    used_ids.add(candidate)
+                    student = dict(stu_id=candidate, stu_name=name, stu_ans=[], identity_status="needs_review",
+                        identity_match_method="manual_review", source_id=result.source_id,
+                        stored_file_id=result.stored_file_id, source_filename=result.filename)
+                fill_manual_answers(student, questions, incomplete_source=bool(
+                    (student.get("recognition") or {}).get("manual_saved_text") or not result.student))
+                normalized.append(replace(result, student=student))
+            results = normalized
         for result in results:
             source_outcome_repository.record_outcome(
                 source_id=result.source_id,
@@ -3221,9 +3260,9 @@ async def run_task_submission_parsing(
             result.student
             for result in results
             if result.student is not None
-            and result.status in {"parsed", "identity_conflict"}
+            and (manual_saved or result.status in {"parsed", "identity_conflict"})
         ]
-        if not students or summary.failed_count or summary.pending_count:
+        if not students or (not manual_saved and (summary.failed_count or summary.pending_count)):
             # A different file's earlier error must not hide an uncertain paid
             # request from the explicit-retry acknowledgement boundary.
             code = "provider_submit_uncertain" if any(
@@ -3270,6 +3309,7 @@ async def run_task_submission_parsing(
             ),
             operation_progress=snapshot,
             submission_file_name=filename,
+            manual_recovery=bool(manual_saved),
             source_summary={
                 "uploaded": summary.uploaded_count,
                 "parsed": summary.success_count,
@@ -3730,7 +3770,10 @@ def _commit_imported_submissions(
                 and previous.operation_type == "submission_manual_review" and previous.status == "done"
                 and (previous.checkpoint or {}).get("manual_student_count_required") is True
                 and workflow.presentation_status == "submissions_ready" and workflow.last_failed_job_id is None)
-            if (operation is None or operation.operation_type != "submission_manual_review"
+            organizing_saved = (operation is not None and operation.operation_type == "submission_recognition"
+                and bool((operation.payload or {}).get("manual_saved_sources"))
+                and workflow.active_job_id == operation.id and workflow.parse_job_id == operation.id)
+            if not organizing_saved and (operation is None or operation.operation_type != "submission_manual_review"
                     or workflow.active_job_id or (not count_handoff
                     and workflow.last_failed_job_id != (operation.payload or {}).get("manual_origin_id"))):
                 raise InvalidTransition("Manual recognition recovery is no longer current.", code="workflow_busy")
@@ -4106,6 +4149,7 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
         return payload
     _source_summary, source_rows = _submission_source_projection(workflow, owner_id)
     progress: dict | None = None
+    recovering_saved_text = False
     active_operation_status: str | None = None
     if workflow.active_job_id:
         if workflow.active_operation == "grading":
@@ -4120,6 +4164,7 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
                 if progress is not None:
                     progress.setdefault("job_id", operation.id)
                 active_operation_status = operation.status
+                recovering_saved_text = bool((operation.payload or {}).get("manual_saved_sources"))
             except NotFound:
                 progress = None
     elif workflow.extract_job_id or workflow.parse_job_id:
@@ -4141,6 +4186,7 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
         progress.update(phase="paused", error_detail=None, model_waits=[], active=[])
     payload.update({
         "progress": progress,
+        "recovering_saved_text": recovering_saved_text,
         "active_job_id": workflow.active_job_id,
         "active_operation": workflow.active_operation,
         "active_operation_status": active_operation_status,

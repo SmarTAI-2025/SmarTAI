@@ -1,4 +1,4 @@
-"""Explicit teacher handoff of saved submission sources, without model calls."""
+"""Handoff saved answers, organizing saved recognition text only when needed."""
 import uuid
 import asyncio
 import time
@@ -46,6 +46,27 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
         upload = task_facade.load_submission_retry_upload(task_id=task_id, owner_id=owner_id, job_id=source_origin_id)
         reusable = task_facade._reusable_submission_results(
             owner_id=owner_id, task_id=task_id, payload={"retry_from": upload["retry_from"]}, questions=questions, include_incomplete=True)
+        if not origin.payload.get("manual_saved_sources"):
+            from backend.services.recognition_recovery import saved_recognition
+            artifacts = {}
+            for source in source_outcome_repository.list_sources(operation_id=origin.id, owner_id=owner_id, attempt=origin.attempt):
+                saved = reusable.get((source.original_name, source.sha256))
+                if saved and not task_facade._submission_result_incomplete(saved):
+                    continue
+                recovered = saved_recognition(owner_id=owner_id, task_id=task_id,
+                    stored_file_id=source.stored_file_id, purpose="submissions", before=origin.completed_at or origin.updated_at)
+                if recovered.text:
+                    artifacts[source.stored_file_id] = recovered.artifact_ids
+            if artifacts:
+                queued = task_facade.queue_task_submission_parsing(task_id=task_id, owner_id=owner_id,
+                    filename=upload["filename"], content=upload["content"], content_type=upload["content_type"],
+                    registry=task_facade._registry_for_owner(owner_id), identity_mode=upload["identity_mode"],
+                    roster_entries=upload["roster_entries"], roster_name=upload["roster_name"],
+                    recognition_provider_id=origin.payload["recognition_provider_id"],
+                    replace_confirmed=upload["replace_confirmed"], retry_from=upload["retry_from"],
+                    expected_workflow_revision=expected_revision,
+                    manual_saved_sources={"before": origin.completed_at or origin.updated_at, "artifacts": artifacts})
+                return {key: value for key, value in queued.items() if not key.startswith("_")}
     # A separate local operation keeps the stopped attempt and source outcomes
     # immutable. The model worker does not dispatch this operation type.
     row, _ = workflow_repository.create_operation(
@@ -137,17 +158,9 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
                 student["stu_id"] = f"{student['stu_id']}-{source.source_id[-8:]}"
                 student["identity_status"] = "needs_review"
             used_ids.add(student["stu_id"])
-            answers = {answer["q_id"]: answer for answer in student.get("stu_ans", [])}
-            for question in questions:
-                if question.q_id not in answers:
-                    answers[question.q_id] = dict(q_id=question.q_id, number=question.number,
-                        type=question.type, content="", flag=["recognition_manual_pending"])
-                answer = answers[question.q_id]
-                if task_facade._answer_recognition_failures(answer.get("flag")):
-                    answer["flag"] = list(dict.fromkeys([*answer.get("flag", []), "recognition_manual_pending",
-                        "recognition_paused" if origin.error_code == "operation_cancelled" or (origin.payload or {}).get("manual_pause") else "recognition_incomplete"]))
+            fill_manual_answers(student, questions, paused=origin.error_code == "operation_cancelled" or (origin.payload or {}).get("manual_pause"))
             student.update(source_id=None if unknown_count else source.source_id, stored_file_id=source.stored_file_id,
-                source_filename=source.filename, stu_ans=list(answers.values()))
+                source_filename=source.filename)
             students.append(student)
             if source.source_id not in recorded_sources:
                 source_outcome_repository.record_outcome(source_id=source.source_id, owner_id=owner_id,
@@ -172,3 +185,17 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
         current = workflow_repository.get_operation(row.id, owner_id=owner_id)
         if current.lease_token == row.lease_token:
             workflow_repository.release_operation(row.id, owner_id=owner_id, worker_id=worker, lease_token=row.lease_token)
+
+
+def fill_manual_answers(student, questions, *, paused=False, incomplete_source=False):
+    """Shared matrix completion: never turn unread text into a student's blank answer."""
+    answers = {answer["q_id"]: answer for answer in student.get("stu_ans", [])}
+    for question in questions:
+        if question.q_id not in answers:
+            answers[question.q_id] = dict(q_id=question.q_id, number=question.number,
+                type=question.type, content="", flag=["recognition_manual_pending"])
+        answer = answers[question.q_id]
+        if task_facade._answer_recognition_failures(answer.get("flag")) or (incomplete_source and not answer.get("content", "").strip()):
+            answer["flag"] = list(dict.fromkeys([*answer.get("flag", []), "recognition_manual_pending",
+                "recognition_paused" if paused else "recognition_incomplete"]))
+    student["stu_ans"] = list(answers.values())

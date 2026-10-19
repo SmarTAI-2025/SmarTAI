@@ -326,6 +326,7 @@ export interface Task extends TaskLite {
 }
 
 export interface TaskStateSnapshot extends TaskLite {
+  recovering_saved_text?: boolean;
   submission_sources?: SubmissionSourceOutcome[];
   progress?: JobProgress | null;
   active_job_id?: string | null;

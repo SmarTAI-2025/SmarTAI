@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
@@ -44,6 +44,25 @@ beforeEach(() => {
 });
 
 describe("submission recognition completion", () => {
+  it.each(["started", "already_running"])("waits for saved answers after a %s handoff", async responseStatus => {
+    snapshot = { ...detail, status: "submissions_paused", last_failed_job_id: "new-job", error: "operation_cancelled" };
+    manuallyComplete.mockImplementation(async () => {
+      snapshot = { ...detail, status: "parsing_submissions", recovering_saved_text: true };
+      return { status: responseStatus };
+    });
+    const view = () => <I18nProvider><MemoryRouter initialEntries={["/tasks/T/submissions/progress"]}><Routes>
+      <Route path="/tasks/:taskId/submissions/progress" element={<SubmissionRecognitionProgressPage />} />
+      <Route path="/tasks/:taskId/submissions" element={<h1>作答校对页面</h1>} />
+    </Routes></MemoryRouter></I18nProvider>;
+    const { rerender } = render(view());
+    fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    await waitFor(() => expect(screen.getByRole("progressbar")).toBeInTheDocument());
+    expect(screen.queryByRole("heading", { name: "作答校对页面" })).not.toBeInTheDocument();
+    snapshot = { ...snapshot, status: "submissions_ready", submission_sources: [source("parsed")],
+      submission_source_summary: { uploaded: 1, parsed: 1, failed: 0, pending: 0, identity_needs_review: 0 } };
+    rerender(view());
+    expect(await screen.findByRole("heading", { name: "作答校对页面" })).toBeInTheDocument();
+  });
   it("opens manual review from a paused task without a model selection", async () => {
     snapshot = { ...detail, status: "submissions_paused", last_failed_job_id: "new-job", error: "operation_cancelled" };
     show();

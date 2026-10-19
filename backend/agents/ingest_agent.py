@@ -331,6 +331,7 @@ async def _extract_problems_call(
     confirmed_candidates: Optional[List[Dict[str, Any]]] = None,
     manage_progress_lifecycle: bool = True,
     allow_empty: bool = False,
+    partial_source: bool = False,
 ) -> Dict[str, Dict[str, Any]]:
     """Run one bounded LLM extraction call on a single chunk of source text.
 
@@ -382,8 +383,22 @@ async def _extract_problems_call(
         f"**[Source Handling Configuration]**\n{source_guidance}\n\n"
         f"**[Problem Source Document]**\n---\n{text}\n---"
     )
+    recovery_guidance = ("\nThis is manual recovery of SAVED recognition text. Do not read or reconstruct missing pages. "
+        "Retain every available question fragment, even when incomplete. Add boolean source_incomplete=true "
+        "only for a question whose opening, continuation, condition or subpart is missing. "
+        "A missing page does not make unrelated complete questions incomplete. "
+        "Combine distinct saved fragments only when their question identity is supported; retain alternatives. "
+        "Extract questions only from saved problem sources. Supporting material must never fill a missing stem. "
+        "Match supplied rubric/reference material by explicit question identity and copy it literally without alteration. "
+        "Copy a supplied reference_answer literally if present; otherwise leave it empty. Never generate a rubric or reference answer. "
+        "For each test case copied from the source, include source_excerpt: a verbatim excerpt containing that case's "
+        "input and expected output (or function name, arguments and expected return) as one original example, "
+        "and source=teacher. Never combine values from different examples. "
+        "For a newly created test case use source=llm_generated and leave source_excerpt empty. "
+        "Never claim a created case was supplied by the teacher."
+        if partial_source else "")
     messages = [
-        SystemMessage(content=PROB_SYSTEM_PROMPT),
+        SystemMessage(content=PROB_SYSTEM_PROMPT + recovery_guidance),
         HumanMessage(content=user_content),
     ]
 
@@ -414,7 +429,7 @@ async def _extract_problems_call(
             )
         await reporter._emit_message(f"Parsing JSON ({len(raw_output)} chars)...")
 
-    parsed = extract_and_parse_json(raw_output, ProblemSet)
+    parsed = extract_and_parse_json(raw_output, _PartialProblemSet if partial_source else ProblemSet)
 
     if not parsed.problems and not allow_empty:
         if reporter and manage_progress_lifecycle:
@@ -424,11 +439,78 @@ async def _extract_problems_call(
     prob_dict = {q.q_id: q.model_dump() for q in parsed.problems}
     # A parser-generated rubric is not an uploaded teacher instruction.
     for problem in prob_dict.values():
-        criterion = str(problem.get("criterion") or "")
-        if criterion and criterion not in text:
-            problem["criterion"] = ""
+        for field in (("criterion", "reference_answer") if partial_source else ("criterion",)):
+            supplied = str(problem.get(field) or "")
+            if supplied and supplied not in text:
+                problem[field] = ""
+        if partial_source:
+            for case in problem.get("test_cases") or []:
+                # Only this recovery parser consumes model-authored cases. Do not
+                # change the teacher-upload default or any completed packages.
+                excerpt = case.pop("source_excerpt", "")
+                case["source"] = "teacher" if _saved_test_case_supported(case, excerpt, text) else "llm_generated"
     logger.info(f"extract_problems: stored {len(prob_dict)} problems")
     return prob_dict
+
+
+def _saved_test_case_supported(case, excerpt, text):
+    """Verify a complete original example; co-occurring values are not evidence."""
+    def normalized(value):
+        return re.sub(r"\s*([\[\],])\s*", r"\1", re.sub(r"\s+", " ", str(value)).strip())
+
+    if excerpt and excerpt not in text:
+        return False
+    evidence = excerpt or text
+    # An excerpt may include several examples. Apply the same pair validation
+    # with or without an excerpt, never an ordered search for independent values.
+    decoder = json.JSONDecoder()
+    fields = (("function_name", "function_args", "expected_return") if case.get("function_name")
+              else ("input", "expected_output"))
+    for match in re.finditer(r"\{", evidence):
+        try:
+            supplied, _ = decoder.raw_decode(evidence[match.start():])
+        except ValueError:
+            continue
+        if isinstance(supplied, dict) and all(key in supplied and supplied[key] == case.get(key) for key in fields):
+            return True
+
+    if case.get("function_name"):
+        if case.get("function_args") is None or case.get("expected_return") is None:
+            return False
+        pattern = (re.escape(case["function_name"]) + r"\(\s*"
+                   + re.escape(normalized(json.dumps(case["function_args"], ensure_ascii=False)))
+                   + r"\s*\)\s*(?:(?i:returns?)\b|返回|→|->|=>)\s*"
+                   + re.escape(normalized(case["expected_return"])))
+    else:
+        if not case.get("input") or not case.get("expected_output"):
+            return False
+        input_value, output_value = (re.escape(normalized(case[key])) for key in ("input", "expected_output"))
+        labels = r"[\"']?\s*[:：]\s*[\"'`]*"
+        labelled = (r"(?i:\binput\b|输入)" + labels + input_value.replace(r"\ ", r"\s+")
+                    + r"[\"'`]*\s*[,;，；]?\s*(?i:(?:expected[_ ]*)?output\b|预期输出|输出)"
+                    + labels + output_value.replace(r"\ ", r"\s+")
+                    + r"[\"'`]*(?=\s*(?:$|[\n;；。]|\.(?=\s|$)))")
+        if re.search(labelled, "\n".join(normalized(line) for line in evidence.splitlines())):
+            return True
+        pattern = input_value + r"\s*(?:→|->|=>)\s*" + output_value
+    # Arrow/function forms must describe one complete example on a line.
+    # Unrecognized layouts remain AI-sourced rather than guessing an association.
+    pattern = r"(?:(?i:Example|示例|样例)\s*[:：]\s*)?" + pattern + r"[.;。]?"
+    return any(re.fullmatch(pattern, normalized(line)) for line in evidence.splitlines())
+
+
+class _PartialTestCase(TestCase):
+    source: Literal["teacher", "llm_generated"] = "llm_generated"
+    source_excerpt: str = ""
+
+
+class _PartialProblem(ProblemInfo):
+    source_incomplete: bool = False
+    test_cases: Optional[List[_PartialTestCase]] = None
+
+
+class _PartialProblemSet(BaseModel):
+    problems: list[_PartialProblem]
 
 
 def _chunk_problem_text(
@@ -606,7 +688,12 @@ async def parse_student_answer_sources(
                 f"**[Student Submission Content]**:\n---\n{source.text}\n---"
             )
             messages = [
-                SystemMessage(content=HW_SYSTEM_PROMPT),
+                SystemMessage(content=HW_SYSTEM_PROMPT + (
+                    "\nManual recovery: this is saved, possibly partial recognition text. "
+                    "Never reconstruct missing pages or assume unread work is blank. "
+                    "Preserve every available answer fragment. Use recognition_incomplete in flag "
+                    "for an answer whose continuation or steps are missing; do not flag unrelated complete answers."
+                    if (getattr(source, "recognition", None) or {}).get("manual_saved_text") else "")),
                 HumanMessage(content=user_message),
             ]
             try:

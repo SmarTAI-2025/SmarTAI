@@ -377,6 +377,7 @@ def _question_preparation_input_hash(
     provider_configuration_fingerprint: str,
     acknowledged_restart_from: str | None = None,
     generation_language: str | None = None,
+    manual_saved_sources: dict | None = None,
 ) -> str:
     """Hash the ordered logical input independently of retry claim revisions."""
 
@@ -387,6 +388,7 @@ def _question_preparation_input_hash(
                 "base_revision": logical_input_revision,
                 "replace_confirmed": replace_confirmed,
                 "generation_policy": generation_policy,
+                **({"manual_saved_sources": manual_saved_sources} if manual_saved_sources else {}),
                 **({"generation_language": generation_language} if generation_language else {}),
                 "score_policy": dict(score_policy),
                 "recognition_provider_id": recognition_provider_id,
@@ -1543,6 +1545,7 @@ async def _start_question_preparation(
     acknowledged_restart_from: str | None = None,
     retry_origin_id: str | None = None,
     use_current_configuration: bool = False,
+    manual_saved_sources: dict | None = None,
 ):
     # Kept in the endpoint signature for API compatibility. Question
     # preparation is published only to the durable workflow worker below.
@@ -1700,6 +1703,7 @@ async def _start_question_preparation(
                 code="stale_revision",
             )
         restart_origin = acknowledged_restart_from or (retry_source_contract or {}).get("acknowledged_restart_from")
+        manual_saved_sources = manual_saved_sources or (retry_source_contract or {}).get("manual_saved_sources")
         operation_hash = _question_preparation_input_hash(
             ordered_source_inputs=ordered_source_inputs,
             logical_input_revision=logical_input_revision,
@@ -1712,6 +1716,7 @@ async def _start_question_preparation(
                 provider_configuration_fingerprint
             ),
             acknowledged_restart_from=restart_origin,
+            manual_saved_sources=manual_saved_sources,
         )
         replay = task_facade.find_task_operation(
             task_id=task_id, owner_id=current.id,
@@ -1757,6 +1762,7 @@ async def _start_question_preparation(
                 "workflow_revision": workflow.workflow_revision,
             }
         operation_payload = {
+            **({"manual_saved_sources": manual_saved_sources} if manual_saved_sources else {}),
             **({"retry_origin_id": retry_origin_id} if retry_origin_id and replay is None else {}),
             **({"acknowledged_restart_from": restart_origin} if restart_origin else {}),
             "contract_version": 1,
@@ -1898,8 +1904,24 @@ async def manually_complete_question_preparation(
         checkpoint = failed.checkpoint or {}
         has_base = checkpoint.get("aligned_base_artifact_id") or checkpoint.get("questions_extracted_artifact_id")
         if not has_base:
+            from backend.services.question_preparation_manual import saved_question_sources
+            saved_sources = (await run_in_threadpool(saved_question_sources, failed)
+                             if request.question_count is None else None)
+            if saved_sources:
+                return await _start_question_preparation(
+                    task_id=task_id, current=current, background_tasks=BackgroundTasks(),
+                    registry=task_facade._registry_for_owner(current.id),
+                    request=StartQuestionPreparationRequest(
+                        source_tokens=failed.payload["source_tokens"],
+                        expected_workflow_revision=request.expected_workflow_revision,
+                        replace_confirmed=bool(failed.payload.get("replace_confirmed")),
+                        recognition_provider_id=failed.payload["recognition_provider_id"],
+                        score_policy=QuestionScorePolicy.model_validate(failed.payload.get("score_policy") or {})),
+                    allow_prepared_source_reuse=True, retry_source_contract=failed.payload,
+                    manual_saved_sources=saved_sources)
             if count_pending and request.question_count is None:
-                raise InvalidTransition("Enter the question count in the review matrix.")
+                return {"status": "ready_for_review", "task_id": task_id,
+                        "workflow_revision": workflow.workflow_revision, "first_question_id": None}
             from backend.services.question_preparation_manual import blank_manual_question_packages
             packages = blank_manual_question_packages(failed, request.question_count or 0)
             missing = list(packages)
@@ -2325,6 +2347,7 @@ def _rehydrate_question_preparation_inputs(operation):
         recognition_provider_id=recognition_provider_id,
         provider_configuration_fingerprint=frozen_provider_fingerprint,
         acknowledged_restart_from=payload.get("acknowledged_restart_from"),
+        manual_saved_sources=payload.get("manual_saved_sources"),
     )
     if expected_input_hash != operation.input_hash:
         raise _question_preparation_recovery_error(
@@ -2420,9 +2443,13 @@ async def run_durable_question_preparation(operation) -> None:
             (await reporter.snapshot()).model_dump(mode="json")
         )
 
-        sources = await _recognize_saved_question_sources(
-            sources, operation=operation, route=route, registry=inputs["registry"], reporter=reporter,
-        )
+        if (operation.payload or {}).get("manual_saved_sources"):
+            from backend.services.question_preparation_manual import restore_saved_question_sources
+            sources = await run_in_threadpool(restore_saved_question_sources, operation, sources)
+        else:
+            sources = await _recognize_saved_question_sources(
+                sources, operation=operation, route=route, registry=inputs["registry"], reporter=reporter,
+            )
 
         payload = dict(operation.payload or {})
         artifact_context = {
@@ -2476,6 +2503,8 @@ async def run_durable_question_preparation(operation) -> None:
                 question_artifacts[q_id] = stored.id
                 refs.append(stored.id)
             await operation.checkpoint(stage="sources_validated", checkpoint={**operation.checkpoint_data, **copied,
+                **({"manual_extraction_chunks": old_checkpoint["manual_extraction_chunks"]}
+                   if old_checkpoint.get("manual_extraction_chunks") else {}),
                 "question_artifact_ids": question_artifacts, "completed_question_ids": list(question_artifacts),
                 "retry_origin_copied": origin.id}, artifact_refs=list(dict.fromkeys([*operation.artifact_refs, *refs])))
         retry_contract = operation.checkpoint_data.get("retry_frozen_contract")
@@ -2684,7 +2713,7 @@ async def run_durable_question_preparation(operation) -> None:
             "base_provider_inflight_stage"
         )
         recovered_base_stages = {
-            QUESTIONS_EXTRACTED_STAGE: extracted_envelope is not None,
+            QUESTIONS_EXTRACTED_STAGE: extracted_envelope is not None and not operation.checkpoint_data.get("manual_extraction_chunks"),
             UPLOADED_MATERIALS_ALIGNED_STAGE: aligned_envelope is not None,
         }
         if (
@@ -2847,8 +2876,14 @@ async def run_durable_question_preparation(operation) -> None:
 
         async def _on_questions_extracted(
             problem_data: dict[str, dict[str, Any]],
+            *, completed_chunks: int | None = None,
         ) -> None:
             await operation.heartbeat()
+            if not problem_data and completed_chunks is not None:
+                async with checkpoint_lock:
+                    await _write_checkpoint(QUESTIONS_EXTRACTED_STAGE,
+                        manual_extraction_chunks=completed_chunks, base_provider_inflight_stage=None)
+                return
             artifact = await run_in_threadpool(
                 save_base_preparation_artifact,
                 stage=QUESTIONS_EXTRACTED_STAGE,
@@ -2875,6 +2910,7 @@ async def run_durable_question_preparation(operation) -> None:
                     question_ids=list(envelope.payload.problem_data),
                     base_provider_inflight_stage=None,
                     questions_extracted_artifact_id=artifact.id,
+                    **({"manual_extraction_chunks": completed_chunks} if completed_chunks is not None else {}),
                 )
 
         async def _on_base_alignment_started() -> None:
@@ -3224,6 +3260,14 @@ async def _run_question_preparation(
                 str(q_id): dict(problem)
                 for q_id, problem in prebuilt_packages.items()
             }
+        elif durable_operation is not None and durable_operation.payload.get("manual_saved_sources"):
+            from backend.services.question_preparation_manual import prepare_saved_question_packages
+            packages = await prepare_saved_question_packages(sources, provider=provider,
+                reporter=reporter, score_policy=score_policy, ocr_only=ocr_only,
+                recovered=recovered_extracted_problem_data, on_started=on_extraction_started,
+                on_extracted=on_questions_extracted, on_failed=on_base_failed,
+                completed_chunks=durable_operation.checkpoint_data.get("manual_extraction_chunks", 0),
+                chunk_settings=durable_operation.payload["manual_saved_sources"])
         elif ocr_only:
             packages = await prepare_ocr_question_packages(
                 [(draft, text) for draft, text, _payload in sources],
@@ -3259,8 +3303,9 @@ async def _run_question_preparation(
                 provider_submission_safe=(durable_operation is not None),
             )
         # Restored final artifacts must obey the same frozen teacher policy.
-        attach_recognition_review(packages, [payload for _draft, _text, payload in sources])
-        teacher_score_requirements(packages, score_policy, check_rubrics=True)
+        if not (durable_operation is not None and durable_operation.payload.get("manual_saved_sources")):
+            attach_recognition_review(packages, [payload for _draft, _text, payload in sources])
+            teacher_score_requirements(packages, score_policy, check_rubrics=True)
         if on_packages_prepared is not None:
             packages = await on_packages_prepared(packages)
         snapshot = (await reporter.snapshot()).model_dump(mode="json")

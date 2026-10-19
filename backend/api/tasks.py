@@ -626,6 +626,7 @@ async def retry_submission_recognition_endpoint(
             recognition_provider_id=request.recognition_provider_id,
             replace_confirmed=retry["replace_confirmed"] or legacy_partial,
             retry_from=retry["retry_from"],
+            manual_saved_sources=failed.payload.get("manual_saved_sources"),
             acknowledged_restart_from=(f"{failed.id}:{failed.attempt}" if uncertain or
                 (failed.error_code == "operation_cancelled" and request.acknowledge_possible_duplicate_call) else None),
             expected_workflow_revision=request.expected_workflow_revision,

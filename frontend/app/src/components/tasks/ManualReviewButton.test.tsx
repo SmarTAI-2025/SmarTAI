@@ -17,11 +17,22 @@ function show(value: Parameters<typeof ManualReviewButton>[0]["task"], stage?: "
     <Route path="/tasks/T1/questions" element={<div>Question queue</div>} />
     <Route path="/tasks/T1/submissions" element={<div>Answer queue</div>} />
     <Route path="/tasks/T1/review" element={<div>Grade queue</div>} />
+    <Route path="/tasks/T1/problems/progress" element={<div>Organizing saved questions</div>} />
+    <Route path="/tasks/T1/submissions/progress" element={<div>Organizing saved answers</div>} />
   </Routes></MemoryRouter></QueryClientProvider>);
   return invalidate;
 }
-beforeEach(() => { Object.values(calls).forEach(call => call.mockReset().mockResolvedValue({ first_question_id: "Q1" })); });
+beforeEach(() => {
+  Object.values(calls).forEach(call => call.mockReset().mockResolvedValue({ status: "ready_for_review", first_question_id: "Q1" }));
+  calls.grading.mockResolvedValue({ status: "manual_review" });
+});
 describe("manual recovery entry", () => {
+  it.each(["questions", "submissions"] as const)("uses existing progress while saved %s are already being organized", async stage => {
+    calls[stage].mockResolvedValue({ status: "already_running", job_id: "saved-text" });
+    show({ ...task, [stage === "questions" ? "extract_job_id" : "parse_job_id"]: "failed" });
+    await userEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    expect(await screen.findByText(stage === "questions" ? "Organizing saved questions" : "Organizing saved answers")).toBeVisible();
+  });
   it.each([false, true])("hands off failed/paused questions without a model call (paused=%s)", async paused => {
     const invalidate = show({ ...task, status: paused ? "problems_paused" : "error", extract_job_id: "failed" });
     await userEvent.click(screen.getByRole("button", { name: "人工继续处理" }));

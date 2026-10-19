@@ -6,12 +6,13 @@ import { continueTaskRun, manuallyCompleteQuestionPreparation, manuallyCompleteS
 import { normalizeAPIError } from "@/api/client";
 import { useI18n } from "@/i18n/I18nProvider";
 import { Button } from "@/components/ui/Button";
+import { manualReviewDestination } from "@/lib/taskFlow";
 
 type RecoveryTask = Pick<import("@/types").Task, "status" | "workflow_revision" | "last_failed_job_id" | "grading_job_id" | "parse_job_id" | "extract_job_id">;
 type Stage = "questions" | "submissions" | "grading";
 type Props = { taskId?: string | null; task?: RecoveryTask | null; stage?: Stage };
 
-/** Recovery does not require an available model or resubmit a provider request. */
+/** Reuse completed rows; saved text may first need organization in the existing worker. */
 export function ManualReviewButton(props: Props) {
   // Most entry pages already have the authoritative task; avoid another read.
   return props.task ? <LoadedManualReviewButton {...props} task={props.task} /> : null;
@@ -43,14 +44,14 @@ function ManualReviewAction({ taskId, task, jobId, failedStage }: { taskId: stri
     try {
       let href: string;
       if (failedStage === "questions") {
-        await manuallyCompleteQuestionPreparation({ taskId, jobId, expectedWorkflowRevision: task.workflow_revision });
-        href = `/tasks/${taskId}/questions`;
+        const result = await manuallyCompleteQuestionPreparation({ taskId, jobId, expectedWorkflowRevision: task.workflow_revision });
+        href = manualReviewDestination(taskId, failedStage, result.status);
       } else if (failedStage === "submissions") {
-        await manuallyCompleteSubmissionRecognition({ taskId, jobId, expectedWorkflowRevision: task.workflow_revision });
-        href = `/tasks/${taskId}/submissions`;
+        const result = await manuallyCompleteSubmissionRecognition({ taskId, jobId, expectedWorkflowRevision: task.workflow_revision });
+        href = manualReviewDestination(taskId, failedStage, result.status);
       } else {
-        await continueTaskRun(taskId, jobId, task.workflow_revision, true);
-        href = `/tasks/${taskId}/review`;
+        const result = await continueTaskRun(taskId, jobId, task.workflow_revision, true);
+        href = manualReviewDestination(taskId, failedStage, result.status);
       }
       await cache.invalidateQueries({ queryKey: ["tasks"] });
       navigate(href);

@@ -90,6 +90,7 @@ function renderPage(initialEntry: string) {
   render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
+        <Route path="/tasks/:taskId/problems/progress" element={<p>Organizing saved text</p>} />
         <Route path="/tasks/:taskId/submissions/upload" element={<p>Upload submissions</p>} />
         <Route
           path="/tasks/:taskId/questions"
@@ -275,4 +276,13 @@ it("keeps early manual recovery inside the existing matrix and creates only the 
   fireEvent.change(screen.getByRole("spinbutton", { name: "题数" }), { target: { value: "2" } });
   fireEvent.click(screen.getByRole("button", { name: "建立题目行" }));
   await waitFor(() => expect(createRows).toHaveBeenCalledWith({ taskId: "task-1", jobId: "early", expectedWorkflowRevision: 7, questionCount: 2 }));
+});
+
+it("can explicitly recover saved text from a previous empty manual handoff", async () => {
+  Object.assign(manualTask, { problem_data: {}, extract_job_id: "early", manual_question_count_required: true });
+  createRows.mockResolvedValue({ status: "started", workflow_revision: 8 });
+  renderPage("/tasks/task-1/questions");
+  await userEvent.click(screen.getByRole("button", { name: "整理已保存的识别文字" }));
+  await waitFor(() => expect(createRows).toHaveBeenCalledWith({ taskId: "task-1", jobId: "early", expectedWorkflowRevision: 7 }));
+  expect(await screen.findByText("Organizing saved text")).toBeVisible();
 });
