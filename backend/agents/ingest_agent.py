@@ -392,7 +392,8 @@ async def _extract_problems_call(
         "Match supplied rubric/reference material by explicit question identity and copy it literally without alteration. "
         "Copy a supplied reference_answer literally if present; otherwise leave it empty. Never generate a rubric or reference answer. "
         "For each test case copied from the source, include source_excerpt: a verbatim excerpt containing that case's "
-        "input and expected output (or function name, arguments and expected return), and source=teacher. "
+        "input and expected output (or function name, arguments and expected return) as one original example, "
+        "and source=teacher. Never combine values from different examples. "
         "For a newly created test case use source=llm_generated and leave source_excerpt empty. "
         "Never claim a created case was supplied by the teacher."
         if partial_source else "")
@@ -453,50 +454,49 @@ async def _extract_problems_call(
 
 
 def _saved_test_case_supported(case, excerpt, text):
-    """Require the actual I/O pair in one literal source excerpt, not a model label."""
+    """Verify a complete original example; co-occurring values are not evidence."""
     def normalized(value):
         return re.sub(r"\s*([\[\],])\s*", r"\1", re.sub(r"\s+", " ", str(value)).strip())
 
-    # Old/model-omitted excerpts can still be backed by an exact uploaded JSON
-    # case. Do not treat independent occurrences of small values as evidence.
-    if not excerpt:
-        decoder = json.JSONDecoder()
-        fields = (("function_name", "function_args", "expected_return") if case.get("function_name")
-                  else ("input", "expected_output"))
-        for match in re.finditer(r"\{", text):
-            try:
-                supplied, _ = decoder.raw_decode(text[match.start():])
-            except ValueError:
-                continue
-            if isinstance(supplied, dict) and all(key in supplied and supplied[key] == case.get(key) for key in fields):
-                return True
-        # Also preserve ordinary adjacent input/output examples when the model
-        # omits both provenance fields. Unlabelled numbers elsewhere are not proof.
-        if not case.get("function_name") and case.get("input") and case.get("expected_output"):
-            labels = r"[\"']?\s*[:：]\s*[\"'`]*"
-            pattern = (r"(?:\binput\b|输入)" + labels + re.escape(normalized(case["input"]))
-                       + r"[\"'`]*\s*[,;，；]?\s*(?:(?:expected[_ ]*)?output\b|预期输出|输出)"
-                       + labels + re.escape(normalized(case["expected_output"])) + r"(?!\w|\.\d)")
-            return bool(re.search(pattern, normalized(text), re.IGNORECASE))
+    if excerpt and excerpt not in text:
         return False
-    if excerpt not in text:
-        return False
+    evidence = excerpt or text
+    # An excerpt may include several examples. Apply the same pair validation
+    # with or without an excerpt, never an ordered search for independent values.
+    decoder = json.JSONDecoder()
+    fields = (("function_name", "function_args", "expected_return") if case.get("function_name")
+              else ("input", "expected_output"))
+    for match in re.finditer(r"\{", evidence):
+        try:
+            supplied, _ = decoder.raw_decode(evidence[match.start():])
+        except ValueError:
+            continue
+        if isinstance(supplied, dict) and all(key in supplied and supplied[key] == case.get(key) for key in fields):
+            return True
+
     if case.get("function_name"):
-        values = [case["function_name"], json.dumps(case.get("function_args"), ensure_ascii=False),
-                  case.get("expected_return")]
+        if case.get("function_args") is None or case.get("expected_return") is None:
+            return False
+        pattern = (re.escape(case["function_name"]) + r"\(\s*"
+                   + re.escape(normalized(json.dumps(case["function_args"], ensure_ascii=False)))
+                   + r"\s*\)\s*(?:(?i:returns?)\b|返回|→|->|=>)\s*"
+                   + re.escape(normalized(case["expected_return"])))
     else:
-        values = [case.get("input"), case.get("expected_output")]
-    # Whitespace-only differences from structuring do not change provenance.
-    compact = normalized(excerpt)
-    offset = 0
-    for value in values:
-        if value is None or not str(value).strip():
+        if not case.get("input") or not case.get("expected_output"):
             return False
-        match = re.search(r"(?<![\w.])" + re.escape(normalized(value)) + r"(?!\w|\.\d)", compact[offset:])
-        if not match:
-            return False
-        offset += match.end()
-    return True
+        input_value, output_value = (re.escape(normalized(case[key])) for key in ("input", "expected_output"))
+        labels = r"[\"']?\s*[:：]\s*[\"'`]*"
+        labelled = (r"(?i:\binput\b|输入)" + labels + input_value.replace(r"\ ", r"\s+")
+                    + r"[\"'`]*\s*[,;，；]?\s*(?i:(?:expected[_ ]*)?output\b|预期输出|输出)"
+                    + labels + output_value.replace(r"\ ", r"\s+")
+                    + r"[\"'`]*(?=\s*(?:$|[\n;；。]|\.(?=\s|$)))")
+        if re.search(labelled, "\n".join(normalized(line) for line in evidence.splitlines())):
+            return True
+        pattern = input_value + r"\s*(?:→|->|=>)\s*" + output_value
+    # Arrow/function forms must describe one complete example on a line.
+    # Unrecognized layouts remain AI-sourced rather than guessing an association.
+    pattern = r"(?:(?i:Example|示例|样例)\s*[:：]\s*)?" + pattern + r"[.;。]?"
+    return any(re.fullmatch(pattern, normalized(line)) for line in evidence.splitlines())
 
 
 class _PartialTestCase(TestCase):

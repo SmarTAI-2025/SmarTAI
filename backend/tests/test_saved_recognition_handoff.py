@@ -64,6 +64,7 @@ async def test_question_saved_pages_are_organized_without_rereading_or_generatin
     origin = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
     stored = file_repository.get_file(file_id=origin.payload["source_refs"][0]["stored_file_id"], owner_id=owner)
     source_example = "Example input: 10 20; expected output: 30."
+    source_pairs = "1 → 2\n3 → 4"
     source_json_case = {"input": "7 8", "expected_output": "15"}
     cases = [
         {"input": "10 20", "expected_output": "30", "source_excerpt": source_example},
@@ -72,10 +73,13 @@ async def test_question_saved_pages_are_organized_without_rereading_or_generatin
         {"input": "2 3", "expected_output": "5"},  # Created; omitted provenance.
         {"input": "4 5", "expected_output": "9", "source": "llm_generated"},
         {"input": "10 20", "expected_output": "3", "source": "teacher", "source_excerpt": source_example},
+        {"input": "1", "expected_output": "4", "source": "llm_generated", "source_excerpt": source_pairs},
+        {"input": "1", "expected_output": "2", "source_excerpt": source_pairs},
+        {"input": "3", "expected_output": "4"},
     ]
     assembly = await save_pages(owner, task, stored, data, final=not stopped, text=[
         "1. Saved literal question 1. (a) First part. (b) Second part. Rubric: (a) 3 points\n"
-        + source_example + "\n" + json.dumps(source_json_case),
+        + source_example + "\n" + json.dumps(source_json_case) + "\n" + source_pairs,
         *[f"{i}. Saved literal question {i}." for i in range(2, 8)], RuntimeError("failed page")])
     assert assembly.document.coverage.failed_pages == [8]
     if stopped:
@@ -118,7 +122,8 @@ async def test_question_saved_pages_are_organized_without_rereading_or_generatin
         assert read["status"] == "problems_ready" and read["problem_count"] == 7
     problems = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]
     assert [case["source"] for case in problems["q1"]["test_cases"]] == [
-        "teacher", "teacher", "teacher", "llm_generated", "llm_generated", "llm_generated"]
+        "teacher", "teacher", "teacher", "llm_generated", "llm_generated", "llm_generated",
+        "llm_generated", "teacher", "teacher"]
     assert [case["input"] for case in problems["q1"]["test_cases"]] == [case["input"] for case in cases]
     assert all("source_excerpt" not in case for case in problems["q1"]["test_cases"])
     from sqlalchemy import select
@@ -252,10 +257,38 @@ async def test_completed_organization_chunks_are_retained_on_stop_and_skipped_on
      "input: 10 20; output: 30", False),
     ({"input": "", "expected_output": "0"}, "", '{"input": "", "expected_output": "0"}', True),
     ({"input": "2 3", "expected_output": "5"}, "", "题目2有3分，作业有5题", False),
+    ({"input": "1", "expected_output": "4"}, "", "Input: 1; Output: 4 5", False),
+    ({"input": "A", "expected_output": "b"}, "", "Input: a; Output: b", False),
+    ({"input": "A", "expected_output": "b"}, "", "a → b", False),
+    ({"input": "1 2", "expected_output": "3"}, "", "输入：\n1\n2\n输出：\n3", True),
+    ({"function_name": "Add", "function_args": [2, 3], "expected_return": "5"},
+     "", "add([2, 3]) returns 5", False),
 ])
 def test_saved_test_case_evidence(case, excerpt, text, teacher):
     from backend.agents.ingest_agent import _saved_test_case_supported
     assert _saved_test_case_supported(case, excerpt, text) is teacher
+
+
+@pytest.mark.parametrize("with_excerpt", [False, True])
+@pytest.mark.parametrize("source,first,second", [
+    ("1 → 2\n3 → 4", {"input": "1", "expected_output": "2"}, {"input": "3", "expected_output": "4"}),
+    ("input: 1; output: 2\ninput: 3; output: 4",
+     {"input": "1", "expected_output": "2"}, {"input": "3", "expected_output": "4"}),
+    ('[{"input": "1", "expected_output": "2"}, {"input": "3", "expected_output": "4"}]',
+     {"input": "1", "expected_output": "2"}, {"input": "3", "expected_output": "4"}),
+    ("f([1]) returns 2\nf([3]) returns 4",
+     {"function_name": "f", "function_args": [1], "expected_return": "2"},
+     {"function_name": "f", "function_args": [3], "expected_return": "4"}),
+])
+def test_saved_test_case_requires_one_original_pair(source, first, second, with_excerpt):
+    from backend.agents.ingest_agent import _saved_test_case_supported
+    excerpt = source if with_excerpt else ""
+    for original in (first, second):
+        assert _saved_test_case_supported(original, excerpt, source)
+    output_field = "expected_return" if "function_name" in first else "expected_output"
+    for inputs, outputs in ((first, second), (second, first)):
+        mixed = {**inputs, output_field: outputs[output_field]}
+        assert not _saved_test_case_supported(mixed, excerpt, source)
 
 
 @pytest.mark.asyncio
