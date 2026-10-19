@@ -87,7 +87,7 @@ async def prepare_saved_question_packages(sources, *, provider, reporter, score_
     overlap = (chunk_settings or {}).get("chunk_overlap", max(0, settings.source_chunk_overlap_chars))
     chunks = _chunk_problem_text(text, chunk_size, overlap) if chunk_size > 0 else [text]
     if recovered is not None and not completed_chunks:
-        return packages  # An already complete pre-chunk-format artifact.
+        chunks = []  # Reuse extracted rows, but still add requested missing questions below.
     for index, chunk in enumerate(chunks):
         if index < completed_chunks:
             continue
@@ -115,15 +115,21 @@ async def prepare_saved_question_packages(sources, *, provider, reporter, score_
         except Exception as exc:
             await on_failed(QUESTIONS_EXTRACTED_STAGE, exc)
             raise
+    return _complete_saved_question_packages(packages, wanted, score_policy, outline)
+
+
+def _complete_saved_question_packages(packages, wanted, score_policy, outline):
+    from backend.services.question_structure import annotate_major_question_structures
+    from backend.services.teacher_score_constraints import normalize_question_number
     # Explicitly requested, missing questions get editable rows, never fabricated stems.
-    wanted += [number for number in outline if number not in wanted]
+    wanted = [*wanted, *(number for number in outline if number not in wanted)]
     actual = {normalize_question_number(row.get("number")) for row in packages.values()}
     for number in wanted:
         if normalize_question_number(number) not in actual:
             q_id = f"q{len(packages) + 1}"
             packages[q_id] = dict(q_id=q_id, number=number, type="other", stem="", criterion="", max_score=10)
             actual.add(normalize_question_number(number))
-    return _saved_package_issues(packages, score_policy, outline)
+    return _saved_package_issues(annotate_major_question_structures(packages), score_policy, outline)
 
 
 def _saved_package_issues(packages, score_policy, outline):
@@ -222,6 +228,27 @@ def recover_manual_question_packages(operation):
             issues.append(marker)
             problem["review_status"] = "needs_review"
         problem["preparation_issues"] = issues
+    if payload.get("manual_saved_sources"):
+        from backend.db import workflow_repository
+        from backend.services.question_sources import question_recognition_options
+        from backend.services.teacher_score_constraints import explicit_teacher_scores
+        scopes = []
+        for ref in payload.get("source_refs", []):
+            if ref["role"] != "problem":
+                continue
+            source = workflow_repository.get_operation(ref["source_operation_id"], owner_id=operation.owner_id)
+            if (source.assignment_id != operation.assignment_id or source.operation_type != "problem_source"
+                    or source.attempt != ref["source_attempt"]):
+                unavailable()
+            scopes.append(question_recognition_options(source.payload.get("recognition_options"),
+                extraction_hint=source.payload.get("extraction_hint", "")))
+        if not scopes:
+            unavailable()
+        wanted = list(dict.fromkeys(number for scope in scopes for number in scope.targets))
+        policy = QuestionScorePolicy.model_validate(payload.get("score_policy") or {})
+        outline = explicit_teacher_scores(policy.per_question_text or "") if policy.mode == "per_question" else {}
+        problems = _complete_saved_question_packages(problems, wanted, policy, outline)
+        missing_questions = list(problems)
     return problems, missing_questions
 
 
