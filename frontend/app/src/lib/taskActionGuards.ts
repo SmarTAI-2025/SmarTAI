@@ -1242,14 +1242,14 @@ function providerConfigurationErrorCopy(
     ocr_credential_not_found: [
       "所选 OCR 凭据已不存在",
       "The selected OCR credential no longer exists",
-      "返回模型与 BYOK 页面重新保存百度 OCR 的 AK/SK，然后重新选择识别服务。",
-      "Return to Models & BYOK, save the Baidu OCR AK/SK again, then reselect the recognition service.",
+      "返回模型与 BYOK 页面重新保存百度 OCR 的 API Key / Secret Key，然后重新选择识别服务。",
+      "Return to Models & BYOK, save the Baidu OCR API Key / Secret Key again, then reselect the recognition service.",
     ],
     provider_permission_denied: [
       "OCR 账号没有服务权限",
       "The OCR account lacks service permission",
-      "请在百度控制台确认已开通文档解析权限，或替换为有权限的 AK/SK。",
-      "Confirm Document Parsing access in the Baidu console or replace the AK/SK with an authorized pair.",
+      "请在百度控制台确认已开通文档解析权限，或替换为有权限的 API Key / Secret Key。",
+      "Confirm Document Parsing access in the Baidu console or replace the API Key / Secret Key with an authorized pair.",
     ],
     provider_region_unsupported: [
       "模型服务不支持当前网络地区",

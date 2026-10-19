@@ -521,7 +521,7 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
     setSecretKey("");
     setFormError(null);
     if (!request.api_key || !request.secret_key) {
-      setFormError(zh ? "请同时填写 AK 和 SK。" : "Enter both AK and SK.");
+      setFormError(zh ? "请同时填写 API Key 和 Secret Key。" : "Enter both API Key and Secret Key.");
       return;
     }
     try {
@@ -543,7 +543,7 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
     try {
       await verifyCredentials.mutateAsync(metadata.credential_id);
       toast.success(
-        zh ? "AK/SK 验证通过" : "AK/SK verification passed",
+        zh ? "API Key / Secret Key 验证通过" : "API Key / Secret Key verification passed",
         {
           description: zh
             ? "仅验证了凭据；OCR 服务权限与额度将在真实任务中检查。"
@@ -573,7 +573,7 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
   }
 
   const verificationLabel = metadata?.verification_status === "credentials_verified"
-    ? zh ? "AK/SK 已验证" : "AK/SK verified"
+    ? zh ? "API Key / Secret Key 已验证" : "API Key / Secret Key verified"
     : metadata?.verification_status === "failed"
       ? zh ? "最近验证失败" : "Last verification failed"
       : configured
@@ -628,7 +628,7 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
 
       <form className="mt-4 grid gap-3" onSubmit={handleSave}>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label={configured ? (zh ? "替换 AK" : "Replace AK") : "AK"}>
+          <Field label={configured ? (zh ? "替换 API Key" : "Replace API Key") : "API Key"}>
             <Input
               type="password"
               autoComplete="new-password"
@@ -639,7 +639,7 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
               onChange={(event) => setApiKey(event.target.value)}
             />
           </Field>
-          <Field label={configured ? (zh ? "替换 SK" : "Replace SK") : "SK"}>
+          <Field label={configured ? (zh ? "替换 Secret Key" : "Replace Secret Key") : "Secret Key"}>
             <Input
               type="password"
               autoComplete="new-password"
@@ -660,7 +660,7 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
             <>
               <Button type="button" variant="secondary" disabled={pending} onClick={() => void handleVerify()}>
                 {verifyCredentials.isPending ? <Loader2 aria-hidden="true" className="animate-spin" size={16} /> : <CheckCircle2 aria-hidden="true" size={16} />}
-                {zh ? "验证 AK/SK" : "Verify AK/SK"}
+                {zh ? "验证 API Key / Secret Key" : "Verify API Key / Secret Key"}
               </Button>
               <Button type="button" variant="danger" disabled={pending} onClick={() => void handleDelete()}>
                 <Trash2 aria-hidden="true" size={16} />
