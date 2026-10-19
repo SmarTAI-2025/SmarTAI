@@ -64,10 +64,26 @@
 }
 @media print{.topbar{display:none!important}}
 
-/* Center the desktop wordmark over the contents column without shifting tabs/actions. */
-@media(min-width:701px){
- .topbar .brand{position:relative;left:calc((var(--sidebar) - 11rem)/2 - max(1.5rem,(100vw - 1260px)/2))}
+/* Center contents, article and page outline as one reading frame. */
+@media screen and (min-width:701px){
+ :root{--guide-width:1412px;--guide-gutter:max(24px,calc((100vw - var(--guide-width))/2))}
+ .sidebar{left:var(--guide-gutter)}
+ .layout{width:min(calc(100% - 48px),var(--guide-width));margin-left:auto;margin-right:auto;padding-left:var(--sidebar)}
+ .reading-layout{max-width:none;grid-template-columns:minmax(0,1fr) 152px;gap:58px;padding:49px 32px 60px 58px}
+ .topbar .brand{position:relative;left:calc(var(--guide-gutter) + (var(--sidebar) - 11rem)/2 - max(1.5rem,calc((100vw - 1260px)/2)))}
 }
-@media(min-width:701px) and (max-width:1020px){
- .topbar .brand{left:calc((var(--sidebar) - 11rem)/2 - 1rem)}
+@media screen and (min-width:701px) and (max-width:1240px){
+ .reading-layout{grid-template-columns:minmax(0,1fr);gap:32px;padding-left:32px}
+}
+@media screen and (min-width:701px) and (max-width:1020px){
+ :root{--guide-gutter:16px}
+ .layout{width:calc(100% - 32px)}
+ .topbar .brand{left:calc(var(--guide-gutter) + (var(--sidebar) - 11rem)/2 - 1rem)}
+}
+@media screen and (min-width:1600px){.reading-layout{padding-top:62px}}
+
+/* Extend the header rule beyond the outer text edges of all three columns. */
+@media screen and (min-width:1241px){
+ .topbar-inner{border-bottom-color:transparent}
+ .topbar::after{content:"";position:absolute;left:calc(var(--guide-gutter) + 20px);right:calc(var(--guide-gutter) + 12px);bottom:0;height:1px;background:var(--line);pointer-events:none}
 }
