@@ -87,7 +87,7 @@ async def prepare_saved_question_packages(sources, *, provider, reporter, score_
     overlap = (chunk_settings or {}).get("chunk_overlap", max(0, settings.source_chunk_overlap_chars))
     chunks = _chunk_problem_text(text, chunk_size, overlap) if chunk_size > 0 else [text]
     if recovered is not None and not completed_chunks:
-        return packages  # An already complete pre-chunk-format artifact.
+        chunks = []  # Reuse extracted rows, but still add requested missing questions below.
     for index, chunk in enumerate(chunks):
         if index < completed_chunks:
             continue
@@ -123,7 +123,7 @@ async def prepare_saved_question_packages(sources, *, provider, reporter, score_
             q_id = f"q{len(packages) + 1}"
             packages[q_id] = dict(q_id=q_id, number=number, type="other", stem="", criterion="", max_score=10)
             actual.add(normalize_question_number(number))
-    return _saved_package_issues(packages, score_policy, outline)
+    return _saved_package_issues(annotate_major_question_structures(packages), score_policy, outline)
 
 
 def _saved_package_issues(packages, score_policy, outline):
