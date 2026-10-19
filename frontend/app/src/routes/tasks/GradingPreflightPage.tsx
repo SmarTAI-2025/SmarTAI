@@ -1,6 +1,5 @@
 import { ManualReviewButton } from "@/components/tasks/ManualReviewButton";
-import { answerReviewAttention } from "@/lib/submissionReview";
-import { questionReviewIssues, questionReviewBlockers, submissionReviewBlockers } from "@/lib/reviewConfirmation";
+import { questionReviewBlockers, submissionReviewBlockers } from "@/lib/reviewConfirmation";
 import { AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, LoaderCircle, Timer } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
@@ -86,8 +85,6 @@ export function GradingPreflightPage() {
   const effectiveBlockingIssues = [...blockingIssues,
     ...(localQuestionBlockers.length ? ["question_review_blocked"] : []),
     ...(localSubmissionBlockers.length ? ["submission_recognition_blocked"] : [])];
-  const hasAttentionWarnings = problems.some(problem => questionReviewIssues(problem).length > 0)
-    || students.some(student => student.stu_ans.some(answer => answerReviewAttention(answer) === "advisory"));
   const hasSourceWarnings = (setupResponse?.readiness.warnings ?? []).some(
     (warning) => warning.startsWith("submission_"),
   );
@@ -106,7 +103,8 @@ export function GradingPreflightPage() {
     && summary.problemCount > 0
     && summary.studentCount > 0,
   );
-  const countdownActive = canStart && autoStartEnabled && !hasAttentionWarnings && !startGrading.isPending;
+  // Automatic and manual start share the same blockers; review advice is informational.
+  const countdownActive = canStart && autoStartEnabled && !startGrading.isPending;
 
   async function handleStart() {
     if (!taskId || !task || startTriggeredRef.current) return;
@@ -133,7 +131,7 @@ export function GradingPreflightPage() {
   startHandlerRef.current = () => { void handleStart(); };
 
   useEffect(() => {
-    if (!canStart || historyView || !autoStartEnabled || hasAttentionWarnings) {
+    if (!canStart || historyView || !autoStartEnabled) {
       setCountdown(AUTO_START_SECONDS);
       return;
     }
@@ -143,7 +141,7 @@ export function GradingPreflightPage() {
       setCountdown((current) => Math.max(0, current - 1));
     }, 1000);
     return () => window.clearInterval(intervalId);
-  }, [autoStartEnabled, canStart, hasAttentionWarnings, historyView, taskId]);
+  }, [autoStartEnabled, canStart, historyView, taskId]);
 
   useEffect(() => {
     if (countdownActive && countdown === 0) startHandlerRef.current();
@@ -210,9 +208,7 @@ export function GradingPreflightPage() {
                     <p className="mt-1.5 text-[12px] leading-5 text-muted-foreground">
                       {countdownActive
                         ? copy(locale, isRegrading ? "regradeCountdownDescription" : "countdownDescription")
-                        : disabledReason ?? (hasAttentionWarnings
-                          ? (locale === "zh-CN" ? "部分内容需要重点核对，自动开始已暂停；你可以先核对，也可自行决定开始批改。" : "Some inputs need a closer look. Automatic start is paused; review them or start grading when you are ready.")
-                          : copy(locale, isRegrading ? "regradeReadyMessage" : "readyMessage"))}
+                        : disabledReason ?? copy(locale, isRegrading ? "regradeReadyMessage" : "readyMessage")}
                     </p>
                     {countdownActive ? <p className="mt-1 text-[11px] font-semibold text-primary">{countdown} {copy(locale, "countdownUnit")}</p> : null}
                   </div>
@@ -232,9 +228,7 @@ export function GradingPreflightPage() {
                     className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[8px] bg-primary px-5 text-[13px] font-semibold text-primary-foreground outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {startGrading.isPending ? <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" /> : null}
-                    {hasAttentionWarnings && canStart && !startGrading.isPending
-                      ? (locale === "zh-CN" ? "仍然开始批改" : "Start Grading Anyway")
-                      : copy(locale, startGrading.isPending ? "starting" : isRegrading ? "regradeNow" : "startNow")}
+                    {copy(locale, startGrading.isPending ? "starting" : isRegrading ? "regradeNow" : "startNow")}
                     {!startGrading.isPending ? <ChevronRight aria-hidden="true" className="h-4 w-4" /> : null}
                   </button>
                 </div>
