@@ -1,0 +1,615 @@
+[
+  {
+    "id": "quickstart",
+    "title": "快速开始",
+    "intro": "从一份作业开始：准备题目，核对作答，批改复核，再查看成绩。",
+    "sections": [
+      {
+        "title": "第一次使用，先准备这些",
+        "body": "<ul><li>教师账号，以及至少一个可用模型。</li><li>题目文件；参考答案、评分标准、编程测试资料可选。</li><li>学生作答：每位学生一份文件，多份文件打包为 ZIP。</li><li>如需按名单匹配，准备含“学号”“姓名”表头的 CSV、TSV 或 TXT。</li></ul>"
+      },
+      {
+        "title": "完成一轮批改",
+        "body": "<ol><li>在“新建任务”填写名称、学期，可选课程和标签。</li><li>上传题目，设置每题满分，点击“识别并准备题目资料”。</li><li>在题目矩阵检查题干、满分、评分标准和标答。</li><li>上传学生作答，核对学生身份与每题内容。</li><li>选择批改模型和评分方式，保存后核对批改摘要。</li><li>批改完成后先处理红色项目，再进入“学情分析与导出”。</li></ol><p class=\"warning\">批改摘要检查通过后会倒计时自动开始。要修改设置，请在倒计时结束前点击“返回修改批改设置”。</p>"
+      },
+      {
+        "title": "记住两个颜色",
+        "body": "<p><strong>红色“需要处理”</strong>：有缺项、无有效分数或待确认的关键问题，处理后才能继续。</p><p><strong>黄色“建议处理”</strong>：值得核对，但不阻止继续。例如置信度低于 0.60，或部分专家未完成但已有有效评分。</p><p class=\"note\">保存修改与确认复核是两步。改完内容后先保存，再点击确认。</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "account",
+    "title": "注册与登录",
+    "intro": "使用学校邮箱创建教师账号，也可以用已有账号继续工作。",
+    "sections": [
+      {
+        "title": "创建教师账号",
+        "body": "<ol><li>在登录页点击“邮箱验证注册”。</li><li>填写用户名、学校邮箱、密码及确认密码。</li><li>点击“发送验证链接”，打开邮件并完成验证。</li><li>验证完成后返回登录页，进入工作台。</li></ol><p class=\"secondary\">用户名至少 3 个字符；密码为 8–128 个字符。验证链接 30 分钟内有效，验证完成前不会创建账号。</p>",
+        "details": [
+          {
+            "title": "没收到验证邮件",
+            "body": "<p>先检查垃圾邮件；在邮件提示页按页面倒计时重新发送。若提示邮箱域名不符合要求，按页面说明核对学校邮箱。</p>"
+          }
+        ]
+      },
+      {
+        "title": "登录与找回密码",
+        "body": "<p>选择“用户名登录”或“邮箱登录”，输入密码后点击“登录”。忘记密码时，点击“忘记密码”，按邮件链接设置新密码。</p><p>右上角用户名菜单中可以进入“账户设置”“模型与 BYOK”或退出登录。登录过期后重新登录，再从工作台或历史任务打开原任务。</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "workspace",
+    "title": "工作台与历史任务",
+    "intro": "工作台回答“现在先做什么”；历史任务用于查找、筛选和继续以前的工作。",
+    "sections": [
+      {
+        "title": "从工作台继续任务",
+        "body": "<p>任务列表显示课程与标签、当前阶段、进度、预计时间和下一步入口。优先查看需要你继续的任务，再看后台处理中及已生成结果的任务。</p><ul><li>识别或批改进行中：打开进度页查看动态。</li><li>待校对：进入对应的题目、作答或分数矩阵。</li><li>暂停：点击对应继续入口，或转为人工处理。</li><li>已有结果：进入复核或结果分析。</li></ul><p class=\"secondary\">预计时间缺少可靠样本时显示“估算中”；不是卡住的判定依据。</p>"
+      },
+      {
+        "title": "在历史任务中查找",
+        "body": "<p>“历史任务”分为“作业批改”“教材识别”“暂存草稿”。按名称等条件搜索，结合学期、课程、标签或状态筛选，再点击任务入口回到当前阶段。</p><p>查不到任务时，先清除筛选条件。课程与标签用于整理任务，不必为每次作业重复新建同名课程。</p><p>也可以使用“SmarTAI 智能筛选任务”，例如“春季高数还没批完的任务”。检查生成的条件，逐项移除或清除智能条件；遇到歧义，先从真实候选项中确认。智能筛选暂不可用时，普通搜索与筛选仍可用。</p>"
+      },
+      {
+        "title": "整理任务信息",
+        "body": "<p>任务名称、学期、课程和标签可在任务信息编辑入口调整。保存前如提示内容已被其他页面修改，先核对新内容，再重新保存，避免旧页面覆盖新修改。</p><p class=\"warning\">删除操作请先核对页面列出的影响范围。课程资料库中长期保存的资料与任务原件分开管理。</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "models",
+    "title": "模型与 BYOK",
+    "intro": "BYOK 就是使用自己的模型 API 配置。配置一次后，可在不同任务和阶段选择使用。",
+    "sections": [
+      {
+        "title": "添加并启用模型",
+        "body": "<ol><li>打开右上角用户名菜单 →“模型与 BYOK”→“添加模型配置”。</li><li>选择服务商，填写模型名称和 API key；配置名称可留空。</li><li>通常保留默认 API Base URL。使用中转时，按中转方文档填写地址和模型 ID。</li><li>保存并启用，在任务页选择模型。</li></ol><p class=\"note\">保存配置不会发起模型调用。文本测试和图像测试都是可选排错步骤，不是开始任务的前置条件。</p>",
+        "details": [
+          {
+            "title": "Base URL、协议与 RPM 怎么填",
+            "body": "<p>Base URL 保留 /v1 等前缀，不要附加 /chat/completions 等操作路径。API 协议通常保持“跟随厂商”；仅在中转方明确要求时调整。RPM 留空或填 0 表示不额外限速。并发由系统自动调节，资源不足时排队。</p>"
+          }
+        ]
+      },
+      {
+        "title": "测试与管理配置",
+        "body": "<p>“验证（可选）”检查文本连通性；“验证视觉能力”检查图片输入。确认测试提示后才会发出请求，测试可能消耗服务商额度。失败时点按原因文字展开完整说明。</p><ul><li>“本次未能确认”表示这次测试没有得到明确结果，不能直接认定模型不支持图片。</li><li>编辑配置时 API key 留空保留原密钥。</li><li>可设为默认、启用、停用或删除；停用或删除默认模型前，先选另一个默认模型。</li><li>题目识别、作答识别和正式批改可选择不同模型。</li></ul><p class=\"secondary\">“已启用”表示可被选择，不等于服务商实时在线。余额、用量和可用额度请从页面下方“服务商官方入口”查看。</p>"
+      },
+      {
+        "title": "大模型与 OCR 服务的选择与使用",
+        "body": "<p>大模型与 OCR 服务承担不同工作：大模型用于理解题目、生成参考内容与批改；支持图片输入的大模型也可识别图片、扫描件和手写作答。OCR 服务用于提取文档中的文字与结构，识别完成后的批改仍需选择批改模型。请根据文件类型、识别效果和服务额度选择，并校对识别结果。</p><p>大模型 API 在“添加模型配置”中填写服务商、模型名称、API Key 与接口基础地址。OCR 使用对应服务的凭据配置区：例如，百度文档解析使用独立的 API Key / Secret Key 配置区，保存后可验证凭据；服务权限与额度会在实际 OCR 任务中检查。</p><p>服务商入口包括 Google、OpenAI、Anthropic、DeepSeek、智谱、Kimi、千问、腾讯 TokenHub、豆包、MiniMax，以及百度 OCR。在页面下方找到对应服务商，点击“密钥”进入官方控制台申请，再回到相应配置区填写。模型名称从该服务商的“文档”核对；免费额度、余额和账单从“用量”查看。中转渠道使用中转方提供的 Key、Base URL 和模型 ID，有问题优先联系中转方。</p><p class=\"note\">需要逐项填写或申请密钥？查看 <a href=\"#api-smartai\">模型配置步骤</a>、<a href=\"#api-providers\">11 家厂商申请指南</a>，或 <a href=\"#api-relay\">学校及其他中转接口</a>。</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "library",
+    "title": "课程资料库",
+    "intro": "把会反复使用的教材、讲义、答案和评分标准集中保存，下次直接选用。",
+    "sections": [
+      {
+        "title": "上传与分类",
+        "body": "<ol><li>打开“课程资料库”，点击“上传资料”。</li><li>选择 PDF、TXT 或 Markdown 文件。</li><li>按需选择课程、分组、资料类型，填写标签后上传。</li><li>查看解析进度，确认资料已可用。</li></ol><p>资料类型有教材、课后答案、讲义、评分标准和其他。“新建分组”可以把同一章节或教学单元的资料放在一起。</p>",
+        "details": [
+          {
+            "title": "什么时候选“仅提取已有文字”",
+            "body": "<p>文件有可直接读取的文字、且不需要模型解析时，可选择“仅提取已有文字（不调用模型）”。扫描页和图片需要相应识别能力。是否成功入库，以资料的页面状态和可用内容为准。</p>"
+          }
+        ]
+      },
+      {
+        "title": "查找、引用与管理",
+        "body": "<p>用顶部搜索查找文件名、标签或分组，按类型筛选。上传题目时可从资料库选择来源；批改设置中也可选择教材、讲义等补充上下文。</p><p>资料管理可以修改名称、课程、分组和标签，不会改写已解析正文。删除前检查任务引用提示；删除资料也会解除关联引用。</p>"
+      },
+      {
+        "title": "解析不完整时",
+        "body": "<p>打开资料的识别状态，查看失败或未完成页及原因。需要时选择重试模型，补读未完成页面；已经成功的页面会保留，更换重试模型也不必把成功页重新读取。</p><p class=\"note\">课程资料库使用独立存储空间。已保存到资料库的内容长期保留，不随批改任务删除；删除后的空间由系统后台回收。</p>"
+      },
+      {
+        "title": "检索资料中的内容",
+        "body": "<p>文件名搜索用于找文件；下方“资料内容检索”用于查正文片段。先把资料范围缩小到 20 份以内，输入关键词或题目，再打开检索结果的来源引用查看对应位置。</p><p>默认“本地检索”不需要模型辅助；选择“模型辅助”可帮助理解查询，只发送查询而不发送教材，可能产生模型费用。辅助失败时仍可查看本地检索结果。批改设置的任务资料区域也提供相同检索入口。</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "create",
+    "title": "新建任务与草稿",
+    "intro": "先给这次作业一个清楚的名称，再进入题目准备。",
+    "sections": [
+      {
+        "title": "填写任务信息",
+        "body": "<p>点击“新建任务”，填写任务名称并选择学期。课程和标签可选：搜索已有项目，或按页面入口新建后选中。点击继续进入“题目与资料上传”。</p><p class=\"secondary\">例如：任务名称“高等数学 · 第三章作业”，课程“高等数学”，标签“第三章”。刚输入但还没选中或创建的课程、标签，需要先确认。</p>"
+      },
+      {
+        "title": "暂存、恢复与正式保存",
+        "body": "<p>遇到“暂存草稿”提示时，可保留当前填写内容，稍后从“历史任务 → 暂存草稿”或原页面恢复。编辑题干、标答等内容后，点击各区域的“保存”才会写入任务。</p><p class=\"warning\">草稿中保留文件名，不一定代表文件仍可上传。看到“待重新选择”时请重新选文件；看到“已上传文件可继续使用”时可直接继续。</p><p>若草稿与服务器内容冲突，先查看差异，再明确恢复或删除旧草稿。多页面同时编辑同一任务时，优先关闭旧页面。</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "questions",
+    "title": "题目与资料上传",
+    "intro": "只需要提供题目来源；其余材料可以上传，也可以由 SmarTAI 准备。",
+    "sections": [
+      {
+        "title": "四类资料分别放什么",
+        "body": "<ul><li><strong>题目（必填）</strong>：完整题干、条件、图表，可上传或从课程资料库选择。</li><li><strong>标答（可选）</strong>：可只提供最终答案，使用生成模型时可补全可审核的解题过程。</li><li><strong>评分标准（可选）</strong>：上传文件、从资料库选取，或用自然语言描述。</li><li><strong>测试样例（可选）</strong>：仅编程题使用，可提供输入、期望输出、解释与隐藏测试。</li></ul><p>每类可添加多份资料。使用可生成内容的模型时，缺少的标答和评分标准会在统一准备中生成，之后仍可逐题修改。若仅使用百度 OCR 读取资料，缺失内容请在校对阶段手动补齐，或选择生成模型补全。</p><p class=\"secondary\">题目及常规资料以页面列出的 PDF、TXT、Markdown、图片格式为准；编程测试资料可用 PDF、TXT、Markdown、JSON，不接受图片。</p>"
+      },
+      {
+        "title": "缩小识别范围",
+        "body": "<p>“已按题整理”适合题号清楚的作业文件；“从原文提取”适合教材和长文档。按需填写页码、目标题号及补充说明，避免把整本教材的习题都加入任务。</p><ul><li>页码填 PDF 的实际页序号，例如 3-5, 8，而不是书页印刷页码。</li><li>题号例如 1.1.5, 1.2.3；同节范围可写 1.1.5-1.1.7。</li><li>“第 3 章练习，保留图表”等说明写在补充说明中。</li></ul><p>评分标准用自然语言描述时，可选“按题描述”或“整体规则”。按题描述需写清题号；整体规则会结合每题标答整理成评分步骤。</p>"
+      },
+      {
+        "title": "设置满分与生成语言",
+        "body": "<p>在“设置题目满分”中填写统一分值，或打开“每题满分不同”，按题号描述各题分值。例如“第 1–3 题每题 5 分，第 4 题 15 分”。</p><p class=\"note\">未主动设置或未匹配到的题目会暂按 10 分，并提醒核对。识别后务必在题目详情检查满分；模型批改使用该题的已保存满分。</p><p>选择中文或英文生成语言，再选择“题目识别模型”，点击“识别并准备题目资料”。生成语言会沿用于材料生成、补充生成及重试；切换界面语言不会覆盖已选语言。</p>"
+      },
+      {
+        "title": "看进度，或中途接手",
+        "body": "<p>进度页显示完成数、百分比和识别动态。等待名额、等待响应与重试会分别显示。可以返回工作台，稍后继续查看。</p><p>暂停或失败后，按提示重试或“人工继续处理”。人工继续处理进入原题目矩阵，已识别内容与可用原件保留。若不知道完整题数，先补齐数量，再逐题填写。</p><p class=\"warning\">出现失败页、未读页或漏题时，先补读或人工核对，不能把未读取内容当作没有题目。若提示上次请求可能已计费，重新提交前核对提示。</p>",
+        "details": [
+          {
+            "title": "人工继续的额度说明",
+            "body": "<p class=\"secondary\">若目前只有已识别文字，系统可能先调用模型整理，会消耗额度；整理完成后进入原复核矩阵。</p>"
+          }
+        ]
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "question-review",
+    "title": "题目校对与资料补全",
+    "intro": "先核对题目与分值，再确认标答、评分标准和编程测试材料。",
+    "sections": [
+      {
+        "title": "在矩阵中找到需要处理的题",
+        "body": "<p>题目总览按题展示准备状态，支持搜索、筛选和进入详情。优先打开红色“需要处理”项目，再处理黄色建议。可新增题目行，或把不属于本次作业的行移出当前范围。</p><p>详情中对照原件查看题干、参考答案、评分标准及测试资料。每块内容单独编辑和保存；确认按钮与切题按钮可连续完成逐题校对。</p><p class=\"note\">后续阶段可能锁定资料正文，此时可以浏览与复核确认。需要修改时先按任务提供的返回或重做入口处理。</p><p>打开原件预览后，PDF 可翻页、调整缩放并定位页码；图片可直接对照查看。TXT 等未提供预览的格式按页面提示处理，不代表识别内容丢失。</p>"
+      },
+      {
+        "title": "满分与评分标准一起核对",
+        "body": "<p>“本题满分与评分标准”可一起修改。满分应为 0.01–10000 之间、最多两位小数的正数。若评分标准明确列出小问分值，小问仍属于同一道大题，合计必须等于本题满分。</p><p>没有绝对分项分值时，可以使用百分比或自由文本评分标准。例如“推导过程 60%，结论 40%”。系统生成的过程评分会按对应步骤组织；客观题按题目适用的结果规则核对。</p><p class=\"warning\">缺少题干、评分标准，或分项分值冲突时，先修正再确认。批量确认不能跳过实际缺项。</p>"
+      },
+      {
+        "title": "补充资料的三种方式",
+        "body": "<ul><li><strong>直接编辑</strong>：少量修订，在题目详情修改后保存。</li><li><strong>批量导入资料</strong>：选择评分标准、标答或测试样例，从资料库或新文件导入；核对“明确匹配”“可能匹配”“存在冲突”，再点击“应用已确认的匹配”。覆盖现有内容需明确选择。</li><li><strong>SmarTAI 补全缺失项</strong>：先查看缺失清单，取消不需要生成的项，再点击“确认并开始生成”。只补空缺，不覆盖已有内容。</li></ul><p class=\"secondary\">补全预检不调用模型。生成失败后可重新选择仍缺失的项，也可以直接人工填写。参考答案缺失通常是建议核对，不等于评分标准可以留空。</p>"
+      },
+      {
+        "title": "编程题多检查这几项",
+        "body": "<p>查看示例正确代码、运行模式、各测试输入、期望输出和解释。函数模式与标准输入模式的资料分别按对应结构显示；展开完整样例再核对，别只看第一条。</p><p>空字符串可能是有效测试值，与缺少字段不同。页面用“公开样例”和“隐藏测试”区分测试类型。点击“修改”可编辑标题、输入、期望输出、解释和公开/隐藏类型，也可增删样例；编辑后点击“保存测试样例”。留意材料来源标签，区分生成内容、上传内容与教师确认状态。</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "submissions",
+    "title": "上传与校对学生作答",
+    "intro": "先把每份作答对应到正确的学生，再确认每道题的识别内容。",
+    "sections": [
+      {
+        "title": "整理并上传作答",
+        "body": "<p>每位学生一份文件，多份文件打包成 ZIP。一个合并了全班作答的 PDF，请先按学生拆分。</p><p>点击“选择文件”或拖入文件，选择作答识别模型。支持 PDF、TXT、Markdown、CSV、JPG、PNG、WebP 和受支持的压缩包；图片与扫描 PDF 会使用 OCR。</p><p class=\"warning\">已有作答时，重新上传会替换当前识别内容，使已有批改结果需要重新生成。只想保留旧任务并做另一份作业时，请新建任务。</p>"
+      },
+      {
+        "title": "选择身份匹配方式",
+        "body": "<ul><li><strong>按文件名识别学号</strong>：优先看每份文件名，再用文内信息补充；上传前把文件名整理为清楚的学号与姓名。</li><li><strong>导入名单</strong>：上传 CSV、TSV 或 TXT，表头包含“学号”“姓名”；不能唯一匹配的作答会进入复核。</li><li><strong>手动校正</strong>：先识别可能身份，每位学生都需要人工核对。</li></ul><p>选择后点击“开始识别作答”。名单模式下缺少名单时不能开始；改换方式后按新方式核对。</p>"
+      },
+      {
+        "title": "核对身份、作答与原件",
+        "body": "<p>在学生作答矩阵查看学生行与各题状态，进入学生详情，对照原件核对身份和作答。可以新增或删除当前范围的学生行；人工继续处理人数不明时先补齐人数。</p><p>姓名、学号、身份冲突，以及缺少应有作答记录都要处理。内容正确但仍标记待确认时，可以保留原值并明确确认。</p><p class=\"warning\">学生确实没答，可以确认空白；因为识别失败而显示空白，不能直接当作学生没答。先重试、手工补录，或核对原件后明确确认空白。</p>"
+      },
+      {
+        "title": "识别未完成怎么办",
+        "body": "<p>查看文件的成功、失败和未读页。暂停后可继续识别，也可人工继续处理；已有答案、身份及已保存片段会保留。使用原文件、原模型重试时，系统尽量复用成功页，补读失败页。</p><p>只有文件名、没有可复用文件时重新选择；提示“正在核对”时先等检查完成，提示检查失败时先重试检查。补齐红色问题后，再进入批改设置。</p>",
+        "details": [
+          {
+            "title": "人工继续的额度说明",
+            "body": "<p class=\"secondary\">若目前只有已识别文字，系统可能先调用模型整理，会消耗额度；整理完成后进入原复核矩阵。</p>"
+          }
+        ]
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "grading",
+    "title": "批改设置与运行",
+    "intro": "选择本次使用的模型、评分方式和反馈风格，再核对摘要开始批改。",
+    "sections": [
+      {
+        "title": "选择模型与综合方式",
+        "body": "<p>至少选择一个已启用模型。本页选择只影响本次任务，不会改动“模型与 BYOK”的全局启用状态。</p><ul><li><strong>单模型批改</strong>：仅调用所选模型。</li><li><strong>加权平均</strong>：默认按置信度合成有效评分，可改为自定义正数比例，如 1:2。</li><li><strong>综合评审</strong>：主模型综合评语；分数仍按设置的权重合成，会增加模型调用。</li></ul><p class=\"secondary\">失败专家不参与分数合成，其余权重重新归一化。没有有效置信度时使用等权平均。AI 最终分保留一位小数。</p>"
+      },
+      {
+        "title": "评分方式、反馈和资料",
+        "body": "<p>选择严格度、是否允许部分分。高级设置中可调整评语语气、长度、语言、改进建议、单模型采样次数及批改注意事项。</p><p>可选教材、讲义或背景资料作为补充上下文；任务资料最多 20 份。选择“不使用任务资料”时，已确认的逐题题干、标答和评分标准仍参与批改。</p><p class=\"note\">多采样仅适用于单个自有模型，会增加调用量。多个模型各运行一次；平台共享模型如可用，须单独使用并固定单次采样。</p>"
+      },
+      {
+        "title": "保存后会自动倒计时",
+        "body": "<p>点击“保存并查看批改摘要”，核对题数、学生数、评分标准、标答、专家组合及评分策略。检查通过后自动倒计时；也可点“立即开始批改”。要修改请点击“返回修改批改设置”。</p><p>有红色问题时，摘要提供题目、作答或模型配置入口。先补齐后再保存设置；暂停或失败后，即使不改配置，重新保存也会进入新的摘要流程。</p>"
+      },
+      {
+        "title": "进度、暂停与继续",
+        "body": "<p>进度页分别显示各模型已完成、等待名额、等待响应、重试状态，以及已保存 AI 工作与已汇总题次。展开动态查看过程；可以离开页面，后台继续。</p><p>暂停后可继续未完成工作，或“人工继续处理”进入原复核矩阵，保留已有分数与评语。不要把“一个专家已完成”误当作“整道题已完成汇总”。</p><p class=\"secondary\">继续运行会复用兼容的已保存结果。重新识别全部资料或整批重批属于更大范围的重新执行，启动前看清按钮与提示。</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "review",
+    "title": "分数复核与重批",
+    "intro": "从班级矩阵定位问题，再对照作答、评分依据和专家意见决定最终分数。",
+    "sections": [
+      {
+        "title": "先处理红色，再看黄色",
+        "body": "<p>红色包括没有有效评分、分数超出 0 到满分范围，以及补上合法分数后尚未确认的项目。进入详情补分、保存并确认后才能继续。</p><p>黄色包括低置信评分、专家分歧，以及部分专家失败但已有有效评分。0 分也属于有效评分，不能把模型失败记成 0 分。</p><p class=\"secondary\">低置信提示使用固定 0.60 标准。专家分歧指至少两位有效评分的总体标准差除以本题满分，严格大于 15%。这些提示本身不阻止进入结果。</p>"
+      },
+      {
+        "title": "逐题查看与确认",
+        "body": "<p>从矩阵点击指定学生、题目进入详情。查看识别作答、原件、评分依据及各专家分数和评语；需要时修改教师最终分与批注，保存后确认。</p><p>确认与切题按钮在同一区域，可连续核对上一题、下一题。正在编辑的内容先保存或取消，再进行确认；批量确认只处理符合条件的项目，不能掩盖缺分。</p><p class=\"note\">分数矩阵不增加题目行或学生行。人数、题数需要调整时，使用前面的题目或作答准备页面。</p>"
+      },
+      {
+        "title": "只重试失败项，还是整批重批",
+        "body": "<ul><li><strong>只重试失败项</strong>：用于补齐未完成的模型工作；已保存的教师改分和批注保留。</li><li><strong>整批重新批改</strong>：进入重批设置及摘要，明确启动新一轮；即使输入不变，也会重新执行。</li></ul><p>历史报告保留原版本内容。完成新一轮复核后，到报告页生成新版，不会悄悄改写以前下载的报告。</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "results",
+    "title": "成绩分析与报告",
+    "intro": "“学情分析与导出”把班级总览、逐题分析、学生分析、图表和下载分开呈现。",
+    "sections": [
+      {
+        "title": "总览与题目分析",
+        "body": "<p>总览查看学生数、题目数、班级平均得分率、及格率、分数分布和薄弱题目。点击“题目分析”查看各题表现，再进入详情查看题目材料、学生作答与评分。</p><p>搜索、筛选和排序帮助你定位低分题或需复核项目。需要改分时，通过“返回复核记录”回到复核；保存后统计和图表更新。</p>"
+      },
+      {
+        "title": "学生分析",
+        "body": "<p>学生表显示总分、得分率、逐题分数和复核信号，可按列排序或筛选。点击学生详情，查看个人逐题表现；点击具体分数可定位该题。</p><p>在 Ask 输入明确条件，例如“筛选得分率低于 60% 的学生，按得分率从低到高”。查看返回的筛选条件，必要时清除条件恢复全班。</p><p class=\"secondary\">涉及同名或精确姓名时，按澄清提示补充身份。置信度是结果核对信号，不是学生能力分数。</p>"
+      },
+      {
+        "title": "Ask 与可视化分析",
+        "body": "<p>在“可视化分析”描述对象、指标和图表形式，例如“比较各题平均得分率”或“画出总分率与平均置信度散点图”。生成图表会按需调用模型。</p><p>Ask 可在一次请求中提出图表、筛选与排序；图表和主表可使用不同范围，例如全班图表配合低分学生列表。请核对图表标注的样本和范围。</p><p>默认图表包括得分率分布、及格构成、逐题得分率与复核量、散点图和学生×题目热力图。可按页面入口导出图表或打印。</p><p class=\"note\">自定义图表“保存到本次浏览”不等于生成正式报告；需要长期留存时及时导出。</p>"
+      },
+      {
+        "title": "生成与下载报告",
+        "body": "<ol><li>进入“报告与下载”，确认复核已满足要求。</li><li>若最新报告尚未生成，点击生成报告。</li><li>下载单个文件，或一次下载 ZIP。</li><li>后来修改了分数或重批时，重新生成报告，核对版本号与生成时间。</li></ol><ul><li>成绩表 CSV：最终分、总分率和逐题得分。</li><li>学情报告 Markdown：班级、题目与学生事实汇总。</li><li>发布版标答 Markdown / LaTeX：题干、评分标准与参考答案。</li><li>正式结果 JSON：完整结果快照。</li></ul><p class=\"secondary\">历史版本可单独下载；删除历史报告不删除批改分数和复核记录。当前页面数据更新后，旧报告仍保留生成时的内容。</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "settings",
+    "title": "账户设置与常见问题",
+    "intro": "调整显示偏好，查看空间占用；遇到阻断时，从页面给出的原因开始处理。",
+    "sections": [
+      {
+        "title": "界面与存储",
+        "body": "<p>右上角用户名菜单 →“账户设置”，查看用户名、邮箱和角色；选择中文或英文，以及浅色、深色或跟随系统。界面偏好只保存在当前浏览器。</p><p>任务原文件空间统计题目原件、提交包和学生作答原件；资料库空间另行统计。原件按保留规则清理后，结构化结果、分析和长期资料库内容仍保留，但原件预览可能不再可用。</p><p>账户设置中也可管理本地草稿。删除前确认不再需要这些未正式保存的内容。</p><p>任务原文件空间与资料库空间分别计算，默认各为 512 MB（页面显示单位；实际为 512 MiB，即 536,870,912 字节）。管理员可调整配额，请以当前页面显示的上限为准。</p>"
+      },
+      {
+        "title": "按钮点不下去",
+        "body": "<p>点击或查看按钮附近的原因提示：常见情况是缺题目文件、没有可用模型、名单未上传、文件检查中、资料数量已达上限，或还有红色必处理项。按提示补齐后再继续。</p><p>“需要处理”已修好但仍存在时，检查是否只保存了内容、还没有确认。不要反复原样保存或清空标记来跳过真实缺失。</p>"
+      },
+      {
+        "title": "模型失败、页面冲突或文件不见了",
+        "body": "<ul><li>密钥或权限：到“模型与 BYOK”检查服务商、API key、模型 ID。</li><li>模型或接口未找到：同时核对 Model ID 与 Base URL。</li><li>超时或限流：保留当前文件与配置，稍后重试，或选择其他可用模型。</li><li>内容已在其他页面变化：重新加载最新状态，核对保留下来的编辑后保存。</li><li>只有文件名：重新选择；原件可复用：直接继续；检查失败：先重试检查。</li></ul><p class=\"action\">优先用“继续”“只重试失败项”完成剩余部分。需要完全重新处理时，再选择“重新识别全部”或“整批重新批改”。</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "api-smartai",
+    "group": "api",
+    "title": "在 SmarTAI 中配置模型",
+    "intro": "添加自己的 API Key，保存配置，再按需测试文字与图片能力。",
+    "sections": [
+      {
+        "id": "api-overview",
+        "title": "开始之前",
+        "body": "<p>SmarTAI 支持通过自带 API Key 调用不同厂商的模型，按照以下步骤添加配置即可使用。</p><div class=\"note\"><p><strong>无需配置本地代理：</strong> 模型请求由 SmarTAI 平台服务器发起，使用时无需针对不同厂商开启或切换本地 VPN／网络代理。实际调用仍需满足厂商的账号权限、支持地区及接口连通性要求。</p></div><p class=\"secondary\">本指南内容版本：2026 年 10 月；型号与主要额度信息核对至 2026 年 10 月 19 日。型号、免费额度、申请流程与调用限额可能调整，请以厂商官方文档及本人账号控制台为准。</p>"
+      },
+      {
+        "id": "api-entry",
+        "title": "打开「模型与 BYOK」",
+        "body": "<p><strong>入口一：</strong>点击右上角用户名 → <strong>模型与 BYOK</strong>。</p><p><strong>入口二：</strong>点击顶部 <strong>x/x 个模型已启用</strong> → 在展开的菜单中进入模型管理。</p><p>进入“模型与 BYOK”页后，点击右上角 <strong>添加模型配置</strong>。下图同时标出两种入口，随后标出配置页上的添加按钮；红框为说明标注，底图为真实界面截图。</p>"
+      },
+      {
+        "id": "api-fields",
+        "title": "填写并保存",
+        "body": "<p>先在<a href=\"#api-providers\">第 2 节</a>找到要使用的厂商，按步骤申请密钥，再填写以下内容。</p><div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">怎么填</th></tr></thead><tbody><tr><td><strong>服务商</strong></td><td>选择对应厂商。</td></tr><tr><td><strong>配置名称</strong></td><td>可选，例如“作业批改”“图片识别”；留空则默认使用模型名称。</td></tr><tr><td><strong>模型名称</strong></td><td>复制厂商的 <strong>Model ID</strong>。这是模型的调用名称，例如 <code>gemini-3.5-flash-lite</code>，不是中文展示名。</td></tr><tr><td><strong>API key</strong></td><td>粘贴刚申请的密钥，注意不要多复制空格。</td></tr><tr><td><strong>API Base URL</strong></td><td>填接口基础地址，可直接复制各厂商小节中的地址。</td></tr><tr><td><strong>API 协议</strong></td><td>使用厂商官方接口时，保持<strong>跟随厂商</strong>。</td></tr><tr><td><strong>RPM</strong></td><td>每分钟允许发送的请求数。厂商提供了该数值就照填；不清楚可留空或填 <code>0</code>。</td></tr><tr><td><strong>并发</strong></td><td>自动调节，无需填写。</td></tr></tbody></table></div><p>点击 <strong>保存配置</strong>，确认配置为<strong>已启用</strong>。常用的配置可以<strong>设为默认</strong>；需要使用多个模型时，分别添加即可。</p><p>API Key 类似密码，请妥善保管，不要放进截图或发到群聊。保存后页面不会显示完整密钥；编辑配置时，密钥栏留空可保留原密钥。</p><p><strong>费用和限额看哪里？</strong> 到厂商控制台查看“余额 / 免费额度 / 资源包”和“限流 / Limits / Rate Limit”。Token 是厂商统计模型用量的单位，输入和输出都会消耗。免费额度通常有适用模型和有效期；用完后是否继续扣费，取决于账户余额及计费设置。RPM 填 <code>0</code> 只表示不额外排队限速，不代表厂商没有限额。</p>"
+      },
+      {
+        "id": "api-api-connectivity",
+        "title": "测试 API 连通性",
+        "body": "<p>保存后，可以按需测试配置：</p><div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">测试</th><th scope=\"col\">操作</th><th scope=\"col\">适合检查什么</th></tr></thead><tbody><tr><td><strong>文本测试</strong></td><td>点击 <strong>验证（可选）</strong> → <strong>发起连通性验证</strong>。</td><td>密钥、模型名称和接口地址能否正常使用。</td></tr><tr><td><strong>图像测试</strong></td><td>点击 <strong>验证视觉能力</strong> → <strong>发起图像测试</strong>。</td><td>当前模型配置能否正确读取图片。</td></tr></tbody></table></div><p>两种测试都会发送一次真实请求，消耗模型额度，可能产生费用；<strong>取消或关闭确认窗口不会发送请求</strong>。保存配置不会自动测试，测试也不是启用配置的必经步骤。</p><p>图像测试使用系统生成的小图，无需上传作业。显示<strong>已通过</strong>后，仍应检查实际文件的识别结果；显示<strong>本次未能确认</strong>时，先按错误提示排查，不必立即认定模型不能识图。</p><p>验证未通过时，可点按原因文字查看完整说明。若验证通过但仍无法正常批改，请检查实际文件识别结果、模型剩余额度及错误提示。连通性验证通过不代表所有任务都能成功完成。</p>"
+      },
+      {
+        "id": "api-help",
+        "title": "遇到问题怎么办",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">提示或现象</th><th scope=\"col\">处理方法</th></tr></thead><tbody><tr><td>密钥无效、格式错误、没有权限</td><td>重新复制 API Key，检查是否选错厂商、地域或密钥类型。</td></tr><tr><td>模型或接口未找到</td><td>核对 Model ID 和 API Base URL，确认账户已开通该模型。</td></tr><tr><td>限流、额度不足</td><td>查看厂商的余额、赠额有效期和请求限制。分钟限流可稍后重试；每日额度需等厂商重置。</td></tr><tr><td>文本测试通过，图片测试失败</td><td>确认选择的是能处理图片的型号，再检查额度和错误提示。</td></tr><tr><td>连接失败、请求超时</td><td>稍后重试，检查接口地址、厂商服务状态及支持地区；仍无法解决时联系平台管理员。</td></tr></tbody></table></div><p>题目识别、作答识别和批改可以选择不同模型。图片、扫描件和手写作答需要能处理图片的模型；百度 OCR 只负责识别，后续批改仍需大模型。</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-providers",
+    "group": "api",
+    "title": "厂商与 API 申请",
+    "intro": "按需查找厂商，了解申请步骤、填写内容和免费／试用额度。",
+    "sections": [
+      {
+        "id": "api-provider-index",
+        "title": "选择厂商",
+        "body": "<p>以下厂商按页面入口顺序介绍，<strong>不分排名，也不代表推荐优先级</strong>。</p><div class=\"note\"><p><strong>网络访问提示：</strong> 在部分网络环境下，访问 Google Gemini、OpenAI、Anthropic Claude 的官网及 API 控制台可能需要 VPN／网络代理。申请和使用 API 时，请同时遵守厂商的支持地区要求。</p><h3>在 SmarTAI 中使用已配置的模型时，无需开启或切换本地代理。</h3></div><ul><li><a href=\"#api-google\">Google Gemini / Gemma</a></li><li><a href=\"#api-openai\">OpenAI</a></li><li><a href=\"#api-claude\">Anthropic Claude</a></li><li><a href=\"#api-deepseek\">DeepSeek</a></li><li><a href=\"#api-glm\">智谱 BigModel / GLM</a></li><li><a href=\"#api-kimi\">Kimi / Moonshot</a></li><li><a href=\"#api-qwen\">阿里云百炼 / Qwen</a></li><li><a href=\"#api-baidu\">百度文档解析 Unlimited-OCR</a></li><li><a href=\"#api-tencent\">腾讯混元 / TokenHub</a></li><li><a href=\"#api-doubao\">字节豆包 / 火山方舟</a></li><li><a href=\"#api-minimax\">MiniMax</a></li></ul><p>下列填写示例使用厂商官方接口。学校或其他中转接口请看<a href=\"#api-relay\">第 3 节</a>。</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-google",
+    "group": "api",
+    "title": "Google Gemini / Gemma",
+    "intro": "申请与配置 · Google Gemini / Gemma",
+    "sections": [
+      {
+        "id": "api-google-quota",
+        "title": "额度与使用说明",
+        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 下列型号提供 API 免费层，具体请求数和 Token 限额以 AI Studio 的当前项目为准。同一项目的多个密钥共用额度。</p></div><p class=\"note\">Google 免费层的数据处理规则与付费层不同，内容可能用于改进产品。使用前请阅读厂商规则，避免上传未经授权的个人信息。<a href=\"https://ai.google.dev/gemini-api/docs/pricing\">查看官方说明</a>。</p>"
+      },
+      {
+        "id": "api-google-1",
+        "title": "申请密钥",
+        "body": "<ol><li>打开 <a href=\"https://aistudio.google.com/\">Google AI Studio</a>，登录 Google 账号。</li><li>进入 <strong>Dashboard → API Keys</strong>，点击 <strong>Create API key</strong>。</li><li>选择项目；首次使用时，按页面提示创建项目，然后复制生成的密钥。</li><li>在 <a href=\"https://aistudio.google.com/rate-limit\">Rate Limit</a> 中选择同一项目，查看目标模型的 RPM，回到 SmarTAI 填写。</li></ol>"
+      },
+      {
+        "id": "api-google-3",
+        "title": "在 SmarTAI 中填写",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>Google Gemini</strong></td></tr><tr><td>模型名称</td><td><code>gemini-3.5-flash-lite</code>、<code>gemini-3.8-flash</code>、<code>gemma-4-31b-it</code>、<code>gemma-4-26b-a4b-it</code>，任选一个；均可处理文字和图片。</td></tr><tr><td>API key</td><td>刚复制的 Google AI Studio 密钥。</td></tr><tr><td>API Base URL</td><td><code>https://generativelanguage.googleapis.com</code></td></tr><tr><td>API 协议</td><td>跟随厂商（Gemini generateContent）。</td></tr></tbody></table></div><div class=\"note\"><p><strong>模型区别：</strong> <code>gemini-3.5-flash-lite</code> 侧重速度与低成本，<code>gemini-3.8-flash</code> 侧重综合能力；<code>gemma-4-31b-it</code> 和<code>gemma-4-26b-a4b-it</code> 是开放权重模型，后者采用更高效的 MoE 架构。以上型号均支持文字和图片输入。</p></div><p>Gemma 也使用这里的 Google Gemini 入口。使用前请查看<a href=\"https://ai.google.dev/gemini-api/docs/available-regions\">支持地区</a>。</p><p>官方参考：<a href=\"https://ai.google.dev/gemini-api/docs/api-key\">密钥申请说明</a> · <a href=\"https://ai.google.dev/gemini-api/docs/models\">Gemini 模型</a> · <a href=\"https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api\">Gemma 模型</a> · <a href=\"https://ai.google.dev/gemini-api/docs/pricing\">价格与免费层</a>。</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-openai",
+    "group": "api",
+    "title": "OpenAI",
+    "intro": "申请与配置 · OpenAI",
+    "sections": [
+      {
+        "id": "api-openai-quota",
+        "title": "额度与使用说明",
+        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 下列型号没有通用 API 免费层，通常按量付费；账户已有有效 API 赠金时可抵扣。ChatGPT 订阅与 API 费用分开。</p></div>"
+      },
+      {
+        "id": "api-openai-1",
+        "title": "申请密钥",
+        "body": "<ol><li>登录 <a href=\"https://platform.openai.com/\">OpenAI Platform</a>，确认要使用的组织和项目。</li><li>打开 <a href=\"https://platform.openai.com/api-keys\">API keys</a>，点击 <strong>Create new secret key</strong>。</li><li>名称可填 <code>SmarTAI</code>，创建后立即复制密钥。</li><li>在控制台 <strong>Billing</strong> 查看可用余额或赠金，在 <a href=\"https://platform.openai.com/settings/organization/limits\">Limits</a> 查看目标模型的 RPM。</li></ol>"
+      },
+      {
+        "id": "api-openai-3",
+        "title": "在 SmarTAI 中填写",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>OpenAI</strong></td></tr><tr><td>模型名称</td><td><code>gpt-6-luna</code>、<code>gpt-6.1-sol</code>、<code>gpt-6-astra</code>，任选一个；均可处理文字和图片。</td></tr><tr><td>API key</td><td>刚创建的 OpenAI API 密钥。</td></tr><tr><td>API Base URL</td><td><code>https://api.openai.com/v1</code></td></tr><tr><td>API 协议</td><td>跟随厂商（OpenAI Chat Completions）。</td></tr></tbody></table></div><div class=\"note\"><p><strong>模型区别：</strong> <code>gpt-6-luna</code> 侧重速度与低成本，<code>gpt-6.1-sol</code> 兼顾能力与成本，<code>gpt-6-astra</code> 面向更复杂的推理任务。三者均支持文字和图片输入。</p></div><p>官方参考：<a href=\"https://developers.openai.com/api/docs/quickstart\">快速开始</a> · <a href=\"https://developers.openai.com/api/docs/models\">模型列表</a> · <a href=\"https://developers.openai.com/api/docs/pricing\">API 价格</a> · <a href=\"https://developers.openai.com/api/docs/supported-countries\">支持地区</a>。</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-claude",
+    "group": "api",
+    "title": "Anthropic Claude",
+    "intro": "申请与配置 · Anthropic Claude",
+    "sections": [
+      {
+        "id": "api-claude-quota",
+        "title": "额度与使用说明",
+        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 新用户可能获得少量 API 试用额度，实际金额及期限看 Console 的 Billing。符合条件的 Max / Team 订阅用户可领取所含 API 额度；科研项目也可申请专项额度。普通 API 按量计费。</p><p>Max / Team 用户可在 Claude 网页 <strong>Billing → API credits</strong> 关联 Console 组织并领取；新订阅需满 7 天，额度按账期到期，不结转。条件和金额见<a href=\"https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers\">订阅 API 额度说明</a>。</p></div>"
+      },
+      {
+        "id": "api-claude-1",
+        "title": "申请密钥",
+        "body": "<ol><li>登录 <a href=\"https://platform.claude.com/\">Claude Platform</a>。</li><li>进入 <strong>Settings → API Keys</strong>，点击 <strong>Create key</strong>。</li><li>选择工作区，名称可填 <code>SmarTAI</code>，创建后复制密钥。</li><li>在 <a href=\"https://platform.claude.com/settings/billing\">Billing</a> 查看有效额度，在 <a href=\"https://platform.claude.com/usage/limits\">Usage → Limits</a> 查看当前 RPM。</li></ol>"
+      },
+      {
+        "id": "api-claude-3",
+        "title": "在 SmarTAI 中填写",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>Claude（Anthropic）</strong></td></tr><tr><td>模型名称</td><td><code>claude-sonnet-5-5</code>、<code>claude-opus-5-5</code>、<code>claude-haiku-5-5</code>，任选一个；均可处理文字和图片。</td></tr><tr><td>API key</td><td>刚创建的 Claude API 密钥。</td></tr><tr><td>API Base URL</td><td><code>https://api.anthropic.com</code></td></tr><tr><td>API 协议</td><td>跟随厂商（Anthropic Messages）。</td></tr></tbody></table></div><div class=\"note\"><p><strong>模型区别：</strong> <code>claude-haiku-5-5</code> 侧重速度与低成本，<code>claude-sonnet-5-5</code> 兼顾速度与能力，<code>claude-opus-5-5</code> 面向更复杂的任务。三者均支持文字和图片输入。</p></div><p>官方参考：<a href=\"https://platform.claude.com/docs/en/api/overview\">API 入门</a> · <a href=\"https://platform.claude.com/docs/en/models/overview\">模型列表</a> · <a href=\"https://platform.claude.com/docs/en/about-claude/pricing\">价格与试用</a> · <a href=\"https://www.anthropic.com/news/expanding-support-for-scientists\">科研额度申请</a> · <a href=\"https://platform.claude.com/docs/en/api/supported-regions\">支持地区</a>。</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-deepseek",
+    "group": "api",
+    "title": "DeepSeek",
+    "intro": "申请与配置 · DeepSeek",
+    "sections": [
+      {
+        "id": "api-deepseek-quota",
+        "title": "额度与使用说明",
+        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 模型 API 按量付费，账户已有赠送余额时优先抵扣。当前官方公开说明未列出统一的新用户赠额；网页聊天免费不等于 API 免费。</p></div>"
+      },
+      {
+        "id": "api-deepseek-1",
+        "title": "申请密钥",
+        "body": "<ol><li>登录 <a href=\"https://platform.deepseek.com/\">DeepSeek 开放平台</a>。</li><li>打开 <a href=\"https://platform.deepseek.com/api_keys\">API keys</a>，创建并复制密钥。</li><li>在<a href=\"https://platform.deepseek.com/balance\">余额页</a>查看充值余额、赠送余额及有效期；余额不足时按需充值。</li><li>回到 SmarTAI，选择 DeepSeek，填写以下内容并保存。</li></ol>"
+      },
+      {
+        "id": "api-deepseek-3",
+        "title": "在 SmarTAI 中填写",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>DeepSeek</strong></td></tr><tr><td>模型名称</td><td><code>deepseek-flash</code>：文字、图片；<code>deepseek-v4-pro</code>：文字。任选一个。</td></tr><tr><td>API key</td><td>刚创建的 DeepSeek 密钥。</td></tr><tr><td>API Base URL</td><td><code>https://api.deepseek.com/v1</code></td></tr><tr><td>API 协议</td><td>跟随厂商（OpenAI Chat Completions）。</td></tr></tbody></table></div><div class=\"note\"><p><strong>模型区别：</strong> <code>deepseek-flash</code> 支持文字和图片输入，适合通用批改与图像识别；<code>deepseek-v4-pro</code> 仅支持文字输入，可用于纯文本批改和复核。需要识别图片时请选择 <code>deepseek-flash</code>。</p></div><p>厂商页面里的“并发数”不是 RPM，不要填入 RPM 栏。</p><p>官方参考：<a href=\"https://api-docs.deepseek.com/zh-cn/\">首次调用</a> · <a href=\"https://api-docs.deepseek.com/zh-cn/quick_start/pricing/\">模型与价格</a> · <a href=\"https://api-docs.deepseek.com/zh-cn/quick_start/rate_limit/\">限流说明</a>。</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-glm",
+    "group": "api",
+    "title": "智谱 BigModel / GLM",
+    "intro": "申请与配置 · 智谱 BigModel / GLM",
+    "sections": [
+      {
+        "id": "api-glm-quota",
+        "title": "额度与使用说明",
+        "body": "<div class=\"note\"><p><strong>免费额度：</strong> <code>glm-4.7-flash</code> 和 <code>glm-4.6v-flash</code> 当前免费；<code>glm-5.3</code>、<code>glm-5.3-flash</code> 按量付费。新用户资源包的适用模型和有效期，请在到账后查看。</p></div>"
+      },
+      {
+        "id": "api-glm-1",
+        "title": "申请密钥",
+        "body": "<ol><li>注册或登录 <a href=\"https://open.bigmodel.cn/\">BigModel</a>。</li><li>打开 <a href=\"https://bigmodel.cn/usercenter/proj-mgmt/apikeys\">API Keys</a>，选择<strong>标准 API Key</strong>并创建密钥。</li><li>复制密钥。这里使用标准 Key，不要选个人套餐或团队套餐 Key。</li><li>在控制台查看资源包、用量和限额，回到 SmarTAI 填写。</li></ol>"
+      },
+      {
+        "id": "api-glm-3",
+        "title": "在 SmarTAI 中填写",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>Zhipu（智谱）</strong></td></tr><tr><td>模型名称</td><td>文字：<code>glm-4.7-flash</code>、<code>glm-5.3</code>；文字/图片：<code>glm-4.6v-flash</code>、<code>glm-5.3-flash</code>。任选一个。</td></tr><tr><td>API key</td><td>刚创建的<strong>标准 API Key</strong>。</td></tr><tr><td>API Base URL</td><td><code>https://open.bigmodel.cn/api/paas/v4</code></td></tr><tr><td>API 协议</td><td>跟随厂商（OpenAI Chat Completions）。</td></tr></tbody></table></div><div class=\"note\"><p><strong>模型区别：</strong> <code>glm-4.7-flash</code> 为免费文字模型，<code>glm-4.6v-flash</code> 为免费视觉模型；glm-5.3 面向复杂文本任务，<code>glm-5.3-flash</code> 支持文字和图片输入。后两者普通 API 通常按量计费。</p></div><p>以上为国内 BigModel 配置。使用海外 Z.ai 账号时，应使用该站的 Key 和地址 <code>https://api.z.ai/api/paas/v4</code>，不要混用两站凭据。</p><p>官方参考：<a href=\"https://docs.bigmodel.cn/cn/guide/start/quick-start/\">快速开始</a> · <a href=\"https://docs.bigmodel.cn/cn/guide/start/model-overview\">模型列表</a> · <a href=\"https://docs.bigmodel.cn/cn/guide/start/pricing\">价格</a> · <a href=\"https://docs.bigmodel.cn/cn/coding-plan/notice/api-key-management\">密钥类型说明</a>。</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-kimi",
+    "group": "api",
+    "title": "Kimi / Moonshot",
+    "intro": "申请与配置 · Kimi / Moonshot",
+    "sections": [
+      {
+        "id": "api-kimi-quota",
+        "title": "额度与使用说明",
+        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 国内手机号新注册用户完成实名认证后，可获得 15 元 API 代金券，有效期 3 个月。<strong>该券不能用于 Kimi K3</strong>；券用完后按账户余额计费。</p></div>"
+      },
+      {
+        "id": "api-kimi-1",
+        "title": "申请密钥",
+        "body": "<ol><li>注册或登录 <a href=\"https://platform.kimi.com/\">Kimi API 开放平台</a>。</li><li>在用户中心完成实名认证，查看新人代金券是否到账。</li><li>进入 <strong>API Keys</strong>，创建并复制密钥。</li><li>在费用明细中查看代金券的可用模型和到期时间，在速率限制页面查看 RPM。</li></ol>"
+      },
+      {
+        "id": "api-kimi-3",
+        "title": "在 SmarTAI 中填写",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>Kimi（Moonshot）</strong></td></tr><tr><td>模型名称</td><td><code>kimi-k2.6</code> 或 <code>kimi-k3</code>，均可处理文字和图片；使用新人券时选 <code>kimi-k2.6</code>。</td></tr><tr><td>API key</td><td>Kimi 开放平台的 API 密钥。</td></tr><tr><td>API Base URL</td><td><code>https://api.moonshot.cn/v1</code></td></tr><tr><td>API 协议</td><td>跟随厂商（OpenAI Chat Completions）。</td></tr></tbody></table></div><div class=\"note\"><p><strong>模型区别：</strong> <code>kimi-k2.6</code> 适合通用图文任务，符合条件的新用户可使用试用代金券；<code>kimi-k3</code> 面向复杂推理与长文本任务，但不适用该新人代金券。两者均支持文字和图片输入。</p></div><p>Kimi 网页会员、Kimi Code 与 API 的余额分开。海外平台 <code>platform.kimi.ai</code> 使用 <code>https://api.moonshot.ai/v1</code>，其账号、密钥和余额与国内站独立。</p><p>官方参考：<a href=\"https://www.kimi.com/help/kimi-api/api-free-trial\">新人免费权益</a> · <a href=\"https://platform.kimi.com/docs/models\">模型列表</a> · <a href=\"https://www.kimi.com/help/kimi-api/api-rate-limits\">速率限制</a> · <a href=\"https://www.kimi.com/help/kimi-api/api-troubleshooting\">常见问题</a>。</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-qwen",
+    "group": "api",
+    "title": "阿里云百炼 / Qwen",
+    "intro": "申请与配置 · 阿里云百炼 / Qwen",
+    "sections": [
+      {
+        "id": "api-qwen-quota",
+        "title": "额度与使用说明",
+        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 华北 2（北京）的符合条件新用户，下面两个型号各有 100 万 Token 额度，通常有效 90 天。只想使用免费额度时，请开启<strong>免费额度用完即停</strong>。</p></div>"
+      },
+      {
+        "id": "api-qwen-1",
+        "title": "申请密钥",
+        "body": "<ol><li>登录<a href=\"https://bailian.console.aliyun.com/\">阿里云百炼</a>，选择地域 <strong>华北 2（北京）</strong>，按提示开通服务。</li><li>打开 <a href=\"https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key\">API Key 页面</a>，点击 <strong>创建 API Key</strong>。个人使用可选择主账号、默认业务空间，按页面默认权限创建。</li><li>复制密钥，在<strong>免费额度</strong>页面搜索目标模型，查看余量及到期时间，并按需开启<strong>用完即停</strong>。</li><li>回到 SmarTAI，选择 Qwen，填写以下内容。请使用普通 API Key，不要使用 Coding Plan / Token Plan 专属 Key。</li></ol>"
+      },
+      {
+        "id": "api-qwen-3",
+        "title": "在 SmarTAI 中填写",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>Qwen（通义千问）</strong></td></tr><tr><td>模型名称</td><td><code>qwen3.8-max</code> 或 <code>qwen3.8-flash</code>，均可处理文字和图片。</td></tr><tr><td>API key</td><td>北京区创建的普通 API 密钥。</td></tr><tr><td>API Base URL</td><td><code>https://dashscope.aliyuncs.com/compatible-mode/v1</code></td></tr><tr><td>API 协议</td><td>跟随厂商（OpenAI Chat Completions）。</td></tr></tbody></table></div><div class=\"note\"><p><strong>模型区别：</strong> <code>qwen3.8-max</code> 是旗舰型号，侧重复杂推理与多模态理解；<code>qwen3.8-flash</code> 侧重速度与低成本。两者均支持文字和图片输入，新用户免费额度以本人控制台为准。</p></div><p>这两个型号采用动态限流；页面没有提供 RPM 时，留空或填 <code>0</code>。选择其他地域时，密钥和地址也要使用该地域对应值。</p><p>官方参考：<a href=\"https://help.aliyun.com/zh/model-studio/get-api-key\">获取密钥</a> · <a href=\"https://help.aliyun.com/zh/model-studio/new-free-quota\">新人额度规则</a> · <a href=\"https://help.aliyun.com/zh/model-studio/model-pricing\">模型与价格</a> · <a href=\"https://help.aliyun.com/zh/model-studio/rate-limit\">限流说明</a>。</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-baidu",
+    "group": "api",
+    "title": "百度文档解析 Unlimited-OCR",
+    "intro": "申请与配置 · 百度文档解析 Unlimited-OCR",
+    "sections": [
+      {
+        "id": "api-baidu-quota",
+        "title": "额度与使用说明",
+        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 当前限时免费额度为个人实名认证 200 页、企业实名认证 1000 页。剩余页数及有效期请在 OCR 控制台查看；“Unlimited”是产品名，不代表无限免费。</p></div><p><strong>用途说明：</strong> Unlimited-OCR 用于提取图片、PDF 等文档中的文字和结构化内容，不负责作业批改或评分。识别完成后，仍需使用大模型进行批改。</p>"
+      },
+      {
+        "id": "api-baidu-1",
+        "title": "申请凭据并保存",
+        "body": "<ol><li>注册或登录<a href=\"https://console.bce.baidu.com/ai-engine/ocr/overview/index\">百度智能云</a>，完成个人或企业实名认证。</li><li>进入 <strong>OCR 控制台</strong>，开通 <strong>文档解析（Unlimited-OCR）</strong>，在资源列表查看免费页数。</li><li>进入 <strong>应用列表 → 创建应用</strong>，勾选文档解析接口权限。</li><li>在应用列表复制该应用的 <strong>API Key</strong> 和 <strong>Secret Key</strong>。</li><li>回到 SmarTAI「模型与 BYOK」，找到 <strong>百度文档解析（Unlimited-OCR）</strong>，将 <strong>API Key</strong> 和 <strong>Secret Key</strong> 分别填入同名字段，点击「保存凭据」。</li></ol><p>这里不需要填写模型名称或 Base URL，也不要使用百度云“安全认证 / Access Key”中的云账号密钥。</p><p>保存后可点击<strong>验证 API Key / Secret Key</strong>检查凭据；实际识别时再在任务中选择百度 OCR。凭据验证不提交文件，实际 OCR 调用会消耗页数，失败调用也可能消耗免费资源。</p><p>官方参考：<a href=\"https://ai.baidu.com/ai-doc/OCR/dk3iqnq51\">新手操作指引</a> · <a href=\"https://ai.baidu.com/ai-doc/OCR/fmr1p39gb\">Unlimited-OCR 说明</a> · <a href=\"https://ai.baidu.com/ai-doc/OCR/fk3h7xu7h\">免费资源规则</a>。</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-tencent",
+    "group": "api",
+    "title": "腾讯混元 / TokenHub",
+    "intro": "申请与配置 · 腾讯混元 / TokenHub",
+    "sections": [
+      {
+        "id": "api-tencent-quota",
+        "title": "额度与使用说明",
+        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 当前新人活动截至 2026-12-31，语言及多模态理解模型提供 100 万 Token 体验额度，领取后有效 1 年。适用模型、余量和到期时间在“启用管理”查看；未开启后付费时，免费额度用尽会停止调用。</p></div>"
+      },
+      {
+        "id": "api-tencent-1",
+        "title": "申请密钥",
+        "body": "<ol><li>登录<a href=\"https://cloud.tencent.com/product/tokenhub\">腾讯云 TokenHub</a>，完成实名认证。</li><li>进入 <strong>模型广场 → 新用户福利免费体验</strong>，勾选要使用的模型，点击<strong>立即领取</strong>。</li><li>进入 <strong>API Key 管理</strong>，选择<strong>广州</strong>地域，点击<strong>创建 API Key</strong>。</li><li>名称可填 <code>SmarTAI</code>，在“限定范围”中勾选要使用的模型，确认后复制完整密钥。</li></ol>"
+      },
+      {
+        "id": "api-tencent-3",
+        "title": "在 SmarTAI 中填写",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>腾讯混元（TokenHub）</strong></td></tr><tr><td>模型名称</td><td><code>hy3</code>：文字；<code>hy-vision-2.0-instruct</code>：文字、图片。任选一个。</td></tr><tr><td>API key</td><td>广州地域创建的 TokenHub 密钥。</td></tr><tr><td>API Base URL</td><td><code>https://tokenhub.tencentmaas.com/v1</code></td></tr><tr><td>API 协议</td><td>跟随厂商（OpenAI Chat Completions）。</td></tr></tbody></table></div><div class=\"note\"><p><strong>模型区别：</strong> <code>hy3</code> 是通用文字推理模型；<code>hy-vision-2.0-instruct</code> 是视觉理解模型，支持图片内容识别、OCR 和图表理解。需要识别图片时请选择后者。</p></div><p>官方参考：<a href=\"https://cloud.tencent.com/document/product/1823/130058\">快速入门</a> · <a href=\"https://cloud.tencent.com/document/product/1823/130051\">模型列表</a> · <a href=\"https://cloud.tencent.com/document/product/1823/136956\">图片理解</a> · <a href=\"https://cloud.tencent.com/document/product/1823/130053/\">新人额度规则</a>。</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-doubao",
+    "group": "api",
+    "title": "字节豆包 / 火山方舟",
+    "intro": "申请与配置 · 字节豆包 / 火山方舟",
+    "sections": [
+      {
+        "id": "api-doubao-quota",
+        "title": "额度与使用说明",
+        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 新用户有模型 API 试用额度，各模型分别计算，余量和期限在“开通管理”查看。只想使用赠额时，符合条件的账号可开启<strong>安心体验模式</strong>，避免转为付费调用。</p></div>"
+      },
+      {
+        "id": "api-doubao-1",
+        "title": "申请密钥",
+        "body": "<ol><li>注册或登录<a href=\"https://ark.volcengine.com/\">火山方舟</a>，选择<strong>北京</strong>地域。</li><li>在<strong>开通管理</strong>中找到要使用的模型，按提示开通免费试用，并按需开启<strong>安心体验模式</strong>。</li><li>进入 <a href=\"https://ark.volcengine.com/region:cn-beijing/apikey\">API Key 管理</a>，点击<strong>创建 API Key</strong>。个人使用可保留默认项目空间。</li><li>名称可填 <code>SmarTAI</code>，创建后在列表中查看并复制密钥。</li></ol>"
+      },
+      {
+        "id": "api-doubao-3",
+        "title": "在 SmarTAI 中填写",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>豆包（火山方舟）</strong></td></tr><tr><td>模型名称</td><td><code>doubao-seed-2-1-pro-260915</code> 或 <code>doubao-seed-2-1-lite-260915</code>，均可处理文字和图片。</td></tr><tr><td>API key</td><td>北京地域的普通 API 密钥。</td></tr><tr><td>API Base URL</td><td><code>https://ark.cn-beijing.volces.com/api/v3</code></td></tr><tr><td>API 协议</td><td>跟随厂商（OpenAI Chat Completions）。</td></tr></tbody></table></div><div class=\"note\"><p><strong>模型区别：</strong> <code>doubao-seed-2-1-pro-260915</code> 侧重复杂推理与综合能力，<code>doubao-seed-2-1-lite-260915</code> 侧重速度与低成本。两者均支持文字和图片输入。</p></div><p>以上型号直接填写 Model ID 即可，无需创建额外的推理接入点。请使用普通 API Key，不要混用 Coding / Agent Plan 套餐密钥。</p><p>官方参考：<a href=\"https://console.volcengine.com/ark/region:cn-beijing/docs/api-key\">获取密钥</a> · <a href=\"https://console.volcengine.com/ark/region:cn-beijing/docs/model-list\">模型列表</a> · <a href=\"https://console.volcengine.com/ark/region:cn-beijing/docs/activation-management\">开通管理</a> · <a href=\"https://console.volcengine.com/ark/region:cn-beijing/docs/free-inference-quota\">免费推理额度</a>。</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-minimax",
+    "group": "api",
+    "title": "MiniMax",
+    "intro": "申请与配置 · MiniMax",
+    "sections": [
+      {
+        "id": "api-minimax-quota",
+        "title": "额度与使用说明",
+        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 普通 API 按量付费；当前官方公开说明未列出统一的新客赠额。网页免费体验及 M Plan 订阅额度与普通 API 余额分开。</p></div>"
+      },
+      {
+        "id": "api-minimax-1",
+        "title": "申请密钥",
+        "body": "<ol><li>登录 <a href=\"https://platform.minimax.cn/\">MiniMax 开放平台</a>。</li><li>打开<a href=\"https://platform.minimax.cn/console/access?tab=api-keys\">接口密钥</a>，点击<strong>创建新的 API Key</strong>，复制按量付费密钥。</li><li>在 <strong>账户管理 → 余额</strong> 查看可用余额，按需充值。不要使用 M Plan 订阅 Key 代替普通 API Key。</li><li>回到 SmarTAI，选择 MiniMax，填写以下内容并保存。</li></ol>"
+      },
+      {
+        "id": "api-minimax-3",
+        "title": "在 SmarTAI 中填写",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>MiniMax</strong></td></tr><tr><td>模型名称</td><td><code>MiniMax-M3</code>，可处理文字和图片；注意保留大小写。</td></tr><tr><td>API key</td><td>普通按量付费 API 密钥。</td></tr><tr><td>API Base URL</td><td><code>https://api.minimax.cn/v1</code></td></tr><tr><td>API 协议</td><td>跟随厂商（OpenAI Chat Completions）。</td></tr></tbody></table></div><p>普通按量 Key 请使用模型列表中对应的型号；<code>MiniMax-M3.1-Flash-Preview</code> 当前属于 M Plan / MiniMax Code 的提供范围。</p><p>官方参考：<a href=\"https://platform.minimax.cn/docs/guides/quickstart-preparation\">申请与准备</a> · <a href=\"https://platform.minimax.cn/docs/faq/models\">模型列表</a> · <a href=\"https://platform.minimax.cn/docs/pricing/overview\">API 价格</a> · <a href=\"https://platform.minimax.cn/docs/faq/about-account\">账户说明</a>。</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-relay",
+    "group": "api",
+    "title": "学校及其他中转接口",
+    "intro": "使用学校或机构提供的接口时，以对方提供的配置与限额为准。",
+    "sections": [
+      {
+        "id": "api-relay-fields",
+        "title": "获取并填写配置",
+        "body": "<p>如果使用学校、机构或其他中转方提供的 API，请先向对方获取 <strong>API Key、API Base URL、Model ID 和 API 协议</strong>，再按其文档填写。</p><div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">填写方法</th></tr></thead><tbody><tr><td><strong>服务商</strong></td><td>按中转方文档选择。</td></tr><tr><td><strong>API key</strong></td><td>填中转方提供的密钥。</td></tr><tr><td><strong>API Base URL</strong></td><td>填中转方提供的基础地址，不沿用模型厂商的官方地址。</td></tr><tr><td><strong>模型名称</strong></td><td>填中转方给出的 <strong>Model ID</strong>；同一模型在不同中转站的名称可能不同。</td></tr><tr><td><strong>API 协议、RPM</strong></td><td>按中转方文档或管理员提供的值填写。</td></tr></tbody></table></div><p>例如，中转方给出的基础地址是 <code>https://example.edu/v1</code>，就填写这个地址，不要自行加上 <code>/chat/completions</code>。</p><p>保存后，可以按<a href=\"#api-api-connectivity\">文本和图像测试</a>的方法检查。遇到密钥、余额、模型名称、接口地址或连接问题，<strong>优先联系中转方或学校管理员</strong>，并提供错误提示；具体填写方法以对方文档为准。</p>"
+      }
+    ]
+  }
+]

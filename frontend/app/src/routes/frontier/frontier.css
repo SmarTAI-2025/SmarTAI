@@ -3265,3 +3265,9 @@
     animation: none;
   }
 }
+
+/* The manual remains reachable when the desktop showcase navigation is hidden. */
+.frontier-guide-mobile.frontier-nav-cta { display: none; }
+@media (max-width: 820px) {
+  .frontier-guide-mobile.frontier-nav-cta { display: inline-flex; }
+}
