@@ -263,7 +263,7 @@ export function FrontierLiveDemoPage() {
           status = submissions ? "parsing_submissions" : "extracting_problems";
         }
       }
-      await continueWorkflow(run, taskId, status, status === "problems_ready");
+      await continueWorkflow(run, taskId, status);
     } catch (caught) {
       if (run.isCurrent()) {
         failActiveStep();
@@ -423,7 +423,7 @@ export function FrontierLiveDemoPage() {
       setTeacherReviewTask(recognizedTask);
       const alreadyConfirmed = generatedMaterialsConfirmed(aligned);
       setMaterialsConfirmed(alreadyConfirmed);
-      if (!continueToSubmissions && !alreadyConfirmed) {
+      if (!continueToSubmissions) {
         const recognizedState = await run.step(() => getTaskState(currentTaskId));
         setSnapshot(recognizedState);
         markStep("questions", "complete", tx(locale, "题目、标答与评分资料已生成，可继续识别作答。", "Questions, answers, and rubrics are ready. Continue to submissions."), recognizedState.extract_job_id);

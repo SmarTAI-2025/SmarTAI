@@ -129,6 +129,40 @@ test('Full Workflow opens fixed metadata and preloaded source pages without impl
 });
 
 for (const locale of ["zh-CN", "en-US"]) {
+  test(`restoring questions after a network error waits for explicit Continue (${locale})`, async ({ page }) => {
+    const errors = await guest(page), zh = locale === "zh-CN";
+    await page.setViewportSize(zh ? { width: 1440, height: 1000 } : { width: 390, height: 844 });
+    await page.addInitScript(value => localStorage.setItem("smartai_locale", value), locale);
+    const writes: string[] = [];
+    let failLoad = true, status = "problems_ready";
+    await page.route(`${backend}/**`, async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === "/auth/me") return route.fulfill({ json: { id: "guest-owner", username: "Guest", role: "teacher", is_active: true } });
+      if (request.method() !== "GET") {
+        writes.push(path);
+        if (path.endsWith("/parse_submissions")) { status = "submissions_ready"; return route.fulfill({ json: { status: "started", job_id: "parse" } }); }
+        throw new Error(`Unexpected mutation ${path}`);
+      }
+      if (path.endsWith("/grading-setup")) return route.fulfill({ json: { available_experts: [{ provider_id: "demo:vision", enabled: true }] } });
+      if (path.endsWith("/state")) return route.fulfill({ json: { ...task, status } });
+      if (path === `/tasks/${task.task_id}`) {
+        if (failLoad) { failLoad = false; return route.fulfill({ status: 503, json: { detail: "Temporary read failure" } }); }
+        return route.fulfill({ json: { ...task, status } });
+      }
+      return route.fulfill({ json: [] });
+    });
+    await page.goto(`/frontier/live?taskId=${task.task_id}`);
+    await page.getByRole("button", { name: zh ? "重试失败项" : "Retry failed items", exact: true }).click();
+    const next = page.getByRole("button", { name: zh ? "继续识别作答" : "Continue to submissions", exact: true });
+    await expect(next).toBeEnabled();
+    expect(writes).toEqual([]);
+    await expect(page).toHaveURL(new RegExp(`/frontier/live\\?taskId=${task.task_id}`));
+    await next.click();
+    await expect(page.getByRole("heading", { name: zh ? "本次识别的学生作答" : "Recognized submissions", exact: true })).toBeVisible();
+    expect(writes).toEqual([`/tasks/${task.task_id}/parse_submissions`]);
+    expect(errors).toEqual([]);
+  });
+
   test(`simple Demo keeps model errors and failed-item retries on the same page (${locale})`, async ({ page }, testInfo) => {
     const errors = await guest(page), zh = locale === "zh-CN";
     await page.setViewportSize(zh ? { width: 1440, height: 1000 } : { width: 390, height: 844 });

@@ -142,6 +142,27 @@ describe("FrontierLiveDemoPage", () => {
     expect(getTask).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])("only reloads prepared questions after a restore error until Continue is clicked (confirmed: %s)", async confirmed => {
+    const task = taskWithQuestions();
+    if (confirmed) Object.values(task.problem_data).forEach(problem => { problem.review_status = "confirmed"; });
+    let parsed = false;
+    vi.mocked(getTaskState).mockImplementation(async () => taskState(parsed ? "submissions_ready" : "problems_ready"));
+    vi.mocked(getTask).mockRejectedValueOnce(new Error("Network unavailable while restoring questions")).mockResolvedValue(task);
+    vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
+    vi.spyOn(fixtures, "fixtureFile").mockResolvedValue(new File(["synthetic"], "submissions.zip"));
+    vi.mocked(parseSubmissions).mockImplementation(async () => { parsed = true; return { status: "started", job_id: "parse-job" }; });
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click(await screen.findByRole("button", { name: "Retry failed items" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start over" })).toBeEnabled());
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+    expect(getGradingSetup).not.toHaveBeenCalled();
+    expect(fixtures.fixtureFile).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Continue to submissions" }));
+    await waitFor(() => expect(parseSubmissions).toHaveBeenCalledTimes(1));
+  });
+
   it.each(["zh-CN", "en-US"])("shows safe localized progress for recognition, grading, and unknown events (%s)", async (locale) => {
     window.localStorage.setItem("smartai_locale", locale);
     const zh = locale === "zh-CN";
