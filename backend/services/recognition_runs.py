@@ -36,6 +36,8 @@ from backend.services.recognition_results import RecognitionResultService
 from backend.tools.pdf_evidence import MAX_IMAGE_INPUT_BYTES, MAX_INPUT_BYTES
 
 OPERATION_TYPE = "recognition_harness_v2"
+_RENEWABLE_LEASE_SECONDS = 300
+_RENEWABLE_HEARTBEAT_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,7 @@ class _RunContext:
         if request.scope == "targets":
             self.policy.max_detail_pages = min(self.policy.max_detail_pages, 2 * len(request.targets) + 4)
         self.checkpoint = None
+        self.terminal_write = None
 
     @property
     def fence(self):
@@ -73,20 +76,112 @@ class _RunContext:
         checkpoint = RecognitionRunCheckpointV1.model_validate(checkpoint.model_dump())
         refs = list(dict.fromkeys([*(call.artifact_id for call in checkpoint.calls if call.artifact_id),
                                    *([checkpoint.final_artifact_id] if checkpoint.final_artifact_id else [])]))
-        row = await run_in_threadpool(
-            self.repository.save_operation_checkpoint, self.row.id, owner_id=self.row.owner_id,
-            expected_attempt=self.row.attempt, expected_checkpoint_revision=self.row.checkpoint_revision,
-            expected_lease_token=self.row.lease_token, stage="recognition_" + (status or "checkpoint"),
-            checkpoint=checkpoint.model_dump(mode="json"), artifact_refs=refs,
-            terminal_status=status,
-            terminal_summary=None if status is None else dict(status=status, error_code=error,
-                                                              final_artifact_id=checkpoint.final_artifact_id),
-        )
-        self.row, self.checkpoint = row, checkpoint
+        # A terminal checkpoint atomically clears its lease. The heartbeat must
+        # distinguish our own successful commit from another worker fencing us.
+        finished = asyncio.get_running_loop().create_future() if status is not None else None
+        if finished is not None:
+            self.terminal_write = finished
+        try:
+            row = await run_in_threadpool(
+                self.repository.save_operation_checkpoint, self.row.id, owner_id=self.row.owner_id,
+                expected_attempt=self.row.attempt, expected_checkpoint_revision=self.row.checkpoint_revision,
+                expected_lease_token=self.row.lease_token, stage="recognition_" + (status or "checkpoint"),
+                checkpoint=checkpoint.model_dump(mode="json"), artifact_refs=refs,
+                terminal_status=status,
+                terminal_summary=None if status is None else dict(status=status, error_code=error,
+                                                                  final_artifact_id=checkpoint.final_artifact_id),
+            )
+            self.row, self.checkpoint = row, checkpoint
+            if finished is not None:
+                finished.set_result(True)
+        finally:
+            if finished is not None:
+                if not finished.done():
+                    finished.set_result(False)
+                self.terminal_write = None
 
     async def active(self):
         return await self.store.active_source(source=self.request.source, identity=self.identity,
                                              binding=self.binding, authorized_owner_id=self.row.owner_id)
+
+
+class _RecognitionLeaseHeartbeat:
+    """Keep a long source read alive without a long crash-recovery lease."""
+
+    def __init__(self, context, *, worker):
+        self.context, self.worker = context, worker
+        self.row = context.row  # Keep the original claim token after terminal writes.
+        self.deadline = self.row.lease_expires_at
+        self.owner_task = asyncio.current_task()
+        self.task = None
+        self.failure = None
+        self.cancelled_run = False
+
+    def start(self):
+        self.task = asyncio.create_task(self._run())
+
+    @staticmethod
+    def _discard(task):
+        # Cancelling an await cannot stop an already running database thread.
+        # Its late write remains fenced by the original live owner/token.
+        if not task.done():
+            task.cancel()
+        task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+
+    async def _run(self):
+        try:
+            while True:
+                remaining = self.deadline - time.time()
+                await asyncio.sleep(min(_RENEWABLE_HEARTBEAT_SECONDS, max(0, remaining)))
+                if self.context.row.terminal_summary is not None:
+                    return
+                remaining = self.deadline - time.time()
+                if remaining <= 0:
+                    raise LeaseLost("Recognition lease expired.")
+                started = time.time()
+                renewal = asyncio.create_task(run_in_threadpool(
+                    self.context.repository.heartbeat_operation, self.row.id,
+                    owner_id=self.row.owner_id, worker_id=self.worker,
+                    lease_token=self.row.lease_token, lease_seconds=_RENEWABLE_LEASE_SECONDS,
+                ))
+                try:
+                    done, _ = await asyncio.wait(
+                        {renewal}, timeout=min(_RENEWABLE_HEARTBEAT_SECONDS, remaining),
+                    )
+                    if not done:
+                        raise TimeoutError("Recognition lease renewal timed out.")
+                    renewal.result()
+                finally:
+                    self._discard(renewal)
+                # Conservative: the repository sampled its clock after this.
+                self.deadline = started + _RENEWABLE_LEASE_SECONDS
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            terminal = self.context.terminal_write
+            if terminal is not None:
+                # Only the result of this context's own write proves success;
+                # another worker's terminal record does not authorize this run.
+                done, _ = await asyncio.wait({terminal}, timeout=min(
+                    _RENEWABLE_HEARTBEAT_SECONDS, max(0, self.deadline - time.time()),
+                ))
+                if done and terminal.result():
+                    return
+            if self.context.row.terminal_summary is not None:
+                return
+            self.failure = exc
+            if not self.owner_task.cancelling():
+                self.cancelled_run = self.owner_task.cancel()
+
+    async def stop(self):
+        if self.task is not None:
+            cancellations = asyncio.current_task().cancelling()
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                if asyncio.current_task().cancelling() > cancellations:
+                    raise
 
 
 class _GuardedCalls(RecognitionCallService):
@@ -221,10 +316,13 @@ class RecognitionRunService:
             raise RecognitionError("recognition_source_mismatch")
         if not await self.store.active_source(source=source, identity=identity, binding=binding, authorized_owner_id=authorized_owner_id):
             raise RecognitionError("recognition_source_unavailable")
+        renew_lease = (request.policy.total_seconds > 900 and caps is not None and caps.candidate_kind == "vision"
+                       and source.scope != "knowledge_document" and request.purpose != "knowledge")
+        lease_seconds = _RENEWABLE_LEASE_SECONDS if renew_lease else math.ceil(request.policy.total_seconds) + 60
         worker = "recognition-" + uuid.uuid4().hex
         try:
             row = await run_in_threadpool(self.repository.claim_operation, row.id, owner_id=authorized_owner_id,
-                                          worker_id=worker, lease_seconds=math.ceil(request.policy.total_seconds) + 60)
+                                          worker_id=worker, lease_seconds=lease_seconds)
         except LeaseLost:
             latest = await run_in_threadpool(self.repository.get_operation, row.id, owner_id=authorized_owner_id)
             if latest.terminal_summary is not None:
@@ -236,8 +334,11 @@ class RecognitionRunService:
         context = _RunContext(row, identity=identity, request=request, capabilities=caps,
                               store=self.store, progress=self.progress, clock=self.clock, binding=binding,
                               repository=self.repository)
+        heartbeat = _RecognitionLeaseHeartbeat(context, worker=worker) if renew_lease else None
         assembly = None
         try:
+            if heartbeat is not None:
+                heartbeat.start()
             if row.checkpoint:
                 checkpoint = RecognitionRunCheckpointV1.model_validate(row.checkpoint)
                 if (checkpoint.identity_key != identity.key or checkpoint.operation_id != row.id
@@ -311,8 +412,33 @@ class RecognitionRunService:
                                           usage, tuple(context.row.artifact_refs or []), code)
         finally:
             try:
-                await asyncio.shield(run_in_threadpool(self.repository.release_operation, row.id,
-                                                      owner_id=authorized_owner_id, worker_id=worker,
-                                                      lease_token=row.lease_token))
-            except DomainError:
-                pass
+                if heartbeat is not None:
+                    await heartbeat.stop()
+                try:
+                    release = run_in_threadpool(self.repository.release_operation, row.id,
+                                                owner_id=authorized_owner_id, worker_id=worker,
+                                                lease_token=row.lease_token)
+                    if heartbeat is None:
+                        await asyncio.shield(release)
+                    else:
+                        release = asyncio.create_task(release)
+                        try:
+                            done, _ = await asyncio.wait({release}, timeout=_RENEWABLE_HEARTBEAT_SECONDS)
+                            if done:
+                                release.result()
+                        finally:
+                            heartbeat._discard(release)
+                except DomainError:
+                    pass
+                except Exception:
+                    # A cleanup DB outage must not replace the original fencing,
+                    # cancellation or saved result. The short lease still expires.
+                    if heartbeat is None:
+                        raise
+            finally:
+                # Include cancellation during error handling and cleanup, not
+                # only the main try body. Remove only our own cancellation.
+                if heartbeat is not None and heartbeat.cancelled_run:
+                    heartbeat.cancelled_run = False
+                    if asyncio.current_task().uncancel() == 0:
+                        raise LeaseLost("Recognition lease renewal failed.") from None
