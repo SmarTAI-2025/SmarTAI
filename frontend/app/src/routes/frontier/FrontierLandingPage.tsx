@@ -129,6 +129,7 @@ const showcaseAutoplayIntervalMs = 4_200;
 
 export function FrontierLandingPage() {
   const { locale } = useI18n();
+  const guideHref = `/guide/?lang=${locale === "zh-CN" ? "zh" : "en"}`;
   const stages = walkthroughStages(locale);
   const insights = insightStories(locale);
   const [activeStage, setActiveStage] = useState(0);
@@ -163,8 +164,10 @@ export function FrontierLandingPage() {
           <a href="#how-it-works">{tx(locale, "工作方式", "How it works")}</a>
           <a href="#ask-smartai">Ask SmarTAI</a>
           <a href="#trust">{tx(locale, "可信设计", "Trust by design")}</a>
+          <a href={guideHref}>{tx(locale, "用户手册", "User manual")}</a>
         </nav>
         <div className="frontier-nav-actions">
+          <a className="frontier-guide-mobile frontier-nav-cta" href={guideHref}>{tx(locale, "用户手册", "User manual")}</a>
           <LanguageToggle className="frontier-language-toggle border-slate-300 bg-white/75" />
           <Link className="frontier-nav-cta" to="/login">
             {tx(locale, "注册/登录", "Register / Sign in")}

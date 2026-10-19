@@ -1,0 +1,615 @@
+[
+  {
+    "id": "quickstart",
+    "title": "Quick start",
+    "intro": "Start with one assignment: prepare the questions, check student answers, grade and review, then view the results.",
+    "sections": [
+      {
+        "title": "What you need for your first assignment",
+        "body": "<ul><li>A teacher account and at least one available model.</li><li>A question file; reference answers, grading criteria, and programming test materials are optional.</li><li>Student submissions: one file per student, with multiple files packaged as a ZIP.</li><li>For roster-based matching, prepare a CSV, TSV, or TXT file with “学号” (student ID) and “姓名” (name) column headers.</li></ul>"
+      },
+      {
+        "title": "Complete a grading cycle",
+        "body": "<ol><li>In “New task,” enter a name and semester, with an optional course and tags.</li><li>Upload questions, set the maximum score for each question, and click “Recognize and prepare question materials.”</li><li>In the question matrix, check the question text, maximum scores, grading criteria, and reference answers.</li><li>Upload student submissions and check student identities and the content for each question.</li><li>Select grading models and a scoring method, save, and check the grading summary.</li><li>After grading finishes, resolve red items first, then open “Learning analysis and export.”</li></ol><p class=\"warning\">Once the grading summary passes its checks, a countdown starts and grading begins automatically. To change settings, click “Back to grading settings” before the countdown ends.</p>"
+      },
+      {
+        "title": "Remember the two colors",
+        "body": "<p><strong>Red: “Action required”</strong> indicates missing items, no valid score, or important issues awaiting confirmation. Resolve these before continuing.</p><p><strong>Yellow: “Suggested review”</strong> indicates something worth checking but does not prevent you from continuing. Examples include confidence below 0.60, or some experts not finishing when valid scores are already available.</p><p class=\"note\">Saving changes and confirming your review are separate steps. Save your edits first, then click confirm.</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "account",
+    "title": "Registration and sign-in",
+    "intro": "Create a teacher account with your school email, or continue with an existing account.",
+    "sections": [
+      {
+        "title": "Create a teacher account",
+        "body": "<ol><li>On the sign-in page, click “Register with email verification.”</li><li>Enter a username, school email, password, and password confirmation.</li><li>Click “Send verification link,” open the email, and complete verification.</li><li>After verification, return to the sign-in page and open the workspace.</li></ol><p class=\"secondary\">Usernames must contain at least 3 characters; passwords must contain 8–128 characters. Verification links expire after 30 minutes. Your account is not created until verification is complete.</p>",
+        "details": [
+          {
+            "title": "Verification email not received",
+            "body": "<p>Check your spam folder first. On the email notification page, resend after the countdown finishes. If your email domain is not accepted, check your school email against the instructions on the page.</p>"
+          }
+        ]
+      },
+      {
+        "title": "Sign in and reset your password",
+        "body": "<p>Choose “Sign in with username” or “Sign in with email,” enter your password, and click “Sign in.” If you forget your password, click “Forgot password” and use the emailed link to set a new one.</p><p>The username menu in the upper-right corner provides access to “Account settings,” “Models &amp; BYOK,” and sign-out. If your session expires, sign in again and reopen the task from the workspace or task history.</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "workspace",
+    "title": "Workspace and task history",
+    "intro": "The workspace helps you decide what to do next; task history helps you find, filter, and resume earlier work.",
+    "sections": [
+      {
+        "title": "Resume tasks from the workspace",
+        "body": "<p>The task list shows courses and tags, the current stage, progress, estimated time, and the next action. Start with tasks that need your attention, then check tasks processing in the background and tasks with results available.</p><ul><li>Recognition or grading in progress: open the progress page for updates.</li><li>Awaiting review: open the corresponding question, submission, or score matrix.</li><li>Paused: use the appropriate resume action or continue manually.</li><li>Results available: open review or results analysis.</li></ul><p class=\"secondary\">When there are too few reliable samples to estimate completion time, “Estimating” is shown. This alone does not mean the task is stuck.</p>"
+      },
+      {
+        "title": "Find tasks in task history",
+        "body": "<p>“Task history” has sections for “Assignment grading,” “Textbook recognition,” and “Saved drafts.” Search by name or other criteria, combine semester, course, tag, or status filters, then open a task to return to its current stage.</p><p>If you cannot find a task, clear the filters first. Courses and tags organize tasks; you do not need to recreate the same course for every assignment.</p><p>You can also use “SmarTAI smart task filtering,” for example, “Unfinished spring calculus grading tasks.” Check the generated conditions, remove individual conditions, or clear all smart conditions. If a request is ambiguous, first confirm a choice from the actual available options. Standard search and filters remain available when smart filtering is temporarily unavailable.</p>"
+      },
+      {
+        "title": "Organize task information",
+        "body": "<p>Use the task information editor to change the task name, semester, course, and tags. If you are told that another page has changed the content, check the latest content before saving again to avoid overwriting newer changes with an older page.</p><p class=\"warning\">Before deleting, check the scope of impact listed on the page. Long-term course library materials are managed separately from task originals.</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "models",
+    "title": "Models & BYOK",
+    "intro": "BYOK means using your own model API configuration. Configure it once, then select it for different tasks and stages.",
+    "sections": [
+      {
+        "title": "Add and enable a model",
+        "body": "<ol><li>Open the username menu in the upper-right corner → “Models &amp; BYOK” → “Add model configuration.”</li><li>Select a provider and enter the model name and API key. The configuration name is optional.</li><li>Normally, keep the default API Base URL. For a relay service, use the URL and model ID from the relay provider’s documentation.</li><li>Save and enable the configuration, then select the model on the task page.</li></ol><p class=\"note\">Saving a configuration does not call the model. Text and image tests are optional troubleshooting steps, not prerequisites for starting a task.</p>",
+        "details": [
+          {
+            "title": "Base URL, protocol, and RPM",
+            "body": "<p>Keep prefixes such as /v1 in the Base URL; do not append operation paths such as /chat/completions. Normally, leave the API protocol set to “Follow provider,” changing it only when the relay provider explicitly requires this. Leaving RPM blank or entering 0 applies no additional rate limit. The system adjusts concurrency automatically and queues requests when resources are limited.</p>"
+          }
+        ]
+      },
+      {
+        "title": "Test and manage configurations",
+        "body": "<p>“Verify (optional)” tests text connectivity; “Verify vision capability” tests image input. Requests are sent only after you confirm the test prompt, and tests may consume provider quota. If a test fails, click the reason to expand the full explanation.</p><ul><li>“Could not confirm this time” means this test was inconclusive. It does not establish that the model does not support images.</li><li>When editing a configuration, leave API key blank to retain the existing key.</li><li>You can set a default, enable, disable, or delete configurations. Choose another default before disabling or deleting the current default model.</li><li>You can use different models for question recognition, submission recognition, and grading.</li></ul><p class=\"secondary\">“Enabled” means the model can be selected, not that the provider is currently online. Check balances, usage, and available quota using the “Official provider links” at the bottom of the page.</p>"
+      },
+      {
+        "title": "Choosing and using LLM and OCR services",
+        "body": "<p>Large language models and OCR services serve different purposes: LLMs interpret questions, generate reference materials, and grade assignments. Image-capable LLMs can also recognize images, scans, and handwritten answers. OCR services extract text and structure from documents; grading after recognition still requires a grading model. Choose based on file type, recognition quality, and service quota, and check the recognized results.</p><p>For an LLM API, enter the provider, model name, API Key, and API base address in “Add model configuration.” For OCR, use the credential configuration area for that service. For example, Baidu document parsing has a separate API Key / Secret Key configuration area; credentials can be validated after saving. Service permissions and quotas are checked during actual OCR tasks.</p><p>Provider links cover Google, OpenAI, Anthropic, DeepSeek, Zhipu, Kimi, Qwen, Tencent TokenHub, Doubao, MiniMax, and Baidu OCR. Find the provider at the bottom of the page, click “Keys” to apply in its official console, then return to the relevant configuration area. Check model names under the provider’s “Documentation”; check free quota, balances, and billing under “Usage.” For relay services, use the Key, Base URL, and model ID supplied by the relay provider, and contact that provider first if there are problems.</p><p class=\"note\">Need field-by-field instructions or help applying for a key? See <a href=\"#api-smartai\">Model configuration steps</a>, <a href=\"#api-providers\">Application guides for 11 providers</a>, or <a href=\"#api-relay\">School and other relay APIs</a>.</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "library",
+    "title": "Course library",
+    "intro": "Keep reusable textbooks, lecture notes, answers, and grading criteria together so you can select them directly next time.",
+    "sections": [
+      {
+        "title": "Upload and categorize materials",
+        "body": "<ol><li>Open “Course library” and click “Upload materials.”</li><li>Select PDF, TXT, or Markdown files.</li><li>Optionally select a course, group, and material type, add tags, and upload.</li><li>Check parsing progress and confirm that the materials are available.</li></ol><p>Material types include textbooks, exercise answers, lecture notes, grading criteria, and other materials. Use “New group” to keep materials for the same chapter or teaching unit together.</p>",
+        "details": [
+          {
+            "title": "When to choose “Extract existing text only”",
+            "body": "<p>If a file has directly readable text and does not need model-based parsing, choose “Extract existing text only (no model calls).” Scanned pages and images require appropriate recognition capabilities. Use the material’s page status and available content to confirm whether it was successfully added to the library.</p>"
+          }
+        ]
+      },
+      {
+        "title": "Find, reference, and manage materials",
+        "body": "<p>Use the search at the top to find filenames, tags, or groups, and filter by type. When uploading questions, you can select sources from the library. In grading settings, you can also select textbooks, lecture notes, and other supplementary context.</p><p>Material management lets you change names, courses, groups, and tags without rewriting parsed text. Check task-reference warnings before deleting. Deleting materials also removes their reference associations.</p>"
+      },
+      {
+        "title": "When parsing is incomplete",
+        "body": "<p>Open a material’s recognition status to see failed or unfinished pages and the reasons. If needed, choose a retry model to read the remaining pages. Successfully processed pages are retained; changing the retry model does not require reading them again.</p><p class=\"note\">The course library uses separate storage. Saved library content is retained long-term and is not deleted with grading tasks. Space from deleted materials is reclaimed in the background.</p>"
+      },
+      {
+        "title": "Search within materials",
+        "body": "<p>Filename search finds files; “Search material content” below it finds passages in the text. Narrow the material scope to no more than 20 files, enter keywords or a question, then open a result’s source reference to view the relevant location.</p><p>The default “Local search” does not need model assistance. “Model-assisted” search can help interpret the query; only the query is sent, not the textbook, and model charges may apply. Local search results remain available if assistance fails. The task materials area in grading settings provides the same search entry point.</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "create",
+    "title": "New tasks and drafts",
+    "intro": "Give the assignment a clear name, then prepare the questions.",
+    "sections": [
+      {
+        "title": "Enter task information",
+        "body": "<p>Click “New task,” enter a task name, and select a semester. Courses and tags are optional: search for existing ones, or create and select them using the controls on the page. Continue to “Question and material upload.”</p><p class=\"secondary\">For example: task name “Calculus · Chapter 3 Assignment,” course “Calculus,” tag “Chapter 3.” If you have typed a course or tag but have not selected or created it yet, confirm it first.</p>"
+      },
+      {
+        "title": "Save drafts, restore work, and save to the task",
+        "body": "<p>When offered “Save draft,” you can retain your current input and restore it later from “Task history → Saved drafts” or the original page. After editing question text, reference answers, or other content, click “Save” in each area to write the changes to the task.</p><p class=\"warning\">A filename retained in a draft does not necessarily mean the file is still available for upload. Reselect files marked “Reselection required.” If you see “Uploaded files can still be used,” continue directly.</p><p>If a draft conflicts with server content, review the differences, then explicitly restore or delete the old draft. When editing the same task in multiple pages, close older pages first.</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "questions",
+    "title": "Question and material upload",
+    "intro": "Only a question source is required; you can upload the other materials or have SmarTAI prepare them.",
+    "sections": [
+      {
+        "title": "What goes in each of the four material categories",
+        "body": "<ul><li><strong>Questions (required)</strong>: complete question text, conditions, and figures or tables; upload files or select from the course library.</li><li><strong>Reference answers (optional)</strong>: final answers alone are acceptable; a generative model can add solution steps for you to review.</li><li><strong>Grading criteria (optional)</strong>: upload files, select from the library, or describe them in natural language.</li><li><strong>Test cases (optional)</strong>: for programming questions only; may include inputs, expected outputs, explanations, and hidden tests.</li></ul><p>You can add multiple materials to each category. With a generative model, missing reference answers and grading criteria are generated during unified preparation and remain editable question by question afterward. If you only use Baidu OCR to read materials, fill gaps manually during review or select a generative model to complete them.</p><p class=\"secondary\">For questions and general materials, use the PDF, TXT, Markdown, and image formats listed on the page. Programming test materials accept PDF, TXT, Markdown, and JSON, but not images.</p>"
+      },
+      {
+        "title": "Narrow the recognition scope",
+        "body": "<p>“Already organized by question” suits assignment files with clear question numbers; “Extract from source text” suits textbooks and long documents. Specify page numbers, target question numbers, and additional instructions as needed to avoid adding all exercises from an entire textbook.</p><ul><li>Use actual PDF page positions, such as 3-5, 8, rather than printed book page numbers.</li><li>Question numbers can be 1.1.5, 1.2.3; a range within the same section can be written as 1.1.5-1.1.7.</li><li>Put instructions such as “Chapter 3 exercises; retain figures and tables” in additional instructions.</li></ul><p>When describing grading criteria in natural language, choose “By question” or “Overall rules.” For question-specific descriptions, clearly state question numbers. Overall rules are organized into scoring steps using each question’s reference answer.</p>"
+      },
+      {
+        "title": "Set maximum scores and generation language",
+        "body": "<p>Under “Set question maximum scores,” enter a uniform value, or enable “Different maximum scores per question” and describe the scores by question number. For example: “Questions 1–3: 5 points each; Question 4: 15 points.”</p><p class=\"note\">Questions without an explicit setting or a matching rule temporarily default to 10 points, with a reminder to check. After recognition, verify maximum scores in question details. Model grading uses each question’s saved maximum score.</p><p>Choose Chinese or English as the generation language, select a “Question recognition model,” then click “Recognize and prepare question materials.” The chosen language is retained for material generation, supplementary generation, and retries. Changing the interface language does not overwrite it.</p>"
+      },
+      {
+        "title": "Track progress or take over midway",
+        "body": "<p>The progress page shows completion counts, percentages, and recognition activity. Waiting for capacity, waiting for a response, and retrying are shown separately. You can return to the workspace and check again later.</p><p>After a pause or failure, follow the prompts to retry or “Continue manually.” Manual takeover opens the original question matrix and retains recognized content and available originals. If the total number of questions is unknown, set the complete count first, then fill in each question.</p><p class=\"warning\">If there are failed pages, unread pages, or missing questions, read them again or check manually first. Unread content must not be treated as containing no questions. If warned that a previous request may already have been billed, check the warning before resubmitting.</p>",
+        "details": [
+          {
+            "title": "Usage when continuing manually",
+            "body": "<p class=\"secondary\">If only recognized text is available, the system may first use a model to organize it, consuming quota. The original review matrix opens once this step finishes.</p>"
+          }
+        ]
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "question-review",
+    "title": "Review questions and complete materials",
+    "intro": "Check questions and point values first, then confirm reference answers, grading criteria, and programming test materials.",
+    "sections": [
+      {
+        "title": "Find questions that need attention in the matrix",
+        "body": "<p>The question overview shows preparation status by question, with search, filters, and detail views. Open red “Action required” items first, then yellow recommendations. You can add question rows or remove rows that do not belong to this assignment from the current scope.</p><p>In details, compare question text, reference answers, grading criteria, and test materials against the originals. Edit and save each content area separately. Confirmation and question-navigation buttons support continuous question-by-question review.</p><p class=\"note\">Material text may be locked at later stages, while browsing and review confirmation remain available. To make changes, first use the task’s back or redo action.</p><p>In the original-file preview, PDFs support paging, zoom, and page navigation; images can be viewed directly for comparison. For formats such as TXT without a preview, follow the page instructions. A missing preview does not mean recognized content is lost.</p>"
+      },
+      {
+        "title": "Check maximum scores and grading criteria together",
+        "body": "<p>You can edit “Maximum score and grading criteria for this question” together. Maximum scores must be positive numbers from 0.01–10000, with no more than two decimal places. If criteria explicitly assign points to subquestions, those subquestions still belong to the same main question, and their points must add up to its maximum score.</p><p>If no absolute component scores are specified, use percentages or free-text grading criteria, for example, “Derivation: 60%; conclusion: 40%.” Generated process-based scoring is organized by the corresponding steps. For objective questions, check the applicable result-based rules.</p><p class=\"warning\">Fix missing question text, missing grading criteria, or conflicting component scores before confirming. Bulk confirmation cannot bypass genuinely missing items.</p>"
+      },
+      {
+        "title": "Three ways to add materials",
+        "body": "<ul><li><strong>Edit directly</strong>: for small revisions, edit question details and save.</li><li><strong>Bulk import materials</strong>: choose grading criteria, reference answers, or test cases, and import from the library or new files. Check “Clear match,” “Possible match,” and “Conflict,” then click “Apply confirmed matches.” Overwriting existing content requires an explicit selection.</li><li><strong>SmarTAI complete missing items</strong>: review the missing-item list, deselect anything you do not want generated, then click “Confirm and start generating.” Only gaps are filled; existing content is not overwritten.</li></ul><p class=\"secondary\">The completion precheck does not call a model. After a generation failure, you can reselect items that are still missing or enter them manually. Missing reference answers generally prompt a recommended review; this does not mean grading criteria can be left blank.</p>"
+      },
+      {
+        "title": "Extra checks for programming questions",
+        "body": "<p>Check the sample correct code, execution mode, each test input, expected output, and explanation. Function-mode and standard-input-mode materials use their corresponding structures. Expand the full set of cases before reviewing; do not check only the first one.</p><p>An empty string can be a valid test value and is different from a missing field. The page distinguishes “Public examples” from “Hidden tests.” Click “Edit” to change titles, inputs, expected outputs, explanations, and public/hidden types, or to add and remove cases. Then click “Save test cases.” Check source labels to distinguish generated content, uploaded content, and teacher confirmation status.</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "submissions",
+    "title": "Upload and review student submissions",
+    "intro": "Match each submission to the right student, then confirm the recognized content for every question.",
+    "sections": [
+      {
+        "title": "Organize and upload submissions",
+        "body": "<p>Use one file per student and package multiple files as a ZIP. If a single PDF contains the whole class’s answers, split it by student first.</p><p>Click “Choose files” or drag files in, then select a submission recognition model. Supported formats include PDF, TXT, Markdown, CSV, JPG, PNG, WebP, and supported archives. Images and scanned PDFs use OCR.</p><p class=\"warning\">If submissions already exist, uploading again replaces the current recognized content and requires existing grading results to be regenerated. To keep the old task and grade another assignment, create a new task.</p>"
+      },
+      {
+        "title": "Choose an identity-matching method",
+        "body": "<ul><li><strong>Identify student IDs from filenames</strong>: filenames take priority, with information inside the files used as a supplement. Before uploading, use clear student IDs and names in filenames.</li><li><strong>Import a roster</strong>: upload a CSV, TSV, or TXT with “学号” (student ID) and “姓名” (name) headers. Submissions that cannot be matched uniquely are sent for review.</li><li><strong>Correct manually</strong>: possible identities are recognized first, and every student requires manual verification.</li></ul><p>After choosing, click “Start recognizing submissions.” Roster mode cannot start without a roster. If you switch methods, verify identities using the new method.</p>"
+      },
+      {
+        "title": "Check identities, answers, and originals",
+        "body": "<p>In the student submission matrix, check student rows and question statuses. Open student details and compare identities and answers against the originals. You can add or remove student rows in the current scope. During manual takeover, if the student count is unknown, enter the full count first.</p><p>Resolve name, student ID, and identity conflicts, as well as missing expected answer records. If content is correct but still marked as awaiting confirmation, retain its value and explicitly confirm it.</p><p class=\"warning\">You can confirm a blank when the student genuinely left the question unanswered. A blank caused by recognition failure must not be treated directly as an unanswered question. Retry, enter the content manually, or check the original and explicitly confirm the blank.</p>"
+      },
+      {
+        "title": "When recognition is incomplete",
+        "body": "<p>Check successful, failed, and unread pages for each file. After pausing, you can resume recognition or continue manually; existing answers, identities, and saved fragments are retained. When retrying with the original file and model, the system reuses successful pages where possible and rereads failed pages.</p><p>If only the filename remains and no reusable file is available, select it again. If “Checking” is shown, wait for the check to finish. If the check fails, retry the check first. Resolve red issues before proceeding to grading settings.</p>",
+        "details": [
+          {
+            "title": "Usage when continuing manually",
+            "body": "<p class=\"secondary\">If only recognized text is available, the system may first use a model to organize it, consuming quota. The original review matrix opens once this step finishes.</p>"
+          }
+        ]
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "grading",
+    "title": "Configure and run grading",
+    "intro": "Choose models, a scoring method, and a feedback style for this task, then check the summary and begin grading.",
+    "sections": [
+      {
+        "title": "Choose models and score aggregation",
+        "body": "<p>Select at least one enabled model. Selections here apply only to this task and do not change global enabled states in “Models &amp; BYOK.”</p><ul><li><strong>Single-model grading</strong>: calls only the selected model.</li><li><strong>Weighted average</strong>: by default, combines valid scores using confidence weights. You can change this to custom positive ratios, such as 1:2.</li><li><strong>Combined review</strong>: the lead model synthesizes comments. Scores still use the configured weights, and additional model calls are required.</li></ul><p class=\"secondary\">Failed experts are excluded from score aggregation, and the remaining weights are renormalized. If no valid confidence values are available, an equally weighted average is used. Final AI scores retain one decimal place.</p>"
+      },
+      {
+        "title": "Scoring, feedback, and materials",
+        "body": "<p>Choose grading strictness and whether to allow partial credit. Advanced settings let you adjust comment tone, length, language, improvement suggestions, the number of samples for a single model, and grading instructions.</p><p>Optionally select textbooks, lecture notes, or background materials as supplementary context, up to 20 task materials. If you choose “Do not use task materials,” confirmed question text, reference answers, and grading criteria for individual questions are still used.</p><p class=\"note\">Multiple sampling applies only to a single model configured with your own credentials and increases calls. When multiple models are selected, each runs once. If platform-shared models are available, they must be used alone with a fixed single sample.</p>"
+      },
+      {
+        "title": "Saving starts an automatic countdown",
+        "body": "<p>Click “Save and view grading summary” and check question and student counts, grading criteria, reference answers, expert selection, and scoring strategy. Once checks pass, a countdown starts automatically. You can also click “Start grading now.” To make changes, click “Back to grading settings.”</p><p>If red issues remain, the summary provides links to questions, submissions, or model settings. Resolve them, then save the settings again. After a pause or failure, saving again starts a new summary flow even if the configuration is unchanged.</p>"
+      },
+      {
+        "title": "Progress, pause, and resume",
+        "body": "<p>The progress page shows each model’s completed work, waiting for capacity, waiting for responses, and retries, along with saved AI work and aggregated student-question results. Expand the activity log for details. You can leave the page while processing continues in the background.</p><p>After pausing, resume unfinished work or “Continue manually” to open the original review matrix while retaining existing scores and comments. Do not mistake “One expert has finished” for “This question’s result has been fully aggregated.”</p><p class=\"secondary\">Resuming reuses compatible saved results. Recognizing all materials again or regrading the entire batch reruns a broader scope. Read the button labels and prompts carefully before starting.</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "review",
+    "title": "Review scores and regrade",
+    "intro": "Locate issues in the class matrix, then compare answers, grading evidence, and expert feedback to decide final scores.",
+    "sections": [
+      {
+        "title": "Resolve red items first, then check yellow",
+        "body": "<p>Red items include no valid score, scores outside the range from 0 to the maximum, and items awaiting confirmation after a valid score has been supplied. Open details, enter a score, save, and confirm before continuing.</p><p>Yellow items include low-confidence scores, expert disagreement, and partial expert failures where valid scores are available. A score of 0 is valid; model failure must not be recorded as 0.</p><p class=\"secondary\">Low-confidence warnings use a fixed threshold of 0.60. Expert disagreement means that the population standard deviation of at least two valid expert scores, divided by the question’s maximum score, is strictly greater than 15%. These warnings do not themselves block access to results.</p>"
+      },
+      {
+        "title": "Review and confirm each question",
+        "body": "<p>Click a student and question in the matrix to open details. Review the recognized answer, original file, grading evidence, and each expert’s score and comments. If needed, edit the teacher’s final score and annotations, then save and confirm.</p><p>Confirmation and navigation buttons are grouped together for continuous review of previous and next questions. Save or cancel current edits before confirming. Bulk confirmation applies only to eligible items and cannot conceal missing scores.</p><p class=\"note\">The score matrix does not add question or student rows. To change counts, use the earlier question or submission preparation pages.</p>"
+      },
+      {
+        "title": "Retry failed items or regrade the entire batch",
+        "body": "<ul><li><strong>Retry failed items only</strong>: completes unfinished model work while retaining saved teacher score changes and annotations.</li><li><strong>Regrade entire batch</strong>: opens regrading settings and a summary, then explicitly starts a new round. It reruns grading even when inputs are unchanged.</li></ul><p>Historical reports retain their original version content. After reviewing the new round, generate a new version on the report page. Previously downloaded reports are not silently rewritten.</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "results",
+    "title": "Results analysis and reports",
+    "intro": "“Learning analysis and export” separates the class overview, question analysis, student analysis, charts, and downloads.",
+    "sections": [
+      {
+        "title": "Overview and question analysis",
+        "body": "<p>The overview shows student and question counts, the class average score percentage, pass rate, score distribution, and weaker questions. Click “Question analysis” to examine performance by question, then open details for question materials, student answers, and scores.</p><p>Search, filters, and sorting help locate low-scoring questions or items needing review. To change scores, use “Back to review records.” Statistics and charts update after saving.</p>"
+      },
+      {
+        "title": "Student analysis",
+        "body": "<p>The student table shows total scores, score percentages, question scores, and review indicators, with column sorting and filtering. Open a student’s details for individual performance by question; click a specific score to locate that question.</p><p>Enter clear conditions in Ask, for example, “Filter students with score percentages below 60%, sorted from lowest to highest.” Check the returned filter conditions and clear them when needed to restore the whole class.</p><p class=\"secondary\">For duplicate or exact names, supply identity details when prompted for clarification. Confidence is a signal for checking results, not a measure of student ability.</p>"
+      },
+      {
+        "title": "Ask and visual analysis",
+        "body": "<p>In “Visual analysis,” describe the subjects, measures, and chart type, for example, “Compare average score percentages by question” or “Plot total score percentage against average confidence in a scatter plot.” Chart generation calls a model as needed.</p><p>Ask can request charts, filters, and sorting in one request. Charts and the main table can use different scopes, such as a whole-class chart alongside a list of low-scoring students. Check the sample and scope labeled on each chart.</p><p>Default charts include score-percentage distribution, pass/fail composition, per-question score percentages and review counts, scatter plots, and student × question heatmaps. Use the page controls to export charts or print.</p><p class=\"note\">For custom charts, “Save for this browsing session” does not generate an official report. Export promptly if you need a lasting copy.</p>"
+      },
+      {
+        "title": "Generate and download reports",
+        "body": "<ol><li>Open “Reports and downloads” and confirm that review requirements are satisfied.</li><li>If the latest report has not been generated, click generate report.</li><li>Download individual files or download everything as a ZIP.</li><li>After changing scores or regrading, regenerate reports and check the version number and generation time.</li></ol><ul><li>Grade sheet CSV: final scores, total score percentages, and scores by question.</li><li>Learning report Markdown: factual summaries for the class, questions, and students.</li><li>Publication-ready reference answers in Markdown / LaTeX: question text, grading criteria, and reference answers.</li><li>Official results JSON: a complete results snapshot.</li></ul><p class=\"secondary\">Historical versions can be downloaded separately. Deleting a historical report does not delete grading scores or review records. When current page data changes, older reports still retain their content as generated.</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "settings",
+    "title": "Account settings and common issues",
+    "intro": "Adjust display preferences and check storage usage. When something blocks progress, start with the reason shown on the page.",
+    "sections": [
+      {
+        "title": "Interface and storage",
+        "body": "<p>Open the username menu in the upper-right corner → “Account settings” to view your username, email, and role. Choose Chinese or English, and light, dark, or system appearance. Interface preferences are saved only in the current browser.</p><p>Task original-file storage includes original questions, submission packages, and original student answers; library storage is counted separately. When originals are cleaned up under retention rules, structured results, analysis, and long-term library content remain, but original-file previews may no longer be available.</p><p>You can also manage local drafts in account settings. Before deleting, confirm that you no longer need the content that has not been formally saved.</p><p>Task-original storage and knowledge storage have separate default limits of 512 MB each (the UI label; technically 512 MiB, or 536,870,912 bytes). Administrators can change these quotas. Use the limit shown on your current page.</p>"
+      },
+      {
+        "title": "A button is unavailable",
+        "body": "<p>Click or read the reason near the button. Common causes include a missing question file, no available model, a roster not yet uploaded, files being checked, the material limit being reached, or unresolved red required items. Follow the prompt to resolve the issue before continuing.</p><p>If an “Action required” item remains after you fixed it, check whether you saved the content but have not yet confirmed it. Do not repeatedly save unchanged content or clear flags to bypass genuine missing information.</p>"
+      },
+      {
+        "title": "Model failures, page conflicts, or missing files",
+        "body": "<ul><li>Key or permission issues: check the provider, API key, and model ID in “Models &amp; BYOK.”</li><li>Model or endpoint not found: check both the Model ID and Base URL.</li><li>Timeout or rate limiting: retain current files and configuration, then retry later or choose another available model.</li><li>Content changed on another page: reload the latest state, check retained edits, then save.</li><li>Only a filename remains: select the file again. Original reusable: continue directly. Check failed: retry the check first.</li></ul><p class=\"action\">Prefer “Resume” or “Retry failed items only” to complete remaining work. Choose “Recognize all again” or “Regrade entire batch” only when a complete rerun is needed.</p>"
+      }
+    ],
+    "group": "manual"
+  },
+  {
+    "id": "api-smartai",
+    "group": "api",
+    "title": "Configure models in SmarTAI",
+    "intro": "Add your own API Key, save the configuration, and test text and image capabilities as needed.",
+    "sections": [
+      {
+        "id": "api-overview",
+        "title": "Before you begin",
+        "body": "<p>SmarTAI supports models from different providers using your own API Key. Add a configuration by following the steps below.</p><div class=\"note\"><p><strong>No local proxy setup required:</strong> Model requests are sent by SmarTAI's platform servers. You do not need to enable or switch a local VPN/network proxy for different providers. Actual requests must still meet the provider's account permission, supported-region, and API connectivity requirements.</p></div><p class=\"secondary\">Guide version: October 2026. Model names and main quota details were checked through October 19, 2026. Models, free quotas, application procedures, and request limits may change. Refer to the provider's official documentation and your own account console for current information.</p>"
+      },
+      {
+        "id": "api-entry",
+        "title": "Open “Models & BYOK”",
+        "body": "<p><strong>Option one:</strong> Click your username in the upper-right corner → <strong>Models & BYOK</strong>.</p><p><strong>Option two:</strong> Click <strong>x/x models enabled</strong> at the top → Open model management from the expanded menu.</p><p>On the “Models & BYOK” page, click <strong>Add model configuration</strong> in the upper-right corner. The image below marks both entry points together, followed by the Add button on the configuration page. Red boxes are explanatory annotations; the underlying images are actual interface screenshots.</p>"
+      },
+      {
+        "id": "api-fields",
+        "title": "Complete and save the configuration",
+        "body": "<p>First, find your provider in <a href=\"#api-providers\">Section 2</a>, follow the steps to obtain a key, and then enter the following details.</p><div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Field</th><th scope=\"col\">What to enter</th></tr></thead><tbody><tr><td><strong>Provider</strong></td><td>Select the relevant provider.</td></tr><tr><td><strong>Configuration name</strong></td><td>Optional, for example, “Assignment grading” or “Image recognition.” If left blank, the model name is used by default.</td></tr><tr><td><strong>Model name</strong></td><td>Copy the provider's <strong>Model ID</strong>. This is the name used to call the model, such as <code>gemini-3.5-flash-lite</code>, rather than its Chinese display name.</td></tr><tr><td><strong>API key</strong></td><td>Paste the key you just obtained, taking care not to copy any extra spaces.</td></tr><tr><td><strong>API Base URL</strong></td><td>Enter the API base address. You can copy it directly from the relevant provider section.</td></tr><tr><td><strong>API protocol</strong></td><td>When using the provider's official API, keep this set to <strong>Follow provider</strong>.</td></tr><tr><td><strong>RPM</strong></td><td>The number of requests allowed per minute. Enter the value supplied by the provider; if you are unsure, leave it blank or enter <code>0</code>.</td></tr><tr><td><strong>Concurrency</strong></td><td>Adjusted automatically; no entry is needed.</td></tr></tbody></table></div><p>Click <strong>Save configuration</strong> and confirm that the configuration is <strong>Enabled</strong>. For configurations you use often, choose <strong>Set as default</strong>. To use multiple models, add a separate configuration for each.</p><p>An API Key is like a password. Keep it safe, and do not include it in screenshots or share it in group chats. The page will not display the full key after saving. When editing a configuration, leave the key field blank to keep the existing key.</p><p><strong>Where can I check costs and limits?</strong> In the provider's console, look for “Balance / Free quota / Resource packages” and “Rate limiting / Limits / Rate Limit.” Tokens are the units providers use to measure model usage; both input and output consume tokens. Free quotas usually apply to specific models and have an expiry date. Whether charges continue after the quota is exhausted depends on your account balance and billing settings. Setting RPM to <code>0</code> only means that no additional queuing-based rate limit is imposed; it does not mean the provider has no limits.</p>"
+      },
+      {
+        "id": "api-api-connectivity",
+        "title": "Test API connectivity",
+        "body": "<p>After saving, you can test the configuration as needed:</p><div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Test</th><th scope=\"col\">Action</th><th scope=\"col\">What it checks</th></tr></thead><tbody><tr><td><strong>Text test</strong></td><td>Click <strong>Verify (optional)</strong> → <strong>Run connectivity verification</strong>.</td><td>Whether the key, model name, and API address work correctly.</td></tr><tr><td><strong>Image test</strong></td><td>Click <strong>Verify vision capability</strong> → <strong>Run image test</strong>.</td><td>Whether the current model configuration can read images correctly.</td></tr></tbody></table></div><p>Each test sends one real request, consumes model quota, and may incur a charge. <strong>Canceling or closing the confirmation window does not send a request</strong>. Saving a configuration does not automatically run a test, and testing is not required to enable it.</p><p>The image test uses a small system-generated image, so you do not need to upload an assignment. Even if the result is <strong>Passed</strong>, you should still check recognition results for your actual files. If it says <strong>Could not confirm this time</strong>, troubleshoot using the error message first; do not immediately assume the model cannot recognize images.</p><p>If verification fails, click the reason text to view the full explanation. If verification passes but grading still does not work correctly, check the actual file recognition results, the model's remaining quota, and the error message. Passing connectivity verification does not guarantee that every task will succeed.</p>"
+      },
+      {
+        "id": "api-help",
+        "title": "Troubleshooting",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Message or symptom</th><th scope=\"col\">What to do</th></tr></thead><tbody><tr><td>Invalid key, incorrect format, or insufficient permissions</td><td>Copy the API Key again and check that you selected the correct provider, region, and key type.</td></tr><tr><td>Model or endpoint not found</td><td>Check the Model ID and API Base URL, and confirm that the model has been enabled for your account.</td></tr><tr><td>Rate limit reached or insufficient quota</td><td>Check the provider's balance, promotional-credit expiry date, and request limits. For per-minute rate limits, retry later; for daily quotas, wait for the provider to reset them.</td></tr><tr><td>Text test passes but image test fails</td><td>Confirm that the selected model supports images, then check the quota and error message.</td></tr><tr><td>Connection failure or request timeout</td><td>Retry later and check the API address, the provider's service status, and supported regions. If the issue persists, contact the platform administrator.</td></tr></tbody></table></div><p>You can select different models for question recognition, answer recognition, and grading. Images, scans, and handwritten answers require an image-capable model. Baidu OCR handles recognition only; subsequent grading still requires a large language model.</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-providers",
+    "group": "api",
+    "title": "Providers and API access",
+    "intro": "Find a provider and review the application steps, configuration details, and free or trial quotas.",
+    "sections": [
+      {
+        "id": "api-provider-index",
+        "title": "Choose a provider",
+        "body": "<p>The providers below follow the order of their entry points on the page. <strong>The order is neither a ranking nor a recommendation priority</strong>.</p><div class=\"note\"><p><strong>Network access note:</strong> In some network environments, accessing the official websites and API consoles for Google Gemini, OpenAI, and Anthropic Claude may require a VPN/network proxy. When applying for and using an API, also comply with the provider's supported-region requirements.</p><h3>You do not need to enable or switch a local proxy when using configured models in SmarTAI.</h3></div><ul><li><a href=\"#api-google\">Google Gemini / Gemma</a></li><li><a href=\"#api-openai\">OpenAI</a></li><li><a href=\"#api-claude\">Anthropic Claude</a></li><li><a href=\"#api-deepseek\">DeepSeek</a></li><li><a href=\"#api-glm\">Zhipu BigModel / GLM</a></li><li><a href=\"#api-kimi\">Kimi / Moonshot</a></li><li><a href=\"#api-qwen\">Alibaba Cloud Model Studio / Qwen</a></li><li><a href=\"#api-baidu\">Baidu Document Parsing Unlimited-OCR</a></li><li><a href=\"#api-tencent\">Tencent Hunyuan / TokenHub</a></li><li><a href=\"#api-doubao\">ByteDance Doubao / Volcano Ark</a></li><li><a href=\"#api-minimax\">MiniMax</a></li></ul><p>The configuration examples below use the providers' official APIs. For school-provided or other relay APIs, see <a href=\"#api-relay\">Section 3</a>.</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-google",
+    "group": "api",
+    "title": "Google Gemini / Gemma",
+    "intro": "Access and configuration · Google Gemini / Gemma",
+    "sections": [
+      {
+        "id": "api-google-quota",
+        "title": "Quotas and usage notes",
+        "body": "<div class=\"note\"><p><strong>Free quota:</strong> The models below offer an API free tier. Check the current project in AI Studio for specific request and token limits. Multiple keys in the same project share the quota.</p></div><p class=\"note\">Google's free tier has different data-handling rules from the paid tier, and content may be used to improve products. Read the provider's rules before use, and avoid uploading personal information without authorization. <a href=\"https://ai.google.dev/gemini-api/docs/pricing\">See the official explanation</a>.</p>"
+      },
+      {
+        "id": "api-google-1",
+        "title": "Obtain an API key",
+        "body": "<ol><li>Open <a href=\"https://aistudio.google.com/\">Google AI Studio</a> and sign in with your Google account.</li><li>Go to <strong>Dashboard → API Keys</strong> and click <strong>Create API key</strong>.</li><li>Select a project. If this is your first time, follow the page instructions to create a project, then copy the generated key.</li><li>In <a href=\"https://aistudio.google.com/rate-limit\">Rate Limit</a>, select the same project, check the target model's RPM, and enter it in SmarTAI.</li></ol>"
+      },
+      {
+        "id": "api-google-3",
+        "title": "Enter the details in SmarTAI",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Field</th><th scope=\"col\">Value</th></tr></thead><tbody><tr><td>Provider</td><td><strong>Google Gemini</strong></td></tr><tr><td>Model name</td><td><code>gemini-3.5-flash-lite</code>, <code>gemini-3.8-flash</code>, <code>gemma-4-31b-it</code>, <code>gemma-4-26b-a4b-it</code>. Choose any one; all support text and images.</td></tr><tr><td>API key</td><td>The Google AI Studio key you just copied.</td></tr><tr><td>API Base URL</td><td><code>https://generativelanguage.googleapis.com</code></td></tr><tr><td>API protocol</td><td>Follow provider (Gemini generateContent).</td></tr></tbody></table></div><div class=\"note\"><p><strong>Model differences:</strong> <code>gemini-3.5-flash-lite</code> focuses on speed and low cost; <code>gemini-3.8-flash</code> focuses on overall capabilities; <code>gemma-4-31b-it</code> and <code>gemma-4-26b-a4b-it</code> are open-weight models, with the latter using a more efficient MoE architecture. All the models above support text and image input.</p></div><p>Gemma also uses the Google Gemini entry here. Before use, check the <a href=\"https://ai.google.dev/gemini-api/docs/available-regions\">Supported regions</a>.</p><p>Official references: <a href=\"https://ai.google.dev/gemini-api/docs/api-key\">API key instructions</a> · <a href=\"https://ai.google.dev/gemini-api/docs/models\">Gemini models</a> · <a href=\"https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api\">Gemma models</a> · <a href=\"https://ai.google.dev/gemini-api/docs/pricing\">Pricing and free tier</a>.</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-openai",
+    "group": "api",
+    "title": "OpenAI",
+    "intro": "Access and configuration · OpenAI",
+    "sections": [
+      {
+        "id": "api-openai-quota",
+        "title": "Quotas and usage notes",
+        "body": "<div class=\"note\"><p><strong>Free quota:</strong> The models below do not have a general API free tier and normally use pay-as-you-go billing. Any valid API credits already in your account can offset charges. ChatGPT subscriptions and API charges are separate.</p></div>"
+      },
+      {
+        "id": "api-openai-1",
+        "title": "Obtain an API key",
+        "body": "<ol><li>Sign in to <a href=\"https://platform.openai.com/\">OpenAI Platform</a> and confirm the organization and project you want to use.</li><li>Open <a href=\"https://platform.openai.com/api-keys\">API keys</a> and click <strong>Create new secret key</strong>.</li><li>You can enter <code>SmarTAI</code> as the name. Copy the key immediately after creating it.</li><li>In the console, open <strong>Billing</strong> to check your available balance or credits, and open <a href=\"https://platform.openai.com/settings/organization/limits\">Limits</a> to check the target model's RPM.</li></ol>"
+      },
+      {
+        "id": "api-openai-3",
+        "title": "Enter the details in SmarTAI",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Field</th><th scope=\"col\">Value</th></tr></thead><tbody><tr><td>Provider</td><td><strong>OpenAI</strong></td></tr><tr><td>Model name</td><td><code>gpt-6-luna</code>, <code>gpt-6.1-sol</code>, <code>gpt-6-astra</code>. Choose any one; all support text and images.</td></tr><tr><td>API key</td><td>The OpenAI API key you just created.</td></tr><tr><td>API Base URL</td><td><code>https://api.openai.com/v1</code></td></tr><tr><td>API protocol</td><td>Follow provider (OpenAI Chat Completions).</td></tr></tbody></table></div><div class=\"note\"><p><strong>Model differences:</strong> <code>gpt-6-luna</code> focuses on speed and low cost; <code>gpt-6.1-sol</code> balances capabilities and cost; <code>gpt-6-astra</code> is designed for more complex reasoning tasks. All three support text and image input.</p></div><p>Official references: <a href=\"https://developers.openai.com/api/docs/quickstart\">Quickstart</a> · <a href=\"https://developers.openai.com/api/docs/models\">Model list</a> · <a href=\"https://developers.openai.com/api/docs/pricing\">API pricing</a> · <a href=\"https://developers.openai.com/api/docs/supported-countries\">Supported regions</a>.</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-claude",
+    "group": "api",
+    "title": "Anthropic Claude",
+    "intro": "Access and configuration · Anthropic Claude",
+    "sections": [
+      {
+        "id": "api-claude-quota",
+        "title": "Quotas and usage notes",
+        "body": "<div class=\"note\"><p><strong>Free quota:</strong> New users may receive a small API trial credit; check Billing in the Console for the actual amount and expiry date. Eligible Max / Team subscribers can claim included API credits, and research projects can apply for dedicated credits. Standard API usage is billed on a pay-as-you-go basis.</p><p>Max / Team users can open <strong>Billing → API credits</strong> on the Claude website to link a Console organization and claim credits. New subscriptions must be at least 7 days old. Credits expire at the end of the billing period and do not roll over. For eligibility and amounts, see <a href=\"https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers\">API credits for subscribers</a>.</p></div>"
+      },
+      {
+        "id": "api-claude-1",
+        "title": "Obtain an API key",
+        "body": "<ol><li>Sign in to <a href=\"https://platform.claude.com/\">Claude Platform</a>.</li><li>Go to <strong>Settings → API Keys</strong> and click <strong>Create key</strong>.</li><li>Select a workspace. You can use the name <code>SmarTAI</code>, then copy the key after creating it.</li><li>In <a href=\"https://platform.claude.com/settings/billing\">Billing</a>, check your valid credits, and in <a href=\"https://platform.claude.com/usage/limits\">Usage → Limits</a>, check your current RPM.</li></ol>"
+      },
+      {
+        "id": "api-claude-3",
+        "title": "Enter the details in SmarTAI",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Field</th><th scope=\"col\">Value</th></tr></thead><tbody><tr><td>Provider</td><td><strong>Claude (Anthropic)</strong></td></tr><tr><td>Model name</td><td><code>claude-sonnet-5-5</code>, <code>claude-opus-5-5</code>, <code>claude-haiku-5-5</code>. Choose any one; all support text and images.</td></tr><tr><td>API key</td><td>The Claude API key you just created.</td></tr><tr><td>API Base URL</td><td><code>https://api.anthropic.com</code></td></tr><tr><td>API protocol</td><td>Follow provider (Anthropic Messages).</td></tr></tbody></table></div><div class=\"note\"><p><strong>Model differences:</strong> <code>claude-haiku-5-5</code> focuses on speed and low cost; <code>claude-sonnet-5-5</code> balances speed and capabilities; <code>claude-opus-5-5</code> is designed for more complex tasks. All three support text and image input.</p></div><p>Official references: <a href=\"https://platform.claude.com/docs/en/api/overview\">API introduction</a> · <a href=\"https://platform.claude.com/docs/en/models/overview\">Model list</a> · <a href=\"https://platform.claude.com/docs/en/about-claude/pricing\">Pricing and trials</a> · <a href=\"https://www.anthropic.com/news/expanding-support-for-scientists\">Apply for research credits</a> · <a href=\"https://platform.claude.com/docs/en/api/supported-regions\">Supported regions</a>.</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-deepseek",
+    "group": "api",
+    "title": "DeepSeek",
+    "intro": "Access and configuration · DeepSeek",
+    "sections": [
+      {
+        "id": "api-deepseek-quota",
+        "title": "Quotas and usage notes",
+        "body": "<div class=\"note\"><p><strong>Free quota:</strong> Model API usage is billed on a pay-as-you-go basis, with any existing promotional balance used first. Current public official documentation does not specify a standard new-user credit. Free web chat does not mean the API is free.</p></div>"
+      },
+      {
+        "id": "api-deepseek-1",
+        "title": "Obtain an API key",
+        "body": "<ol><li>Sign in to <a href=\"https://platform.deepseek.com/\">DeepSeek Platform</a>.</li><li>Open <a href=\"https://platform.deepseek.com/api_keys\">API keys</a>, then create and copy a key.</li><li>In <a href=\"https://platform.deepseek.com/balance\">Balance</a>, check your purchased balance, promotional balance, and expiry dates. Top up as needed if your balance is insufficient.</li><li>Return to SmarTAI, select DeepSeek, enter the details below, and save.</li></ol>"
+      },
+      {
+        "id": "api-deepseek-3",
+        "title": "Enter the details in SmarTAI",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Field</th><th scope=\"col\">Value</th></tr></thead><tbody><tr><td>Provider</td><td><strong>DeepSeek</strong></td></tr><tr><td>Model name</td><td><code>deepseek-flash</code>: text and images; <code>deepseek-v4-pro</code>: text. Choose either one.</td></tr><tr><td>API key</td><td>The DeepSeek key you just created.</td></tr><tr><td>API Base URL</td><td><code>https://api.deepseek.com/v1</code></td></tr><tr><td>API protocol</td><td>Follow provider (OpenAI Chat Completions).</td></tr></tbody></table></div><div class=\"note\"><p><strong>Model differences:</strong> <code>deepseek-flash</code> supports text and image input and is suitable for general grading and image recognition; <code>deepseek-v4-pro</code> supports text input only and can be used for text-only grading and review. For image recognition, select <code>deepseek-flash</code>.</p></div><p>The “concurrency” value on the provider's page is not RPM; do not enter it in the RPM field.</p><p>Official references: <a href=\"https://api-docs.deepseek.com/zh-cn/\">Your first API call</a> · <a href=\"https://api-docs.deepseek.com/zh-cn/quick_start/pricing/\">Models and pricing</a> · <a href=\"https://api-docs.deepseek.com/zh-cn/quick_start/rate_limit/\">Rate-limit details</a>.</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-glm",
+    "group": "api",
+    "title": "Zhipu BigModel / GLM",
+    "intro": "Access and configuration · Zhipu BigModel / GLM",
+    "sections": [
+      {
+        "id": "api-glm-quota",
+        "title": "Quotas and usage notes",
+        "body": "<div class=\"note\"><p><strong>Free quota:</strong> <code>glm-4.7-flash</code> and <code>glm-4.6v-flash</code> are currently free; <code>glm-5.3</code>, <code>glm-5.3-flash</code> use pay-as-you-go billing. After receiving a new-user resource package, check which models it covers and when it expires.</p></div>"
+      },
+      {
+        "id": "api-glm-1",
+        "title": "Obtain an API key",
+        "body": "<ol><li>Register or sign in to <a href=\"https://open.bigmodel.cn/\">BigModel</a>.</li><li>Open <a href=\"https://bigmodel.cn/usercenter/proj-mgmt/apikeys\">API Keys</a>, select <strong>Standard API Key</strong>, and create a key.</li><li>Copy the key. Use a standard Key here, not a personal-plan or team-plan Key.</li><li>Check resource packages, usage, and limits in the console, then return to SmarTAI to enter the details.</li></ol>"
+      },
+      {
+        "id": "api-glm-3",
+        "title": "Enter the details in SmarTAI",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Field</th><th scope=\"col\">Value</th></tr></thead><tbody><tr><td>Provider</td><td><strong>Zhipu</strong></td></tr><tr><td>Model name</td><td>Text: <code>glm-4.7-flash</code>, <code>glm-5.3</code>; text/images: <code>glm-4.6v-flash</code>, <code>glm-5.3-flash</code>. Choose any one.</td></tr><tr><td>API key</td><td>The newly created <strong>Standard API Key</strong>.</td></tr><tr><td>API Base URL</td><td><code>https://open.bigmodel.cn/api/paas/v4</code></td></tr><tr><td>API protocol</td><td>Follow provider (OpenAI Chat Completions).</td></tr></tbody></table></div><div class=\"note\"><p><strong>Model differences:</strong> <code>glm-4.7-flash</code> is a free text model; <code>glm-4.6v-flash</code> is a free vision model. glm-5.3 is designed for complex text tasks, and <code>glm-5.3-flash</code> supports text and image input. Standard API usage for the latter two is normally billed on a pay-as-you-go basis.</p></div><p>The configuration above is for the mainland China BigModel platform. If you have an overseas Z.ai account, use that site's Key and address, <code>https://api.z.ai/api/paas/v4</code>. Do not mix credentials from the two sites.</p><p>Official references: <a href=\"https://docs.bigmodel.cn/cn/guide/start/quick-start/\">Quickstart</a> · <a href=\"https://docs.bigmodel.cn/cn/guide/start/model-overview\">Model list</a> · <a href=\"https://docs.bigmodel.cn/cn/guide/start/pricing\">Pricing</a> · <a href=\"https://docs.bigmodel.cn/cn/coding-plan/notice/api-key-management\">Key types</a>.</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-kimi",
+    "group": "api",
+    "title": "Kimi / Moonshot",
+    "intro": "Access and configuration · Kimi / Moonshot",
+    "sections": [
+      {
+        "id": "api-kimi-quota",
+        "title": "Quotas and usage notes",
+        "body": "<div class=\"note\"><p><strong>Free quota:</strong> New users registering with a mainland China mobile number can receive an RMB 15 API voucher after completing real-name verification. It is valid for 3 months. <strong>This voucher cannot be used for Kimi K3</strong>. Once the voucher is exhausted, usage is charged to the account balance.</p></div>"
+      },
+      {
+        "id": "api-kimi-1",
+        "title": "Obtain an API key",
+        "body": "<ol><li>Register or sign in to <a href=\"https://platform.kimi.com/\">Kimi API Platform</a>.</li><li>Complete real-name verification in the user center and check whether the new-user voucher has been credited.</li><li>Go to <strong>API Keys</strong>, then create and copy a key.</li><li>Check billing details for the models covered by the voucher and its expiry date, and check the rate-limits page for RPM.</li></ol>"
+      },
+      {
+        "id": "api-kimi-3",
+        "title": "Enter the details in SmarTAI",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Field</th><th scope=\"col\">Value</th></tr></thead><tbody><tr><td>Provider</td><td><strong>Kimi (Moonshot)</strong></td></tr><tr><td>Model name</td><td><code>kimi-k2.6</code> or <code>kimi-k3</code>. Both support text and images; to use the new-user voucher, choose <code>kimi-k2.6</code>.</td></tr><tr><td>API key</td><td>Your API key from the Kimi Platform.</td></tr><tr><td>API Base URL</td><td><code>https://api.moonshot.cn/v1</code></td></tr><tr><td>API protocol</td><td>Follow provider (OpenAI Chat Completions).</td></tr></tbody></table></div><div class=\"note\"><p><strong>Model differences:</strong> <code>kimi-k2.6</code> is suitable for general text-and-image tasks, and eligible new users can use trial vouchers; <code>kimi-k3</code> is designed for complex reasoning and long-text tasks but is not covered by this new-user voucher. Both support text and image input.</p></div><p>Kimi web subscriptions, Kimi Code, and API balances are separate. The overseas platform <code>platform.kimi.ai</code> uses <code>https://api.moonshot.ai/v1</code>, and its accounts, keys, and balances are independent of the mainland China site.</p><p>Official references: <a href=\"https://www.kimi.com/help/kimi-api/api-free-trial\">Free benefits for new users</a> · <a href=\"https://platform.kimi.com/docs/models\">Model list</a> · <a href=\"https://www.kimi.com/help/kimi-api/api-rate-limits\">Rate limits</a> · <a href=\"https://www.kimi.com/help/kimi-api/api-troubleshooting\">FAQ</a>.</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-qwen",
+    "group": "api",
+    "title": "Alibaba Cloud Model Studio / Qwen",
+    "intro": "Access and configuration · Alibaba Cloud Model Studio / Qwen",
+    "sections": [
+      {
+        "id": "api-qwen-quota",
+        "title": "Quotas and usage notes",
+        "body": "<div class=\"note\"><p><strong>Free quota:</strong> Eligible new users in China (Beijing), China North 2, receive a quota of 1 million tokens for each of the two models below, usually valid for 90 days. If you only want to use the free quota, enable <strong>Stop when free quota is exhausted</strong>.</p></div>"
+      },
+      {
+        "id": "api-qwen-1",
+        "title": "Obtain an API key",
+        "body": "<ol><li>Sign in to <a href=\"https://bailian.console.aliyun.com/\">Alibaba Cloud Model Studio</a>, select the region <strong>China North 2 (Beijing)</strong>, and follow the prompts to activate the service.</li><li>Open <a href=\"https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key\">API Key page</a> and click <strong>Create API Key</strong>. For personal use, you can select the primary account and default workspace, and create the key with the page's default permissions.</li><li>Copy the key. On the <strong>Free quota</strong> page, search for the target model, check the remaining quota and expiry date, and enable <strong>Stop when exhausted</strong> as needed.</li><li>Return to SmarTAI, select Qwen, and enter the details below. Use a standard API Key, not a dedicated Coding Plan / Token Plan Key.</li></ol>"
+      },
+      {
+        "id": "api-qwen-3",
+        "title": "Enter the details in SmarTAI",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Field</th><th scope=\"col\">Value</th></tr></thead><tbody><tr><td>Provider</td><td><strong>Qwen (Tongyi Qianwen)</strong></td></tr><tr><td>Model name</td><td><code>qwen3.8-max</code> or <code>qwen3.8-flash</code>. Both support text and images.</td></tr><tr><td>API key</td><td>A standard API key created in the Beijing region.</td></tr><tr><td>API Base URL</td><td><code>https://dashscope.aliyuncs.com/compatible-mode/v1</code></td></tr><tr><td>API protocol</td><td>Follow provider (OpenAI Chat Completions).</td></tr></tbody></table></div><div class=\"note\"><p><strong>Model differences:</strong> <code>qwen3.8-max</code> is the flagship model, focusing on complex reasoning and multimodal understanding; <code>qwen3.8-flash</code> focuses on speed and low cost. Both support text and image input. Check your own console for the new-user free quota.</p></div><p>These two models use dynamic rate limiting. If the page does not provide an RPM value, leave it blank or enter <code>0</code>. If you select a different region, use the key and address for that region as well.</p><p>Official references: <a href=\"https://help.aliyun.com/zh/model-studio/get-api-key\">Obtain a key</a> · <a href=\"https://help.aliyun.com/zh/model-studio/new-free-quota\">New-user quota rules</a> · <a href=\"https://help.aliyun.com/zh/model-studio/model-pricing\">Models and pricing</a> · <a href=\"https://help.aliyun.com/zh/model-studio/rate-limit\">Rate-limit details</a>.</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-baidu",
+    "group": "api",
+    "title": "Baidu Document Parsing Unlimited-OCR",
+    "intro": "Access and configuration · Baidu Document Parsing Unlimited-OCR",
+    "sections": [
+      {
+        "id": "api-baidu-quota",
+        "title": "Quotas and usage notes",
+        "body": "<div class=\"note\"><p><strong>Free quota:</strong> The current limited-time free quota is 200 pages for individually verified accounts and 1000 pages for enterprise-verified accounts. Check the OCR console for remaining pages and expiry dates. “Unlimited” is the product name; it does not mean unlimited free usage.</p></div><p><strong>Purpose:</strong> Unlimited-OCR extracts text and structured content from images, PDFs, and other documents. It does not grade assignments or assign scores. After recognition, a large language model is still needed for grading.</p>"
+      },
+      {
+        "id": "api-baidu-1",
+        "title": "Obtain and save credentials",
+        "body": "<ol><li>Register or sign in to <a href=\"https://console.bce.baidu.com/ai-engine/ocr/overview/index\">Baidu AI Cloud</a> and complete individual or enterprise real-name verification.</li><li>Go to <strong>OCR console</strong>, activate <strong>Document Parsing (Unlimited-OCR)</strong>, and check the resource list for your free page quota.</li><li>Go to <strong>Application list → Create application</strong> and select the permissions for the document parsing API.</li><li>In the application list, copy the application's <strong>API Key</strong> and <strong>Secret Key</strong>.</li><li>Return to “Models & BYOK” in SmarTAI and find <strong>Baidu Document Parsing (Unlimited-OCR)</strong>. Enter the <strong>API Key</strong> and <strong>Secret Key</strong> into their respective fields, then click “Save credentials.”</li></ol><p>You do not need to enter a model name or Base URL here. Do not use the cloud account keys under Baidu Cloud's “Security credentials / Access Key.”</p><p>After saving, click <strong>Verify API Key / Secret Key</strong> to check the credentials. For actual recognition, select Baidu OCR in the task. Credential verification does not submit a file. Actual OCR calls consume pages, and failed calls may also consume free resources.</p><p>Official references: <a href=\"https://ai.baidu.com/ai-doc/OCR/dk3iqnq51\">Beginner's guide</a> · <a href=\"https://ai.baidu.com/ai-doc/OCR/fmr1p39gb\">Unlimited-OCR overview</a> · <a href=\"https://ai.baidu.com/ai-doc/OCR/fk3h7xu7h\">Free resource rules</a>.</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-tencent",
+    "group": "api",
+    "title": "Tencent Hunyuan / TokenHub",
+    "intro": "Access and configuration · Tencent Hunyuan / TokenHub",
+    "sections": [
+      {
+        "id": "api-tencent-quota",
+        "title": "Quotas and usage notes",
+        "body": "<div class=\"note\"><p><strong>Free quota:</strong> The current new-user promotion ends on 2026-12-31. Language and multimodal-understanding models offer a trial quota of 1 million tokens, valid for 1 year after claiming it. Check “Activation management” for eligible models, remaining quota, and expiry dates. If postpaid billing is not enabled, calls stop when the free quota is exhausted.</p></div>"
+      },
+      {
+        "id": "api-tencent-1",
+        "title": "Obtain an API key",
+        "body": "<ol><li>Sign in to <a href=\"https://cloud.tencent.com/product/tokenhub\">Tencent Cloud TokenHub</a> and complete real-name verification.</li><li>Go to <strong>Model marketplace → Free trial for new users</strong>, select the models you want to use, and click <strong>Claim now</strong>.</li><li>Go to <strong>API Key management</strong>, select the <strong>Guangzhou</strong> region and click <strong>Create API Key</strong>.</li><li>You can enter <code>SmarTAI</code> as the name. Under “Scope,” select the models you want to use, confirm, and copy the full key.</li></ol>"
+      },
+      {
+        "id": "api-tencent-3",
+        "title": "Enter the details in SmarTAI",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Field</th><th scope=\"col\">Value</th></tr></thead><tbody><tr><td>Provider</td><td><strong>Tencent Hunyuan (TokenHub)</strong></td></tr><tr><td>Model name</td><td><code>hy3</code>: text; <code>hy-vision-2.0-instruct</code>: text and images. Choose either one.</td></tr><tr><td>API key</td><td>A TokenHub key created in the Guangzhou region.</td></tr><tr><td>API Base URL</td><td><code>https://tokenhub.tencentmaas.com/v1</code></td></tr><tr><td>API protocol</td><td>Follow provider (OpenAI Chat Completions).</td></tr></tbody></table></div><div class=\"note\"><p><strong>Model differences:</strong> <code>hy3</code> is a general-purpose text reasoning model; <code>hy-vision-2.0-instruct</code> is a vision-understanding model that supports image content recognition, OCR, and chart understanding. Choose the latter when you need image recognition.</p></div><p>Official references: <a href=\"https://cloud.tencent.com/document/product/1823/130058\">Getting started</a> · <a href=\"https://cloud.tencent.com/document/product/1823/130051\">Model list</a> · <a href=\"https://cloud.tencent.com/document/product/1823/136956\">Image understanding</a> · <a href=\"https://cloud.tencent.com/document/product/1823/130053/\">New-user quota rules</a>.</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-doubao",
+    "group": "api",
+    "title": "ByteDance Doubao / Volcano Ark",
+    "intro": "Access and configuration · ByteDance Doubao / Volcano Ark",
+    "sections": [
+      {
+        "id": "api-doubao-quota",
+        "title": "Quotas and usage notes",
+        "body": "<div class=\"note\"><p><strong>Free quota:</strong> New users receive model API trial quotas, calculated separately for each model. Check “Activation management” for remaining quotas and expiry dates. If you only want to use the promotional quota, eligible accounts can enable <strong>Worry-free trial mode</strong> to avoid switching to paid calls.</p></div>"
+      },
+      {
+        "id": "api-doubao-1",
+        "title": "Obtain an API key",
+        "body": "<ol><li>Register or sign in to <a href=\"https://ark.volcengine.com/\">Volcano Ark</a>, and select the <strong>Beijing</strong> region.</li><li>In <strong>Activation management</strong>, find the model you want to use, follow the prompts to activate its free trial, and enable <strong>Worry-free trial mode</strong> as needed.</li><li>Go to <a href=\"https://ark.volcengine.com/region:cn-beijing/apikey\">API Key management</a> and click <strong>Create API Key</strong>. For personal use, you can keep the default project workspace.</li><li>You can enter <code>SmarTAI</code> as the name, then view and copy the key from the list after creating it.</li></ol>"
+      },
+      {
+        "id": "api-doubao-3",
+        "title": "Enter the details in SmarTAI",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Field</th><th scope=\"col\">Value</th></tr></thead><tbody><tr><td>Provider</td><td><strong>Doubao (Volcano Ark)</strong></td></tr><tr><td>Model name</td><td><code>doubao-seed-2-1-pro-260915</code> or <code>doubao-seed-2-1-lite-260915</code>. Both support text and images.</td></tr><tr><td>API key</td><td>A standard API key for the Beijing region.</td></tr><tr><td>API Base URL</td><td><code>https://ark.cn-beijing.volces.com/api/v3</code></td></tr><tr><td>API protocol</td><td>Follow provider (OpenAI Chat Completions).</td></tr></tbody></table></div><div class=\"note\"><p><strong>Model differences:</strong> <code>doubao-seed-2-1-pro-260915</code> focuses on complex reasoning and overall capabilities; <code>doubao-seed-2-1-lite-260915</code> focuses on speed and low cost. Both support text and image input.</p></div><p>For the models above, simply enter the Model ID; you do not need to create an additional inference endpoint. Use a standard API Key, and do not mix it with Coding / Agent Plan subscription keys.</p><p>Official references: <a href=\"https://console.volcengine.com/ark/region:cn-beijing/docs/api-key\">Obtain a key</a> · <a href=\"https://console.volcengine.com/ark/region:cn-beijing/docs/model-list\">Model list</a> · <a href=\"https://console.volcengine.com/ark/region:cn-beijing/docs/activation-management\">Activation management</a> · <a href=\"https://console.volcengine.com/ark/region:cn-beijing/docs/free-inference-quota\">Free inference quota</a>.</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-minimax",
+    "group": "api",
+    "title": "MiniMax",
+    "intro": "Access and configuration · MiniMax",
+    "sections": [
+      {
+        "id": "api-minimax-quota",
+        "title": "Quotas and usage notes",
+        "body": "<div class=\"note\"><p><strong>Free quota:</strong> Standard API usage is billed on a pay-as-you-go basis. Current public official documentation does not specify a standard new-customer credit. Free web trials and M Plan subscription quotas are separate from the standard API balance.</p></div>"
+      },
+      {
+        "id": "api-minimax-1",
+        "title": "Obtain an API key",
+        "body": "<ol><li>Sign in to <a href=\"https://platform.minimax.cn/\">MiniMax Platform</a>.</li><li>Open <a href=\"https://platform.minimax.cn/console/access?tab=api-keys\">API keys</a> and click <strong>Create new API Key</strong>, then copy the pay-as-you-go key.</li><li>In <strong>Account management → Balance</strong>, check your available balance and top up as needed. Do not use an M Plan subscription Key in place of a standard API Key.</li><li>Return to SmarTAI, select MiniMax, enter the details below, and save.</li></ol>"
+      },
+      {
+        "id": "api-minimax-3",
+        "title": "Enter the details in SmarTAI",
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Field</th><th scope=\"col\">Value</th></tr></thead><tbody><tr><td>Provider</td><td><strong>MiniMax</strong></td></tr><tr><td>Model name</td><td><code>MiniMax-M3</code> supports text and images. Preserve the capitalization exactly.</td></tr><tr><td>API key</td><td>A standard pay-as-you-go API key.</td></tr><tr><td>API Base URL</td><td><code>https://api.minimax.cn/v1</code></td></tr><tr><td>API protocol</td><td>Follow provider (OpenAI Chat Completions).</td></tr></tbody></table></div><p>With a standard pay-as-you-go Key, use the corresponding model from the model list; <code>MiniMax-M3.1-Flash-Preview</code> is currently offered through M Plan / MiniMax Code.</p><p>Official references: <a href=\"https://platform.minimax.cn/docs/guides/quickstart-preparation\">Access and preparation</a> · <a href=\"https://platform.minimax.cn/docs/faq/models\">Model list</a> · <a href=\"https://platform.minimax.cn/docs/pricing/overview\">API pricing</a> · <a href=\"https://platform.minimax.cn/docs/faq/about-account\">Account information</a>.</p>"
+      }
+    ]
+  },
+  {
+    "id": "api-relay",
+    "group": "api",
+    "title": "School-provided and other relay APIs",
+    "intro": "When using an API provided by a school or institution, follow its configuration details and limits.",
+    "sections": [
+      {
+        "id": "api-relay-fields",
+        "title": "Obtain and enter the configuration",
+        "body": "<p>If you use an API provided by a school, institution, or another relay provider, first obtain the <strong>API Key, API Base URL, Model ID, and API protocol</strong> from them, then enter the details according to their documentation.</p><div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">Field</th><th scope=\"col\">How to enter it</th></tr></thead><tbody><tr><td><strong>Provider</strong></td><td>Select the provider specified in the relay provider's documentation.</td></tr><tr><td><strong>API key</strong></td><td>Enter the key supplied by the relay provider.</td></tr><tr><td><strong>API Base URL</strong></td><td>Enter the base address supplied by the relay provider rather than the model provider's official address.</td></tr><tr><td><strong>Model name</strong></td><td>Enter the relay provider's <strong>Model ID</strong>. The same model may have different names on different relay services.</td></tr><tr><td><strong>API protocol, RPM</strong></td><td>Use the values in the relay provider's documentation or those supplied by the administrator.</td></tr></tbody></table></div><p>For example, if the relay provider gives you the base address <code>https://example.edu/v1</code>, enter that address without adding <code>/chat/completions</code>.</p><p>After saving, check the configuration using the <a href=\"#api-api-connectivity\">text and image tests</a>. If you encounter problems with the key, balance, model name, API address, or connection, <strong>contact the relay provider or school administrator first</strong> and provide the error message. Follow their documentation for the specific configuration procedure.</p>"
+      }
+    ]
+  }
+]

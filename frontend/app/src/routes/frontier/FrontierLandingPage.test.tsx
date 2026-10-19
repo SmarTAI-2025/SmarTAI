@@ -24,6 +24,16 @@ describe("FrontierLandingPage", () => {
     expect(screen.getByLabelText("SmarTAI promotional film with English narration")).toBeInTheDocument();
   });
 
+  it.each([['zh-CN', '用户手册', 'zh'], ['en-US', 'User manual', 'en']])(
+    'links to the public manual in the current %s language', (locale, label, language) => {
+      window.localStorage.setItem('smartai_locale', locale);
+      render(<I18nProvider><MemoryRouter><FrontierLandingPage /></MemoryRouter></I18nProvider>);
+      for (const link of screen.getAllByRole('link', { name: label })) {
+        expect(link).toHaveAttribute('href', `/guide/?lang=${language}`);
+      }
+    },
+  );
+
   it("lets the reviewer step through the product walkthrough", () => {
     render(<I18nProvider><MemoryRouter><FrontierLandingPage /></MemoryRouter></I18nProvider>);
 

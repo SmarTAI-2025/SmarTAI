@@ -1,0 +1,320 @@
+[
+  {
+    "id": "01-login",
+    "chapter": "account",
+    "src": "assets/captures/zh/01-login.jpg",
+    "caption": "用户名或邮箱登录教师工作台。",
+    "afterSection": 1,
+    "width": 960,
+    "height": 1280,
+    "maxWidth": 560
+  },
+  {
+    "id": "02-workspace",
+    "chapter": "workspace",
+    "src": "assets/captures/zh/02-workspace.jpg",
+    "caption": "工作台汇总任务阶段，并提供继续处理的入口。",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2482
+  },
+  {
+    "id": "03-history",
+    "chapter": "workspace",
+    "src": "assets/captures/zh/03-history.jpg",
+    "caption": "历史任务按阶段展示进度，可搜索并回到对应处理页面。",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 2000
+  },
+  {
+    "id": "04-byok",
+    "chapter": "models",
+    "src": "assets/captures/zh/04-byok.jpg",
+    "caption": "模型配置与百度文档解析凭据分别管理。",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 1732
+  },
+  {
+    "id": "04b-model-dialog",
+    "chapter": "models",
+    "src": "assets/captures/zh/04b-model-dialog.jpg",
+    "caption": "添加模型时填写服务商、模型名称和 API 配置。",
+    "afterSection": 0,
+    "maxWidth": 560,
+    "width": 1120,
+    "height": 1584
+  },
+  {
+    "id": "04c-provider-links",
+    "chapter": "models",
+    "src": "assets/captures/zh/04c-provider-links.jpg",
+    "caption": "服务商官方入口可查找密钥申请、用量和文档。",
+    "afterSection": 2,
+    "width": 2600,
+    "height": 342
+  },
+  {
+    "id": "02-workspace-overview",
+    "chapter": "quickstart",
+    "src": "assets/captures/zh/02-workspace.jpg",
+    "caption": "从工作台新建任务，或继续处于不同阶段的作业。",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2482
+  },
+  {
+    "id": "05-library",
+    "chapter": "library",
+    "src": "assets/captures/zh/05-library.jpg",
+    "caption": "从课程资料库上传文件，并按类型检索。",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 1376
+  },
+  {
+    "id": "05b-library-upload",
+    "chapter": "library",
+    "src": "assets/captures/zh/05b-library-upload.jpg",
+    "caption": "上传时选择课程、分组和资料类型；可仅提取已有文字。",
+    "afterSection": 0,
+    "maxWidth": 563,
+    "width": 1120,
+    "height": 990
+  },
+  {
+    "id": "06-new-task",
+    "chapter": "create",
+    "src": "assets/captures/zh/06-new-task.jpg",
+    "caption": "填写任务名称、学期与课程，再创建任务或暂存草稿。",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2000
+  },
+  {
+    "id": "07-question-upload",
+    "chapter": "questions",
+    "src": "assets/captures/zh/07-question-upload.jpg",
+    "caption": "四类题目资料分开上传；题目文件为必填。",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2284
+  },
+  {
+    "id": "07b-recognition-options",
+    "chapter": "questions",
+    "src": "assets/captures/zh/07b-recognition-options.jpg",
+    "caption": "选择识别模型与生成语言，再准备题目资料。",
+    "afterSection": 2,
+    "width": 1880,
+    "height": 646
+  },
+  {
+    "id": "09-question-review",
+    "chapter": "question-review",
+    "src": "assets/captures/zh/09-question-review.jpg",
+    "caption": "题目矩阵汇总题干、标答、评分标准和审核状态。",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2000
+  },
+  {
+    "id": "10-question-detail",
+    "chapter": "question-review",
+    "src": "assets/captures/zh/10-question-detail.jpg",
+    "caption": "逐题对照题干、参考答案、满分与评分标准。",
+    "afterSection": 1,
+    "width": 2152,
+    "height": 1904
+  },
+  {
+    "id": "13-submission-upload",
+    "chapter": "submissions",
+    "src": "assets/captures/zh/13-submission-upload.jpg",
+    "caption": "上传作答时选择识别模型与学生身份匹配方式。",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 2062
+  },
+  {
+    "id": "14-submission-review",
+    "chapter": "submissions",
+    "src": "assets/captures/zh/14-submission-review.jpg",
+    "caption": "按学生和题目校对作答；下方集中列出需要处理的项目。",
+    "afterSection": 2,
+    "width": 2800,
+    "height": 2000
+  },
+  {
+    "id": "15-answer-detail",
+    "chapter": "submissions",
+    "src": "assets/captures/zh/15-answer-detail.jpg",
+    "caption": "打开具体作答，检查真实空白与待确认状态。",
+    "afterSection": 2,
+    "width": 2120,
+    "height": 796
+  },
+  {
+    "id": "16-grading-setup",
+    "chapter": "grading",
+    "src": "assets/captures/zh/16-grading-setup.jpg",
+    "caption": "选择参与批改的模型，并设置分数合成方式与权重。",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 3194
+  },
+  {
+    "id": "16b-grading-advanced",
+    "chapter": "grading",
+    "src": "assets/captures/zh/16b-grading-advanced.jpg",
+    "caption": "评分方式和高级设置集中调整严格度、反馈与批改注意事项。",
+    "afterSection": 1,
+    "width": 2376,
+    "height": 1598
+  },
+  {
+    "id": "17-grading-preflight",
+    "chapter": "grading",
+    "src": "assets/captures/zh/17-grading-preflight.jpg",
+    "caption": "批改摘要展示自动开始倒计时、任务概要与评分策略。",
+    "afterSection": 2,
+    "width": 2800,
+    "height": 2014
+  },
+  {
+    "id": "18-grading-recovery",
+    "chapter": "grading",
+    "src": "assets/captures/zh/18-grading-recovery.jpg",
+    "caption": "批改已暂停，已完成结果保留，可继续剩余批改。",
+    "afterSection": 3,
+    "width": 2800,
+    "height": 2000
+  },
+  {
+    "id": "19-review-matrix",
+    "chapter": "review",
+    "src": "assets/captures/zh/19-review-matrix.jpg",
+    "caption": "复核矩阵显示逐题结果，并区分需要处理与建议处理。",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2000
+  },
+  {
+    "id": "20-review-detail",
+    "chapter": "review",
+    "src": "assets/captures/zh/20-review-detail.jpg",
+    "caption": "查看评分步骤、置信度及各专家原始结果。",
+    "afterSection": 1,
+    "width": 1034,
+    "height": 2460
+  },
+  {
+    "id": "20b-teacher-result",
+    "chapter": "review",
+    "src": "assets/captures/zh/20b-teacher-result.jpg",
+    "caption": "在教师最终结果区域记录最终分数与补充评语。",
+    "afterSection": 1,
+    "width": 1034,
+    "height": 600
+  },
+  {
+    "id": "21-result-overview",
+    "chapter": "results",
+    "src": "assets/captures/zh/21-result-overview.jpg",
+    "caption": "结果总览汇总班级表现、分数分布和薄弱题目。",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2214
+  },
+  {
+    "id": "22-question-analysis",
+    "chapter": "results",
+    "src": "assets/captures/zh/22-question-analysis.jpg",
+    "caption": "题目分析按题展示得分与复核信号，可继续打开详情。",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2200
+  },
+  {
+    "id": "22b-question-detail-analysis",
+    "chapter": "results",
+    "src": "assets/captures/zh/22b-question-detail-analysis.jpg",
+    "caption": "题目详情将统计指标与题目材料放在一起核对。",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 3420
+  },
+  {
+    "id": "23-student-analysis",
+    "chapter": "results",
+    "src": "assets/captures/zh/23-student-analysis.jpg",
+    "caption": "学生分析展示总分、得分率和逐题分数，支持定位具体题目。",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 2232
+  },
+  {
+    "id": "24-visual-analysis",
+    "chapter": "results",
+    "src": "assets/captures/zh/24-visual-analysis.jpg",
+    "caption": "在 Ask 描述分析需求；下方可直接查看默认得分率分布。",
+    "afterSection": 2,
+    "width": 2800,
+    "height": 4390
+  },
+  {
+    "id": "24b-default-charts",
+    "chapter": "results",
+    "src": "assets/captures/zh/24b-default-charts.jpg",
+    "caption": "默认分析包含逐题比较、散点图和学生与题目的得分热力图。",
+    "afterSection": 2,
+    "width": 2596,
+    "height": 2220
+  },
+  {
+    "id": "25-reports",
+    "chapter": "results",
+    "src": "assets/captures/zh/25-reports.jpg",
+    "caption": "报告页显示版本、生成时间和各文件的下载入口。",
+    "afterSection": 3,
+    "width": 2800,
+    "height": 2116
+  },
+  {
+    "id": "26-settings",
+    "chapter": "settings",
+    "src": "assets/captures/zh/26-settings.jpg",
+    "caption": "账户设置可查看任务原件空间，并切换界面语言与外观。",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2624
+  },
+  {
+    "id": "API1a-entry",
+    "chapter": "api-smartai",
+    "src": "assets/captures/zh/API1-entry.jpg",
+    "caption": "两处红框分别标出用户名菜单与已启用模型数量，均可进入模型管理。",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 420
+  },
+  {
+    "id": "API1c-add",
+    "chapter": "api-smartai",
+    "src": "assets/captures/zh/API1c-add.jpg",
+    "caption": "两种入口都会进入“模型与 BYOK”页。点击右上角红框内的“添加模型配置”。",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 1732
+  },
+  {
+    "id": "API3-real",
+    "chapter": "api-smartai",
+    "src": "assets/captures/zh/API3-real.jpg",
+    "caption": "红框分别标出模型配置中的文本连通性测试与图像能力测试入口。",
+    "afterSection": 3,
+    "width": 2600,
+    "height": 532
+  }
+]

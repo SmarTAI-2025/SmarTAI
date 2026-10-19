@@ -1,0 +1,320 @@
+[
+  {
+    "id": "01-login",
+    "chapter": "account",
+    "src": "assets/captures/en/01-login.jpg",
+    "caption": "Sign in to the teacher workspace with a username or email.",
+    "afterSection": 1,
+    "width": 960,
+    "height": 1400,
+    "maxWidth": 560
+  },
+  {
+    "id": "02-workspace",
+    "chapter": "workspace",
+    "src": "assets/captures/en/02-workspace.jpg",
+    "caption": "The workspace summarizes task stages and provides actions to continue processing.",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2482
+  },
+  {
+    "id": "03-history",
+    "chapter": "workspace",
+    "src": "assets/captures/en/03-history.jpg",
+    "caption": "Task history shows progress by stage, with search and links back to the relevant processing pages.",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 2000
+  },
+  {
+    "id": "04-byok",
+    "chapter": "models",
+    "src": "assets/captures/en/04-byok.jpg",
+    "caption": "Model configurations and Baidu document parsing credentials are managed separately.",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 1732
+  },
+  {
+    "id": "04b-model-dialog",
+    "chapter": "models",
+    "src": "assets/captures/en/04b-model-dialog.jpg",
+    "caption": "When adding a model, enter the provider, model name, and API configuration.",
+    "afterSection": 0,
+    "maxWidth": 560,
+    "width": 1120,
+    "height": 1624
+  },
+  {
+    "id": "04c-provider-links",
+    "chapter": "models",
+    "src": "assets/captures/en/04c-provider-links.jpg",
+    "caption": "Official provider links lead to key applications, usage, and documentation.",
+    "afterSection": 2,
+    "width": 2600,
+    "height": 342
+  },
+  {
+    "id": "02-workspace-overview",
+    "chapter": "quickstart",
+    "src": "assets/captures/en/02-workspace.jpg",
+    "caption": "Create a task from the workspace or resume assignments at different stages.",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2482
+  },
+  {
+    "id": "05-library",
+    "chapter": "library",
+    "src": "assets/captures/en/05-library.jpg",
+    "caption": "Upload files to the course library and find them by type.",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 1376
+  },
+  {
+    "id": "05b-library-upload",
+    "chapter": "library",
+    "src": "assets/captures/en/05b-library-upload.jpg",
+    "caption": "Choose a course, group, and material type when uploading; extracting existing text only is also available.",
+    "afterSection": 0,
+    "maxWidth": 563,
+    "width": 1120,
+    "height": 990
+  },
+  {
+    "id": "06-new-task",
+    "chapter": "create",
+    "src": "assets/captures/en/06-new-task.jpg",
+    "caption": "Enter the task name, semester, and course, then create the task or save a draft.",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2000
+  },
+  {
+    "id": "07-question-upload",
+    "chapter": "questions",
+    "src": "assets/captures/en/07-question-upload.jpg",
+    "caption": "Upload the four question-material categories separately; a question file is required.",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2324
+  },
+  {
+    "id": "07b-recognition-options",
+    "chapter": "questions",
+    "src": "assets/captures/en/07b-recognition-options.jpg",
+    "caption": "Choose the recognition model and generation language, then prepare question materials.",
+    "afterSection": 2,
+    "width": 1880,
+    "height": 686
+  },
+  {
+    "id": "09-question-review",
+    "chapter": "question-review",
+    "src": "assets/captures/en/09-question-review.jpg",
+    "caption": "The question matrix summarizes question text, reference answers, grading criteria, and review status.",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2000
+  },
+  {
+    "id": "10-question-detail",
+    "chapter": "question-review",
+    "src": "assets/captures/en/10-question-detail.jpg",
+    "caption": "Check question text, reference answers, maximum scores, and grading criteria question by question.",
+    "afterSection": 1,
+    "width": 2152,
+    "height": 1904
+  },
+  {
+    "id": "13-submission-upload",
+    "chapter": "submissions",
+    "src": "assets/captures/en/13-submission-upload.jpg",
+    "caption": "Choose the recognition model and student identity-matching method when uploading submissions.",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 2062
+  },
+  {
+    "id": "14-submission-review",
+    "chapter": "submissions",
+    "src": "assets/captures/en/14-submission-review.jpg",
+    "caption": "Review answers by student and question; items requiring attention are grouped below.",
+    "afterSection": 2,
+    "width": 2800,
+    "height": 2000
+  },
+  {
+    "id": "15-answer-detail",
+    "chapter": "submissions",
+    "src": "assets/captures/en/15-answer-detail.jpg",
+    "caption": "Open a specific answer to check genuine blanks and pending confirmation status.",
+    "afterSection": 2,
+    "width": 2120,
+    "height": 796
+  },
+  {
+    "id": "16-grading-setup",
+    "chapter": "grading",
+    "src": "assets/captures/en/16-grading-setup.jpg",
+    "caption": "Select grading models and configure score aggregation and weights.",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 3194
+  },
+  {
+    "id": "16b-grading-advanced",
+    "chapter": "grading",
+    "src": "assets/captures/en/16b-grading-advanced.jpg",
+    "caption": "Scoring and advanced settings bring together strictness, feedback, and grading instructions.",
+    "afterSection": 1,
+    "width": 2376,
+    "height": 1634
+  },
+  {
+    "id": "17-grading-preflight",
+    "chapter": "grading",
+    "src": "assets/captures/en/17-grading-preflight.jpg",
+    "caption": "The grading summary shows the automatic-start countdown, task overview, and scoring strategy.",
+    "afterSection": 2,
+    "width": 2800,
+    "height": 2072
+  },
+  {
+    "id": "18-grading-recovery",
+    "chapter": "grading",
+    "src": "assets/captures/en/18-grading-recovery.jpg",
+    "caption": "Grading is paused; completed results are retained and the remaining work can be resumed.",
+    "afterSection": 3,
+    "width": 2800,
+    "height": 2000
+  },
+  {
+    "id": "19-review-matrix",
+    "chapter": "review",
+    "src": "assets/captures/en/19-review-matrix.jpg",
+    "caption": "The review matrix shows per-question results and distinguishes required actions from recommended reviews.",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2000
+  },
+  {
+    "id": "20-review-detail",
+    "chapter": "review",
+    "src": "assets/captures/en/20-review-detail.jpg",
+    "caption": "View scoring steps, confidence, and each expert’s original results.",
+    "afterSection": 1,
+    "width": 1034,
+    "height": 2644
+  },
+  {
+    "id": "20b-teacher-result",
+    "chapter": "review",
+    "src": "assets/captures/en/20b-teacher-result.jpg",
+    "caption": "Record final scores and additional comments in the teacher’s final result area.",
+    "afterSection": 1,
+    "width": 1034,
+    "height": 600
+  },
+  {
+    "id": "21-result-overview",
+    "chapter": "results",
+    "src": "assets/captures/en/21-result-overview.jpg",
+    "caption": "The results overview summarizes class performance, score distribution, and weaker questions.",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2214
+  },
+  {
+    "id": "22-question-analysis",
+    "chapter": "results",
+    "src": "assets/captures/en/22-question-analysis.jpg",
+    "caption": "Question analysis shows scores and review indicators by question, with links to details.",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2200
+  },
+  {
+    "id": "22b-question-detail-analysis",
+    "chapter": "results",
+    "src": "assets/captures/en/22b-question-detail-analysis.jpg",
+    "caption": "Question details bring statistics and question materials together for checking.",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 3450
+  },
+  {
+    "id": "23-student-analysis",
+    "chapter": "results",
+    "src": "assets/captures/en/23-student-analysis.jpg",
+    "caption": "Student analysis shows total scores, score percentages, and per-question scores, with navigation to specific questions.",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 2232
+  },
+  {
+    "id": "24-visual-analysis",
+    "chapter": "results",
+    "src": "assets/captures/en/24-visual-analysis.jpg",
+    "caption": "Describe your analysis request in Ask; view the default score-percentage distribution directly below.",
+    "afterSection": 2,
+    "width": 2800,
+    "height": 4598
+  },
+  {
+    "id": "24b-default-charts",
+    "chapter": "results",
+    "src": "assets/captures/en/24b-default-charts.jpg",
+    "caption": "Default analysis includes question comparisons, scatter plots, and a student-by-question score heatmap.",
+    "afterSection": 2,
+    "width": 2596,
+    "height": 2428
+  },
+  {
+    "id": "25-reports",
+    "chapter": "results",
+    "src": "assets/captures/en/25-reports.jpg",
+    "caption": "The report page shows versions, generation times, and download links for each file.",
+    "afterSection": 3,
+    "width": 2800,
+    "height": 2116
+  },
+  {
+    "id": "26-settings",
+    "chapter": "settings",
+    "src": "assets/captures/en/26-settings.jpg",
+    "caption": "Account settings show task original-file storage and let you change interface language and appearance.",
+    "afterSection": 0,
+    "width": 2800,
+    "height": 2624
+  },
+  {
+    "id": "API1a-entry",
+    "chapter": "api-smartai",
+    "src": "assets/captures/en/API1-entry.jpg",
+    "caption": "The two outlined controls open model management: use the username menu or the enabled-model count.",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 420
+  },
+  {
+    "id": "API1c-add",
+    "chapter": "api-smartai",
+    "src": "assets/captures/en/API1c-add.jpg",
+    "caption": "Both entry points open “Models & BYOK.” Click “Add model configuration” inside the red box at the upper right.",
+    "afterSection": 1,
+    "width": 2800,
+    "height": 1732
+  },
+  {
+    "id": "API3-real",
+    "chapter": "api-smartai",
+    "src": "assets/captures/en/API3-real.jpg",
+    "caption": "The outlines identify the text-connectivity and image-capability test controls on the model configuration.",
+    "afterSection": 3,
+    "width": 2600,
+    "height": 532
+  }
+]
