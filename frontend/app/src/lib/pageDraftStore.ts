@@ -1,3 +1,4 @@
+import { draftErrorCode, draftMessage } from "@/lib/draftMessages";
 /** Explicit device-local snapshots. This module never calls a business API. */
 export const PAGE_DRAFT_PREFIX = "smartai:page-draft:"; // obsolete automatic v1 cache, never read
 export const PAGE_DRAFT_DB = "smartai-explicit-drafts";
@@ -39,25 +40,24 @@ function request<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
 }
 function complete(tx: IDBTransaction) {
-  return new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onabort = tx.onerror = () => reject(tx.error ?? new Error("暂存事务未完成，请重试。")); });
+  return new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onabort = tx.onerror = () => reject(tx.error ?? new Error("transactionFailed")); });
 }
 function database() {
   if (!connection) connection = new Promise<IDBDatabase>((resolve, reject) => {
-    if (typeof indexedDB === "undefined") { reject(new Error("此浏览器不支持本地暂存；输入仍在，请更换支持 IndexedDB 的浏览器。")); return; }
+    if (typeof indexedDB === "undefined") { reject(new Error("unavailable")); return; }
     const open = indexedDB.open(PAGE_DRAFT_DB, 1);
     open.onupgradeneeded = () => { open.result.createObjectStore("drafts", { keyPath: "key" }); open.result.createObjectStore("meta"); };
     open.onsuccess = () => { open.result.onversionchange = () => { open.result.close(); connection = null; }; resolve(open.result); };
     open.onerror = () => reject(open.error);
-    open.onblocked = () => reject(new Error("本地暂存被其他标签页阻塞，请关闭旧页面后重试。"));
+    open.onblocked = () => reject(new Error("blocked"));
   }).catch((error) => { connection = null; throw error; });
   return connection;
 }
 function removeLegacy() {
   try { for (const key of Object.keys(sessionStorage)) if (key.startsWith(PAGE_DRAFT_PREFIX)) sessionStorage.removeItem(key); } catch { /* Never read legacy automatic snapshots. */ }
 }
-export function draftError(error: unknown) {
-  if (error instanceof DOMException && error.name === "QuotaExceededError") return "浏览器存储空间不足，未暂存任何新内容。请删除旧草稿或释放空间后重试。";
-  return error instanceof Error ? error.message : "本地暂存失败，输入仍在，请重试。";
+export function draftError(error: unknown, locale = "zh-CN") {
+  return draftMessage(draftErrorCode(error), locale);
 }
 export async function clearPageDrafts() {
   generation++; removeLegacy(); announce({ type: "clear" });
@@ -88,7 +88,7 @@ export async function readPageDraft<T>(owner: string, scope: string, codec: Draf
   for (const item of rows) {
     if (item.owner !== owner || item.expires <= Date.now() || item.version !== 2 || item.epoch !== epoch) {
       tx.objectStore("drafts").delete(item.key);
-      if (item.key === key) { row = null; notice = "旧草稿已过期或版本不兼容，未恢复；请重新填写。"; }
+      if (item.key === key) { row = null; notice = "expired"; }
     }
   }
   await done;
@@ -105,10 +105,10 @@ export async function readPageDraft<T>(owner: string, scope: string, codec: Draf
       target[file.path.at(-1)!] = new File([file.bytes!], file.name, { type: file.type, lastModified: file.modified });
     }
     if (row.files.reduce((total, file) => total + (file.bytes?.byteLength ?? 0), 0) > MAX_DRAFT_BYTES) throw new Error();
-    return { value, record: row, epoch, notice: "草稿已恢复。" };
+    return { value, record: row, epoch, notice: "restored" };
   } catch {
     await removePageDraft(owner, scope);
-    return { ...await readPageDraft(owner, scope, codec), notice: "草稿或文件已损坏，未恢复；请重新选择文件并暂存。" };
+    return { ...await readPageDraft(owner, scope, codec), notice: "corrupt" };
   }
 }
 export function preparePageDraft<T>(owner: string, scope: string, businessVersion: string, value: T, codec: DraftCodec<T>, epoch: string, expectedRevision: string | null): DraftWrite {
@@ -119,16 +119,16 @@ export function preparePageDraft<T>(owner: string, scope: string, businessVersio
   }
   visit(value, []);
   const data = codec.encode(value); const bytes = new Blob([JSON.stringify(data)]).size + files.reduce((sum, file) => sum + (file.blob?.size ?? 0), 0);
-  if (bytes > MAX_DRAFT_BYTES) throw new Error("本页草稿超过 64 MiB，本次未暂存。请减少文件或内容后重试。");
+  if (bytes > MAX_DRAFT_BYTES) throw new Error("tooLarge");
   const savedAt = Date.now();
   return { generation, expectedRevision, record: { key: draftKey(owner, scope), version: 2, owner, scope, businessVersion, revision: crypto.randomUUID(), epoch, savedAt, expires: savedAt + PAGE_DRAFT_TTL, bytes, data, files } };
 }
 export async function writePageDrafts(writes: DraftWrite[]) {
-  if (writes.reduce((sum, write) => sum + write.record.bytes, 0) > MAX_DRAFT_BYTES) throw new Error("本次页面草稿超过 64 MiB，未暂存任何新内容。请减少文件或内容后重试。");
+  if (writes.reduce((sum, write) => sum + write.record.bytes, 0) > MAX_DRAFT_BYTES) throw new Error("tooLarge");
   // Read native files before the transaction. Store actual ArrayBuffer bytes:
   // ephemeral WebKit contexts can abort IndexedDB transactions containing Blobs.
   for (const write of writes) write.record.files = await Promise.all(write.record.files.map(async ({ blob, ...file }) => {
-    if (!(blob instanceof Blob)) throw new Error("所选文件无法读取，未暂存。请重新选择后重试。");
+    if (!(blob instanceof Blob)) throw new Error("unreadableFile");
     const bytes = await blob.arrayBuffer();
     return { ...file, bytes, checksum: fileChecksum(bytes), type: blob.type };
   }));
@@ -139,12 +139,12 @@ export async function writePageDrafts(writes: DraftWrite[]) {
     const rows = await request<DraftRecord[]>(tx.objectStore("drafts").getAll());
     for (const write of writes) {
       const existing = rows.find((item) => item.key === write.record.key);
-      if (write.generation !== generation || write.record.epoch !== epoch) throw new Error("登录状态已变化，本次未暂存。请重新登录后继续。");
-      if ((existing?.revision ?? null) !== write.expectedRevision) throw new Error("其他标签页已暂存或删除此草稿，本次未覆盖。请保留输入，重新打开页面核对最新版本。");
+      if (write.generation !== generation || write.record.epoch !== epoch) throw new Error("sessionChanged");
+      if ((existing?.revision ?? null) !== write.expectedRevision) throw new Error("staleWrite");
     }
     const keys = new Set(writes.map((write) => write.record.key));
     const retained = rows.filter((row) => !keys.has(row.key) && !row.deleted && row.expires > Date.now());
-    if (retained.length + writes.length > MAX_DRAFTS || retained.reduce((sum, row) => sum + row.bytes, 0) + writes.reduce((sum, write) => sum + write.record.bytes, 0) > MAX_TOTAL_BYTES) throw new Error("本地草稿达到 30 份或 128 MiB 上限。请在账户设置删除旧草稿后重试；原暂存版本仍保留。");
+    if (retained.length + writes.length > MAX_DRAFTS || retained.reduce((sum, row) => sum + row.bytes, 0) + writes.reduce((sum, write) => sum + write.record.bytes, 0) > MAX_TOTAL_BYTES) throw new Error("limit");
     for (const write of writes) tx.objectStore("drafts").put(write.record);
     await done; writes.forEach((write) => announce({ type: "write", key: write.record.key }));
   } catch (error) { try { tx.abort(); } catch { /* Already aborted. */ } await done.catch(() => {}); throw error; }

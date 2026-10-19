@@ -154,7 +154,7 @@ it("still protects a concurrent task setting change until the teacher resolves i
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   expect(putJSON).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "暂存" }));
-  await screen.findByText(/请先核对服务器变化/);
+  await screen.findByText(/请先选择保留当前输入或恢复旧草稿/);
   await user.click(screen.getByRole("button", { name: "保留当前输入" }));
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   await screen.findByText("Grading summary");

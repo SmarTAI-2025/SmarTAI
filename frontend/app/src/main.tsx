@@ -109,7 +109,7 @@ function routeElement(element: React.ReactNode) {
   return <React.Suspense fallback={<RouteFallback />}>{element}</React.Suspense>;
 }
 
-import { DraftLeaveProvider } from "@/hooks/useDraftLeave";
+import { LocalizedDraftLeaveProvider as DraftLeaveProvider } from "@/hooks/useDraftLeave";
 
 const router = createBrowserRouter([{ element: <DraftLeaveProvider><Outlet /></DraftLeaveProvider>, children: [
   { path: "/", element: routeElement(<FrontierLandingPage />), errorElement: <RouteRecoveryPage /> },

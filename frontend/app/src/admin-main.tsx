@@ -1,4 +1,4 @@
-import { DraftLeaveProvider } from "@/hooks/useDraftLeave";
+import { LocalizedDraftLeaveProvider as DraftLeaveProvider } from "@/hooks/useDraftLeave";
 import { Outlet } from "react-router-dom";
 import React from "react";
 import ReactDOM from "react-dom/client";

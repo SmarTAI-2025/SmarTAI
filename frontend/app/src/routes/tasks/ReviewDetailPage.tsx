@@ -352,7 +352,7 @@ function ReviewDetailForm() {
     if (!taskId || !student) {
       return { ok: false as const, message: tx(locale, "缺少任务或学生信息。", "Task or student information is missing.") };
     }
-    if (businessBusy.current || reviewDrafts.current.get(question.id)?.conflict) return { ok: false as const, message: "请先核对草稿冲突，或等待当前保存完成。" };
+    if (businessBusy.current || reviewDrafts.current.get(question.id)?.conflict) return { ok: false as const, message: tx(locale, "请先处理草稿冲突，或等待保存完成。", "Resolve the draft conflict or wait for saving to finish.") };
     const submittedDraft = drafts[question.id];
     businessBusy.current = true;
     const savingStudentKey = `${taskId}:${student.id}`;
@@ -370,9 +370,9 @@ function ReviewDetailForm() {
         teacher_comment: prepared.teacherComment,
         confirm: true,
       });
-      if (!mounted.current || activeStudentKeyRef.current !== savingStudentKey) return { ok: false as const, message: "编辑页面已变化。" };
-      if (await reviewDrafts.current.get(question.id)?.clear(submittedDraft) === false) return { ok: false as const, message: "保存期间又有修改，已保留当前输入。" };
-      if (!mounted.current || activeStudentKeyRef.current !== savingStudentKey) return { ok: false as const, message: "编辑页面已变化。" };
+      if (!mounted.current || activeStudentKeyRef.current !== savingStudentKey) return { ok: false as const, message: tx(locale, "编辑页面已变化。", "The editor has changed.") };
+      if (await reviewDrafts.current.get(question.id)?.clear(submittedDraft) === false) return { ok: false as const, message: tx(locale, "保存期间又有修改，当前输入已保留。", "Input changed while saving. Your current input is preserved.") };
+      if (!mounted.current || activeStudentKeyRef.current !== savingStudentKey) return { ok: false as const, message: tx(locale, "编辑页面已变化。", "The editor has changed.") };
       setDrafts((current) => ({
         ...current,
         [question.id]: { score: correctionReviewDraftScore(response.correction), comment: response.correction.teacher_comment ?? "" },

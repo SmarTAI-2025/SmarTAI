@@ -1,9 +1,10 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { ManualReviewButton } from "@/components/tasks/ManualReviewButton";
 import { questionReviewBlockers, submissionReviewBlockers } from "@/lib/reviewConfirmation";
 import { AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, LoaderCircle, Timer } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
-import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
+import { getAPIErrorCode } from "@/api/client";
 import { useGradingSetup, useStartGrading, useTask } from "@/api/hooks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { GradingRetryNotice } from "@/components/tasks/GradingRetryNotice";
@@ -151,7 +152,7 @@ export function GradingPreflightPage() {
   const isError = taskQuery.isError || setupQuery.isError;
   const startError = startGrading.error
     ? gradingBlockerMessage(getAPIErrorCode(startGrading.error), locale)
-      ?? normalizeAPIError(startGrading.error).message
+      ?? userFacingError(startGrading.error, locale)
     : null;
   const disabledReason = historyView ? null : getDisabledReason({
     locale,

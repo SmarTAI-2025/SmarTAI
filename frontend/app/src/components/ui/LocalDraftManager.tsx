@@ -1,9 +1,10 @@
+import { draftErrorCode, draftMessage } from "@/lib/draftMessages";
 import { useI18n } from "@/i18n/I18nProvider";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { listTasks } from "@/api/tasks";
 import { useDraftOwner } from "@/hooks/useDraftProtection";
-import { draftError, listPageDrafts, removePageDraft, subscribeDraftChanges } from "@/lib/pageDraftStore";
+import { listPageDrafts, removePageDraft, subscribeDraftChanges } from "@/lib/pageDraftStore";
 export function draftDestination(scope: string) {
   let parts: string[];
   try { parts = scope.split(":").map(decodeURIComponent); } catch { return null; }
@@ -52,7 +53,7 @@ export function LocalDraftManager({ libraryOnly = false, maxItems, showViewAll =
       void listPageDrafts(owner).then((rows) => {
         if (!disposed && current === request) setSnapshot(previous => ({ ...previous, owner, rows, error: "", loading: false }));
       }).catch((failure) => {
-        if (!disposed && current === request) setSnapshot({ owner, rows: [], taskNames: {}, error: draftError(failure), loading: false });
+        if (!disposed && current === request) setSnapshot({ owner, rows: [], taskNames: {}, error: draftErrorCode(failure), loading: false });
       });
       // Local drafts remain usable offline; name lookup must not delay them.
       void listTasks().then(tasks => {
@@ -111,11 +112,11 @@ export function LocalDraftManager({ libraryOnly = false, maxItems, showViewAll =
         </div>
         <button type="button" className="shrink-0 rounded border px-3 py-2 hover:bg-muted" onClick={() => {
           if (owner && window.confirm(zh ? "删除这份草稿？已保存的任务内容不受影响。" : "Delete this draft? Saved task content is unaffected.")) {
-            void removePageDraft(owner, row.scope).catch((failure) => setSnapshot(current => current.owner === owner ? { ...current, error: draftError(failure) } : current));
+            void removePageDraft(owner, row.scope).catch((failure) => setSnapshot(current => current.owner === owner ? { ...current, error: draftErrorCode(failure) } : current));
           }
         }}>{zh ? "删除" : "Delete"}</button>
       </li>;
     })}</ul>}
-    {error ? <p role="alert" className="mt-3 text-sm text-danger">{error}</p> : null}
+    {error ? <p role="alert" className="mt-3 text-sm text-danger">{draftMessage(error, locale)}</p> : null}
   </section>;
 }
