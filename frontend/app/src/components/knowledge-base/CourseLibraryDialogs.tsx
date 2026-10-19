@@ -1,3 +1,4 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { materialMetadataVersion } from "@/lib/editorVersions";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
@@ -111,7 +112,7 @@ export function GroupDialog({ group, courses, onClose, onSaved, onUseExisting, o
         setSimilar(detail.candidates as SimilarGroupCandidate[]);
         return;
       }
-      toast.error(tx(locale, "无法保存分组", "Could not save group"), { description: normalized.message });
+      toast.error(tx(locale, "无法保存分组", "Could not save group"), { description: userFacingError(normalized, locale) });
     }
   }
 
@@ -130,7 +131,7 @@ export function GroupDialog({ group, courses, onClose, onSaved, onUseExisting, o
       (onDeleted ?? onClose)();
     } catch (error) {
       toast.error(tx(locale, "无法删除分组", "Could not delete group"), {
-        description: normalizeAPIError(error).message,
+        description: userFacingError(error, locale),
       });
     }
   }
@@ -262,7 +263,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
             ? tx(locale, "单个标签不能超过 60 个字符，请缩短后再上传。", "Each label must be at most 60 characters. Shorten it before uploading.")
             : code === "too_many_material_labels"
               ? tx(locale, "最多添加 20 个标签，请减少后再上传。", "Use at most 20 labels before uploading.")
-              : normalized.message;
+              : userFacingError(normalized, locale);
       setUploadError(description);
       toast.error(tx(locale, "资料上传失败", "Material upload failed"), { description });
     }
@@ -377,7 +378,7 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
       onSaved(result);
     } catch (error) {
       toast.error(tx(locale, "无法更新资料", "Could not update material"), {
-        description: normalizeAPIError(error).message,
+        description: userFacingError(error, locale),
       });
     }
   }
@@ -405,7 +406,7 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
       onDeleted();
     } catch (error) {
       toast.error(tx(locale, "无法删除资料", "Could not delete material"), {
-        description: normalizeAPIError(error).message,
+        description: userFacingError(error, locale),
       });
     }
   }

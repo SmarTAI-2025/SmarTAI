@@ -6,6 +6,8 @@ const labels: Record<string, [string, string]> = {
   avg_percent: ["平均得分率（%）", "Mean score (%)"], score_percent: ["得分率（%）", "Score (%)"],
   avg_confidence: ["平均置信度", "Average confidence"], low_confidence_count: ["低置信题次", "Low-confidence count"],
   score: ["得分", "Score"], total_score: ["总分", "Total score"], max_score: ["满分", "Maximum score"],
+  total_max: ["总分满分", "Maximum total"], score_min: ["最低分", "Minimum score"], score_max: ["最高分", "Maximum score"],
+  confidence: ["置信度", "Confidence"], number: ["题号", "Question"],
   avg_score: ["平均得分", "Mean score"], count: ["数量", "Count"], student_count: ["学生人数", "Student count"],
   review_count: ["复核题次", "Review count"], pending_review_count: ["待复核题次", "Pending review count"],
   passed: ["及格", "Passed"], pass: ["及格", "Passed"], failed: ["未及格", "Failed"], fail: ["未及格", "Failed"],

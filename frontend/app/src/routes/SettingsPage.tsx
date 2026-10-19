@@ -110,8 +110,8 @@ export function SettingsPage() {
               <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
                 {tx(
                   locale,
-                  "只统计题目原件、提交包和学生作答原件；知识库长期资料使用独立空间，不在这里统计，也不会随任务自动删除。",
-                  "Counts problem originals, submission packages, and student-answer originals only. Long-lived knowledge documents use separate storage and are never auto-deleted with a task.",
+                  "题目和作答原文件占用的空间；课程资料库单独计算。",
+                  "Storage used by original question and submission files. Knowledge storage is counted separately.",
                 )}
               </p>
             </div>
@@ -229,13 +229,13 @@ export function SettingsPage() {
         <ShieldCheck aria-hidden="true" className="mt-0.5 h-[18px] w-[18px] shrink-0 text-emerald-600" />
         <div>
           <p className="font-semibold text-foreground">
-            {tx(locale, "账号与模型设置彼此独立", "Account and model settings are separate")}
+            {tx(locale, "模型与 API Key", "Models and API keys")}
           </p>
           <p className="mt-0.5">
             {tx(
               locale,
-              "API key 请从右上角用户名菜单进入“模型与 BYOK”管理；退出登录也始终位于该菜单底部。",
-              "Manage API keys from “Models & BYOK” in the account menu; sign out remains at the bottom of that menu.",
+              "在右上角用户名菜单中打开“模型与 BYOK”管理。",
+              "Open Models & BYOK from the username menu in the top-right corner.",
             )}
           </p>
         </div>

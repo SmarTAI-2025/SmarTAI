@@ -1,3 +1,4 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { ManualReviewLoader } from "@/components/tasks/ManualReviewButton";
 import { LOW_CONFIDENCE_THRESHOLD } from "@/lib/confidencePolicy";
 import { demoLockedText } from "@/lib/frontierFixtures";
@@ -527,9 +528,9 @@ function ModelSection({
               {setup.selected_provider_ids.map(id => {
                 const expert = experts.find(item => item.provider_id === id);
                 return <label key={id} className="flex min-w-0 items-center justify-between gap-3 text-[13px]">
-                  <span className="min-w-0 truncate text-foreground">{expert ? modelDisplayName(expert) : id}</span>
+                  <span className="min-w-0 truncate text-foreground">{expert ? modelDisplayName(expert) : (locale === "zh-CN" ? "已失效模型" : "Unavailable model")}</span>
                   <input type="number" min="0" step="any" inputMode="decimal"
-                    aria-label={`${expert ? modelDisplayName(expert) : id} ${gradingSetupText(locale, "modelWeight")}`}
+                    aria-label={`${expert ? modelDisplayName(expert) : (locale === "zh-CN" ? "已失效模型" : "Unavailable model")} ${gradingSetupText(locale, "modelWeight")}`}
                     value={setup.expert_weights?.[id] || ""}
                     onChange={(event) => onWeightsChange({ ...setup.expert_weights, [id]: Number(event.target.value) })}
                     className="h-9 w-24 shrink-0 rounded-[8px] border bg-card px-3 text-right text-[13px] outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
@@ -775,7 +776,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
         </span>
       </div>
 
-      {docs.length > 0 ? <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "以下资料已加入本任务，无需重复上传；解析状态见各资料提示。" : "The documents below are already attached; no duplicate upload is needed. See each document's processing status."}</p> : null}
+      {docs.length > 0 ? <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "已加入本任务，无需重复上传。" : "Already added to this task; no need to upload again."}</p> : null}
       <div className={cn("mt-3 overflow-hidden rounded-[8px] border bg-card", !docsQuery.isLoading && docs.length === 0 && "border-dashed")}>
         {docsQuery.isLoading ? (
           <div className="flex min-h-[58px] items-center justify-center"><LoaderCircle aria-hidden="true" className="h-5 w-5 animate-spin text-primary" /></div>
@@ -1128,7 +1129,7 @@ function localizeKnowledgeStorageError(error: unknown, locale: Locale): string {
   if (isKnowledgeStorageQuotaExceeded(error)) {
     return knowledgeStorageQuotaCopy(locale).description;
   }
-  return normalizeAPIError(error).message;
+  return userFacingError(error, locale);
 }
 import { KnowledgeIngestionStatus } from "@/components/knowledge-base/KnowledgeIngestionStatus";
 import { KnowledgeSearchPanel } from "@/components/knowledge-base/KnowledgeSearchPanel";

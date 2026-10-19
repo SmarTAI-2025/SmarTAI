@@ -8,7 +8,7 @@ describe("teacher score contract errors", () => {
     expect(backgroundErrorTitle("question_structure_score_mismatch", "en-US"))
       .toBe("Question numbers or points differ from teacher instructions");
     const info = classifyRecoverableError("question_structure_score_mismatch", { locale: "zh-CN", taskId: "t1" });
-    expect(info.description).toContain("系统没有采用不一致的题目包");
+    expect(info.description).toContain("题号或分值不一致");
     expect(info.actionHref).toBe("/tasks/t1/upload/problems");
     expect(info.actionKind).not.toBe("byok");
   });

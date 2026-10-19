@@ -100,7 +100,7 @@ it.each([
     await user.click(await screen.findByRole("button", { name: /移除/ }));
     await screen.findByText("已选择 0/20 份");
   }
-  expect(screen.queryAllByText(/任务或模型配置已更新|服务器业务版本已变化/)).toHaveLength(0);
+  expect(screen.queryAllByText(/任务或模型配置已更新|任务内容已更新/)).toHaveLength(0);
   expect(slider).toHaveValue("70");
   await user.click(screen.getByRole("button", { name: "暂存" }));
   await screen.findByText(/已暂存 ·/);
@@ -124,7 +124,7 @@ it.each([false, true])("does not report its own save as a conflict (configured=%
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   await waitFor(() => expect(client.getQueryData<GradingSetupResponse>(gradingSetupKeys.detail("task-1"))?.grading_setup?.strictness).toBe(70));
   try {
-    expect(screen.queryAllByText(/任务或模型配置已更新|服务器业务版本已变化/)).toHaveLength(0);
+    expect(screen.queryAllByText(/任务或模型配置已更新|任务内容已更新/)).toHaveLength(0);
   } finally { await act(async () => { release(); }); }
   await screen.findByText("Grading summary");
   // Reviewing an answer changes the task revision, not grading settings.
@@ -134,7 +134,7 @@ it.each([false, true])("does not report its own save as a conflict (configured=%
     await router.navigate(setupUrl);
   });
   expect(await screen.findByRole("slider")).toHaveValue("70");
-  expect(screen.queryAllByText(/任务或模型配置已更新|服务器业务版本已变化/)).toHaveLength(0);
+  expect(screen.queryAllByText(/任务或模型配置已更新|任务内容已更新/)).toHaveLength(0);
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   await screen.findByText("Grading summary");
   expect(putJSON).toHaveBeenCalledTimes(2);
@@ -149,7 +149,7 @@ it("still protects a concurrent task setting change until the teacher resolves i
   saved = { ...defaults, strictness: 20 };
   revision++;
   await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
-  await screen.findByText(/服务器业务版本已变化/);
+  await screen.findByText(/任务内容已更新，当前输入已保留/);
   expect(slider).toHaveValue("70");
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   expect(putJSON).not.toHaveBeenCalled();
@@ -170,7 +170,7 @@ it.each(["add", "change", "remove"])("ignores an unselected model %s while prese
   fireEvent.change(slider, { target: { value: "70" } });
   otherModel = action === "remove" ? null : "unused-changed";
   await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
-  expect(screen.queryAllByText(/任务或模型配置已更新|服务器业务版本已变化/)).toHaveLength(0);
+  expect(screen.queryAllByText(/任务或模型配置已更新|任务内容已更新/)).toHaveLength(0);
   expect(slider).toHaveValue("70");
   await user.click(screen.getByRole("button", { name: "暂存" }));
   await screen.findByText(/已暂存 ·/);
@@ -187,7 +187,7 @@ it("blocks an unavailable selected model with validation, without a false draft 
   fireEvent.change(slider, { target: { value: "70" } });
   enabled = false;
   await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
-  expect(screen.queryAllByText(/服务器业务版本已变化/)).toHaveLength(0);
+  expect(screen.queryAllByText(/任务内容已更新，当前输入已保留/)).toHaveLength(0);
   await user.click(screen.getByRole("button", { name: "暂存" }));
   await screen.findByText(/已暂存 ·/);
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
@@ -203,7 +203,7 @@ it("preserves the first unsaved configuration when another model becomes the def
   fireEvent.change(slider, { target: { value: "70" } });
   otherModel = "new-default"; defaultProvider = "provider-2";
   await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
-  expect(screen.queryAllByText(/任务或模型配置已更新|服务器业务版本已变化/)).toHaveLength(0);
+  expect(screen.queryAllByText(/任务或模型配置已更新|任务内容已更新/)).toHaveLength(0);
   await user.click(screen.getByRole("button", { name: "暂存" }));
   await screen.findByText(/已暂存 ·/);
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
@@ -222,7 +222,7 @@ it("releases the save guard after a rejected stale write and still requires conf
     throw new APIError(409, "workflow_revision_conflict", { detail: { code: "workflow_revision_conflict" } });
   });
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
-  await screen.findByText(/服务器业务版本已变化/);
+  await screen.findByText(/任务内容已更新，当前输入已保留/);
   expect(slider).toHaveValue("70");
   expect(slider).toBeEnabled();
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));

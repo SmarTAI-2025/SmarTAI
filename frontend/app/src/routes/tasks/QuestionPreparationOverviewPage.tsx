@@ -124,7 +124,7 @@ export function QuestionPreparationOverviewPage() {
       <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
         {tx(locale, "题目资料总览", "Question Material Overview")}
       </h1>
-      {deletingQuestion ? <UnsavedChangesDialog title={tx(locale, "删除题目？", "Delete question?")} description={tx(locale, `将从当前复核矩阵移除第 ${deletingQuestion.number || deletingQuestion.q_id} 题。`, `Remove question ${deletingQuestion.number || deletingQuestion.q_id} from the current review matrix.`)} stayLabel={tx(locale, "取消", "Cancel")} leaveLabel={tx(locale, "删除", "Delete")} saving={rowBusy} onStay={() => { if (!rowBusy) setDeletingQuestion(null); }} onLeave={() => void changeQuestionRow(deletingQuestion)}>
+      {deletingQuestion ? <UnsavedChangesDialog title={tx(locale, "删除题目？", "Delete question?")} description={tx(locale, `将从当前复核矩阵移除第 ${deletingQuestion.number || "—"} 题。`, `Remove question ${deletingQuestion.number || "—"} from the current review matrix.`)} stayLabel={tx(locale, "取消", "Cancel")} leaveLabel={tx(locale, "删除", "Delete")} saving={rowBusy} onStay={() => { if (!rowBusy) setDeletingQuestion(null); }} onLeave={() => void changeQuestionRow(deletingQuestion)}>
         {rowError ? <p role="alert" className="text-sm text-danger">{tx(locale, "修改失败，请刷新后重试。", "Could not update rows. Refresh and retry.")}</p> : null}
       </UnsavedChangesDialog> : null}
       {rowError && !deletingQuestion ? <p role="alert" className="mt-3 text-sm text-danger">{tx(locale, "修改失败，请刷新后重试。", "Could not update rows. Refresh and retry.")}</p> : null}
@@ -145,7 +145,7 @@ export function QuestionPreparationOverviewPage() {
           placeholder={tx(locale, "按满分升序，或找出缺少标答的题目", "Sort by maximum score, or find missing reference answers")} />
 
         {failure ? <div role="alert" className="mt-4 rounded-lg border border-amber-300 p-4 text-sm">
-          <p>{tx(locale, `已确认 ${failure.completed} 道题；第 ${failure.problem.number || failure.problem.q_id} 题未能保存，可能内容已更新或任务正在处理。请重新加载并核对后重试。`, `${failure.completed} questions confirmed; question ${failure.problem.number || failure.problem.q_id} could not be saved. Content may have changed or the task may be busy. Reload and review before retrying.`)}</p>
+          <p>{tx(locale, `已确认 ${failure.completed} 道题；第 ${failure.problem.number || "—"} 题未能保存，可能内容已更新或任务正在处理。请重新加载并核对后重试。`, `${failure.completed} questions confirmed; question ${failure.problem.number || "—"} could not be saved. Content may have changed or the task may be busy. Reload and review before retrying.`)}</p>
           <button type="button" onClick={() => void taskQuery.refetch()} className="mt-2 mr-4 font-semibold text-primary">{tx(locale, "重新加载", "Reload")}</button>
           <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(failure.problem.q_id)}/content#question-${encodeURIComponent(failure.problem.q_id)}`} className="mt-2 font-semibold text-primary">{tx(locale, "前往该题", "Go to question")}</Link>
         </div> : null}
@@ -223,7 +223,7 @@ function QuestionReviewQueue({ risks, taskId, locale, confirmation }: { confirma
   return <ReviewQueuePanel locale={locale} confirmation={confirmation} items={[...grouped.values()].map(rows => {
     const { problem } = rows[0];
     const blocking = rows.some(row => row.issue.severity === "blocking");
-    return { key: problem.q_id, title: problem.number || problem.q_id,
+    return { key: problem.q_id, title: problem.number || "—",
       severity: blocking ? "blocking" : "advisory",
       reason: [...new Set(rows.map(({ issue }) => ["recognition_partial", "recognition_needs_review"].includes(issue.code) && issue.severity === "blocking"
         ? tx(locale, "题目识别不完整，请补齐并确认", "Question recognition incomplete; complete and confirm")
@@ -265,7 +265,7 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort, 
         <tbody className="divide-y">
           {rows.map(({ problem, issues }) => (
             <tr key={problem.q_id} className="h-[64px] hover:bg-muted/30">
-              <td className="px-5 py-3 font-semibold text-foreground">{problem.number || problem.q_id}</td>
+              <td className="px-5 py-3 font-semibold text-foreground">{problem.number || "—"}</td>
               <td className="px-3 py-3 text-muted-foreground">{questionTypeLabel(problem.type, locale)}</td>
               <td className="px-3 py-3"><MaxScoreStatus problem={problem} locale={locale} /></td>
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="stem" locale={locale} /></td>

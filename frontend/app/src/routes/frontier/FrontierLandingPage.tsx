@@ -93,7 +93,7 @@ function insightStories(locale: Locale): InsightStory[] {
     {
       id: "spread",
       query: tx(locale, "班级总评成绩分布如何？", "How spread out are overall scores?"),
-      answer: tx(locale, "四份合成作答从 67% 到 87%，中位数约为 77%，成绩主要集中在 70%—82%。", "The four synthetic submissions range from 67% to 87%, with a 77% median and most scores between 70% and 82%."),
+      answer: tx(locale, "四份作答得分率为 67%—87%，中位数约 77%，主要集中在 70%—82%。", "The four submissions score 67%–87%, with a median of about 77%; most fall between 70% and 82%."),
       followUpQuery: tx(locale, "这能直接说明教学效果吗？", "Does that directly measure teaching effectiveness?"),
       followUpAnswer: tx(locale, "不能。这只是四份合成作答在当前评分版本下的分布，应结合原作答、样本规模与教学情境判断。", "No. This is only the distribution of four synthetic submissions under the current grading version; inspect the source work, sample size, and teaching context."),
       chartRequest: tx(locale, "请生成总评成绩箱线图。", "Generate a box plot of overall scores."),
@@ -103,7 +103,7 @@ function insightStories(locale: Locale): InsightStory[] {
     {
       id: "threshold",
       query: tx(locale, "低于 70% 的学生占多少？", "What share of students scored below 70%?"),
-      answer: tx(locale, "四份合成作答中有 1 份低于 70%，占 25%；其余 3 份达到或超过 70%。", "One of the four synthetic submissions is below 70%: 25% of the class, while three are at or above the threshold."),
+      answer: tx(locale, "四份作答中有 1 份低于 70%，占 25%；其余 3 份达到或超过 70%。", "One of the four submissions is below 70% (25%); the other three meet or exceed 70%."),
       followUpQuery: tx(locale, "低于门槛就代表没有掌握吗？", "Does falling below the threshold mean no mastery?"),
       followUpAnswer: tx(locale, "不能只凭单一门槛下结论。门槛用于筛选待复核作答，教师仍需查看各题表现与原始证据。", "A single threshold is not enough for that conclusion. It filters submissions for review; the teacher still checks question-level performance and source evidence."),
       chartRequest: tx(locale, "请生成低于 70% 的占比图。", "Chart the share below 70%."),
@@ -213,8 +213,8 @@ export function FrontierLandingPage() {
               </a>
             </div>
             <div className="frontier-proof-strip" aria-label={tx(locale, "Demo 边界", "Demo boundaries")}>
-              <span><Check aria-hidden="true" /> {tx(locale, "合成学生数据", "Synthetic student data")}</span>
-              <span><Check aria-hidden="true" /> {tx(locale, "真实产品流程", "Real product workflow")}</span>
+              <span><Check aria-hidden="true" /> {tx(locale, "演示样例", "Demo samples")}</span>
+              <span><Check aria-hidden="true" /> {tx(locale, "产品流程", "Product workflow")}</span>
               <span><Check aria-hidden="true" /> {tx(locale, "教师控制发布", "Teacher-controlled release")}</span>
             </div>
           </div>
@@ -222,7 +222,7 @@ export function FrontierLandingPage() {
           <div className="frontier-hero-visual" data-stage={stage.id} aria-label={tx(locale, "SmarTAI 互动产品导览", "Interactive SmarTAI product walkthrough")}>
             <div className="frontier-visual-caption">
               <span>{tx(locale, "产品导览", "Product walkthrough")}</span>
-              <span>{tx(locale, "合成内容", "Synthetic content")}</span>
+              <span>{tx(locale, "演示样例", "Demo samples")}</span>
             </div>
             <div className="frontier-document-stack" aria-hidden="true">
               <div className="frontier-page frontier-page-back" />
@@ -322,12 +322,12 @@ export function FrontierLandingPage() {
 
         <section id="walkthrough" className="frontier-workspace-section">
           <div className="frontier-workspace-copy">
-            <p className="frontier-eyebrow">{tx(locale, "源自真实产品界面", "Built from the product UI")}</p>
+            <p className="frontier-eyebrow">{tx(locale, "产品界面", "Product interface")}</p>
             <h2 className="frontier-title-fragments">
               {titleFragments(locale, ["识别完成，", "原文件仍在手边。"], ["Recognition done.", "Source in view."])}
             </h2>
             <p>
-              {tx(locale, "真实 Demo 使用这里展示的同一套任务工作台、原文对照、复核语言和评分控件。动画面板是前端导览；按钮将进入真实 API 驱动的产品。", "The live demo uses the same task workspace, source comparison, review language, and score controls shown here. The animated panel is a walkthrough; the button opens the real API-backed product.")}
+              {tx(locale, "对照原文件检查识别内容，查看并调整评分结果。", "Check recognition against the original files, then review and adjust grades.")}
             </p>
             <ul>
               <li><ShieldCheck aria-hidden="true" /> {tx(locale, "原文优先的可追溯性", "Source-first traceability")}</li>
@@ -348,7 +348,7 @@ export function FrontierLandingPage() {
             <div className="frontier-window-body">
               <div className="frontier-window-source">
                 <div className="frontier-window-label"><FileText aria-hidden="true" /> {tx(locale, "原文件", "Original file")}</div>
-                <img src="/frontier-demo/live/DEMO-002_handwritten_raw.png" alt={tx(locale, "未带评分提示的合成手写力学作答", "Synthetic handwritten mechanics answer without grading annotations")} />
+                <img src="/frontier-demo/live/DEMO-002_handwritten_raw.png" alt={tx(locale, "手写力学作答示例", "Sample handwritten mechanics answer")} />
               </div>
               <div className="frontier-window-divider" aria-hidden="true" />
               <div className="frontier-window-review">
@@ -385,7 +385,7 @@ export function FrontierLandingPage() {
             <div className="frontier-ask-console">
               <div className="frontier-ask-console-title">
                 <span>Ask SmarTAI</span>
-                <small>{tx(locale, "产品导览 · 合成数据", "Product walkthrough · synthetic data")}</small>
+                <small>{tx(locale, "产品导览", "Product walkthrough")}</small>
               </div>
               <div className="frontier-ask-prompts" aria-label={tx(locale, "分析问题示例", "Example analysis questions")}>
                 <SmarTAIMascot variant="thinking" size="sm" className="frontier-ask-mascot" />
@@ -417,7 +417,7 @@ export function FrontierLandingPage() {
                       <div className="frontier-smartai-answer">
                         <span>SmarTAI</span>
                         <p>{item.answer}</p>
-                        <small>{tx(locale, "依据：4 道题 · 4 份合成作答 · 当前评分版本", "Based on 4 questions · 4 synthetic submissions · current grading version")}</small>
+                        <small>{tx(locale, "4 道题 · 4 份作答", "4 questions · 4 submissions")}</small>
                       </div>
                       <div className="frontier-teacher-query frontier-followup-query">
                         <span>{tx(locale, "教师追问", "Teacher follow-up")}</span>
@@ -459,7 +459,7 @@ export function FrontierLandingPage() {
                   <InsightChart insight={item} locale={locale} />
                   <div className="frontier-chart-foot">
                     <ShieldCheck aria-hidden="true" />
-                    <span>{tx(locale, "本导览图表使用上方标明的 4 份合成作答与当前评分版本。", "This walkthrough chart uses the four synthetic submissions and current grading version stated above.")}</span>
+                    <span>{tx(locale, "图表展示 4 份示例作答。", "Charts show four sample submissions.")}</span>
                   </div>
                 </div>
               );
@@ -477,7 +477,7 @@ export function FrontierLandingPage() {
           <div className="frontier-trust-list">
             <article><span>01</span><h3>{tx(locale, "追溯原文", "Trace the source")}</h3><p>{tx(locale, "原文件与识别内容在整个复核过程中保持连接。", "Original files and recognized content stay connected through review.")}</p></article>
             <article><span>02</span><h3>{tx(locale, "提示教师复核", "Prompt teacher review")}</h3><p>{tx(locale, "低置信度或模型分歧会被标记，最终由教师复核判断。", "Low confidence or model disagreement is flagged for the teacher's final review.")}</p></article>
-            <article><span>03</span><h3>{tx(locale, "控制发布", "Control the release")}</h3><p>{tx(locale, "教师确认最终结果前，任何分数都不会发布给学生。", "No score reaches a student until the educator confirms the final result.")}</p></article>
+            <article><span>03</span><h3>{tx(locale, "控制发布", "Control the release")}</h3><p>{tx(locale, "教师可复核、调整并导出批改结果。", "Teachers can review, adjust, and export grading results.")}</p></article>
           </div>
         </section>
 
@@ -491,7 +491,7 @@ export function FrontierLandingPage() {
             <h2 className="frontier-title-fragments">
               {titleFragments(locale, ["打开真实 Demo。"], ["Open the live demo."])}
             </h2>
-            <p>{tx(locale, "真实工作台使用合成文件，并运行真实 API 与批改流程。", "The live workspace uses synthetic files with the real API and grading pipeline.")}</p>
+            <p>{tx(locale, "用示例作业完成一次批改。", "Complete a grading run with sample coursework.")}</p>
           </div>
           <Link className="frontier-primary-cta frontier-primary-cta-light" to={liveDemoEntryHref}>
             {tx(locale, "进入真实 Demo", "Enter live demo")}
@@ -502,7 +502,7 @@ export function FrontierLandingPage() {
 
       <footer className="frontier-footer">
         <Link className="frontier-wordmark" to="/frontier" aria-label="SmarTAI Frontier home"><SmarTAIWordmark alt="" className="frontier-wordmark-image" /></Link>
-        <p>{tx(locale, "互动展示 · 合成学生数据 · 点击即可进入真实产品", "Interactive showcase · synthetic student data · live product available after entry")}</p>
+        <p>{tx(locale, "互动展示 · 演示样例", "Interactive showcase · demo samples")}</p>
       </footer>
     </div>
   );
@@ -628,7 +628,7 @@ function WalkthroughStageDetail({ id, locale, metric }: { id: WalkthroughStageId
       </div>
       <div className="frontier-analysis-metrics">
         <span><strong>50%</strong><small>{tx(locale, "Q3 得分率", "Q3 attainment")}</small></span>
-        <span><strong>4</strong><small>{tx(locale, "份合成作答", "synthetic submissions")}</small></span>
+        <span><strong>4</strong><small>{tx(locale, "份作答", "submissions")}</small></span>
       </div>
       <div className="frontier-analysis-provenance">
         <ShieldCheck aria-hidden="true" />

@@ -21,8 +21,8 @@ export function RouteRecoveryPage() {
     <main className="mx-auto grid min-h-[60vh] max-w-2xl content-center gap-5 px-6 py-12" role="alert">
       <h1 className="text-2xl font-semibold">{zh ? "页面暂时无法显示" : "This page could not be displayed"}</h1>
       <p className="text-sm leading-6 text-muted-foreground">
-        {zh ? "已提交的任务资料不会因此删除。可以重新加载页面，或从历史任务继续；重新加载不会自动重新识别或批改。"
-          : "Submitted task materials are not deleted. Reload this page or continue from task history. Reloading does not automatically restart recognition or grading."}
+        {zh ? "页面加载失败。请重新加载，或从历史任务继续。"
+          : "The page could not load. Reload it or continue from History."}
       </p>
       <div className="flex flex-wrap gap-3">
         <button type="button" onClick={() => leave.request(() => window.location.reload())} className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">

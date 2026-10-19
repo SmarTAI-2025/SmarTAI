@@ -14,3 +14,11 @@ it.each([["zh-CN", "请缩小范围重试。"], ["en-US", "Narrow the query and 
   expect(screen.getByRole("status")).toHaveTextContent(text);
   expect(screen.queryByText(/SELECT|Internal reasoning/)).not.toBeInTheDocument();
 });
+
+it.each(["zh-CN", "en-US"])("replaces planner diagnostics without changing the selection payload (%s)", locale => {
+  const result = { ...execution, recognized: false, explanation: "筛选结果需要 student_id。 / Selection requires student_id." };
+  render(<GroundedAskAnswer execution={result} locale={locale} />);
+  expect(screen.getByRole("status")).toHaveTextContent(locale === "zh-CN" ? "缩小范围" : "Narrow it");
+  expect(screen.queryByText(/student_id/)).not.toBeInTheDocument();
+  expect(result.selection).toEqual({ kind: "students", ids: ["001"] });
+});

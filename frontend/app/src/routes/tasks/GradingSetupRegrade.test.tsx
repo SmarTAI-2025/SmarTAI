@@ -169,13 +169,13 @@ describe("GradingSetupPage regrade mode", () => {
     fireEvent.change(slider, { target: { value: "60" } });
     current.data = { ...current.data, workflow_revision: 8, knowledge: { ...current.data.knowledge, task_doc_count: 1 } };
     fireEvent.change(slider, { target: { value: "70" } });
-    expect(screen.queryByText(/服务器业务版本已变化/)).toBeNull();
+    expect(screen.queryByText(/任务内容已更新/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "暂存" }));
     await screen.findByText(/已暂存 ·/);
     expect(slider).toHaveValue("70"); expect(saveSetupMutate).not.toHaveBeenCalled();
     current.data = { ...current.data, workflow_revision: 9, grading_setup_fingerprint: "setup-2", grading_setup: { ...current.data.grading_setup, strictness: 20 } };
     fireEvent.change(slider, { target: { value: "80" } });
-    await screen.findByText(/服务器业务版本已变化/);
+    await screen.findByText(/任务内容已更新/);
     expect(slider).toHaveValue("80");
   });
 
@@ -299,7 +299,7 @@ describe("GradingSetupPage regrade mode", () => {
 
     const saveButton = await screen.findByRole("button", { name: "Save & Review Grading" });
     expect(saveButton).toBeEnabled();
-    expect(screen.getByText(/Grading cannot start yet, but you can still save/)).toBeInTheDocument();
+    expect(screen.getByText(/Finish preparing the questions and submissions/)).toBeInTheDocument();
 
     fireEvent.click(saveButton);
 

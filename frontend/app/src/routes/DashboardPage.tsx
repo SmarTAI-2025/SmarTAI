@@ -1,6 +1,6 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { normalizeAPIError } from "@/api/client";
 import { useExperts, useTasks } from "@/api/hooks";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { KnowledgeActivityPanel } from "@/components/knowledge-base/KnowledgeActivityPanel";
@@ -128,7 +128,7 @@ export function DashboardPage() {
   ];
 
   const tasksError = tasksQuery.error
-    ? normalizeAPIError(tasksQuery.error).message
+    ? userFacingError(tasksQuery.error, locale)
     : null;
   const blockingTasksError = hasTaskSnapshot ? null : tasksError;
 

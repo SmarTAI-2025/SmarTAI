@@ -205,7 +205,7 @@ function QuestionResultCard({ locale, taskId, student, question, studentReturn, 
 
       <div className="mt-3 grid gap-3 xl:grid-cols-2">
         <ContentPanel title={tx(locale, "学生作答", "Student Response")}><MarkdownMath className="text-[13px] leading-6 text-foreground">{answer?.content || tx(locale, "未识别到该题作答。", "No response was recognized for this question.")}</MarkdownMath></ContentPanel>
-        <ContentPanel title={tx(locale, "SmarTAI 原始批改结果", "Original SmarTAI Result")} meta={`${formatScore(aiCorrectionScore(correction), correction.max_score)} / ${String(correction.max_score)}`}><MarkdownMath className="text-[12px] leading-5 text-muted-foreground">{correction.comment || tx(locale, "SmarTAI 未返回文字依据。", "SmarTAI returned no written rationale.")}</MarkdownMath><div className="mt-3 grid grid-cols-3 gap-2"><SmallSignal label={tx(locale, "置信度", "Confidence")} value={formatConfidence(correction.confidence)} /><SmallSignal label={tx(locale, "专家数", "Models")} value={String(correction.expert_results?.length ?? 0)} /><SmallSignal label={tx(locale, "合成方式", "Synthesis")} value={formatSynthesis(correction.synthesis_method, locale)} /></div></ContentPanel>
+        <ContentPanel title={tx(locale, "SmarTAI 原始批改结果", "Original SmarTAI Result")} meta={`${formatScore(aiCorrectionScore(correction), correction.max_score)} / ${String(correction.max_score)}`}><MarkdownMath className="text-[12px] leading-5 text-muted-foreground">{correction.comment || tx(locale, "SmarTAI 未返回文字依据。", "SmarTAI returned no written rationale.")}</MarkdownMath><div className="mt-3 grid grid-cols-3 gap-2"><SmallSignal label={tx(locale, "置信度", "Confidence")} value={formatConfidence(correction.confidence)} /><SmallSignal label={tx(locale, "专家数", "Models")} value={String(correction.expert_results?.length ?? 0)} /></div></ContentPanel>
         <ContentPanel title={tx(locale, "最终采用结果", "Final Applied Result")} meta={`${formatScore(finalScore, correction.max_score)} / ${String(correction.max_score)}`}><p className="text-[12px] leading-5 text-foreground">{correction.teacher_comment?.trim() || tx(locale, "没有额外教师评语。", "No additional teacher comment.")}</p><p className="mt-3 text-[10px] font-semibold text-muted-foreground">{formatCorrectionScoreSource(correction, locale)}</p></ContentPanel>
         <ContentPanel title={tx(locale, "题干与评分标准", "Question & rubric")}><MarkdownMath className="text-[12px] leading-5 text-foreground">{question.stem || tx(locale, "未提供题干。", "No question stem was provided.")}</MarkdownMath><div className="my-3 border-t" /><MarkdownMath className="text-[12px] leading-5 text-muted-foreground">{question.criterion || tx(locale, "未提供评分标准。", "No rubric was provided.")}</MarkdownMath></ContentPanel>
       </div>
@@ -266,11 +266,6 @@ function questionStateForStudent(student: StudentSummary, questionId: string): R
   return correctionNeedsFormalReview(correction) ? "warning" : "ready";
 }
 
-function formatSynthesis(value: string | null | undefined, locale: Locale): string {
-  const labels: Record<string, [string, string]> = { single: ["单专家", "Single"], median: ["中位数", "Median"], multi_sample: ["多次采样", "Multi-sample"], weighted_average: ["加权平均", "Weighted"], judge_agent: ["裁判模型", "Judge"], degraded_to_single: ["部分专家完成", "Some experts completed"], all_failed: ["全部失败", "Failed"], quota_exhausted: ["额度耗尽", "Quota"] };
-  const pair = value ? labels[value] : null;
-  return pair ? pair[locale === "en-US" ? 1 : 0] : value || "—";
-}
 
 function isEditableTarget(target: EventTarget | null): boolean { return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)); }
 function tx(locale: Locale, zh: string, en: string): string { return locale === "en-US" ? en : zh; }

@@ -122,7 +122,7 @@ it("uses the newly saved server state instead of a draft for an older metadata s
   state.task = { ...state.task, name: "New server title" };
   await act(() => router.navigate(-1));
   await waitFor(() => expect(name()).toHaveValue("New server title"));
-  expect(await screen.findByText(/服务器内容或当前输入已变化/)).toBeInTheDocument();
+  expect(await screen.findByText(/发现旧草稿，当前内容已变化/)).toBeInTheDocument();
   expect(state.update).not.toHaveBeenCalled();
 });
 

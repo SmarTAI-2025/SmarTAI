@@ -100,7 +100,7 @@ describe("password reset pages", () => {
     expect(requestReset).toHaveBeenCalledWith({ email: "teacher@ustc.edu.cn" });
     expect(resetRequestMutation).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole("heading", { name: "重置请求已受理" })).toBeInTheDocument();
-    expect(screen.getByText(/无论账号存在、停用或不存在/)).toBeInTheDocument();
+    expect(screen.getByText(/如果该邮箱符合条件/)).toBeInTheDocument();
     expect(screen.getByTestId("location")).toHaveTextContent("/forgot-password/check-email");
     const stored = window.sessionStorage.getItem(PASSWORD_RESET_REQUEST_STORAGE_KEY) ?? "";
     expect(stored).not.toContain("teacher@ustc.edu.cn");

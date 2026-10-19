@@ -210,8 +210,8 @@ describe("GradingProgressPage completion routing", () => {
     renderProgress();
 
     expect(screen.getByRole("alert")).toHaveTextContent("This grading run did not finish");
-    expect(screen.getByRole("alert")).toHaveTextContent("grading_failed");
-    expect(screen.getByRole("alert")).toHaveTextContent("run-1");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("grading_failed");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("run-1");
   });
 
   it("renders the classified provider cause from the grading run", () => {
@@ -240,7 +240,7 @@ describe("GradingProgressPage completion routing", () => {
     renderProgress();
 
     expect(screen.getByRole("alert")).toHaveTextContent("The model took too long to respond");
-    expect(screen.getByRole("alert")).toHaveTextContent("provider_timeout");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("provider_timeout");
     expect(screen.getByRole("alert")).not.toHaveTextContent("grading_failed");
   });
 

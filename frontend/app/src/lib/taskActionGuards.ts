@@ -337,7 +337,7 @@ export function classifyRecoverableError(
   if (code === "question_source_incomplete") {
     return {
       title: tx(locale, "资料尚未完整读取", "Source reading is incomplete"),
-      description: tx(locale, "仍有页面未成功读取，已暂停题目生成。已完成的页面证据已保存，重新检查资料时会复用；不会把部分内容当作整份文件完成。", "Some pages could not be read, so question generation is paused. Completed page evidence is saved for reuse when checking the source again; partial input is not treated as a complete document."),
+      description: tx(locale, "部分页面未能读取，题目生成已暂停。请检查资料后重试。", "Some pages could not be read, so question generation is paused. Check the source and try again."),
       actionLabel: tx(locale, "检查资料", "Check source"), actionKind: "reselect",
       actionHref: taskHref("/upload/problems"), tone: "warning", technicalDetails,
     };
@@ -346,7 +346,7 @@ export function classifyRecoverableError(
   if (code === "recognition_already_running") {
     return {
       title: tx(locale, "这份资料仍在识别", "This source is still being recognized"),
-      description: tx(locale, "已有任务正在处理同一份资料，本次没有重复提交。", "An existing run is processing this source. No duplicate request was submitted."),
+      description: tx(locale, "这份资料正在处理，请查看进度。", "This source is being processed. Check its progress."),
       actionLabel: tx(locale, "查看任务", "View task"), actionHref: taskHref(""),
       actionKind: "refresh", tone: "warning", technicalDetails,
     };
@@ -383,8 +383,8 @@ export function classifyRecoverableError(
         "No usable result was received, and the available records do not identify the cause. ",
       )) + tx(
         locale,
-        "上次调用是否计费尚无法确认，系统不会自动重试。原文件和已保存结果保留；可稍后确认重试失败项，或先切换模型。重试可能再次消耗额度；反复失败时请提供任务编号排查。",
-        "Billing for the previous call is unconfirmed, so SmarTAI will not retry automatically. Originals and saved results are preserved. Confirm a retry of failed items later, or switch models first. Retrying may incur another charge; share the job ID if failures persist.",
+        "上次调用是否计费尚无法确认，重试可能再次消耗额度。原文件和已保存结果保留。",
+        "The previous call’s billing status is unknown. Retrying may use additional quota. Originals and saved results are retained.",
       ),
       actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
       actionKind: "refresh",
@@ -413,8 +413,8 @@ export function classifyRecoverableError(
       title: tx(locale, "批改输入已经变化或不完整", "The grading inputs changed or are incomplete"),
       description: tx(
         locale,
-        "题目、作答或本次批改快照已不再匹配。任务原资料仍然保留；请刷新后重新启动批改，以当前内容生成新的批次。",
-        "The questions, submissions, or grading snapshot no longer match. Source data is preserved. Refresh and start a new run from the current content.",
+        "任务内容已更新，请刷新后重新开始批改。",
+        "Task content changed. Refresh before starting a new grading run.",
       ),
       actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
       actionKind: "refresh",
@@ -444,8 +444,8 @@ export function classifyRecoverableError(
       title: tx(locale, "当前任务没有可批改题目", "This task has no questions to grade"),
       description: tx(
         locale,
-        "批改没有启动，因为当前任务缺少结构化题目。请返回题目上传与校对阶段补齐题目。",
-        "Grading did not start because the task has no structured questions. Return to question upload and review to prepare them.",
+        "请先补齐题目，再开始批改。",
+        "Complete the questions before starting grading.",
       ),
       actionLabel: tx(locale, "返回上传题目", "Return to question upload"),
       actionHref: taskHref("/upload/problems"),
@@ -476,8 +476,8 @@ export function classifyRecoverableError(
       title: tx(locale, "学生作答尚未准备完整", "Student answers are not ready"),
       description: tx(
         locale,
-        "至少一名学生缺少当前结构化作答，系统没有创建空批改批次。请返回作答校对页面检查识别结果。",
-        "At least one student has no current structured answers, so no empty grading run was created. Return to submission review and check the recognition result.",
+        "部分学生的作答尚未准备好，请检查识别结果。",
+        "Some student answers are not ready. Check the recognition results.",
       ),
       actionLabel: tx(locale, "检查学生作答", "Review student submissions"),
       actionHref: taskHref("/submissions"),
@@ -524,8 +524,8 @@ export function classifyRecoverableError(
       title: tx(locale, "部分学生作答识别失败", "Some submissions failed recognition"),
       description: tx(
         locale,
-        "批改没有启动，也没有丢弃已保存的任务资料。请返回作答识别页面查看失败文件和具体原因。",
-        "Grading did not start, and saved task data was not discarded. Return to submission recognition to inspect the failed files and exact reasons.",
+        "请先处理识别失败的文件。",
+        "Resolve the files that failed recognition first.",
       ),
       actionLabel: tx(locale, "查看识别失败", "Review recognition failures"),
       actionHref: taskHref("/submissions/progress"),
@@ -540,8 +540,8 @@ export function classifyRecoverableError(
       title: tx(locale, "仍有学生身份待确认", "Some student identities are unresolved"),
       description: tx(
         locale,
-        "为避免把成绩记到错误学生，批改没有启动。请返回作答校对并确认学生身份。",
-        "Grading did not start to avoid assigning results to the wrong student. Return to submission review and confirm student identities.",
+        "请核对并确认学生身份。",
+        "Check and confirm the student identities.",
       ),
       actionLabel: tx(locale, "校对学生身份", "Review student identities"),
       actionHref: taskHref("/submissions"),
@@ -564,7 +564,7 @@ export function classifyRecoverableError(
   if (code === "submission_recognition_needs_review") {
     return {
       title: tx(locale, "仍有作答识别待核对", "Some transcriptions need review"),
-      description: tx(locale, "请核对标记的作答与原件后确认；识别不确定不会被当成学生答错。", "Confirm the flagged transcriptions against the originals before grading. Uncertainty is not a student error."),
+      description: tx(locale, "请对照原件核对标记的作答，确认后继续。", "Check the flagged answers against the originals and confirm before continuing."),
       actionLabel: tx(locale, "核对作答", "Review submissions"),
       actionHref: taskHref("/submissions?filter=review"),
       actionKind: "reselect", tone: "warning", technicalDetails,
@@ -576,8 +576,8 @@ export function classifyRecoverableError(
       title: tx(locale, "作答状态需要重新确认", "The submission state needs confirmation"),
       description: tx(
         locale,
-        "服务器返回了旧版来源凭证错误。请刷新任务状态；若结构化题目和作答仍在，可直接重新尝试批改，无需仅为补凭证而重传文件。",
-        "The server returned a legacy source-evidence error. Refresh the task; if structured questions and answers remain, retry grading without re-uploading files only to restore evidence.",
+        "请刷新任务状态后重试，无需重新上传已保存的文件。",
+        "Refresh the task and try again. Saved files do not need to be uploaded again.",
       ),
       actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
       actionKind: "refresh",
@@ -591,8 +591,8 @@ export function classifyRecoverableError(
       title: tx(locale, "任务仍在处理", "The task is still processing"),
       description: tx(
         locale,
-        "另一阶段仍在运行，系统没有重复启动批改。请等待当前处理完成后刷新。",
-        "Another stage is still running, so SmarTAI did not start duplicate grading. Wait for it to finish, then refresh.",
+        "另一阶段正在运行，请等待完成。",
+        "Another stage is running. Wait for it to finish.",
       ),
       actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
       actionKind: "refresh",
@@ -606,8 +606,8 @@ export function classifyRecoverableError(
       title: tx(locale, "批改已经在运行", "Grading is already running"),
       description: tx(
         locale,
-        "系统已找到当前批改批次，没有重复创建任务。刷新后可继续查看同一批次。",
-        "SmarTAI found the active grading run and did not create a duplicate. Refresh to continue viewing the same run.",
+        "已有批改正在运行，请刷新查看。",
+        "A grading run already exists. Refresh to view it.",
       ),
       actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
       actionKind: "refresh",
@@ -621,8 +621,8 @@ export function classifyRecoverableError(
       title: tx(locale, "批改结果保存失败", "The grading results could not be saved"),
       description: tx(
         locale,
-        "批改服务未能把本批结果完整写入数据库，因此没有把不完整结果标为成功。任务原资料仍然保留，请稍后重试；若持续失败，请把任务编号交给管理员检查存储服务。",
-        "The service could not fully save this grading batch, so incomplete results were not marked successful. Source data is preserved. Retry later; if it persists, give the job ID to an administrator to check storage.",
+        "批改结果未能完整保存，请稍后重试；若仍失败，请联系管理员。",
+        "Grading results could not be fully saved. Try again later or contact your administrator if it continues.",
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
@@ -633,10 +633,10 @@ export function classifyRecoverableError(
 
   if (code === "programming_execution_unavailable") {
     return {
-      title: tx(locale, "编程题未执行：隔离执行服务不可用", "Programming item not executed: isolated runner unavailable"),
+      title: tx(locale, "编程题测试暂不可用", "Programming tests are unavailable"),
       description: tx(locale,
-        "已有成功结果已保留。编程题没有运行测试，不能把未执行当作学生答错。请联系管理员恢复隔离执行服务后仅重试失败项，或查看结果并人工补齐分数。",
-        "Successful results are preserved. Tests were not run, so this is not a failed student test. Ask an administrator to restore the isolated runner, then retry only failed items, or review the results and enter the missing score."),
+        "编程题测试未能运行，已有结果已保留。请联系管理员后重试失败项，或人工补齐分数。",
+        "Programming tests could not run. Existing results are retained. Contact your administrator, then retry failed items or enter scores manually."),
       actionLabel: tx(locale, "查看进度与恢复", "View progress and recovery"),
       actionKind: "refresh",
       actionHref: taskId ? `/tasks/${taskId}/grading/progress` : undefined,
@@ -650,8 +650,8 @@ export function classifyRecoverableError(
       title: tx(locale, "本次批改没有完成", "This grading run did not finish"),
       description: tx(
         locale,
-        "批改过程中出现了未预期的错误，任务资料仍然保留。请稍后重试；若多次重试仍失败，请记下下方任务/作业编号并联系管理员。",
-        "An unexpected error occurred during grading. Task data is preserved. Retry shortly; if it keeps failing, note the job ID below and contact your administrator.",
+        "批改未完成，任务资料已保留。请稍后重试；若仍失败，请联系管理员。",
+        "Grading did not finish. Task data is retained. Retry later or contact your administrator if it continues.",
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
@@ -678,8 +678,8 @@ export function classifyRecoverableError(
       title: tx(locale, "模型响应超时", "The model took too long to respond"),
       description: tx(
         locale,
-        "模型服务未能在限定时间内返回结果，通常因为负载较高或网络较慢。任务资料不会丢失，请稍后重试。",
-        "The model service did not respond in time, usually because it is busy or the connection is slow. Your task data is preserved — retry shortly.",
+        "模型响应超时，请稍后重试。",
+        "The model timed out. Please try again later.",
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
@@ -693,8 +693,8 @@ export function classifyRecoverableError(
       title: tx(locale, "无法连接模型服务", "Cannot reach the model service"),
       description: tx(
         locale,
-        "SmarTAI 连接不到模型服务。请检查网络是否正常、代理或 VPN（科学上网）是否已开启后重试；本地部署请确认后端地址可达。",
-        "SmarTAI could not reach the model service. Check your network and that your proxy or VPN is enabled, then retry. For local setups, confirm the backend address is reachable.",
+        "无法连接模型服务，请检查模型配置后重试。",
+        "Cannot connect to the model service. Check the model configuration and try again.",
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
@@ -791,11 +791,11 @@ export function classifyRecoverableError(
 
   if (code === "provider_image_payload_invalid") {
     return {
-      title: tx(locale, "图片无法组成安全模型请求", "The image could not be encoded safely"),
+      title: tx(locale, "图片无法读取", "The image could not be read"),
       description: tx(
         locale,
-        "系统没有把无法验证的图片负载发送给模型。请重新上传清晰的 JPG、PNG 或 WebP；原任务资料仍然保留。",
-        "The invalid image payload was not sent to the model. Upload a clear JPG, PNG, or WebP again; task data is preserved.",
+        "图片无法读取，请重新上传清晰的 JPG、PNG 或 WebP。",
+        "The image could not be read. Upload a clear JPG, PNG, or WebP image.",
       ),
       actionLabel: tx(locale, "重新选择文件", "Choose the file again"),
       actionKind: "reupload",
@@ -857,8 +857,8 @@ export function classifyRecoverableError(
       title: tx(locale, "作答与当前任务题目不匹配", "The answers do not match this task"),
       description: tx(
         locale,
-        "文件内容已解析，也提取到了作答条目，但没有题号能对应当前任务。这不是“学生答错”，更可能是传错作业、OCR 误读题号，或任务题目后来被替换。",
-        "The file was parsed and answer entries were extracted, but none of their question IDs match this task. This does not mean the student answered incorrectly; the wrong assignment may have been uploaded, OCR may have misread labels, or the task questions may have changed.",
+        "识别出的题号与当前任务不匹配，请核对文件和题号。",
+        "Recognized question numbers do not match this task. Check the file and question numbers.",
       ),
       actionLabel: tx(locale, "核对并重新上传", "Review and upload again"),
       actionKind: "reupload",
@@ -872,8 +872,8 @@ export function classifyRecoverableError(
       title: tx(locale, "没有提取到任何作答内容", "No answer content was detected"),
       description: tx(
         locale,
-        "文件文字和模型返回结构都可以读取，但没有提取到学生作答。这不是学生答错，也不同于题号不匹配；请检查是否只上传了封面/空白页、答案区域是否被裁掉，或换一个识别模型重试。",
-        "The file text and model response structure were readable, but no student answers were extracted. This is not a wrong answer and differs from unmatched question IDs. Check for a cover/blank page or cropped answer area, or retry with another model.",
+        "未找到作答内容，请检查空白页、封面或裁剪范围。",
+        "No answers were found. Check for blank pages, cover pages, or cropped content.",
       ),
       actionLabel: tx(locale, "核对并重新上传", "Review and upload again"),
       actionKind: "reupload",
@@ -887,8 +887,8 @@ export function classifyRecoverableError(
       title: tx(locale, "原文件保存未完成", "The original file was not saved"),
       description: tx(
         locale,
-        "系统无法确认原文件已经安全保存，因此没有继续识别。这是文件存储或数据库问题，不是学生答案问题。请重试；若重复出现，请把任务编号交给管理员。",
-        "The system could not confirm that the original was safely stored, so recognition did not continue. This is a file-storage or database issue, not a student-answer issue. Retry; if it repeats, share the job ID with an administrator.",
+        "原文件未能保存，请重试；若仍失败，请联系管理员。",
+        "The original file could not be saved. Retry or contact your administrator if it continues.",
       ),
       actionLabel: tx(locale, "重新上传", "Upload again"),
       actionKind: "reupload",
@@ -902,8 +902,8 @@ export function classifyRecoverableError(
       title: tx(locale, "识别结果写入任务失败", "Recognized results could not be saved to the task"),
       description: tx(
         locale,
-        "原文件和逐文件识别结果已经保留，但可用作答没有成功发布到当前任务。这是结果持久化问题，不是 OCR 或学生答案错误；请携带任务编号排查数据库后重试。",
-        "The originals and per-file outcomes were preserved, but usable answers were not published to this task. This is result persistence failure, not an OCR or student-answer error. Use the job ID to check the database, then retry.",
+        "作答结果未能保存，请联系管理员。原文件和已完成识别已保留。",
+        "Recognized answers could not be saved. Contact your administrator. Originals and completed recognition are retained.",
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
@@ -931,8 +931,8 @@ export function classifyRecoverableError(
     return {
       title: tx(locale, "题号或分项分值与教师设置不一致", "Question numbers or points differ from teacher instructions"),
       description: tx(locale,
-        "请核对题号与分值说明后重新准备；系统没有采用不一致的题目包。",
-        "Check the question numbers and score instructions, then prepare again. The inconsistent package was not accepted.",
+        "题号或分值不一致，请核对后重新准备。",
+        "Question numbers or scores do not match. Check them before preparing the questions again.",
       ),
       actionLabel: tx(locale, "重新准备题目", "Prepare questions again"),
       actionHref: taskId ? `/tasks/${taskId}/upload/problems` : undefined,
@@ -947,8 +947,8 @@ export function classifyRecoverableError(
       title: tx(locale, "模型返回格式无法解析", "The model returned an invalid structure"),
       description: tx(
         locale,
-        "模型有返回内容，但没有形成系统需要的学生、题号和作答结构；系统没有把不确定内容当成成功结果。可以重试，或换用结构化输出更稳定的模型。",
-        "The model returned content, but not the required student, question-ID, and answer structure. The system did not accept uncertain output as a success. Retry or choose a model with more reliable structured output.",
+        "未能完整识别学生信息与作答，请重试或更换模型。",
+        "Could not recognize all student details and answers. Retry or choose another model.",
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
@@ -959,11 +959,11 @@ export function classifyRecoverableError(
 
   if (code === "submission_model_field_too_long") {
     return {
-      title: tx(locale, "模型返回字段超过安全长度", "The model returned an oversized field"),
+      title: tx(locale, "识别结果格式有误", "Invalid recognition result"),
       description: tx(
         locale,
-        "模型返回了过长的身份或题号字段。系统只拒绝这份来源，没有截断后冒充成功，也不会拖垮整批。",
-        "The model returned an overlong identity or question field. Only this source was rejected; no truncated value was accepted and the rest of the batch continued.",
+        "识别结果格式有误，请重试或更换模型。",
+        "The recognition result has an invalid format. Retry or choose another model.",
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
@@ -1051,7 +1051,7 @@ export function classifyRecoverableError(
   if (code === "provider_daily_quota_exceeded" || code === "shared_pool_daily_limit_reached") {
     return {
       title: tx(locale, "模型日额度已用完", "The model's daily quota is exhausted"),
-      description: tx(locale, "服务商明确返回日额度耗尽。系统已停止本轮处理，不会自动跨天等待。请查看服务商用量，额度恢复后返回配置重新启动，或更换有额度的模型。", "The provider explicitly reported a daily quota limit. This run has stopped; it will not wait overnight. Check provider usage, then change models or restart from settings after the quota resets."),
+      description: tx(locale, "模型日额度已用完，本轮已停止。额度恢复后重新启动，或更换模型。", "The model’s daily quota is exhausted and this run has stopped. Restart once quota is available, or choose another model."),
       actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/models", actionKind: "byok", tone: "warning",
       dailyQuotaExhausted: true, showUsageLinks: true, technicalDetails,
     };
@@ -1127,7 +1127,7 @@ export function classifyRecoverableError(
   ) {
     return {
       title: tx(locale, "任务状态已经变化", "The task state has changed"),
-      description: friendlyMessage(message, code, tx(locale, "刷新后会按最新阶段继续，不会重复启动同一任务。", "Refresh to continue from the latest stage without starting duplicate work.")),
+      description: friendlyMessage(message, code, tx(locale, "请刷新任务状态后继续。", "Refresh the task status to continue.")),
       actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
       actionKind: "refresh",
       tone: "warning",
@@ -1144,10 +1144,10 @@ export function classifyRecoverableError(
       || normalized.includes("waking up"))
   ) {
     return {
-      title: tx(locale, "网络或后端暂时不可用", "The network or backend is temporarily unavailable"),
+      title: tx(locale, "暂时无法连接服务", "Cannot connect to the service"),
       description: message.includes("waking up")
-        ? tx(locale, "后端可能正在唤醒，当前页面内容不会丢失。稍等片刻后重试。", "The backend may be waking up. This page will keep its content; retry shortly.")
-        : friendlyMessage(message, code, tx(locale, "请检查网络后重试；当前页面内容不会丢失。", "Check your network and retry. This page will keep its content.")),
+        ? tx(locale, "暂时无法连接服务，请稍后重试。", "Cannot connect to the service. Please try again later.")
+        : friendlyMessage(message, code, tx(locale, "请检查网络后重试。", "Check your connection and try again.")),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
       tone: "warning",
@@ -1157,15 +1157,15 @@ export function classifyRecoverableError(
 
   return {
     title: apiError.status >= 500
-      ? tx(locale, "后端处理未完成", "Backend processing did not complete")
+      ? tx(locale, "本次操作未完成", "This action did not complete")
       : tx(locale, "本次操作未完成", "This action did not complete"),
     description: friendlyMessage(
       message,
       code,
       tx(
         locale,
-        "识别或批改过程中出现了未预期的错误，任务资料仍然保留。请稍后重试；若多次重试仍失败，请记下下方任务/作业编号并联系管理员。",
-        "An unexpected error occurred. Your task data is preserved. Retry shortly; if it keeps failing, note the job ID below and contact your administrator.",
+        "本次操作未完成，请稍后重试；若仍失败，请联系管理员。",
+        "This action did not complete. Try again later or contact your administrator if it continues.",
       ),
     ),
     actionLabel: tx(locale, "重新尝试", "Try again"),
@@ -1274,8 +1274,8 @@ function providerConfigurationErrorCopy(
     provider_endpoint_dns_failed: [
       "中转站域名无法解析",
       "The relay hostname could not be resolved",
-      "请检查 Base URL 拼写与中转站服务状态；系统没有尝试访问其他地址。",
-      "Check the base URL spelling and relay status. No alternate address was contacted.",
+      "请检查 Base URL 拼写与服务状态。",
+      "Check the Base URL and service status.",
     ],
     provider_endpoint_non_public_address: [
       "中转站域名解析到非公网地址",
@@ -1286,14 +1286,14 @@ function providerConfigurationErrorCopy(
     provider_endpoint_tls_failed: [
       "中转站 HTTPS 证书校验失败",
       "The relay HTTPS certificate could not be verified",
-      "请让中转站维护方修复可信证书；系统不会绕过证书校验。",
-      "Ask the relay operator to fix its trusted certificate. Certificate checks are not bypassed.",
+      "请让服务提供方修复证书后重试。",
+      "Ask the service provider to fix its certificate before retrying.",
     ],
     provider_endpoint_redirect_blocked: [
       "中转站返回了重定向",
       "The relay returned a redirect",
-      "请把 Base URL 改为重定向后的实际 HTTPS 服务根路径；系统不会自动跟随重定向。",
-      "Set the base URL to the final HTTPS service root. Redirects are not followed automatically.",
+      "请将 Base URL 改为最终的 HTTPS 服务地址。",
+      "Set the Base URL to the final HTTPS service address.",
     ],
     provider_endpoint_protocol_mismatch: [
       "中转站响应与所选 API 协议不一致",
@@ -1371,8 +1371,8 @@ function providerTransientErrorCopy(
   }
   if (code === "provider_endpoint_response_too_large") {
     return {
-      title: tx(locale, "中转站响应超过安全大小上限", "The relay response exceeded the safety limit"),
-      description: tx(locale, "系统停止读取过大的响应且没有把它当作成功结果。请缩小输入或输出范围后重试。", "The oversized response was stopped and was not accepted as a result. Reduce the input or requested output, then retry."),
+      title: tx(locale, "返回内容过大", "The response is too large"),
+      description: tx(locale, "返回内容过大，请缩小输入或输出范围后重试。", "The response is too large. Reduce the input or requested output and try again."),
     };
   }
   return null;
@@ -1403,7 +1403,7 @@ function fileErrorDescription(
   locale: Locale,
 ): string {
   if (["source_empty", "submission_source_empty"].includes(code ?? "") || /file is empty|contains no usable text|no extractable text/i.test(message)) {
-    return tx(locale, "文件为空或只含空白字符，没有可识别正文。请打开文件确认内容，重新保存后上传；重复提交同一空文件无法解决。", "The file is empty or contains only whitespace, with no readable content. Open it, check the content, and save it again before uploading; retrying the same empty file will not help.");
+    return tx(locale, "文件为空，请确认内容后重新保存并上传。", "The file is empty. Check its contents, save it, and upload again.");
   }
   if (code === "source_content_type_not_allowed" || code === "submission_source_content_type_mismatch") {
     return tx(locale, "文件内容与扩展名不符，或文件已损坏。请确认能在本地打开，并重新导出为上传区域支持的格式；只修改文件后缀无效。", "The file contents do not match its extension, or the file is damaged. Check that it opens locally and export it in a format supported by this upload area; renaming the extension does not convert it.");
@@ -1461,9 +1461,15 @@ function formatByteLimit(value: unknown): string | undefined {
   return `${Number.isInteger(megabytes) ? megabytes : megabytes.toFixed(1)} MB`;
 }
 
-function friendlyMessage(message: string, code: string | null, fallback: string): string {
-  const trimmed = message.trim();
-  return trimmed && trimmed !== code && trimmed !== "Unknown API error" ? trimmed : fallback;
+function friendlyMessage(_message: string, _code: string | null, fallback: string): string {
+  // Raw provider/server text is not display copy. Keep classification and
+  // recovery based on the original error, then use the localized description.
+  return fallback;
+}
+
+/** Display text only; callers retain the original error for status and recovery. */
+export function userFacingError(error: unknown, locale: string = "zh-CN"): string {
+  return classifyRecoverableError(error, { locale: locale === "en-US" ? "en-US" : "zh-CN" }).description;
 }
 
 function formatWait(seconds: number, locale: Locale): string {

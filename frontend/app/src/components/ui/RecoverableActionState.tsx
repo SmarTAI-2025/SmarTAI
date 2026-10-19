@@ -47,6 +47,12 @@ export function RecoverableActionState({
   className?: string;
 }) {
   const stopped = info.technicalDetails.some((item) => item.value === "operation_cancelled");
+  // Diagnostic values still drive recovery above; only useful limits appear in the UI.
+  const detailLabels = locale === "en-US"
+    ? ["Retry after", "Page limit", "Character limit", "File-size limit", "Original storage used", "Original storage limit", "Requested upload"]
+    : ["重试等待", "页数上限", "字符上限", "文件上限", "原文件已用", "原文件额度", "本次上传"];
+  const visibleDetails = info.technicalDetails.filter(item => detailLabels.includes(item.label)
+    && /^\d[\d.,\s]*(?:B|KB|MB|GB)?$/.test(item.value));
   const primary = workflowRecovery ? (info.dailyQuotaExhausted ? undefined : { ...workflowRecovery.retry, label: workflowRecovery.retry.label ?? (stopped ? info.actionLabel : workflowRetryLabel(locale)) }) : primaryAction ?? (info.actionHref
     ? { label: info.actionLabel, href: info.actionHref }
     : undefined);
@@ -104,13 +110,13 @@ export function RecoverableActionState({
             </div>
           ) : null}
 
-          {info.technicalDetails.length ? (
+          {visibleDetails.length ? (
             <details className={cn("group", compact ? "mt-3" : "mt-5")}>
               <summary className="w-fit cursor-pointer select-none text-xs font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
                 {locale === "en-US" ? "Technical details" : "技术信息"}
               </summary>
               <dl className="mt-2 grid gap-x-5 gap-y-1.5 rounded-[8px] bg-slate-50 px-3 py-2 text-[11px] dark:bg-slate-950/40 sm:grid-cols-2">
-                {info.technicalDetails.map((item) => (
+                {visibleDetails.map((item) => (
                   <div key={`${item.label}:${item.value}`} className="grid grid-cols-[max-content_minmax(0,1fr)] gap-2">
                     <dt className="text-muted-foreground">{item.label}</dt>
                     <dd className="min-w-0 break-all font-mono text-foreground">{item.value}</dd>

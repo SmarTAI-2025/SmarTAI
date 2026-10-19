@@ -46,15 +46,15 @@ export function RegisterCheckEmailPage() {
             eyebrow={recoveryReason === "expired"
               ? (zh ? "验证请求已过期" : "Verification request expired")
               : (zh ? "注册信息已失效" : "Registration details unavailable")}
-            helper={zh ? "未找到可安全重发的请求" : "No safe resend request is available"}
+            helper={zh ? "注册信息已失效" : "Registration details expired"}
             title={zh ? "请重新填写注册信息" : "Start registration again"}
             description={recoveryReason
               ? (zh
                   ? "原验证请求已过期或不可再用。请重新提交注册信息获取新邮件。"
                   : "The original verification request expired or is no longer usable. Submit registration again for a new email.")
               : (zh
-                  ? "本机没有有效的待验证记录。我们不会猜测 request ID，也不会提供本地预览链接。"
-                  : "There is no valid pending record on this device. We do not guess a request ID or provide a local preview link.")}
+                  ? "请重新填写注册信息，获取新的验证邮件。"
+                  : "Please register again to receive a new verification email.")}
             steps={steps}
             stepsLabel={zh ? "注册进度" : "Registration progress"}
             currentStep={2}

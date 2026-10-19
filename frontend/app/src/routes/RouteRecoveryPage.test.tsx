@@ -14,7 +14,7 @@ it("offers non-mutating recovery without exposing an exception payload", () => {
     expect(screen.getByRole("button", { name: "重新加载页面" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "返回历史任务" })).toHaveAttribute("href", "/history");
     expect(screen.queryByText(/private response detail/)).not.toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("不会自动重新识别或批改");
+    expect(screen.getByRole("alert")).toHaveTextContent("重新加载页面");
   } finally {
     silenceExpectedError.mockRestore();
   }
@@ -29,5 +29,5 @@ it.each([
   render(<RouterProvider router={router} />);
   expect(screen.getByRole("button", { name: "重新加载页面" })).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "返回修改配置" })).toHaveAttribute("href", configurationHref);
-  expect(screen.getByRole("alert")).toHaveTextContent("不会自动重新识别或批改");
+  expect(screen.getByRole("alert")).toHaveTextContent("重新加载页面");
 });

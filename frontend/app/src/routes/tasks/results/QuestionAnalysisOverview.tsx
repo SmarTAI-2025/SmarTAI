@@ -162,7 +162,7 @@ export function QuestionAnalysisOverview({
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 pb-3 text-[11px] text-muted-foreground">
           <span>{tx(locale, `匹配 ${filteredRows.length} / ${rows.length} 道题`, `${filteredRows.length} / ${rows.length} questions matched`)}</span>
           {rows.some((row) => row.knowledgePoints.length === 0) ? (
-            <span>{tx(locale, "知识点只显示后端真实标注；未标注时不由前端猜测。", "Knowledge points are shown only when provided; the UI does not invent them.")}</span>
+            <span>{tx(locale, "部分题目暂无知识点标注。", "Some questions do not have topic labels yet.")}</span>
           ) : null}
         </div>
       </div>

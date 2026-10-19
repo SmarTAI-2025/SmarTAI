@@ -757,7 +757,7 @@ function StudentAnswerReviewForm() {
               />
             </div>
             <div className="mt-1.5 grid gap-0.5 px-1 text-[11px] leading-5 text-muted-foreground">
-              <span>{tx(locale, "搜索只筛选题目；当前学生保持不变。输入中文时会在选词完成后再应用筛选。", "Question search only filters questions; the selected student stays unchanged. IME text is applied after composition finishes.")}</span>
+              <span>{tx(locale, "搜索当前学生的题目。", "Search this student’s questions.")}</span>
               <span className="flex items-center gap-1.5 font-medium text-foreground/70">
                 <Keyboard aria-hidden="true" className="h-3.5 w-3.5" />
                 {t("answerReviewKeyboardHint")}
@@ -854,7 +854,7 @@ function StudentAnswerReviewForm() {
             } }}
           />
           {batchMessage ? <p role="status" className="mb-4 text-sm text-muted-foreground">{batchMessage}</p> : null}
-          {!readOnly && questions.some((question) => !answers.has(question.id)) ? <p className="mb-4 text-xs text-muted-foreground">{tx(locale, "缺失的作答没有识别记录，批量复核不会将其标为已确认；可返回总览重新添加作答。", "Missing responses have no recognition record and are excluded from confirmation. Return to the overview to upload them.")}</p> : null}
+          {!readOnly && questions.some((question) => !answers.has(question.id)) ? <p className="mb-4 text-xs text-muted-foreground">{tx(locale, "缺失作答需逐题处理，可返回总览补充。", "Handle missing answers individually, or return to the overview to add them.")}</p> : null}
           </div>
           </SourceComparisonWorkspace>
         </section>

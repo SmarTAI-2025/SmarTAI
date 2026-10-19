@@ -1,8 +1,9 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { ArrowRight, Check, LoaderCircle } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useStartGrading } from "@/api/hooks/tasks";
-import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
+import { getAPIErrorCode } from "@/api/client";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { cn } from "@/lib/cn";
 import type { ReviewBlocker } from "@/lib/reviewConfirmation";
@@ -70,5 +71,5 @@ export function RetryFailedGrading({ taskId, revision, locale, paused = false }:
   const retry = useStartGrading(); const navigate = useNavigate(); const zh = locale === "zh-CN";
   return <div className="space-y-2"><button type="button" className={reviewActionClass} disabled={retry.isPending} onClick={() => retry.mutate({ taskId, expectedWorkflowRevision: revision, requestId: `retry-${crypto.randomUUID()}`, retryScope: "failed_only" }, { onSuccess: (data) => { if (data.status === "started" || data.status === "already_running") navigate(`/tasks/${taskId}/grading/progress`); } })}>{retry.isPending ? (zh ? "正在启动" : "Starting") : paused ? (zh ? "继续未完成批改" : "Resume incomplete grading") : (zh ? "仅重试失败项" : "Retry failed items")}</button>
     <p className="text-xs text-muted-foreground">{paused ? (zh ? "仅继续未完成的模型批改并使用模型额度；已保存的有效评分、教师分数和评语保留。也可在复核队列中人工补齐并确认。" : "Uses model quota only for unfinished grading. Saved valid grades and teacher edits are retained. You can also complete and confirm items manually in the review queue.") : (zh ? "仅重新批改缺少有效分数的题次并使用模型额度；成功结果、教师分数和评语保留。若仍失败，请手动给分后确认。" : "Uses model quota only for results without valid scores. Successful results and teacher scores/comments are retained. If retry still fails, enter a score before confirming.")}</p>
-    {retry.isError ? <p role="alert" className="text-sm text-red-700">{getAPIErrorCode(retry.error) === "grading_inputs_changed" ? (zh ? "题目、作答或模型配置已改变。请返回批改设置核对后启动新的批改。" : "Questions, answers or model configuration changed. Review grading setup before starting a new run.") : getAPIErrorCode(retry.error) === "grading_retry_unavailable" ? (zh ? "当前没有可重试的失败批改，请刷新页面。" : "No failed grading run is available. Refresh the page.") : normalizeAPIError(retry.error).message}</p> : null}</div>;
+    {retry.isError ? <p role="alert" className="text-sm text-red-700">{getAPIErrorCode(retry.error) === "grading_inputs_changed" ? (zh ? "题目、作答或模型配置已改变。请返回批改设置核对后启动新的批改。" : "Questions, answers or model configuration changed. Review grading setup before starting a new run.") : getAPIErrorCode(retry.error) === "grading_retry_unavailable" ? (zh ? "当前没有可重试的失败批改，请刷新页面。" : "No failed grading run is available. Refresh the page.") : userFacingError(retry.error, locale)}</p> : null}</div>;
 }

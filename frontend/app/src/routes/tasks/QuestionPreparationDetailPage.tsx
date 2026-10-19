@@ -283,7 +283,7 @@ function QuestionPreparationDetailPageForm() {
 
       {readOnly ? <p className="mt-4 rounded-[8px] border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">{tx(locale, "当前任务已进入后续阶段，可浏览和确认复核，不能修改资料正文。", "This task has moved to a later stage. You can review and confirm materials; content editing is unavailable.")}</p> : null}
       {failure ? <div role="alert" className="mt-4 rounded-lg border border-amber-300 p-4 text-sm">
-        <p>{tx(locale, `已确认 ${failure.completed} 道题；第 ${failure.problem.number || failure.problem.q_id} 题未能保存，可能内容已更新或任务正在处理。请重新加载并核对后重试。`, `${failure.completed} questions confirmed; question ${failure.problem.number || failure.problem.q_id} could not be saved. Content may have changed or the task may be busy. Reload and review before retrying.`)}</p>
+        <p>{tx(locale, `已确认 ${failure.completed} 道题；第 ${failure.problem.number || "—"} 题未能保存，可能内容已更新或任务正在处理。请重新加载并核对后重试。`, `${failure.completed} questions confirmed; question ${failure.problem.number || "—"} could not be saved. Content may have changed or the task may be busy. Reload and review before retrying.`)}</p>
         <button type="button" onClick={() => void taskQuery.refetch()} className="mt-2 mr-4 font-semibold text-primary">{tx(locale, "重新加载", "Reload")}</button>
         <button type="button" onClick={() => {
           if (filtered.some((problem) => problem.q_id === failure.problem.q_id)) scrollToQuestion(failure.problem.q_id);
@@ -308,7 +308,7 @@ function QuestionPreparationDetailPageForm() {
               {filtered.map((problem) => {
                 const active = problem.q_id === activeQuestionId;
                 const riskCount = openRiskCount(problem);
-                const number = problem.number || problem.q_id;
+                const number = problem.number || "—";
                 return (
                   <button key={problem.q_id} type="button" aria-current={active ? "true" : undefined} onClick={() => scrollToQuestion(problem.q_id)} className={cn("mb-1 flex min-h-10 w-full items-center justify-between rounded-[7px] px-2.5 text-left text-xs font-semibold transition last:mb-0", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
                     <span className="truncate" title={tx(locale, `第 ${number} 题`, problemLabel(problem))}>{tx(locale, `第 ${number} 题`, problemLabel(problem))}</span>
@@ -341,7 +341,7 @@ function QuestionPreparationDetailPageForm() {
             ))}
 
             <ReviewStageActions
-              note={tx(locale, `共 ${problems.length} 道题；复核确认与进入下一阶段分别操作。`, `${problems.length} questions; confirm reviews and continue as separate actions.`)}
+              note={tx(locale, `共 ${problems.length} 道题`, `${problems.length} questions`)}
               confirmation={<ReviewConfirmButton locale={locale} all confirmed={problems.every(questionReviewConfirmed)} busy={confirming || updateProblem.isPending} onClick={() => void confirmReview(problems)} />}
               back={{ href: overviewHref, label: tx(locale, "返回题目资料总览", "Back to Question Material Overview") }}
               next={{ label: tx(locale, "进入上传作答", "Continue to Upload Submissions"), disabled: confirming || updateProblem.isPending, onClick: () => {
@@ -398,7 +398,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
       <header className="flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-xl font-bold text-foreground">{tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)}</h2>
+            <h2 className="text-xl font-bold text-foreground">{tx(locale, `第 ${problem.number || "—"} 题`, `Question ${problem.number || "—"}`)}</h2>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-muted-foreground dark:bg-slate-800">{questionTypeLabel(problem.type, locale)}</span>
             <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", problem.max_score_review_status === "confirmed" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35")}>{tx(locale, `满分 ${formatScore(problem.max_score ?? 10)} 分`, `${formatScore(problem.max_score ?? 10)} points max`)}</span>
             {problem.question_structure?.subparts.length ? <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 dark:bg-violet-950/30 dark:text-violet-300">{tx(locale, `含 ${problem.question_structure.subparts.length} 个小问 · ${problem.question_structure.subparts.map((part) => part.label).join(" ")}`, `${problem.question_structure.subparts.length} subparts · ${problem.question_structure.subparts.map((part) => part.label).join(" ")}`)}</span> : null}
@@ -410,7 +410,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 max-sm:[&_button]:px-2 max-sm:[&_button]:text-xs! sm:shrink-0">
-          <ReviewConfirmButton title={tx(locale, `第 ${problem.number || problem.q_id} 题`, `Question ${problem.number || problem.q_id}`)} locale={locale} confirmed={questionReviewConfirmed(problem)} blocked={questionReviewNextBlocked(problem)} busy={saving} onClick={() => onConfirm(problem)} />
+          <ReviewConfirmButton title={tx(locale, `第 ${problem.number || "—"} 题`, `Question ${problem.number || "—"}`)} locale={locale} confirmed={questionReviewConfirmed(problem)} blocked={questionReviewNextBlocked(problem)} busy={saving} onClick={() => onConfirm(problem)} />
           <QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} />
         </div>
       </header>
@@ -513,7 +513,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           </div>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">{sourceLabel} · {tx(locale, "小问仍属于同一道大题；若评分标准写出分项分值，合计必须等于本题满分。", "Subparts remain inside one major question. Explicit rubric points must equal this maximum.")}</p>
         </div>
-        {!readOnly ? <button type="button" aria-label={tx(locale, `修改第 ${problem.number || problem.q_id} 题满分与评分标准`, `Edit score and rubric for question ${problem.number || problem.q_id}`)} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(null); }); else setEditing(true); }} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
+        {!readOnly ? <button type="button" aria-label={tx(locale, `修改第 ${problem.number || "—"} 题满分与评分标准`, `Edit score and rubric for question ${problem.number || "—"}`)} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(null); }); else setEditing(true); }} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
           {editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}
           {editing ? tx(locale, "取消", "Cancel") : tx(locale, "修改", "Edit")}
         </button> : null}
@@ -525,7 +525,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
             <span className="mb-1.5 block text-xs font-semibold text-foreground">{tx(locale, "本题满分", "Maximum score")}</span>
             <div className="relative w-36">
               <input
-                aria-label={tx(locale, `第 ${problem.number || problem.q_id} 题满分`, `Maximum score for question ${problem.number || problem.q_id}`)}
+                aria-label={tx(locale, `第 ${problem.number || "—"} 题满分`, `Maximum score for question ${problem.number || "—"}`)}
                 type="number"
                 inputMode="decimal"
                 min="0.01"
@@ -543,7 +543,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           {!scoreValid ? <p id={`${fieldKey}-score-error`} role="alert" className="text-xs text-danger">{scoringValidationMessage(draftSummary, false, locale)}</p> : null}
           <label className="block">
             <span className="mb-1.5 block text-xs font-semibold text-foreground">{tx(locale, "评分标准（与标答步骤对应）", "Rubric (Aligned with Reference Answer Steps)")}</span>
-            <textarea aria-label={tx(locale, `第 ${problem.number || problem.q_id} 题评分标准`, `Rubric for question ${problem.number || problem.q_id}`)} value={criterionDraft} onChange={(event) => { setCriterionDraft(event.target.value); setError(null); }} rows={8} className="w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
+            <textarea aria-label={tx(locale, `第 ${problem.number || "—"} 题评分标准`, `Rubric for question ${problem.number || "—"}`)} value={criterionDraft} onChange={(event) => { setCriterionDraft(event.target.value); setError(null); }} rows={8} className="w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
           </label>
           <RubricPointStatus summary={draftSummary} locale={locale} />
           {error ? <p role="alert" className="text-xs text-danger">{error}</p> : null}
@@ -645,7 +645,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
               ? tx(locale, "保存失败，请重试。", "Save failed. Try again.")
               : field === "solution_code"
                 ? tx(locale, "可直接编辑源码；保存后恢复语法高亮。", "Edit the source code directly; syntax highlighting returns after saving.")
-                : field === "type" ? "" : tx(locale, "编辑态保留原始 Markdown / LaTeX。", "Raw Markdown / LaTeX is preserved while editing.")}</p>
+                : field === "type" ? "" : tx(locale, "支持 Markdown 和 LaTeX。", "Markdown and LaTeX are supported.")}</p>
             <button type="button" disabled={saving || localDraft.formalPending || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存", "Save")}</button>
           </div>
         </div>

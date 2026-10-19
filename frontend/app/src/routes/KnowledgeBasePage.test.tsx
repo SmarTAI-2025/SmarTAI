@@ -99,7 +99,7 @@ describe("KnowledgeBasePage storage quota", () => {
     expect(screen.getByText("5.0 MB")).toBeInTheDocument();
     expect(screen.queryByText("当前单份可上传")).not.toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "知识库空间占用" })).toHaveAttribute("aria-valuenow", "12");
-    expect(screen.getByText("刚删除失败，系统正在后台自动重试；完成前仍计入占用，无需手动操作。")).toBeInTheDocument();
+    expect(screen.getByText("清理未完成，正在重试；完成后释放空间。")).toBeInTheDocument();
     expect(screen.getByText(/保存到个人或课程资料库的内容会长期保留，不会随批改任务删除/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /清理|重试/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: /暂存草稿/ })).not.toBeInTheDocument();

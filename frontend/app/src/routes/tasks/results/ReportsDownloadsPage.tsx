@@ -1,3 +1,4 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import {
   Archive,
   CheckCircle2,
@@ -15,7 +16,6 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { getTaskResultArtifactBlob } from "@/api/tasks";
 import { useDeleteTaskResultArtifact, useGenerateTaskResultArtifacts, useTaskResultArtifacts } from "@/api/hooks/tasks";
-import { normalizeAPIError } from "@/api/client";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -86,7 +86,7 @@ export function ReportsDownloadsPage({
       const blob = await getTaskResultArtifactBlob(taskId, version, artifactId);
       triggerDownload(blob, filename);
     } catch (error) {
-      toast.error(tx(locale, "下载失败", "Download failed"), { description: normalizeAPIError(error).message });
+      toast.error(tx(locale, "下载失败", "Download failed"), { description: userFacingError(error, locale) });
     } finally {
       setDownloading(null);
     }
@@ -97,7 +97,7 @@ export function ReportsDownloadsPage({
     try {
       await deleteMutation.mutateAsync({ taskId, version });
     } catch (error) {
-      toast.error(tx(locale, "删除失败", "Delete failed"), { description: normalizeAPIError(error).message });
+      toast.error(tx(locale, "删除失败", "Delete failed"), { description: userFacingError(error, locale) });
     }
   };
 

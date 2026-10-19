@@ -136,7 +136,7 @@ function SourceOutcomeRow({ source, locale }: { source: SubmissionSourceOutcome;
           <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
             <h3 className="min-w-0 break-all text-xs font-bold text-foreground">{source.file_name}</h3>
             <span className="shrink-0 text-[10px] text-muted-foreground">
-              {source.content_type} · {formatBytes(source.size_bytes, locale)}
+              {source.content_type === "application/pdf" ? "PDF" : source.content_type?.startsWith("image/") ? tx(locale, "图片", "Image") : source.content_type?.startsWith("text/") ? tx(locale, "文本", "Text") : tx(locale, "文件", "File")} · {formatBytes(source.size_bytes, locale)}
             </span>
           </div>
           <p className="mt-1 text-xs font-semibold text-foreground">{copy.title}</p>
@@ -159,13 +159,7 @@ function SourceOutcomeRow({ source, locale }: { source: SubmissionSourceOutcome;
                 {tx(locale, "诊断信息", "Diagnostic details")}
               </summary>
               <dl className="mt-1.5 grid gap-x-4 gap-y-1 rounded-md bg-slate-50 px-2.5 py-2 text-[10px] dark:bg-slate-950/40 sm:grid-cols-2">
-                <TechnicalRow label={tx(locale, "错误代码", "Error code")} value={source.reason_code} />
-                <TechnicalRow label={tx(locale, "原识别代码", "Recognition code")} value={source.recognition_reason_code && source.recognition_reason_code !== source.reason_code ? source.recognition_reason_code : null} />
                 <TechnicalRow label={tx(locale, "处理结果", "Resolution")} value={source.resolution_status === "identity_resolved" ? tx(locale, "教师已确认身份", "Identity confirmed by teacher") : source.resolution_status === "manual_review" ? tx(locale, "等待人工处理", "Awaiting manual review") : source.resolution_status === "manual_resolved" ? tx(locale, "教师已补齐确认", "Completed by teacher") : null} />
-                <TechnicalRow label={tx(locale, "失败阶段", "Failure phase")} value={source.failure_phase} />
-                <TechnicalRow label={tx(locale, "任务编号", "Job ID")} value={source.job_id} />
-                <TechnicalRow label={tx(locale, "来源编号", "Source ID")} value={source.source_id} />
-                <TechnicalRow label={tx(locale, "追踪编号", "Trace ID")} value={source.trace_id} />
                 <TechnicalRow label={tx(locale, "可直接重试", "Retryable")} value={source.retryable ? tx(locale, "是", "Yes") : tx(locale, "否", "No")} />
               </dl>
             </details>

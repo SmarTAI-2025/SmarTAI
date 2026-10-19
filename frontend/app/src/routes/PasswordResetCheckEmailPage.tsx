@@ -32,14 +32,14 @@ export function PasswordResetCheckEmailPage() {
           </span>
           <div>
             <p className="text-xs font-semibold text-primary">{zh ? "检查邮箱" : "Check your email"}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">{zh ? "不透露账号是否存在" : "Account existence stays private"}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">{zh ? "检查你的邮箱" : "Check your email"}</p>
           </div>
         </div>
         <h1 className="mt-5 text-[27px] font-semibold">{zh ? "重置请求已受理" : "Reset request accepted"}</h1>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           {zh
-            ? "如果该邮箱符合条件，我们会发送密码重置邮件。无论账号存在、停用或不存在，此页面都会显示相同结果。"
-            : "If the email is eligible, we send a reset message. This page looks the same whether the account exists, is disabled, or does not exist."}
+            ? "如果该邮箱符合条件，你会收到重置邮件。请检查收件箱和垃圾邮件。"
+            : "If the address is eligible, you will receive a reset email. Check your inbox and spam folder."}
         </p>
         <div className="mt-5 rounded-[10px] border bg-muted/30 p-4">
           <ol className="grid gap-3 text-sm leading-6">

@@ -369,7 +369,7 @@ describe("one-click grading review", () => {
     await waitFor(async () => {
       const loaded = await readPageDraft("review-teacher", scope, objectDraftCodec({ score: "", comment: "" }));
       if (success) expect(loaded.value).toBeNull();
-      else { expect(loaded.value?.score).toBe("9"); expect(score).toHaveValue("9"); expect(screen.getAllByRole("alert").some(el=>el.textContent?.includes("Retry later"))).toBe(true); }
+      else { expect(loaded.value?.score).toBe("9"); expect(score).toHaveValue("9"); expect(screen.getAllByRole("alert").some(el=>el.textContent?.includes("This action did not complete"))).toBe(true); }
     });
   });
   it("loads fresh drafts when another task has the same student and question IDs", async () => {

@@ -27,7 +27,7 @@ describe("FrontierDemoEntryPage", () => {
 
     render(<QueryClientProvider client={new QueryClient()}><I18nProvider><RouterProvider router={router} /></I18nProvider></QueryClientProvider>);
 
-    expect(screen.getByRole("heading", { name: "Entering the live demo" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Starting the demo" })).toBeInTheDocument();
     expect(await screen.findByText("Live route reached")).toBeInTheDocument();
     expect(createFrontierDemoSession).toHaveBeenCalledTimes(1);
   });
@@ -45,8 +45,8 @@ describe("FrontierDemoEntryPage", () => {
 
     render(<QueryClientProvider client={new QueryClient()}><I18nProvider><RouterProvider router={router} /></I18nProvider></QueryClientProvider>);
 
-    expect(await screen.findByText(/此环境尚未启用 Demo 服务/)).toBeInTheDocument();
-    expect(screen.getByText("真实产品 Demo")).toBeInTheDocument();
+    expect(await screen.findByText(/演示暂不可用/)).toBeInTheDocument();
+    expect(screen.getByText("产品演示")).toBeInTheDocument();
     expect(document.querySelector('[data-smartai-app-mark="silver"]')).toBeInTheDocument();
     expect(document.querySelector('[data-smartai-wordmark="white"]')).toBeInTheDocument();
     expect(screen.queryByText("frontier_demo_disabled")).not.toBeInTheDocument();

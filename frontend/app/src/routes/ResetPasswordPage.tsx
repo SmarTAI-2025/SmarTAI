@@ -146,12 +146,11 @@ export function ResetPasswordPage() {
           </span>
           <div>
             <p className="text-xs font-semibold text-primary">{zh ? "账号安全" : "Account security"}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">{zh ? "打开页面不会消费链接" : "Opening this page does not consume the link"}</p>
           </div>
         </div>
         <h1 className="mt-5 text-[27px] font-semibold">{zh ? "设置新密码" : "Set a new password"}</h1>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          {zh ? "提交后旧密码和旧登录状态将失效；不会自动登录。" : "After submission, the old password and sessions are invalidated. This flow does not sign you in."}
+          {zh ? "重置后，请使用新密码重新登录。" : "After resetting, sign in again with your new password."}
         </p>
         <form className="mt-6 grid gap-3.5" onSubmit={handleSubmit}>
           <Field label={zh ? "新密码" : "New password"}>

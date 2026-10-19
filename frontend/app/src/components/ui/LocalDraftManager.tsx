@@ -94,10 +94,9 @@ export function LocalDraftManager({ libraryOnly = false, maxItems, showViewAll =
       <h2 className="text-base font-semibold">{zh ? "暂存草稿" : "Saved drafts"}</h2>
       {showViewAll ? <Link to="/history?view=drafts" className="text-sm font-medium text-primary hover:underline">{zh ? "查看全部草稿" : "View all drafts"}</Link> : null}
     </div>
-    <p className="mt-2 text-xs text-muted-foreground">{zh ? "即将清理的草稿优先，其余按最近暂存排序。" : "Drafts expiring soon appear first, followed by recently saved drafts."}</p>
     <details className="mt-2 text-xs text-muted-foreground">
       <summary className="w-fit cursor-pointer">{zh ? "本机保存 7 天 · 保存说明" : "Kept on this device for 7 days · Storage details"}</summary>
-      <p className="mt-2">{zh ? "仅属于当前账号；正式提交成功后删除对应草稿。退出、切换账号或会话失效会清理本机草稿，请先正式保存需要长期保留的内容。" : "For this account only, removed after successful submission. Sign-out, account changes and session expiry clear local drafts. Submit work you need to keep long term."}</p>
+      <p className="mt-2">{zh ? "草稿仅供当前账号使用。提交、退出登录、切换账号或登录过期后会清理，请及时保存需要保留的内容。" : "Drafts belong to this account. Submission, sign-out, account changes, and session expiry clear them. Save work you need to keep."}</p>
     </details>
     {loading ? <p role="status" className="mt-3 text-sm text-muted-foreground">{t("loading")}</p> : !visible.length && !error ? <p className="mt-3 text-sm text-muted-foreground">{zh ? "没有有效的本地草稿。" : "No valid local drafts."}</p> : <ul className="mt-3 space-y-2">{visible.map((row) => {
       const destination = draftDestination(row.scope);
@@ -105,13 +104,13 @@ export function LocalDraftManager({ libraryOnly = false, maxItems, showViewAll =
       return <li key={row.scope} className="flex flex-wrap items-center justify-between gap-3 border-t py-2 text-sm">
         <div className="min-w-0 flex-1 break-words">
           {destination ? <Link className="text-primary hover:underline" to={destination}>{zh ? "打开草稿" : "Open draft"} · {draftLabel(row, snapshot.taskNames, zh)}</Link> : draftLabel(row, snapshot.taskNames, zh)}
-          <p className="mt-1 text-xs text-muted-foreground">{zh ? "暂存于 " : "Saved "}{new Date(row.savedAt).toLocaleString(locale)} · {(row.bytes / 1048576).toFixed(2)} MiB</p>
+          <p className="mt-1 text-xs text-muted-foreground">{zh ? "暂存于 " : "Saved "}{new Date(row.savedAt).toLocaleString(locale)}</p>
           <p className={`mt-1 text-xs ${expiringSoon ? "font-medium text-amber-700 dark:text-amber-300" : "text-muted-foreground"}`}>
             {expiringSoon ? (zh ? "即将清理 · " : "Expiring soon · ") : null}{zh ? "清理时间：" : "Expires: "}{new Date(row.expires).toLocaleString(locale)}
           </p>
         </div>
         <button type="button" className="shrink-0 rounded border px-3 py-2 hover:bg-muted" onClick={() => {
-          if (owner && window.confirm(zh ? "删除这份本地草稿？正式业务结果不受影响。" : "Delete this local draft? Submitted business results are unchanged.")) {
+          if (owner && window.confirm(zh ? "删除这份草稿？已保存的任务内容不受影响。" : "Delete this draft? Saved task content is unaffected.")) {
             void removePageDraft(owner, row.scope).catch((failure) => setSnapshot(current => current.owner === owner ? { ...current, error: draftError(failure) } : current));
           }
         }}>{zh ? "删除" : "Delete"}</button>

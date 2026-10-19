@@ -68,7 +68,7 @@ describe("GradingSetupPage task-material picker", () => {
     render(<MemoryRouter><KnowledgeSection locale="zh-CN" taskId="task-1" value="all_task_docs" onChange={vi.fn()} /></MemoryRouter>);
     await user.click(screen.getByRole("button", { name: "上传资料" }));
     expect(window.alert).toHaveBeenCalledWith(expect.stringContaining("本任务最多选择 20 份资料"));
-    expect(screen.getByText(/以下资料已加入本任务，无需重复上传/)).toBeInTheDocument();
+    expect(screen.getByText(/已加入本任务，无需重复上传/)).toBeInTheDocument();
     expect(attachMaterial).not.toHaveBeenCalled();
   });
 

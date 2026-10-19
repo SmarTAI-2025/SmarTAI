@@ -31,7 +31,7 @@ const copy = {
   noMatch: ["没有符合当前筛选条件的题次。清空输入可恢复全部结果。", "No responses match this filter. Clear it to restore all results."],
   clear: ["清空筛选", "Clear filter"],
   loadError: ["暂时无法读取批改结果", "Grading results could not be loaded"],
-  loadErrorDescription: ["任务数据没有被修改。请刷新后重试，或从历史任务重新进入。", "Task data was not changed. Refresh or reopen it from History."],
+  loadErrorDescription: ["请刷新重试，或从历史任务重新进入。", "Refresh or reopen the task from History."],
   retry: ["重新读取", "Retry"],
   missingTask: ["缺少任务信息，请从工作台或历史任务重新进入。", "Task information is missing. Reopen it from Workspace or History."],
   loading: ["正在读取批改结果…", "Loading grading results…"],

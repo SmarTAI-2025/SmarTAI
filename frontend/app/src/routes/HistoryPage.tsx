@@ -1,3 +1,4 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { compareValues } from "@/lib/sortValues";
 import { isTaskProcessing } from "@/lib/taskFlow";
 import { useQueries } from "@tanstack/react-query";
@@ -6,7 +7,6 @@ import { getTaskState } from "@/api/tasks";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { normalizeAPIError } from "@/api/client";
 import {
   useDeleteTask,
   useInterpretTaskHistoryQuery,
@@ -117,7 +117,7 @@ function GradingHistoryPanel() {
   const total = orderedTasks?.length ?? data?.total ?? 0;
   const tasks = orderedTasks ? orderedTasks.slice((query.page - 1) * query.page_size, query.page * query.page_size) : data?.items ?? [];
   const hasFilters = countHistoryFilters(query) > 0;
-  const errorMessage = historyQuery.error ? normalizeAPIError(historyQuery.error).message : null;
+  const errorMessage = historyQuery.error ? userFacingError(historyQuery.error, locale) : null;
 
   useEffect(() => {
     if (!data || total <= 0) return;
@@ -207,7 +207,7 @@ function GradingHistoryPanel() {
       await deleteTask.mutateAsync(task.task_id);
       toast.success(t("historyDeleteSuccess"));
     } catch (error) {
-      toast.error(normalizeAPIError(error).message);
+      toast.error(userFacingError(error, locale));
     } finally {
       setDeletingTaskId(null);
     }

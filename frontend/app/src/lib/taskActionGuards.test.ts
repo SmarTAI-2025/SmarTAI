@@ -41,7 +41,7 @@ describe("task contract compatibility", () => {
       detail: { code: "submission_recognition_needs_review" },
     }), { locale: "en-US", taskId: "task" });
     expect(result.actionHref).toContain("submissions?filter=review");
-    expect(result.description).toContain("student");
+    expect(result.description).toContain("flagged answers");
   });
   it.each(["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout"])(
     "offers range adjustment for %s without claiming a fresh submit", (code) => {
@@ -55,7 +55,7 @@ describe("task contract compatibility", () => {
       detail: { code: "recognition_already_running" },
     }), { locale: "en-US", taskId: "task" });
     expect(result.actionKind).toBe("refresh");
-    expect(result.description).toContain("No duplicate request");
+    expect(result.description).toContain("Check its progress");
   });
   it.each(["stale_revision", "task_workflow_changed", "version_conflict", "workflow_revision_conflict"])(
     "treats %s as a workflow revision conflict",
@@ -287,7 +287,7 @@ describe("background task failure guidance", () => {
     });
 
     expect(info.title).toBe("没有提取到任何作答内容");
-    expect(info.description).toContain("不同于题号不匹配");
+    expect(info.description).toContain("未找到作答内容");
     expect(info.actionKind).toBe("reupload");
   });
 
@@ -299,7 +299,7 @@ describe("background task failure guidance", () => {
     });
 
     expect(info.title).toBe("原文件保存未完成");
-    expect(info.description).toContain("无法确认原文件已经安全保存");
+    expect(info.description).toContain("原文件未能保存");
     expect(info.description).not.toContain("原文件已经保存");
     expect(info.actionKind).toBe("reupload");
   });
@@ -308,7 +308,7 @@ describe("background task failure guidance", () => {
     const info = classifyRecoverableError("provider_unreachable", { locale: "zh-CN" });
 
     expect(info.title).toBe("无法连接模型服务");
-    expect(info.description).toContain("VPN");
+    expect(info.description).toContain("检查模型配置");
     expect(info.actionKind).toBe("retry");
     expect(info.tone).toBe("warning");
   });
@@ -332,8 +332,8 @@ describe("background task failure guidance", () => {
     });
     expect(info.title).toBe(locale === "zh-CN" ? "模型服务暂时不可用" : "The model service is temporarily unavailable");
     expect(info.description).toContain("HTTP 503");
-    expect(info.description).toContain(locale === "zh-CN" ? "系统不会自动重试" : "will not retry automatically");
-    expect(info.description).toContain(locale === "zh-CN" ? "计费尚无法确认" : "Billing for the previous call is unconfirmed");
+    expect(info.description).toContain(locale === "zh-CN" ? "重试可能再次消耗额度" : "Retrying may use additional quota");
+    expect(info.description).toContain(locale === "zh-CN" ? "计费尚无法确认" : "billing status is unknown");
     expect(info.technicalDetails.map((item) => item.value)).toContain("503");
     expect(info.actionKind).toBe("refresh");
   });
@@ -353,7 +353,7 @@ describe("background task failure guidance", () => {
     });
     expect(info.description).toContain(locale === "zh-CN" ? "PDF 第 8 页" : "PDF pages: 8");
     expect(info.description).toContain("RECITATION");
-    expect(info.description).toContain(locale === "zh-CN" ? "系统不会自动重试" : "will not retry automatically");
+    expect(info.description).toContain(locale === "zh-CN" ? "重试可能再次消耗额度" : "Retrying may use additional quota");
     expect(info.actionKind).toBe("refresh");
   });
 
@@ -468,9 +468,9 @@ describe("background task failure guidance", () => {
   it("routes an unsafe image payload back to file selection", () => {
     const info = classifyRecoverableError("provider_image_payload_invalid", { locale: "zh-CN" });
 
-    expect(info.title).toBe("图片无法组成安全模型请求");
+    expect(info.title).toBe("图片无法读取");
     expect(info.actionKind).toBe("reupload");
-    expect(info.description).toContain("没有把无法验证的图片负载发送给模型");
+    expect(info.description).toContain("JPG、PNG 或 WebP");
   });
 
   it("routes a vision-required background failure to BYOK with OCR-specific copy", () => {
@@ -507,7 +507,7 @@ describe("background task failure guidance", () => {
     expect(info.actionKind).toBe("retry");
   });
 
-  it("keeps a stable grading failure code and job id visible", () => {
+  it("retains grading failure diagnostics for recovery", () => {
     const info = classifyRecoverableError("grading_failed", {
       locale: "zh-CN",
       phase: "error",
@@ -515,7 +515,7 @@ describe("background task failure guidance", () => {
     });
 
     expect(info.title).toBe("本次批改没有完成");
-    expect(info.description).toContain("任务资料仍然保留");
+    expect(info.description).toContain("任务资料已保留");
     expect(info.description).toContain("联系管理员");
     expect(info.technicalDetails).toContainEqual({ label: "错误代码", value: "grading_failed" });
     expect(info.technicalDetails).toContainEqual({ label: "任务编号", value: "run-1" });
@@ -544,7 +544,7 @@ describe("background task failure guidance", () => {
     });
 
     expect(info.title).toBe("批改结果保存失败");
-    expect(info.description).toContain("数据库");
+    expect(info.description).toContain("结果未能完整保存");
     expect(info.actionKind).toBe("retry");
   });
 
@@ -584,4 +584,13 @@ describe("unusable upload recovery", () => {
       expect(info.description).toContain(expected);
     }
   });
+});
+
+it.each(["zh-CN", "en-US"] as const)("keeps raw unknown server details out of copy while preserving recovery (%s)", locale => {
+  const error = new APIError(409, "SELECT private_column FROM internal_table; task=asg_private", { detail: { code: "future_conflict" } });
+  const info = classifyRecoverableError(error, { locale });
+  expect(info.actionKind).toBe("retry");
+  expect(info.description).not.toMatch(/SELECT|internal_table|asg_private|future_conflict/);
+  expect(error.status).toBe(409);
+  expect(error.message).toContain("SELECT");
 });

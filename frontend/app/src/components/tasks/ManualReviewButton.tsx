@@ -1,9 +1,9 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTask } from "@/api/hooks/tasks";
 import { continueTaskRun, manuallyCompleteQuestionPreparation, manuallyCompleteSubmissionRecognition } from "@/api/tasks";
-import { normalizeAPIError } from "@/api/client";
 import { useI18n } from "@/i18n/I18nProvider";
 import { Button } from "@/components/ui/Button";
 import { manualReviewDestination } from "@/lib/taskFlow";
@@ -55,7 +55,7 @@ function ManualReviewAction({ taskId, task, jobId, failedStage }: { taskId: stri
       }
       await cache.invalidateQueries({ queryKey: ["tasks"] });
       navigate(href);
-    } catch (caught) { setError(normalizeAPIError(caught).message); }
+    } catch (caught) { setError(userFacingError(caught, locale)); }
     finally { setBusy(false); }
   }
   return <div className="mt-3"><Button variant="secondary" disabled={busy} onClick={() => void open()}>{locale === "zh-CN" ? "人工继续处理" : "Continue manually"}</Button>{error ? <p role="alert" className="mt-2 text-xs text-red-700">{error}</p> : null}</div>;
