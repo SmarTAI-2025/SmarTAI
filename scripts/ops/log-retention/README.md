@@ -8,6 +8,8 @@ courses, usage and guest identity are removed only after producer draining and
 verified storage deletion. Failures retain a retryable request. Daily global
 admission/model counters survive individual session cleanup. Ordinary teacher
 closure, mailbox verification, grading and source ownership are unchanged.
+Ready requests are ordered by retry eligibility (creation time for untried
+requests), so one failed or draining session cannot monopolize each poll.
 
 Temporary task/source copies still use the existing teacher pipeline and are
 reclaimed with the session; this change does not redesign immutable fixture
@@ -54,7 +56,11 @@ configuration and reload/restart those same services if validation fails.
 No application or database restart is required. The response-based access-log
 filter activates only when the corresponding application code is deployed.
 
-Journals retain up to 14 days with a 100 MiB budget and daily file rotation.
+Persistent journals retain up to 14 days with a 512 MiB budget, a 4 GiB
+filesystem free-space requirement and daily file rotation. Runtime journals
+keep their separate 100 MiB budget to avoid increasing memory-backed storage.
+The 4 GiB value preserves this host's existing default free-space protection.
+These are usage ceilings, not preallocated storage or guaranteed history.
 Active/preallocated journal files and file-granularity deletion mean this is
 not an exact byte/second boundary. Text logs rotate daily or above 10 MiB at
 the next hourly check, retain at most 14 archives and discard archives over

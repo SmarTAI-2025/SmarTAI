@@ -108,6 +108,58 @@ def test_failed_object_delete_retains_durable_retry_until_verified_empty(enabled
         assert session.scalar(select(FrontierDemoDailyUsageRecord)).sessions == 1
 
 
+@pytest.mark.parametrize("blocked_by", ["storage_failure", "task_cleanup"])
+def test_failed_or_waiting_guest_does_not_starve_healthy_guest(tmp_path, monkeypatch, blocked_by):
+    from backend.db.models import AssignmentRecord
+    from backend.services import task_facade
+    monkeypatch.setattr(settings, "frontier_demo_session_cooldown_seconds", 0)
+    owner_a, owner_b = frontier_demo.issue_user().id, frontier_demo.issue_user().id
+    storage = LocalStorage(tmp_path)
+    key_a, key_b = f"users/{owner_a}/blocked", f"users/{owner_b}/healthy"
+    storage.save(key_a, b"blocked guest")
+    storage.save(key_b, b"healthy guest")
+    monkeypatch.setattr(account_closure, "get_storage", lambda: storage)
+    if blocked_by == "task_cleanup":
+        task_facade.create_task(owner_id=owner_a, name="synthetic waiting task",
+            semester_id=None, course_id=None, idempotency_key="waiting-task")
+    real_delete = storage.delete
+    attempts = []
+    def delete_one(key):
+        attempts.append(key)
+        if key == key_a:
+            raise OSError("synthetic permission failure")
+        real_delete(key)
+    monkeypatch.setattr(storage, "delete", delete_one)
+    # Advance actual clock eligibility; do not overwrite retry timestamps.
+    now = [time.time()]
+    monkeypatch.setattr(account_closure.time, "time", lambda: now[0])
+    frontier_demo.queue_cleanup(owner_id=owner_a)
+    now[0] += 0.1
+    frontier_demo.queue_cleanup(owner_id=owner_b)
+    assert account_closure.process_one_closure(frontier_only=True, raise_errors=False)
+    now[0] += 6  # The failed/waiting head is eligible again on the next poll.
+    assert account_closure.process_one_closure(frontier_only=True)
+    with session_scope() as session:
+        assert session.get(UserRecord, owner_a) is not None
+        assert session.get(UserRecord, owner_b) is None
+        assert session.scalar(select(AccountClosureRecord).where(AccountClosureRecord.user_id == owner_a)) is not None
+        assert session.scalar(select(AccountClosureRecord).where(AccountClosureRecord.user_id == owner_b)) is None
+        assert session.scalar(select(FrontierDemoDailyUsageRecord)).sessions == 2
+    assert storage.exists(key_a) and not storage.exists(key_b)
+    assert key_b in attempts
+    # Once the blocking condition is repaired, the older guest still retries.
+    if blocked_by == "task_cleanup":
+        with session_scope() as session:
+            for row in session.scalars(select(AssignmentRecord).where(AssignmentRecord.teacher_id == owner_a)):
+                session.delete(row)
+    monkeypatch.setattr(storage, "delete", real_delete)
+    now[0] += 6
+    assert account_closure.process_one_closure(frontier_only=True, raise_errors=True)
+    with session_scope() as session:
+        assert session.get(UserRecord, owner_a) is None
+    assert not storage.exists(key_a)
+
+
 def test_guest_worker_does_not_process_formal_closure_or_delete_misclassified_user(enabled):
     with session_scope() as session:
         session.add(UserRecord(id="formal", username="formal", role="teacher", password_hash="hash", created_at=1, updated_at=1))

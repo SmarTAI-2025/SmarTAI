@@ -8,6 +8,12 @@ from backend.tests.test_postgres_integration import pg_database
 pytestmark = pytest.mark.skipif(not os.environ.get("SMARTAI_TEST_POSTGRES_URL"), reason="Requires disposable PostgreSQL")
 
 
+@pytest.mark.parametrize("blocked_by", ["storage_failure", "task_cleanup"])
+def test_demo_cleanup_retry_order_does_not_starve_postgres(pg_database, monkeypatch, tmp_path, blocked_by):
+    from backend.tests.test_frontier_demo_cleanup import test_failed_or_waiting_guest_does_not_starve_healthy_guest
+    test_failed_or_waiting_guest_does_not_starve_healthy_guest(tmp_path, monkeypatch, blocked_by)
+
+
 def test_demo_expiry_serializes_reclaims_and_preserves_global_budget(pg_database, monkeypatch, tmp_path):
     from sqlalchemy import select
     from backend.config import settings

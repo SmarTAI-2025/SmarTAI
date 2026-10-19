@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from backend.db.session import session_scope
 from backend.db.models import (AccountClosureRecord, BlockedRegistrationEmailRecord, UserRecord,
     AssignmentRecord, KnowledgeDocumentRecord, KnowledgeStorageRecord, StoredFileRecord,
@@ -28,7 +28,12 @@ def _claim(*, frontier_only=False):
         )
         if frontier_only:
             candidates = candidates.where(AccountClosureRecord.mode == "frontier_demo")
-        row = session.scalar(candidates.order_by(AccountClosureRecord.created_at).limit(1).with_for_update())
+        # Retry eligibility becomes the queue time after a failed/waiting pass.
+        # An old failing guest must not reclaim every poll ahead of ready peers.
+        row = session.scalar(candidates.order_by(
+            func.coalesce(AccountClosureRecord.lease_until, AccountClosureRecord.created_at),
+            AccountClosureRecord.created_at, AccountClosureRecord.id,
+        ).limit(1).with_for_update())
         if row is None:
             return None
         row.lease_token = uuid.uuid4().hex
