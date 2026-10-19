@@ -131,6 +131,7 @@ class InitializeContentLanguageRequest(BaseModel):
 class UpdateProblemRequest(BaseModel):
     expected_workflow_revision: int | None = Field(default=None, ge=0)
     number: str | None = Field(default=None, min_length=1, max_length=64)
+    type: str | None = Field(default=None, min_length=1, max_length=64)
     stem: str | None = None
     criterion: str | None = None
     max_score: float | None = Field(

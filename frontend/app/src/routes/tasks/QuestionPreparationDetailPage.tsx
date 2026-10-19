@@ -3,7 +3,8 @@ import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
 import { questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewBlocked, questionReviewNextBlocked, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
-import { questionTypeLabel, testCaseLabel } from "@/lib/reviewLabels";
+import { QUESTION_TYPES, questionTypeLabel, testCaseLabel } from "@/lib/reviewLabels";
+import { normalizeFilterType } from "@/lib/taskFilterIntent";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -43,7 +44,7 @@ import { isProgrammingProblem } from "@/lib/questionPreparation";
 import { parseScoreHundredths, summarizeRubricPoints } from "@/lib/rubricPoints";
 import type { ProblemInfo, TestCase } from "@/types";
 
-type TextFieldKey = "number" | "stem" | "reference_answer" | "solution_code";
+type TextFieldKey = "number" | "type" | "stem" | "reference_answer" | "solution_code";
 
 const EMPTY_TEST_CASES: TestCase[] = [];
 
@@ -417,7 +418,10 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
 
 
       <div className="space-y-0 divide-y">
-        <EditableTextField fieldKey={`${problem.q_id}:number`} label={tx(locale, "题号", "Question number")} value={problem.number ?? ""} problem={problem} field="number" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
+        <div className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+          <EditableTextField fieldKey={`${problem.q_id}:number`} label={tx(locale, "题号", "Question number")} value={problem.number ?? ""} problem={problem} field="number" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
+          <EditableTextField fieldKey={`${problem.q_id}:type`} label={tx(locale, "题型", "Question type")} value={problem.type ?? "other"} problem={problem} field="type" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
+        </div>
         <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Question")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
 
         <div className="grid divide-y md:grid-cols-2 md:divide-x md:divide-y-0">
@@ -633,19 +637,22 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
       </div>
       {editing ? (
         <div className="mt-3">
-          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} aria-label={label} rows={field === "number" ? 1 : field === "stem" ? 7 : compact ? 6 : 8} className={cn("w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15", field === "solution_code" && "font-mono text-xs")} />
+          {field === "type" ? <select value={normalizeFilterType(draft)} onChange={event => setDraft(event.target.value)} aria-label={label} className="h-[50px] w-full rounded-[8px] border bg-background px-4 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15">
+            {!QUESTION_TYPES.includes(normalizeFilterType(draft)) ? <option value={normalizeFilterType(draft)}>{questionTypeLabel(draft, locale)}</option> : null}
+            {QUESTION_TYPES.map(type => <option key={type} value={type}>{questionTypeLabel(type, locale)}</option>)}
+          </select> : <textarea value={draft} onChange={(event) => setDraft(event.target.value)} aria-label={label} rows={field === "number" ? 1 : field === "stem" ? 7 : compact ? 6 : 8} className={cn("w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15", field === "solution_code" && "font-mono text-xs")} />}
           <div className="mt-3 flex items-center justify-between gap-3">
             <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error
               ? tx(locale, "保存失败，请重试。", "Save failed. Try again.")
               : field === "solution_code"
                 ? tx(locale, "可直接编辑源码；保存后恢复语法高亮。", "Edit the source code directly; syntax highlighting returns after saving.")
-                : tx(locale, "编辑态保留原始 Markdown / LaTeX。", "Raw Markdown / LaTeX is preserved while editing.")}</p>
+                : field === "type" ? "" : tx(locale, "编辑态保留原始 Markdown / LaTeX。", "Raw Markdown / LaTeX is preserved while editing.")}</p>
             <button type="button" disabled={saving || localDraft.formalPending || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存", "Save")}</button>
           </div>
         </div>
       ) : (
-        <div className={cn("mt-3 min-h-[92px] rounded-[8px] bg-slate-50 px-4 py-3 text-sm leading-6 dark:bg-slate-950/20", compact && "min-h-[72px]")}>
-          {value.trim() ? (field === "solution_code"
+        <div className={cn("mt-3 min-h-[92px] rounded-[8px] bg-slate-50 px-4 py-3 text-sm leading-6 dark:bg-slate-950/20", compact && "min-h-[72px]", (field === "number" || field === "type") && "min-h-[50px]")}>
+          {field === "type" ? questionTypeLabel(value, locale) : value.trim() ? (field === "solution_code"
             ? <SyntaxHighlightedCode code={value} languageHint={`${problem.type}\n${problem.stem}`} locale={locale} />
             : <MarkdownMath>{value}</MarkdownMath>) : <p className="text-sm text-muted-foreground">{tx(locale, "SmarTAI 正在生成或本次处理未成功，请在风险总览查看。", "SmarTAI generation is pending or failed; check the risk overview.")}</p>}
         </div>

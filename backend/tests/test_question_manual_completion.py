@@ -205,9 +205,10 @@ async def test_regular_recognized_question_number_uses_the_same_editor(monkeypat
     await manual(owner, task, job, revision)
     original = task_facade.get_task(task_id=task, owner_id=owner)
     changed = task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1",
-        expected_revision=original["workflow_revision"], patch={"number": "1.1.5"})
+        expected_revision=original["workflow_revision"], patch={"number": "1.1.5", "type": "other"})
     question = changed["problem"]
     assert question["number"] == "1.1.5" and question["q_id"] == "q1"
+    assert question["type"] == "other"
     assert question["stem"] == original["problem_data"]["q1"]["stem"]
     assert question["reference_answer"] == original["problem_data"]["q1"]["reference_answer"]
     assert question["criterion"] == original["problem_data"]["q1"]["criterion"]
@@ -215,3 +216,5 @@ async def test_regular_recognized_question_number_uses_the_same_editor(monkeypat
     for value in (" ", "x" * 65):
         with pytest.raises(ValidationError):
             task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1", patch={"number": value})
+        with pytest.raises(ValidationError):
+            task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1", patch={"type": value})

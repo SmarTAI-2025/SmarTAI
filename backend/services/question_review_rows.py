@@ -34,7 +34,7 @@ def add_question(*, task_id: str, owner_id: str, expected_revision: int) -> dict
             {"origin": "teacher_review", "presentation": {"review_status": "needs_review"}},
             number=number, order_index=order, stem="", criterion="", max_score=10)
         session.add(AssignmentQuestionRecord(id=f"q_{uuid.uuid4().hex[:12]}", assignment_id=task_id,
-            q_id=q_id, order_index=order, number=number, type="short", stem="", criterion="", max_score=10,
+            q_id=q_id, order_index=order, number=number, type="other", stem="", criterion="", max_score=10,
             reference_answer="", source=source, version=1, created_at=now, updated_at=now))
         workflow.workflow_revision += 1
         workflow.updated_at = now

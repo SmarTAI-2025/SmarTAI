@@ -100,7 +100,7 @@ def blank_manual_question_packages(operation, count):
         q_id = f"manual-{index + 1}"
         marker = _issue(q_id, "source", "manual_completion_required", "warning", [])
         marker["details"] = {"required_fields": ["stem", "criterion"], "reason": operation.error_code}
-        packages[q_id] = dict(q_id=q_id, number=str(index + 1), type="short", stem="",
+        packages[q_id] = dict(q_id=q_id, number=str(index + 1), type="other", stem="",
             criterion="", reference_answer="", max_score=10, review_status="needs_review",
             preparation_issues=[marker])
     return packages
