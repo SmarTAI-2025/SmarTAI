@@ -191,7 +191,12 @@ export function FrontierLiveDemoPage() {
           return;
         }
         if (state.problem_count > 0 || state.status === "problems_ready" || isTaskAwaitingGrading(state.status)) {
-          const task = await run.step(() => getTask(restoredTaskId));
+          let task = await run.step(() => getTask(restoredTaskId));
+          if (state.status === "problems_ready" || isTaskAwaitingGrading(state.status)) {
+            const reviewed = await readCurrentReview(run, restoredTaskId, state.status === "problems_ready" ? "questions" : "submissions", { task, state });
+            if (!reviewed) return;
+            task = reviewed.task;
+          }
           const prepared = Object.values(task.problem_data);
           const confirmed = generatedMaterialsConfirmed(prepared);
           setTeacherReviewTask(task);
@@ -352,7 +357,9 @@ export function FrontierLiveDemoPage() {
     setError(null);
     try {
       markStep("grading", "active", tx(locale, "正在启动批改…", "Starting grading…"));
-      const current = await run.step(() => getTask(taskId));
+      const reviewed = await readCurrentReview(run, taskId, "submissions");
+      if (!reviewed) return;
+      const current = reviewed.task;
       setSubmissionReviewTask(current);
       const blockers = [...demoQuestionReviewBlockers(current, locale), ...submissionReviewBlockers(current, locale)];
       if (blockers.length) {
@@ -378,6 +385,38 @@ export function FrontierLiveDemoPage() {
     } finally {
       finishRun(run);
     }
+  }
+
+  async function readCurrentReview(run: DemoRun, currentTaskId: string, stage: "questions" | "submissions", loaded?: { task: Task; state: TaskStateSnapshot }) {
+    // Content and workflow reads must describe the same revision and stage.
+    // A later state alone must never authorize work against earlier content.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const task = loaded?.task ?? await run.step(() => getTask(currentTaskId));
+      const state = loaded && task.status === loaded.state.status && task.workflow_revision === loaded.state.workflow_revision
+        ? loaded.state : await run.step(() => getTaskState(currentTaskId));
+      if (!await reviewStageIsCurrent(run, currentTaskId, stage, state)) return null;
+      if (task.status === state.status && task.workflow_revision === state.workflow_revision) return { task, state };
+      loaded = undefined;
+    }
+    throw new Error(tx(locale, "任务内容已更新，请重试读取最新状态。", "Task content changed. Retry to load the latest state."));
+  }
+
+  async function reviewStageIsCurrent(run: DemoRun, currentTaskId: string, stage: "questions" | "submissions", state: TaskStateSnapshot) {
+    // Another tab can restart recognition while this review remains open.
+    // Reconcile persisted workflow state before classifying content as a human blocker.
+    setSnapshot(state);
+    if (!isTaskAwaitingGrading(state.status)) setSubmissionReviewTask(null);
+    if (stage === "questions" ? state.status === "problems_ready" : isTaskAwaitingGrading(state.status)) return true;
+    activeStepRef.current = null;
+    setSteps(stepsFromSnapshot(state, locale));
+    if (state.status === "error") {
+      const detail = state.progress?.error_detail || state.error || "workflow_error";
+      throw new Error(liveDemoWorkflowFailureMessage(locale, detail));
+    }
+    if (!isTaskPaused(state.status) && state.status !== "draft") {
+      await continueWorkflow(run, currentTaskId, state.status);
+    }
+    return false;
   }
 
   async function continueWorkflow(run: DemoRun, currentTaskId: string, startingStatus: TaskStatus, continueToSubmissions = false) {
@@ -419,20 +458,19 @@ export function FrontierLiveDemoPage() {
     }
 
     if (status === "problems_ready") {
-      const recognizedTask = await run.step(() => getTask(currentTaskId));
+      const reviewed = await readCurrentReview(run, currentTaskId, "questions");
+      if (!reviewed) return;
+      const recognizedTask = reviewed.task;
       setTeacherReviewTask(recognizedTask);
       const alreadyConfirmed = generatedMaterialsConfirmed(Object.values(recognizedTask.problem_data));
       setMaterialsConfirmed(alreadyConfirmed);
       // Recheck persisted content on every explicit continuation, including
       // edits made in another tab since the Demo was loaded.
       if (!continueToSubmissions || demoQuestionReviewBlockers(recognizedTask, locale).length) {
-        const recognizedState = await run.step(() => getTaskState(currentTaskId));
-        setSnapshot(recognizedState);
-        markStep("questions", "complete", tx(locale, "题目、标答与评分资料已生成，可继续识别作答。", "Questions, answers, and rubrics are ready. Continue to submissions."), recognizedState.extract_job_id);
+        markStep("questions", "complete", tx(locale, "题目、标答与评分资料已生成，可继续识别作答。", "Questions, answers, and rubrics are ready. Continue to submissions."), recognizedTask.extract_job_id);
         return;
       }
-      const afterQuestions = await run.step(() => getTaskState(currentTaskId));
-      setSnapshot(afterQuestions);
+      const afterQuestions = reviewed.state;
       markStep("questions", "complete", tx(locale, `已识别 ${afterQuestions.problem_count} 题，继续识别作答`, `${afterQuestions.problem_count} questions recognized; continuing to submissions`), afterQuestions.extract_job_id);
 
       markStep("submissions", "active", tx(locale, "正在上传原始排版、混排与手写作答…", "Uploading raw typeset, mixed, and handwritten submissions…"));
@@ -448,10 +486,10 @@ export function FrontierLiveDemoPage() {
     }
 
     if (isTaskAwaitingGrading(status)) {
-      const recognized = await run.step(() => getTaskState(currentTaskId));
-      const recognizedTask = await run.step(() => getTask(currentTaskId));
-      setSnapshot(recognized);
-      setSubmissionReviewTask(recognizedTask);
+      const reviewed = await readCurrentReview(run, currentTaskId, "submissions");
+      if (!reviewed) return;
+      const recognized = reviewed.state;
+      setSubmissionReviewTask(reviewed.task);
       markStep("submissions", "complete", tx(locale, `已识别 ${recognized.student_count} 份作答`, `${recognized.student_count} submissions recognized`), recognized.parse_job_id);
       return;
     } else if (status === "grading") {

@@ -42,7 +42,17 @@ for (const locale of ["zh-CN", "en-US"]) {
         if (path.endsWith("/problems/q1")) {
           const patch = request.postDataJSON();
           expect(patch.expected_workflow_revision).toBe(revision);
+          const repairedEmptyStem = !problems.q1.stem.trim() && Boolean(patch.stem?.trim());
           Object.assign(problems.q1, patch);
+          if (repairedEmptyStem) {
+            problems.q1.review_status = "needs_review";
+            problems.q1.preparation_issues = [{ issue_id: "required-repair-q1", q_id: "q1", field: "stem",
+              severity: "blocking", status: "resolved", code: "required_review_confirmation" }];
+          }
+          if (patch.review_status === "confirmed") {
+            expect(problems.q1.stem).toBe("Saved question text");
+            problems.q1.max_score_review_status = "confirmed";
+          }
           return json({ status: "ok", q_id: "q1", problem: problems.q1, workflow_revision: ++revision });
         }
         if (path.endsWith("/students/S1/identity")) {
@@ -87,8 +97,17 @@ for (const locale of ["zh-CN", "en-US"]) {
     await expect(firstQuestion.getByText("Saved question text", { exact: true })).toBeVisible();
     await returnToDemo();
     const continueButton = page.getByRole("button", { name: zh ? "继续识别作答" : "Continue to submissions", exact: true });
-    await expect(continueButton).toBeEnabled();
+    // Real repairs retain a required-confirmation marker until the teacher confirms.
+    await expect(questionReview).toBeVisible();
+    await expect(continueButton).toHaveCount(0);
     expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`]);
+    await questionReview.click();
+    await page.locator(`a[href="/tasks/${task.task_id}/questions/q1/content#question-q1"]`).first().click();
+    await firstQuestion.getByRole("button", { name: zh ? "第 1 题 · 待确认" : "Question 1 · Confirm review", exact: true }).click();
+    await expect(firstQuestion.getByRole("button", { name: zh ? "第 1 题 · 已确认" : "Question 1 · Confirmed", exact: true })).toBeVisible();
+    await returnToDemo();
+    await expect(continueButton).toBeEnabled();
+    expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`, `/tasks/${task.task_id}/problems/q1`]);
     await continueButton.click();
     const submissionReview = page.getByRole("alert").getByRole("link", { name: zh ? "校对作答" : "Review submissions", exact: true });
     await expect(submissionReview).toHaveAttribute("href", `/tasks/${task.task_id}/submissions`);
@@ -102,11 +121,11 @@ for (const locale of ["zh-CN", "en-US"]) {
     await returnToDemo();
     const grade = page.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first();
     await expect(grade).toBeEnabled();
-    expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`, `/tasks/${task.task_id}/parse_submissions`, `/tasks/${task.task_id}/students/S1/identity`]);
+    expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`, `/tasks/${task.task_id}/problems/q1`, `/tasks/${task.task_id}/parse_submissions`, `/tasks/${task.task_id}/students/S1/identity`]);
     await grade.click();
     await expect(page.getByRole("heading", { name: zh ? "从真实分数看到班级表现" : "See class performance from live scores", exact: true })).toBeVisible();
     expect(writes.at(-1)).toBe(`/tasks/${task.task_id}/grade`);
-    expect(writes).toHaveLength(4);
+    expect(writes).toHaveLength(5);
     expect(errors).toEqual([]);
   });
 }
@@ -122,6 +141,57 @@ async function guest(page: Page) {
     sessionStorage.setItem("smartai_frontier_tasks", '["asg_browser_demo"]');
   });
   return errors;
+}
+
+for (const stage of ["problems_ready", "submissions_ready"] as const) for (const locale of ["zh-CN", "en-US"]) {
+  test(`stale ${stage} review retries the latest recognition failure inline (${locale})`, async ({ page }) => {
+    const errors = await guest(page), zh = locale === "zh-CN", submissions = stage === "submissions_ready";
+    await page.setViewportSize(zh ? { width: 1440, height: 1000 } : { width: 390, height: 844 });
+    await page.addInitScript(value => localStorage.setItem("smartai_locale", value), locale);
+    let status: Task["status"] = stage, revision = 1;
+    const writes: { path: string; body: Record<string, unknown> }[] = [];
+    const retryPath = `/tasks/${task.task_id}/${submissions ? "submission-recognition" : "question-preparation"}/recognition-job/retry`;
+    const current = () => ({ ...task, status, workflow_revision: revision,
+      error: status === "error" ? "provider_timeout" : null, last_failed_job_id: status === "error" ? "recognition-job" : null,
+      extract_job_id: submissions ? "successful-questions" : "recognition-job", parse_job_id: submissions ? "recognition-job" : null,
+      problem_data: status === "error" && !submissions ? {} : task.problem_data,
+      student_data: submissions && status !== "error" ? { S1: { stu_id: "S1", stu_name: "Example", identity_status: "matched", stu_ans: [] } } : {},
+    });
+    await page.route(`${backend}/**`, async route => {
+      const request = route.request(), path = new URL(request.url()).pathname, json = (value: unknown) => route.fulfill({ json: value });
+      if (path === "/auth/me") return json({ id: "guest-owner", username: "Guest", role: "teacher", is_active: true });
+      if (request.method() !== "GET") {
+        writes.push({ path, body: request.postDataJSON() });
+        expect(path).toBe(retryPath);
+        expect(writes[0].body.expected_workflow_revision).toBe(2);
+        expect(writes[0].body).not.toHaveProperty("acknowledge_possible_duplicate_call");
+        status = stage; revision = 3;
+        return json({ status: "started", job_id: "recognition-job" });
+      }
+      if (path === `/tasks/${task.task_id}` || path.endsWith("/state")) return json(current());
+      if (path.endsWith("/grading-setup")) return json({ task_id: task.task_id, workflow_revision: revision, configured: true,
+        grading_setup: { primary_provider_id: "demo:vision" }, available_experts: [{ provider_id: "demo:vision", enabled: true }] });
+      return json([]);
+    });
+    await page.goto(`/frontier/live?taskId=${task.task_id}`);
+    const nextLabel = submissions ? (zh ? "开始批改" : "Start grading") : (zh ? "继续识别作答" : "Continue to submissions");
+    const next = page.getByRole("button", { name: nextLabel, exact: true }).first();
+    await expect(next).toBeEnabled();
+    // Simulate another tab restarting recognition and receiving a model failure.
+    status = "error"; revision = 2;
+    await next.click();
+    const alert = page.getByRole("alert");
+    await expect(alert.getByRole("link")).toHaveCount(0);
+    const retry = alert.getByRole("button", { name: zh ? "重试失败项" : "Retry failed items", exact: true });
+    await expect(retry).toBeEnabled();
+    expect(writes).toEqual([]);
+    await retry.click();
+    await expect(next).toBeEnabled();
+    await expect(alert).toHaveCount(0);
+    expect(writes.map(item => item.path)).toEqual([retryPath]);
+    await expect(page).toHaveURL(new RegExp(`/frontier/live\\?taskId=${task.task_id}$`));
+    expect(errors).toEqual([]);
+  });
 }
 
 // Real production router, session guard, and async workflow; synthetic API

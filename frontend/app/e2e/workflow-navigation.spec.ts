@@ -178,6 +178,10 @@ for (const stage of ["problems", "submissions", "grading"] as const) {
     await page.goto(`/tasks/navigation-task/${stage}/progress`);
     await expect(page.locator("main h1")).toBeVisible();
     await page.getByRole("link", { name: "历史任务", exact: true }).first().click();
+    // Let the progress route unmount before completing the synthetic job;
+    // otherwise its completion redirect can race the History navigation.
+    await expect(page).toHaveURL(/\/history$/);
+    await expect(page.locator("main h1")).toHaveText("历史任务");
     run.complete();
     const open = page.getByRole("link", { name: "自动跳转验证", exact: true });
     await expect(open).toHaveAttribute("href", `/tasks/navigation-task/${next[stage]}`);
