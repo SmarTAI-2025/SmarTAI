@@ -101,7 +101,7 @@ export function FrontierLiveDemoPage() {
   const [snapshot, setSnapshot] = useState<TaskStateSnapshot | null>(null);
   const [steps, setSteps] = useState<RunStep[]>(() => initialSteps(locale));
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ message: string; code?: string | null; reviewBlockers?: ReviewBlocker[] } | null>(null);
+  const [error, setError] = useState<{ message: string; code?: string | null } | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [providerLabel, setProviderLabel] = useState<string | null>(null);
   const [teacherReviewTask, setTeacherReviewTask] = useState<Task | null>(null);
@@ -112,6 +112,21 @@ export function FrontierLiveDemoPage() {
   const runRef = useRef<DemoRun | null>(null);
   const localeRef = useRef(locale);
   localeRef.current = locale;
+  // Only completed recognition can require manual review. Failed/paused jobs
+  // retain their existing retry/resume action, even if partial data is present.
+  const reviewTask = isTaskAwaitingGrading(snapshot?.status) ? submissionReviewTask
+    : snapshot?.status === "problems_ready" ? teacherReviewTask : null;
+  const questionBlockers = reviewTask ? demoQuestionReviewBlockers(reviewTask, locale) : [];
+  const submissionBlockers = reviewTask && isTaskAwaitingGrading(snapshot?.status) ? submissionReviewBlockers(reviewTask, locale) : [];
+  const requiredReview = !error && reviewTask && (questionBlockers.length || submissionBlockers.length) ? {
+    href: `/tasks/${reviewTask.task_id}/${questionBlockers.length ? "questions" : "submissions"}`,
+    label: questionBlockers.length ? tx(locale, "审核题目", "Review questions") : tx(locale, "校对作答", "Review submissions"),
+    description: questionBlockers.length
+      ? (isTaskAwaitingGrading(snapshot?.status)
+        ? tx(locale, "请审核并修正题目中的问题，再开始批改。", "Review and correct the questions before grading.")
+        : tx(locale, "请审核并修正题目中的问题，再继续识别作答。", "Review and correct the questions before recognizing submissions."))
+      : tx(locale, "请修正学生信息或作答中的问题，再开始批改。", "Correct the student details or answers before grading."),
+  } : null;
 
   useEffect(() => () => { runRef.current = null; }, []);
 
@@ -175,12 +190,9 @@ export function FrontierLiveDemoPage() {
           setError({ message: liveDemoWorkflowFailureMessage(locale, detail), code: detail });
           return;
         }
-        if (state.problem_count > 0) {
+        if (state.problem_count > 0 || state.status === "problems_ready" || isTaskAwaitingGrading(state.status)) {
           const task = await run.step(() => getTask(restoredTaskId));
-          const prepared = alignDemoProblems(Object.values(task.problem_data));
-          if (!preparedMaterialsComplete(prepared)) {
-            throw new Error(tx(locale, "此任务的题目准备资料不完整；请打开任务检查真实结果。", "This task's prepared question materials are incomplete. Open the task to inspect the real result."));
-          }
+          const prepared = Object.values(task.problem_data);
           const confirmed = generatedMaterialsConfirmed(prepared);
           setTeacherReviewTask(task);
           setMaterialsConfirmed(confirmed);
@@ -234,7 +246,6 @@ export function FrontierLiveDemoPage() {
   async function retryFailedItems() {
     if (!taskId) return startFreshRun();
     if (submissionReviewTask && isTaskAwaitingGrading(snapshot?.status)) return confirmSubmissionReview();
-    if (teacherReviewTask && error?.reviewBlockers?.length) return confirmTeacherMaterials();
     const run = beginRun(taskId);
     if (!run) return;
     const previousError = error;
@@ -323,12 +334,6 @@ export function FrontierLiveDemoPage() {
     setError(null);
     try {
       markStep("questions", "active", tx(locale, "正在检查题目是否可以进入下一阶段…", "Checking that questions are ready for the next stage…"));
-      const blockers = questionReviewBlockers(Object.values(teacherReviewTask.problem_data), taskId, locale);
-      if (blockers.length) {
-        failActiveStep();
-        setError({ message: blockers.map(item => item.label).join("; "), reviewBlockers: blockers });
-        return;
-      }
       await continueWorkflow(run, taskId, "problems_ready", true);
     } catch (caught) {
       if (run.isCurrent()) {
@@ -349,10 +354,9 @@ export function FrontierLiveDemoPage() {
       markStep("grading", "active", tx(locale, "正在启动批改…", "Starting grading…"));
       const current = await run.step(() => getTask(taskId));
       setSubmissionReviewTask(current);
-      const blockers = [...questionReviewBlockers(Object.values(current.problem_data), taskId, locale), ...submissionReviewBlockers(current, locale)];
+      const blockers = [...demoQuestionReviewBlockers(current, locale), ...submissionReviewBlockers(current, locale)];
       if (blockers.length) {
         failActiveStep();
-        setError({ message: blockers.map((item) => item.label).join("; "), reviewBlockers: blockers });
         return;
       }
       let setup = await run.step(() => getGradingSetup(taskId));
@@ -416,14 +420,12 @@ export function FrontierLiveDemoPage() {
 
     if (status === "problems_ready") {
       const recognizedTask = await run.step(() => getTask(currentTaskId));
-      const aligned = alignDemoProblems(Object.values(recognizedTask.problem_data));
-      if (!preparedMaterialsComplete(aligned)) {
-        throw new Error(tx(locale, "本次题目准备未生成完整的标答、评分依据或代码题材料；请打开任务检查真实结果。", "This preparation run did not generate a complete answer, rubric, or programming package. Open the task to inspect the real result."));
-      }
       setTeacherReviewTask(recognizedTask);
-      const alreadyConfirmed = generatedMaterialsConfirmed(aligned);
+      const alreadyConfirmed = generatedMaterialsConfirmed(Object.values(recognizedTask.problem_data));
       setMaterialsConfirmed(alreadyConfirmed);
-      if (!continueToSubmissions) {
+      // Recheck persisted content on every explicit continuation, including
+      // edits made in another tab since the Demo was loaded.
+      if (!continueToSubmissions || demoQuestionReviewBlockers(recognizedTask, locale).length) {
         const recognizedState = await run.step(() => getTaskState(currentTaskId));
         setSnapshot(recognizedState);
         markStep("questions", "complete", tx(locale, "题目、标答与评分资料已生成，可继续识别作答。", "Questions, answers, and rubrics are ready. Continue to submissions."), recognizedState.extract_job_id);
@@ -536,11 +538,16 @@ export function FrontierLiveDemoPage() {
             {steps.map((step, index) => <WorkflowStep key={step.id} step={step} index={index} locale={locale} />)}
           </ol>
 
-          {error ? (
+          {requiredReview ? (
+            <RecoverableActionState locale={locale} className="mt-5"
+              info={{ title: tx(locale, "需要人工校对", "Manual review required"), description: requiredReview.description,
+                tone: "danger", actionKind: "reselect", actionLabel: requiredReview.label, technicalDetails: [] }}
+              primaryAction={{ label: requiredReview.label, href: requiredReview.href, busy }}
+            />
+          ) : error ? (
             <RecoverableActionState locale={locale} className="mt-5"
               info={{
                 ...classifyRecoverableError(error.code ?? snapshot?.error ?? error.message, { locale, taskId: taskId ?? undefined, jobId: snapshot?.grading_job_id ?? undefined, phase: snapshot?.progress?.current_step ?? undefined }),
-                ...(error.reviewBlockers?.length ? { title: tx(locale, "批改前需要校对", "Review required before grading"), description: error.message } : {}),
               }}
               primaryAction={{ label: tx(locale, "重试失败项", "Retry failed items"), onClick: () => void retryFailedItems(), busy }}
             />
@@ -551,12 +558,12 @@ export function FrontierLiveDemoPage() {
               <Button onClick={() => void retryFailedItems()} disabled={busy}>
                 {t(TASK_ACTION_KEYS[snapshot.status])}
               </Button>
-            ) : !error && teacherReviewTask && !submissionReviewTask && snapshot?.status === "problems_ready" ? (
+            ) : !error && !requiredReview && teacherReviewTask && !submissionReviewTask && snapshot?.status === "problems_ready" ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmTeacherMaterials()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                 {tx(locale, "继续识别作答", "Continue to submissions")}
               </Button>
-            ) : !error && submissionReviewTask && isTaskAwaitingGrading(snapshot?.status) ? (
+            ) : !error && !requiredReview && submissionReviewTask && isTaskAwaitingGrading(snapshot?.status) ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmSubmissionReview()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                 {tx(locale, "开始批改", "Start grading")}
@@ -637,7 +644,7 @@ export function FrontierLiveDemoPage() {
           task={submissionReviewTask}
           locale={locale}
           busy={busy}
-          blocked={Boolean(error?.reviewBlockers?.length)}
+          blocked={Boolean(requiredReview)}
           onContinue={() => void confirmSubmissionReview()}
         />
       ) : teacherReviewTask ? (
@@ -645,6 +652,7 @@ export function FrontierLiveDemoPage() {
           task={teacherReviewTask}
           locale={locale}
           confirmed={materialsConfirmed}
+          reviewDescription={requiredReview?.description}
         />
       ) : null}
     </div>
@@ -696,10 +704,10 @@ function SubmissionRecognitionReview({ task, locale, busy, blocked, onContinue }
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button onClick={onContinue} disabled={busy || blocked} className="h-10 px-4">
+        {!blocked ? <Button onClick={onContinue} disabled={busy} className="h-10 px-4">
           {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           {tx(locale, "开始批改", "Start grading")}
-        </Button>
+        </Button> : null}
         <span className="text-xs text-muted-foreground">{tx(locale, "需要修改时，可进入作答校对页。", "Open submission review if you need to make corrections.")}</span>
       </div>
     </section>
@@ -942,12 +950,15 @@ function TeacherMaterialConfirmation({
   task,
   locale,
   confirmed,
+  reviewDescription,
 }: {
   task: Task;
   locale: Locale;
   confirmed: boolean;
+  reviewDescription?: string;
 }) {
-  const aligned = alignDemoProblems(Object.values(task.problem_data));
+  let aligned = Object.values(task.problem_data);
+  try { aligned = alignDemoProblems(aligned); } catch { /* Keep malformed results available for manual review. */ }
   return (
     <section className="mt-5 rounded-[10px] border border-primary/25 bg-primary/[0.035] p-4 sm:p-5" aria-labelledby="demo-teacher-material-title">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -955,7 +966,7 @@ function TeacherMaterialConfirmation({
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "题目资料", "Question materials")}</p>
           <h3 id="demo-teacher-material-title" className="mt-1 text-lg font-bold">{tx(locale, "本次生成的题目资料", "Generated question materials")}</h3>
           <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
-            {tx(locale, "题干、标答与评分依据已实时生成，可以继续识别作答。", "Questions, reference answers, and rubrics were generated live. You can continue to submissions.")}
+            {reviewDescription ?? tx(locale, "题干、标答与评分依据已实时生成，可以继续识别作答。", "Questions, reference answers, and rubrics were generated live. You can continue to submissions.")}
           </p>
         </div>
         <Link className="shrink-0 text-xs font-semibold text-primary hover:underline" to={`/tasks/${task.task_id}/questions`}>
@@ -1063,21 +1074,20 @@ async function demoRecognitionProvider(taskId: string) {
 }
 
 function generatedMaterialsConfirmed(problems: ProblemInfo[]) {
-  return problems.every((problem) => (
+  return problems.length > 0 && problems.every((problem) => (
     problem.review_status === "confirmed"
   ));
 }
 
-function preparedMaterialsComplete(problems: ProblemInfo[]) {
-  return problems.every((problem) => (
-    Boolean(problem.stem.trim())
-    && Boolean(problem.criterion.trim())
-    && Boolean(problem.reference_answer?.trim())
-    && (problemNumber(problem.number) !== 4 || (
-      Boolean(problem.solution_code?.trim())
-      && Boolean(problem.test_cases?.length)
-    ))
-  ));
+function demoQuestionReviewBlockers(task: Task, locale: Locale): ReviewBlocker[] {
+  const problems = Object.values(task.problem_data);
+  const blockers = questionReviewBlockers(problems, task.task_id, locale);
+  // Preserve the fixed fixture's Q1–Q4 guard, but offer its existing editor
+  // instead of retrying a successfully completed recognition job.
+  try { alignDemoProblems(problems); } catch {
+    blockers.push({ label: tx(locale, "请核对题目数量和 Q1–Q4 题号。", "Check the question count and Q1–Q4 numbering."), href: `/tasks/${task.task_id}/questions` });
+  }
+  return blockers;
 }
 
 export function alignDemoProblems(problems: ProblemInfo[]) {

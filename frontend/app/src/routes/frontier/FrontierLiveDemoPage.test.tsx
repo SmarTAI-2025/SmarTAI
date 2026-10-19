@@ -255,7 +255,7 @@ describe("FrontierLiveDemoPage", () => {
     }
   });
 
-  it.each(["zh-CN", "en-US"])("keeps blocking details and retry on the Demo after a real recognition failure (%s)", async (locale) => {
+  it.each(["zh-CN", "en-US"])("routes newly discovered answer blockers to submission review (%s)", async (locale) => {
     window.localStorage.setItem("smartai_locale", locale);
     const zh = locale === "zh-CN";
     const initial = { ...taskWithQuestions(), student_data: recognizedStudents() };
@@ -269,15 +269,86 @@ describe("FrontierLiveDemoPage", () => {
     const alert = await screen.findByRole("alert");
     expect(screen.queryByRole("heading", { name: zh ? "本次识别的学生作答" : "Recognized submissions" })).toBeVisible();
     expect(screen.getByRole("link", { name: zh ? "在作答校对页查看" : "Open submission review" })).toHaveAttribute("href", "/tasks/asg_demo123/submissions");
-    expect(within(alert).getByText(/Alex Chen/)).toBeVisible();
-    expect(within(alert).queryByRole("link")).not.toBeInTheDocument();
-    await user.click(within(alert).getByRole("button", { name: zh ? "重试失败项" : "Retry failed items" }));
-    expect(await screen.findByRole("alert")).toBeVisible();
+    expect(within(alert).getByRole("link", { name: zh ? "校对作答" : "Review submissions" })).toHaveAttribute("href", "/tasks/asg_demo123/submissions");
+    expect(within(alert).queryByRole("button", { name: zh ? "重试失败项" : "Retry failed items" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: zh ? "返回修改配置" : "Back to edit settings" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: zh ? "开始批改" : "Start grading" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: zh ? "开始批改" : "Start grading" })).not.toBeInTheDocument();
     expect(saveGradingSetup).not.toHaveBeenCalled();
     expect(startGrading).not.toHaveBeenCalled();
     expect(updateStudentAnswer).not.toHaveBeenCalled();
+  });
+
+  it.each(["empty stem", "missing rubric", "missing questions", "duplicate numbering", "identity", "confirmation"])("offers manual review immediately for %s without starting work", async kind => {
+    const task = { ...taskWithQuestions(), student_data: recognizedStudents() };
+    const submissions = kind === "identity" || kind === "confirmation";
+    if (kind === "empty stem") task.problem_data.q1.stem = "";
+    if (kind === "missing rubric") task.problem_data.q1.criterion = "";
+    if (kind === "missing questions") task.problem_data = {};
+    if (kind === "duplicate numbering") task.problem_data.q2.number = "1";
+    if (kind === "identity") task.student_data["demo-1"].stu_name = "[Unknown Student]";
+    if (kind === "confirmation") task.student_data["demo-1"].stu_ans[0].flag = ["recognition_repaired_needs_confirmation"];
+    vi.mocked(getTaskState).mockResolvedValue({ ...taskState(submissions ? "submissions_ready" : "problems_ready"), problem_count: Object.keys(task.problem_data).length });
+    vi.mocked(getTask).mockResolvedValue(task);
+    renderLive("asg_demo123");
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByRole("link", { name: submissions ? "Review submissions" : "Review questions" })).toHaveAttribute("href", `/tasks/asg_demo123/${submissions ? "submissions" : "questions"}`);
+    expect(screen.queryByRole("button", { name: /Retry failed items|Continue to submissions|Start grading/ })).not.toBeInTheDocument();
+    expect(preflightProblemSource).not.toHaveBeenCalled();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+  });
+
+  it.each(["problems_ready", "submissions_ready"] as const)("reloads saved review on return to the same task, without treating an unsaved draft as a fix (%s)", async stage => {
+    const submissions = stage === "submissions_ready";
+    const task = { ...taskWithQuestions(), student_data: recognizedStudents() };
+    if (submissions) task.student_data["demo-1"].stu_name = "";
+    else task.problem_data.q1.stem = "";
+    vi.mocked(getTaskState).mockResolvedValue(taskState(stage));
+    vi.mocked(getTask).mockImplementation(async () => structuredClone(task));
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    const reviewLabel = submissions ? "Review submissions" : "Review questions";
+    await user.click(await screen.findByRole("link", { name: reviewLabel }));
+    await user.click(screen.getByRole("link", { name: "Return to Demo" }));
+    // No persisted correction: returning must still lead to manual review.
+    await user.click(await screen.findByRole("link", { name: reviewLabel }));
+    task.problem_data.q1.stem = "Saved question text";
+    task.student_data["demo-1"].stu_name = "Saved student name";
+    await user.click(screen.getByRole("link", { name: "Return to Demo" }));
+    expect((await screen.findAllByRole("button", { name: submissions ? "Start grading" : "Continue to submissions" }))[0]).toBeEnabled();
+    expect(getTask).toHaveBeenCalledTimes(3);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(createTask).not.toHaveBeenCalled();
+    expect(preflightProblemSource).not.toHaveBeenCalled();
+    expect(startQuestionPreparation).not.toHaveBeenCalled();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(saveGradingSetup).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+  });
+
+  it("rechecks persisted questions before uploading submissions", async () => {
+    const task = taskWithQuestions();
+    vi.mocked(getTaskState).mockResolvedValue(taskState("problems_ready"));
+    vi.mocked(getTask).mockResolvedValueOnce(task).mockResolvedValue({
+      ...task, problem_data: { ...task.problem_data, q1: { ...task.problem_data.q1, stem: "" } },
+    });
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click(await screen.findByRole("button", { name: "Continue to submissions" }));
+    expect(await screen.findByRole("link", { name: "Review questions" })).toHaveAttribute("href", "/tasks/asg_demo123/questions");
+    expect(parseSubmissions).not.toHaveBeenCalled();
+  });
+
+  it("uses shared review severity for missing supplementary materials", async () => {
+    const task = taskWithQuestions();
+    task.problem_data.q1.reference_answer = null;
+    task.problem_data.q4.solution_code = null;
+    task.problem_data.q4.test_cases = null;
+    vi.mocked(getTaskState).mockResolvedValue(taskState("problems_ready"));
+    vi.mocked(getTask).mockResolvedValue(task);
+    renderLive("asg_demo123");
+    expect(await screen.findByRole("button", { name: "Continue to submissions" })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it.each([false, true])("keeps the replacement task locked when an old request settles (reject: %s)", async (reject) => {
@@ -789,6 +860,9 @@ function renderLive(taskId?: string) {
         <Route path="/login" element={<p>Public login</p>} />
         <Route path="/tasks/:taskId" element={<>
           <p>Task details</p><Link to="/frontier/live?taskId=asg_demo123">Return to Demo</Link>
+        </>} />
+        <Route path="/tasks/:taskId/:review" element={<>
+          <p>Existing review page</p><Link to="/frontier/live?taskId=asg_demo123">Return to Demo</Link>
         </>} />
       </Routes>
     </MemoryRouter>

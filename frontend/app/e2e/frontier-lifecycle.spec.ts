@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { ProblemInfo } from "../src/types";
+import type { ProblemInfo, Task } from "../src/types";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 const task = {
@@ -20,6 +20,95 @@ function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
+}
+
+for (const locale of ["zh-CN", "en-US"]) {
+  test(`required review uses existing editors and returns to the same Quick Demo (${locale})`, async ({ page }, testInfo) => {
+    const errors = await guest(page), zh = locale === "zh-CN";
+    await page.setViewportSize(zh ? { width: 1440, height: 1000 } : { width: 390, height: 844 });
+    await page.addInitScript(value => localStorage.setItem("smartai_locale", value), locale);
+    const problems: Task["problem_data"] = structuredClone(task.problem_data);
+    problems.q1.stem = "";
+    const students: Task["student_data"] = { S1: { stu_id: "S1", stu_name: "[Unknown Student]", identity_status: "needs_review", source_id: "source1",
+      stu_ans: Object.values(problems).map(problem => ({ q_id: problem.q_id, number: problem.number, type: problem.type, content: "Saved answer", flag: [], review_status: "pending" })) } };
+    let status = "problems_ready", revision = 1;
+    const writes: string[] = [];
+    const current = () => ({ ...task, status, workflow_revision: revision, problem_data: problems, student_data: status === "problems_ready" ? {} : students, student_count: status === "problems_ready" ? 0 : 1 });
+    await page.route(`${backend}/**`, async route => {
+      const request = route.request(), path = new URL(request.url()).pathname, json = (value: unknown) => route.fulfill({ json: value });
+      if (path === "/auth/me") return json({ id: "guest-owner", username: "Guest", role: "teacher", is_active: true });
+      if (request.method() !== "GET") {
+        writes.push(path);
+        if (path.endsWith("/problems/q1")) {
+          const patch = request.postDataJSON();
+          expect(patch.expected_workflow_revision).toBe(revision);
+          Object.assign(problems.q1, patch);
+          return json({ status: "ok", q_id: "q1", problem: problems.q1, workflow_revision: ++revision });
+        }
+        if (path.endsWith("/students/S1/identity")) {
+          const patch = request.postDataJSON();
+          expect(patch.expected_workflow_revision).toBe(revision);
+          students.S1 = { ...students.S1, stu_name: patch.student_name, identity_status: "matched" };
+          return json({ status: "ok", previous_student_id: "S1", student: students.S1, workflow_revision: ++revision });
+        }
+        if (path.endsWith("/parse_submissions")) { status = "submissions_ready"; return json({ status: "started", job_id: "parse" }); }
+        if (path.endsWith("/grade")) { status = "graded"; return json({ status: "started", job_id: "grade" }); }
+        throw new Error(`Unexpected mutation ${path}`);
+      }
+      if (path === `/tasks/${task.task_id}` || path.endsWith("/state")) return json(current());
+      if (path.endsWith("/grading-setup")) return json({ task_id: task.task_id, workflow_revision: revision, configured: true,
+        grading_setup: { primary_provider_id: "demo:vision" }, available_experts: [{ provider_id: "demo:vision", enabled: true }] });
+      if (path.endsWith("/source-files")) return json({ task_id: task.task_id, workflow_revision: revision, problem_source: null, submission_sources: {} });
+      if (path.endsWith("/result")) return json({ ...current(), results: [], timestamp: 1 });
+      return json([]);
+    });
+    async function returnToDemo() {
+      const quick = page.getByRole("link", { name: zh ? "简明演示" : "Quick Demo", exact: true });
+      if (!await quick.isVisible()) await page.getByRole("button", { name: zh ? "打开导航" : "Open navigation", exact: true }).click();
+      await quick.click();
+      await expect(page).toHaveURL(new RegExp(`/frontier/live\\?taskId=${task.task_id}$`));
+    }
+    await page.goto(`/frontier/live?taskId=${task.task_id}`);
+    const questionReview = page.getByRole("alert").getByRole("link", { name: zh ? "审核题目" : "Review questions", exact: true });
+    await expect(questionReview).toHaveAttribute("href", `/tasks/${task.task_id}/questions`);
+    await page.getByRole("alert").screenshot({ path: testInfo.outputPath(`required-questions-${locale}.png`) });
+    await questionReview.click();
+    await expect(page).toHaveURL(new RegExp(`/tasks/${task.task_id}/questions$`));
+    // Returning without saving leaves the blocker in place and performs no write.
+    await returnToDemo();
+    await expect(questionReview).toBeVisible();
+    expect(writes).toEqual([]);
+    await questionReview.click();
+    await page.locator(`a[href="/tasks/${task.task_id}/questions/q1/content#question-q1"]`).first().click();
+    const firstQuestion = page.locator('[data-question-id="q1"]');
+    await firstQuestion.getByRole("button", { name: zh ? "题目 · 修改" : "Question · Edit", exact: true }).click();
+    await firstQuestion.getByRole("textbox", { name: zh ? "题目" : "Question", exact: true }).fill("Saved question text");
+    await firstQuestion.getByRole("button", { name: zh ? "保存" : "Save", exact: true }).click();
+    await expect(firstQuestion.getByText("Saved question text", { exact: true })).toBeVisible();
+    await returnToDemo();
+    const continueButton = page.getByRole("button", { name: zh ? "继续识别作答" : "Continue to submissions", exact: true });
+    await expect(continueButton).toBeEnabled();
+    expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`]);
+    await continueButton.click();
+    const submissionReview = page.getByRole("alert").getByRole("link", { name: zh ? "校对作答" : "Review submissions", exact: true });
+    await expect(submissionReview).toHaveAttribute("href", `/tasks/${task.task_id}/submissions`);
+    await expect(page.getByRole("button", { name: zh ? "重试失败项" : "Retry failed items", exact: true })).toHaveCount(0);
+    await page.getByRole("alert").screenshot({ path: testInfo.outputPath(`required-submissions-${locale}.png`) });
+    await submissionReview.click();
+    await page.locator(`a[href="/tasks/${task.task_id}/students/S1?identity=edit"]`).first().click();
+    await page.getByRole("textbox", { name: zh ? "姓名" : "Name", exact: true }).fill("Saved student name");
+    await page.getByRole("button", { name: zh ? "保存并确认身份" : "Save and confirm identity", exact: true }).click();
+    await expect(page.getByRole("textbox", { name: zh ? "姓名" : "Name", exact: true })).toHaveCount(0);
+    await returnToDemo();
+    const grade = page.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first();
+    await expect(grade).toBeEnabled();
+    expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`, `/tasks/${task.task_id}/parse_submissions`, `/tasks/${task.task_id}/students/S1/identity`]);
+    await grade.click();
+    await expect(page.getByRole("heading", { name: zh ? "从真实分数看到班级表现" : "See class performance from live scores", exact: true })).toBeVisible();
+    expect(writes.at(-1)).toBe(`/tasks/${task.task_id}/grade`);
+    expect(writes).toHaveLength(4);
+    expect(errors).toEqual([]);
+  });
 }
 
 async function guest(page: Page) {
