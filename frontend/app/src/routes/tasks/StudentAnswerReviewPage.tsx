@@ -32,7 +32,7 @@ import {
   type FocusEvent,
   type ReactNode,
 } from "react";
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useTask, useUpdateStudentAnswer, useUpdateStudentIdentity } from "@/api/hooks/tasks";
@@ -96,6 +96,7 @@ function StudentAnswerReviewForm() {
   const [blocked, setBlocked] = useState<ReviewBlocker[]>([]);
   const { taskId, studentId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const navigate = useNavigate();
   const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
@@ -235,7 +236,8 @@ function StudentAnswerReviewForm() {
   useEffect(() => {
     if (!filteredQuestions.length) return;
     const requested = filteredQuestions.find((question) => question.id === requestedQuestionId) ?? filteredQuestions[0];
-    const routeKey = `${studentId ?? ""}:${requestedQuestionId}:${questionFilterParam}`;
+    // Repeat issue navigation must reposition even when its URL is unchanged.
+    const routeKey = `${location.key}:${studentId ?? ""}:${requestedQuestionId}:${questionFilterParam}`;
     if (positionedRouteRef.current === routeKey) return;
     let secondFrame = 0;
     const firstFrame = window.requestAnimationFrame(() => {
@@ -253,7 +255,7 @@ function StudentAnswerReviewForm() {
       window.cancelAnimationFrame(firstFrame);
       if (secondFrame) window.cancelAnimationFrame(secondFrame);
     };
-  }, [filteredQuestions, questionFilterParam, requestedQuestionId, studentId]);
+  }, [filteredQuestions, location.key, questionFilterParam, requestedQuestionId, studentId]);
 
   useEffect(() => {
     if (!filteredQuestions.length) return;

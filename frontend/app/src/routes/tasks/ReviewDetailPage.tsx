@@ -17,7 +17,7 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { normalizeAPIError } from "@/api/client";
 import { useTask, useTaskResult, useTaskFinalization, useUpdateCorrectionReview } from "@/api/hooks/tasks";
@@ -58,6 +58,7 @@ function ReviewDetailForm() {
   const navigate = useNavigate();
   const [blockedReviews, setBlockedReviews] = useState<ReviewBlocker[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const taskQuery = useTask(taskId);
   const resultQuery = useTaskResult(taskId);
   const updateReview = useUpdateCorrectionReview();
@@ -217,7 +218,8 @@ function ReviewDetailForm() {
   useEffect(() => {
     if (!visibleQuestions.length || !studentId) return;
     const requested = visibleQuestions.find((question) => question.id === requestedQuestionId) ?? visibleQuestions[0];
-    const routeKey = `${studentId}:${requestedQuestionId}:${questionQuery}`;
+    // Repeat issue navigation must reposition even when its URL is unchanged.
+    const routeKey = `${location.key}:${studentId}:${requestedQuestionId}:${questionQuery}`;
     if (positionedRouteRef.current === routeKey) return;
     let secondFrame = 0;
     const firstFrame = window.requestAnimationFrame(() => {
@@ -236,7 +238,7 @@ function ReviewDetailForm() {
       window.cancelAnimationFrame(firstFrame);
       if (secondFrame) window.cancelAnimationFrame(secondFrame);
     };
-  }, [questionQuery, requestedQuestionId, scrollToQuestion, studentId, visibleQuestions]);
+  }, [location.key, questionQuery, requestedQuestionId, scrollToQuestion, studentId, visibleQuestions]);
 
   useEffect(() => {
     if (!visibleQuestions.length) return;
@@ -441,8 +443,6 @@ function ReviewDetailForm() {
       if (!prepared.ok) {
         setBatchError(prepared.message);
         setBlockedReviews([{ label: `${student.name} · ${question.label} · ${prepared.message}`, href: buildHref(student.id, question.id, false) }]);
-        if (visibleQuestions.some((item) => item.id === question.id)) scrollToQuestion(question.id);
-        else navigate(buildHref(student.id, question.id, false));
         return;
       }
     }
