@@ -1,5 +1,4 @@
-import { ManualReviewButton } from "@/components/tasks/ManualReviewButton";
-import { getTaskDestination, isTaskAwaitingGrading, isTaskPaused } from "@/lib/taskFlow";
+import { isTaskAwaitingGrading, isTaskPaused } from "@/lib/taskFlow";
 import { TASK_ACTION_KEYS, TASK_STAGE_KEYS } from "@/lib/taskPresentation";
 import { QUESTION_FIXTURE, SUBMISSION_FIXTURE, DEMO_SCORE_POLICY, fixtureFile } from "@/lib/frontierFixtures";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
@@ -36,6 +35,8 @@ import {
   getTaskResult,
   getTaskState,
   parseSubmissions,
+  retryQuestionPreparation,
+  retrySubmissionRecognition,
   startGrading,
 } from "@/api/tasks";
 import { SmarTAIAppMark, SmarTAIWordmark } from "@/components/brand/SmarTAIBrand";
@@ -230,16 +231,39 @@ export function FrontierLiveDemoPage() {
     if (!taskIdFromUrl && searchParams.get("workflow") === "full") void startFreshRun(true);
   }, [taskIdFromUrl, searchParams.get("workflow")]);
 
-  async function retryFailedGrading() {
-    if (!taskId) return;
+  async function retryFailedItems() {
+    if (!taskId) return startFreshRun();
+    if (submissionReviewTask && isTaskAwaitingGrading(snapshot?.status)) return confirmSubmissionReview();
+    if (teacherReviewTask && error?.reviewBlockers?.length) return confirmTeacherMaterials();
     const run = beginRun(taskId);
     if (!run) return;
+    const previousError = error;
     setError(null);
     try {
       const current = await run.step(() => getTaskState(taskId));
-      const response = await run.step(() => gradingIntent.execute(current.workflow_revision, request => startGrading(taskId, { ...request, retryScope: "failed_only" })));
-      if (!response) return;
-      await continueWorkflow(run, taskId, "grading");
+      setSnapshot(current);
+      let status = current.status;
+      if (status === "error" || isTaskPaused(status)) {
+        const failedJobId = current.last_failed_job_id;
+        if (current.grading_job_id && (failedJobId === current.grading_job_id || status === "grading_paused")) {
+          const response = await run.step(() => gradingIntent.execute(current.workflow_revision, request => startGrading(taskId, { ...request, retryScope: "failed_only" })));
+          if (!response) return;
+          status = "grading";
+        } else {
+          const submissions = current.parse_job_id && (failedJobId === current.parse_job_id || status === "submissions_paused");
+          const jobId = submissions ? current.parse_job_id : current.extract_job_id && (failedJobId === current.extract_job_id || status === "problems_paused") ? current.extract_job_id : null;
+          if (!jobId) throw new Error(current.error || previousError?.message || "workflow_error");
+          const recognitionProviderId = await run.step(() => demoRecognitionProvider(taskId));
+          await run.step(() => (submissions ? retrySubmissionRecognition : retryQuestionPreparation)({
+            taskId, jobId, recognitionProviderId, expectedWorkflowRevision: current.workflow_revision,
+            // An explicit resume of a stopped job follows the existing retry contract.
+            // Uncertain provider submissions still require the backend's acknowledgement guard.
+            ...((isTaskPaused(status) || current.error === "operation_cancelled") ? { acknowledgePossibleDuplicateCall: true } : {}),
+          }));
+          status = submissions ? "parsing_submissions" : "extracting_problems";
+        }
+      }
+      await continueWorkflow(run, taskId, status);
     } catch (caught) {
       if (run.isCurrent()) {
         failActiveStep();
@@ -399,7 +423,7 @@ export function FrontierLiveDemoPage() {
       setTeacherReviewTask(recognizedTask);
       const alreadyConfirmed = generatedMaterialsConfirmed(aligned);
       setMaterialsConfirmed(alreadyConfirmed);
-      if (!continueToSubmissions && !alreadyConfirmed) {
+      if (!continueToSubmissions) {
         const recognizedState = await run.step(() => getTaskState(currentTaskId));
         setSnapshot(recognizedState);
         markStep("questions", "complete", tx(locale, "题目、标答与评分资料已生成，可继续识别作答。", "Questions, answers, and rubrics are ready. Continue to submissions."), recognizedState.extract_job_id);
@@ -515,32 +539,21 @@ export function FrontierLiveDemoPage() {
             {steps.map((step, index) => <WorkflowStep key={step.id} step={step} index={index} locale={locale} />)}
           </ol>
 
-          {error?.reviewBlockers?.length ? (
-            <div role="alert" className="mt-5">
-              <InlineNotice tone="warning" title={tx(locale, "批改前需要校对", "Review required before grading")}>
-                <ul className="space-y-1">{error.reviewBlockers.map((blocker) => (
-                  <li key={blocker.href}><Link className="underline" to={blocker.href}>{blocker.label}</Link></li>
-                ))}</ul>
-              </InlineNotice>
-            </div>
-          ) : error ? (
+          {error ? (
             <RecoverableActionState locale={locale} className="mt-5"
-              info={classifyRecoverableError(error.code ?? snapshot?.error ?? error.message, { locale, taskId: taskId ?? undefined, jobId: snapshot?.grading_job_id ?? undefined, phase: snapshot?.progress?.current_step ?? undefined })}
-              workflowRecovery={taskId && snapshot?.grading_job_id && snapshot.last_failed_job_id === snapshot.grading_job_id ? {
-                retry: { onClick: () => void retryFailedGrading(), busy }, configurationHref: `/tasks/${taskId}/grading-setup`,
-              } : taskId && submissionReviewTask && isTaskAwaitingGrading(snapshot?.status) ? {
-                retry: { onClick: () => void confirmSubmissionReview(), busy, label: tx(locale, "重试批改", "Retry grading") }, configurationHref: `/tasks/${taskId}/grading-setup`,
-              } : undefined}
-              additionalActions={taskId ? [{ label: tx(locale, "查看进度与恢复", "View progress and recovery"), href: snapshot?.grading_job_id ? `/tasks/${taskId}/grading/progress` : `/tasks/${taskId}/${snapshot?.parse_job_id ? "submissions" : "problems"}/progress` }] : []}
+              info={{
+                ...classifyRecoverableError(error.code ?? snapshot?.error ?? error.message, { locale, taskId: taskId ?? undefined, jobId: snapshot?.grading_job_id ?? undefined, phase: snapshot?.progress?.current_step ?? undefined }),
+                ...(error.reviewBlockers?.length ? { title: tx(locale, "批改前需要校对", "Review required before grading"), description: error.message } : {}),
+              }}
+              primaryAction={{ label: tx(locale, "重试失败项", "Retry failed items"), onClick: () => void retryFailedItems(), busy }}
             />
           ) : null}
 
-          {error || (snapshot && isTaskPaused(snapshot.status)) ? <ManualReviewButton taskId={taskId} task={snapshot} /> : null}
           <div className="mt-6 flex flex-wrap items-center gap-3">
             {!error && snapshot && isTaskPaused(snapshot.status) ? (
-              <Link to={getTaskDestination(snapshot)} className="rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground">
+              <Button onClick={() => void retryFailedItems()} disabled={busy}>
                 {t(TASK_ACTION_KEYS[snapshot.status])}
-              </Link>
+              </Button>
             ) : !error && teacherReviewTask && !submissionReviewTask && snapshot?.status === "problems_ready" ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmTeacherMaterials()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
@@ -551,7 +564,7 @@ export function FrontierLiveDemoPage() {
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                 {tx(locale, "开始批改", "Start grading")}
               </Button>
-            ) : !taskId || snapshot?.status === "draft" ? (
+            ) : !error && (!taskId || snapshot?.status === "draft") ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => { if (taskId && snapshot?.status === "draft") { const run = beginRun(taskId); if (run) void continueWorkflow(run, taskId, "draft").catch(e => { if (run.isCurrent()) setError(errorMessage(e)); }).finally(() => finishRun(run)); } else void startFreshRun(); }} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                 {busy ? tx(locale, "正在运行真实流程…", "Running real workflow…") : tx(locale, "开始真实 OCR + 批改", "Start real OCR + grading")}
