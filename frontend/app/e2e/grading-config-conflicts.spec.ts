@@ -63,7 +63,7 @@ for (const width of [1440, 390]) {
       if (path.endsWith("/finalization")) return json({ task_id: "config-task", workflow_revision: revision, remaining_review_count: 0 });
       throw new Error(`Unexpected request ${req.method()} ${path}`);
     });
-    const conflicts = page.getByText(/任务或模型配置已更新|服务器业务版本已变化|请先核对服务器变化/);
+    const conflicts = page.getByText(/任务或模型配置已更新|任务内容已更新|请先核对服务器变化/);
     const draft = page.getByRole("button", { name: "暂存", exact: true });
     const submit = page.getByRole("button", { name: "保存并查看批改摘要" });
     const attach = async () => {

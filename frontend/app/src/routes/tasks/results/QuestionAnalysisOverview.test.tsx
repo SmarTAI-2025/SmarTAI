@@ -62,7 +62,7 @@ describe("question analysis Ask SmarTAI", () => {
     vi.mocked(interpretFilterIntent).mockResolvedValue(intent({ recognized: false, max_score_percent: 70, explanation: "无法按未提供的出勤率筛选。" }));
     mount();
     submit("得分率低于70%且上课缺勤最多的题目");
-    expect(await screen.findByText(/未应用部分筛选/)).toBeInTheDocument();
+    expect(await screen.findByText(/未能理解查询条件/)).toBeInTheDocument();
     expect(visibleQuestions()).toEqual(["Q1", "Q2", "Q11"]);
     expect(interpretFilterIntent).toHaveBeenCalledTimes(1);
   });

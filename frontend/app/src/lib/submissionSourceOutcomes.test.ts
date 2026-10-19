@@ -28,9 +28,9 @@ describe("submission source reason copy", () => {
     const item = source({ reason_code: "question_source_incomplete" });
     const zh = getSubmissionSourceReasonCopy(item, "zh-CN");
     const en = getSubmissionSourceReasonCopy(item, "en-US");
-    expect(zh.description).toContain("作答识别尚未完成");
+    expect(zh.description).toContain("部分页面尚未读完");
     expect(zh.description).not.toContain("题目生成");
-    expect(en.description).toContain("submission recognition is incomplete");
+    expect(en.description).toContain("Some pages could not be read");
     expect(en.description).not.toContain("question generation");
     expect(zh.nextStep).toContain("文件与模型设置未变时");
     expect(en.nextStep).toContain("if the file and model settings are unchanged");
@@ -57,8 +57,8 @@ describe("submission source reason copy", () => {
     [
       "submission_model_field_too_long",
       "structured_parse",
-      "模型返回字段超过安全长度",
-      "The model returned an oversized field",
+      "识别结果格式有误",
+      "The recognition result has an invalid format",
     ],
     [
       "submission_outcome_persistence_failed",
@@ -171,8 +171,8 @@ describe("submission source reason copy", () => {
       unknown_question_ids: ["q99"],
     }), "zh-CN");
 
-    expect(copy.description).toContain("不是“学生答错了”");
-    expect(copy.description).toContain("传错作业");
+    expect(copy.description).toContain("题号与当前任务不匹配");
+    expect(copy.description).toContain("核对文件和题号");
     expect(copy.nextStep).toContain("q99");
   });
 
@@ -184,8 +184,8 @@ describe("submission source reason copy", () => {
     }), "zh-CN");
 
     expect(copy.title).toContain("没有提取到任何作答内容");
-    expect(copy.description).toContain("与“题号不匹配”不同");
-    expect(copy.description).toContain("不表示学生答错");
+    expect(copy.description).toContain("未找到作答内容");
+    expect(copy.description).toContain("空白页、封面或不完整");
   });
 
   it("explains that duplicate identities preserve both files", () => {

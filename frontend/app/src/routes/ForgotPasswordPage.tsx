@@ -56,7 +56,7 @@ export function ForgotPasswordPage() {
           </span>
           <div>
             <p className="text-xs font-semibold text-primary">{zh ? "找回账号" : "Account recovery"}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">{zh ? "匿名中性请求" : "Private neutral request"}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">{zh ? "通过邮箱重置密码" : "Reset by email"}</p>
           </div>
         </div>
         <h1 className="mt-5 text-[27px] font-semibold">{zh ? "忘记密码" : "Forgot password"}</h1>

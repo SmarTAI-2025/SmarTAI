@@ -83,10 +83,10 @@ interface RunStep {
 
 function initialSteps(locale: Locale): RunStep[] {
   return [
-    { id: "task", label: tx(locale, "创建专属 Demo 任务", "Create a dedicated demo task"), detail: tx(locale, "真实 POST /tasks 请求", "Real POST /tasks request"), state: "waiting" },
-    { id: "questions", label: tx(locale, "准备并审核题目", "Prepare and review questions"), detail: tx(locale, "真实识别 + 标答与评分资料生成", "Real extraction + answer and rubric generation"), state: "waiting" },
-    { id: "submissions", label: tx(locale, "识别混合作答", "Recognize mixed submissions"), detail: tx(locale, "真实 PDF / 图片 OCR 流程", "Real PDF/image OCR pipeline"), state: "waiting" },
-    { id: "grading", label: tx(locale, "运行 AI 批改", "Run AI grading"), detail: tx(locale, "真实单模型批改任务", "Real single-provider grading run"), state: "waiting" },
+    { id: "task", label: tx(locale, "创建专属 Demo 任务", "Create a dedicated demo task"), detail: tx(locale, "准备演示任务", "Prepare the demo task"), state: "waiting" },
+    { id: "questions", label: tx(locale, "准备并审核题目", "Prepare and review questions"), detail: tx(locale, "识别题目并生成标答与评分标准", "Recognize questions and prepare answers and rubrics"), state: "waiting" },
+    { id: "submissions", label: tx(locale, "识别混合作答", "Recognize mixed submissions"), detail: tx(locale, "识别 PDF 和图片作答", "Recognize PDF and image submissions"), state: "waiting" },
+    { id: "grading", label: tx(locale, "运行 AI 批改", "Run AI grading"), detail: tx(locale, "按评分设置批改", "Grade using the selected settings"), state: "waiting" },
   ];
 }
 
@@ -262,7 +262,7 @@ export function FrontierLiveDemoPage() {
     setSteps(initialSteps(locale));
     activeStepRef.current = null;
     try {
-      markStep("task", "active", tx(locale, "正在创建真实教师任务…", "Creating a real teacher-owned task…"));
+      markStep("task", "active", tx(locale, "正在创建任务…", "Creating the task…"));
       const task = await run.step(() => createTask({
         authScope: "frontier",
         semester_id: getCurrentSemesterId(),
@@ -272,7 +272,7 @@ export function FrontierLiveDemoPage() {
       rememberFrontierTask(task.task_id);
       run.taskId = task.task_id;
       setTaskId(task.task_id);
-      markStep("task", "complete", tx(locale, `任务 ${shortId(task.task_id)} 已创建`, `Task ${shortId(task.task_id)} created`));
+      markStep("task", "complete", tx(locale, "任务已创建", "Task created"));
       // Keep the created task reachable if saving its language needs a retry.
       navigate(`/frontier/live?taskId=${encodeURIComponent(task.task_id)}`, { replace: true });
       const language = await run.step(() => initializeContentLanguage(task.task_id, contentLanguageFromLocale(locale)));
@@ -426,7 +426,7 @@ export function FrontierLiveDemoPage() {
       const recognizedTask = await run.step(() => getTask(currentTaskId));
       setSnapshot(recognized);
       setSubmissionReviewTask(recognizedTask);
-      markStep("submissions", "complete", tx(locale, `已识别 ${recognized.student_count} 份合成作答`, `${recognized.student_count} synthetic submissions recognized`), recognized.parse_job_id);
+      markStep("submissions", "complete", tx(locale, `已识别 ${recognized.student_count} 份作答`, `${recognized.student_count} submissions recognized`), recognized.parse_job_id);
       return;
     } else if (status === "grading") {
       markStep("questions", "complete", tx(locale, "题目已准备", "Questions already prepared"));
@@ -439,7 +439,7 @@ export function FrontierLiveDemoPage() {
       const completed = await run.step(() => getTaskState(currentTaskId));
       setSnapshot(completed);
       setDemoResult(await run.step(() => getTaskResult(currentTaskId)));
-      markStep("grading", "complete", tx(locale, `已处理 ${completed.student_count * completed.problem_count} 个作答单元`, `${completed.student_count * completed.problem_count} answer units processed`), completed.grading_job_id);
+      markStep("grading", "complete", tx(locale, `已处理 ${completed.student_count * completed.problem_count} 题次`, `${completed.student_count * completed.problem_count} responses processed`), completed.grading_job_id);
     }
   }
 
@@ -485,28 +485,25 @@ export function FrontierLiveDemoPage() {
           </FrontierExitLink>
           <h1 className="mt-5 text-[34px] font-bold leading-tight tracking-[-0.035em] text-white sm:text-[42px]">{tx(locale, "真实批改运行", "Live grading run")}</h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">
-            {tx(locale, "合成作业会经过真实的 SmarTAI API、原文识别、OCR 与批改流程。本页不会向真实结果注入任何预计算分数。", "Synthetic coursework goes through the real SmarTAI API, source recognition, OCR, and grading pipeline. Nothing on this page injects precomputed scores into the live result.")}
+            {tx(locale, "使用示例作业体验题目识别、作答校对、批改与分析。", "Try question recognition, submission review, grading, and analysis with sample coursework.")}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <BoundaryBadge icon={<FlaskConical />} label={tx(locale, "合成输入", "Synthetic inputs")} inverse />
-          <BoundaryBadge icon={<Activity />} label={tx(locale, "真实 API", "Real API")} tone="blue" inverse />
-          <BoundaryBadge icon={<ScanText />} label={tx(locale, "真实 OCR", "Real OCR")} tone="blue" inverse />
-          <BoundaryBadge icon={<Sparkles />} label={tx(locale, "真实批改", "Real grading")} tone="blue" inverse />
+          <BoundaryBadge icon={<FlaskConical />} label={tx(locale, "演示样例", "Demo samples")} inverse />
+          <BoundaryBadge icon={<Activity />} label={tx(locale, "任务流程", "Task workflow")} tone="blue" inverse />
+          <BoundaryBadge icon={<ScanText />} label={tx(locale, "文字识别", "Text recognition")} tone="blue" inverse />
+          <BoundaryBadge icon={<Sparkles />} label={tx(locale, "智能批改", "AI grading")} tone="blue" inverse />
         </div>
       </div>
 
-      <InlineNotice tone="info" title={tx(locale, "免密码 Demo 会话，不暴露模型密钥", "Passwordless demo session, no exposed model key")} className="mt-6">
-        {tx(locale, "从展示页进入时，后端会签发短时 Demo 会话。模型 API Key 仅保存在后端，不会写入本页面、文件包或 URL。", "Entering from the showcase creates a short-lived demo session. The model API key remains server-side and is never embedded in this page, fixture archive, or URL.")}
-      </InlineNotice>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(330px,0.9fr)]">
         <section className="flex h-full flex-col rounded-[12px] border bg-card p-5 shadow-sm sm:p-7">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "可观察的真实流程", "Observable live workflow")}</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "演示流程", "Demo workflow")}</p>
               <h2 className="mt-2 text-2xl font-bold tracking-[-0.025em]">{tx(locale, "运行完整样例任务", "Run the complete sample task")}</h2>
-              <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">{tx(locale, "每次运行都会使用模型额度、创建独立任务并保留真实 job ID，所有中间结果均可进入产品页面检查。", "Each run uses model quota, creates its own task, preserves the real job IDs, and leaves every intermediate result open for inspection.")}</p>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">{tx(locale, "每次运行会创建新任务并使用模型额度。", "Each run creates a new task and uses model quota.")}</p>
             </div>
             {snapshot ? <StatusPill status={snapshot.status} /> : null}
           </div>
@@ -567,15 +564,15 @@ export function FrontierLiveDemoPage() {
           </div>
 
           <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
-            {taskId ? <span className="font-mono">task {shortId(taskId)}</span> : <span>{tx(locale, "尚未创建任务", "No task created yet")}</span>}
+            {!taskId ? <span>{tx(locale, "尚未创建任务", "No task created yet")}</span> : null}
             {providerLabel ? <span>{tx(locale, "模型", "provider")} {providerLabel}</span> : null}
-            {elapsed !== null ? <span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{tx(locale, `已观察 ${elapsed} 秒`, `${elapsed}s observed`)}</span> : null}
+            {elapsed !== null ? <span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" />{tx(locale, `已用时 ${elapsed} 秒`, `${elapsed}s elapsed`)}</span> : null}
           </div>
 
           {snapshot?.progress ? (
             <div className="mt-5 rounded-[9px] border bg-muted/30 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold">
-                <span className="inline-flex items-center gap-2 text-foreground"><Activity className="h-4 w-4 text-primary" />{tx(locale, "后端进度", "Backend progress")}</span>
+                <span className="inline-flex items-center gap-2 text-foreground"><Activity className="h-4 w-4 text-primary" />{tx(locale, "处理进度", "Progress")}</span>
                 <span className="text-muted-foreground">{t(TASK_STAGE_KEYS[snapshot.status])}</span>
               </div>
               <div role="progressbar" aria-label={tx(locale, "当前处理进度", "Current processing progress")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent(snapshot)} className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
@@ -612,10 +609,10 @@ export function FrontierLiveDemoPage() {
             <div className="flex h-[280px] items-start justify-center overflow-auto bg-slate-100 p-3">
               <img src={HANDWRITTEN_FIXTURE} alt="Raw synthetic handwritten student submission without grades or teacher annotations" className="max-w-full bg-white shadow-md" />
             </div>
-            <p className="border-t px-4 py-3 text-xs leading-5 text-muted-foreground">{tx(locale, "这就是实际上传至 API 的浏览器端合成样例副本；它不代表当前后端已持久化原始文件字节。", "This is the same browser-side synthetic fixture uploaded to the API. It is not a claim that the current backend persists original bytes.")}</p>
+            <p className="border-t px-4 py-3 text-xs leading-5 text-muted-foreground">{tx(locale, "手写作答示例。", "Handwritten submission sample.")}</p>
           </section>
-          <InlineNotice tone="warning" title={tx(locale, "仍由教师控制的部分", "What remains human-controlled")}>
-            {tx(locale, "题目准备流程真实生成标答与评分依据，教师可随时审核和确认。普通待确认不阻止继续，严重问题需先处理。批改完成后，教师仍需检查证据并决定最终发布。", "The live preparation flow generates reference answers and rubrics for teacher review. Ordinary pending confirmations do not prevent continuation; blocking issues must be resolved first. Teachers still review the grading evidence and decide what to release.")}
+          <InlineNotice tone="warning" title={tx(locale, "检查与复核", "Check and review")}>
+            {tx(locale, "可查看题目、作答和批改结果。提示需要处理时，请先完成校对。", "Review questions, submissions, and grading results. Resolve any required corrections before continuing.")}
           </InlineNotice>
         </aside>
       </div>
@@ -647,10 +644,10 @@ function SubmissionRecognitionReview({ task, locale, busy, blocked, onContinue }
     <section className="mt-5 rounded-[10px] border border-primary/25 bg-primary/[0.035] p-4 sm:p-5" aria-labelledby="demo-submission-review-title">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "真实 OCR", "Live OCR")}</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "文字识别", "Text recognition")}</p>
           <h3 id="demo-submission-review-title" className="mt-1 text-lg font-bold">{tx(locale, "本次识别的学生作答", "Recognized submissions")}</h3>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
-            {tx(locale, "以下学生、文件名和逐题作答均来自本次真实作答识别流程；继续后才会启动模型批改。", "The students, filenames, and per-question answers below come from this live recognition run. Model grading starts only after you continue.")}
+            {tx(locale, "检查学生信息和作答，确认后开始批改。", "Check student details and answers before starting grading.")}
           </p>
         </div>
         <Link className="shrink-0 text-xs font-semibold text-primary hover:underline" to={`/tasks/${task.task_id}/submissions`}>
@@ -664,7 +661,7 @@ function SubmissionRecognitionReview({ task, locale, busy, blocked, onContinue }
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <p className="truncate text-sm font-bold">{student.stu_name || student.stu_id}</p>
-                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{student.stu_id} · {student.source_filename || tx(locale, "合成作答文件", "synthetic submission")}</p>
+                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{student.stu_id} · {student.source_filename || tx(locale, "作答文件", "Submission file")}</p>
               </div>
               <span className={cn("shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold", student.identity_status === "needs_review" ? "bg-warning/10 text-warning" : "bg-accent/10 text-accent")}>
                 {student.identity_status === "needs_review" ? tx(locale, "身份待核对", "Identity check") : tx(locale, `${student.stu_ans.length} 题已识别`, `${student.stu_ans.length} answers`)}
@@ -690,7 +687,7 @@ function SubmissionRecognitionReview({ task, locale, busy, blocked, onContinue }
           {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           {tx(locale, "开始批改", "Start grading")}
         </Button>
-        <span className="text-xs text-muted-foreground">{tx(locale, "Demo 不会修改识别文本；如有问题可先进入作答校对页。", "The Demo does not rewrite recognized text. Open submission review first if anything needs checking.")}</span>
+        <span className="text-xs text-muted-foreground">{tx(locale, "需要修改时，可进入作答校对页。", "Open submission review if you need to make corrections.")}</span>
       </div>
     </section>
   );
@@ -711,10 +708,10 @@ function DemoResultInsights({ result, taskId, locale }: { result: TaskResultResp
     <section className="frontier-live-results mt-5 overflow-hidden rounded-[12px] border border-primary/20 bg-card p-4 sm:p-6" aria-labelledby="demo-result-insights-title">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "真实批改 · 即时分析", "Live grading · instant analysis")}</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "批改结果 · 学情分析", "Grading results · learning analysis")}</p>
           <h3 id="demo-result-insights-title" className="mt-1 text-xl font-bold">{tx(locale, "从真实分数看到班级表现", "See class performance from live scores")}</h3>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
-            {tx(locale, "所有指标均由本次 API 返回的逐题批改结果实时计算；教师确认前属于未确认结果。", "Every metric is computed from the per-question grading results returned by this live API run. Results remain unconfirmed until teacher review.")}
+            {tx(locale, "统计基于当前保存的批改结果。", "Statistics use the currently saved grading results.")}
           </p>
         </div>
         <div className="flex flex-wrap gap-3 text-xs font-semibold text-primary">
@@ -735,7 +732,7 @@ function DemoResultInsights({ result, taskId, locale }: { result: TaskResultResp
       <LiveResultCarousel model={model} locale={locale} />
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[10px] bg-muted/60 px-4 py-3 text-xs text-foreground">
-        <span>{tx(locale, `当前总分为 AI 初评；${model.reviewCount} 个题次仍需教师按证据复核。`, `These totals are AI provisional scores; ${model.reviewCount} responses still require evidence-based teacher review.`)}</span>
+        <span>{tx(locale, `有 ${model.reviewCount} 个题次需要关注，可查看复核详情。`, `${model.reviewCount} responses need attention. See the review details.`)}</span>
         <span className="font-semibold text-primary">{tx(locale, `班级平均 ${formatScore(model.classAverageScore)} 分`, `Class mean ${formatScore(model.classAverageScore)} points`)}</span>
       </div>
     </section>
@@ -773,7 +770,7 @@ function LiveResultCarousel({ model, locale }: { model: ReturnType<typeof buildR
     <section
       className="frontier-live-reveal mt-4 overflow-hidden rounded-[12px] border border-[#cfd9ef] bg-card shadow-sm"
       style={{ animationDelay: "320ms" }}
-      aria-label={tx(locale, "真实结果图表轮播", "Live result chart carousel")}
+      aria-label={tx(locale, "结果图表轮播", "Result chart carousel")}
       onMouseEnter={() => setPointerPaused(true)}
       onMouseLeave={() => setPointerPaused(false)}
       onFocusCapture={() => setPointerPaused(true)}
@@ -783,7 +780,7 @@ function LiveResultCarousel({ model, locale }: { model: ReturnType<typeof buildR
     >
       <div className="flex flex-col gap-3 border-b bg-muted/35 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">{tx(locale, "真实数据 · 动态图集", "Live data · rotating gallery")}</p>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-primary">{tx(locale, "结果图表", "Result charts")}</p>
           <h4 className="mt-1 inline-flex items-center gap-2 text-sm font-bold"><BarChart3 className="h-4 w-4 text-primary" />{slideLabels[activeSlide]}</h4>
         </div>
         <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label={tx(locale, "选择分析图", "Choose analysis chart")}>
@@ -847,7 +844,7 @@ function StudentPathChart({ model, locale }: { model: ReturnType<typeof buildRes
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "逐位学生", "Student by student")}</p>
         <h5 className="mt-2 text-xl font-bold">{tx(locale, "总分率一眼可比", "Compare total score rates")}</h5>
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">{tx(locale, "每个点均来自本次真实批改总分；连接线只帮助阅读，不代表时间趋势。", "Every point comes from this live grading total. The connecting line aids comparison and is not a time trend.")}</p>
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">{tx(locale, "比较各位学生的总分率。", "Compare students’ total score percentages.")}</p>
         <div className="mt-4 grid grid-cols-2 gap-2">
           {model.students.map((student) => <div key={student.id} className="rounded-lg border bg-card px-3 py-2"><span className="block truncate text-[10px] text-muted-foreground">{student.name}</span><strong className="text-primary">{formatPercent(student.percent)}</strong></div>)}
         </div>
@@ -873,7 +870,7 @@ function ScoreDistributionChart({ model, locale }: { model: ReturnType<typeof bu
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "分布直方图", "Score histogram")}</p>
         <h5 className="mt-2 text-xl font-bold">{tx(locale, "班级成绩落在哪些区间", "Where the class scores fall")}</h5>
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">{tx(locale, "柱高由本次真实学生总分率分箱计算，不使用宣传页预置数据。", "Column heights are bucketed from this run's student totals, never from showcase fixture data.")}</p>
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">{tx(locale, "查看不同得分区间的学生人数。", "View the number of students in each score range.")}</p>
       </div>
     </div>
   );
@@ -913,9 +910,9 @@ function ReviewSignalChart({ model, locale }: { model: ReturnType<typeof buildRe
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "教师复核信号", "Teacher review signals")}</p>
         <h5 className="mt-2 text-xl font-bold">{tx(locale, "把注意力放在需要判断的地方", "Focus attention where judgment is needed")}</h5>
-        <p className="mt-2 max-w-lg text-xs leading-5 text-muted-foreground">{tx(locale, "环图按本次真实批改的复核标记计算；它不替教师作决定。", "The ring is computed from this run's actual review flags; it never makes the teacher's decision.")}</p>
+        <p className="mt-2 max-w-lg text-xs leading-5 text-muted-foreground">{tx(locale, "查看需要关注的作答占比。", "View the proportion of answers needing attention.")}</p>
         <div className="mt-5 grid grid-cols-3 gap-2">
-          {[{ value: totalUnits, label: tx(locale, "作答单元", "Answer units") }, { value: model.reviewCount, label: tx(locale, "需复核", "Review") }, { value: clearUnits, label: tx(locale, "无复核标记", "No flag") }].map((item) => <div key={item.label} className="rounded-lg border bg-card px-3 py-3"><strong className="text-xl text-primary">{item.value}</strong><span className="mt-1 block text-[10px] text-muted-foreground">{item.label}</span></div>)}
+          {[{ value: totalUnits, label: tx(locale, "题次", "Responses") }, { value: model.reviewCount, label: tx(locale, "需复核", "Review") }, { value: clearUnits, label: tx(locale, "无复核标记", "No flag") }].map((item) => <div key={item.label} className="rounded-lg border bg-card px-3 py-3"><strong className="text-xl text-primary">{item.value}</strong><span className="mt-1 block text-[10px] text-muted-foreground">{item.label}</span></div>)}
         </div>
       </div>
     </div>
@@ -942,7 +939,7 @@ function TeacherMaterialConfirmation({
     <section className="mt-5 rounded-[10px] border border-primary/25 bg-primary/[0.035] p-4 sm:p-5" aria-labelledby="demo-teacher-material-title">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "真实生成", "Live generation")}</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "题目资料", "Question materials")}</p>
           <h3 id="demo-teacher-material-title" className="mt-1 text-lg font-bold">{tx(locale, "本次生成的题目资料", "Generated question materials")}</h3>
           <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
             {tx(locale, "题干、标答与评分依据已实时生成，可以继续识别作答。", "Questions, reference answers, and rubrics were generated live. You can continue to submissions.")}
@@ -961,7 +958,7 @@ function TeacherMaterialConfirmation({
             </summary>
             <div className="mt-3 grid gap-3 lg:grid-cols-2">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{tx(locale, "本次真实识别题干", "Live recognized question")}</p>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{tx(locale, "题干", "Question")}</p>
                 <MarkdownMath className="mt-1 text-xs leading-5 text-foreground">{problem.stem}</MarkdownMath>
               </div>
               <div>
@@ -1009,7 +1006,6 @@ function WorkflowStep({ step, index, locale }: { step: RunStep; index: number; l
       <div className="min-w-0">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm font-bold text-foreground">{step.label}</p>
-          {step.jobId ? <span className="font-mono text-[10px] text-muted-foreground">{tx(locale, "任务", "job")} {shortId(step.jobId)}</span> : null}
         </div>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">{step.detail}</p>
       </div>
@@ -1158,12 +1154,12 @@ function stepsFromSnapshot(snapshot: TaskStateSnapshot, locale: Locale): RunStep
           ? "active"
           : "waiting";
     const completeDetail = step.id === "task"
-      ? tx(locale, `任务 ${shortId(snapshot.task_id)} 已创建`, `Task ${shortId(snapshot.task_id)} created`)
+      ? tx(locale, "任务已创建", "Task created")
       : step.id === "questions"
         ? tx(locale, `已识别 ${snapshot.problem_count} 题；人工确认状态请查看审核页面`, `${snapshot.problem_count} questions recognized; see question review for confirmation status`)
         : step.id === "submissions"
-          ? tx(locale, `已识别 ${snapshot.student_count} 份合成作答`, `${snapshot.student_count} synthetic submissions recognized`)
-          : tx(locale, `已处理 ${snapshot.student_count * snapshot.problem_count} 个作答单元`, `${snapshot.student_count * snapshot.problem_count} answer units processed`);
+          ? tx(locale, `已识别 ${snapshot.student_count} 份作答`, `${snapshot.student_count} submissions recognized`)
+          : tx(locale, `已处理 ${snapshot.student_count * snapshot.problem_count} 题次`, `${snapshot.student_count * snapshot.problem_count} responses processed`);
     return {
       ...step,
       state,
@@ -1206,9 +1202,6 @@ function createIdempotencyKey() {
     : `frontier-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function shortId(value: string) {
-  return value.length > 12 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
-}
 
 function safeTaskId(value: string | null) {
   return value && /^[A-Za-z0-9_-]{1,96}$/.test(value) && isFrontierTaskPath(`/tasks/${value}`) ? value : null;

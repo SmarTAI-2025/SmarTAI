@@ -51,7 +51,7 @@ export const materialImportCopy = {
     progressBackground: "可以离开此页，导入会在后台继续；完成候选匹配后将进入确认页。",
     progressSteps: "导入步骤",
     progressLatest: "最近进度",
-    progressWaiting: "正在等待后端返回事实进度…",
+    progressWaiting: "正在等待进度更新…",
     progressLoadError: "无法读取资料导入进度。",
     refresh: "刷新状态",
     backWorkspace: "返回工作台",

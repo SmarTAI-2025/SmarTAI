@@ -567,7 +567,7 @@ function ScorePolicyEditor({ value, disabled, maximumMaxScore, maxTextLength, lo
         <div>
           <h2 id="score-policy-title" className="text-sm font-bold text-foreground">{tx(locale, "设置题目满分", "Set Question Maximum Scores")}</h2>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            {tx(locale, "评分步骤统一使用百分比；这里的满分会成为批改时不可被模型覆盖的分值尺度。", "Rubric steps use percentages. These maximum scores become the grading scale the model cannot override.")}
+            {tx(locale, "按此处设置的满分批改；评分步骤按百分比分配。", "Grading uses the maximum score set here; rubric steps use percentages.")}
           </p>
         </div>
         <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 text-xs font-semibold text-foreground">
@@ -731,7 +731,7 @@ function SourceEditor({
       <div className="p-3 sm:p-4">
         {referenceStatus === "checking" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "正在核对已上传文件…", "Checking uploaded files…")}</p> : null}
         {referenceStatus === "missing" ? <p role="alert" className="mb-3 text-xs text-danger">{tx(locale, "原文件已过期、删除或不可用，请重新选择文件或资料库条目。填写的信息仍保留。", "The original file expired, was deleted, or is unavailable. Reselect a file or library item; your form is preserved.")}</p> : null}
-        {referenceStatus === "unavailable" ? <p role="alert" className="mb-3 text-xs text-danger">{tx(locale, "暂时无法核对文件，请重试；不会自动上传或识别。", "Unable to check the file. Retry; no upload or recognition will start automatically.")} <button type="button" className="underline" onClick={onRetryReference}>{tx(locale, "重试检查", "Retry check")}</button></p> : null}
+        {referenceStatus === "unavailable" ? <p role="alert" className="mb-3 text-xs text-danger">{tx(locale, "暂时无法核对文件，请重试。", "Unable to check the file. Please try again.")} <button type="button" className="underline" onClick={onRetryReference}>{tx(locale, "重试检查", "Retry check")}</button></p> : null}
         {needsFileReselection ? <p role="alert" className="mb-3 text-xs text-warning">{tx(locale, `“${source.fileName}” 仅保留了文件名，请重新选择文件，或从课程资料库选择。`, `Only the filename “${source.fileName}” is retained. Reselect the file or choose it from the course library.`)}</p> : null}
         {source.sourceMode === "upload" && source.storedFileId && referenceStatus === "ready" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "已上传文件可继续使用，无需重新选择。", "Uploaded file is available. No need to select it again.")}</p> : null}
         {source.sourceMode === "library" && source.libraryMaterial && referenceStatus === "ready" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "资料库文件可直接使用，无需重新上传。", "The library file is available. No need to upload it again.")}</p> : null}

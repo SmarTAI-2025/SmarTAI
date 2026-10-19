@@ -182,20 +182,20 @@ export function QuestionAnalysisDetail({
       </div>
 
       <div className="mt-4">
-        <EvidencePanel title={tx(locale, "Rubric 维度表现", "Performance by Rubric Criterion")} subtitle={tx(locale, "按批改步骤描述聚合", "Aggregated from grading-step descriptions")}>
+        <EvidencePanel title={tx(locale, "评分项表现", "Performance by scoring criterion")} subtitle={tx(locale, "各评分项的平均得分", "Average score by criterion")}>
           {rubricDimensions.length ? <div className="mt-3 grid gap-2 lg:grid-cols-2">{rubricDimensions.map((dimension) => (
             <div key={dimension.label} className="rounded-[7px] bg-muted/60 px-3 py-2">
               <div className="flex items-start justify-between gap-3 text-[11px]"><strong className="min-w-0 break-words leading-4 text-foreground">{dimension.label}</strong><span className="shrink-0 font-semibold text-primary">{formatScore(dimension.averageScore)} {tx(locale, "平均分", "mean")}</span></div>
               <p className="mt-1 text-[10px] text-muted-foreground">{tx(locale, `${dimension.correct}/${dimension.attempts} 次标记为正确`, `${dimension.correct}/${dimension.attempts} marked correct`)}</p>
             </div>
-          ))}</div> : <PanelEmpty text={tx(locale, "当前结果没有步骤级 rubric 数据。", "No step-level rubric data is available.")} />}
+          ))}</div> : <PanelEmpty text={tx(locale, "暂无分项评分。", "No scores by criterion are available.")} />}
         </EvidencePanel>
         <div className="mt-4 grid gap-4 xl:grid-cols-2">
-          <EvidencePanel title={tx(locale, "易错点与常见问题（有据）", "Common issues (evidence-backed)")} subtitle={tx(locale, "按重复评分反馈计数，不由前端生成主题", "Counts repeated grading feedback; no invented topic")}>
+          <EvidencePanel title={tx(locale, "常见问题", "Common issues")} subtitle={tx(locale, "出现次数较多的评分反馈", "Frequently occurring grading feedback")}>
             <SignalList locale={locale} signals={commonFeedback} empty={tx(locale, "没有重复反馈可形成摘要。", "No repeated feedback to summarize.")} />
           </EvidencePanel>
-          <EvidencePanel title={tx(locale, "复核与分歧信号", "Review & disagreement signals")} subtitle={tx(locale, `基于 ${question.count} 份真实作答`, `Based on ${question.count} real responses`)}>
-            <SignalList locale={locale} signals={reviewSignals} empty={tx(locale, "没有正式复核或分歧信号。", "No formal review or disagreement signal.")} />
+          <EvidencePanel title={tx(locale, "复核与分歧信号", "Review & disagreement signals")} subtitle={tx(locale, `基于 ${question.count} 份作答`, `Based on ${question.count} responses`)}>
+            <SignalList locale={locale} signals={reviewSignals} empty={tx(locale, "暂无需要关注的问题。", "No issues need attention.")} />
           </EvidencePanel>
         </div>
       </div>

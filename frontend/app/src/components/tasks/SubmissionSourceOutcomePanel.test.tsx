@@ -81,7 +81,7 @@ describe("SubmissionSourceOutcomePanel", () => {
     expect(screen.getByText(zh ? "尚未读取页码：" : "Unread pages:").parentElement).toHaveTextContent(zh ? "尚未读取页码：3" : "Unread pages: 3");
     expect(screen.getByText(zh ? "第 2 页：模型服务暂时不可用 (HTTP 503)" : "Page 2: The model service is temporarily unavailable (HTTP 503)")).toBeInTheDocument();
     expect(screen.getByText(zh ? "成功页结果已保留；文件与模型设置未变时，重试会复用可用结果，补读其余页面。" : "Successful page results are retained. If the file and model settings are unchanged, retry reuses eligible results and reads the remaining pages.")).toBeInTheDocument();
-    expect(screen.getByText(zh ? /上次调用是否计费尚无法确认/ : /billing is unconfirmed/)).toBeInTheDocument();
+    expect(screen.getByText(zh ? /上次调用是否计费尚无法确认/ : /billing status is unknown/)).toBeInTheDocument();
     expect(screen.queryByText(/学生未作答|内容为空|student left.*blank/i)).not.toBeInTheDocument();
   });
 
@@ -96,7 +96,7 @@ describe("SubmissionSourceOutcomePanel", () => {
     expect(screen.queryByText(/题目生成/)).not.toBeInTheDocument();
   });
 
-  it("shows the accounting equation, exact reason, and diagnostic identifiers", () => {
+  it("shows accounting and actionable reasons without diagnostic identifiers", () => {
     render(
       <MemoryRouter>
         <SubmissionSourceOutcomePanel
@@ -117,7 +117,7 @@ describe("SubmissionSourceOutcomePanel", () => {
     expect(screen.getByText(/3 份上传 = 1 份成功 \+ 1 份失败 \+ 1 份身份待确认/)).toBeInTheDocument();
     expect(screen.getByText("student-scan.png")).toBeInTheDocument();
     expect(screen.getByText("所选模型不支持图片输入")).toBeInTheDocument();
-    expect(screen.getByText("job-21:1:src-ocr")).toBeInTheDocument();
+    expect(screen.queryByText(/job-21|src-ocr|provider_vision_not_supported/)).not.toBeInTheDocument();
     expect(screen.getByText("student-unknown.pdf")).toBeInTheDocument();
     expect(screen.getByText("学生身份需要教师确认")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "重新选择文件" })).toHaveAttribute(
@@ -156,4 +156,12 @@ describe("SubmissionSourceOutcomePanel", () => {
     expect(screen.getByText("学生身份发生冲突")).toBeInTheDocument();
     expect(screen.getByText("同时发现未匹配题号：q7、q9")).toBeInTheDocument();
   });
+});
+
+it.each(["zh-CN", "en-US"] as const)("renders older file records without content type (%s)", locale => {
+  const { content_type: _contentType, ...olderSource } = sources[1];
+  render(<MemoryRouter><SubmissionSourceOutcomePanel locale={locale} sources={[olderSource as SubmissionSourceOutcome]} /></MemoryRouter>);
+  expect(screen.getByText("student-scan.png")).toBeVisible();
+  expect(screen.getByText(locale === "zh-CN" ? /^文件 ·/ : /^File ·/)).toBeVisible();
+  expect(screen.getByText(locale === "zh-CN" ? "所选模型不支持图片输入" : "The selected model does not support image input")).toBeVisible();
 });

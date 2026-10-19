@@ -10,7 +10,7 @@ vi.mock("@/hooks/useDraftProtection", () => ({ useDraftProtection: () => ({ conf
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
 vi.mock("@/components/tasks/MaterialOriginalPreview", () => ({ MaterialOriginalPreview: () => null }));
 vi.mock("@/api/hooks", () => ({
-  useTask: () => ({ isSuccess: true, data: { problem_data: {} } }),
+  useTask: () => ({ isSuccess: true, data: { problem_data: Object.fromEntries(["required", "advisory", "below", "clear", "unknown", "mismatch", "invalid"].map(id => [id, { q_id: id, number: id }])) } }),
   useApplyMaterialImport: () => ({ isPending: false }),
   useMaterialImport: () => ({ data: { status: "ready", source: { filename: "answers.txt" }, candidates: state.candidates } }),
 }));

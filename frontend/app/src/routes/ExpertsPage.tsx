@@ -186,7 +186,7 @@ export function ExpertsPage() {
             : "Unable to save configuration",
         { description: message },
       );
-      throw new Error(message);
+      throw error;
     }
   }
 
@@ -344,8 +344,8 @@ export function ExpertsPage() {
             </h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {zh
-                ? "保存并启用后即可用于任务；连通性验证只是可选排错，不会阻止使用。"
-                : "Saved and enabled configurations work immediately. Connectivity checks are optional diagnostics."}
+                ? "保存并启用后即可使用，测试为可选项。"
+                : "Save and enable to use this model. Testing is optional."}
             </p>
           </div>
           <button
@@ -546,8 +546,8 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
         zh ? "API Key / Secret Key 验证通过" : "API Key / Secret Key verification passed",
         {
           description: zh
-            ? "仅验证了凭据；OCR 服务权限与额度将在真实任务中检查。"
-            : "Credentials only were verified. OCR access and quota are checked by a real task.",
+            ? "凭据验证通过。使用前请确认已开通 OCR 服务且额度充足。"
+            : "Credentials verified. Before use, check that OCR service access and quota are available.",
         },
       );
     } catch (error) {
@@ -612,8 +612,8 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
       {configured ? (
         <dl className="mt-3 grid gap-2 rounded-lg bg-slate-50 px-3 py-3 text-xs dark:bg-slate-900/40 sm:grid-cols-3">
           <div>
-            <dt className="text-muted-foreground">{zh ? "凭据记录" : "Credential record"}</dt>
-            <dd className="mt-1 break-all font-mono text-[11px]">{metadata?.credential_id}</dd>
+            <dt className="text-muted-foreground">{zh ? "凭据状态" : "Credential status"}</dt>
+            <dd className="mt-1 break-all font-mono text-[11px]">{zh ? "已保存" : "Saved"}</dd>
           </div>
           <div>
             <dt className="text-muted-foreground">{zh ? "最近检查" : "Last checked"}</dt>
@@ -621,7 +621,7 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
           </div>
           <div>
             <dt className="text-muted-foreground">{zh ? "最近错误" : "Last error"}</dt>
-            <dd className="mt-1 break-all font-medium">{metadata?.verification_error_code ?? "—"}</dd>
+            <dd className="mt-1 break-all font-medium">{metadata?.verification_error_code ? expertErrorMessage(metadata.verification_error_code, locale) ?? (zh ? "验证未通过，请重试" : "Verification failed; try again") : "—"}</dd>
           </div>
         </dl>
       ) : null}
@@ -671,8 +671,8 @@ function BaiduOCRSettings({ locale }: { locale: "zh-CN" | "en-US" }) {
         </div>
         <p className="text-[11px] leading-4 text-muted-foreground">
           {zh
-            ? "这里只检查凭据，图片识别会在任务中进行。"
-            : "This check verifies credentials. Image recognition takes place in your tasks."}
+            ? "保存后可在任务中选择百度 OCR。"
+            : "After saving, you can select Baidu OCR in your tasks."}
         </p>
         {formError ? <InlineError message={formError} /> : null}
       </form>
@@ -751,7 +751,7 @@ function ExpertTableRow({
       <td className="px-3 text-center align-middle text-xs text-muted-foreground">
         <span className="block">RPM {expert.rpm > 0 ? expert.rpm : "—"}</span>
         <span className="mt-1 block">
-          {zh ? "并发自动 · 上限 50" : "Auto concurrency · up to 50"}
+          {zh ? "并发自动" : "Automatic concurrency"}
         </span>
       </td>
       <td className="px-5 align-middle">
@@ -813,7 +813,7 @@ function ExpertMobileRow(props: ExpertRowProps) {
       </div>
       <div className="text-xs text-muted-foreground">
         <span>
-          RPM {expert.rpm > 0 ? expert.rpm : "—"} · {zh ? "并发自动 · 上限 50" : "Auto concurrency · up to 50"}
+          RPM {expert.rpm > 0 ? expert.rpm : "—"} · {zh ? "并发自动" : "Automatic concurrency"}
         </span>
       </div>
       <ExpertActions {...props} />
@@ -1192,7 +1192,7 @@ function ExpertEditorDialog({
       });
     } catch (error) {
       setApiKey("");
-      setFormError(error instanceof Error ? error.message : zh ? "保存失败。" : "Unable to save.");
+      setFormError(safeExpertError(error, locale));
     }
   }
 
@@ -1210,11 +1210,11 @@ function ExpertEditorDialog({
       description={
         target.mode === "add"
           ? zh
-            ? "保存配置不会自动发起模型调用。"
-            : "Saving does not automatically call the model."
+            ? "保存不会调用模型。"
+            : "Saving does not call the model."
           : zh
-            ? "API key 留空将保留现有密钥；保存后请重新验证。"
-            : "Leave the API key blank to keep it. Verify again after saving."
+            ? "API key 留空保留原密钥，可按需重新测试。"
+            : "Leave the API key blank to keep it. Test again if needed."
       }
       closeLabel={zh ? "关闭" : "Close"}
       onClose={onClose}
@@ -1282,8 +1282,8 @@ function ExpertEditorDialog({
           hint={
             target.mode === "add"
               ? zh
-                ? "提交后立即清空，页面和接口都不会回显。"
-                : "Cleared after submission and never returned by the UI or API."
+                ? "保存后不再显示完整密钥。"
+                : "The full key is not displayed after saving."
               : zh
                 ? "留空保留现有密钥。"
                 : "Leave blank to keep the current key."
@@ -1385,12 +1385,12 @@ function ExpertEditorDialog({
           <div className="grid content-start gap-1.5 text-sm">
             <span className="font-medium">{zh ? "并发" : "Concurrency"}</span>
             <span className="flex h-9 items-center rounded-md border bg-muted/40 px-3">
-              {zh ? "自动 · 上限 50" : "Automatic · up to 50"}
+              {zh ? "自动" : "Automatic"}
             </span>
             <p className="text-xs leading-5 text-muted-foreground">
               {zh
-                ? "根据 RPM、请求耗时和服务器资源自动调节。资源不足时排队。"
-                : "Automatically adjusts to RPM, request duration and server capacity. Requests queue when capacity is full."}
+                ? "并发自动调节，无需设置。"
+                : "Concurrency adjusts automatically; no setup is needed."}
             </p>
           </div>
         </div>
@@ -1454,8 +1454,8 @@ function ConfirmationDialog({
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900 dark:border-amber-900 dark:bg-amber-950/35 dark:text-amber-100">
           {image
             ? zh
-              ? "系统将发送一次合成小图请求，会消耗模型额度并可能产生费用。"
-              : "SmarTAI will send one small synthetic image request. This uses model quota and may incur charges."
+              ? "将用一张示例图片进行测试，会消耗模型额度并可能产生费用。"
+              : "A sample image will be sent for testing. This uses model quota and may incur charges."
             : zh
             ? "系统将发送一次可选的最小文本请求。这不是启用配置的前置条件，实际任务也可以直接测试。"
             : "SmarTAI will send one optional minimal text request. This is not required before using the configuration in a real task."}
@@ -1548,8 +1548,7 @@ function safeExpertError(error: unknown, locale: "zh-CN" | "en-US") {
   if (code?.startsWith("provider_") || code?.startsWith("expert_verification_")) {
     return locale === "zh-CN" ? "请求未能完成，请检查配置或稍后重试。" : "The request could not complete. Check the configuration or try again later.";
   }
-  return normalized.message
-    || (locale === "zh-CN" ? "请求失败，请稍后重试。" : "Request failed. Try again later.");
+  return locale === "zh-CN" ? "请求失败，请稍后重试。" : "Request failed. Try again later.";
 }
 
 function expertErrorMessage(code: string | null | undefined, locale: "zh-CN" | "en-US") {

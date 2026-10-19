@@ -1,3 +1,4 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { taskInputVersion } from "@/lib/editorVersions";
 import { useProblemDraftReferences } from "@/hooks/useProblemDraftReferences";
 import { createSourceDraft } from "@/lib/taskPageDrafts";
@@ -595,7 +596,7 @@ function localizeImportError(error: unknown, locale: "zh-CN" | "en-US") {
   if (code && known[code]) return locale === "zh-CN" ? known[code][0] : known[code][1];
   if (normalized.status === 503) return materialImportText(locale, "modelRequired");
   if (normalized.status === 0) return materialImportText(locale, "genericError");
-  return normalized.message || materialImportText(locale, "genericError");
+  return userFacingError(normalized, locale) || materialImportText(locale, "genericError");
 }
 
 function isAcceptedFile(filename: string) {

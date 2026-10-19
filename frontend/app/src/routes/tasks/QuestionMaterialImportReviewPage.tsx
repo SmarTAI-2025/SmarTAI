@@ -1,3 +1,4 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { confidenceValue, confidenceNeedsAttention, confidenceRequiresReview } from "@/lib/confidencePolicy";
 import { materialSelectionVersion } from "@/lib/editorVersions";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
@@ -135,7 +136,7 @@ function QuestionMaterialImportReviewPageForm() {
         setInvalidPlanReason(locale === "zh-CN" ? invalidPlanMessages[code][0] : invalidPlanMessages[code][1]);
         setApplyError(null);
       } else {
-        setApplyError(normalized.message);
+        setApplyError(userFacingError(normalized, locale));
       }
     }
   }
@@ -174,7 +175,7 @@ function QuestionMaterialImportReviewPageForm() {
             <p className="mt-2 max-w-xl text-xs leading-5 text-muted-foreground">
               {planExpired
                 ? (locale === "zh-CN" ? "匹配计划已过期，请重新选择资料并生成候选。" : "The match plan expired. Choose the material and generate candidates again.")
-                : (plan?.error ?? "")}
+                : userFacingError(plan?.error || importQuery.error, locale)}
             </p>
             {taskId ? <div className="mt-3"><Link to={`/tasks/${taskId}/questions`} className="inline-flex h-9 items-center justify-center rounded-lg border bg-card px-4 text-sm font-semibold hover:bg-muted">{locale === "zh-CN" ? "人工继续处理" : "Continue manually"}</Link></div> : null}
             {planExpired ? (
@@ -288,7 +289,7 @@ function CandidateMatrix({ candidates, problems, acceptedIds, overwriteIds, disa
               || candidate.match_status !== "exact" || confidenceRequiresReview(candidate.confidence));
             return (
               <tr key={candidate.candidate_id} className="align-top hover:bg-muted/20">
-                <td className="px-5 py-3 font-semibold text-foreground">{problem?.number || candidate.q_id}</td>
+                <td className="px-5 py-3 font-semibold text-foreground">{problem?.number || "—"}</td>
                 <td className="px-3 py-3 text-foreground">{targetLabel(candidate.target, locale)}</td>
                 <td className="px-3 py-3">
                   <span className={cn("inline-flex items-center gap-1.5 font-semibold", conflict ? "text-danger" : possible ? "text-warning" : "text-accent")}>

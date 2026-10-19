@@ -190,15 +190,14 @@ function completionStepState(index: number, completedSteps: number): "done" | "a
 function localizeEvent(event: ProgressEvent, locale: Locale) {
   const executionMessage = executionProgressCopy(event.message, locale);
   if (executionMessage) return executionMessage;
-  if (locale === "en-US") return event.message;
-  const known: Record<string, string> = {
-    "AI completion started": "SmarTAI 补全已开始",
-    "Generating missing problem materials": "正在生成缺失的题目资料",
-    "Validating generated problem materials": "正在校验生成的题目资料",
-    "Applying generated materials to still-empty slots": "正在写回仍为空的资料槽位",
-    "AI completion finished": "SmarTAI 补全已完成",
+  const known: Record<string, [string, string]> = {
+    "AI completion started": ["SmarTAI 补全已开始", "SmarTAI completion started"],
+    "Generating missing problem materials": ["正在生成缺失的题目资料", "Generating missing question materials"],
+    "Validating generated problem materials": ["正在检查生成内容", "Checking generated materials"],
+    "Applying generated materials to still-empty slots": ["正在保存补全内容", "Saving completed materials"],
+    "AI completion finished": ["SmarTAI 补全已完成", "SmarTAI completion finished"],
   };
-  return known[event.message] ?? event.message;
+  return known[event.message]?.[locale === "zh-CN" ? 0 : 1] ?? (locale === "zh-CN" ? "处理中…" : "Processing…");
 }
 
 function formatEventTime(value: number, locale: Locale) {

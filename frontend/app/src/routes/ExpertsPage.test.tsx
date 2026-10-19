@@ -253,7 +253,7 @@ describe("ExpertsPage editable vendor Base URL", () => {
     await user.click(screen.getByRole("button", { name: "添加模型配置" }));
     expect(screen.getByLabelText(/^RPM/)).toHaveValue(null);
     expect(screen.queryByRole("spinbutton", { name: /并发/ })).not.toBeInTheDocument();
-    expect(screen.getByText("自动 · 上限 50")).toBeInTheDocument();
+    expect(screen.getByText("自动")).toBeInTheDocument();
 
     await user.type(screen.getByLabelText(/^API key/), "sk-test-only");
     await user.click(screen.getByRole("button", { name: "保存配置" }));
@@ -285,7 +285,7 @@ describe("ExpertsPage editable vendor Base URL", () => {
     const user = userEvent.setup();
     renderPage();
 
-    expect(screen.getAllByText("并发自动 · 上限 50").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("并发自动").length).toBeGreaterThan(0);
     await user.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
     expect(screen.getByLabelText(/^RPM/)).toHaveValue(null);
     await user.type(screen.getByLabelText(/^RPM/), "10");
@@ -516,7 +516,8 @@ describe("ExpertsPage editable vendor Base URL", () => {
     const user = userEvent.setup();
     renderPage();
 
-    expect(screen.getByText("ocr-record-1")).toBeInTheDocument();
+    expect(screen.queryByText("ocr-record-1")).not.toBeInTheDocument();
+    expect(screen.getByText("已保存")).toBeInTheDocument();
     expect(screen.getByText("API Key / Secret Key 已验证")).toBeInTheDocument();
     expect(screen.getByLabelText("替换 API Key")).toHaveValue("");
     expect(screen.getByLabelText("替换 Secret Key")).toHaveValue("");

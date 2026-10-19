@@ -73,7 +73,7 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
       const hydratedBaseline = latest.current.baseline && draftFingerprint(latest.current.baseline);
       const compatible = latest.current.versionsMatch?.(result.record.businessVersion, latest.current.version) ?? result.record.businessVersion === latest.current.version;
       if (!compatible || (currentFingerprint !== startValue && currentFingerprint !== hydratedBaseline)) {
-        setConflict(result.value); setNotice("发现已暂存草稿，但服务器内容或当前输入已变化。请核对后明确恢复，未自动覆盖。"); return;
+        setConflict(result.value); setNotice("发现旧草稿，当前内容已变化。请核对后选择是否恢复。"); return;
       }
       saved.current = draftFingerprint(result.value); setSavedAt(result.record.savedAt);
       latest.current.onRestore(result.value);
@@ -92,19 +92,19 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
     if (cleared.current) return;
     if (load.current?.value || isDirty()) {
       setConflict(load.current?.value ?? latest.current.value);
-      setNotice("服务器业务版本已变化：此任务的已保存内容有更新。当前输入仍保留，请选择保留当前输入或恢复旧草稿，再暂存。");
+      setNotice("任务内容已更新，当前输入已保留。请选择保留当前输入或恢复旧草稿，再暂存。");
     } else if (latest.current.baseline) latest.current.onRestore(latest.current.baseline);
   }, [version, enabled]);
 
   useEffect(() => subscribeDraftChanges((event) => {
     const detail = (event as CustomEvent<{ type: string; key?: string; remote?: boolean }>).detail;
     if (detail.remote && detail.type === "write" && owner && detail.key === draftKey(owner, scope)) {
-      setNotice("另一标签页已暂存或删除此草稿。当前输入保留；再次暂存不会覆盖它，请重新打开页面核对最新版本。");
+      setNotice("另一标签页已更新草稿。当前输入已保留，请重新打开页面核对。");
     }
     if (detail.type === "clear") {
       saved.current = null; load.current = null; setSavedAt(null); setConflict(null);
       latest.current.onRestore(latest.current.baseline ?? initialValue.current);
-      setNotice("本机草稿已清除。退出、切换账号或会话失效后不会恢复上个账号的输入。");
+      setNotice("已退出或切换账号，本机草稿已清除。");
     }
   }), [owner, scope]);
 
@@ -154,18 +154,18 @@ export function useDraftProtection<T extends object>({ scope, value, onRestore, 
   function restoreConflict() {
     if (!conflict) return;
     latest.current.onRestore(conflict); saved.current = null; setConflict(null); setSavedAt(null);
-    setNotice("已恢复旧草稿供核对，尚未正式保存。请检查业务内容后重新暂存或提交。");
+    setNotice("已恢复旧草稿，尚未正式保存。请核对后暂存或提交。");
   }
   function keepCurrent() {
     saved.current = null; setConflict(null); setSavedAt(null);
-    setNotice("已保留当前输入，请重新暂存。正式保存时仍会核对服务器版本。");
+    setNotice("已保留当前输入，请重新暂存。");
   }
   function resetWorking(value: T) {
     incarnation.current += 1;
     if (load.current) load.current = { ...load.current, value: null };
     saved.current = draftFingerprint(value); cleared.current = null; setSavedAt(null); setConflict(null);
     latest.current.onRestore(value);
-    setNotice("工作区已载入最新内容；之前明确暂存的版本仍保留，重新打开时会核对服务器版本。");
+    setNotice("已载入最新内容，之前暂存的草稿已保留。");
   }
   const controller = useRef<DraftController>(null!);
   controller.current = {

@@ -331,11 +331,12 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     minority_veto: "Outlying expert score", parse_failed: "Could not parse result", degraded_to_single: "Some experts completed",
     transient_llm: "Model network error or timeout", llm_failed: "Model could not grade", quota_exhausted: "Quota exhausted", general: "Teacher review required",
   };
-  if (locale === "en-US") return english[reason] ?? reason.replaceAll("_", " ");
+  if (locale === "en-US") return english[reason] ?? "Please review this item";
   const labels: Record<string, string> = {
     grading_paused: "已暂停，批改未完成",
     partial_experts: "部分专家完成",
     high_indecisiveness: "专家分歧较大",
+    minority_veto: "个别模型评分偏离较大",
     low_confidence: "置信度偏低",
     score_spread_high: "评分差异较大",
     parse_failed: "解析失败",
@@ -345,7 +346,7 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     quota_exhausted: "额度不足",
     general: "需要人工确认",
   };
-  return labels[reason] ?? reason.replaceAll("_", " ");
+  return labels[reason] ?? "请检查此项";
 }
 
 export function clampPercent(value: number | null | undefined) {

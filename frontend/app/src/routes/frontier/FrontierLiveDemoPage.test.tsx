@@ -154,7 +154,7 @@ describe("FrontierLiveDemoPage", () => {
         messages: [{ ts: 1, level: "info", message }], activity_latest: activity,
       } }).mockReturnValue(new Promise(() => {}));
       const view = renderLive("asg_demo123");
-      const panel = (await screen.findByText(zh ? "后端进度" : "Backend progress")).parentElement!.parentElement!;
+      const panel = (await screen.findByText(zh ? "处理进度" : "Progress")).parentElement!.parentElement!;
       expect(within(panel).getByText(expected)).toBeVisible();
       expect(within(panel).getByText(status === "grading" ? (zh ? "批改中" : "Grading") : (zh ? "题目识别" : "Processing questions"))).toBeVisible();
       expect(panel).not.toHaveTextContent(/normalizing_ocr_output|activity_responding|private provider diagnostic/);
@@ -221,7 +221,7 @@ describe("FrontierLiveDemoPage", () => {
       } });
       vi.mocked(getTaskResult).mockResolvedValue(gradedResult({ ...taskWithQuestions(), student_data: recognizedStudents() }));
       const view = renderLive("asg_demo123");
-      const panel = (await screen.findByText(locale === "zh-CN" ? "后端进度" : "Backend progress")).parentElement!.parentElement!;
+      const panel = (await screen.findByText(locale === "zh-CN" ? "处理进度" : "Progress")).parentElement!.parentElement!;
       expect(within(panel).queryByText(stopped
         ? (locale === "zh-CN" ? "本次处理已停止" : "This run has stopped")
         : (locale === "zh-CN" ? "已完成" : "Completed"))).toBeVisible();
@@ -404,16 +404,16 @@ describe("FrontierLiveDemoPage", () => {
     expect(startGrading).not.toHaveBeenCalled();
   });
 
-  it("states the honest boundary between synthetic inputs and live processing", () => {
+  it("labels demo samples without implementation commentary", () => {
     render(<I18nProvider><MemoryRouter><FrontierLiveDemoPage /></MemoryRouter></I18nProvider>);
     expect(document.querySelector('[data-smartai-app-mark="silver"]')).toBeInTheDocument();
     expect(document.querySelector('[data-smartai-wordmark="white"]')).toBeInTheDocument();
-    expect(screen.getByText("Synthetic inputs")).toBeInTheDocument();
-    expect(screen.getByText("Real API")).toBeInTheDocument();
-    expect(screen.getByText("Real OCR")).toBeInTheDocument();
-    expect(screen.getByText("Real grading")).toBeInTheDocument();
-    expect(screen.getByText(/Nothing on this page injects precomputed scores/i)).toBeInTheDocument();
-    expect(screen.getByText(/no exposed model key/i)).toBeInTheDocument();
+    expect(screen.getByText("Demo samples")).toBeInTheDocument();
+    expect(screen.getByText("Task workflow")).toBeInTheDocument();
+    expect(screen.getByText("Text recognition")).toBeInTheDocument();
+    expect(screen.getByText("AI grading")).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing on this page injects precomputed scores/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no exposed model key/i)).not.toBeInTheDocument();
   });
 
   it("translates paused-run steps without restarting or presenting an error", async () => {

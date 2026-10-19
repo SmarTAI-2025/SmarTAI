@@ -213,16 +213,12 @@ export function GradingProgressPage() {
 
               <QueueTable locale={locale} queue={queue} completed={completedView} />
 
-              <section className="mt-4 flex min-h-[74px] items-center rounded-[10px] border bg-transparent px-5 py-4 text-[13px] leading-5 text-muted-foreground sm:px-[30px] sm:text-[14px]">
-                {latestError ? (
+              {latestError ? <section className="mt-4 flex min-h-[74px] items-center rounded-[10px] border bg-transparent px-5 py-4 text-[13px] leading-5 text-muted-foreground sm:px-[30px] sm:text-[14px]">
                   <span className="flex items-start gap-2 text-danger">
                     <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
                     {backgroundErrorTitle(latestError, locale)}
                   </span>
-                ) : completedView
-                  ? (locale === "en-US" ? "This page preserves the completed grading queue for later review." : "这里保留已完成批改的队列快照，便于之后回看。")
-                  : copy(locale, "recoverableHint")}
-              </section>
+              </section> : null}
             </>
           )}
           {status === "error" && progress?.job_id && <>

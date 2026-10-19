@@ -1,3 +1,4 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { ReviewQueue as ReviewQueuePanel } from "@/components/tasks/ReviewQueue";
 import { isCorrectionReviewConfirmed, correctionReviewBlocked, correctionReviewNextBlocked } from "@/components/tasks/resultsReviewModel";
 import { ReviewConfirmButton, ReviewStageActions, RetryFailedGrading } from "@/components/tasks/ReviewConfirmation";
@@ -6,7 +7,6 @@ import { AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, LoaderCircle, Se
 import { useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { normalizeAPIError } from "@/api/client";
 import { useConfirmResultReviews } from "@/hooks/useConfirmResultReviews";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useTask, useTaskFinalization, useTaskResult, useTeacherComments } from "@/api/hooks/tasks";
@@ -150,7 +150,7 @@ export function ReviewOverviewPage() {
       });
       toast.success(locale === "en-US" ? `${confirmableReviews.length} reviews confirmed.` : `已确认 ${confirmableReviews.length} 个题次的复核。`);
     } catch (error) {
-      setBatchError(normalizeAPIError(error).message);
+      setBatchError(userFacingError(error, locale));
     } finally {
       confirmingRef.current = false;
     }

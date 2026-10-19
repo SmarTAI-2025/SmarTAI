@@ -284,7 +284,7 @@ export function ProblemRecognitionProgressPage() {
     generationTotal,
     generationMetrics.solution_completed_questions ?? 0,
   );
-  const questionLabel = (qId: string) => progress?.question_labels?.[qId] ?? qId;
+  const questionLabel = (qId: string) => progress?.question_labels?.[qId] ?? (locale === "zh-CN" ? "未编号题目" : "Unnumbered question");
   const activeQuestionLabels = (progress?.active_question_ids ?? []).map(questionLabel);
   const failedQuestionLabels = (progress?.failed_question_ids ?? []).map((qId) => {
     const label = questionLabel(qId);
@@ -443,10 +443,10 @@ function QuestionGenerationFailureSummary({
       ) : null}
       <ul className="mt-1 grid gap-1 text-muted-foreground">
         {failed.map((qId) => {
-          const label = progress?.question_labels?.[qId] ?? qId;
+          const label = progress?.question_labels?.[qId] ?? (locale === "zh-CN" ? "未编号题目" : "Unnumbered question");
           const code = progress?.question_error_codes?.[qId];
           return (
-            <li key={qId} title={code}>
+            <li key={qId}>
               {label}{code ? ` · ${questionGenerationErrorLabel(code, locale)}` : ""}
             </li>
           );

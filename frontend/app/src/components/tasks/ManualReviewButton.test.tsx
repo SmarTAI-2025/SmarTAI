@@ -65,7 +65,7 @@ describe("manual recovery entry", () => {
     calls.submissions.mockRejectedValue(new Error("Task changed"));
     show({ ...task, parse_job_id: "failed" });
     await userEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Task changed"));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("本次操作未完成"));
     expect(screen.queryByText("Answer queue")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "人工继续处理" })).toBeEnabled();
   });

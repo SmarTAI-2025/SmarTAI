@@ -1,7 +1,8 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { Check, Pencil, Plus, Tag as TagIcon, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
-import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
+import { getAPIErrorCode } from "@/api/client";
 import { taskMetadataSnapshot } from "@/api/tasks";
 import { useCreateTag, useDeleteTag, useUpdateTag, useUpdateTask } from "@/api/hooks";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -55,7 +56,7 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
     try {
       await updateTask.mutateAsync({ taskId: task.task_id, patch: { tag_ids: next, expected_metadata: taskMetadataSnapshot(task) } });
     } catch (error) {
-      toast.error(getAPIErrorCode(error) === "task_metadata_conflict" ? (locale === "zh-CN" ? "此任务的标签已更新，请核对后重新选择。" : "This task's tags changed. Review them and select again.") : normalizeAPIError(error).message);
+      toast.error(getAPIErrorCode(error) === "task_metadata_conflict" ? (locale === "zh-CN" ? "此任务的标签已更新，请核对后重新选择。" : "This task's tags changed. Review them and select again.") : userFacingError(error, locale));
     }
   }
 
@@ -71,7 +72,7 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
       setSearch("");
       setNewColor("slate");
     } catch (error) {
-      toast.error(getAPIErrorCode(error) === "task_metadata_conflict" ? (locale === "zh-CN" ? "此任务的标签已更新，请核对后重新选择。" : "This task's tags changed. Review them and select again.") : normalizeAPIError(error).message);
+      toast.error(getAPIErrorCode(error) === "task_metadata_conflict" ? (locale === "zh-CN" ? "此任务的标签已更新，请核对后重新选择。" : "This task's tags changed. Review them and select again.") : userFacingError(error, locale));
     }
   }
 
@@ -88,7 +89,7 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
       await updateTag.mutateAsync({ tagId: editingTag.id, patch: { name, color: editingColor } });
       setEditingTag(null);
     } catch (error) {
-      toast.error(normalizeAPIError(error).message);
+      toast.error(userFacingError(error, locale));
     }
   }
 
@@ -106,7 +107,7 @@ export function HistoryTagPopover({ task, tags }: { task: TaskLite; tags: TaskTa
       setEditingTag(null);
       toast.success(t("historyTagDeleteSuccess"));
     } catch (error) {
-      toast.error(normalizeAPIError(error).message);
+      toast.error(userFacingError(error, locale));
     }
   }
 

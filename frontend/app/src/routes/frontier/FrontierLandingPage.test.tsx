@@ -11,7 +11,7 @@ describe("FrontierLandingPage", () => {
     const { container } = render(<I18nProvider><MemoryRouter><FrontierLandingPage /></MemoryRouter></I18nProvider>);
 
     expect(screen.getByRole("heading", { name: /faster review.*evidence intact/i })).toBeInTheDocument();
-    expect(screen.getAllByText(/synthetic student data/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/demo samples/i).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: /enter (the )?live demo/i })[0]).toHaveAttribute("href", "/frontier/enter");
     expect(screen.getByRole("link", { name: "Register / Sign in" })).toHaveAttribute("href", "/login");
     expect(container.querySelectorAll('[data-smartai-wordmark="blue"]')).toHaveLength(4);
@@ -97,7 +97,7 @@ describe("FrontierLandingPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /how spread out are overall scores/i }));
     expect(screen.getByRole("img", { name: /Box chart: Overall score distribution/i })).toBeInTheDocument();
-    expect(screen.getByText(/77% median/i)).toBeInTheDocument();
+    expect(screen.getByText(/median of about 77%/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /what share of students scored below 70%/i }));
     expect(screen.getByRole("img", { name: /Pie chart: Score threshold share/i })).toBeInTheDocument();

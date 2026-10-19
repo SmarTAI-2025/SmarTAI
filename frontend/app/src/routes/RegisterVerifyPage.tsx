@@ -77,7 +77,7 @@ export function RegisterVerifyPage() {
         icon={CheckCircle2}
         tone="success"
         eyebrow={zh ? "邮箱验证完成" : "Email verified"}
-        helper={alreadyVerified ? (zh ? "该流程此前已确认" : "This flow was already confirmed") : (zh ? "账号已安全创建" : "Account created securely")}
+        helper={alreadyVerified ? (zh ? "邮箱已验证" : "Email verified") : (zh ? "账号已创建" : "Account created")}
         title={zh ? "注册完成" : "Registration complete"}
         description={zh
           ? "现在可以选择用户名或邮箱，并使用密码登录；验证流程不会自动登录。"
@@ -152,14 +152,14 @@ export function RegisterVerifyPage() {
           helper={zh ? "一次性安全链接" : "Single-use secure link"}
           title={zh ? "完成邮箱验证" : "Complete email verification"}
           description={zh
-            ? "确认后才创建普通教师账号。仅打开页面不会消费链接。"
-            : "A teacher account is created only after confirmation. Merely opening this page does not consume the link."}
+            ? "点击下方按钮完成注册。"
+            : "Use the button below to complete registration."}
           steps={steps}
           stepsLabel={zh ? "注册进度" : "Registration progress"}
           currentStep={2}
         />
         <InlineNotice tone="neutral" className="mt-5">
-          {zh ? "验证完成后仍需手动登录，不会自动进入工作台。" : "After verification, you still sign in manually; this flow never opens the workspace automatically."}
+          {zh ? "验证后即可登录。" : "You can sign in after verification."}
         </InlineNotice>
         {retryError ? <div className="mt-4"><AuthError message={retryError} /></div> : null}
         <Button className="mt-5 h-11 w-full" disabled={verifyRegistration.isPending || cooldown.active} onClick={handleVerify}>

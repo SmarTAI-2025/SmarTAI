@@ -62,7 +62,7 @@ describe("RegisterVerifyPage", () => {
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent(/^\/register\/verify$/));
     await act(async () => screen.getByRole("button", { name: "确认并完成注册" }).click());
     expect(await screen.findByRole("heading", { name: "注册完成" })).toBeInTheDocument();
-    expect(screen.getByText("该流程此前已确认")).toBeInTheDocument();
+    expect(screen.getByText("邮箱已验证")).toBeInTheDocument();
   });
 
   it.each([

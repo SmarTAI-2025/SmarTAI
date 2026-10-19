@@ -1,3 +1,4 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
 import { validExpertResults, hasPartialExperts } from "@/components/tasks/resultsModel";
 import { isCorrectionReviewConfirmed, correctionReviewBlocked, correctionReviewNextBlocked } from "@/components/tasks/resultsReviewModel";
@@ -380,10 +381,10 @@ function ReviewDetailForm() {
     } catch (error) {
       const normalized = normalizeAPIError(error);
       if (activeStudentKeyRef.current === savingStudentKey) {
-        setSaveErrors((current) => ({ ...current, [question.id]: normalized.message }));
+        setSaveErrors((current) => ({ ...current, [question.id]: userFacingError(normalized, locale) }));
       }
       if (normalized.status === 409) void Promise.all([taskQuery.refetch(), resultQuery.refetch()]);
-      return { ok: false as const, message: normalized.message };
+      return { ok: false as const, message: userFacingError(normalized, locale) };
     } finally {
       businessBusy.current = false;
       saveInFlightRef.current = false;
@@ -552,7 +553,7 @@ function ReviewDetailForm() {
           <ResultQuestionQuery className="mt-3" locale={locale} taskId={taskId} filter={questionFilter}
             questions={visibleQuestions} onSelect={(id) => scrollToQuestion(id)} />
           <div className="mt-1.5 grid gap-0.5 px-1 text-[11px] leading-5 text-muted-foreground">
-            <span>{tx(locale, "搜索只筛选题目，当前学生保持不变；中文输入在选词完成后应用。", "Question search does not change the selected student; IME text is applied after composition.")}</span>
+            <span>{tx(locale, "搜索当前学生的题目。", "Search this student’s questions.")}</span>
             <span className="flex items-center gap-1.5 font-medium text-foreground/70">
               <Keyboard aria-hidden="true" className="h-3.5 w-3.5" />
               {t("answerReviewKeyboardHint")}

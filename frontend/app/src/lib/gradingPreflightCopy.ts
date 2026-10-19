@@ -51,7 +51,7 @@ const copy = {
   setupRequired: ["请先保存本任务的批改设置。", "Save the grading setup for this task first."],
   unavailable: ["当前任务还没有可批改的完整输入，请检查题目、作答或正在运行的任务。", "Grading inputs are not ready yet. Check questions, submissions, or the operation currently running."],
   startError: ["暂时无法开始批改，请检查任务状态后重试。", "Grading could not be started. Check the task state and try again."],
-  exactTaskSetup: ["已保存的任务级设置", "Saved task-level setup"],
+  exactTaskSetup: ["本次批改设置", "Settings for this run"],
 } as const;
 
 export type GradingPreflightCopyKey = keyof typeof copy;

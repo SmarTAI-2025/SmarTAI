@@ -111,7 +111,7 @@ function VisualizationDraftPage({ locale, taskId, version, dataRevision = versio
           if (result.execution.recognized) conversation.current = [...conversation.current, question].slice(-4);
           return; }
         if (result.mode !== "chart") {
-          toast.error(tx(locale, "图表返回格式不匹配", "Chart response format did not match"));
+          toast.error(tx(locale, "暂时无法生成图表，请重试。", "Unable to generate the chart. Please try again."));
           return;
         }
         setPreview(result); setExecution(result.execution ?? null);
@@ -199,23 +199,23 @@ function VisualizationDraftPage({ locale, taskId, version, dataRevision = versio
       </div>
 
       <div className="mt-4 grid gap-4 border-t p-5 xl:grid-cols-2">
-        <ChartCard locale={locale} id="score-distribution" title={tx(locale, "得分率分布", "Score-rate distribution")} description={tx(locale, "查看成绩集中区间与尾部学生，不把人数少的区间夸大。", "Locate score clusters and tails without exaggerating sparse buckets.")} metadata={chartMetadata(locale, students.length, version, scope, "", provisional)} detailHref={`${root}/students`}>
+        <ChartCard locale={locale} id="score-distribution" title={tx(locale, "得分率分布", "Score-rate distribution")} description={tx(locale, "查看各得分区间的学生人数。", "View the number of students in each score range.")} metadata={chartMetadata(locale, students.length, version, scope, "", provisional)} detailHref={`${root}/students`}>
           <ResponsiveContainer width="100%" height={250}><BarChart data={distributionData} margin={{ top: 12, right: 12, left: -20, bottom: 4 }}><CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" vertical={false} /><XAxis dataKey="label" tick={{ fontSize: 10 }} /><YAxis allowDecimals={false} tick={{ fontSize: 10 }} /><Tooltip contentStyle={tooltipStyle} /><Bar dataKey="count" name={tx(locale, "学生数", "Students")} radius={[6, 6, 0, 0]}>{distributionData.map((bucket, index) => <Cell key={bucket.label} fill={CHART_PALETTE[index % CHART_PALETTE.length]} />)}</Bar></BarChart></ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard locale={locale} id="pass-composition" title={tx(locale, "及格构成", "Pass/Fail Breakdown")} description={tx(locale, "只比较互斥的及格、未及格与无可比总分，不把复核状态混入同一饼图。", "Compares mutually exclusive passed, failed, and unscored groups; review status is shown separately.")} metadata={chartMetadata(locale, students.length, version, scope, "", provisional)} detailHref={`${root}/students`}>
+        <ChartCard locale={locale} id="pass-composition" title={tx(locale, "及格构成", "Pass/Fail Breakdown")} description={tx(locale, "查看及格、未及格和暂无总分的学生比例。", "Compare the proportions of students who passed, failed, or have no total score.")} metadata={chartMetadata(locale, students.length, version, scope, "", provisional)} detailHref={`${root}/students`}>
           <ResponsiveContainer width="100%" height={250}><PieChart><Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="47%" innerRadius={46} outerRadius={82} paddingAngle={3} label={({ name, percent = 0 }) => `${name} ${Math.round(percent * 100)}%`}>{pieData.map((entry, index) => <Cell key={entry.name} fill={PIE_COLORS[index % PIE_COLORS.length]} />)}</Pie><Tooltip contentStyle={tooltipStyle} /><Legend wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard locale={locale} id="question-performance" title={tx(locale, "逐题得分率与复核量", "Question Score Percentage & Review Volume")} description={tx(locale, "柱表示平均得分率，折线表示复核信号题次数，用于同时发现薄弱题与证据风险。", "Bars show the average score percentage; the line shows review-signal volume, highlighting both difficult questions and evidence risks.")} metadata={chartMetadata(locale, students.length, version, scope, "", provisional)} detailHref={`${root}/questions`}>
+        <ChartCard locale={locale} id="question-performance" title={tx(locale, "逐题得分率与复核量", "Question Score Percentage & Review Volume")} description={tx(locale, "柱形为平均得分率，折线为需关注题次。", "Bars show average score percentages; the line shows responses needing attention.")} metadata={chartMetadata(locale, students.length, version, scope, "", provisional)} detailHref={`${root}/questions`}>
           <div style={{ width: `${Math.max(520, questionData.length * 72)}px`, height: 280 }}><ResponsiveContainer width="100%" height="100%"><ComposedChart data={questionData} margin={{ top: 14, right: 18, left: -10, bottom: 4 }}><CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" vertical={false} /><XAxis dataKey="label" tick={{ fontSize: 10 }} /><YAxis yAxisId="score" domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" /><YAxis yAxisId="review" orientation="right" allowDecimals={false} tick={{ fontSize: 10 }} /><Tooltip contentStyle={tooltipStyle} /><Legend wrapperStyle={{ fontSize: 11 }} /><Bar yAxisId="score" dataKey="scoreRate" name={tx(locale, "平均得分率", "Average Score Percentage")} radius={[5, 5, 0, 0]}>{questionData.map((item, index) => <Cell key={item.label} fill={CHART_PALETTE[index % CHART_PALETTE.length]} />)}</Bar><Line yAxisId="review" type="monotone" dataKey="reviewCount" name={tx(locale, "复核信号题次", "Review-signal responses")} stroke={COLORS.violet} strokeWidth={2.5} dot={{ r: 3, fill: COLORS.violet }} /></ComposedChart></ResponsiveContainer></div>
         </ChartCard>
 
-        <ChartCard locale={locale} id="confidence-scatter" title={tx(locale, "得分率 × 平均置信度", "Score Percentage × Average Confidence")} description={tx(locale, "每个点是一位学生；红色表示含复核信号，便于识别高分低置信等异常组合。", "Each point represents a student. Red indicates a review signal, helping identify patterns such as a high score with low confidence.")} metadata={chartMetadata(locale, students.length, version, scope, "", provisional)} detailHref={`${root}/students`}>
+        <ChartCard locale={locale} id="confidence-scatter" title={tx(locale, "得分率 × 平均置信度", "Score Percentage × Average Confidence")} description={tx(locale, "每个点代表一位学生，红色表示有需关注项目。", "Each point represents a student; red indicates items needing attention.")} metadata={chartMetadata(locale, students.length, version, scope, "", provisional)} detailHref={`${root}/students`}>
           <ResponsiveContainer width="100%" height={280}><ScatterChart margin={{ top: 16, right: 18, left: -4, bottom: 4 }}><CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" /><XAxis type="number" dataKey="score" name={tx(locale, "得分率", "Score Percentage")} domain={[0, 100]} unit="%" tick={{ fontSize: 10 }} /><YAxis type="number" dataKey="confidence" name={tx(locale, "平均置信度", "Average Confidence")} domain={[0, 100]} unit="%" tick={{ fontSize: 10 }} /><Tooltip cursor={{ strokeDasharray: "3 3" }} contentStyle={tooltipStyle} /><Legend wrapperStyle={{ fontSize: 11 }} /><Scatter name={tx(locale, "无复核信号", "No review signals")} data={scatterData.filter((item) => !item.review)} fill={COLORS.primary} /><Scatter name={tx(locale, "含复核信号", "With review signals")} data={scatterData.filter((item) => item.review)} fill={COLORS.rose} /></ScatterChart></ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard locale={locale} id="score-heatmap" title={tx(locale, "学生 × 题目得分热力图", "Student × Question Score Heatmap")} description={tx(locale, "颜色表达逐格得分率，单元格保留真实百分比；适合寻找个人薄弱题和班级共性。", "Cell color represents score percentage while retaining the exact value, revealing individual and class-wide weaknesses.")} metadata={chartMetadata(locale, Math.min(students.length, 100), version, scope, students.length > 100 ? tx(locale, "最多显示前 100 位", "First 100 students") : "", provisional)} detailHref={`${root}/students`} wide>
+        <ChartCard locale={locale} id="score-heatmap" title={tx(locale, "学生 × 题目得分热力图", "Student × Question Score Heatmap")} description={tx(locale, "查看每位学生的逐题得分率。", "View each student’s score percentage by question.")} metadata={chartMetadata(locale, Math.min(students.length, 100), version, scope, students.length > 100 ? tx(locale, "最多显示前 100 位", "First 100 students") : "", provisional)} detailHref={`${root}/students`} wide>
           <ScoreHeatmap locale={locale} students={students.slice(0, 100)} questions={model.questions} />
         </ChartCard>
       </div>
@@ -296,7 +296,7 @@ function compactLabel(value: string, max: number): string { return value.length 
 async function exportChartPng(id: string, title: string, locale: Locale): Promise<void> {
   const container = document.querySelector(`[data-chart-export="${CSS.escape(id)}"]`);
   const svg = container?.querySelector("svg");
-  if (!svg) { toast.error(tx(locale, "当前图表没有可导出的 SVG", "This chart has no exportable SVG")); return; }
+  if (!svg) { toast.error(tx(locale, "当前图表暂时无法导出，请重试。", "Unable to export this chart. Please try again.")); return; }
   const bounds = svg.getBoundingClientRect();
   const clone = svg.cloneNode(true) as SVGSVGElement;
   clone.setAttribute("xmlns", "http://www.w3.org/2000/svg"); clone.setAttribute("width", String(Math.max(1, bounds.width))); clone.setAttribute("height", String(Math.max(1, bounds.height)));

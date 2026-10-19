@@ -1,3 +1,4 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { taskWorkspacePath } from "@/lib/frontierSession";
 import { Check, Circle, LoaderCircle, RefreshCw } from "lucide-react";
 import { useEffect } from "react";
@@ -12,7 +13,7 @@ import { materialImportText } from "@/lib/materialImportCopy";
 const FACT_STEPS = [
   { key: "source", zh: "准备资料来源", en: "Prepare material source" },
   { key: "match", zh: "匹配题目与资料", en: "Match questions and materials" },
-  { key: "prepare", zh: "校验待确认候选", en: "Validate review candidates" },
+  { key: "prepare", zh: "整理匹配结果", en: "Prepare matching results" },
 ] as const;
 
 export function QuestionMaterialImportProgressPage() {
@@ -85,7 +86,7 @@ export function QuestionMaterialImportProgressPage() {
               {importQuery.isError ? (
                 <p className="text-danger">{materialImportText(locale, "progressLoadError")}</p>
               ) : isFailed ? (
-                <p className="text-danger">{plan?.progress?.error_detail || plan?.error || materialImportText(locale, "progressLoadError")}</p>
+                <p className="text-danger">{userFacingError(plan?.progress?.error_detail || plan?.error, locale)}</p>
               ) : plan?.progress?.messages?.length ? (
                 <ul className="grid gap-1.5">
                   {plan.progress.messages.slice(-4).map((event) => (
@@ -100,7 +101,7 @@ export function QuestionMaterialImportProgressPage() {
         </div>
 
         <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t pt-5">
-          <span className="max-w-[420px] truncate text-[11px] text-muted-foreground" title={jobId}>{jobId ?? ""}</span>
+          <span aria-hidden="true" />
           <div className="flex flex-wrap gap-2">
             {hasError && taskId ? <Link to={`/tasks/${taskId}/questions`} className="inline-flex h-9 items-center justify-center rounded-lg border bg-card px-4 text-sm font-semibold hover:bg-muted">{locale === "zh-CN" ? "人工继续处理" : "Continue manually"}</Link> : null}
             {hasError ? (
@@ -119,7 +120,6 @@ export function QuestionMaterialImportProgressPage() {
           </div>
         </div>
       </section>
-      <span className="sr-only">{taskId}</span>
       </div>
     </div>
   );
@@ -128,13 +128,13 @@ export function QuestionMaterialImportProgressPage() {
 function localizeProgressMessage(message: string, locale: "zh-CN" | "en-US") {
   const executionMessage = executionProgressCopy(message, locale);
   if (executionMessage) return executionMessage;
-  if (locale === "en-US") return message;
-  if (message === "Material source prepared") return "资料来源已准备";
-  if (message === "Matching source material to known questions") return "正在匹配资料与已有题目";
-  if (message === "Validating matched material fields") return "正在校验匹配到的资料字段";
+  const zh = locale === "zh-CN";
+  if (message === "Material source prepared") return zh ? "资料来源已准备" : "Source material ready";
+  if (message === "Matching source material to known questions") return zh ? "正在匹配资料与已有题目" : "Matching material to questions";
+  if (message === "Validating matched material fields") return zh ? "正在检查匹配结果" : "Checking matched materials";
   if (message.startsWith("Prepared ") && message.endsWith(" material candidates for review")) {
     const count = message.match(/\d+/)?.[0] ?? "";
-    return `已准备 ${count} 项待确认候选`;
+    return zh ? `已准备 ${count} 项匹配结果` : `${count} matched items ready for review`;
   }
-  return message;
+  return zh ? "处理中…" : "Processing…";
 }

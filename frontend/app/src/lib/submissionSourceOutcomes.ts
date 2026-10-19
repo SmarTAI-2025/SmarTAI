@@ -13,7 +13,7 @@ export function getSubmissionSourceReasonCopy(
 ): SubmissionSourceReasonCopy {
   if (source.resolution_status === "manual_resolved") return {
     title: tx(locale, "教师已补齐并确认", "Completed and confirmed by the teacher"),
-    description: tx(locale, "原识别记录和诊断信息仍保留。", "Original recognition records and diagnostics are preserved."),
+    description: tx(locale, "原文件和识别记录已保留。", "Original files and recognition records are retained."),
   };
   if (source.status === "manual_review") return {
     title: tx(locale, "识别未完成，等待人工处理", "Recognition incomplete; awaiting manual review"),
@@ -35,8 +35,8 @@ export function getSubmissionSourceReasonCopy(
     title: tx(locale, "这份作答未完成识别", "This submission was not recognized"),
     description: tx(
       locale,
-      "后端保留了原文件和诊断代码，但没有得到可用作答。可按下方错误代码重试；若重复出现，请把任务编号交给管理员排查。",
-      "The backend preserved the original file and diagnostic code but produced no usable answers. Retry using the code below; if it repeats, share the job ID with an administrator.",
+      "未能识别作答，请重试。若仍失败，请联系管理员。",
+      "Unable to recognize this submission. Try again or contact your administrator if it continues.",
     ),
   };
 }
@@ -98,7 +98,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   }),
   question_source_incomplete: (locale) => ({
     title: tx(locale, "资料尚未完整读取", "Source reading is incomplete"),
-    description: tx(locale, "仍有页面未成功读取，作答识别尚未完成。已完成的页面证据已保存；不会把部分内容当作整份作答完成。", "Some pages could not be read, so submission recognition is incomplete. Completed page evidence is saved; partial input is not treated as a complete submission."),
+    description: tx(locale, "部分页面尚未读完，已识别内容已保留。", "Some pages could not be read. Recognized content is retained."),
     nextStep: tx(locale, "检查资料识别状态后继续；文件与模型设置未变时会复用可用结果，结果未知的模型请求需要确认后才能重新提交。", "Check the source recognition status before continuing. Eligible results are reused if the file and model settings are unchanged; model requests with unknown outcomes need confirmation before resubmission."),
   }),
   recognition_already_running: recognitionStateCopy,
@@ -130,7 +130,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   }),
   no_provider_configured: (locale) => ({
     title: tx(locale, "尚未配置作答识别模型", "No submission-recognition model is configured"),
-    description: tx(locale, "系统没有可用于读取并结构化学生作答的已启用模型，因此没有开始猜测或生成结果。", "No enabled model is available to read and structure student submissions, so the system did not guess or generate results."),
+    description: tx(locale, "请先选择已启用的识别模型。", "Select an enabled recognition model."),
     nextStep: tx(locale, "先在模型设置中启用并选择一个识别模型，再重试这批原文件。", "Enable and select a recognition model in model settings, then retry these originals."),
   }),
   provider_not_enabled: (locale) => ({
@@ -147,8 +147,8 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     title: tx(locale, "尚未选择可用的视觉模型", "No usable vision model is selected"),
     description: tx(
       locale,
-      "这份文件需要读取图片或扫描页，但当前阶段没有可用的视觉模型。原文件已保存，并不是文件丢失或学生答案有误。",
-      "This file requires image or scanned-page reading, but no usable vision model is selected for this stage. The original is saved; the file was not lost and the student's answer is not at fault.",
+      "原文件已保存，请选择支持图片识别的模型。",
+      "The original file is saved. Select a model that supports image recognition.",
     ),
     nextStep: tx(locale, "添加或启用支持图片输入的视觉模型后重试，或上传可复制文字版 PDF/TXT。", "Add or enable a vision-capable model and retry, or upload a text-based PDF/TXT file."),
   }),
@@ -174,20 +174,20 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   provider_timeout: (locale, source) => providerCopy(locale, source, "模型响应超时", "The model timed out", "稍后重试；原文件已经保存，不需要重新整理整批文件。", "Retry later. The original is saved, so the whole batch does not need to be rebuilt."),
   provider_unreachable: (locale, source) => providerCopy(locale, source, "暂时无法连接模型服务", "The model service is unreachable", "检查网络或模型服务状态后重试。", "Check network and provider status, then retry."),
   provider_rate_limited: (locale, source) => providerCopy(locale, source, "模型服务仍返回限流", "The model service still reports a limit", "无法确定是分钟限制还是日额度；多次等待仍失败时请查看官网用量。使用上方“重试失败项”，也可先切换模型。", "The response does not identify a minute or daily limit. Check official usage if waiting repeatedly fails. Use Retry failed items above, or switch models first."),
-  provider_daily_quota_exceeded: (locale, source) => providerCopy(locale, source, "模型日额度已用完", "The model's daily quota is exhausted", "本轮已停止，不会自动跨天等待。请查看服务商用量，恢复后返回配置重新启动，或更换模型。", "This run has stopped and will not wait overnight. Check provider usage, then restart from settings or change models."),
-  provider_overloaded: (locale, source) => providerCopy(locale, source, "模型服务当前拥堵", "The model service is busy", "原文件已保留。稍后重试或选择另一个已启用模型；这不是已确认的每日额度耗尽。", "Your file is preserved. Retry later or select another enabled model; a daily quota limit has not been confirmed."),
+  provider_daily_quota_exceeded: (locale, source) => providerCopy(locale, source, "模型日额度已用完", "The model's daily quota is exhausted", "本轮已停止。请查看服务商用量，恢复后返回配置重新启动，或更换模型。", "This run has stopped. Check provider usage, then restart from settings or change models."),
+  provider_overloaded: (locale, source) => providerCopy(locale, source, "模型服务当前拥堵", "The model service is busy", "原文件已保留。请稍后重试或选择另一个已启用模型。", "Your file is retained. Retry later or select another enabled model."),
   provider_auth_failed: (locale, source) => providerCopy(locale, source, "模型凭据无效或无权限", "The model credentials were rejected", "到 BYOK 检查 API Key、模型权限和余额后重试。", "Check the API key, model permission, and balance in BYOK, then retry."),
   provider_region_unsupported: (locale, source) => providerCopy(locale, source, "模型服务不支持当前网络地区", "The model service does not support the current network region", "请使用供应商支持的接入环境或另选已获授权的模型。", "Use a provider-supported access environment or another authorized model."),
   ocr_credential_not_found: (locale, source) => providerCopy(locale, source, "所选 OCR 凭据已不存在", "The selected OCR credential no longer exists", "返回 BYOK 保存百度 OCR 的 API Key / Secret Key，并重新选择识别服务。", "Save the Baidu OCR API Key / Secret Key in BYOK and select the recognition service again."),
   provider_permission_denied: (locale, source) => providerCopy(locale, source, "OCR 账号没有服务权限", "The OCR account lacks service permission", "在百度控制台确认已开通文档解析权限，或更换有权限的 API Key / Secret Key。", "Confirm Document Parsing access in the Baidu console or replace the API Key / Secret Key with an authorized pair."),
   provider_quota_exceeded: (locale, source) => providerCopy(locale, source, "服务商余额或额度已用完", "Provider credits or quota exhausted", "在对应服务商控制台检查余额与额度；恢复后重试，或切换模型。", "Check credits and quota in the provider console, then retry after recovery or switch models."),
-  provider_unavailable: (locale, source) => providerCopy(locale, source, "OCR 服务暂时不可用", "The OCR service is temporarily unavailable", "稍后重试；系统不会静默换用其他服务。", "Retry later. SmarTAI will not silently switch to another service."),
-  provider_submit_uncertain: (locale, source) => providerCopy(locale, source, "识别未完成，重试需确认", "Recognition did not complete; confirm before retrying", "未完成的识别调用没有取得可用结果，上次调用是否计费尚无法确认。系统不会自动重提；可确认重试失败项，可能再次消耗额度。反复失败时请提供任务编号排查。", "The incomplete recognition call produced no usable result and billing is unconfirmed. SmarTAI will not resubmit automatically. You can confirm a retry of failed items, which may incur additional charges. Share the job ID if failures persist."),
+  provider_unavailable: (locale, source) => providerCopy(locale, source, "OCR 服务暂时不可用", "The OCR service is temporarily unavailable", "请稍后重试。", "Please try again later."),
+  provider_submit_uncertain: (locale, source) => providerCopy(locale, source, "识别未完成，重试需确认", "Recognition did not complete; confirm before retrying", "上次调用是否计费尚无法确认。重试可能再次消耗额度。", "The previous call’s billing status is unknown. Retrying may use additional quota."),
   provider_task_failed: (locale, source) => providerCopy(locale, source, "OCR 服务端任务失败", "The provider-side OCR task failed", "检查文件格式和百度服务状态后，再由教师明确重试。", "Check the file format and Baidu service status, then retry explicitly."),
   provider_request_failed: (locale, source) => providerCopy(locale, source, "OCR 请求失败", "The OCR request failed", "检查 BYOK、网络与服务状态后重试；系统没有改用其他模型。", "Check BYOK, network, and provider status, then retry. No alternate model was used."),
-  provider_download_url_rejected: (locale, source) => providerCopy(locale, source, "OCR 结果下载地址未通过安全校验", "The OCR result URL failed security validation", "请保留任务编号联系管理员核对服务商返回域名；不要重复提交原文件。", "Keep the job ID and ask an administrator to verify the provider result host. Do not resubmit the original."),
-  provider_result_unavailable: (locale, source) => providerCopy(locale, source, "OCR 结果暂时不可用", "The OCR result is unavailable", "请保留任务编号并稍后查看；系统不会为取得结果而重复提交文件。", "Keep the job ID and check later. SmarTAI will not resubmit the file to obtain a result."),
-  provider_result_too_large: (locale, source) => providerCopy(locale, source, "OCR 结果超过安全上限", "The OCR result exceeds the safety limit", "拆分文件后由教师明确重试；当前过大结果未被写入任务。", "Split the file and retry explicitly. The oversized result was not written to the task."),
+  provider_download_url_rejected: (locale, source) => providerCopy(locale, source, "OCR 结果下载地址未通过安全校验", "The OCR result URL failed security validation", "暂时无法获取识别结果，请联系管理员。", "Unable to retrieve recognition results. Contact your administrator."),
+  provider_result_unavailable: (locale, source) => providerCopy(locale, source, "OCR 结果暂时不可用", "The OCR result is unavailable", "暂时无法获取识别结果，请稍后查看。", "Recognition results are not available yet. Please check again later."),
+  provider_result_too_large: (locale, source) => providerCopy(locale, source, "OCR 结果超过安全上限", "The OCR result exceeds the safety limit", "识别结果过大，请拆分文件后重试。", "The recognition result is too large. Split the file and try again."),
   provider_model_not_found: (locale, source) => providerCopy(locale, source, "模型名称不存在或无权限", "The model was not found or is unavailable", "核对模型名称，或改选另一个已启用模型后重试。", "Check the model name or retry with another enabled model."),
   provider_credentials_unavailable: (locale, source) => providerCopy(locale, source, "无法读取已保存的模型凭据", "Saved model credentials could not be loaded", "重新保存 BYOK 凭据后重试。", "Save the BYOK credentials again, then retry."),
   provider_model_or_endpoint_not_found: (locale, source) => providerCopy(locale, source, "模型名称或接口路径不存在", "The model or endpoint was not found", "在 BYOK 核对模型名称与 Base URL；中转站只填写服务根路径，不要填写完整操作终点。", "Check the model name and base URL in BYOK. Enter the relay service root, not a full operation endpoint."),
@@ -196,20 +196,20 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   provider_content_blocked: (locale, source) => providerCopy(locale, source, "模型限制了这次内容输出", "The model blocked this content output", "服务商因内容策略停止输出。这不代表图片测试失败。请更换模型后重试，原文件仍保留。", "The provider stopped output under its content policy. This is not an image-test failure. Change models and retry; the original file is preserved."),
   provider_upstream_unavailable: (locale, source) => providerCopy(locale, source, "模型服务暂时不可用", "The model service is temporarily unavailable", "稍后重试，或换用另一个已启用模型。", "Retry later or choose another enabled model."),
   provider_response_invalid: (locale, source) => providerCopy(locale, source, "模型返回格式无法解析", "The model returned an invalid structure", "重试本次识别，或更换模型；原文件已保留。", "Retry recognition or change models; the original file is preserved."),
-  provider_image_payload_invalid: (locale, source) => providerCopy(locale, source, "图片内容无法组成安全模型请求", "The image could not be encoded for the model request", "重新上传清晰的 JPG、PNG 或 WebP；若持续出现，请携带任务编号联系管理员。", "Upload a clear JPG, PNG, or WebP again. If it persists, share the job ID with an administrator."),
+  provider_image_payload_invalid: (locale, source) => providerCopy(locale, source, "图片无法读取", "The image could not be read", "重新上传清晰的 JPG、PNG 或 WebP；若持续出现，请携带任务编号联系管理员。", "Upload a clear JPG, PNG, or WebP again. If it persists, share the job ID with an administrator."),
   provider_message_payload_not_supported: (locale, source) => providerCopy(locale, source, "当前协议无法发送这类输入", "The selected protocol cannot encode this input", "核对高级 API 协议，或改用支持当前文件类型的模型。", "Check the Advanced API protocol or choose a model that supports this file type."),
   provider_endpoint_dns_failed: (locale, source) => providerCopy(locale, source, "中转站域名无法解析", "The relay hostname could not be resolved", "检查 Base URL 拼写和中转站服务状态后重试。", "Check the base URL spelling and relay status, then retry."),
   provider_endpoint_non_public_address: (locale, source) => providerCopy(locale, source, "中转站域名解析到非公网地址", "The relay hostname resolved to a non-public address", "检查中转站 DNS 配置后重试；系统已阻止访问内网或特殊地址。", "Check the relay DNS configuration, then retry. Access to private or special addresses was blocked."),
-  provider_endpoint_tls_failed: (locale, source) => providerCopy(locale, source, "中转站 HTTPS 证书校验失败", "The relay HTTPS certificate could not be verified", "请中转站维护方修复可信证书；系统不会绕过证书校验。", "Ask the relay operator to fix its trusted certificate. Certificate checks are not bypassed."),
-  provider_endpoint_redirect_blocked: (locale, source) => providerCopy(locale, source, "中转站返回了重定向", "The relay returned a redirect", "填写重定向后的实际 HTTPS 服务根路径；系统不会自动跟随重定向。", "Enter the final HTTPS service root. Redirects are not followed automatically."),
+  provider_endpoint_tls_failed: (locale, source) => providerCopy(locale, source, "中转站 HTTPS 证书校验失败", "The relay HTTPS certificate could not be verified", "请让服务提供方修复证书后重试。", "Ask the service provider to fix its certificate before retrying."),
+  provider_endpoint_redirect_blocked: (locale, source) => providerCopy(locale, source, "中转站返回了重定向", "The relay returned a redirect", "请将 Base URL 改为最终的 HTTPS 服务地址。", "Set the Base URL to the final HTTPS service address."),
   provider_endpoint_protocol_mismatch: (locale, source) => providerCopy(locale, source, "中转站响应与所选 API 协议不一致", "The relay response does not match the selected API protocol", "在 BYOK 的高级设置中核对 OpenAI、Anthropic 或 Gemini 协议。", "Check the OpenAI, Anthropic, or Gemini protocol in BYOK Advanced settings."),
   provider_endpoint_response_too_large: (locale, source) => providerCopy(locale, source, "中转站响应超过安全大小上限", "The relay response exceeded the safety limit", "缩小输入或输出范围后重试；若持续出现，请联系管理员评估限制。", "Reduce the input or requested output and retry. If it persists, ask an administrator to review the limit."),
   submission_parse_invalid: (locale) => ({
     title: tx(locale, "模型返回格式无法解析", "The model returned an invalid structure"),
     description: tx(
       locale,
-      "模型有返回内容，但没有形成系统需要的学生、题号和作答结构；系统没有把不确定内容当成成功结果。",
-      "The model returned content, but not the required student, question-ID, and answer structure. The system did not treat uncertain output as a success.",
+      "未能完整识别学生信息与作答，请重试或更换模型。",
+      "Could not recognize all student details and answers. Retry or choose another model.",
     ),
     nextStep: tx(locale, "可直接重试；若持续出现，换用结构化输出更稳定的模型。", "Retry once; if it persists, choose a model with more reliable structured output."),
   }),
@@ -217,26 +217,26 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     title: tx(locale, "作答识别没有完成", "Submission recognition did not complete"),
     description: tx(
       locale,
-      "系统没有得到可用的结构化作答，也没有收到更具体的安全原因码。原文件与任务编号已保留，可据此继续排查。",
-      "No usable structured submission was produced, and no more specific safe code was available. The original file and job ID are preserved for diagnosis.",
+      "未能识别作答，请重试；若仍失败，请联系管理员。",
+      "Unable to recognize the submission. Retry or contact your administrator if it continues.",
     ),
     nextStep: tx(locale, "先重试一次；若仍失败，请携带下方任务编号排查服务端日志。", "Retry once; if it fails again, use the job ID below to inspect server logs."),
   }),
   submission_model_field_too_long: (locale) => ({
-    title: tx(locale, "模型返回字段超过安全长度", "The model returned an oversized field"),
+    title: tx(locale, "识别结果格式有误", "The recognition result has an invalid format"),
     description: tx(
       locale,
-      "模型返回了过长的学号、姓名、题号或标签。系统只拒绝这份来源，没有让它拖垮整批，也没有截断后冒充正确结果。",
-      "The model returned an overlong student ID, name, question ID, or flag. Only this source was rejected; the batch continued and no truncated value was treated as correct.",
+      "本份文件的识别结果格式有误，请重试或更换模型。",
+      "This file’s recognition result has an invalid format. Retry or choose another model.",
     ),
-    nextStep: tx(locale, "重试一次；若持续出现，换用结构化输出更稳定的模型并核对原文件版式。", "Retry once; if it persists, use a model with more reliable structured output and inspect the source layout."),
+    nextStep: tx(locale, "请重试；若仍失败，请更换模型并检查文件排版。", "Retry; if it continues, change models and check the file layout."),
   }),
   submission_source_persistence_failed: (locale) => ({
     title: tx(locale, "原文件保存未完成", "The original file was not saved"),
     description: tx(
       locale,
-      "系统无法确认这份原文件已经安全保存，因此没有继续把它当作可识别来源。这是存储或数据库问题，不是学生答案问题。",
-      "The system could not confirm that this original was safely stored, so it did not continue treating it as a recognizable source. This is a storage or database issue, not a student-answer issue.",
+      "原文件未能保存，请重新上传。",
+      "The original file could not be saved. Please upload it again.",
     ),
     nextStep: tx(locale, "先重试上传；若重复出现，请携带任务编号让管理员检查文件存储和数据库。", "Retry the upload. If it repeats, share the job ID with an administrator to check file storage and the database."),
   }),
@@ -244,8 +244,8 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     title: tx(locale, "识别结果写入任务失败", "Recognized results could not be saved to the task"),
     description: tx(
       locale,
-      "原文件和逐文件识别结果已经保留，但系统未能把可用作答发布到当前任务。这是结果持久化问题，不应重新解释为 OCR 或学生答案错误。",
-      "The originals and per-file recognition outcomes were preserved, but usable answers could not be published to this task. This is result persistence failure, not an OCR or student-answer error.",
+      "作答结果未能保存，请联系管理员。",
+      "The recognized answers could not be saved. Contact your administrator.",
     ),
     nextStep: tx(locale, "请携带任务编号让管理员检查数据库冲突或存储状态，然后重试。", "Share the job ID with an administrator to check database conflicts or storage state, then retry."),
   }),
@@ -253,8 +253,8 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     title: tx(locale, "逐文件识别结果保存未完成", "Per-file outcomes were not fully saved"),
     description: tx(
       locale,
-      "原文件已经保存，但系统无法确认每份文件的终态都写入数据库。任务已停止，不会把缺失结果继续显示为处理中，也不会静默进入批改。",
-      "The originals were saved, but the system could not confirm that every per-file terminal outcome reached the database. The task stopped; missing results will not remain processing or silently enter grading.",
+      "部分文件的识别结果未能保存，请联系管理员。",
+      "Recognition results for some files could not be saved. Contact your administrator.",
     ),
     nextStep: tx(locale, "携带任务编号让管理员检查数据库后重试；无需重新整理原始文件。", "Share the job ID with an administrator to check the database, then retry; the originals do not need to be rebuilt."),
   }),
@@ -262,8 +262,8 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     title: tx(locale, "没有提取到任何作答内容", "No answer content was detected"),
     description: tx(
       locale,
-      "文件文字和模型返回结构都可以读取，但结果中没有任何学生作答。这与“题号不匹配”不同，也不表示学生答错；常见原因是只上传了封面/空白页、答案区域未拍全，或页面版式让模型漏掉了作答。",
-      "The file text and model response structure were readable, but no student answers were present in the result. This differs from unmatched question IDs and does not mean the student answered incorrectly. Common causes include a cover/blank page, a cropped answer area, or a layout the model missed.",
+      "未找到作答内容。请检查是否上传了空白页、封面或不完整的答案区域。",
+      "No answers were found. Check for blank pages, cover pages, or cropped answer areas.",
     ),
     nextStep: tx(locale, "打开原文件确认答案区域存在且完整；必要时重新拍摄，或换一个识别模型重试。", "Open the original and confirm the answer area is present and complete; rescan or retry with another recognition model if needed."),
   }),
@@ -271,8 +271,8 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     title: tx(locale, "没有作答能对应当前任务题目", "No answers match this task's questions"),
     description: tx(
       locale,
-      "文件内容已被解析，也提取到了作答条目，但其中的题号没有一个能对应当前任务。它表示“题目不匹配”，不是“学生答错了”。可能是传错作业、题号被 OCR 误读，或任务题目后来被替换。",
-      "The file was parsed and answer entries were extracted, but none of their question IDs match this task. This means the questions do not match—not that the student answered incorrectly. The wrong assignment may have been uploaded, OCR may have misread labels, or the task questions may have changed.",
+      "已识别作答，但题号与当前任务不匹配。请核对文件和题号。",
+      "Answers were recognized, but their question numbers do not match this task. Check the file and question numbers.",
     ),
     nextStep: source.unknown_question_ids.length
       ? tx(locale, `识别到的未匹配题号：${source.unknown_question_ids.join("、")}。请核对原文件与当前题目。`, `Unmatched IDs found: ${source.unknown_question_ids.join(", ")}. Compare the original file with the current questions.`)
@@ -322,11 +322,11 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   ocr_unsupported_file: (locale) => fileCopy(locale, "百度 OCR 不支持该文件格式", "Baidu OCR does not support this file format", "转换为 PDF、JPG、PNG、BMP 或 TIFF，或更换识别模型。", "Convert it to PDF, JPG, PNG, BMP, or TIFF, or choose another recognition model."),
   ocr_file_too_large: (locale) => fileCopy(locale, "文件超过百度 OCR 上传上限", "The file exceeds the Baidu OCR upload limit", "压缩图片或拆分文档后重新上传。", "Compress the image or split the document, then upload again."),
   ocr_image_dimension_limit_exceeded: (locale) => fileCopy(locale, "图片边长超过 8192 像素", "An image edge exceeds 8192 pixels", "缩小图片尺寸并保持文字清晰后重新上传。", "Resize the image while keeping the text clear, then upload it again."),
-  media_inspection_unavailable: (locale) => fileCopy(locale, "文件安全检查暂时不可用", "Media safety inspection is unavailable", "请管理员恢复媒体检查组件；系统尚未把文件发送给百度。", "Ask an administrator to restore media inspection. The file was not sent to Baidu."),
+  media_inspection_unavailable: (locale) => fileCopy(locale, "文件安全检查暂时不可用", "Media safety inspection is unavailable", "请稍后重试，或联系管理员。", "Try again later or contact your administrator."),
   media_inspection_busy: (locale) => fileCopy(locale, "文件安全检查正忙", "Media safety inspection is busy", "稍等片刻后重试；文件尚未发送给百度。", "Wait briefly and retry. The file has not been sent to Baidu."),
   media_inspection_timeout: (locale) => fileCopy(locale, "文件安全检查超时", "Media safety inspection timed out", "优化或拆分文件后重试；文件尚未发送给百度。", "Optimize or split the file, then retry. The file was not sent to Baidu."),
   media_inspection_failed: (locale) => fileCopy(locale, "文件未通过安全检查", "Media safety inspection failed", "检查文件是否损坏或加密，并重新导出。", "Check whether the file is damaged or encrypted, then export it again."),
-  pdf_processing_unavailable: (locale) => fileCopy(locale, "服务器暂时不能处理 PDF", "PDF processing is unavailable on the server", "请管理员恢复 PDF 处理组件；也可临时转为图片或 TXT。", "Ask an administrator to restore PDF processing, or convert the file to an image/TXT temporarily."),
+  pdf_processing_unavailable: (locale) => fileCopy(locale, "服务器暂时不能处理 PDF", "PDF processing is unavailable on the server", "请稍后重试，或将文件转为图片或 TXT 后上传。", "Try again later, or upload the content as images or TXT."),
   pdf_extraction_busy: (locale) => fileCopy(locale, "PDF 读取服务正忙", "PDF extraction is busy", "稍等片刻后直接重试；原文件已经保存。", "Wait briefly and retry; the original file is already saved."),
   pdf_extraction_timeout: (locale) => fileCopy(locale, "PDF 读取超时", "PDF extraction timed out", "拆分或优化 PDF 后重试。", "Split or optimize the PDF, then retry."),
   pdf_page_limit_exceeded: (locale) => fileCopy(locale, "PDF 页数超过上限", "The PDF exceeds the page limit", "拆分 PDF 后重新上传。", "Split the PDF and upload again."),
@@ -334,11 +334,11 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   pdf_extraction_failed: (locale) => fileCopy(locale, "PDF 内容无法读取", "The PDF could not be read", "检查文件是否损坏或加密，并尝试重新导出。", "Check whether the file is damaged or encrypted, and export it again."),
   pdf_ocr_render_failed: (locale) => fileCopy(locale, "扫描 PDF 无法转成 OCR 页面", "The scanned PDF could not be rendered for OCR", "尝试重新导出 PDF，或逐页转为清晰图片。", "Export the PDF again, or convert each page to a clear image."),
   submission_archive_empty: (locale) => archiveCopy(locale, "压缩包中没有学生文件", "The archive contains no student files", "确认压缩包不是空的，且文件没有全部放在系统隐藏目录中。", "Make sure the archive is not empty and files are not all in hidden system folders."),
-  submission_archive_invalid: (locale) => archiveCopy(locale, "压缩包损坏或结构不安全", "The archive is damaged or unsafe", "重新打包为 ZIP，并避免加密、路径穿越或损坏条目。", "Create a new ZIP without encryption, unsafe paths, or damaged members."),
+  submission_archive_invalid: (locale) => archiveCopy(locale, "压缩包损坏或结构不安全", "The archive is damaged or unsafe", "请重新打包为未加密的 ZIP 后上传。", "Create a new, unencrypted ZIP and upload it again."),
   submission_archive_limit_exceeded: (locale) => archiveCopy(locale, "压缩包超过安全上限", "The archive exceeds a safety limit", "减少文件数量、单文件大小或解压后总体积，再重新上传。", "Reduce file count, member size, or total expanded size, then upload again."),
   submission_archive_member_too_large: (locale) => archiveMemberCopy(locale, "压缩包中的这份文件过大", "This archive member is too large", "只压缩或拆分这份文件后重新打包；同包其他健康文件已经继续处理。", "Compress or split only this member, then rebuild the archive. Other healthy members continued processing."),
   submission_archive_member_unreadable: (locale) => archiveMemberCopy(locale, "压缩包中的这份文件无法读取", "This archive member could not be read", "重新导出这份文件并重新打包；系统保留了整个原始压缩包供核对。", "Export this member again and rebuild the archive. The original container was preserved for review."),
-  submission_archive_member_unsafe_path: (locale) => archiveMemberCopy(locale, "压缩包成员路径不安全", "This archive member has an unsafe path", "重新打包时移除绝对路径和 ../ 上级目录；同包其他安全文件已经继续处理。", "Rebuild the archive without absolute paths or ../ parent traversal. Other safe members continued processing."),
+  submission_archive_member_unsafe_path: (locale) => archiveMemberCopy(locale, "压缩包成员路径不安全", "This archive member has an unsafe path", "压缩包无法读取，请将学生文件重新打包为 ZIP 后上传。", "The archive could not be read. Repack the student files as a ZIP and upload it again."),
 };
 
 function parsedCopy(locale: Locale, source: SubmissionSourceOutcome): SubmissionSourceReasonCopy {
@@ -385,7 +385,7 @@ function archiveCopy(locale: Locale, zhTitle: string, enTitle: string, zhStep: s
 function archiveMemberCopy(locale: Locale, zhTitle: string, enTitle: string, zhStep: string, enStep: string): SubmissionSourceReasonCopy {
   return {
     title: tx(locale, zhTitle, enTitle),
-    description: tx(locale, "这一个成员没有被当成成功结果；整个原始压缩包已保存，同包其他成员不会因此丢失。", "This member was not treated as successful. The original container is saved, and other members are not discarded because of it."),
+    description: tx(locale, "这份文件未能处理，原始压缩包和其他文件已保留。", "This file could not be processed. The original archive and other files are retained."),
     nextStep: tx(locale, zhStep, enStep),
   };
 }
@@ -399,7 +399,7 @@ function recognitionFileCopy(locale: Locale): SubmissionSourceReasonCopy {
 }
 
 function recognitionLimitCopy(locale: Locale): SubmissionSourceReasonCopy {
-  return { title: tx(locale, "达到本次识别资源上限", "Recognition resource limit reached"), description: tx(locale, "已保留可用内容和缺口状态，没有截断后冒充完整结果。", "Available content and gaps were preserved; truncated content is not marked complete."), nextStep: tx(locale, "缩小题目或页码范围，检查缺失部分；不要直接重复提交整批文件。", "Narrow the question or page range and inspect missing content. Do not blindly resubmit the entire batch.") };
+  return { title: tx(locale, "达到本次识别资源上限", "Recognition resource limit reached"), description: tx(locale, "已达到处理上限，请缩小范围后重试。已识别内容已保留。", "The processing limit was reached. Reduce the scope and try again. Recognized content is retained."), nextStep: tx(locale, "缩小题目或页码范围，检查缺失部分；不要直接重复提交整批文件。", "Narrow the question or page range and inspect missing content. Do not blindly resubmit the entire batch.") };
 }
 
 function recognitionProcessingCopy(locale: Locale): SubmissionSourceReasonCopy {
@@ -411,7 +411,7 @@ function recognitionOptInCopy(locale: Locale): SubmissionSourceReasonCopy {
 }
 
 function recognitionProviderCopy(locale: Locale): SubmissionSourceReasonCopy {
-  return { title: tx(locale, "需要匹配的识别或解析模型", "A compatible recognition or parsing model is required"), description: tx(locale, "当前配置不能执行这个阶段；系统没有自动改用其他模型。", "The current configuration cannot run this stage. No other model was selected automatically."), nextStep: tx(locale, "核对本阶段已选模型及凭据；专用 OCR 的结果需要另行选择结构化解析模型。", "Check the selected stage model and credentials. Dedicated OCR output needs a separately selected structured parser.") };
+  return { title: tx(locale, "需要匹配的识别或解析模型", "A compatible recognition or parsing model is required"), description: tx(locale, "请选择可用的识别模型后重试。", "Select an available recognition model and try again."), nextStep: tx(locale, "核对本阶段已选模型及凭据；专用 OCR 的结果需要另行选择结构化解析模型。", "Check the selected stage model and credentials. Dedicated OCR output needs a separately selected structured parser.") };
 }
 
 function recognitionReviewCopy(locale: Locale): SubmissionSourceReasonCopy {

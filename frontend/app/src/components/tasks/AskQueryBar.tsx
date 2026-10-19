@@ -73,8 +73,8 @@ export function TaskQueryBar({ filter, taskId, ...props }: Omit<AskQueryBarProps
   const info = filter.error ? classifyRecoverableError(filter.error, {
     locale, phase: "analytics_filter_intent", returnTo: taskId ? `/tasks/${encodeURIComponent(taskId)}` : "/history",
   }) : null;
-  const message = filter.execution ? "" : filter.pending ? (zh ? "正在理解筛选与排序…" : "Interpreting the filter and sort…")
-    : filter.unrecognized ? (zh ? "暂时无法完整理解此条件，未应用部分筛选。请换一种表达重试。" : "The full instruction could not be understood; no partial filter was applied. Please rephrase and try again.")
+  const message = filter.execution ? "" : filter.pending ? (zh ? "正在处理…" : "Processing…")
+    : filter.unrecognized ? (zh ? "未能理解查询条件，请换一种表达。" : "Could not understand the query. Please rephrase it.")
       : filter.needsApply ? (zh ? "查询尚未应用，请点击 Ask SmarTAI。" : "Query not applied yet. Click Ask SmarTAI.")
       : "";
   return <AskQueryBar {...props} value={filter.query} onChange={filter.setQuery} onApply={(value) => void filter.apply(value)} onCancel={filter.cancel} pending={filter.pending} feedback={<>

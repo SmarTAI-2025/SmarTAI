@@ -1,3 +1,4 @@
+import { userFacingError } from "@/lib/taskActionGuards";
 import { completionSelectionVersion } from "@/lib/editorVersions";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
@@ -332,7 +333,7 @@ function localizeStartError(error: unknown, locale: Locale) {
   if (code in known) return aiCompletionText(locale, known[code as keyof typeof known]);
   if (normalized.status === 503) return aiCompletionText(locale, "errorModel");
   if (normalized.status === 0) return aiCompletionText(locale, "startErrorGeneric");
-  return normalized.message || aiCompletionText(locale, "startErrorGeneric");
+  return userFacingError(normalized, locale) || aiCompletionText(locale, "startErrorGeneric");
 }
 
 function sameIdSet(left: string[], right: string[]) {

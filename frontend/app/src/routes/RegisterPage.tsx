@@ -124,8 +124,8 @@ export function RegisterPage() {
           helper={zh ? "链接 30 分钟内有效" : "Link valid for 30 minutes"}
           title={zh ? "创建教师账号" : "Create teacher account"}
           description={zh
-            ? "填写账号信息。我们会向学校邮箱发送一次性链接，验证完成后才创建普通教师账号。"
-            : "Enter your account details. We create a teacher account only after the one-time school-email link is confirmed."}
+            ? "填写信息后，通过学校邮箱完成验证。"
+            : "Complete the form, then verify your university email."}
           steps={steps}
           stepsLabel={zh ? "注册进度" : "Registration progress"}
           currentStep={1}
@@ -205,7 +205,7 @@ export function RegisterPage() {
             </Field>
           </div>
           <p className="text-xs leading-5 text-muted-foreground">
-            {zh ? "密码需 8–128 个字符；验证邮件成功确认前不会创建账号。" : "Use 8–128 characters. No account is created until the email is confirmed."}
+            {zh ? "密码需 8–128 个字符。" : "Use 8–128 characters."}
           </p>
           {formError ? <AuthError message={formError} /> : null}
           <Button type="submit" className="mt-1 h-11 w-full" disabled={requestRegistration.isPending || cooldown.active}>
