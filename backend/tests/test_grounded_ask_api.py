@@ -17,6 +17,42 @@ def reset_limits():
     analytics._ask_bursts.clear()
 
 
+@pytest.mark.parametrize("endpoint", ["teacher", "task", "legacy"])
+@pytest.mark.parametrize("recognized", [True, False])
+def test_http_response_excludes_planning_details_without_changing_public_result(monkeypatch, endpoint, recognized):
+    owner = _user("teacher", "public-ask")
+    seeded = _seed_graded_assignment(owner)
+    public = {
+        "recognized": recognized,
+        "kind": "students" if recognized else "clarification",
+        "explanation": "Done" if recognized else "Please specify a student",
+        "data": {"columns": ["student_id"], "rows": [["S1"]]} if recognized else {"columns": [], "rows": []},
+        "selection": {"kind": "students", "ids": ["S1"]} if recognized else None,
+        "chart": None,
+        "candidates": [],
+    }
+    internal = {
+        "sql": "SELECT student_id FROM students", "parameters": {"task_id": seeded["task_id"]},
+        "assumptions": ["private-planning-marker"], "fingerprint": "private-snapshot",
+        "bindings": [{"rows": [{"private": "resolved context"}]}], "source_counts": {"grades": 2},
+        "scope": "current_task", "future_internal_diagnostic": "must stay private",
+    }
+
+    async def fake_ask(**kwargs):
+        return {**public, **internal}
+
+    monkeypatch.setattr(analytics.grounded_ask, "ask", fake_ask)
+    path = "/analytics/ask" if endpoint == "teacher" else f"/analytics/{seeded['task_id']}/{'query' if endpoint == 'legacy' else 'ask'}"
+    request = {"question": "Show students", "mode": "filter"} if endpoint == "legacy" else {"question": "Show students"}
+    response = _client(owner, _Registry(Provider())).post(path, json=request)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    execution = body["execution"] if endpoint == "legacy" else body
+    assert execution == public
+    assert not set(internal).intersection(execution)
+    assert "private-planning-marker" not in response.text
+
+
 def test_authorization_precedes_model_and_no_other_owner_data_is_loaded():
     owner, other = _user("teacher","ask-owner"), _user("teacher","ask-other")
     seeded = _seed_graded_assignment(owner)
@@ -54,6 +90,7 @@ def test_history_is_authorized_by_owner_even_when_query_requests_every_task():
     assert response.json()["selection"]["ids"]==[own["task_id"]]
     assert response.json()["tasks"][0]["progress_percent"] == 100
     assert response.json()["tasks"][0]["eta_seconds"] == 0
+    assert set(response.json()) == {"recognized", "kind", "explanation", "data", "selection", "chart", "candidates", "tasks"}
     assert hidden["task_id"] not in response.text
 
 
@@ -160,3 +197,4 @@ def test_demo_and_teacher_use_same_ask_selection_and_chart_contract(auth_scope):
     assert response.status_code == 200
     assert response.json()["mode"] == "chart"
     assert response.json()["traces"][0]["y"] == [1]
+    assert set(response.json()["execution"]) == {"recognized", "kind", "explanation", "data", "selection", "chart", "candidates"}

@@ -716,7 +716,11 @@ async def _run_grounded_ask(task_id: str | None, req: AskRequest, current: User,
             history=req.history, snapshot=snapshot)
         if req.surface == "history" and result.get("tasks") is not None:
             result["tasks"] = await enrich_history_progress(result["tasks"], owner_id=current.id)
-        return result
+        # Keep query plans and diagnostic context inside the agent. All Ask
+        # routes, including /query's nested execution, share this boundary.
+        return {key: result[key] for key in (
+            "recognized", "kind", "explanation", "data", "selection", "chart", "candidates", "tasks",
+        ) if key in result}
     except DomainError as exc:
         if isinstance(exc, NotFound):
             raise _not_found() from exc
