@@ -164,7 +164,7 @@ for (const stage of ["problems_ready", "submissions_ready"] as const) for (const
         writes.push({ path, body: request.postDataJSON() });
         expect(path).toBe(retryPath);
         expect(writes[0].body.expected_workflow_revision).toBe(2);
-        expect(writes[0].body).not.toHaveProperty("acknowledge_possible_duplicate_call");
+        expect(writes[0].body.acknowledge_possible_duplicate_call).toBe(true);
         status = stage; revision = 3;
         return json({ status: "started", job_id: "recognition-job" });
       }
