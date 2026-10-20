@@ -1,0 +1,19 @@
+{
+  "base": "0304ff2e0cc294ada51c99af8d5ab07540cb61a8",
+  "candidate": "ccb1dd32",
+  "base_schema_sha256": "b686184ca91f74b430df8569e68bd9a98fd8c872a8362fe1d475dfc9564a5ad2",
+  "candidate_schema_sha256": "7f3fa1ad3973552fc3bcdfc13dbf9697e531743231945917b693f34c960a932a",
+  "base_route_count": 160,
+  "candidate_route_count": 160,
+  "semantic_differences": [],
+  "documentation_differences": [
+    {
+      "path": "/problem_schema/properties/reference_answer/description",
+      "before": "Teacher-supplied reference answer (calculation-style problems). If None, CalculationSkill will ask the LLM to generate sympy code and execute it in the sandbox to compute a reference value.",
+      "after": "Teacher-supplied reference answer (calculation-style problems). Mathematical grading considers the original work and rubric and verifies supported individual relations when useful."
+    }
+  ],
+  "retired_legacy_routes_present": [],
+  "scope": "actual app routes/OpenAPI and ProblemInfo JSON schema; not runtime acceptance",
+  "passed": true
+}

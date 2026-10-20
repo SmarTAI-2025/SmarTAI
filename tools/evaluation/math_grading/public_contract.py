@@ -59,10 +59,12 @@ def export_at(revision, directory):
     program = """
 import json
 from pathlib import Path
+from fastapi.routing import iter_route_contexts
 from backend.main import app
 from backend.models import ProblemInfo
 result = {"openapi": app.openapi(),
-          "routes": sorted((r.path, sorted(getattr(r, "methods", []))) for r in app.routes),
+          "routes": sorted((r.path, sorted(getattr(r.original_route, "methods", []) or []))
+                           for r in iter_route_contexts(app.routes)),
           "problem_schema": ProblemInfo.model_json_schema()}
 Path("openapi.json").write_text(json.dumps(result, ensure_ascii=False, sort_keys=True))
 """
