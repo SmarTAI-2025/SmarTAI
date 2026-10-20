@@ -61,7 +61,6 @@ import type { ProblemInfo, Task, TaskResultResponse, TaskStateSnapshot, TaskStat
 
 const HANDWRITTEN_FIXTURE = "/frontier-demo/live/DEMO-002_handwritten_raw.png";
 const POLL_INTERVAL_MS = 1_500;
-const WORKFLOW_TIMEOUT_MS = 8 * 60 * 1_000;
 const EXPECTED_DEMO_QUESTION_COUNT = 4;
 
 type RunStepId = "task" | "questions" | "submissions" | "grading";
@@ -507,8 +506,7 @@ export function FrontierLiveDemoPage() {
   }
 
   async function waitForStatus(run: DemoRun, currentTaskId: string, targets: TaskStatus[]) {
-    const deadline = Date.now() + WORKFLOW_TIMEOUT_MS;
-    while (Date.now() < deadline) {
+    while (true) {
       const state = await run.step(() => getTaskState(currentTaskId));
       setSnapshot(state);
       if (isTaskPaused(state.status)) {
@@ -522,7 +520,6 @@ export function FrontierLiveDemoPage() {
       }
       await run.step(() => delay(POLL_INTERVAL_MS));
     }
-    throw new Error(tx(locale, "真实流程已超过八分钟；任务已保留，可继续检查或恢复。", "The live run exceeded eight minutes. The task is preserved so you can inspect or resume it."));
   }
 
   function markStep(id: RunStepId, state: RunStepState, detail: string, jobId?: string | null) {
@@ -637,6 +634,12 @@ export function FrontierLiveDemoPage() {
               </div>
               <p role="status" aria-live="polite" className="mt-2 text-xs leading-5 text-muted-foreground">{latestProgressMessage(snapshot, locale)}</p>
             </div>
+          ) : null}
+
+          {snapshot?.active_operation_status === "pending" ? (
+            <p role="status" aria-live="polite" className="mt-2 text-xs leading-5 text-muted-foreground">
+              {tx(locale, "当前正在排队，请耐心等待；也可保留此标签页，稍后查看。", "You’re currently in the queue. Please wait, or keep this tab open and check back later.")}
+            </p>
           ) : null}
         </section>
 

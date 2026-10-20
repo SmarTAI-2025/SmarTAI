@@ -68,6 +68,74 @@ describe("FrontierLiveDemoPage", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["zh-CN", "en-US"])("shows the immediate queue notice without progress and clears it when running (%s)", async locale => {
+    vi.useFakeTimers();
+    let view: ReturnType<typeof renderLive> | undefined;
+    try {
+      localStorage.setItem("smartai_locale", locale);
+      let state = { ...taskState("extracting_problems"), problem_count: 0, progress: null, active_operation_status: "pending" };
+      vi.mocked(getTaskState).mockImplementation(async () => state as TaskStateSnapshot);
+      view = renderLive("asg_demo123");
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      const copy = locale === "zh-CN" ? "当前正在排队，请耐心等待；也可保留此标签页，稍后查看。" : "You’re currently in the queue. Please wait, or keep this tab open and check back later.";
+      expect(screen.getByText(copy)).toBeVisible();
+      expect(screen.getByText(copy)).toHaveClass("mt-2", "text-xs", "leading-5", "text-muted-foreground");
+      state = { ...state, active_operation_status: "running" };
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      expect(screen.queryByText(copy)).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally { view?.unmount(); vi.useRealTimers(); }
+  });
+
+  it.each([
+    ["extracting_problems", "pending"], ["extracting_problems", "running"],
+    ["parsing_submissions", "pending"], ["parsing_submissions", "running"],
+    ["grading", "pending"], ["grading", "running"],
+  ] as const)("keeps observing %s/%s beyond eight minutes until completion", async (status, operationStatus) => {
+    vi.useFakeTimers();
+    let view: ReturnType<typeof renderLive> | undefined;
+    try {
+      const completed = status === "extracting_problems" ? "problems_ready" : status === "parsing_submissions" ? "submissions_ready" : "graded";
+      let state = { ...taskState(status), problem_count: 0, active_operation_status: operationStatus } as TaskStateSnapshot;
+      vi.mocked(getTaskState).mockImplementation(async () => state);
+      vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(completed), student_data: recognizedStudents() });
+      vi.mocked(getTaskResult).mockResolvedValue(gradedResult({ ...taskWithQuestions(), student_data: recognizedStudents() }));
+      view = renderLive("asg_demo123");
+      await act(async () => { await vi.advanceTimersByTimeAsync(9 * 60 * 1000); });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      const before = vi.mocked(getTaskState).mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      expect(vi.mocked(getTaskState).mock.calls.length).toBeGreaterThan(before);
+      state = taskState(completed);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      const finished = vi.mocked(getTaskState).mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(getTaskState).toHaveBeenCalledTimes(finished);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      for (const method of [createTask, retryQuestionPreparation, retrySubmissionRecognition, parseSubmissions, startGrading]) expect(method).not.toHaveBeenCalled();
+    } finally { view?.unmount(); vi.useRealTimers(); }
+  });
+
+  it.each(["pause", "error", "session expired", "unmount"])("stops long-running observation on %s", async terminal => {
+    vi.useFakeTimers();
+    let view: ReturnType<typeof renderLive> | undefined;
+    try {
+      vi.mocked(getTaskState).mockResolvedValue({ ...taskState("extracting_problems"), problem_count: 0 });
+      view = renderLive("asg_demo123");
+      await act(async () => { await vi.advanceTimersByTimeAsync(9 * 60 * 1000); });
+      if (terminal === "unmount") view.unmount();
+      else if (terminal === "session expired") vi.mocked(getTaskState).mockRejectedValue(new client.APIError(401, "Expired", { detail: { code: "frontier_demo_session_expired" } }));
+      else vi.mocked(getTaskState).mockResolvedValue({ ...taskState(terminal === "pause" ? "problems_paused" : "error"), error: terminal === "error" ? "provider_timeout" : null });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      const stopped = vi.mocked(getTaskState).mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(getTaskState).toHaveBeenCalledTimes(stopped);
+      if (terminal === "pause") expect(screen.getByRole("button", { name: "Continue recognition" })).toBeEnabled();
+      if (terminal === "error" || terminal === "session expired") expect(screen.getByRole("alert")).toBeVisible();
+      for (const method of [createTask, retryQuestionPreparation, retrySubmissionRecognition, parseSubmissions, startGrading]) expect(method).not.toHaveBeenCalled();
+    } finally { view?.unmount(); vi.useRealTimers(); }
+  });
+
   it.each(["en-US", "zh-CN"])("freezes %s on first click even when UI changes while task creation is pending", async initialLocale => {
     localStorage.setItem("smartai_locale", initialLocale);
     const creation = deferred<TaskStateSnapshot>();
