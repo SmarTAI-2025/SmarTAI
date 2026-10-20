@@ -215,6 +215,28 @@ def test_nonblank_minimum_does_not_grant_blank_answer_points():
     assert score == 0 and steps[0].score == 0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blank_credit", [0, 2])
+async def test_blank_answer_uses_actual_rubric_once_without_empty_deduction_full_marks(
+    monkeypatch, provider, blank_credit
+):
+    p = problem(criterion=f"Blank answers earn {blank_credit} points; otherwise deduct errors.")
+    plan = plan_for(p, mode="deductions", floor=6, nonblank=True)
+    draft = grading.MathAssessment(route_id="main", route_reason="Deduction route",
+                                    deductions=[], comment="No written error.")
+    with pytest.raises(ValueError, match="blank_deduction"):
+        grading.score_assessment(draft, plan, "")
+    call = AsyncMock(return_value=(grading.DirectMathGrade(
+        score=blank_credit, rationale=f"Explicit blank policy: {blank_credit}/10.",
+        comment="Blank answer.", confidence=1), response()))
+    monkeypatch.setattr(grading, "structured_llm_call", call)
+    with math_plans_context({"q1": plan}):
+        result = await CalculationSkill(provider).grade(p, answer(""))
+    assert result.score == blank_credit and not result.error_kind
+    assert call.await_count == 1
+    assert call.await_args.kwargs["output_model"] is grading.DirectMathGrade
+
+
 def test_holistic_evidence_is_separate_from_brief_comment():
     draft = grading.MathAssessment(route_id="main", route_reason="Whole rubric", score=8,
         rationale="Method 8/8: correct equation. Final arithmetic 0/2: 6*7=41.",
@@ -273,6 +295,30 @@ async def test_actual_math_tool_evidence_is_consumed_before_final_ledger(
         result = await CalculationSkill(provider).grade(p, a)
     assert not result.error_kind and result.score == 8 + final and len(seen) == 2
     assert sum(step.score for step in result.steps) == result.score
+
+
+@pytest.mark.asyncio
+async def test_late_tool_timeout_keeps_earlier_completed_evidence(monkeypatch, provider):
+    import asyncio
+    from backend.tools import math_verification
+    monkeypatch.setattr(grading, "VERIFICATION_BUDGET_SECONDS", .03)
+    calls = 0
+
+    async def verify(_):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return math_verification.MathVerificationEvidence(
+                status="supported", method="exact", reason="First check completed.")
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(math_verification, "verify_math", verify)
+    p, a, plan = problem(), answer(), plan_for()
+    draft = assessment(checks=[grading.Verification(claim_id="s1", context_quote=p.stem,
+        request={"student_expression": "42", "reference_expression": "42"}) for _ in range(3)])
+    evidence = await CalculationSkill(provider)._verify(draft, p, a, plan)
+    assert [entry["status"] for entry in evidence] == ["supported", "unknown", "unknown"]
+    assert calls == 2  # No third launch after the total budget expires.
 
 
 def test_rounding_preserves_item_total():

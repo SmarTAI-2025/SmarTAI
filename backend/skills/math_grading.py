@@ -24,6 +24,7 @@ from backend.tools import knowledge as kb_tool
 from backend.tools.structured_llm import PermanentLLMError, structured_llm_call
 
 TRACE_VERSION = "math_evidence_v1"
+VERIFICATION_BUDGET_SECONDS = 20.0
 _review_budget = ContextVar("math_review_budget", default=None)
 
 
@@ -183,6 +184,10 @@ def score_assessment(assessment: MathAssessment, plan, answer: str) -> tuple[flo
             descriptions.append((desc, _points(award.score), award.score == item.points))
         total = sum((score for _, score, _ in descriptions), Decimal(0))
     elif route.mode == "deductions":
+        if not answer.strip():
+            # No quoted mistakes in an empty submission is not evidence of
+            # full credit. Ask the model for the rubric's blank-answer policy.
+            raise ValueError("blank_deduction_requires_direct_grade")
         if assessment.awards:
             raise ValueError("mixed_scoring_modes")
         seen_errors: set[str] = set()
@@ -386,14 +391,18 @@ class MathGradingSkill(GradingSkill):
         claims = _claim_map(draft, answer.content or "", plan)
         context = "\n".join((problem.stem, problem.reference_answer or "", plan.effective_criterion))
         evidence = []
+        deadline = asyncio.get_running_loop().time() + VERIFICATION_BUDGET_SECONDS
         for check in draft.checks:
             if check.claim_id not in claims or check.context_quote not in context:
                 evidence.append({"claim_id": check.claim_id, "status": "unknown",
                                  "reason": "The proposed check has no matching source context."})
                 continue
             try:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise TimeoutError
                 request = MathVerificationRequest.model_validate(check.request)
-                result = await asyncio.wait_for(verify_math(request), timeout=12)
+                result = await asyncio.wait_for(verify_math(request), timeout=min(12, remaining))
                 evidence.append({"claim_id": check.claim_id, "context_quote": check.context_quote,
                                  "request": request.model_dump(mode="json"),
                                  **result.model_dump(mode="json")})
@@ -421,6 +430,10 @@ class MathGradingSkill(GradingSkill):
                 # Reference retrieval is optional evidence, not a grade gate.
                 chunks = []
             prompt = self._prompt(problem, answer, plan, kb_tool.context_text(chunks))
+            if not (answer.content or "").strip():
+                # There are no student claims to build. Preserve any explicit
+                # teacher blank-answer policy with one direct grading call.
+                return await self._direct(problem, answer, plan, prompt, unit, chunks)
             system = build_system_prompt(
                 "Grade only the submitted work under the frozen rubric. "
                 "Do not reconstruct missing student steps. Give concise checkable scoring evidence. "
@@ -446,7 +459,9 @@ class MathGradingSkill(GradingSkill):
             if draft.checks:
                 await self._substep(unit, "verify_result")
                 try:
-                    evidence = await asyncio.wait_for(self._verify(draft, problem, answer, plan), timeout=20)
+                    # The verifier preserves completed evidence if later
+                    # checks exhaust the shared deadline.
+                    evidence = await self._verify(draft, problem, answer, plan)
                 except Exception:
                     evidence = [{"claim_id": check.claim_id, "status": "unknown",
                                  "reason": "Verification did not complete within its resource budget."}
