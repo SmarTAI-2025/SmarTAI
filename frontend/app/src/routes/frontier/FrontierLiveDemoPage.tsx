@@ -272,9 +272,8 @@ export function FrontierLiveDemoPage() {
           const recognitionProviderId = await run.step(() => demoRecognitionProvider(taskId));
           await run.step(() => (submissions ? retrySubmissionRecognition : retryQuestionPreparation)({
             taskId, jobId, recognitionProviderId, expectedWorkflowRevision: current.workflow_revision,
-            // An explicit resume of a stopped job follows the existing retry contract.
-            // Uncertain provider submissions still require the backend's acknowledgement guard.
-            ...((isTaskPaused(status) || current.error === "operation_cancelled") ? { acknowledgePossibleDuplicateCall: true } : {}),
+            // Quick Demo retries may repeat an uncertain call against the Demo quota.
+            acknowledgePossibleDuplicateCall: true,
           }));
           status = submissions ? "parsing_submissions" : "extracting_problems";
         }

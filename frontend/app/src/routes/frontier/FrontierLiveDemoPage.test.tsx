@@ -351,7 +351,7 @@ describe("FrontierLiveDemoPage", () => {
     expect(saveGradingSetup).not.toHaveBeenCalled();
     await user.click(within(alert).getByRole("button", { name: "Retry failed items" }));
     expect((await screen.findAllByRole("button", { name: submissions ? "Start grading" : "Continue to submissions" }))[0]).toBeEnabled();
-    expect(retry).toHaveBeenCalledExactlyOnceWith({ taskId: "asg_demo123", jobId: "failed-recognition", recognitionProviderId: "demo:vision", expectedWorkflowRevision: 2 });
+    expect(retry).toHaveBeenCalledExactlyOnceWith({ taskId: "asg_demo123", jobId: "failed-recognition", recognitionProviderId: "demo:vision", expectedWorkflowRevision: 2, acknowledgePossibleDuplicateCall: true });
     expect(parseSubmissions).not.toHaveBeenCalled();
     expect(startGrading).not.toHaveBeenCalled();
     expect(saveGradingSetup).not.toHaveBeenCalled();
@@ -589,7 +589,7 @@ describe("FrontierLiveDemoPage", () => {
     const user = userEvent.setup();
     renderLive("asg_demo123");
     await user.click(await screen.findByRole("button", { name: status === "error" ? "Retry failed items" : "Continue grading" }));
-    await waitFor(() => expect(startGrading).toHaveBeenCalledExactlyOnceWith("asg_demo123", expect.objectContaining({ retryScope: "failed_only", expectedWorkflowRevision: failed.workflow_revision, requestId: expect.any(String) })));
+    await waitFor(() => expect(startGrading).toHaveBeenCalledExactlyOnceWith("asg_demo123", { retryScope: "failed_only", expectedWorkflowRevision: failed.workflow_revision, requestId: expect.any(String) }));
     expect(await screen.findByRole("heading", { name: "See class performance from live scores" })).toBeVisible();
     expect(createTask).not.toHaveBeenCalled();
     expect(startQuestionPreparation).not.toHaveBeenCalled();
@@ -624,7 +624,7 @@ describe("FrontierLiveDemoPage", () => {
     const user = userEvent.setup();
     renderLive("asg_demo123");
     await user.dblClick(await screen.findByRole("button", { name: paused ? "Continue recognition" : "Retry failed items" }));
-    await waitFor(() => expect(retry).toHaveBeenCalledExactlyOnceWith({ taskId: "asg_demo123", jobId: "failed", recognitionProviderId: "demo:vision", expectedWorkflowRevision: 7, ...(paused ? { acknowledgePossibleDuplicateCall: true } : {}) }));
+    await waitFor(() => expect(retry).toHaveBeenCalledExactlyOnceWith({ taskId: "asg_demo123", jobId: "failed", recognitionProviderId: "demo:vision", expectedWorkflowRevision: 7, acknowledgePossibleDuplicateCall: true }));
     await act(async () => request.resolve({ status: "started", job_id: "retry" }));
     expect((await screen.findAllByRole("button", { name: submissions ? "Start grading" : "Continue to submissions" }))[0]).toBeEnabled();
     expect(screen.getByRole("heading", { name: "Live grading run" })).toBeVisible();
@@ -634,16 +634,43 @@ describe("FrontierLiveDemoPage", () => {
     expect(startGrading).not.toHaveBeenCalled();
   });
 
-  it("keeps a rejected retry recoverable without acknowledging an uncertain provider submission", async () => {
-    vi.mocked(getTaskState).mockResolvedValue({ ...taskState("error"), error: "provider_submit_uncertain", extract_job_id: "failed", last_failed_job_id: "failed" });
+  it.each(["questions", "submissions"] as const)("retries uncertain %s in the quick Demo without an extra confirmation", async stage => {
+    const submissions = stage === "submissions";
+    const retry = submissions ? retrySubmissionRecognition : retryQuestionPreparation;
+    const failed = { ...taskState("error"), workflow_revision: 7, error: "provider_submit_uncertain",
+      extract_job_id: submissions ? "done" : "failed", parse_job_id: submissions ? "failed" : null, last_failed_job_id: "failed" };
+    vi.mocked(getTaskState).mockResolvedValueOnce(failed).mockResolvedValueOnce(failed)
+      .mockResolvedValue(taskState(submissions ? "submissions_ready" : "problems_ready"));
+    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(submissions ? "submissions_ready" : "problems_ready"), student_data: submissions ? recognizedStudents() : {} });
     vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
-    vi.mocked(retryQuestionPreparation).mockRejectedValue(new client.APIError(409, "Conflict", { detail: { code: "provider_submit_uncertain" } }));
+    vi.mocked(retry).mockResolvedValue({ status: "started", job_id: "retry" });
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    expect(await screen.findByRole("button", { name: "Retry failed items" })).toBeEnabled();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    await user.dblClick(screen.getByRole("button", { name: "Retry failed items" }));
+    await waitFor(() => expect(retry).toHaveBeenCalledExactlyOnceWith({ taskId: "asg_demo123", jobId: "failed", recognitionProviderId: "demo:vision", expectedWorkflowRevision: 7, acknowledgePossibleDuplicateCall: true }));
+    expect((await screen.findAllByRole("button", { name: submissions ? "Start grading" : "Continue to submissions" }))[0]).toBeEnabled();
+    expect(createTask).not.toHaveBeenCalled();
+    expect(preflightProblemSource).not.toHaveBeenCalled();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+  });
+
+  it.each(["questions", "submissions"] as const)("keeps a rejected %s retry recoverable on the quick Demo", async stage => {
+    const submissions = stage === "submissions";
+    const retry = submissions ? retrySubmissionRecognition : retryQuestionPreparation;
+    vi.mocked(getTaskState).mockResolvedValue({ ...taskState("error"), error: "provider_submit_uncertain",
+      extract_job_id: submissions ? "done" : "failed", parse_job_id: submissions ? "failed" : null, last_failed_job_id: "failed" });
+    vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
+    vi.mocked(retry).mockRejectedValue(new client.APIError(409, "Conflict", { detail: { code: "provider_submit_uncertain" } }));
     const user = userEvent.setup();
     renderLive("asg_demo123");
     await user.click(await screen.findByRole("button", { name: "Retry failed items" }));
-    await waitFor(() => expect(retryQuestionPreparation).toHaveBeenCalledTimes(1));
-    expect(retryQuestionPreparation).toHaveBeenCalledWith(expect.not.objectContaining({ acknowledgePossibleDuplicateCall: true }));
+    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    expect(retry).toHaveBeenCalledWith(expect.objectContaining({ acknowledgePossibleDuplicateCall: true }));
     expect(await screen.findByRole("button", { name: "Retry failed items" })).toBeEnabled();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Live grading run" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Start over" })).toBeEnabled();
   });
