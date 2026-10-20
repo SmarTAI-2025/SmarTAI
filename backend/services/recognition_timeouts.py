@@ -16,7 +16,8 @@ if TYPE_CHECKING:
     from backend.recognition.engine import RecognitionEngine
 
 
-SOURCE_TIMEOUT_PROFILE = "source-300-v1"
+SOURCE_TIMEOUT_PROFILE = "source-response-300-v1"
+LEGACY_SOURCE_TIMEOUT_PROFILE = "source-300-v1"
 _PER_CALL_SECONDS = 300
 _READ_ALLOWANCE_SECONDS = 600
 _LOCATOR_ALLOWANCE_SECONDS = 360
@@ -30,15 +31,15 @@ def apply_source_timeout_profile(
     timeout_profile: str | None,
     total_pages: int | None = None,
 ) -> RecognitionReadRequestV1:
-    """Bound serial work without changing call limits, retries or old policies.
+    """Select frozen response timing without changing calls or older profiles.
 
-    Page count does not bound initial calls: one PDF page can require several crop
-    reads. Until the plan exists, reserve the existing legal call upper bound. The
-    locator can use its known search window because each image contains eight pages.
+    The legacy source profile keeps its original cumulative budgets because it
+    may already own pending submissions. New operations time each provider
+    response independently, with bounded local waits and processing elsewhere.
     """
     if timeout_profile is None:
         return request
-    if timeout_profile != SOURCE_TIMEOUT_PROFILE:
+    if timeout_profile not in (SOURCE_TIMEOUT_PROFILE, LEGACY_SOURCE_TIMEOUT_PROFILE):
         raise RecognitionError("recognition_request_invalid")
     if engine is None or request.purpose == "knowledge" or request.source.scope == "knowledge_document":
         return request
@@ -49,6 +50,16 @@ def apply_source_timeout_profile(
         raise RecognitionError("recognition_request_invalid")
 
     policy = request.policy
+    if timeout_profile == SOURCE_TIMEOUT_PROFILE:
+        selected = RecognitionPolicyV1.model_validate({
+            **policy.model_dump(), "per_call_seconds": _PER_CALL_SECONDS,
+            "timeout_mode": "response_only",
+        })
+        return request.model_copy(update={"policy": selected})
+
+    # Preserve the first source profile exactly when an old parent resumes.
+    # One page may require several crops, so its original allowance used the
+    # legal call bounds instead of treating pages as an exact call count.
     initial_calls = min(policy.max_initial_calls, policy.max_calls, policy.max_regions)
     extra_calls = 0
     if caps.response_recheck and caps.semantic_repair and policy.enable_repair:

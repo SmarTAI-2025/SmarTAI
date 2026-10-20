@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from backend.domain.errors import PdfEvidenceError, RecognitionError
-from backend.recognition.budget import RecognitionBudget, validate_budget_accounting
+from backend.recognition.budget import RecognitionBudget, validate_budget_accounting, validate_budget_timing
 from backend.recognition.engine import EngineRepairInputV1, RecognitionEngine
+from backend.recognition.local_limits import bounded_recognition_progress
 from backend.recognition.models import NormalizedRegionV1, RecognitionDocumentV1, RecognitionPatchV1
 from backend.recognition.repair_records import (
     RECHECK_VERSION, RepairCallEvidenceV1, RepairExecutionV1, RepairImageEvidenceV1,
@@ -131,7 +132,11 @@ def _validate_execution(initial, execution):
     if any(getattr(budget, field) != value for field, value in expected_counts.items()):
         raise ValueError("final budget must retain all initial and additional calls exactly once")
     validate_budget_accounting(budget, caps, records)
-    if budget.duration_ms < raw.budget.duration_ms or budget.global_remaining_seconds > raw.budget.global_remaining_seconds:
+    validate_budget_timing(budget, raw.execution_policy)
+    if budget.duration_ms < raw.budget.duration_ms or (
+        budget.global_remaining_seconds is not None
+        and budget.global_remaining_seconds > raw.budget.global_remaining_seconds
+    ):
         raise ValueError("recheck cannot restart the original deadline")
     if raw.schema_version == 2:
         from backend.recognition.workflow_v2 import validate_logical, validate_provenance
@@ -215,10 +220,10 @@ async def _prepare_image(source_bytes, source, target, budget, progress, *, tota
     if source.content_type == "application/pdf":
         command = PdfRenderRequest(page_number=context.page_number, region=context.region.as_tuple(), scale=2)
         if local_reader is not None:
-            result = (await local_reader.read(source_bytes, command, timeout_seconds=min(10, budget.remaining("read")))).evidence
+            result = (await local_reader.read(source_bytes, command, timeout_seconds=budget.local_timeout(10, "read"))).evidence
         else:
             result = await read_pdf_evidence(
-                source_bytes, command, timeout_seconds=min(10, budget.remaining("read")), progress=progress,
+                source_bytes, command, timeout_seconds=budget.local_timeout(10, "read"), progress=progress,
             )
         if (not isinstance(result, PdfRenderResult) or result.total_pages != total_pages
                 or result.page_number != context.page_number or result.region != context.region.as_tuple()):
@@ -227,10 +232,10 @@ async def _prepare_image(source_bytes, source, target, budget, progress, *, tota
     else:
         command = ImagePrepareRequest(content_type=source.content_type, region=context.region.as_tuple())
         if local_reader is not None:
-            result = (await local_reader.read(source_bytes, command, timeout_seconds=min(10, budget.remaining("read")))).evidence
+            result = (await local_reader.read(source_bytes, command, timeout_seconds=budget.local_timeout(10, "read"))).evidence
         else:
             result = await read_image_evidence(
-                source_bytes, command, timeout_seconds=min(10, budget.remaining("read")), progress=progress,
+                source_bytes, command, timeout_seconds=budget.local_timeout(10, "read"), progress=progress,
             )
         if not isinstance(result, ImagePreparedResult):
             raise RecognitionError("recognition_response_invalid")
@@ -267,6 +272,8 @@ async def recheck_recognition(
     if initial.repair_execution is not None:
         raise RecognitionError("recognition_request_invalid")
     raw, source = initial.raw, initial.raw.request.source
+    if raw.execution_policy.timeout_mode == "response_only":
+        progress = bounded_recognition_progress(progress)
     if (authorized_owner_id != source.owner_id or not isinstance(source_bytes, bytes)
             or hashlib.sha256(source_bytes).hexdigest() != source.input_sha256):
         raise RecognitionError("recognition_source_mismatch")

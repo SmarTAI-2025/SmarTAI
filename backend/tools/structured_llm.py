@@ -35,6 +35,7 @@ from tenacity import (
 from backend.config import settings
 from backend.llm.providers import BaseProvider, LLMResponse, ProviderRequestError
 from backend.llm.endpoint_policy import ProviderEndpointError
+from backend.llm.request_timeouts import current_response_scope, provider_local_step
 
 logger = logging.getLogger(__name__)
 
@@ -911,7 +912,7 @@ async def _before_retry_attempt(retry_state) -> None:
     from backend.services.execution_control import current_execution
     control = current_execution()
     if control is not None:
-        await control.check(_retry_provider(retry_state))
+        await provider_local_step(control.check(_retry_provider(retry_state)))
     budget = _attempt_budget.get()
     if budget is not None:
         if budget.used >= _retry_limit():
@@ -925,7 +926,7 @@ async def _before_retry_sleep(retry_state) -> None:
         budget.waited += float(retry_state.next_action.sleep)
     exc = retry_state.outcome.exception()
     from backend.progress.recognition_activity import report_provider_state
-    await report_provider_state(
+    await provider_local_step(report_provider_state(
         _retry_provider(retry_state), "retrying",
         attempt=(budget.used if budget is not None else retry_state.attempt_number) + 1,
         max_attempts=_retry_limit(), retry_at=time.time() + float(retry_state.next_action.sleep),
@@ -933,7 +934,7 @@ async def _before_retry_sleep(retry_state) -> None:
             "timeout" if any("timeout" in type(error).__name__.lower() or getattr(error, "code", None) == "provider_timeout"
                              for error in (exc, exc.__cause__)) else "unavailable"
         ),
-    )
+    ), best_effort=True)
     if not isinstance(exc, RateLimitError):
         return
     seconds = float(retry_state.next_action.sleep)
@@ -945,8 +946,10 @@ async def _before_retry_sleep(retry_state) -> None:
     if control is not None:
         from backend.services.execution_control import provider_key
         provider = _retry_provider(retry_state)
-        await control.waiting(provider, max(next_attempt, control.rate_failures.get(provider_key(provider), 0) + 1),
-                              _retry_limit(), seconds)
+        await provider_local_step(control.waiting(
+            provider, max(next_attempt, control.rate_failures.get(provider_key(provider), 0) + 1),
+            _retry_limit(), seconds,
+        ))
 
 
 @retry(
@@ -983,6 +986,10 @@ async def _invoke_with_rate_retry(invoke, *args, **kwargs):
     try:
         return await invoke(*args, **kwargs)
     except Exception as exc:
+        if (scope := current_response_scope()) is not None and scope.submission_may_exist:
+            # A previous 429 in an SDK exception context cannot authorize even
+            # another local retry cycle while this request remains unknown.
+            raise
         from backend.services.background_errors import classify_background_error
         code = classify_background_error(exc, "provider_request_failed")
         _block_exhausted_provider(getattr(invoke, "__self__", invoke), code)

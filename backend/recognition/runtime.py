@@ -11,6 +11,7 @@ from backend.domain.errors import RecognitionError
 from backend.llm.request_timeouts import response_timeout_scope
 from backend.recognition.budget import RecognitionBudget
 from backend.recognition.engine import EngineLocateInputV1, EngineReadInputV1, EngineRepairInputV1, RecognitionEngine, freeze_engine_input
+from backend.recognition.local_limits import LOCAL_STEP_SECONDS, bounded_recognition_progress
 from backend.recognition.models import (
     EvidenceModel, NormalizedRegionV1, RecognitionCandidateV1,
     RecognitionPolicyV1, RecognitionSourceRefV1,
@@ -132,7 +133,7 @@ async def _dispatch(
     kind: Literal["initial", "locator", "empty_recovery", "patch"], source: RecognitionSourceRefV1, policy: RecognitionPolicyV1,
     capabilities: EngineCapabilitiesV1, region_keys: tuple[str, ...], budget: RecognitionBudget,
     capacity: RecognitionCapacity, progress: ProgressReporter | None,
-    call_session=None,
+    call_session=None, before_send=None,
 ) -> RecognitionCallResultV1:
     """Dispatch once; an ambiguous completion remains charged and pending.
 
@@ -165,9 +166,15 @@ async def _dispatch(
         return await call_session.dispatch(
             kind, request, source=source, policy=policy, capabilities=capabilities,
             region_keys=region_keys, budget=budget,
-            dispatch=lambda: _dispatch(engine, request, kind=kind, source=source, policy=policy,
+            dispatch=lambda before_send=None: _dispatch(engine, request, kind=kind, source=source, policy=policy,
                                       capabilities=capabilities, region_keys=region_keys, budget=budget,
-                                      capacity=capacity, progress=progress),
+                                      capacity=capacity, progress=progress, before_send=before_send),
+        )
+    if policy.timeout_mode == "response_only":
+        return await _dispatch_response_only(
+            engine, request, dispatch=dispatch, kind=kind, source=source, policy=policy,
+            capabilities=capabilities, region_keys=region_keys, budget=budget,
+            capacity=capacity, progress=bounded_recognition_progress(progress), before_send=before_send,
         )
     ticket = None
     uncertain = False
@@ -253,5 +260,122 @@ async def _dispatch(
         budget.settle(ticket, outcome="failed" if failed else candidate.status,
                       input_tokens=candidate.input_tokens, output_tokens=candidate.output_tokens)
     if progress:
+        await progress.increment_stage_metrics(**{f"recognition_{kind}_calls": 1})
+    return RecognitionCallResultV1(candidate=candidate, submission_may_exist=uncertain)
+
+
+async def _dispatch_response_only(
+    engine, request, *, dispatch, kind, source, policy, capabilities, region_keys,
+    budget, capacity, progress, before_send,
+):
+    """Charge only admitted submissions; local queues have a separate allowance."""
+    from backend.config import settings
+    from backend.llm.providers import ProviderRequestError
+
+    if capabilities.candidate_kind != "vision" or source.scope == "knowledge_document" or request.purpose == "knowledge":
+        raise RecognitionError("recognition_request_invalid")
+    ticket = None
+    state = None
+    authorization_error = None
+    failure_pages = (
+        sorted(number for image in request.images for number in image.page_numbers)
+        if isinstance(request, EngineLocateInputV1) else request.document_pages or [request.page_number]
+    ) if source.content_type == "application/pdf" else []
+
+    async def authorize():
+        nonlocal authorization_error
+        try:
+            budget.assert_context(source, policy, engine.capabilities)
+            budget.preflight(kind, request.max_output_tokens, region_keys=region_keys)
+            if before_send is not None:
+                async with asyncio.timeout(LOCAL_STEP_SECONDS):
+                    await before_send()
+        except TimeoutError:
+            # A late DB write may already hold a pending marker. The run
+            # retains that evidence; no provider dispatch follows this error.
+            authorization_error = RecognitionError("recognition_artifact_unavailable")
+            raise authorization_error from None
+        except Exception as exc:
+            authorization_error = exc
+            raise
+
+    def reserve():
+        nonlocal ticket, authorization_error
+        try:
+            budget.assert_context(source, policy, engine.capabilities)
+            ticket = budget.reserve(kind, request.max_output_tokens, region_keys=region_keys)
+        except Exception as exc:
+            authorization_error = exc
+            raise
+
+    try:
+        with response_timeout_scope(
+            policy.per_call_seconds, response_only=True, local_wait_seconds=settings.llm_timeout,
+            before_send=authorize, on_send=reserve,
+        ) as state:
+            async with state.local_admission(capacity.lease(source.owner_id)):
+                budget.assert_context(source, policy, engine.capabilities)
+                candidate = await dispatch(request)
+            if ticket is None or not state.ever_started:
+                # A provider adapter must identify its actual request boundary;
+                # returning a candidate is not proof that this contract was met.
+                raise RecognitionError("recognition_response_invalid")
+            candidate = RecognitionCandidateV1.model_validate(candidate.model_dump(warnings=False))
+            if engine.capabilities != capabilities:
+                raise RecognitionError("recognition_route_changed", submission_may_exist=True)
+            if (candidate.status == "not_run" or candidate.provider_route_id != capabilities.route_id
+                    or candidate.kind != capabilities.candidate_kind
+                    or candidate.status != "error" and candidate.safe_error_code is not None):
+                raise RecognitionError("recognition_response_invalid", submission_may_exist=True)
+            uncertain = state.submission_may_exist or candidate.safe_error_code == "provider_submit_uncertain"
+    except (RecognitionError, ProviderRequestError) as exc:
+        if authorization_error is not None:
+            # Provider adapters normalize model errors. A trusted local fence
+            # failure must pass through that wrapper unchanged to the worker.
+            raise authorization_error
+        upstream_status = exc.upstream_status_code if isinstance(exc, RecognitionError) else exc.status_code
+        if ticket is None:
+            raise RecognitionError(exc.code, submission_may_exist=False,
+                                   upstream_status_code=upstream_status) from None
+        # Only proved rejection/no connection can override the adapter's
+        # conservative marker. An unverifiable completed response still keeps
+        # the existing duplicate-submission protection.
+        uncertain = state.submission_may_exist or (not state.last_attempt_rejected and (
+            getattr(exc, "submission_may_exist", False) or exc.code == "provider_submit_uncertain"
+        ))
+        candidate = RecognitionCandidateV1(
+            kind=capabilities.candidate_kind, status="error", provider_route_id=capabilities.route_id,
+            safe_error_code=exc.code, upstream_status_code=upstream_status,
+        )
+    except TimeoutError:
+        if authorization_error is not None:
+            raise authorization_error
+        if ticket is None:
+            raise RecognitionError("recognition_artifact_unavailable") from None
+        uncertain = state.submission_may_exist or not state.last_attempt_rejected
+        candidate = RecognitionCandidateV1(
+            kind=capabilities.candidate_kind, status="error", provider_route_id=capabilities.route_id,
+            safe_error_code="provider_submit_uncertain" if uncertain else "recognition_response_invalid",
+        )
+    except Exception:
+        if authorization_error is not None:
+            raise authorization_error
+        if ticket is None:
+            raise RecognitionError("recognition_response_invalid") from None
+        uncertain = state.submission_may_exist or not state.last_attempt_rejected
+        candidate = RecognitionCandidateV1(
+            kind=capabilities.candidate_kind, status="error", provider_route_id=capabilities.route_id,
+            safe_error_code="recognition_response_invalid",
+        )
+    if not uncertain:
+        failed = candidate.status == "error" or candidate.finish_reason == "refused" or "provider_refused" in candidate.warning_codes
+        budget.settle(ticket, outcome="failed" if failed else candidate.status,
+                      input_tokens=candidate.input_tokens, output_tokens=candidate.output_tokens)
+    if progress:
+        if candidate.status == "error":
+            await progress.record_provider_failure(
+                RecognitionError(candidate.safe_error_code or "recognition_response_invalid",
+                                 submission_may_exist=uncertain), pages=failure_pages,
+            )
         await progress.increment_stage_metrics(**{f"recognition_{kind}_calls": 1})
     return RecognitionCallResultV1(candidate=candidate, submission_may_exist=uncertain)

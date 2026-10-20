@@ -26,6 +26,7 @@ from backend.recognition.durable_records import (
 )
 from backend.recognition.invocation import evidence_usage
 from backend.recognition.local_cache import RecognitionByteCache
+from backend.recognition.local_limits import LOCAL_STEP_SECONDS, bounded_recognition_progress
 from backend.recognition.models import RecognitionUsageV1
 from backend.recognition.planner import EngineCapabilitiesV1
 from backend.recognition.workflow_v2 import RecognitionAssemblyV2
@@ -55,6 +56,16 @@ def _zero():
     return RecognitionUsageV1(input_tokens=0, output_tokens=0)
 
 
+async def _storage_step(awaitable, *, response_only):
+    if not response_only:
+        return await awaitable
+    try:
+        async with asyncio.timeout(LOCAL_STEP_SECONDS):
+            return await awaitable
+    except TimeoutError:
+        raise RecognitionError("recognition_artifact_unavailable") from None
+
+
 class _RunContext:
     def __init__(self, row, *, identity, request, capabilities, store, progress, clock, binding, repository):
         self.row, self.identity, self.request, self.capabilities = row, identity, request, capabilities
@@ -82,7 +93,7 @@ class _RunContext:
         if finished is not None:
             self.terminal_write = finished
         try:
-            row = await run_in_threadpool(
+            row = await _storage_step(run_in_threadpool(
                 self.repository.save_operation_checkpoint, self.row.id, owner_id=self.row.owner_id,
                 expected_attempt=self.row.attempt, expected_checkpoint_revision=self.row.checkpoint_revision,
                 expected_lease_token=self.row.lease_token, stage="recognition_" + (status or "checkpoint"),
@@ -90,7 +101,7 @@ class _RunContext:
                 terminal_status=status,
                 terminal_summary=None if status is None else dict(status=status, error_code=error,
                                                                   final_artifact_id=checkpoint.final_artifact_id),
-            )
+            ), response_only=self.policy.timeout_mode == "response_only")
             self.row, self.checkpoint = row, checkpoint
             if finished is not None:
                 finished.set_result(True)
@@ -101,8 +112,10 @@ class _RunContext:
                 self.terminal_write = None
 
     async def active(self):
-        return await self.store.active_source(source=self.request.source, identity=self.identity,
-                                             binding=self.binding, authorized_owner_id=self.row.owner_id)
+        return await _storage_step(self.store.active_source(
+            source=self.request.source, identity=self.identity,
+            binding=self.binding, authorized_owner_id=self.row.owner_id,
+        ), response_only=self.policy.timeout_mode == "response_only")
 
 
 class _RecognitionLeaseHeartbeat:
@@ -213,7 +226,7 @@ class _GuardedCalls(RecognitionCallService):
         )
         # A failed or cancelled checkpoint write never reaches provider dispatch.
         await ctx.write(checkpoint)
-        if ctx.progress:
+        if ctx.progress and ctx.policy.timeout_mode == "legacy":
             await ctx.progress.increment_stage_metrics(recognition_submits_checkpointed=1)
 
     async def record(self, *args, **kwargs):
@@ -250,12 +263,12 @@ class RecognitionRunService:
                 raise ValueError
             assembly = None
             if checkpoint.final_artifact_id:
-                envelope = await self.store.load(
+                envelope = await _storage_step(self.store.load(
                     checkpoint.final_artifact_id, source=request.source, identity=identity,
                     binding=RecognitionArtifactBindingV1.model_validate((row.payload or {}).get("binding") or
                         dict(link="assignment", business_id=request.source.business_id)),
                     authorized_owner_id=row.owner_id,
-                )
+                ), response_only=request.policy.timeout_mode == "response_only")
                 if envelope.payload_kind != "assembly_v2":
                     raise ValueError
                 assembly = envelope.payload
@@ -263,10 +276,12 @@ class RecognitionRunService:
                 status, row.id, assembly, _zero(), operation_usage(checkpoint, now=row.completed_at or self.clock()),
                 tuple(row.artifact_refs or []), (row.terminal_summary or {}).get("error_code"),
             )
-        except (ValidationError, ValueError, TypeError, AttributeError, RecognitionError):
+        except (ValidationError, ValueError, TypeError, AttributeError, RecognitionError) as exc:
             return RecognitionRunResultV1("needs_review", row.id, None, _zero(),
                                           RecognitionUsageV1(input_tokens=None, output_tokens=None, usage_complete=False),
-                                          safe_error_code="recognition_artifact_invalid")
+                                          safe_error_code=("recognition_artifact_unavailable" if
+                                              request.policy.timeout_mode == "response_only" and isinstance(exc, RecognitionError)
+                                              and exc.code == "recognition_artifact_unavailable" else "recognition_artifact_invalid"))
 
     async def run(self, request, source_bytes, *, engine, prompt_version, authorized_owner_id, binding=None,
                   retry_key=None, acknowledge_pending_retry=False):
@@ -280,6 +295,10 @@ class RecognitionRunService:
         except (ValidationError, ValueError, TypeError, AttributeError):
             raise RecognitionError("recognition_request_invalid") from None
         source = request.source
+        response_only = request.policy.timeout_mode == "response_only"
+        if response_only and (caps is None or caps.candidate_kind != "vision"):
+            raise RecognitionError("recognition_request_invalid")
+        progress = bounded_recognition_progress(self.progress) if response_only else self.progress
         if source.owner_id != authorized_owner_id:
             raise RecognitionError("recognition_source_mismatch")
         identity = final_cache_identity(request, capabilities=caps, prompt_version=prompt_version, workflow_version=2)
@@ -287,24 +306,26 @@ class RecognitionRunService:
         binding = RecognitionArtifactBindingV1.model_validate(binding.model_dump())
         if binding.business_id != source.business_id:
             raise RecognitionError("recognition_source_mismatch")
-        assignment_id = await run_in_threadpool(self.binding_resolver, binding, authorized_owner_id)
+        assignment_id = await _storage_step(
+            run_in_threadpool(self.binding_resolver, binding, authorized_owner_id), response_only=response_only,
+        )
         # create_operation checks live assignment ownership. Crucially, this
         # internal operation never uses the legacy error/expiry retry reset.
-        row, _ = await run_in_threadpool(
+        row, _ = await _storage_step(run_in_threadpool(
             self.repository.create_operation, assignment_id=assignment_id, owner_id=authorized_owner_id,
             operation_type=OPERATION_TYPE, input_hash=identity.key, retry_existing=False,
             payload=dict(identity_key=identity.key, binding=binding.model_dump()),
-        )
+        ), response_only=response_only)
         if retry_key is not None and row.status not in {"pending", "running", "completed"}:
             # Preserve the failed checkpoint and its uncertain-call evidence.
             # A stable parent attempt gives one retry child; successful leaf
             # artifacts keep their original identity and can still be reused.
             retry_hash = hashlib.sha256(f"{identity.key}:explicit-retry:{retry_key}".encode()).hexdigest()
-            row, _ = await run_in_threadpool(
+            row, _ = await _storage_step(run_in_threadpool(
                 self.repository.create_operation, assignment_id=assignment_id, owner_id=authorized_owner_id,
                 operation_type=OPERATION_TYPE, input_hash=retry_hash, retry_existing=False,
                 payload=dict(identity_key=identity.key, binding=binding.model_dump(), retry_origin_id=row.id),
-            )
+            ), response_only=response_only)
         if row.terminal_summary is not None:
             return await self._restored(row, request, identity,
                                         status="already_done" if row.status == "completed" else "needs_review")
@@ -314,17 +335,24 @@ class RecognitionRunService:
         if (type(source_bytes) is not bytes or not source_bytes or len(source_bytes) > maximum
                 or hashlib.sha256(source_bytes).hexdigest() != source.input_sha256):
             raise RecognitionError("recognition_source_mismatch")
-        if not await self.store.active_source(source=source, identity=identity, binding=binding, authorized_owner_id=authorized_owner_id):
+        if not await _storage_step(self.store.active_source(
+            source=source, identity=identity, binding=binding, authorized_owner_id=authorized_owner_id,
+        ), response_only=response_only):
             raise RecognitionError("recognition_source_unavailable")
-        renew_lease = (request.policy.total_seconds > 900 and caps is not None and caps.candidate_kind == "vision"
+        renew_lease = ((response_only or request.policy.total_seconds > 900) and caps is not None and caps.candidate_kind == "vision"
                        and source.scope != "knowledge_document" and request.purpose != "knowledge")
         lease_seconds = _RENEWABLE_LEASE_SECONDS if renew_lease else math.ceil(request.policy.total_seconds) + 60
         worker = "recognition-" + uuid.uuid4().hex
         try:
-            row = await run_in_threadpool(self.repository.claim_operation, row.id, owner_id=authorized_owner_id,
-                                          worker_id=worker, lease_seconds=lease_seconds)
+            row = await _storage_step(run_in_threadpool(
+                self.repository.claim_operation, row.id, owner_id=authorized_owner_id,
+                worker_id=worker, lease_seconds=lease_seconds,
+            ), response_only=response_only)
         except LeaseLost:
-            latest = await run_in_threadpool(self.repository.get_operation, row.id, owner_id=authorized_owner_id)
+            latest = await _storage_step(
+                run_in_threadpool(self.repository.get_operation, row.id, owner_id=authorized_owner_id),
+                response_only=response_only,
+            )
             if latest.terminal_summary is not None:
                 return await self._restored(latest, request, identity,
                                             status="already_done" if latest.status == "completed" else "needs_review")
@@ -332,7 +360,7 @@ class RecognitionRunService:
                 return await self._restored(latest, request, identity, status="already_running")
             return RecognitionRunResultV1("already_running", row.id, None, _zero(), _zero())
         context = _RunContext(row, identity=identity, request=request, capabilities=caps,
-                              store=self.store, progress=self.progress, clock=self.clock, binding=binding,
+                              store=self.store, progress=progress, clock=self.clock, binding=binding,
                               repository=self.repository)
         heartbeat = _RecognitionLeaseHeartbeat(context, worker=worker) if renew_lease else None
         assembly = None
@@ -362,26 +390,28 @@ class RecognitionRunService:
             if checkpoint.final_artifact_id:
                 await context.write(checkpoint, status="completed")
                 return await self._restored(context.row, request, identity, status="already_done")
-            remaining = min(request.policy.total_seconds, checkpoint.started_at + request.policy.total_seconds - self.clock())
-            if remaining <= 0:
+            remaining = None if response_only else min(
+                request.policy.total_seconds, checkpoint.started_at + request.policy.total_seconds - self.clock(),
+            )
+            if remaining is not None and remaining <= 0:
                 await context.write(checkpoint, status="needs_review", error="recognition_timeout")
                 return await self._restored(context.row, request, identity, status="needs_review")
             await context.write(checkpoint)
-            if self.progress:
-                await self.progress.set_current_step("recognition_resume", message="Checking durable recognition progress")
+            if progress:
+                await progress.set_current_step("recognition_resume", message="Checking durable recognition progress")
             local = RecognitionLocalEvidenceReader(store=self.store, cache=self.cache, binding=binding,
                                                     source=source, authorized_owner_id=authorized_owner_id, fence=context.fence,
-                                                    progress=self.progress)
+                                                    progress=progress)
             calls = _GuardedCalls(context)
             results = RecognitionResultService(store=self.store, binding=binding, authorized_owner_id=authorized_owner_id,
                                                 fence=context.fence)
             async with asyncio.timeout(remaining):
-                assembly = await RecognitionAgent(engine, capacity=self.capacity, progress=self.progress,
+                assembly = await RecognitionAgent(engine, capacity=self.capacity, progress=progress,
                                                    local_reader=local, call_service=calls,
                                                    elapsed_seconds=max(0, self.clock() - checkpoint.started_at)).recognize(
                     request, source_bytes, authorized_owner_id=authorized_owner_id, prompt_version=prompt_version,
                 )
-                receipt = await results.record(assembly, timeout_seconds=min(10, remaining))
+                receipt = await results.record(assembly, timeout_seconds=10 if remaining is None else min(10, remaining))
                 checkpoint = context.checkpoint.model_copy(deep=True)
                 checkpoint.final_artifact_id = receipt.artifact_id
                 pending = any(call.state == "pending" for call in checkpoint.calls)
@@ -398,6 +428,8 @@ class RecognitionRunService:
             # cannot infer that cancellation prevented the remote submission.
             raise
         except (DomainError, ValidationError, TimeoutError) as exc:
+            if response_only and isinstance(exc, LeaseLost):
+                raise
             code = "recognition_timeout" if isinstance(exc, TimeoutError) else (
                 exc.code if isinstance(exc, DomainError) and exc.code in RECOGNITION_ERROR_CODES else "recognition_artifact_unavailable")
             if context.checkpoint is not None:

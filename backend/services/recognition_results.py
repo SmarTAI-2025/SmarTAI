@@ -79,7 +79,8 @@ class RecognitionResultService:
         context = dict(source=request.source, identity=identity, binding=self.binding.model_copy(deep=True), authorized_owner_id=self.owner)
         started = time.monotonic()
         try:
-            async with asyncio.timeout(min(timeout_seconds, request.policy.total_seconds)):
+            async with asyncio.timeout(timeout_seconds if request.policy.timeout_mode == "response_only"
+                                       else min(timeout_seconds, request.policy.total_seconds)):
                 digest = await run_in_threadpool(lambda: hashlib.sha256(source_bytes).hexdigest())
                 if digest != request.source.input_sha256:
                     raise RecognitionError("recognition_source_mismatch")

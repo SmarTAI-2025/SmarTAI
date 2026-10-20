@@ -35,17 +35,24 @@ from backend.tests.test_task_background_workflows import (
 
 
 PROFILE_KEY = "recognition_timeout_profile"
-NEW_PROFILE = "source-300-v1"
+NEW_PROFILE = "source-response-300-v1"
+PR245_PROFILE = "source-300-v1"
+TIMEOUT_PROFILES = pytest.mark.parametrize(
+    "profile", [NEW_PROFILE, None, PR245_PROFILE], ids=["new", "pre245", "pr245"],
+)
 
 
-def _freeze_parent_as_old_or_new(owner_id, operation_id, legacy):
+def _freeze_parent(owner_id, operation_id, profile):
     operation = workflow_repository.get_operation(operation_id, owner_id=owner_id)
     assert operation.payload[PROFILE_KEY] == NEW_PROFILE
-    if legacy:
+    if profile != NEW_PROFILE:
         # Simulate an already-published job from before this rollout, without
         # changing its input hash, sources, checkpoint or source artifacts.
         payload = dict(operation.payload)
-        payload.pop(PROFILE_KEY)
+        if profile is None:
+            payload.pop(PROFILE_KEY)
+        else:
+            payload[PROFILE_KEY] = profile
         operation = workflow_repository.update_operation(
             operation.id,
             owner_id=owner_id,
@@ -55,13 +62,10 @@ def _freeze_parent_as_old_or_new(owner_id, operation_id, legacy):
     return operation
 
 
-def _assert_frozen_profile(operation, legacy):
-    if legacy:
-        # A republished payload may explicitly store None; both representations
-        # must keep the legacy policy and its existing OCR/cache identity.
-        assert operation.payload.get(PROFILE_KEY) is None
-    else:
-        assert operation.payload[PROFILE_KEY] == NEW_PROFILE
+def _assert_frozen_profile(operation, profile):
+    # Missing and explicit None both keep the oldest policy. A PR245 parent
+    # keeps its original profile even when its retry is published by new code.
+    assert operation.payload.get(PROFILE_KEY) == profile
 
 
 def _fail_claimed(owner_id, task_id, job_id, error_code):
@@ -78,11 +82,11 @@ def _fail_claimed(owner_id, task_id, job_id, error_code):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy", [False, True], ids=["new", "legacy"])
-async def test_question_start_freezes_profile_without_upgrading_idempotent_replay(legacy):
+@TIMEOUT_PROFILES
+async def test_question_start_freezes_profile_without_upgrading_idempotent_replay(profile):
     owner, task = _seed_task()
     source, queued, _ = await _queue_question_preparation(owner, task)
-    original = _freeze_parent_as_old_or_new(owner, queued["job_id"], legacy)
+    original = _freeze_parent(owner, queued["job_id"], profile)
     source_operation = workflow_repository.get_operation(source["source_token"], owner_id=owner)
     assert PROFILE_KEY not in source_operation.payload
 
@@ -102,7 +106,7 @@ async def test_question_start_freezes_profile_without_upgrading_idempotent_repla
     assert isinstance(replay, dict), getattr(replay, "body", replay)
     assert replay["job_id"] == original.id
     after = workflow_repository.get_operation(original.id, owner_id=owner)
-    _assert_frozen_profile(after, legacy)
+    _assert_frozen_profile(after, profile)
     assert after.input_hash == original.input_hash
     assert after.attempt == original.attempt
     assert after.payload == original.payload
@@ -110,12 +114,12 @@ async def test_question_start_freezes_profile_without_upgrading_idempotent_repla
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy", [False, True], ids=["new", "legacy"])
+@TIMEOUT_PROFILES
 @pytest.mark.parametrize("retry_kind", ["same_operation", "new_configuration", "uncertain"])
-async def test_question_retry_inherits_timeout_profile_and_preserves_uncertainty(legacy, retry_kind):
+async def test_question_retry_inherits_timeout_profile_and_preserves_uncertainty(profile, retry_kind):
     owner, task = _seed_task()
     _, queued, _ = await _queue_question_preparation(owner, task)
-    _freeze_parent_as_old_or_new(owner, queued["job_id"], legacy)
+    _freeze_parent(owner, queued["job_id"], profile)
     uncertain = retry_kind == "uncertain"
     failed = _fail_claimed(
         owner, task, queued["job_id"],
@@ -149,7 +153,7 @@ async def test_question_retry_inherits_timeout_profile_and_preserves_uncertainty
     )
     assert isinstance(retried, dict), getattr(retried, "body", retried)
     resumed = workflow_repository.get_operation(retried["job_id"], owner_id=owner)
-    _assert_frozen_profile(resumed, legacy)
+    _assert_frozen_profile(resumed, profile)
     if retry_kind == "same_operation":
         assert resumed.id == failed.id
         assert resumed.input_hash == failed.input_hash
@@ -165,8 +169,8 @@ async def test_question_retry_inherits_timeout_profile_and_preserves_uncertainty
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy", [False, True], ids=["new", "legacy"])
-async def test_saved_question_and_reference_sources_use_the_parent_frozen_profile(monkeypatch, legacy):
+@TIMEOUT_PROFILES
+async def test_saved_question_and_reference_sources_use_the_parent_frozen_profile(monkeypatch, profile):
     owner, task = _seed_task()
     sources = []
     for role in ("problem", "reference_answer", "rubric", "programming_tests"):
@@ -195,7 +199,7 @@ async def test_saved_question_and_reference_sources_use_the_parent_frozen_profil
     monkeypatch.setattr(task_preparation, "read_question_source", read)
     operation = SimpleNamespace(
         owner_id=owner, assignment_id=task, operation_id="timeout-profile-parent",
-        attempt=1, payload={} if legacy else {PROFILE_KEY: NEW_PROFILE},
+        attempt=1, payload={} if profile is None else {PROFILE_KEY: profile},
         update_progress=AsyncMock(),
     )
     result = await task_preparation._recognize_saved_question_sources(
@@ -210,24 +214,24 @@ async def test_saved_question_and_reference_sources_use_the_parent_frozen_profil
         "problems", "reference", "rubric", "test_cases",
     ]
     assert [call.kwargs["timeout_profile"] for call in read.await_args_list] == [
-        None if legacy else NEW_PROFILE,
+        profile,
     ] * 4
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy", [False, True], ids=["new", "legacy"])
-async def test_submission_exact_replay_preserves_profile_through_worker_reader(monkeypatch, legacy):
+@TIMEOUT_PROFILES
+async def test_submission_exact_replay_preserves_profile_through_worker_reader(monkeypatch, profile):
     owner, task = _seed_task(with_question=True)
     registry = _Registry()
     kwargs = dict(task_id=task, owner_id=owner, filename="student.txt",
                   content=b"Synthetic student answer", content_type="text/plain", registry=registry)
     queued = task_facade.queue_task_submission_parsing(**kwargs)
-    _freeze_parent_as_old_or_new(owner, queued["job_id"], legacy)
+    _freeze_parent(owner, queued["job_id"], profile)
     failed = _fail_claimed(owner, task, queued["job_id"], "provider_rate_limited")
 
     replay = task_facade.queue_task_submission_parsing(**kwargs)
     resumed = workflow_repository.get_operation(replay["job_id"], owner_id=owner)
-    _assert_frozen_profile(resumed, legacy)
+    _assert_frozen_profile(resumed, profile)
     assert resumed.id == failed.id
     assert resumed.input_hash == failed.input_hash
     assert resumed.attempt == failed.attempt + 1
@@ -238,20 +242,20 @@ async def test_submission_exact_replay_preserves_profile_through_worker_reader(m
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
     await task_facade.run_durable_submission_recognition(_claim(owner, resumed.id, "replayed-reader"))
     read.assert_awaited_once()
-    assert read.await_args.kwargs["timeout_profile"] == (None if legacy else NEW_PROFILE)
+    assert read.await_args.kwargs["timeout_profile"] == profile
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy", [False, True], ids=["new", "legacy"])
+@TIMEOUT_PROFILES
 @pytest.mark.parametrize("uncertain", [False, True], ids=["safe_retry", "acknowledged_retry"])
-async def test_submission_retry_from_inherits_profile_without_bypassing_ack(monkeypatch, legacy, uncertain):
+async def test_submission_retry_from_inherits_profile_without_bypassing_ack(monkeypatch, profile, uncertain):
     owner, task = _seed_task(with_question=True)
     registry = _Registry()
     queued = task_facade.queue_task_submission_parsing(
         task_id=task, owner_id=owner, filename="student.txt", content=b"Synthetic answer",
         content_type="text/plain", registry=registry,
     )
-    _freeze_parent_as_old_or_new(owner, queued["job_id"], legacy)
+    _freeze_parent(owner, queued["job_id"], profile)
     failed = _fail_claimed(
         owner, task, queued["job_id"],
         "provider_submit_uncertain" if uncertain else "provider_rate_limited",
@@ -282,7 +286,7 @@ async def test_submission_retry_from_inherits_profile_without_bypassing_ack(monk
     )
     assert isinstance(retried, dict), getattr(retried, "body", retried)
     resumed = workflow_repository.get_operation(retried["job_id"], owner_id=owner)
-    _assert_frozen_profile(resumed, legacy)
+    _assert_frozen_profile(resumed, profile)
     assert resumed.id != failed.id
     assert resumed.payload["retry_from"] == {"operation_id": failed.id, "attempt": failed.attempt}
     original = workflow_repository.get_operation(failed.id, owner_id=owner)
@@ -293,20 +297,20 @@ async def test_submission_retry_from_inherits_profile_without_bypassing_ack(monk
 
     await task_facade.run_durable_submission_recognition(_claim(owner, resumed.id, "retry-reader"))
     read.assert_awaited_once()
-    assert read.await_args.kwargs["timeout_profile"] == (None if legacy else NEW_PROFILE)
+    assert read.await_args.kwargs["timeout_profile"] == profile
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy", [False, True], ids=["new", "legacy"])
+@TIMEOUT_PROFILES
 @pytest.mark.parametrize("error_code", ["provider_submit_uncertain", "operation_cancelled"])
-async def test_submission_saved_upload_restart_inherits_profile_without_retry_from(monkeypatch, legacy, error_code):
+async def test_submission_saved_upload_restart_inherits_profile_without_retry_from(monkeypatch, profile, error_code):
     owner, task = _seed_task(with_question=True)
     registry = _Registry()
     queued = task_facade.queue_task_submission_parsing(
         task_id=task, owner_id=owner, filename="student.txt", content=b"Saved student answer",
         content_type="text/plain", registry=registry,
     )
-    _freeze_parent_as_old_or_new(owner, queued["job_id"], legacy)
+    _freeze_parent(owner, queued["job_id"], profile)
     failed = _fail_claimed(owner, task, queued["job_id"], error_code)
     workflow = workflow_repository.get_workflow(task, owner_id=owner)
     read = AsyncMock(side_effect=RecognitionError("provider_rate_limited"))
@@ -324,7 +328,7 @@ async def test_submission_saved_upload_restart_inherits_profile_without_retry_fr
     )
     assert isinstance(restarted, dict), getattr(restarted, "body", restarted)
     resumed = workflow_repository.get_operation(restarted["job_id"], owner_id=owner)
-    _assert_frozen_profile(resumed, legacy)
+    _assert_frozen_profile(resumed, profile)
     assert resumed.id != failed.id
     assert resumed.payload["acknowledged_restart_from"] == f"{failed.id}:{failed.attempt}"
     original = workflow_repository.get_operation(failed.id, owner_id=owner)
@@ -335,4 +339,4 @@ async def test_submission_saved_upload_restart_inherits_profile_without_retry_fr
 
     await task_facade.run_durable_submission_recognition(_claim(owner, resumed.id, "upload-restart-reader"))
     read.assert_awaited_once()
-    assert read.await_args.kwargs["timeout_profile"] == (None if legacy else NEW_PROFILE)
+    assert read.await_args.kwargs["timeout_profile"] == profile

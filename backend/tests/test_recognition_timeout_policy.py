@@ -14,7 +14,7 @@ from backend.recognition.models import RecognitionCandidateV1, RecognitionPolicy
 from backend.recognition.planner import EngineCapabilitiesV1
 from backend.recognition.runtime import RecognitionCapacity, run_initial_read
 from backend.services.question_source_batches import read_question_pdf_batches
-from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE, apply_source_timeout_profile
+from backend.services.recognition_timeouts import LEGACY_SOURCE_TIMEOUT_PROFILE, apply_source_timeout_profile
 
 
 class Clock:
@@ -57,7 +57,7 @@ def read_request(data=b"test-pdf", **changes):
 
 
 def apply(request, engine, **kwargs):
-    return apply_source_timeout_profile(request, engine=engine, timeout_profile=SOURCE_TIMEOUT_PROFILE, **kwargs)
+    return apply_source_timeout_profile(request, engine=engine, timeout_profile=LEGACY_SOURCE_TIMEOUT_PROFILE, **kwargs)
 
 
 def test_missing_profile_preserves_legacy_defaults_serialization_and_identity():
@@ -200,7 +200,7 @@ async def test_existing_explicit_short_call_and_phase_deadlines_still_apply():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("profile,per_call,total", [(None, 120, 600), (SOURCE_TIMEOUT_PROFILE, 300, 6060)])
+@pytest.mark.parametrize("profile,per_call,total", [(None, 120, 600), (LEGACY_SOURCE_TIMEOUT_PROFILE, 300, 6060)])
 async def test_each_pdf_batch_gets_the_selected_frozen_policy(profile, per_call, total):
     seen = []
 

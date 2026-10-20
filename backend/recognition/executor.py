@@ -15,6 +15,7 @@ from pydantic import Field, ValidationError, model_validator
 from backend.domain.errors import PdfEvidenceError, RecognitionError
 from backend.recognition.budget import RecognitionBudget
 from backend.recognition.engine import EngineReadInputV1, RecognitionEngine
+from backend.recognition.local_limits import bounded_recognition_progress
 from backend.recognition.models import (
     Code, EvidenceModel, NormalizedRegionV1, RecognitionCandidateV1,
     RecognitionSourceRefV1, RecognitionUsageV1,
@@ -205,6 +206,8 @@ must prevent replay after ambiguous submits, including cancellation. Byte/hash
 checks here do not replace the caller's storage ACL and operation lease.
 """
     source, plan = _snapshot(source, plan, engine)
+    if plan.policy.timeout_mode == "response_only":
+        progress = bounded_recognition_progress(progress)
     if source.owner_id != authorized_owner_id or source.content_type != "application/pdf" or not isinstance(pdf_bytes, bytes) or hashlib.sha256(pdf_bytes).hexdigest() != source.input_sha256:
         raise RecognitionError("recognition_source_mismatch")
     if plan.source_kind != "pdf":
@@ -232,10 +235,10 @@ checks here do not replace the caller's storage ACL and operation lease.
     async def pdf_read(request):
         if local_reader is not None:
             return (await local_reader.read(
-                pdf_bytes, request, timeout_seconds=min(10, budget.remaining("read")),
+                pdf_bytes, request, timeout_seconds=budget.local_timeout(10, "read"),
             )).evidence
         return await read_pdf_evidence(
-            pdf_bytes, request, timeout_seconds=min(10, budget.remaining("read")), progress=progress,
+            pdf_bytes, request, timeout_seconds=budget.local_timeout(10, "read"), progress=progress,
         )
 
     try:

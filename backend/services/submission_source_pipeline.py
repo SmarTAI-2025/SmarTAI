@@ -18,6 +18,7 @@ from backend.db.file_repository import (
     get_file,
     save_file,
 )
+from backend.domain.errors import LeaseLost
 from backend.services.background_errors import (
     classify_background_error,
     is_retryable_background_error,
@@ -281,6 +282,7 @@ def failure_phase_for_code(code: str) -> str:
 def _source_read_failure_phase(code: str, content_type: str) -> str:
     if (
         code in {
+            "provider_capacity_unavailable",
             "provider_overloaded",
             "provider_timeout",
             "provider_unreachable",
@@ -726,6 +728,9 @@ async def prepare_submission_sources(
                     text=text,
                     recognition=recognition,
                 ))
+        except LeaseLost:
+            # Ownership loss must stop this worker, not become a failed source.
+            raise
         except Exception as exc:
             if document_ocr_checkpointed and document_ocr_failed is not None:
                 try:

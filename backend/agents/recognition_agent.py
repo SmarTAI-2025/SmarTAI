@@ -13,13 +13,14 @@ from typing import Callable, Literal, TYPE_CHECKING
 from pydantic import Field, ValidationError, model_validator
 
 from backend.domain.errors import PdfEvidenceError, RecognitionError
-from backend.recognition.budget import BudgetSnapshot, RecognitionBudget, validate_budget_accounting
+from backend.recognition.budget import BudgetSnapshot, RecognitionBudget, validate_budget_accounting, validate_budget_timing
 from backend.recognition.engine import EngineLocateInputV1, LocatorImageV1, RecognitionEngine
 from backend.recognition.executor import RecognitionReadBatchV1, read_pdf_plan
 from backend.recognition.image_executor import read_image_plan
 from backend.recognition.locator import (
     NativeLocatorRequestV1, NativeLocatorResultV1, PageNumber, TargetId, locate_native_targets,
 )
+from backend.recognition.local_limits import bounded_recognition_progress
 from backend.recognition.models import Code, EvidenceModel, Purpose, RecognitionPolicyV1, RecognitionSourceRefV1
 from backend.recognition.planner import EngineCapabilitiesV1, PageObservationV1, RecognitionPlanRequestV1, plan_recognition
 from backend.recognition.runtime import RecognitionCapacity, run_locator_call
@@ -47,6 +48,10 @@ class RecognitionReadRequestV1(EvidenceModel):
 
     @model_validator(mode="after")
     def scope_contract(self):
+        if self.policy.timeout_mode == "response_only" and (
+            self.purpose == "knowledge" or self.source.scope == "knowledge_document"
+        ):
+            raise ValueError("knowledge reads retain their own bounded timeout policy")
         if (self.scope == "pages") != bool(self.pages) or self.pages != sorted(set(self.pages)):
             raise ValueError("page scope requires ordered explicit pages")
         if self.scope == "targets" and not self.targets:
@@ -109,6 +114,7 @@ class RecognitionWorkflowReadV1(EvidenceModel):
             expected_policy.max_detail_pages = min(expected_policy.max_detail_pages, 2 * len(self.request.targets) + 4)
         if self.execution_policy != expected_policy:
             raise ValueError("workflow must retain the effective request policy")
+        validate_budget_timing(self.budget, self.execution_policy)
         if self.selected_pages != sorted(set(self.selected_pages)) or self.indexed_pages != sorted(set(self.indexed_pages)):
             raise ValueError("workflow page sets must be ordered and unique")
         pages = [*self.indexed_pages, *self.selected_pages, *(p.page_number for p in self.native_details)]
@@ -240,6 +246,8 @@ class RecognitionAgent:
             local_reader.assert_context(source, authorized_owner_id=authorized_owner_id)
         capabilities = self.engine.capabilities.model_copy(deep=True) if self.engine else None
         policy = request.policy.model_copy(deep=True)
+        if policy.timeout_mode == "response_only":
+            self.progress = bounded_recognition_progress(self.progress)
         if request.scope == "targets":
             policy.max_detail_pages = min(policy.max_detail_pages, 2 * len(request.targets) + 4)
         budget = RecognitionBudget(source, policy, capabilities, clock=self.clock, elapsed_seconds=self.elapsed_seconds)
@@ -255,9 +263,9 @@ class RecognitionAgent:
         async def pdf_read(command, phase="locator"):
             if local_reader is not None:
                 return (await local_reader.read(
-                    source_bytes, command, timeout_seconds=min(10, budget.remaining(phase)),
+                    source_bytes, command, timeout_seconds=budget.local_timeout(10, phase),
                 )).evidence
-            return await read_pdf_evidence(source_bytes, command, timeout_seconds=min(10, budget.remaining(phase)), progress=self.progress)
+            return await read_pdf_evidence(source_bytes, command, timeout_seconds=budget.local_timeout(10, phase), progress=self.progress)
 
         try:
             if self.progress:
@@ -409,11 +417,11 @@ class RecognitionAgent:
                     command = PdfContactSheetRequest(pages=sorted(numbers[part:part + 8]))
                     if local_reader is not None:
                         sheet = (await local_reader.read(
-                            source_bytes, command, timeout_seconds=min(10, budget.remaining("locator")),
+                            source_bytes, command, timeout_seconds=budget.local_timeout(10, "locator"),
                         )).evidence
                     else:
                         sheet = await read_pdf_evidence(source_bytes, command,
-                                                       timeout_seconds=min(10, budget.remaining("locator")), progress=self.progress)
+                                                       timeout_seconds=budget.local_timeout(10, "locator"), progress=self.progress)
                     if not isinstance(sheet, PdfContactSheetResult) or sheet.total_pages != index.total_pages:
                         raise RecognitionError("recognition_response_invalid")
                     payload = decode_pdf_payload(sheet)

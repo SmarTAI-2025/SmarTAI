@@ -287,6 +287,11 @@ class RecognitionPolicyV1(EvidenceModel):
     # Keep legacy defaults/cache identities. Opt-in caps are 12*300+360 for
     # locating, 18*300+600 for reading, and both phases plus 60 for finalization.
     version: str = "faithful-v2"
+    # Existing requests/artifacts omit this field so their exact identities stay
+    # stable. Only a newly frozen source profile disables cumulative deadlines.
+    timeout_mode: Literal["legacy", "response_only"] = Field(
+        default="legacy", exclude_if=lambda value: value == "legacy",
+    )
     max_locator_calls: int = Field(default=12, ge=0, le=12)
     locator_seconds: float = Field(default=360, gt=0, le=3960)
     read_seconds: float = Field(default=600, gt=0, le=6000)

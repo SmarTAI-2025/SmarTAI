@@ -97,7 +97,8 @@ def authorize_dispatch(checkpoint, *, kind, identity_key, region_keys, max_outpu
         raise RecognitionError("recognition_plan_changed")
     if any(item.state == "pending" for item in checkpoint.calls):
         raise RecognitionError("provider_submit_uncertain")
-    if _elapsed(checkpoint, now) >= policy.total_seconds:
+    elapsed = _elapsed(checkpoint, now)
+    if policy.timeout_mode == "legacy" and elapsed >= policy.total_seconds:
         raise RecognitionError("recognition_timeout")
     counts = {name: sum(item.kind == name for item in checkpoint.calls) + (kind == name)
               for name in ("locator", "initial", "empty_recovery", "patch")}
