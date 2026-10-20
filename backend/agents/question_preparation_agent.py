@@ -41,6 +41,7 @@ from backend.services.background_errors import classify_background_error
 from backend.services.question_structure import (
     MajorQuestionStructureV1,
     QuestionRubricValidationError,
+    validate_generated_math_rubric_percentages,
     validate_rubric_points,
 )
 from backend.skills.question_score import resolve_question_score_policy
@@ -464,6 +465,17 @@ def _validate_major_question_candidates(
             validate_teacher_subpart_rubric(
                 candidate.text_value or "", problem, problem.get("teacher_subpart_points") or {},
             )
+            try:
+                validate_generated_math_rubric_percentages(
+                    candidate.text_value or "",
+                    question_type=str(problem.get("type") or ""),
+                    has_subparts=bool(structure.subparts),
+                )
+            except ValueError as exc:
+                raise ValidationError(
+                    "The generated mathematical rubric percentages must total 100%.",
+                    code="provider_response_invalid",
+                ) from exc
         if candidate.target == "reference_answer" and structure.subparts:
             normalized_answer = unicodedata.normalize(
                 "NFKC", candidate.text_value or ""

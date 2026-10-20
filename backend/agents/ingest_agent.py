@@ -1802,6 +1802,21 @@ Rules:
 - teacher_subpart_points contains authoritative teacher allocations. Preserve each named label's
   points exactly in criterion; allocate only the unspecified remainder. Do not replace explicit
   allocations with an even split. A subpart remains inside its single major-question package.
+- For calculation, proof/reasoning and concept rubrics, define mathematical goals or obligations,
+  not a mandatory copy of the reference solution. Accept valid alternative methods unless the
+  question explicitly requires one. Allocate by the importance of those goals, never by counting
+  student steps or splitting equally across generic dimensions. Preserve any provided scoring
+  rules verbatim and label newly inferred details as AI additions; do not claim they came from
+  the teacher. Positive allocations must sum to 100% (or max_score for labelled subparts).
+  If an existing rule instead uses deductions, retain its per-error amount, repetition limit,
+  cap, floor and blank/nonblank applicability; deduction amounts need not sum to the maximum.
+  Do not invent a minimum, a fixed partial-credit cap, or full credit merely from a correct result.
+- In those mathematical rubrics, distinguish the first error, correct downstream reasoning on an
+  erroneous intermediate value, a later independent error, and a separately scored conclusion.
+  Specify their treatment for this question; do not impose universal half/full credit downstream.
+  Include relevant precision, domain/assumptions, units and integration constants. For proofs,
+  address theorem hypotheses, logical gaps/circularity and cases; for concepts distinguish full,
+  partial, missing and contradictory coverage, accepting synonyms and suitable examples.
 - reference_answer: a correct model answer or derivation suitable for teacher review. Cover every
   labelled subpart in question_structure, in source order, without creating separate q_ids. If an
   existing teacher answer contains only a final answer, preserve that conclusion and expand it
