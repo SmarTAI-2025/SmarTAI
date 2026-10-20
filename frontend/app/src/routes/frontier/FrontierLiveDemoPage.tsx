@@ -448,11 +448,14 @@ export function FrontierLiveDemoPage() {
         recognitionProviderId,
       }));
       markStep("questions", "active", tx(locale, "正在识别题目并生成标答、评分依据与代码题材料…", "Recognizing questions and generating answers, rubrics, and programming materials…"), response.job_id);
-      const state = await waitForStatus(run, currentTaskId, ["problems_ready"]);
+      const state = await waitForStatus(run, currentTaskId, "extracting_problems", ["problems_ready"]);
+      if (!state) return;
       status = state.status;
     } else if (status === "extracting_problems") {
       markStep("questions", "active", tx(locale, "正在等待已有题目识别任务…", "Waiting for the existing question-recognition job…"));
-      status = (await waitForStatus(run, currentTaskId, ["problems_ready"])).status;
+      const state = await waitForStatus(run, currentTaskId, "extracting_problems", ["problems_ready"]);
+      if (!state) return;
+      status = state.status;
     }
 
     if (status === "problems_ready") {
@@ -476,11 +479,15 @@ export function FrontierLiveDemoPage() {
       const recognitionProviderId = await run.step(() => demoRecognitionProvider(currentTaskId));
       const response = await run.step(() => parseSubmissions({ taskId: currentTaskId, file: archive, identityMode: "filename", recognitionProviderId, expectedWorkflowRevision: afterQuestions.workflow_revision }));
       markStep("submissions", "active", tx(locale, "作答识别与 OCR 正在运行…", "Submission recognition and OCR are running…"), response.job_id);
-      status = (await waitForStatus(run, currentTaskId, ["submissions_ready", "grading_setup"])).status;
+      const state = await waitForStatus(run, currentTaskId, "parsing_submissions", ["submissions_ready", "grading_setup"]);
+      if (!state) return;
+      status = state.status;
     } else if (status === "parsing_submissions") {
       markStep("questions", "complete", tx(locale, "题目已准备", "Questions already prepared"));
       markStep("submissions", "active", tx(locale, "正在等待已有作答识别任务…", "Waiting for the existing submission-recognition job…"));
-      status = (await waitForStatus(run, currentTaskId, ["submissions_ready", "grading_setup"])).status;
+      const state = await waitForStatus(run, currentTaskId, "parsing_submissions", ["submissions_ready", "grading_setup"]);
+      if (!state) return;
+      status = state.status;
     }
 
     if (isTaskAwaitingGrading(status)) {
@@ -494,7 +501,9 @@ export function FrontierLiveDemoPage() {
       markStep("questions", "complete", tx(locale, "题目已准备", "Questions already prepared"));
       markStep("submissions", "complete", tx(locale, "作答已识别", "Submissions already recognized"));
       markStep("grading", "active", tx(locale, "正在等待已有批改任务…", "Waiting for the existing grading job…"));
-      status = (await waitForStatus(run, currentTaskId, ["graded", "finalized"])).status;
+      const state = await waitForStatus(run, currentTaskId, "grading", ["graded", "finalized"]);
+      if (!state) return;
+      status = state.status;
     }
 
     if (["graded", "finalized"].includes(status)) {
@@ -505,7 +514,7 @@ export function FrontierLiveDemoPage() {
     }
   }
 
-  async function waitForStatus(run: DemoRun, currentTaskId: string, targets: TaskStatus[]) {
+  async function waitForStatus(run: DemoRun, currentTaskId: string, activeStatus: TaskStatus, targets: TaskStatus[]): Promise<TaskStateSnapshot | null> {
     while (true) {
       const state = await run.step(() => getTaskState(currentTaskId));
       setSnapshot(state);
@@ -517,6 +526,17 @@ export function FrontierLiveDemoPage() {
       if (state.status === "error") {
         const detail = state.progress?.error_detail || state.error || "workflow_error";
         throw new Error(liveDemoWorkflowFailureMessage(locale, detail));
+      }
+      if (state.status !== activeStatus) {
+        // Another tab may advance or reset the task while this stage is watched.
+        // Reconcile through the existing workflow without resuming the old stage.
+        activeStepRef.current = null;
+        setSteps(stepsFromSnapshot(state, locale));
+        setTeacherReviewTask(null);
+        setSubmissionReviewTask(null);
+        setMaterialsConfirmed(false);
+        if (state.status !== "draft") await continueWorkflow(run, currentTaskId, state.status);
+        return null;
       }
       await run.step(() => delay(POLL_INTERVAL_MS));
     }

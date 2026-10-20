@@ -136,6 +136,44 @@ describe("FrontierLiveDemoPage", () => {
     } finally { view?.unmount(); vi.useRealTimers(); }
   });
 
+  it.each([
+    ["extracting_problems", "parsing_submissions"], ["extracting_problems", "submissions_ready"],
+    ["extracting_problems", "grading"], ["extracting_problems", "graded"], ["extracting_problems", "finalized"],
+    ["parsing_submissions", "grading"], ["parsing_submissions", "graded"], ["parsing_submissions", "finalized"],
+    ["parsing_submissions", "problems_ready"], ["grading", "problems_ready"],
+    ["parsing_submissions", "extracting_problems"], ["grading", "parsing_submissions"], ["grading", "submissions_ready"],
+    ["extracting_problems", "draft"], ["parsing_submissions", "draft"], ["grading", "draft"],
+  ] as const)("reconciles a watched %s stage changed elsewhere to %s without restarting work", async (initial, changed) => {
+    vi.useFakeTimers();
+    let view: ReturnType<typeof renderLive> | undefined;
+    try {
+      let state = { ...taskState(initial), problem_count: 0 };
+      vi.mocked(getTaskState).mockImplementation(async () => state);
+      vi.mocked(getTask).mockImplementation(async () => ({ ...taskWithQuestions(state.status), student_data: recognizedStudents() }));
+      vi.mocked(getTaskResult).mockResolvedValue(gradedResult({ ...taskWithQuestions(), student_data: recognizedStudents() }));
+      view = renderLive("asg_demo123");
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      state = taskState(changed);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      if (changed === "extracting_problems" || changed === "parsing_submissions" || changed === "grading") {
+        const observing = vi.mocked(getTaskState).mock.calls.length;
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+        expect(vi.mocked(getTaskState).mock.calls.length).toBeGreaterThan(observing);
+        state = taskState(changed === "grading" ? "graded" : changed === "extracting_problems" ? "problems_ready" : "submissions_ready");
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      }
+      const finished = vi.mocked(getTaskState).mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(9 * 60 * 1000); });
+      expect(getTaskState).toHaveBeenCalledTimes(finished);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      if (["graded", "finalized"].includes(state.status)) expect(getTaskResult).toHaveBeenCalledWith("asg_demo123");
+      else if (state.status === "problems_ready") expect(screen.getByRole("button", { name: "Continue to submissions" })).toBeEnabled();
+      else if (state.status === "submissions_ready") expect(screen.getAllByRole("button", { name: "Start grading" })[0]).toBeEnabled();
+      else expect(screen.getByRole("button", { name: "Start real OCR + grading" })).toBeEnabled();
+      for (const method of [createTask, preflightProblemSource, startQuestionPreparation, retryQuestionPreparation, retrySubmissionRecognition, parseSubmissions, startGrading]) expect(method).not.toHaveBeenCalled();
+    } finally { view?.unmount(); vi.useRealTimers(); }
+  });
+
   it.each(["en-US", "zh-CN"])("freezes %s on first click even when UI changes while task creation is pending", async initialLocale => {
     localStorage.setItem("smartai_locale", initialLocale);
     const creation = deferred<TaskStateSnapshot>();
