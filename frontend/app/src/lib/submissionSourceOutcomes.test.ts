@@ -64,7 +64,10 @@ describe("submission source reason copy", () => {
     const label = getSubmissionPageErrorLabel(item, { page: 2, error_code: "provider_capacity_unavailable" }, locale);
 
     expect(label).toBe(locale === "zh-CN" ? "第 2 页：等待调用资源超时" : "Page 2: Timed out waiting for model capacity");
-    expect(getSubmissionSourceReasonCopy(item, locale).nextStep).toContain(locale === "zh-CN" ? "是否计费尚无法确认" : "billing status is unknown");
+    expect(locale === "zh-CN"
+      ? ["上次调用是否计费尚无法确认。重试可能再次消耗额度。", "上次调用是否完成尚不确定，再次调用可能重复消耗额度。"]
+      : ["The previous call’s billing status is unknown. Retrying may use additional quota.", "It is unclear whether the previous call completed. Calling again may use quota twice."]
+    ).toContain(getSubmissionSourceReasonCopy(item, locale).nextStep);
   });
 
   it.each([
