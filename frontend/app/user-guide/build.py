@@ -16,7 +16,7 @@ def build():
         os.environ['MANUAL_LANG'] = language
         pages[language] = runpy.run_path(str(ROOT / 'build_language.py'))['page']
     data = json.dumps(pages, ensure_ascii=False).replace('</', '<\\/')
-    return '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SmarTAI · Teacher Manual / 教师使用手册</title></head><body><script>window.__manualPages=''' + data + ''';
+    return '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><title>SmarTAI · Teacher Manual / 教师使用手册</title></head><body><script>window.__manualPages=''' + data + ''';
 window.__manualLanguage='zh';
 try {
   const siteLanguage=localStorage.getItem('smartai_locale');
