@@ -50,6 +50,9 @@ def observation(case, expert, duration_ms):
 
 
 async def legacy_case(case):
+    from backend.skills import calculation
+    if not hasattr(calculation, "SympyLoopResult"):
+        raise RuntimeError("legacy replay requires the old production base; use candidate:evaluate")
     from backend.llm.providers import LLMResponse
     from backend.skills.calculation import SympyLoopResult
     from backend.tools.structured_llm import PermanentLLMError, StructuredOutputInvalidError

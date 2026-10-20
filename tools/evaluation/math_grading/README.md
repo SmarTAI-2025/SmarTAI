@@ -1,6 +1,6 @@
 # 数理批改评测（任务4）
 
-4A 已提供：40个合成样例、旧 main 固定响应回放、评测器、公开数据集核验。4B 候选主链与产品回归尚未执行，等待任务3交接准确候选 SHA。
+4A 已提供：40个合成样例、旧 main 固定响应回放、评测器、公开数据集核验。4B已完成候选 `72377b72` 的本地集成验收：40例符合预期（38有效分数、2故障无分），旧11处分差消除。[最终报告](reports/FINAL-72377b72.md) 汇总实际工具、后端、前端及公开合同证据；提交状态以canonical HANDOFF-T4为准。
 
 共同合同位于 canonical `docs/project_navigation/2026-10-20-math-grading/CONTRACT.md`。本目录不实现评分计划、数学核验器或生产评分引擎。
 
@@ -12,7 +12,7 @@
 
 `reports/baseline-main.json` 记录输入语料哈希、生产基线、提示词哈希、实际捕获提示、原始响应、分数/步骤、运行环境、耗时、调用次数及逐类指标。固定响应调用数不等于真实provider调用数。`reports/BASELINE.md` 给出可读结果。**回放通过不是AI准确率提升。**
 
-未观测指标为null并带observed/total；不会把缺失证据当作通过。原文对齐仅检查quote确实出现，不冒充语义正确性验证；重复扣分检查是error_id去重，语义上同源但不同ID的重复需4B定向用例验证。真教师区间指标保持null、样本数0。工具状态不能直接算分。
+未观测指标为null并带observed/total；不会把缺失证据当作通过。原文对齐仅检查quote确实出现，不冒充语义正确性验证；聚合重复扣分指标是error_id去重，4B另用定向测试检查重复规则/原文应用和虚构依赖。不承诺能自动识别全部语义等价错误。真教师区间指标保持null、样本数0。工具状态不能直接算分。
 
 ## 可复现命令
 
@@ -37,12 +37,12 @@
 
 ## 4B接入
 
-收到准确候选后，在本目录补候选适配器，依赖已提交 `backend.skills.math_grading` 的 `MathAssessment/DirectMathGrade` 和实际评分计划schema；不复制任务1/2/3实现。当前仅只读过任务3工作中schema，**未运行未提交候选**。
+`candidate.py` 使用生产 `grade_batch`、评分计划编译器和数学工具；`candidate_fixtures.py` 只提供模型边界的独立固定响应，不读取expected。运行中的实际plan/claims/evidence来自生产trace。C01/02/03映射为同题不同作答，另有真实批次测试验证先冻结一次再处理三位学生。常规40例各自运行以便故障隔离，报告的计划调用数因此包括每例新run，不可冒充全班共享后的真实模型费用。
 
-适配器约定：`async evaluate(case: dict, provider) -> dict`。`candidate-replay`传provider=None且禁止网络；live传有调用上限的provider。返回至少`id,score,max_score,steps,duration_ms,provider_entry_calls,fixed_response_calls`，失败score=None；内部记录可添加`plan_id,claims,deductions,verification_claims`。`advisory/required_handling`必须来自实际产品投影，不能把技能评语或测试预期转写为运行证据。返回quote/error/verification证据要来自生产trace，不能拷贝oracle。候选适配器尚未实现，当前运行该模式会明确拒绝。
+适配器约定：`async evaluate(case: dict, provider) -> dict`。`candidate-replay`传provider=None且禁止网络；live传有调用上限的provider。返回`id,score,max_score,steps,duration_ms,provider_entry_calls,fixed_response_calls`，失败score=None；另记录实际plan和trace。建议/强制处理取真实grade_batch的Correction经共享grading_review投影；这层Correction是存储之前的内部结果，不能将其raw_output误称公开API输出。候选live已有入口但未运行；收费开关仍有效。
 
 ```bash
-# 完成候选适配后执行；下列模块名是约定的待实现入口。
+# 在已交接的候选工作区运行。
 /opt/anaconda3/envs/smartai/bin/python -m tools.evaluation.math_grading.run \
   --mode candidate-replay \
   --adapter tools.evaluation.math_grading.candidate:evaluate \
@@ -70,4 +70,4 @@
 
 默认最多3例/6次provider入口，每次输出上限2048tokens。模型价格和SDK内部重试可能影响实际账单，**入口上限不是费用金额或HTTP请求数上限**；真实费用保留null，token缺失也不补0。若需硬费用封顶，应使用有额度限制的专用凭据。实时记录模型、实际请求、token（提供时）、耗时和已完成案例。故障注入例不允许live选择。取消/关闭前未执行此命令就不会发请求。
 
-新主链live需同时指定已经验证的候选adapter；本轮没有通过临时schema臆造候选live结果。未来真实模型结果与固定回放分开保存、分开汇报。
+新主链live需同时指定 `--adapter tools.evaluation.math_grading.candidate:evaluate`；本轮未运行live。真实模型结果与固定回放分开保存、分开汇报。

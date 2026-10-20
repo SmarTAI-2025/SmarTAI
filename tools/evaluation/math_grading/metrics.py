@@ -20,7 +20,8 @@ def assess(case, result):
     valid = finite(value) and 0 <= value <= case["problem"]["max_score"]
     interval = case["expected"]["score_interval"]
     error = None
-    over = under = hit = None
+    over = under = None
+    hit = False if interval is not None else None
     if interval is not None and valid:
         lo, hi = interval
         error = max(lo - value, 0, value - hi)

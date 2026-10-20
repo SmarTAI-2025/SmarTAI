@@ -47,6 +47,7 @@ def test_no_score_is_not_zero_and_unknown_metrics_are_not_success():
     assert all_metrics["quote_alignment"] == {"value": None, "observed": 0, "total": 2}
     assert result["real_teacher_interval_hit"]["observed"] == 0
     assert assess(failed, observation(failed, 0))["score_available_as_expected"] is False
+    assert assess(blank, observation(blank, None))["synthetic_interval_hit"] is False
     for bad in [float("nan"), float("inf"), True, -1, 11]:
         assert assess(blank, observation(blank, bad))["no_score"] is True
 
@@ -135,12 +136,14 @@ def test_provider_entry_budget_and_output_cap():
 
 
 def test_replay_does_not_reuse_or_modify_the_oracle():
-    from tools.evaluation.math_grading.replay import legacy_case
-    # Proof skill has no legacy full-mark override: deliberately wrong fixed
-    # response stays wrong despite an expected 10. This catches oracle leakage.
+    from tools.evaluation.math_grading.candidate import evaluate
+    from tools.evaluation.math_grading.candidate_fixtures import AWARDS
+    from unittest.mock import patch
+    # A deliberately wrong fixed response stays wrong despite an expected 10.
+    # This catches oracle leakage through the actual candidate chain.
     case = deepcopy(next(c for c in CASES if c["id"] == "P01"))
-    case["replay"]["response"]["score"] = 1
-    result = asyncio.run(legacy_case(case))
+    with patch.dict(AWARDS, {"P01": [0, 1]}):
+        result = asyncio.run(evaluate(case))
     assert result["score"] == 1
     assert assess(case, result)["synthetic_interval_hit"] is False
     assert case["expected"]["score_interval"] == [10, 10]

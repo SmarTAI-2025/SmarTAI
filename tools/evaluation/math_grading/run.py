@@ -7,6 +7,7 @@ from contextlib import ExitStack
 from datetime import datetime, timezone
 import importlib
 from importlib.metadata import version
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -110,6 +111,10 @@ async def execute(args):
         "results": [], "candidate_acceptance": "not_executed",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "runtime": {"python": sys.version, "sympy": version("sympy"), "pydantic": version("pydantic")},
+        "backend_tree": subprocess.check_output(["git", "rev-parse", "HEAD:backend"], text=True).strip(),
+        "evaluation_sources": {
+            path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(Path(__file__).parent.glob("*.py"))},
     }
     if args.mode == "verify":
         from backend.tools.math_verification import MathVerificationRequest, verify_math
@@ -160,6 +165,11 @@ async def execute(args):
         module, name = args.adapter.split(":", 1)
         adapter = getattr(importlib.import_module(module), name)
         report["adapter"] = args.adapter
+        report["scope"] = (
+            "production grade_batch, rubric compiler, math tools, multi-expert dispatcher and "
+            "shared review projection; fixed model boundaries; persistence/API covered separately"
+            if args.mode == "candidate-replay" else
+            "production adapter with a real provider; inspect adapter and recorded requests")
     if args.mode == "candidate-replay" and adapter is None:
         raise ValueError("4B requires the coordinator's exact candidate adapter; no mock success fallback")
     for case in selected:
@@ -181,6 +191,8 @@ async def execute(args):
     report["metrics"] = summarize(completed, report["results"])
     report["completed_case_count"] = len(completed)
     report["planned_case_count"] = len(selected)
+    if args.mode == "candidate-replay":
+        report["candidate_acceptance"] = "fixed_replay_executed_other_gates_reported_separately"
     report["prompt_versions"] = {
         name: __import__("hashlib").sha256(Path("backend/prompts", name).read_bytes()).hexdigest()
         for name in ("calc.txt", "proof.txt", "concept.txt")}
