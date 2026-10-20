@@ -199,10 +199,14 @@ def _apply_merge(
             str(keeper.get("stem") or "")
             + str(dropped.get("stem") or "")[raw_split:]
         )
+        if new_stem != keeper.get("stem") and "recognition_confidence" in keeper:
+            keeper["recognition_confidence"] = None  # Neither assessment covers the assembled text.
         keeper["stem"] = new_stem
         norms[keeper_idx] = normalize_stem(new_stem)
     elif len(norms[dropped_idx]) > len(norms[keeper_idx]):
         keeper["stem"] = dropped.get("stem")
+        if "recognition_confidence" in keeper or "recognition_confidence" in dropped:
+            keeper["recognition_confidence"] = dropped.get("recognition_confidence")
         norms[keeper_idx] = norms[dropped_idx]
     for field in _BACKFILL_FIELDS:
         if not keeper.get(field) and dropped.get(field):

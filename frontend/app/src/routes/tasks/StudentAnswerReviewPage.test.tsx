@@ -168,9 +168,9 @@ describe("StudentAnswerReviewPage review shortcuts", () => {
       flag: ["recognition_manual_pending", "recognition_paused", "manual_blank_confirmed"] }));
   });
   it("keeps ordinary recognition advice beside confirmation without blocking continuation", async () => {
-    taskData.student_data.S001.stu_ans[0].flag = ["recognition_needs_review", "recognition_low_confidence"];
+    Object.assign(taskData.student_data.S001.stu_ans[0], { flag: [], recognition_confidence: .4 });
     renderPage();
-    const advice = await screen.findByText("作答文件识别可能有误，请对照原件核对文字和公式。");
+    const advice = await screen.findByText("置信度 0.4 较低，建议核对确认。");
     expect(within(advice.closest("header")!).getByRole("button", { name: /待确认/ })).toBeEnabled();
     expect(screen.queryByTitle(/置信度偏低，可选核对，可继续/)).not.toBeInTheDocument();
   });

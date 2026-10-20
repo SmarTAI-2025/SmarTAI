@@ -43,7 +43,7 @@ it.each(["zh-CN", "en-US"])("synchronizes cells, counts and queue after confirmi
 
 it("counts ordinary and flagged pending responses consistently, then clears both after confirmation", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  const flagged = { q_id: "Q1", number: "1", type: "short", content: "literal student answer", flag: ["recognition_low_confidence"], review_status: "pending" as const };
+  const flagged = { q_id: "Q1", number: "1", type: "short", content: "literal student answer", recognition_confidence: .4, flag: [], review_status: "pending" as const };
   client.setQueryData(taskKeys.detail("T"), { task_id: "T", status: "submissions_ready", workflow_revision: 1,
     problem_data: { Q1: { q_id: "Q1", stem: "Question" } }, student_data: {
       S1: { stu_id: "S1", stu_name: "Normal", identity_status: "matched", stu_ans: [{ ...flagged, flag: ["external_annotation_present"] }] },

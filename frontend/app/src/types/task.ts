@@ -75,6 +75,7 @@ export interface ProblemInfo {
   type: string;
   stem: string;
   criterion: string;
+  recognition_confidence?: number | null;
   max_score: number;
   max_score_source?: "default_10" | "uniform" | "per_question_text" | "teacher_edited" | "legacy";
   max_score_review_status?: "needs_review" | "confirmed";

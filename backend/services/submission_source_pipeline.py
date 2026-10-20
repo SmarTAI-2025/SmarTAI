@@ -24,7 +24,7 @@ from backend.services.background_errors import (
     is_retryable_background_error,
 )
 from backend.storage import get_storage
-from backend.services.question_sources import recognition_needs_review
+from backend.services.question_sources import recognition_has_failure
 from backend.tools.file_processing import (
     ARCHIVE_EXTENSIONS,
     RawUploadSource,
@@ -53,7 +53,6 @@ class PreparedSubmissionSource:
 
 def attach_submission_recognition(results, sources):
     """Keep reading uncertainty separate from student identity and correctness."""
-    from backend.domain.confidence_policy import confidence_value
     by_source = {source.source_id: source.recognition for source in sources if source.recognition}
     output = []
     for result in results:
@@ -62,11 +61,10 @@ def attach_submission_recognition(results, sources):
             output.append(result)
             continue
         student = {**result.student, "recognition": summary}
-        # Queue specific uncertainty, not the generic recommendation to review OCR.
-        if recognition_needs_review(summary):
+        # File assessments stay in source diagnostics. Each parsed answer owns
+        # its numeric confidence; only concrete source failures propagate here.
+        if recognition_has_failure(summary):
             flags = ["recognition_needs_review"]
-            if summary.get("confidence") == "low":
-                flags.append("recognition_low_confidence")
             if summary.get("error_code") or (summary.get("coverage") or {}).get("missing_targets"):
                 flags.append("recognition_failed")
             for key in ("failed_pages", "unprocessed_pages"):
@@ -75,12 +73,6 @@ def attach_submission_recognition(results, sources):
                     flags.append(f"recognition_{key}:" + ",".join(str(page) for page in pages))
             student["stu_ans"] = [dict(answer, flag=list(dict.fromkeys([*answer.get("flag", []), *flags])))
                                    for answer in student.get("stu_ans", [])]
-        numeric_confidence = confidence_value(summary.get("confidence"))
-        if numeric_confidence is not None:
-            student["stu_ans"] = [dict(answer, flag=[
-                *[flag for flag in answer.get("flag", []) if not flag.startswith("recognition_confidence:")],
-                f"recognition_confidence:{numeric_confidence}"])
-                for answer in student.get("stu_ans", [])]
         output.append(replace(result, student=student))
     return output
 
