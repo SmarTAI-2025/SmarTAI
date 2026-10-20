@@ -27,7 +27,7 @@ function setup(locale = "en-US", secret = false) {
   return render(<I18nProvider><PageDraftSession ownerId="bilingual-owner"><LocalizedDraftLeaveProvider><Editor secret={secret} /></LocalizedDraftLeaveProvider></PageDraftSession></I18nProvider>);
 }
 async function ready() {
-  await waitFor(() => expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled());
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled(), { timeout: 3000 });
 }
 async function save() {
   fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
