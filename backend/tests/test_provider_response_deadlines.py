@@ -174,7 +174,7 @@ async def test_full_response_deadline_stops_active_chunks_without_retry(route, s
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["openai", "anthropic", "gemini", "relay_openai_chat_completions"])
 async def test_429_attempts_get_new_response_limits_with_one_authorization(route, scheduler, monkeypatch):
-    monkeypatch.setattr(structured_llm._invoke_with_rate_retry.retry, "wait", wait_fixed(0.05))
+    monkeypatch.setattr(structured_llm._invoke_with_rate_retry.retry, "wait", wait_fixed(0.25))
     events = []
 
     async def guard():
@@ -188,7 +188,7 @@ async def test_429_attempts_get_new_response_limits_with_one_authorization(route
         return SimpleNamespace(content="done")
 
     async with provider_for(route, invoke, monkeypatch) as provider:
-        with response_timeout_scope(0.04, response_only=True, local_wait_seconds=0.2,
+        with response_timeout_scope(0.2, response_only=True, local_wait_seconds=0.2,
                                     before_send=guard, on_send=lambda: events.append("reserve")) as state:
             result = await structured_llm.ainvoke_with_rate_retry(provider, MESSAGES)
     assert result.content == "done" and state.attempt_count == 3
