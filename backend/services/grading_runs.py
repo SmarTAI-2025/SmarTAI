@@ -370,6 +370,10 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
         questions = _questions_for_run(
             assignment_id=run.assignment_id, frozen_setup=frozen_setup,
         )
+        from backend.services.math_grading_context import ensure_run_math_version
+        ensure_run_math_version(
+            run_id=run_id, worker_id=worker_id, questions=questions, frozen_setup=frozen_setup,
+        )
         frozen_rows = grading_repository.list_frozen_submissions(run_id=run_id)
         frozen_revisions: list[tuple[education.SubmissionRevisionDTO, str]] = []
         for fr in frozen_rows:

@@ -835,6 +835,22 @@ def test_release_blocks_when_expected_result_matrix_is_incomplete(setup_assignme
     assert exc_info.value.code == "incomplete_result_matrix"
 
 
+def _freeze_current_math_plan(run_id, question, worker_id):
+    """A recoverable current-engine result was graded under a persisted plan."""
+    from backend.services.grading_checkpoints import GradingCheckpoints
+    from backend.services.math_grading_context import ensure_run_math_version, problem_from_question
+    from backend.services.math_rubric_plan import fallback_math_rubric_plan
+
+    ensure_run_math_version(
+        run_id=run_id, worker_id=worker_id, questions=[question], frozen_setup=None,
+    )
+    checkpoints = GradingCheckpoints(
+        run_id=run_id, worker_id=worker_id, questions=[question], frozen_revisions=[],
+    )
+    problem = problem_from_question(question)
+    checkpoints.save_math_plan(problem, fallback_math_rubric_plan(problem))
+
+
 def test_reclaimed_worker_recomputes_counters_from_existing_results(
     setup_assignment, monkeypatch,
 ):
@@ -856,6 +872,7 @@ def test_reclaimed_worker_recomputes_counters_from_existing_results(
     question = assignment_repository.get_questions_by_assignment(
         assignment_id=setup_assignment["assignment_id"]
     )[0]
+    _freeze_current_math_plan(run.id, question, "w-dead")
     result = grading_adapter.correction_to_result(
         run_id=run.id, revision_id=revision.id, question=question,
         student_id=setup_assignment["student_id"],
@@ -919,6 +936,7 @@ def test_reclaimed_pass_starts_fresh_progress_reporter(setup_assignment, monkeyp
     question = assignment_repository.get_questions_by_assignment(
         assignment_id=setup_assignment["assignment_id"]
     )[0]
+    _freeze_current_math_plan(run.id, question, "w-dead")
     result = grading_adapter.correction_to_result(
         run_id=run.id, revision_id=revision.id, question=question,
         student_id=setup_assignment["student_id"],

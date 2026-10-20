@@ -188,6 +188,7 @@ async def grade_student(
 
         try:
             problem = ProblemInfo(**problem_raw)
+            problem._math_rubric_source = dict(problem_raw.get("_math_rubric_source") or {})
         except Exception as e:
             logger.error(
                 "Invalid problem data for q_id=%s; exception_type=%s",
@@ -413,6 +414,31 @@ async def _grade_single_answer(
 
 
 async def grade_batch(
+    question_ids_by_student: dict[str, set[str]] | None = None,
+    **kwargs,
+) -> List[Dict[str, Any]]:
+    """Freeze one rubric per question before any student or expert fan-out."""
+    from backend.services.math_grading_context import math_plans_context, prepare_math_plans
+    student_store, problem_store = kwargs["student_store"], kwargs["problem_store"]
+    pending = {
+        answer.get("q_id")
+        for student in student_store.values() if student.get("stu_id")
+        for answer in student.get("stu_ans", [])
+        if (question_ids_by_student is None or
+            answer.get("q_id") in question_ids_by_student.get(student["stu_id"], set()))
+    }
+    pending_store = {key: value for key, value in problem_store.items() if key in pending}
+    if not pending_store:
+        return await _grade_batch_frozen(question_ids_by_student, **kwargs)
+    plans = await prepare_math_plans(
+        pending_store, kwargs["registry"], grading_setup=kwargs.get("grading_setup"),
+        reporter=kwargs.get("reporter"),
+    )
+    with math_plans_context(plans):
+        return await _grade_batch_frozen(question_ids_by_student, **kwargs)
+
+
+async def _grade_batch_frozen(
     question_ids_by_student: dict[str, set[str]] | None = None,
     *,
     student_store: Dict[str, Dict[str, Any]],

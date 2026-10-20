@@ -71,6 +71,9 @@ def build_problem_store(questions: list[education.QuestionDTO]) -> dict[str, dic
             "reference_answer": q.reference_answer,
             "test_cases": q.test_cases,
             "max_score": q.max_score,
+            # Private orchestration metadata, consumed before public DTO
+            # conversion; preserve teacher/AI provenance in the plan hash.
+            "_math_rubric_source": q.source or {},
         }
     return store
 
@@ -248,6 +251,20 @@ async def run_grading(
             else assignment_id
         )
     )
+    from backend.services.math_grading_context import math_plans_context, prepare_math_plans
+
+    needed_qids = {
+        answer["q_id"]
+        for student_id, student in student_store.items()
+        for answer in student["stu_ans"]
+        if answer["q_id"] in problem_store
+        and (selected is None or answer["q_id"] in selected.get(student_id, set()))
+    }
+    plans = await prepare_math_plans(
+        {qid: raw for qid, raw in problem_store.items() if qid in needed_qids},
+        None if settings.e2e_fake_provider else registry,
+        grading_setup=grading_setup, reporter=reporter,
+    ) if needed_qids else {}
     if settings.e2e_fake_provider:
         from backend.testing.fake_provider import FakeProvider, fake_grade_batch
 
@@ -260,14 +277,15 @@ async def run_grading(
             task_id=knowledge_task_id,
         )
     else:
-        raw_results = await grade_batch(
-            **selection_options,
-            student_store=student_store, problem_store=problem_store, registry=registry,
-            reporter=reporter, language=language, task_id=knowledge_task_id,
-            multi_sample_n=grading_setup.multi_sample_n if grading_setup else None,
-            aggregation_method=grading_setup.aggregation_method if grading_setup else None,
-            grading_setup=grading_setup,
-        )
+        with math_plans_context(plans):
+            raw_results = await grade_batch(
+                **selection_options,
+                student_store=student_store, problem_store=problem_store, registry=registry,
+                reporter=reporter, language=language, task_id=knowledge_task_id,
+                multi_sample_n=grading_setup.multi_sample_n if grading_setup else None,
+                aggregation_method=grading_setup.aggregation_method if grading_setup else None,
+                grading_setup=grading_setup,
+            )
     revision_by_student = {sid: rev for rev, sid in frozen_revisions}
     raw_by_student = {raw.get("student_id", ""): raw for raw in raw_results}
     outcomes: list[AdapterOutcome] = []

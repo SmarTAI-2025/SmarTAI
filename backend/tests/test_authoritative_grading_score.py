@@ -76,76 +76,39 @@ def test_normalize_clamps_malicious_score_and_rejects_invalid_scale():
 
 @pytest.mark.asyncio
 async def test_concept_skill_uses_authoritative_question_max(monkeypatch):
-    captured: dict[str, str] = {}
-
-    async def retrieve(*_args, **_kwargs):
+    from backend.skills.math_grading import MathAssessment
+    captured = {}
+    async def retrieve(*args, **kwargs):
         return []
-
-    async def structured_call(*_args, **kwargs):
-        captured["system_prompt"] = kwargs["system_prompt"]
-        return (
-            SimpleNamespace(
-                score=8.0,
-                max_score=10.0,
-                confidence=0.9,
-                comment="ok",
-                steps=[{
-                    "step_no": 1,
-                    "desc": "reasoning",
-                    "is_correct": True,
-                    "score": 6.0,
-                }],
-                hits=[],
-            ),
-            SimpleNamespace(content="{}", duration_ms=1.0),
-        )
-
-    monkeypatch.setattr("backend.skills.concept.kb_tool.retrieve", retrieve)
-    monkeypatch.setattr("backend.skills.concept.structured_llm_call", structured_call)
-
-    result = await ConceptSkill(_provider()).grade(_problem(), _answer(), student_id="s1")
-
-    assert result.score == 4.0
-    assert result.max_score == 5.0
-    assert result.steps[0].score == 3.0
+    async def structured_call(*args, **kwargs):
+        captured.update(kwargs)
+        return (MathAssessment(route_id="holistic", route_reason="Original rubric", score=4,
+                    confidence=.9, comment="Reasoning earns 3 and conclusion 1 of 5 points."),
+                SimpleNamespace(content="{}", duration_ms=1))
+    monkeypatch.setattr("backend.skills.math_grading.kb_tool.retrieve_for_grading", retrieve)
+    monkeypatch.setattr("backend.skills.math_grading.structured_llm_call", structured_call)
+    result = await ConceptSkill(_provider()).grade(_problem(type_="概念题"), _answer(type_="概念题"))
+    assert result.score == 4 and result.max_score == 5
+    assert sum(step.score for step in result.steps) == 4
     assert "authoritative maximum score for this question is 5" in captured["system_prompt"]
 
 
 @pytest.mark.asyncio
 async def test_proof_skill_uses_authoritative_question_max(monkeypatch):
-    captured: dict[str, str] = {}
-
-    async def retrieve(*_args, **_kwargs):
+    from backend.skills.math_grading import MathAssessment
+    captured = {}
+    async def retrieve(*args, **kwargs):
         return []
-
-    async def structured_call(*_args, **kwargs):
-        captured["system_prompt"] = kwargs["system_prompt"]
-        return (
-            SimpleNamespace(
-                score=16.0,
-                max_score=20.0,
-                confidence=0.9,
-                comment="ok",
-                steps=[{
-                    "step_no": 1,
-                    "desc": "proof",
-                    "is_correct": True,
-                    "score": 12.0,
-                }],
-            ),
-            SimpleNamespace(content="{}", duration_ms=1.0),
-        )
-
-    monkeypatch.setattr("backend.skills.proof.kb_tool.retrieve", retrieve)
-    monkeypatch.setattr("backend.skills.proof.structured_llm_call", structured_call)
-
-    result = await ProofSkill(_provider()).grade(
-        _problem(type_="证明题"), _answer(type_="证明题"), student_id="s1"
-    )
-
-    assert result.score == 4.0
-    assert result.max_score == 5.0
-    assert result.steps[0].score == 3.0
+    async def structured_call(*args, **kwargs):
+        captured.update(kwargs)
+        return (MathAssessment(route_id="holistic", route_reason="Original rubric", score=4,
+                    confidence=.9, comment="Reasoning earns 3 and conclusion 1 of 5 points."),
+                SimpleNamespace(content="{}", duration_ms=1))
+    monkeypatch.setattr("backend.skills.math_grading.kb_tool.retrieve_for_grading", retrieve)
+    monkeypatch.setattr("backend.skills.math_grading.structured_llm_call", structured_call)
+    result = await ProofSkill(_provider()).grade(_problem(type_="证明题"), _answer(type_="证明题"))
+    assert result.score == 4 and result.max_score == 5
+    assert sum(step.score for step in result.steps) == 4
     assert "authoritative maximum score for this question is 5" in captured["system_prompt"]
 
 

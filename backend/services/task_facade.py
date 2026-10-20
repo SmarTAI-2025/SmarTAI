@@ -4718,6 +4718,17 @@ def start_task_grading(
             for answer_id in sorted(answer_statuses)
         },
     }
+    from backend.services.math_grading_context import (
+        MATH_GRADING_ENGINE_VERSION, problem_from_question, uses_math_grading,
+    )
+    math_qids = {question.q_id for question in questions if uses_math_grading(question.type)}
+    if math_qids:
+        from backend.services.math_rubric_plan import math_rubric_fingerprint
+        input_manifest["math_grading_engine_version"] = MATH_GRADING_ENGINE_VERSION
+        input_manifest["math_rubric_input_fingerprints"] = {
+            question.q_id: math_rubric_fingerprint(problem_from_question(question))
+            for question in questions if question.q_id in math_qids
+        }
     run_fingerprint = _hash_json({
         "grading_setup": workflow.grading_setup,
         "input_manifest": input_manifest,
@@ -4725,7 +4736,9 @@ def start_task_grading(
     latest = runs[-1] if runs else None
     if latest and latest.status == "completed" and not (explicit_request and retry_scope == "full_batch"):
         frozen = workflow_repository.get_run_setup(latest.id)
-        if frozen is not None and frozen.fingerprint == run_fingerprint:
+        if (frozen is not None and frozen.fingerprint == run_fingerprint
+                and (not math_qids or
+                     (frozen.input_manifest or {}).get("math_grading_engine_version") == MATH_GRADING_ENGINE_VERSION)):
             cached = grading_repository.bind_grading_request(
                 assignment_id=task_id, teacher_id=owner_id, request_id=request_id,
                 request_revision=expected_workflow_revision, run_id=latest.id,
@@ -4749,17 +4762,32 @@ def start_task_grading(
                 or any(old.get(key) != input_manifest.get(key) for key in stable_keys)
                 or content_questions(old.get("questions", [])) != content_questions(input_manifest["questions"])):
             raise VersionConflict("Grading inputs changed; review the setup before starting a new run.", code="grading_inputs_changed")
+        from backend.services.grading_checkpoints import saved_experts, saved_math_plans
+        # A failed-only retry keeps the actual shared rules, rather than asking
+        # a model to redistribute the same question's points. Old-engine or
+        # missing-plan mathematical results are rerun in this new run.
+        plans = saved_math_plans(latest.id, questions=questions) if math_qids else {}
         reusable = [result.model_dump(mode="json") for result in grading_repository.list_results_for_run(latest.id)
                     if result.effective_score is not None and math.isfinite(result.effective_score)
+                    and (result.q_id not in math_qids or result.q_id in plans)
                     and ("grading_paused" not in result.initial_review_reasons or result.teacher_review)]
         if len(reusable) == len(questions) * len(frozen_revision_ids):
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
         input_manifest.update(retry_from_run_id=latest.id, reused_results=reusable, retry_scope="failed_only")
-        from backend.services.grading_checkpoints import saved_experts
+        if math_qids:
+            input_manifest["math_rubric_plans"] = {
+                qid: plan.model_dump(mode="json") for qid, plan in plans.items()
+            }
         # Changing a provider still permits the established failed-item retry,
         # but partial expert votes from its previous configuration cannot mix in.
         input_manifest["reused_experts"] = (saved_experts(latest.id)
             if old.get("provider_configuration_fingerprint") == input_manifest.get("provider_configuration_fingerprint") else [])
+        if math_qids:
+            from backend.services.math_grading_context import expert_matches_plan
+            input_manifest["reused_experts"] = [
+                item for item in input_manifest["reused_experts"]
+                if expert_matches_plan(item, math_qids, plans)
+            ]
     # A new explicit full-batch intent reruns even identical inputs. HTTP
     # replays still bind to the original run above; failed-only retries reuse
     # valid scores, and legacy callers retain fingerprint-based reuse.

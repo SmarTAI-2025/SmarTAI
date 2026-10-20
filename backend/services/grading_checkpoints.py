@@ -9,6 +9,10 @@ from backend.db.models import AssignmentQuestionRecord, GradeResultRecord, Gradi
 from backend.db.workflow_repository import GradingRunSetupRecord
 from backend.domain.education import QuestionDTO
 from backend.models import Correction, ExpertResult, ProblemInfo, TaskGradingSetup
+from backend.services.math_grading_context import (
+    MATH_GRADING_ENGINE_VERSION, PLAN_EVENT, expert_matches_plan,
+    matching_math_plans, plans_from_snapshots, problem_from_question, uses_math_grading,
+)
 
 _current = ContextVar("grading_checkpoints", default=None)
 EVENT = "grading_expert_checkpoint"
@@ -32,10 +36,28 @@ def saved_experts(run_id):
     setup = workflow_repository.get_run_setup(run_id)
     saved = {checkpoint_key(item): item for item in
              (setup.input_manifest if setup else {}).get("reused_experts", [])}
-    for event in repository.list_events(run_id):
+    events = repository.list_events(run_id)
+    for event in events:
         if event["message"] == EVENT:
             saved[checkpoint_key(event["payload"])] = event["payload"]
-    return list(saved.values())
+    manifest = (setup.input_manifest if setup else {}) or {}
+    math_qids = {q["q_id"] for q in manifest.get("questions", []) if uses_math_grading(q.get("type", ""))}
+    plans = plans_from_snapshots(manifest, events)
+    if manifest.get("questions") and all("assignment_id" in q for q in manifest["questions"]):
+        plans = matching_math_plans(
+            [QuestionDTO.model_validate(q) for q in manifest["questions"]], plans,
+        )
+    return [item for item in saved.values() if expert_matches_plan(item, math_qids, plans)]
+
+
+def saved_math_plans(run_id, *, questions=None):
+    from backend.db import workflow_repository
+
+    setup = workflow_repository.get_run_setup(run_id)
+    plans = plans_from_snapshots(
+        (setup.input_manifest if setup else {}) or {}, repository.list_events(run_id),
+    )
+    return matching_math_plans(questions, plans) if questions is not None else plans
 
 
 class GradingCheckpoints:
@@ -43,7 +65,40 @@ class GradingCheckpoints:
         self.run_id, self.worker_id = run_id, worker_id
         self.questions = {q.q_id: q for q in questions}
         self.revisions = {student: revision.id for revision, student in frozen_revisions}
-        self.saved = {checkpoint_key(item): item for item in saved_experts(run_id)}
+        self.math_plans = saved_math_plans(run_id, questions=questions)
+        math_qids = {q.q_id for q in questions if uses_math_grading(q.type)}
+        self.saved = {checkpoint_key(item): item for item in saved_experts(run_id)
+                      if expert_matches_plan(item, math_qids, self.math_plans)}
+
+    def get_math_plan(self, problem):
+        from backend.services.math_rubric_plan import math_rubric_fingerprint
+
+        plan = self.math_plans.get(problem.q_id)
+        if (plan is not None and plan.input_fingerprint == math_rubric_fingerprint(problem)
+                and plan.max_score == problem.max_score):
+            return plan.model_copy(deep=True)
+        return None
+
+    def save_math_plan(self, problem, plan):
+        from backend.services.math_rubric_plan import math_rubric_fingerprint
+
+        if (plan.input_fingerprint != math_rubric_fingerprint(problem)
+                or plan.max_score != problem.max_score):
+            raise CheckpointWriteError("math_plan_input_mismatch")
+        existing = self.math_plans.get(problem.q_id)
+        if existing is not None:
+            if existing.plan_id != plan.plan_id:
+                raise CheckpointWriteError("math_plan_already_frozen")
+            return
+        try:
+            repository.record_event(
+                self.run_id, worker_id=self.worker_id, level="info", message=PLAN_EVENT,
+                payload={"engine_version": MATH_GRADING_ENGINE_VERSION, "q_id": problem.q_id,
+                         "plan": plan.model_dump(mode="json")},
+            )
+        except Exception as exc:
+            raise CheckpointWriteError("math_plan_checkpoint_failed") from exc
+        self.math_plans[problem.q_id] = plan.model_copy(deep=True)
 
     async def seed_activity(self, observer, registry, setup):
         """Count completed reused pairs without inventing a new model call/ETA."""
@@ -83,12 +138,27 @@ class GradingCheckpoints:
     def get(self, student_id, q_id, provider_id, sample_index):
         from backend.agents.multi_expert import _is_successful_expert
         item = self.saved.get((student_id, q_id, provider_id, sample_index))
+        if item and not expert_matches_plan(
+            item, {qid for qid, q in self.questions.items() if uses_math_grading(q.type)}, self.math_plans,
+        ):
+            return None
         result = ExpertResult.model_validate(item["result"]) if item else None
         return result if result is not None and _is_successful_expert(result) else None
 
     def save_expert(self, student_id, q_id, provider_id, sample_index, result):
         item = dict(student_id=student_id, q_id=q_id, provider_id=provider_id,
                     sample_index=sample_index, result=result.model_dump(mode="json"))
+        if uses_math_grading(self.questions[q_id].type):
+            plan = self.math_plans.get(q_id)
+            if plan is None:
+                # Direct skill invocations use the same deterministic rubric
+                # fallback. Freeze it too; never infer rules from the result.
+                from backend.services.math_grading_context import get_math_plan
+                from backend.services.math_rubric_plan import fallback_math_rubric_plan
+                problem = problem_from_question(self.questions[q_id])
+                plan = get_math_plan(problem) or fallback_math_rubric_plan(problem)
+                self.save_math_plan(problem, plan)
+            item.update(math_grading_engine_version=MATH_GRADING_ENGINE_VERSION, math_plan_id=plan.plan_id)
         try:
             repository.record_event(self.run_id, worker_id=self.worker_id, level="info",
                                     message=EVENT, payload=item)
@@ -123,16 +193,23 @@ def persist_paused_results(session, run):
     manifest = setup.input_manifest or {}
     config = TaskGradingSetup.model_validate(setup.setup)
     saved = {checkpoint_key(item): item for item in manifest.get("reused_experts", [])}
-    for event in session.scalars(select(GradingRunEventRecord).where(
+    events = list(session.scalars(select(GradingRunEventRecord).where(
         GradingRunEventRecord.grading_run_id == run.id,
-        GradingRunEventRecord.message == EVENT,
-    ).order_by(GradingRunEventRecord.sequence)):
-        saved[checkpoint_key(event.payload)] = event.payload
+    ).order_by(GradingRunEventRecord.sequence)))
+    for event in events:
+        if event.message == EVENT:
+            saved[checkpoint_key(event.payload)] = event.payload
+    plans = plans_from_snapshots(manifest, [
+        {"message": event.message, "payload": event.payload} for event in events
+    ])
+    math_qids = {q["q_id"] for q in manifest.get("questions", []) if uses_math_grading(q.get("type", ""))}
+    saved = {key: item for key, item in saved.items() if expert_matches_plan(item, math_qids, plans)}
     existing = {(row.submission_revision_id, row.question_id) for row in session.scalars(
         select(GradeResultRecord).where(GradeResultRecord.grading_run_id == run.id))}
     # A queued retry can be stopped before the worker imports its completed rows.
     inherited = {(item["submission_revision_id"], item["question_id"]): item
-                 for item in manifest.get("reused_results", [])}
+                 for item in manifest.get("reused_results", [])
+                 if item.get("q_id") not in math_qids or item.get("q_id") in plans}
     samples = [(provider, index) for provider in config.selected_provider_ids
                for index in (range(1, config.multi_sample_n + 1)
                    if len(config.selected_provider_ids) == 1 and config.multi_sample_n > 1 else [0])]
@@ -158,9 +235,14 @@ def persist_paused_results(session, run):
             pair = (frozen.submission_revision_id, question.id)
             if pair in existing:
                 continue
+            question_plans = matching_math_plans([question], plans)
             experts = []
             for provider, index in samples:
                 item = saved.get((frozen.student_id, question.q_id, provider, index))
+                if item and not expert_matches_plan(
+                    item, {question.q_id} if uses_math_grading(question.type) else set(), question_plans,
+                ):
+                    item = None
                 experts.append(ExpertResult.model_validate(item["result"]) if item else ExpertResult(
                     provider=labels.get(provider, provider) + (f"#sample{index}" if index else ""), provider_id=provider,
                     score=0, max_score=question.max_score, confidence=0,
@@ -185,6 +267,8 @@ def persist_paused_results(session, run):
             result = correction_to_result(run_id=run.id, revision_id=frozen.submission_revision_id,
                 question=question, student_id=frozen.student_id, correction=correction)
             preserved = inherited.get(pair)
+            if uses_math_grading(question.type) and question.q_id not in question_plans:
+                preserved = None
             if preserved:
                 from backend.domain.education import GradeResultDTO
                 result = GradeResultDTO.model_validate(preserved)

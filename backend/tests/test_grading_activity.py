@@ -57,8 +57,15 @@ async def test_fast_model_finishes_other_questions_while_slow_waits(monkeypatch)
     reporter, events = recorder(3)
     problems = {f"q{i}": {"q_id": f"q{i}", "type": "简答题", "number": str(i), "stem": "question", "criterion": "Correctness", "max_score": 10} for i in range(3)}
     students = {"s": {"stu_id": "s", "stu_ans": [{"q_id": q, "content": "answer"} for q in problems]}}
-    task = asyncio.create_task(grade_batch(student_store=students, problem_store=problems,
-        registry=_FakeRegistry([fast, slow]), reporter=reporter, aggregation_method="weighted_average"))
+    # This test isolates expert scheduling after question-level preparation.
+    # Freeze real plans so the fake provider is never asked to interpret rules.
+    from backend.models import ProblemInfo
+    from backend.services.math_grading_context import math_plans_context
+    from backend.services.math_rubric_plan import fallback_math_rubric_plan
+    with math_plans_context({qid: fallback_math_rubric_plan(ProblemInfo(**raw))
+                             for qid, raw in problems.items()}):
+        task = asyncio.create_task(grade_batch(student_store=students, problem_store=problems,
+            registry=_FakeRegistry([fast, slow]), reporter=reporter, aggregation_method="weighted_average"))
     try:
         await asyncio.wait_for(fast_done.wait(), 2)
         await asyncio.sleep(0)
