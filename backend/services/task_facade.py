@@ -57,7 +57,7 @@ from backend.db.models import (
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.confidence_policy import confidence_value, question_issue_requires_confirmation
+from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_requires_confirmation
 from backend.domain.errors import (
     DomainError,
     DuplicateActiveRun,
@@ -4424,7 +4424,7 @@ def grading_readiness(
                 if {question.q_id for question in questions} - {answer.q_id for answer in revision.answers}:
                     issues.append("submission_recognition_blocked")
                 recognition_review_ids.extend(answer.id for answer in revision.answers
-                                              if "recognition_needs_review" in (answer.flag or []))
+                                              if confidence_needs_attention(_answer_recognition_confidence(answer.flag)))
                 for answer in revision.answers:
                     if _answer_recognition_failures(answer.flag):
                         issues.append("submission_recognition_blocked")
@@ -4501,8 +4501,10 @@ def _effective_question_issues(presentation):
     for issue in presentation.get("preparation_issues", []):
         coverage = (issue.get("details") or {}).get("coverage") or {}
         # Old source scores/labels were broadcast to every question. They are
-        # not per-question assessments; keep actual failure evidence visible.
+        # not per-question assessments; keep actual failure evidence visible,
+        # including incomplete question fragments from saved-text recovery.
         if (issue.get("code") in {"recognition_partial", "recognition_needs_review"}
+                and not (issue.get("code") == "recognition_partial" and issue.get("severity") == "blocking")
                 and (issue.get("details") or {}).get("confidence_scope") != "question"
                 and not (issue.get("details") or {}).get("error_code")
                 and not any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))):

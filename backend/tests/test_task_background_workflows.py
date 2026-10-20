@@ -424,7 +424,7 @@ def test_answer_review_only_preserves_submission_grading_and_analysis(with_uncha
     task_facade._commit_imported_submissions(
         task_id=task_id, owner_id=owner_id, course_id=assignment.course_id,
         students=[{"stu_id": "S001", "stu_name": "Student", "source_filename": "old.txt",
-                   "stu_ans": [{"q_id": "q1", "content": "original answer", "flag": ["low_confidence"]}]}],
+                   "stu_ans": [{"q_id": "q1", "content": "original answer", "flag": ["answer_recognition_confidence:0.4"]}]}],
         expected_workflow_revision=0, submission_file_name="old.txt",
     )
     workflow_repository.update_workflow(
@@ -438,12 +438,14 @@ def test_answer_review_only_preserves_submission_grading_and_analysis(with_uncha
     patch = {"review_status": "confirmed"}
     if with_unchanged_content:
         patch["content"] = "original answer"
+        patch["flag"] = []  # The editor returns public flags, not confidence metadata.
     response = task_facade.update_student_answer(
         task_id=task_id, owner_id=owner_id, display_student_id="S001", q_id="q1",
         patch=patch, expected_revision=1,
     )
     assert response["answer"]["review_status"] == "confirmed"
-    assert response["answer"]["flag"] == ["low_confidence"]
+    assert response["answer"]["flag"] == []
+    assert response["answer"]["recognition_confidence"] == .4
     assert response["workflow_revision"] == 2
     with session_scope() as session:
         assert session.scalar(select(SubmissionRecord.current_revision_id).where(SubmissionRecord.assignment_id == task_id)) == revision_before

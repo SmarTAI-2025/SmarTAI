@@ -251,7 +251,7 @@ def _seed_legacy_structured_case(
     for index in range(1, question_count):
         student["stu_ans"].append({**student["stu_ans"][0], "q_id": f"q{index + 1}"})
     if recognition_needs_review:
-        student["stu_ans"][0]["flag"] = ["recognition_needs_review"]
+        student["stu_ans"][0]["flag"] = ["answer_recognition_confidence:0.4"]
     if not with_answers:
         student["stu_ans"] = []
     task_facade._commit_imported_submissions(
@@ -562,7 +562,36 @@ def test_grade_endpoint_accepts_uncertain_answers_and_preserves_pending_review()
     assert after["problem_data"]["q1"]["review_status"] == "needs_review"
     answer = next(iter(after["student_data"].values()))["stu_ans"][0]
     assert answer["review_status"] == "pending"
-    assert answer["flag"] == ["recognition_needs_review"]
+    assert answer["flag"] == []
+    assert answer["recognition_confidence"] == .4
+
+
+@pytest.mark.parametrize("flags,expected_warnings", [
+    ([], []),
+    (["recognition_needs_review", "recognition_low_confidence"], []),
+    (["recognition_confidence:0.1"], []),
+    (["answer_recognition_confidence:0.6"], []),
+    (["answer_recognition_confidence:0.4"], ["submission_recognition_needs_review"]),
+])
+def test_grading_readiness_confidence_warning_uses_only_individual_answer_score(flags, expected_warnings):
+    from sqlalchemy import select
+    from backend.db.models import SubmissionAnswerRecord
+    from backend.db.session import session_scope
+    from backend.services import task_facade
+
+    seeded = _seed_legacy_structured_case()
+    args = {"task_id": seeded["assignment_id"], "owner_id": seeded["owner_id"]}
+    with session_scope() as session:
+        session.scalar(select(SubmissionAnswerRecord)).flag = flags
+    assert task_facade.grading_readiness(**args) == {
+        "ready": True, "blocking_issues": [], "warnings": expected_warnings,
+    }
+    before = task_facade.get_task(**args, full=True)
+    task_facade.update_student_answer(
+        **args, display_student_id="S001", q_id="q1",
+        patch={"review_status": "confirmed"}, expected_revision=before["workflow_revision"],
+    )
+    assert task_facade.grading_readiness(**args)["warnings"] == []
 
 
 def test_stale_preflight_revision_cannot_create_grading_run():
