@@ -61,7 +61,6 @@ import type { ProblemInfo, Task, TaskResultResponse, TaskStateSnapshot, TaskStat
 
 const HANDWRITTEN_FIXTURE = "/frontier-demo/live/DEMO-002_handwritten_raw.png";
 const POLL_INTERVAL_MS = 1_500;
-const WORKFLOW_TIMEOUT_MS = 8 * 60 * 1_000;
 const EXPECTED_DEMO_QUESTION_COUNT = 4;
 
 type RunStepId = "task" | "questions" | "submissions" | "grading";
@@ -101,7 +100,7 @@ export function FrontierLiveDemoPage() {
   const [snapshot, setSnapshot] = useState<TaskStateSnapshot | null>(null);
   const [steps, setSteps] = useState<RunStep[]>(() => initialSteps(locale));
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ message: string; code?: string | null; reviewBlockers?: ReviewBlocker[] } | null>(null);
+  const [error, setError] = useState<{ message: string; code?: string | null } | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [providerLabel, setProviderLabel] = useState<string | null>(null);
   const [teacherReviewTask, setTeacherReviewTask] = useState<Task | null>(null);
@@ -112,6 +111,21 @@ export function FrontierLiveDemoPage() {
   const runRef = useRef<DemoRun | null>(null);
   const localeRef = useRef(locale);
   localeRef.current = locale;
+  // Only completed recognition can require manual review. Failed/paused jobs
+  // retain their existing retry/resume action, even if partial data is present.
+  const reviewTask = isTaskAwaitingGrading(snapshot?.status) ? submissionReviewTask
+    : snapshot?.status === "problems_ready" ? teacherReviewTask : null;
+  const questionBlockers = reviewTask ? demoQuestionReviewBlockers(reviewTask, locale) : [];
+  const submissionBlockers = reviewTask && isTaskAwaitingGrading(snapshot?.status) ? submissionReviewBlockers(reviewTask, locale) : [];
+  const requiredReview = !error && reviewTask && (questionBlockers.length || submissionBlockers.length) ? {
+    href: `/tasks/${reviewTask.task_id}/${questionBlockers.length ? "questions" : "submissions"}`,
+    label: questionBlockers.length ? tx(locale, "审核题目", "Review questions") : tx(locale, "校对作答", "Review submissions"),
+    description: questionBlockers.length
+      ? (isTaskAwaitingGrading(snapshot?.status)
+        ? tx(locale, "请审核并修正题目中的问题，再开始批改。", "Review and correct the questions before grading.")
+        : tx(locale, "请审核并修正题目中的问题，再继续识别作答。", "Review and correct the questions before recognizing submissions."))
+      : tx(locale, "请修正学生信息或作答中的问题，再开始批改。", "Correct the student details or answers before grading."),
+  } : null;
 
   useEffect(() => () => { runRef.current = null; }, []);
 
@@ -175,12 +189,14 @@ export function FrontierLiveDemoPage() {
           setError({ message: liveDemoWorkflowFailureMessage(locale, detail), code: detail });
           return;
         }
-        if (state.problem_count > 0) {
-          const task = await run.step(() => getTask(restoredTaskId));
-          const prepared = alignDemoProblems(Object.values(task.problem_data));
-          if (!preparedMaterialsComplete(prepared)) {
-            throw new Error(tx(locale, "此任务的题目准备资料不完整；请打开任务检查真实结果。", "This task's prepared question materials are incomplete. Open the task to inspect the real result."));
+        if (state.problem_count > 0 || state.status === "problems_ready" || isTaskAwaitingGrading(state.status)) {
+          let task = await run.step(() => getTask(restoredTaskId));
+          if (state.status === "problems_ready" || isTaskAwaitingGrading(state.status)) {
+            const reviewed = await readCurrentReview(run, restoredTaskId, state.status === "problems_ready" ? "questions" : "submissions", { task, state });
+            if (!reviewed) return;
+            task = reviewed.task;
           }
+          const prepared = Object.values(task.problem_data);
           const confirmed = generatedMaterialsConfirmed(prepared);
           setTeacherReviewTask(task);
           setMaterialsConfirmed(confirmed);
@@ -234,7 +250,6 @@ export function FrontierLiveDemoPage() {
   async function retryFailedItems() {
     if (!taskId) return startFreshRun();
     if (submissionReviewTask && isTaskAwaitingGrading(snapshot?.status)) return confirmSubmissionReview();
-    if (teacherReviewTask && error?.reviewBlockers?.length) return confirmTeacherMaterials();
     const run = beginRun(taskId);
     if (!run) return;
     const previousError = error;
@@ -256,9 +271,8 @@ export function FrontierLiveDemoPage() {
           const recognitionProviderId = await run.step(() => demoRecognitionProvider(taskId));
           await run.step(() => (submissions ? retrySubmissionRecognition : retryQuestionPreparation)({
             taskId, jobId, recognitionProviderId, expectedWorkflowRevision: current.workflow_revision,
-            // An explicit resume of a stopped job follows the existing retry contract.
-            // Uncertain provider submissions still require the backend's acknowledgement guard.
-            ...((isTaskPaused(status) || current.error === "operation_cancelled") ? { acknowledgePossibleDuplicateCall: true } : {}),
+            // Quick Demo retries may repeat an uncertain call against the Demo quota.
+            acknowledgePossibleDuplicateCall: true,
           }));
           status = submissions ? "parsing_submissions" : "extracting_problems";
         }
@@ -323,12 +337,6 @@ export function FrontierLiveDemoPage() {
     setError(null);
     try {
       markStep("questions", "active", tx(locale, "正在检查题目是否可以进入下一阶段…", "Checking that questions are ready for the next stage…"));
-      const blockers = questionReviewBlockers(Object.values(teacherReviewTask.problem_data), taskId, locale);
-      if (blockers.length) {
-        failActiveStep();
-        setError({ message: blockers.map(item => item.label).join("; "), reviewBlockers: blockers });
-        return;
-      }
       await continueWorkflow(run, taskId, "problems_ready", true);
     } catch (caught) {
       if (run.isCurrent()) {
@@ -347,12 +355,13 @@ export function FrontierLiveDemoPage() {
     setError(null);
     try {
       markStep("grading", "active", tx(locale, "正在启动批改…", "Starting grading…"));
-      const current = await run.step(() => getTask(taskId));
+      const reviewed = await readCurrentReview(run, taskId, "submissions");
+      if (!reviewed) return;
+      const current = reviewed.task;
       setSubmissionReviewTask(current);
-      const blockers = [...questionReviewBlockers(Object.values(current.problem_data), taskId, locale), ...submissionReviewBlockers(current, locale)];
+      const blockers = [...demoQuestionReviewBlockers(current, locale), ...submissionReviewBlockers(current, locale)];
       if (blockers.length) {
         failActiveStep();
-        setError({ message: blockers.map((item) => item.label).join("; "), reviewBlockers: blockers });
         return;
       }
       let setup = await run.step(() => getGradingSetup(taskId));
@@ -374,6 +383,38 @@ export function FrontierLiveDemoPage() {
     } finally {
       finishRun(run);
     }
+  }
+
+  async function readCurrentReview(run: DemoRun, currentTaskId: string, stage: "questions" | "submissions", loaded?: { task: Task; state: TaskStateSnapshot }) {
+    // Content and workflow reads must describe the same revision and stage.
+    // A later state alone must never authorize work against earlier content.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const task = loaded?.task ?? await run.step(() => getTask(currentTaskId));
+      const state = loaded && task.status === loaded.state.status && task.workflow_revision === loaded.state.workflow_revision
+        ? loaded.state : await run.step(() => getTaskState(currentTaskId));
+      if (!await reviewStageIsCurrent(run, currentTaskId, stage, state)) return null;
+      if (task.status === state.status && task.workflow_revision === state.workflow_revision) return { task, state };
+      loaded = undefined;
+    }
+    throw new Error(tx(locale, "任务内容已更新，请重试读取最新状态。", "Task content changed. Retry to load the latest state."));
+  }
+
+  async function reviewStageIsCurrent(run: DemoRun, currentTaskId: string, stage: "questions" | "submissions", state: TaskStateSnapshot) {
+    // Another tab can restart recognition while this review remains open.
+    // Reconcile persisted workflow state before classifying content as a human blocker.
+    setSnapshot(state);
+    if (!isTaskAwaitingGrading(state.status)) setSubmissionReviewTask(null);
+    if (stage === "questions" ? state.status === "problems_ready" : isTaskAwaitingGrading(state.status)) return true;
+    activeStepRef.current = null;
+    setSteps(stepsFromSnapshot(state, locale));
+    if (state.status === "error") {
+      const detail = state.progress?.error_detail || state.error || "workflow_error";
+      throw new Error(liveDemoWorkflowFailureMessage(locale, detail));
+    }
+    if (!isTaskPaused(state.status) && state.status !== "draft") {
+      await continueWorkflow(run, currentTaskId, state.status);
+    }
+    return false;
   }
 
   async function continueWorkflow(run: DemoRun, currentTaskId: string, startingStatus: TaskStatus, continueToSubmissions = false) {
@@ -407,30 +448,30 @@ export function FrontierLiveDemoPage() {
         recognitionProviderId,
       }));
       markStep("questions", "active", tx(locale, "正在识别题目并生成标答、评分依据与代码题材料…", "Recognizing questions and generating answers, rubrics, and programming materials…"), response.job_id);
-      const state = await waitForStatus(run, currentTaskId, ["problems_ready"]);
+      const state = await waitForStatus(run, currentTaskId, "extracting_problems", ["problems_ready"]);
+      if (!state) return;
       status = state.status;
     } else if (status === "extracting_problems") {
       markStep("questions", "active", tx(locale, "正在等待已有题目识别任务…", "Waiting for the existing question-recognition job…"));
-      status = (await waitForStatus(run, currentTaskId, ["problems_ready"])).status;
+      const state = await waitForStatus(run, currentTaskId, "extracting_problems", ["problems_ready"]);
+      if (!state) return;
+      status = state.status;
     }
 
     if (status === "problems_ready") {
-      const recognizedTask = await run.step(() => getTask(currentTaskId));
-      const aligned = alignDemoProblems(Object.values(recognizedTask.problem_data));
-      if (!preparedMaterialsComplete(aligned)) {
-        throw new Error(tx(locale, "本次题目准备未生成完整的标答、评分依据或代码题材料；请打开任务检查真实结果。", "This preparation run did not generate a complete answer, rubric, or programming package. Open the task to inspect the real result."));
-      }
+      const reviewed = await readCurrentReview(run, currentTaskId, "questions");
+      if (!reviewed) return;
+      const recognizedTask = reviewed.task;
       setTeacherReviewTask(recognizedTask);
-      const alreadyConfirmed = generatedMaterialsConfirmed(aligned);
+      const alreadyConfirmed = generatedMaterialsConfirmed(Object.values(recognizedTask.problem_data));
       setMaterialsConfirmed(alreadyConfirmed);
-      if (!continueToSubmissions) {
-        const recognizedState = await run.step(() => getTaskState(currentTaskId));
-        setSnapshot(recognizedState);
-        markStep("questions", "complete", tx(locale, "题目、标答与评分资料已生成，可继续识别作答。", "Questions, answers, and rubrics are ready. Continue to submissions."), recognizedState.extract_job_id);
+      // Recheck persisted content on every explicit continuation, including
+      // edits made in another tab since the Demo was loaded.
+      if (!continueToSubmissions || demoQuestionReviewBlockers(recognizedTask, locale).length) {
+        markStep("questions", "complete", tx(locale, "题目、标答与评分资料已生成，可继续识别作答。", "Questions, answers, and rubrics are ready. Continue to submissions."), recognizedTask.extract_job_id);
         return;
       }
-      const afterQuestions = await run.step(() => getTaskState(currentTaskId));
-      setSnapshot(afterQuestions);
+      const afterQuestions = reviewed.state;
       markStep("questions", "complete", tx(locale, `已识别 ${afterQuestions.problem_count} 题，继续识别作答`, `${afterQuestions.problem_count} questions recognized; continuing to submissions`), afterQuestions.extract_job_id);
 
       markStep("submissions", "active", tx(locale, "正在上传原始排版、混排与手写作答…", "Uploading raw typeset, mixed, and handwritten submissions…"));
@@ -438,25 +479,31 @@ export function FrontierLiveDemoPage() {
       const recognitionProviderId = await run.step(() => demoRecognitionProvider(currentTaskId));
       const response = await run.step(() => parseSubmissions({ taskId: currentTaskId, file: archive, identityMode: "filename", recognitionProviderId, expectedWorkflowRevision: afterQuestions.workflow_revision }));
       markStep("submissions", "active", tx(locale, "作答识别与 OCR 正在运行…", "Submission recognition and OCR are running…"), response.job_id);
-      status = (await waitForStatus(run, currentTaskId, ["submissions_ready", "grading_setup"])).status;
+      const state = await waitForStatus(run, currentTaskId, "parsing_submissions", ["submissions_ready", "grading_setup"]);
+      if (!state) return;
+      status = state.status;
     } else if (status === "parsing_submissions") {
       markStep("questions", "complete", tx(locale, "题目已准备", "Questions already prepared"));
       markStep("submissions", "active", tx(locale, "正在等待已有作答识别任务…", "Waiting for the existing submission-recognition job…"));
-      status = (await waitForStatus(run, currentTaskId, ["submissions_ready", "grading_setup"])).status;
+      const state = await waitForStatus(run, currentTaskId, "parsing_submissions", ["submissions_ready", "grading_setup"]);
+      if (!state) return;
+      status = state.status;
     }
 
     if (isTaskAwaitingGrading(status)) {
-      const recognized = await run.step(() => getTaskState(currentTaskId));
-      const recognizedTask = await run.step(() => getTask(currentTaskId));
-      setSnapshot(recognized);
-      setSubmissionReviewTask(recognizedTask);
+      const reviewed = await readCurrentReview(run, currentTaskId, "submissions");
+      if (!reviewed) return;
+      const recognized = reviewed.state;
+      setSubmissionReviewTask(reviewed.task);
       markStep("submissions", "complete", tx(locale, `已识别 ${recognized.student_count} 份作答`, `${recognized.student_count} submissions recognized`), recognized.parse_job_id);
       return;
     } else if (status === "grading") {
       markStep("questions", "complete", tx(locale, "题目已准备", "Questions already prepared"));
       markStep("submissions", "complete", tx(locale, "作答已识别", "Submissions already recognized"));
       markStep("grading", "active", tx(locale, "正在等待已有批改任务…", "Waiting for the existing grading job…"));
-      status = (await waitForStatus(run, currentTaskId, ["graded", "finalized"])).status;
+      const state = await waitForStatus(run, currentTaskId, "grading", ["graded", "finalized"]);
+      if (!state) return;
+      status = state.status;
     }
 
     if (["graded", "finalized"].includes(status)) {
@@ -467,9 +514,8 @@ export function FrontierLiveDemoPage() {
     }
   }
 
-  async function waitForStatus(run: DemoRun, currentTaskId: string, targets: TaskStatus[]) {
-    const deadline = Date.now() + WORKFLOW_TIMEOUT_MS;
-    while (Date.now() < deadline) {
+  async function waitForStatus(run: DemoRun, currentTaskId: string, activeStatus: TaskStatus, targets: TaskStatus[]): Promise<TaskStateSnapshot | null> {
+    while (true) {
       const state = await run.step(() => getTaskState(currentTaskId));
       setSnapshot(state);
       if (isTaskPaused(state.status)) {
@@ -481,9 +527,19 @@ export function FrontierLiveDemoPage() {
         const detail = state.progress?.error_detail || state.error || "workflow_error";
         throw new Error(liveDemoWorkflowFailureMessage(locale, detail));
       }
+      if (state.status !== activeStatus) {
+        // Another tab may advance or reset the task while this stage is watched.
+        // Reconcile through the existing workflow without resuming the old stage.
+        activeStepRef.current = null;
+        setSteps(stepsFromSnapshot(state, locale));
+        setTeacherReviewTask(null);
+        setSubmissionReviewTask(null);
+        setMaterialsConfirmed(false);
+        if (state.status !== "draft") await continueWorkflow(run, currentTaskId, state.status);
+        return null;
+      }
       await run.step(() => delay(POLL_INTERVAL_MS));
     }
-    throw new Error(tx(locale, "真实流程已超过八分钟；任务已保留，可继续检查或恢复。", "The live run exceeded eight minutes. The task is preserved so you can inspect or resume it."));
   }
 
   function markStep(id: RunStepId, state: RunStepState, detail: string, jobId?: string | null) {
@@ -536,11 +592,16 @@ export function FrontierLiveDemoPage() {
             {steps.map((step, index) => <WorkflowStep key={step.id} step={step} index={index} locale={locale} />)}
           </ol>
 
-          {error ? (
+          {requiredReview ? (
+            <RecoverableActionState locale={locale} className="mt-5"
+              info={{ title: tx(locale, "需要人工校对", "Manual review required"), description: requiredReview.description,
+                tone: "danger", actionKind: "reselect", actionLabel: requiredReview.label, technicalDetails: [] }}
+              primaryAction={{ label: requiredReview.label, href: requiredReview.href, busy }}
+            />
+          ) : error ? (
             <RecoverableActionState locale={locale} className="mt-5"
               info={{
                 ...classifyRecoverableError(error.code ?? snapshot?.error ?? error.message, { locale, taskId: taskId ?? undefined, jobId: snapshot?.grading_job_id ?? undefined, phase: snapshot?.progress?.current_step ?? undefined }),
-                ...(error.reviewBlockers?.length ? { title: tx(locale, "批改前需要校对", "Review required before grading"), description: error.message } : {}),
               }}
               primaryAction={{ label: tx(locale, "重试失败项", "Retry failed items"), onClick: () => void retryFailedItems(), busy }}
             />
@@ -551,12 +612,12 @@ export function FrontierLiveDemoPage() {
               <Button onClick={() => void retryFailedItems()} disabled={busy}>
                 {t(TASK_ACTION_KEYS[snapshot.status])}
               </Button>
-            ) : !error && teacherReviewTask && !submissionReviewTask && snapshot?.status === "problems_ready" ? (
+            ) : !error && !requiredReview && teacherReviewTask && !submissionReviewTask && snapshot?.status === "problems_ready" ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmTeacherMaterials()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                 {tx(locale, "继续识别作答", "Continue to submissions")}
               </Button>
-            ) : !error && submissionReviewTask && isTaskAwaitingGrading(snapshot?.status) ? (
+            ) : !error && !requiredReview && submissionReviewTask && isTaskAwaitingGrading(snapshot?.status) ? (
               <Button className="h-12 px-6 text-sm shadow-sm" onClick={() => void confirmSubmissionReview()} disabled={busy}>
                 {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                 {tx(locale, "开始批改", "Start grading")}
@@ -593,6 +654,12 @@ export function FrontierLiveDemoPage() {
               </div>
               <p role="status" aria-live="polite" className="mt-2 text-xs leading-5 text-muted-foreground">{latestProgressMessage(snapshot, locale)}</p>
             </div>
+          ) : null}
+
+          {snapshot?.active_operation_status === "pending" ? (
+            <p role="status" aria-live="polite" className="mt-2 text-xs leading-5 text-muted-foreground">
+              {tx(locale, "当前正在排队，请耐心等待；也可保留此标签页，稍后查看。", "You’re currently in the queue. Please wait, or keep this tab open and check back later.")}
+            </p>
           ) : null}
         </section>
 
@@ -637,7 +704,7 @@ export function FrontierLiveDemoPage() {
           task={submissionReviewTask}
           locale={locale}
           busy={busy}
-          blocked={Boolean(error?.reviewBlockers?.length)}
+          blocked={Boolean(requiredReview)}
           onContinue={() => void confirmSubmissionReview()}
         />
       ) : teacherReviewTask ? (
@@ -645,6 +712,7 @@ export function FrontierLiveDemoPage() {
           task={teacherReviewTask}
           locale={locale}
           confirmed={materialsConfirmed}
+          reviewDescription={requiredReview?.description}
         />
       ) : null}
     </div>
@@ -696,10 +764,10 @@ function SubmissionRecognitionReview({ task, locale, busy, blocked, onContinue }
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button onClick={onContinue} disabled={busy || blocked} className="h-10 px-4">
+        {!blocked ? <Button onClick={onContinue} disabled={busy} className="h-10 px-4">
           {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           {tx(locale, "开始批改", "Start grading")}
-        </Button>
+        </Button> : null}
         <span className="text-xs text-muted-foreground">{tx(locale, "需要修改时，可进入作答校对页。", "Open submission review if you need to make corrections.")}</span>
       </div>
     </section>
@@ -942,12 +1010,15 @@ function TeacherMaterialConfirmation({
   task,
   locale,
   confirmed,
+  reviewDescription,
 }: {
   task: Task;
   locale: Locale;
   confirmed: boolean;
+  reviewDescription?: string;
 }) {
-  const aligned = alignDemoProblems(Object.values(task.problem_data));
+  let aligned = Object.values(task.problem_data);
+  try { aligned = alignDemoProblems(aligned); } catch { /* Keep malformed results available for manual review. */ }
   return (
     <section className="mt-5 rounded-[10px] border border-primary/25 bg-primary/[0.035] p-4 sm:p-5" aria-labelledby="demo-teacher-material-title">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -955,7 +1026,7 @@ function TeacherMaterialConfirmation({
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "题目资料", "Question materials")}</p>
           <h3 id="demo-teacher-material-title" className="mt-1 text-lg font-bold">{tx(locale, "本次生成的题目资料", "Generated question materials")}</h3>
           <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
-            {tx(locale, "题干、标答与评分依据已实时生成，可以继续识别作答。", "Questions, reference answers, and rubrics were generated live. You can continue to submissions.")}
+            {reviewDescription ?? tx(locale, "题干、标答与评分依据已实时生成，可以继续识别作答。", "Questions, reference answers, and rubrics were generated live. You can continue to submissions.")}
           </p>
         </div>
         <Link className="shrink-0 text-xs font-semibold text-primary hover:underline" to={`/tasks/${task.task_id}/questions`}>
@@ -1063,21 +1134,20 @@ async function demoRecognitionProvider(taskId: string) {
 }
 
 function generatedMaterialsConfirmed(problems: ProblemInfo[]) {
-  return problems.every((problem) => (
+  return problems.length > 0 && problems.every((problem) => (
     problem.review_status === "confirmed"
   ));
 }
 
-function preparedMaterialsComplete(problems: ProblemInfo[]) {
-  return problems.every((problem) => (
-    Boolean(problem.stem.trim())
-    && Boolean(problem.criterion.trim())
-    && Boolean(problem.reference_answer?.trim())
-    && (problemNumber(problem.number) !== 4 || (
-      Boolean(problem.solution_code?.trim())
-      && Boolean(problem.test_cases?.length)
-    ))
-  ));
+function demoQuestionReviewBlockers(task: Task, locale: Locale): ReviewBlocker[] {
+  const problems = Object.values(task.problem_data);
+  const blockers = questionReviewBlockers(problems, task.task_id, locale);
+  // Preserve the fixed fixture's Q1–Q4 guard, but offer its existing editor
+  // instead of retrying a successfully completed recognition job.
+  try { alignDemoProblems(problems); } catch {
+    blockers.push({ label: tx(locale, "请核对题目数量和 Q1–Q4 题号。", "Check the question count and Q1–Q4 numbering."), href: `/tasks/${task.task_id}/questions` });
+  }
+  return blockers;
 }
 
 export function alignDemoProblems(problems: ProblemInfo[]) {

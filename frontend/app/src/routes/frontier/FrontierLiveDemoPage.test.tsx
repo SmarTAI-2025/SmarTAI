@@ -68,6 +68,112 @@ describe("FrontierLiveDemoPage", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["zh-CN", "en-US"])("shows the immediate queue notice without progress and clears it when running (%s)", async locale => {
+    vi.useFakeTimers();
+    let view: ReturnType<typeof renderLive> | undefined;
+    try {
+      localStorage.setItem("smartai_locale", locale);
+      let state = { ...taskState("extracting_problems"), problem_count: 0, progress: null, active_operation_status: "pending" };
+      vi.mocked(getTaskState).mockImplementation(async () => state as TaskStateSnapshot);
+      view = renderLive("asg_demo123");
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      const copy = locale === "zh-CN" ? "当前正在排队，请耐心等待；也可保留此标签页，稍后查看。" : "You’re currently in the queue. Please wait, or keep this tab open and check back later.";
+      expect(screen.getByText(copy)).toBeVisible();
+      expect(screen.getByText(copy)).toHaveClass("mt-2", "text-xs", "leading-5", "text-muted-foreground");
+      state = { ...state, active_operation_status: "running" };
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      expect(screen.queryByText(copy)).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally { view?.unmount(); vi.useRealTimers(); }
+  });
+
+  it.each([
+    ["extracting_problems", "pending"], ["extracting_problems", "running"],
+    ["parsing_submissions", "pending"], ["parsing_submissions", "running"],
+    ["grading", "pending"], ["grading", "running"],
+  ] as const)("keeps observing %s/%s beyond eight minutes until completion", async (status, operationStatus) => {
+    vi.useFakeTimers();
+    let view: ReturnType<typeof renderLive> | undefined;
+    try {
+      const completed = status === "extracting_problems" ? "problems_ready" : status === "parsing_submissions" ? "submissions_ready" : "graded";
+      let state = { ...taskState(status), problem_count: 0, active_operation_status: operationStatus } as TaskStateSnapshot;
+      vi.mocked(getTaskState).mockImplementation(async () => state);
+      vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(completed), student_data: recognizedStudents() });
+      vi.mocked(getTaskResult).mockResolvedValue(gradedResult({ ...taskWithQuestions(), student_data: recognizedStudents() }));
+      view = renderLive("asg_demo123");
+      await act(async () => { await vi.advanceTimersByTimeAsync(9 * 60 * 1000); });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      const before = vi.mocked(getTaskState).mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      expect(vi.mocked(getTaskState).mock.calls.length).toBeGreaterThan(before);
+      state = taskState(completed);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      const finished = vi.mocked(getTaskState).mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(getTaskState).toHaveBeenCalledTimes(finished);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      for (const method of [createTask, retryQuestionPreparation, retrySubmissionRecognition, parseSubmissions, startGrading]) expect(method).not.toHaveBeenCalled();
+    } finally { view?.unmount(); vi.useRealTimers(); }
+  });
+
+  it.each(["pause", "error", "session expired", "unmount"])("stops long-running observation on %s", async terminal => {
+    vi.useFakeTimers();
+    let view: ReturnType<typeof renderLive> | undefined;
+    try {
+      vi.mocked(getTaskState).mockResolvedValue({ ...taskState("extracting_problems"), problem_count: 0 });
+      view = renderLive("asg_demo123");
+      await act(async () => { await vi.advanceTimersByTimeAsync(9 * 60 * 1000); });
+      if (terminal === "unmount") view.unmount();
+      else if (terminal === "session expired") vi.mocked(getTaskState).mockRejectedValue(new client.APIError(401, "Expired", { detail: { code: "frontier_demo_session_expired" } }));
+      else vi.mocked(getTaskState).mockResolvedValue({ ...taskState(terminal === "pause" ? "problems_paused" : "error"), error: terminal === "error" ? "provider_timeout" : null });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      const stopped = vi.mocked(getTaskState).mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(getTaskState).toHaveBeenCalledTimes(stopped);
+      if (terminal === "pause") expect(screen.getByRole("button", { name: "Continue recognition" })).toBeEnabled();
+      if (terminal === "error" || terminal === "session expired") expect(screen.getByRole("alert")).toBeVisible();
+      for (const method of [createTask, retryQuestionPreparation, retrySubmissionRecognition, parseSubmissions, startGrading]) expect(method).not.toHaveBeenCalled();
+    } finally { view?.unmount(); vi.useRealTimers(); }
+  });
+
+  it.each([
+    ["extracting_problems", "parsing_submissions"], ["extracting_problems", "submissions_ready"],
+    ["extracting_problems", "grading"], ["extracting_problems", "graded"], ["extracting_problems", "finalized"],
+    ["parsing_submissions", "grading"], ["parsing_submissions", "graded"], ["parsing_submissions", "finalized"],
+    ["parsing_submissions", "problems_ready"], ["grading", "problems_ready"],
+    ["parsing_submissions", "extracting_problems"], ["grading", "parsing_submissions"], ["grading", "submissions_ready"],
+    ["extracting_problems", "draft"], ["parsing_submissions", "draft"], ["grading", "draft"],
+  ] as const)("reconciles a watched %s stage changed elsewhere to %s without restarting work", async (initial, changed) => {
+    vi.useFakeTimers();
+    let view: ReturnType<typeof renderLive> | undefined;
+    try {
+      let state = { ...taskState(initial), problem_count: 0 };
+      vi.mocked(getTaskState).mockImplementation(async () => state);
+      vi.mocked(getTask).mockImplementation(async () => ({ ...taskWithQuestions(state.status), student_data: recognizedStudents() }));
+      vi.mocked(getTaskResult).mockResolvedValue(gradedResult({ ...taskWithQuestions(), student_data: recognizedStudents() }));
+      view = renderLive("asg_demo123");
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      state = taskState(changed);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      if (changed === "extracting_problems" || changed === "parsing_submissions" || changed === "grading") {
+        const observing = vi.mocked(getTaskState).mock.calls.length;
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+        expect(vi.mocked(getTaskState).mock.calls.length).toBeGreaterThan(observing);
+        state = taskState(changed === "grading" ? "graded" : changed === "extracting_problems" ? "problems_ready" : "submissions_ready");
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+      }
+      const finished = vi.mocked(getTaskState).mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(9 * 60 * 1000); });
+      expect(getTaskState).toHaveBeenCalledTimes(finished);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      if (["graded", "finalized"].includes(state.status)) expect(getTaskResult).toHaveBeenCalledWith("asg_demo123");
+      else if (state.status === "problems_ready") expect(screen.getByRole("button", { name: "Continue to submissions" })).toBeEnabled();
+      else if (state.status === "submissions_ready") expect(screen.getAllByRole("button", { name: "Start grading" })[0]).toBeEnabled();
+      else expect(screen.getByRole("button", { name: "Start real OCR + grading" })).toBeEnabled();
+      for (const method of [createTask, preflightProblemSource, startQuestionPreparation, retryQuestionPreparation, retrySubmissionRecognition, parseSubmissions, startGrading]) expect(method).not.toHaveBeenCalled();
+    } finally { view?.unmount(); vi.useRealTimers(); }
+  });
+
   it.each(["en-US", "zh-CN"])("freezes %s on first click even when UI changes while task creation is pending", async initialLocale => {
     localStorage.setItem("smartai_locale", initialLocale);
     const creation = deferred<TaskStateSnapshot>();
@@ -190,7 +296,7 @@ describe("FrontierLiveDemoPage", () => {
     const students = recognizedStudents();
     students["demo-1"].stu_ans[0].flag = ["recognition_needs_review", "recognition_low_confidence"];
     vi.mocked(getTaskState).mockResolvedValue(taskState("submissions_ready"));
-    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(), student_data: students });
+    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions("submissions_ready"), student_data: students });
     renderLive("asg_demo123");
     const expected = locale === "zh-CN"
       ? "识别结果需对照原件核对 · 本题识别置信度较低，请对照原件核对并确认"
@@ -208,7 +314,7 @@ describe("FrontierLiveDemoPage", () => {
           phase: "done", total_students: 4, total_questions: 4, completed_units: 0,
           ...steps, active: [], messages: [{ ts: 1, level: "info", message: "activity_completed" }],
         } });
-        vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(), student_data: recognizedStudents() });
+        vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(status), student_data: recognizedStudents() });
         const view = renderLive("asg_demo123");
         const bar = await screen.findByRole("progressbar");
         expect(bar).toHaveAttribute("aria-valuenow", "100");
@@ -255,11 +361,11 @@ describe("FrontierLiveDemoPage", () => {
     }
   });
 
-  it.each(["zh-CN", "en-US"])("keeps blocking details and retry on the Demo after a real recognition failure (%s)", async (locale) => {
+  it.each(["zh-CN", "en-US"])("routes newly discovered answer blockers to submission review (%s)", async (locale) => {
     window.localStorage.setItem("smartai_locale", locale);
     const zh = locale === "zh-CN";
-    const initial = { ...taskWithQuestions(), student_data: recognizedStudents() };
-    const current = { ...taskWithQuestions(), student_data: recognizedStudents() };
+    const initial = { ...taskWithQuestions("submissions_ready"), student_data: recognizedStudents() };
+    const current = { ...taskWithQuestions("submissions_ready"), student_data: recognizedStudents() };
     current.student_data["demo-1"].stu_ans[0].flag = ["recognition_failed"];
     vi.mocked(getTaskState).mockResolvedValue(taskState("submissions_ready"));
     vi.mocked(getTask).mockResolvedValueOnce(initial).mockResolvedValue(current);
@@ -269,15 +375,233 @@ describe("FrontierLiveDemoPage", () => {
     const alert = await screen.findByRole("alert");
     expect(screen.queryByRole("heading", { name: zh ? "本次识别的学生作答" : "Recognized submissions" })).toBeVisible();
     expect(screen.getByRole("link", { name: zh ? "在作答校对页查看" : "Open submission review" })).toHaveAttribute("href", "/tasks/asg_demo123/submissions");
-    expect(within(alert).getByText(/Alex Chen/)).toBeVisible();
-    expect(within(alert).queryByRole("link")).not.toBeInTheDocument();
-    await user.click(within(alert).getByRole("button", { name: zh ? "重试失败项" : "Retry failed items" }));
-    expect(await screen.findByRole("alert")).toBeVisible();
+    expect(within(alert).getByRole("link", { name: zh ? "校对作答" : "Review submissions" })).toHaveAttribute("href", "/tasks/asg_demo123/submissions");
+    expect(within(alert).queryByRole("button", { name: zh ? "重试失败项" : "Retry failed items" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: zh ? "返回修改配置" : "Back to edit settings" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: zh ? "开始批改" : "Start grading" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: zh ? "开始批改" : "Start grading" })).not.toBeInTheDocument();
     expect(saveGradingSetup).not.toHaveBeenCalled();
     expect(startGrading).not.toHaveBeenCalled();
     expect(updateStudentAnswer).not.toHaveBeenCalled();
+  });
+
+  it.each(["empty stem", "missing rubric", "missing questions", "duplicate numbering", "identity", "confirmation"])("offers manual review immediately for %s without starting work", async kind => {
+    const submissions = kind === "identity" || kind === "confirmation";
+    const task = { ...taskWithQuestions(submissions ? "submissions_ready" : "problems_ready"), student_data: recognizedStudents() };
+    if (kind === "empty stem") task.problem_data.q1.stem = "";
+    if (kind === "missing rubric") task.problem_data.q1.criterion = "";
+    if (kind === "missing questions") task.problem_data = {};
+    if (kind === "duplicate numbering") task.problem_data.q2.number = "1";
+    if (kind === "identity") task.student_data["demo-1"].stu_name = "[Unknown Student]";
+    if (kind === "confirmation") task.student_data["demo-1"].stu_ans[0].flag = ["recognition_repaired_needs_confirmation"];
+    vi.mocked(getTaskState).mockResolvedValue({ ...taskState(submissions ? "submissions_ready" : "problems_ready"), problem_count: Object.keys(task.problem_data).length });
+    vi.mocked(getTask).mockResolvedValue(task);
+    renderLive("asg_demo123");
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByRole("link", { name: submissions ? "Review submissions" : "Review questions" })).toHaveAttribute("href", `/tasks/asg_demo123/${submissions ? "submissions" : "questions"}`);
+    expect(screen.queryByRole("button", { name: /Retry failed items|Continue to submissions|Start grading/ })).not.toBeInTheDocument();
+    expect(preflightProblemSource).not.toHaveBeenCalled();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+  });
+
+  it.each(["problems_ready", "submissions_ready"] as const)("reloads saved review on return to the same task, without treating an unsaved draft as a fix (%s)", async stage => {
+    const submissions = stage === "submissions_ready";
+    const task = { ...taskWithQuestions(stage), student_data: recognizedStudents() };
+    if (submissions) task.student_data["demo-1"].stu_name = "";
+    else task.problem_data.q1.stem = "";
+    vi.mocked(getTaskState).mockResolvedValue(taskState(stage));
+    vi.mocked(getTask).mockImplementation(async () => structuredClone(task));
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    const reviewLabel = submissions ? "Review submissions" : "Review questions";
+    await user.click(await screen.findByRole("link", { name: reviewLabel }));
+    await user.click(screen.getByRole("link", { name: "Return to Demo" }));
+    // No persisted correction: returning must still lead to manual review.
+    await user.click(await screen.findByRole("link", { name: reviewLabel }));
+    task.problem_data.q1.stem = "Saved question text";
+    task.student_data["demo-1"].stu_name = "Saved student name";
+    await user.click(screen.getByRole("link", { name: "Return to Demo" }));
+    expect((await screen.findAllByRole("button", { name: submissions ? "Start grading" : "Continue to submissions" }))[0]).toBeEnabled();
+    expect(getTask).toHaveBeenCalledTimes(3);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(createTask).not.toHaveBeenCalled();
+    expect(preflightProblemSource).not.toHaveBeenCalled();
+    expect(startQuestionPreparation).not.toHaveBeenCalled();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(saveGradingSetup).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+  });
+
+  it.each(["problems_ready", "submissions_ready"] as const)("keeps a newly failed recognition retryable when continuing stale %s review", async stage => {
+    const task = { ...taskWithQuestions(), status: stage, student_data: recognizedStudents() };
+    const submissions = stage === "submissions_ready";
+    let retried = false;
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState(stage)).mockImplementation(async () => retried
+      ? { ...taskState(stage), workflow_revision: 3 }
+      : { ...taskState("error"), workflow_revision: 2, error: "provider_timeout", last_failed_job_id: "failed-recognition",
+        extract_job_id: submissions ? "successful-questions" : "failed-recognition", parse_job_id: submissions ? "failed-recognition" : null });
+    vi.mocked(getTask).mockResolvedValueOnce(task).mockImplementation(async () => retried
+      ? { ...task, workflow_revision: 3 }
+      : { ...task, status: "error", workflow_revision: 2, error: "provider_timeout", problem_data: submissions ? task.problem_data : {}, student_data: {} });
+    vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
+    const retry = submissions ? retrySubmissionRecognition : retryQuestionPreparation;
+    vi.mocked(retry).mockImplementation(async () => { retried = true; return { status: "started", job_id: "failed-recognition" }; });
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click((await screen.findAllByRole("button", { name: stage === "problems_ready" ? "Continue to submissions" : "Start grading" }))[0]);
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByRole("button", { name: "Retry failed items" })).toBeVisible();
+    expect(within(alert).queryByRole("link", { name: /Review questions|Review submissions/ })).not.toBeInTheDocument();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+    expect(saveGradingSetup).not.toHaveBeenCalled();
+    await user.click(within(alert).getByRole("button", { name: "Retry failed items" }));
+    expect((await screen.findAllByRole("button", { name: submissions ? "Start grading" : "Continue to submissions" }))[0]).toBeEnabled();
+    expect(retry).toHaveBeenCalledExactlyOnceWith({ taskId: "asg_demo123", jobId: "failed-recognition", recognitionProviderId: "demo:vision", expectedWorkflowRevision: 2, acknowledgePossibleDuplicateCall: true });
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+    expect(saveGradingSetup).not.toHaveBeenCalled();
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it.each(["problems_ready", "submissions_ready"] as const)("reconciles recognition failure between state and content while restoring %s", async stage => {
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState(stage)).mockResolvedValue({
+      ...taskState("error"), workflow_revision: 2, error: "provider_timeout",
+      last_failed_job_id: "failed-recognition", extract_job_id: "failed-recognition", parse_job_id: stage === "submissions_ready" ? "failed-recognition" : null,
+    });
+    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(), status: "error", workflow_revision: 2,
+      error: "provider_timeout", problem_data: {}, student_data: {} });
+    renderLive("asg_demo123");
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByRole("button", { name: "Retry failed items" })).toBeEnabled();
+    expect(within(alert).queryByRole("link")).not.toBeInTheDocument();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+  });
+
+  it.each(["problems_ready", "submissions_ready"] as const)("does not combine old content with a newer ready workflow revision (%s)", async stage => {
+    const task = { ...taskWithQuestions(), status: stage, student_data: recognizedStudents() };
+    const revised = structuredClone(task);
+    revised.workflow_revision = 2;
+    if (stage === "problems_ready") revised.problem_data.q1.stem = "";
+    else revised.student_data["demo-1"].stu_name = "";
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState(stage)).mockResolvedValue({ ...taskState(stage), workflow_revision: 2 });
+    vi.mocked(getTask).mockResolvedValueOnce(task).mockResolvedValueOnce(task).mockResolvedValue(revised);
+    vi.spyOn(fixtures, "fixtureFile").mockResolvedValue(new File(["synthetic"], "submissions.zip"));
+    vi.mocked(getGradingSetup).mockResolvedValue({ ...gradingSetup(), grading_setup: gradingSetup().suggested_setup });
+    vi.mocked(parseSubmissions).mockRejectedValue(new Error("Unexpected recognition with stale reviewed content"));
+    vi.mocked(startGrading).mockRejectedValue(new Error("Unexpected grading with stale reviewed content"));
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click((await screen.findAllByRole("button", { name: stage === "problems_ready" ? "Continue to submissions" : "Start grading" }))[0]);
+    expect(await screen.findByRole("link", { name: stage === "problems_ready" ? "Review questions" : "Review submissions" })).toBeVisible();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+    expect(saveGradingSetup).not.toHaveBeenCalled();
+  });
+
+  it("stops without a mutation when review revisions keep changing", async () => {
+    const task = taskWithQuestions();
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState("problems_ready"))
+      .mockResolvedValueOnce({ ...taskState("problems_ready"), workflow_revision: 2 })
+      .mockResolvedValue({ ...taskState("problems_ready"), workflow_revision: 3 });
+    vi.mocked(getTask).mockResolvedValueOnce(task).mockResolvedValueOnce(task).mockResolvedValue({ ...task, workflow_revision: 2 });
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click(await screen.findByRole("button", { name: "Continue to submissions" }));
+    expect(within(await screen.findByRole("alert")).getByRole("button", { name: "Retry failed items" })).toBeEnabled();
+    expect(getTask).toHaveBeenCalledTimes(3);
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+  });
+
+  it("observes grading started in another tab instead of submitting again", async () => {
+    const task = { ...taskWithQuestions("submissions_ready"), student_data: recognizedStudents() };
+    const grading = deferred<TaskStateSnapshot>();
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState("submissions_ready"))
+      .mockResolvedValueOnce(taskState("grading")).mockReturnValueOnce(grading.promise).mockResolvedValue(taskState("graded"));
+    vi.mocked(getTask).mockResolvedValueOnce(task).mockResolvedValue({ ...task, status: "grading" });
+    vi.mocked(getTaskResult).mockResolvedValue(gradedResult(task));
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click((await screen.findAllByRole("button", { name: "Start grading" }))[0]);
+    expect(await screen.findByRole("button", { name: "Running…" })).toBeDisabled();
+    await act(async () => grading.resolve(taskState("graded")));
+    expect(await screen.findByRole("heading", { name: "See class performance from live scores" })).toBeVisible();
+    expect(startGrading).not.toHaveBeenCalled();
+    expect(saveGradingSetup).not.toHaveBeenCalled();
+  });
+
+  it.each(["problems_ready", "submissions_ready"] as const)("keeps a newly paused recognition resumable when continuing stale %s review", async stage => {
+    const task = { ...taskWithQuestions(), status: stage, student_data: recognizedStudents() };
+    const status = stage === "problems_ready" ? "problems_paused" : "submissions_paused";
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState(stage)).mockResolvedValue(taskState(status));
+    vi.mocked(getTask).mockResolvedValueOnce(task).mockResolvedValue({ ...task, status, problem_data: {}, student_data: {} });
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click((await screen.findAllByRole("button", { name: stage === "problems_ready" ? "Continue to submissions" : "Start grading" }))[0]);
+    expect(await screen.findByRole("button", { name: "Continue recognition" })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+  });
+
+  it.each(["problems_ready", "submissions_ready"] as const)("observes newly running recognition without restarting stale %s review", async stage => {
+    const task = { ...taskWithQuestions(), status: stage, student_data: recognizedStudents() };
+    const status = stage === "problems_ready" ? "extracting_problems" : "parsing_submissions";
+    const pending = deferred<TaskStateSnapshot>();
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState(stage)).mockResolvedValueOnce(taskState(status)).mockReturnValueOnce(pending.promise);
+    vi.mocked(getTask).mockResolvedValueOnce(task).mockResolvedValue({ ...task, status, problem_data: {}, student_data: {} });
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click((await screen.findAllByRole("button", { name: stage === "problems_ready" ? "Continue to submissions" : "Start grading" }))[0]);
+    expect(await screen.findByRole("button", { name: "Running…" })).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await act(async () => pending.resolve(taskState(stage === "problems_ready" ? "problems_paused" : "submissions_paused")));
+    expect(await screen.findByRole("button", { name: "Continue recognition" })).toBeEnabled();
+    expect(preflightProblemSource).not.toHaveBeenCalled();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+    expect(retryQuestionPreparation).not.toHaveBeenCalled();
+    expect(retrySubmissionRecognition).not.toHaveBeenCalled();
+  });
+
+  it("clears stale submission review when another tab returns the task to question review", async () => {
+    const task = { ...taskWithQuestions(), status: "submissions_ready" as const, student_data: recognizedStudents() };
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState("submissions_ready")).mockResolvedValue(taskState("problems_ready"));
+    vi.mocked(getTask).mockResolvedValueOnce(task).mockResolvedValue(taskWithQuestions());
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click((await screen.findAllByRole("button", { name: "Start grading" }))[0]);
+    expect(await screen.findByRole("button", { name: "Continue to submissions" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Start grading" })).not.toBeInTheDocument();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+  });
+
+  it("rechecks persisted questions before uploading submissions", async () => {
+    const task = taskWithQuestions();
+    vi.mocked(getTaskState).mockResolvedValue(taskState("problems_ready"));
+    vi.mocked(getTask).mockResolvedValueOnce(task).mockResolvedValue({
+      ...task, problem_data: { ...task.problem_data, q1: { ...task.problem_data.q1, stem: "" } },
+    });
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    await user.click(await screen.findByRole("button", { name: "Continue to submissions" }));
+    expect(await screen.findByRole("link", { name: "Review questions" })).toHaveAttribute("href", "/tasks/asg_demo123/questions");
+    expect(parseSubmissions).not.toHaveBeenCalled();
+  });
+
+  it("uses shared review severity for missing supplementary materials", async () => {
+    const task = taskWithQuestions();
+    task.problem_data.q1.reference_answer = null;
+    task.problem_data.q4.solution_code = null;
+    task.problem_data.q4.test_cases = null;
+    vi.mocked(getTaskState).mockResolvedValue(taskState("problems_ready"));
+    vi.mocked(getTask).mockResolvedValue(task);
+    renderLive("asg_demo123");
+    expect(await screen.findByRole("button", { name: "Continue to submissions" })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it.each([false, true])("keeps the replacement task locked when an old request settles (reject: %s)", async (reject) => {
@@ -326,10 +650,11 @@ describe("FrontierLiveDemoPage", () => {
   });
 
   it.each([false, true])("grades inline despite optional expert disagreement (configured: %s)", async (configured) => {
-    const task = { ...taskWithQuestions(), student_data: recognizedStudents() };
+    const task = { ...taskWithQuestions(configured ? "grading_setup" : "submissions_ready"), student_data: recognizedStudents() };
     const setup = { ...gradingSetup(), configured, grading_setup: configured ? { ...gradingSetup().suggested_setup!, teacher_notes: "Keep my saved settings" } : null };
     const grading = deferred<TaskStateSnapshot>();
     vi.mocked(getTaskState).mockResolvedValueOnce(taskState(configured ? "grading_setup" : "submissions_ready"))
+      .mockResolvedValueOnce(taskState(configured ? "grading_setup" : "submissions_ready"))
       .mockReturnValueOnce(grading.promise).mockResolvedValue(taskState("graded"));
     vi.mocked(getTask).mockResolvedValue(task);
     vi.mocked(getGradingSetup).mockResolvedValue(setup);
@@ -370,7 +695,7 @@ describe("FrontierLiveDemoPage", () => {
     const user = userEvent.setup();
     renderLive("asg_demo123");
     await user.click(await screen.findByRole("button", { name: status === "error" ? "Retry failed items" : "Continue grading" }));
-    await waitFor(() => expect(startGrading).toHaveBeenCalledExactlyOnceWith("asg_demo123", expect.objectContaining({ retryScope: "failed_only", expectedWorkflowRevision: failed.workflow_revision, requestId: expect.any(String) })));
+    await waitFor(() => expect(startGrading).toHaveBeenCalledExactlyOnceWith("asg_demo123", { retryScope: "failed_only", expectedWorkflowRevision: failed.workflow_revision, requestId: expect.any(String) }));
     expect(await screen.findByRole("heading", { name: "See class performance from live scores" })).toBeVisible();
     expect(createTask).not.toHaveBeenCalled();
     expect(startQuestionPreparation).not.toHaveBeenCalled();
@@ -399,13 +724,13 @@ describe("FrontierLiveDemoPage", () => {
     const request = deferred<{ status: string; job_id: string }>();
     vi.mocked(getTaskState).mockResolvedValueOnce(failed).mockResolvedValueOnce({ ...failed, workflow_revision: 7 })
       .mockResolvedValue(taskState(submissions ? "submissions_ready" : "problems_ready"));
-    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(), student_data: submissions ? recognizedStudents() : {} });
+    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(submissions ? "submissions_ready" : "problems_ready"), student_data: submissions ? recognizedStudents() : {} });
     vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
     vi.mocked(retry).mockReturnValue(request.promise);
     const user = userEvent.setup();
     renderLive("asg_demo123");
     await user.dblClick(await screen.findByRole("button", { name: paused ? "Continue recognition" : "Retry failed items" }));
-    await waitFor(() => expect(retry).toHaveBeenCalledExactlyOnceWith({ taskId: "asg_demo123", jobId: "failed", recognitionProviderId: "demo:vision", expectedWorkflowRevision: 7, ...(paused ? { acknowledgePossibleDuplicateCall: true } : {}) }));
+    await waitFor(() => expect(retry).toHaveBeenCalledExactlyOnceWith({ taskId: "asg_demo123", jobId: "failed", recognitionProviderId: "demo:vision", expectedWorkflowRevision: 7, acknowledgePossibleDuplicateCall: true }));
     await act(async () => request.resolve({ status: "started", job_id: "retry" }));
     expect((await screen.findAllByRole("button", { name: submissions ? "Start grading" : "Continue to submissions" }))[0]).toBeEnabled();
     expect(screen.getByRole("heading", { name: "Live grading run" })).toBeVisible();
@@ -415,23 +740,52 @@ describe("FrontierLiveDemoPage", () => {
     expect(startGrading).not.toHaveBeenCalled();
   });
 
-  it("keeps a rejected retry recoverable without acknowledging an uncertain provider submission", async () => {
-    vi.mocked(getTaskState).mockResolvedValue({ ...taskState("error"), error: "provider_submit_uncertain", extract_job_id: "failed", last_failed_job_id: "failed" });
+  it.each(["questions", "submissions"] as const)("retries uncertain %s in the quick Demo without an extra confirmation", async stage => {
+    const submissions = stage === "submissions";
+    const retry = submissions ? retrySubmissionRecognition : retryQuestionPreparation;
+    const failed = { ...taskState("error"), workflow_revision: 7, error: "provider_submit_uncertain",
+      extract_job_id: submissions ? "done" : "failed", parse_job_id: submissions ? "failed" : null, last_failed_job_id: "failed" };
+    vi.mocked(getTaskState).mockResolvedValueOnce(failed).mockResolvedValueOnce(failed)
+      .mockResolvedValue(taskState(submissions ? "submissions_ready" : "problems_ready"));
+    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(submissions ? "submissions_ready" : "problems_ready"), student_data: submissions ? recognizedStudents() : {} });
     vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
-    vi.mocked(retryQuestionPreparation).mockRejectedValue(new client.APIError(409, "Conflict", { detail: { code: "provider_submit_uncertain" } }));
+    vi.mocked(retry).mockResolvedValue({ status: "started", job_id: "retry" });
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    expect(await screen.findByRole("button", { name: "Retry failed items" })).toBeEnabled();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    await user.dblClick(screen.getByRole("button", { name: "Retry failed items" }));
+    await waitFor(() => expect(retry).toHaveBeenCalledExactlyOnceWith({ taskId: "asg_demo123", jobId: "failed", recognitionProviderId: "demo:vision", expectedWorkflowRevision: 7, acknowledgePossibleDuplicateCall: true }));
+    expect((await screen.findAllByRole("button", { name: submissions ? "Start grading" : "Continue to submissions" }))[0]).toBeEnabled();
+    expect(createTask).not.toHaveBeenCalled();
+    expect(preflightProblemSource).not.toHaveBeenCalled();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(startGrading).not.toHaveBeenCalled();
+  });
+
+  it.each(["questions", "submissions"] as const)("keeps a rejected %s retry recoverable on the quick Demo", async stage => {
+    const submissions = stage === "submissions";
+    const retry = submissions ? retrySubmissionRecognition : retryQuestionPreparation;
+    vi.mocked(getTaskState).mockResolvedValue({ ...taskState("error"), error: "provider_submit_uncertain",
+      extract_job_id: submissions ? "done" : "failed", parse_job_id: submissions ? "failed" : null, last_failed_job_id: "failed" });
+    vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
+    vi.mocked(retry).mockRejectedValue(new client.APIError(409, "Conflict", { detail: { code: "provider_submit_uncertain" } }));
     const user = userEvent.setup();
     renderLive("asg_demo123");
     await user.click(await screen.findByRole("button", { name: "Retry failed items" }));
-    await waitFor(() => expect(retryQuestionPreparation).toHaveBeenCalledTimes(1));
-    expect(retryQuestionPreparation).toHaveBeenCalledWith(expect.not.objectContaining({ acknowledgePossibleDuplicateCall: true }));
+    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    expect(retry).toHaveBeenCalledWith(expect.objectContaining({ acknowledgePossibleDuplicateCall: true }));
     expect(await screen.findByRole("button", { name: "Retry failed items" })).toBeEnabled();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Live grading run" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Start over" })).toBeEnabled();
   });
 
   it("keeps a failed setup save on the Demo and starts only after an explicit successful retry", async () => {
-    const task = { ...taskWithQuestions(), student_data: recognizedStudents() };
-    vi.mocked(getTaskState).mockResolvedValueOnce(taskState("submissions_ready")).mockResolvedValue(taskState("graded"));
+    const task = { ...taskWithQuestions("submissions_ready"), student_data: recognizedStudents() };
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState("submissions_ready"))
+      .mockResolvedValueOnce(taskState("submissions_ready")).mockResolvedValueOnce(taskState("submissions_ready"))
+      .mockResolvedValue(taskState("graded"));
     vi.mocked(getTask).mockResolvedValue(task);
     vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
     vi.mocked(saveGradingSetup).mockRejectedValueOnce(new client.APIError(409, "Conflict", { detail: { code: "workflow_revision_conflict" } }))
@@ -452,7 +806,7 @@ describe("FrontierLiveDemoPage", () => {
   it("does not submit grading after leaving while the default setup is being saved", async () => {
     const saving = deferred<GradingSetupResponse>();
     vi.mocked(getTaskState).mockResolvedValue(taskState("submissions_ready"));
-    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions(), student_data: recognizedStudents() });
+    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions("submissions_ready"), student_data: recognizedStudents() });
     vi.mocked(getGradingSetup).mockResolvedValue(gradingSetup());
     vi.mocked(saveGradingSetup).mockReturnValue(saving.promise);
     const user = userEvent.setup();
@@ -466,7 +820,7 @@ describe("FrontierLiveDemoPage", () => {
   });
 
   it("checks current blocking issues before saving defaults or grading", async () => {
-    const task = { ...taskWithQuestions(), student_data: recognizedStudents() };
+    const task = { ...taskWithQuestions("submissions_ready"), student_data: recognizedStudents() };
     vi.mocked(getTaskState).mockResolvedValue(taskState("submissions_ready"));
     vi.mocked(getTask).mockResolvedValueOnce(task).mockResolvedValue({
       ...task, problem_data: { ...task.problem_data, q1: { ...task.problem_data.q1, stem: "" } },
@@ -687,7 +1041,9 @@ describe("FrontierLiveDemoPage", () => {
       workflow_revision: 0,
     });
     vi.mocked(startQuestionPreparation).mockResolvedValue({ status: "started", job_id: "job-questions" });
-    vi.mocked(getTask).mockResolvedValue(recognizedTask);
+    vi.mocked(getTask).mockImplementation(async () => ({ ...recognizedTask,
+      status: vi.mocked(startGrading).mock.calls.length ? "graded" : vi.mocked(parseSubmissions).mock.calls.length ? "submissions_ready" : "problems_ready",
+    }));
     vi.mocked(updateProblem).mockResolvedValue({ status: "ok", q_id: "q", problem: taskWithQuestions().problem_data.q1, workflow_revision: 5 });
     vi.mocked(updateStudentAnswer).mockImplementation(async (_taskId, studentId, qId, patch) => ({ status: "ok", stu_id: studentId, q_id: qId, answer: recognizedTask.student_data[studentId].stu_ans.find((answer) => answer.q_id === qId)!, workflow_revision: (patch.expected_workflow_revision ?? 0) + 1 }));
     vi.mocked(parseSubmissions).mockResolvedValue({ status: "started", job_id: "job-submissions" });
@@ -790,6 +1146,9 @@ function renderLive(taskId?: string) {
         <Route path="/tasks/:taskId" element={<>
           <p>Task details</p><Link to="/frontier/live?taskId=asg_demo123">Return to Demo</Link>
         </>} />
+        <Route path="/tasks/:taskId/:review" element={<>
+          <p>Existing review page</p><Link to="/frontier/live?taskId=asg_demo123">Return to Demo</Link>
+        </>} />
       </Routes>
     </MemoryRouter>
   </FrontierContext.Provider></I18nProvider>);
@@ -867,8 +1226,8 @@ function gradedResult(task: Task): TaskResultResponse {
   };
 }
 
-function taskWithQuestions(): Task {
-  const base = taskState("problems_ready");
+function taskWithQuestions(status: TaskStateSnapshot["status"] = "problems_ready"): Task {
+  const base = taskState(status);
   const problem = (qId: string, number: string, stem: string) => ({
     q_id: qId,
     number,
