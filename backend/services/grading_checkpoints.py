@@ -181,18 +181,19 @@ class GradingCheckpoints:
             if (trace := read_math_trace(expert)) is not None
         ]
         try:
+            checkpoint_event = None
             if traces:
-                # Expert checkpoints precede arbitration. Preserve its final
-                # evidence before the public result drops internal raw_output.
-                repository.record_event(
-                    self.run_id, worker_id=self.worker_id, level="info",
-                    message=MATH_TRACE_EVENT,
-                    payload={"math_grading_engine_version": MATH_GRADING_ENGINE_VERSION,
-                             "student_id": student_id, "q_id": correction.q_id,
-                             "score": correction.score, "synthesis_method": correction.synthesis_method,
-                             "experts": traces},
+                # Expert checkpoints precede arbitration. Final evidence and
+                # its reviewed score must become visible in one transaction.
+                checkpoint_event = (
+                    MATH_TRACE_EVENT,
+                    {"math_grading_engine_version": MATH_GRADING_ENGINE_VERSION,
+                     "student_id": student_id, "q_id": correction.q_id,
+                     "score": correction.score, "synthesis_method": correction.synthesis_method,
+                     "experts": traces},
                 )
-            repository.upsert_result(self.run_id, worker_id=self.worker_id, grade_result=result)
+            repository.upsert_result(self.run_id, worker_id=self.worker_id, grade_result=result,
+                                     checkpoint_event=checkpoint_event)
         except Exception as exc:
             raise CheckpointWriteError("question_checkpoint_failed") from exc
 

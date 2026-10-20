@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 
-for (const mode of ["individual", "overview-all", "detail-all", "advisory"]) for (const locale of ["zh-CN", "en-US"]) {
+for (const mode of ["individual", "overview-all", "detail-all", "advisory", "math-advisory"]) for (const locale of ["zh-CN", "en-US"]) {
   test(`${mode} ${locale}: confirmation, live results and queue stay consistent`, async ({ page }, testInfo) => {
     const zh = locale === "zh-CN", taskId = "asg_review_status";
     const errors: string[] = [];
@@ -17,13 +17,21 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory"]) for
       localStorage.setItem("smartai_locale", locale);
       localStorage.setItem("smartai_token", "synthetic-teacher-token");
     }, locale);
-    const problem_data = Object.fromEntries([1, 2, 3, 4].map(n => [`q${n}`, { q_id: `q${n}`, number: String(n), stem: `Synthetic question ${n}.`, criterion: "Reasoning rubric.", max_score: 10 }]));
+    const sharedRule = zh ? "本轮统一按首次错误扣分，后续正确推导保留过程分。" : "Deduct for the first error; credit correct subsequent reasoning.";
+    const problem_data = Object.fromEntries([1, 2, 3, 4].map(n => [`q${n}`, {
+      q_id: `q${n}`, number: String(n), stem: `Synthetic question ${n}.`, criterion: "Reasoning rubric.", max_score: 10,
+      review_status: "confirmed", max_score_review_status: "confirmed",
+      preparation_issues: mode === "math-advisory" && n === 1 ? [{
+        issue_id: "shared-plan", field: "rubric", code: "math_rubric_advisory", severity: "warning", status: "open",
+        details: { message: sharedRule },
+      }] : [],
+    }]));
     const student_data = { S1: { stu_id: "S1", stu_name: "Example", identity_status: "matched", stu_ans: [1, 2, 3, 4].map(n => ({ q_id: `q${n}`, content: "Synthetic answer.", review_status: "confirmed", flag: [] })) } };
     const corrections = [6, 8, 4, 10].map((score, i) => ({ q_id: `q${i + 1}`, score, provisional_score: score, max_score: 10,
-      confidence: i === 0 || i === 2 ? (mode === "advisory" ? .95 : .2) : i === 1 ? .5 : .95, comment: "Original explanation.", steps: [], requires_human_review: i === 0 || i === 2,
-      review_reasons: i === 0 || i === 2 ? ["high_indecisiveness"] : [], initial_review_reasons: [] as string[],
+      confidence: i === 0 || i === 2 ? (mode.endsWith("advisory") ? .95 : .2) : i === 1 ? .5 : .95, comment: "Original explanation.", steps: [], requires_human_review: i === 0 || i === 2,
+      review_reasons: i === 0 || i === 2 ? [mode === "math-advisory" ? "math_scoring_uncertainty" : "high_indecisiveness"] : [], initial_review_reasons: [] as string[],
       review_status: "pending", teacher_score: null as number | null, teacher_comment: "",
-      expert_results: (i === 0 ? [10, 6] : i === 2 ? [0, 8] : [score, score]).map((value, index) => ({ provider: `expert-${index}`, score: i === 1 && index === 1 ? 0 : value,
+      expert_results: (mode === "math-advisory" ? [score, score] : i === 0 ? [10, 6] : i === 2 ? [0, 8] : [score, score]).map((value, index) => ({ provider: `expert-${index}`, score: i === 1 && index === 1 ? 0 : value,
         max_score: 10, confidence: .95, comment: "Evidence.", steps: [], error_kind: i === 1 && index === 1 ? "general" : null })) }));
     const task = { task_id: taskId, owner_id: "teacher", name: "Review consistency", status: "graded", workflow_revision: 1,
       final_result_version: 0, problem_data, student_data, problem_count: 4, student_count: 1, created_at: 1, updated_at: 1, kb_docs: {} };
@@ -76,12 +84,26 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory"]) for
       throw new Error(`Unexpected request ${request.method()} ${path}`);
     });
     const root = `/tasks/${taskId}`;
+    if (mode === "math-advisory") {
+      await page.goto(`${root}/questions`);
+      const questionQueue = page.getByRole("region", { name: zh ? "待复核队列" : "Review queue" });
+      await expect(questionQueue).toContainText(sharedRule);
+      await expect(questionQueue.getByRole("link")).toHaveCount(1);
+      await expect(questionQueue.getByRole("tab", { name: zh ? "建议处理 (1)" : "Suggested review (1)", exact: true })).toBeVisible();
+      expect(writes).toEqual([]);
+    }
     // Partial experts and disagreement are suggestions; valid results remain accessible.
     await page.goto(`${root}/review`);
     const queue = page.getByRole("region", { name: zh ? "待复核队列" : "Review queue" });
     await expect(queue.getByRole("link")).toHaveCount(3);
     await expect(queue.getByRole("link", { name: /Q2/ })).toHaveCount(1);
     await expect(queue.getByRole("link", { name: /Q4/ })).toHaveCount(0);
+    if (mode === "math-advisory") {
+      await expect(queue).toContainText(zh ? "评分依据仍有疑点，建议核对" : "Scoring evidence needs checking");
+      await page.getByRole("button", { name: zh ? "查看结果分析" : "View Results & Analysis", exact: true }).click();
+      await expect(page).toHaveURL(`${root}/results`);
+      expect(writes).toEqual([]);
+    }
     if (mode === "advisory") {
       await expect(queue).toContainText(zh ? "建议处理" : "Suggested review");
       await page.screenshot({ path: testInfo.outputPath("optional-review-queue.png"), fullPage: true });
@@ -100,9 +122,12 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory"]) for
       await expect(queue.getByRole("link")).toHaveCount(3);
     }
     await page.goto(`${root}/review${mode === "overview-all" ? "" : "/S1/q1"}`);
-    if (mode === "individual" || mode === "advisory") {
+    if (mode === "individual" || mode.endsWith("advisory")) {
       for (const id of ["q1", "q2", "q3"]) {
         const card = page.locator(`[data-question-id="${id}"]`);
+        if (mode === "math-advisory" && id !== "q2") {
+          await expect(card).toContainText(zh ? "评分依据仍有疑点，建议核对" : "Scoring evidence needs checking");
+        }
         await card.getByRole("button", { name: zh ? /待确认/ : /Confirm review/ }).click();
         if (id !== "q3") await expect(card.getByRole("button", { name: zh ? /已确认/ : /Confirmed/ })).toBeVisible();
         else await expect(page).toHaveURL(`${root}/review`);
@@ -111,7 +136,7 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory"]) for
       await page.getByRole("button", { name: zh ? "全部确认" : "Confirm all", exact: true }).click();
       await expect.poll(() => writes.length).toBe(mode === "overview-all" ? 3 : 4);
     }
-    const reviewWrites = mode === "individual" || mode === "advisory" ? 3 : mode === "overview-all" ? 3 : 4;
+    const reviewWrites = mode === "individual" || mode.endsWith("advisory") ? 3 : mode === "overview-all" ? 3 : 4;
     await page.getByRole("button", { name: zh ? "查看结果分析" : "View Results & Analysis", exact: true }).click();
     await expect(page).toHaveURL(`${root}/results`);
     expect(writes).toHaveLength(reviewWrites);

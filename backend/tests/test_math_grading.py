@@ -302,6 +302,35 @@ def test_invalid_evidence_and_ledgers_are_rejected(mutate, error):
         grading.score_assessment(draft, plan_for(), "6*7=41")
 
 
+@pytest.mark.parametrize("case", ["unquoted_credit", "blank_quote", "blank_reason", "blank_holistic"])
+def test_unsubstantiated_credit_and_empty_evidence_are_rejected(case):
+    draft, plan = assessment(), plan_for()
+    if case == "unquoted_credit":
+        draft.awards[0].claim_ids = []
+    elif case == "blank_quote":
+        draft.claims[0].quote = " "
+    elif case == "blank_reason":
+        draft.awards[0].reason = " "
+    else:
+        plan = plan_for(mode="holistic")
+        draft = grading.MathAssessment(route_id="main", route_reason="Whole rubric",
+                                       score=8, rationale=" ", comment=" ")
+    with pytest.raises(ValueError):
+        grading.score_assessment(draft, plan, "6*7=41 ")
+
+
+def test_missing_item_may_have_zero_credit_without_a_fabricated_quote():
+    draft = assessment()
+    draft.awards[1].claim_ids = []
+    draft.awards[1].reason = "The required final result was not supplied."
+    assert grading.score_assessment(draft, plan_for(), "6*7=41")[0] == 8
+
+
+def test_direct_grade_rejects_whitespace_only_rationale():
+    with pytest.raises(ValueError):
+        grading.DirectMathGrade(score=8, rationale=" \n ", comment="Partial credit.")
+
+
 def test_deductions_apply_only_teacher_floor_and_no_negative_frontend_steps():
     plan = plan_for(mode="deductions", floor=6, nonblank=True)
     draft = grading.MathAssessment(route_id="main", route_reason="Teacher deduction rule",

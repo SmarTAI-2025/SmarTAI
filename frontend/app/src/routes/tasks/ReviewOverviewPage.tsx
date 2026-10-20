@@ -18,7 +18,7 @@ import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
-import { buildResultsModel, hasPartialExperts, effectiveCorrectionScore, formatConfidence, formatPercent, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
+import { buildResultsModel, hasPartialExperts, effectiveCorrectionScore, formatConfidence, formatPercent, correctionReviewReasonIds, reviewReasonLabel, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
 import { collectResultReviewItems, type ReviewItem } from "@/components/tasks/resultsReviewModel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
@@ -484,6 +484,7 @@ function queueReason(locale: Locale, item: ReviewItem): string {
   if (item.category === "low-confidence") return locale === "zh-CN" ? "置信度较低 · 建议核对" : "Low confidence · review suggested";
   if (item.category === "expert-disagreement") return copy(locale, "disagreementReason");
   if (item.category === "score-anomaly") return copy(locale, "anomalyReason");
+  if (correctionReviewReasonIds(item.correction).includes("math_scoring_uncertainty")) return reviewReasonLabel("math_scoring_uncertainty", locale);
   return copy(locale, "reviewReason");
 }
 

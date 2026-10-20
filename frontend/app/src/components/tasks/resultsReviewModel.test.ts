@@ -78,6 +78,17 @@ describe("grading review attention", () => {
     expect(correctionReviewAttention({ ...value, teacher_score: score, review_status: "confirmed" })).toBe("none");
   });
 
+  it.each(["zh-CN", "en-US"] as const)("explains math evidence concerns without blocking a valid score (%s)", locale => {
+    const value = correction({ confidence: .95, review_reasons: ["math_scoring_uncertainty"] });
+    expect(correctionReviewAttention(value)).toBe("advisory");
+    expect(correctionReviewNextBlocked(value)).toBe(false);
+    expect(correctionReviewNotes(value, locale)).toEqual([{
+      severity: "advisory",
+      label: locale === "zh-CN" ? "评分依据仍有疑点，建议核对" : "Scoring evidence needs checking",
+    }]);
+    expect(correctionReviewAttention({ ...value, teacher_score: value.score, review_status: "confirmed" })).toBe("none");
+  });
+
   it("excludes optional confidence checks from required counts while retaining explicit confidence-query data", () => {
     const corrections = [correction({ q_id: "normal", confidence: 0.6 }), correction({ q_id: "optional", confidence: 0.4 }), correction({ q_id: "missing", score: null, provisional_score: null })];
     const model = buildResultsModel(undefined, { task_id: "T1", status: "graded", timestamp: 0, results: [{ student_id: "s1", student_name: "Sample", corrections }] } as Parameters<typeof buildResultsModel>[1]);

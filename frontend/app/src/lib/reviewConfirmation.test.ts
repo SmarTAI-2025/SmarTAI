@@ -1,11 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { answerReviewBlocked, answerReviewNextBlocked, questionReviewBlocked, questionReviewNextBlocked, questionReviewIssues, questionReviewBlockers, questionIssueNeedsReview, submissionReviewBlockers, submissionConfirmationBlockers, studentIdentityReviewBlocked } from "./reviewConfirmation";
+import { answerReviewBlocked, answerReviewNextBlocked, questionReviewBlocked, questionReviewNextBlocked, questionReviewIssues, questionReviewBlockers, questionReviewConfirmed, questionIssueNeedsReview, recognitionIssueLabel, submissionReviewBlockers, submissionConfirmationBlockers, studentIdentityReviewBlocked } from "./reviewConfirmation";
 import type { Task, ProblemInfo, StudentAnswerInfo, PreparationIssue, StudentSubmission } from "@/types";
 
 const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id: "q1", number: "1", type: "short", stem: "Question text", criterion: "Scoring rubric", reference_answer: "Reference answer", max_score: 10, ...overrides });
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
+  it("keeps a new shared rubric explanation visible after material confirmation without reopening its gate", () => {
+    const warning = issue({
+      code: "math_rubric_advisory", field: "rubric",
+      details: { message: "本轮 AI 评分解释：原有明确规则优先；后续错误不重复扣分。" },
+    });
+    const problem = question({
+      review_status: "confirmed", max_score_review_status: "confirmed",
+      preparation_issues: [warning],
+    });
+    expect(questionReviewIssues(problem)).toEqual([warning]);
+    expect(recognitionIssueLabel(warning, "zh-CN")).toBe(warning.details?.message);
+    expect(questionReviewConfirmed(problem)).toBe(true);
+    expect(questionReviewBlocked(problem)).toBe(false);
+    expect(questionReviewNextBlocked(problem)).toBe(false);
+    expect(questionReviewBlockers([problem], "T1", "zh-CN")).toEqual([]);
+  });
+
   it("allows a genuine blank response but blocks failed recognition", () => {
     const blank = {q_id:"q1", number:"1", type:"short", content:"", flag:[]} as StudentAnswerInfo;
     expect(answerReviewBlocked(blank)).toBe(false);

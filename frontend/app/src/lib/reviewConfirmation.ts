@@ -45,6 +45,7 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
 }
 
 export function recognitionIssueLabel(issue: PreparationIssue, locale: string): string | null {
+  if (issue.code === "math_rubric_advisory" && typeof issue.details?.message === "string") return issue.details.message;
   if (issue.details?.review_display_reason === "empty_stem") return locale === "zh-CN"
     ? "题干为空，请对照原件补齐并确认。" : "Question text is empty. Complete it against the source and confirm.";
   if (issue.details?.review_display_reason === "missing_rubric") return locale === "zh-CN"
@@ -89,7 +90,7 @@ export function submissionRecognitionIncomplete(task?: Pick<Task, "submission_so
 export function questionReviewConfirmed(problem: ProblemInfo): boolean {
   return problem.review_status === "confirmed" && !questionReviewBlocked(problem) &&
     problem.max_score_review_status === "confirmed" &&
-    !(problem.preparation_issues ?? []).some(issue => issue.status === "open");
+    !(problem.preparation_issues ?? []).some(issue => issue.status === "open" && issue.code !== "math_rubric_advisory");
 }
 export interface ReviewBlocker { label: string; href: string }
 export function questionReviewBlocked(problem: ProblemInfo): boolean {
@@ -120,7 +121,7 @@ export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
   const confirmed = problem.review_status === "confirmed";
   const issues: PreparationIssue[] = (problem.preparation_issues ?? []).flatMap(issue => {
     const severity = questionIssueSeverity(issue, problem);
-    if (severity === "none" || (confirmed && severity === "advisory")) return [];
+    if (severity === "none" || (confirmed && severity === "advisory" && issue.code !== "math_rubric_advisory")) return [];
     const confidence = questionConfidence(issue, problem);
     return [{ ...issue, severity: severity === "blocking" ? "blocking" as const : "warning" as const,
       details: { ...issue.details, ...(confidence !== null ? { confidence } : {}),

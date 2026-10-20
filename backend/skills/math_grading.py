@@ -13,7 +13,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.models import ExpertResult, GradingConfidence, StepScore
 from backend.skills.base import (
@@ -109,6 +109,13 @@ class DirectMathGrade(BaseModel):
     rationale: str = Field(min_length=1)
     comment: str
 
+    @field_validator("rationale")
+    @classmethod
+    def require_scoring_evidence(cls, value):
+        if not value.strip():
+            raise ValueError("direct_grade_requires_scoring_evidence")
+        return value
+
 
 class ExpertRevision(BaseModel):
     expert_index: int = Field(ge=0)
@@ -140,7 +147,7 @@ def _claim_map(assessment: MathAssessment, answer: str, plan) -> dict[str, Claim
         raise ValueError("duplicate_or_empty_claim_id")
     item_ids = {item.id for route in plan.routes for item in route.items}
     for claim in claims.values():
-        if claim.quote not in answer or not set(claim.item_ids) <= item_ids:
+        if not claim.quote.strip() or claim.quote not in answer or not set(claim.item_ids) <= item_ids:
             raise ValueError("claim_not_in_student_answer_or_rubric")
         if not set(claim.depends_on) <= claims.keys():
             raise ValueError("missing_claim_dependency")
@@ -177,7 +184,8 @@ def score_assessment(assessment: MathAssessment, plan, answer: str) -> tuple[flo
             raise ValueError("missing_duplicate_or_mixed_awards")
         for item_id, item in items.items():
             award = awards[item_id]
-            if award.score > item.points or not set(award.claim_ids) <= claims.keys():
+            if (award.score > item.points or not set(award.claim_ids) <= claims.keys()
+                    or not award.reason.strip() or (award.score > 0 and not award.claim_ids)):
                 raise ValueError("invalid_award")
             quotes = " / ".join(claims[key].quote for key in award.claim_ids)
             desc = f"{item.description}\n{quotes}\n{award.reason}".strip()
@@ -196,6 +204,8 @@ def score_assessment(assessment: MathAssessment, plan, answer: str) -> tuple[flo
         total = _points(plan.max_score)
         reasons = []
         for deduction in assessment.deductions:
+            if not deduction.reason.strip():
+                raise ValueError("deduction_requires_scoring_evidence")
             if deduction.error_id in seen_errors or not deduction.error_id:
                 raise ValueError("duplicate_deduction")
             seen_errors.add(deduction.error_id)
@@ -234,6 +244,8 @@ def score_assessment(assessment: MathAssessment, plan, answer: str) -> tuple[flo
                          total == _points(plan.max_score))]
     if total > _points(plan.max_score):
         raise ValueError("score_exceeds_question")
+    if any(not desc.strip() for desc, _, _ in descriptions):
+        raise ValueError("missing_scoring_evidence")
     floor = _points(route.minimum_score) if (route.minimum_condition == "always" or answer.strip()) else Decimal(0)
     total = max(total, floor, Decimal(0))
     score = _rounded(total, plan.max_score)

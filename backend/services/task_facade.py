@@ -510,8 +510,15 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
         "updated_at": max(assignment.updated_at, workflow.updated_at),
     }
     if full:
+        math_plans = _math_plans_for_projection(
+            latest_run.id if latest_run else None, questions,
+            grading_setup=workflow.grading_setup or {},
+        )
         payload["problem_data"] = {
-            question.q_id: _serialize_problem(question) for question in questions
+            question.q_id: _serialize_problem(
+                question, math_plan=math_plans.get(question.q_id),
+                feedback_language=(workflow.grading_setup or {}).get("feedback_language", "zh"),
+            ) for question in questions
         }
         payload["student_data"] = {} if incomplete_submissions else _serialize_student_data(
             task_id, owner_id, submissions
@@ -855,7 +862,101 @@ def _workflow_grading_failure_code(workflow, run) -> str | None:
     return _grading_failure_code(run)
 
 
-def _serialize_problem(question) -> dict:
+def _math_plans_for_projection(run_id, questions, *, grading_setup=None) -> dict:
+    """Only the selected run's unchanged inputs may explain current questions."""
+    from backend.db.models import GradingRunEventRecord
+    from backend.services.math_grading_context import ENGINE_EVENT, PLAN_EVENT, matching_math_plans, plans_from_snapshots
+
+    if run_id is None:
+        return {}
+    frozen = workflow_repository.get_run_setup(run_id)
+    if frozen is None or (grading_setup is not None and frozen.setup != grading_setup):
+        return {}
+    # A question read must not fetch every student's private evidence trace.
+    with session_scope() as session:
+        events = [{"message": row.message, "payload": row.payload} for row in session.scalars(
+            select(GradingRunEventRecord).where(
+                GradingRunEventRecord.grading_run_id == run_id,
+                GradingRunEventRecord.message.in_([ENGINE_EVENT, PLAN_EVENT]),
+            ).order_by(GradingRunEventRecord.sequence)
+        )]
+    return matching_math_plans(questions, plans_from_snapshots(frozen.input_manifest or {}, events))
+
+
+def _math_rubric_advisory(question, plan, language: str) -> list[dict]:
+    """Project readable shared rules, never the private scoring graph or source."""
+    if plan is None or not any(text.strip() for text in plan.advisories):
+        return []
+    from backend.services.math_rubric_plan import _FALLBACK_ADVISORY, _FOLLOW_THROUGH, _NUMERICAL_POLICY
+
+    zh = language == "zh"
+    presentation = (question.source or {}).get("presentation") or {}
+    generated = "criterion" in (presentation.get("ai_completion_provenance") or {})
+    original_source = ("AI生成" if generated else "提供的材料") if zh else (
+        "AI-generated material" if generated else "provided material"
+    )
+    advice = [
+        ("未能可靠拆分评分项，本轮按原评分标准整体判断；所有学生使用同一解释，无需额外确认。"
+         if zh else text) if text == _FALLBACK_ADVISORY else text
+        for text in plan.advisories if text.strip()
+    ]
+    # The original rubric remains in its existing field. Remove only our own
+    # envelope, keeping the model's actual shared interpretation verbatim.
+    _, separator, explanation = plan.effective_criterion.partition("\n\nAI interpretation:\n")
+    explanation = explanation.partition("\n\nExplicit original rules take precedence")[0].strip() if separator else ""
+    fallback = _FALLBACK_ADVISORY in plan.advisories
+    if fallback and zh:
+        explanation = (
+            "保留原标准的明确分值、方法限制、扣分、上限及有条件保底；不按学生步骤数平均分配。"
+            "标准简略时按题目要求统一判断部分得分；分值冲突时在题目满分内保留原标准的相对重点。"
+        )
+    lines = [
+        *advice,
+        (f"本轮 AI 评分解释（原标准来自{original_source}；原有明确规则优先，并非教师已确认的新标准）："
+         if zh else f"AI scoring interpretation for this run (original rubric from {original_source}; "
+         "explicit original rules take precedence; AI additions are not teacher-confirmed):"),
+        explanation,
+    ]
+    if not fallback:
+        for route in plan.routes:
+            mode = ({"points": "得分制", "deductions": "扣分制", "holistic": "整体评分"} if zh else
+                    {"points": "Points awarded", "deductions": "Points deducted", "holistic": "Holistic"})[route.mode]
+            items = "; ".join(
+                f"{item.description}: {item.points:g} "
+                + (f"分（{'原文' if item.source == 'provided' else 'AI解释'}）" if zh else
+                   f"points ({'original rule' if item.source == 'provided' else 'AI interpretation'})")
+                for item in route.items
+            )
+            lines.append(f"{mode}: {route.description} — {route.applies_when}" + (f": {items}" if items else ""))
+            if route.minimum_score:
+                condition = ("非空作答" if route.minimum_condition == "nonblank" else "所有作答") if zh else (
+                    "nonblank answers" if route.minimum_condition == "nonblank" else "all answers"
+                )
+                lines.append(f"{condition}最低 {route.minimum_score:g} 分" if zh else
+                             f"Minimum {route.minimum_score:g} points for {condition}.")
+    follow_through = (
+        "按原标准区分首次错误、沿错误中间值继续正确推导和新的独立错误，不统一规定后续得满分或半分；明确要求正确结果的评分项仍须满足。"
+        if zh and plan.follow_through == _FOLLOW_THROUGH else plan.follow_through
+    )
+    numerical = (
+        "保留题目的定义域、变量假设、单位、精度及积分常数要求；允许等价方法，除非原标准指定方法。"
+        "π、e、i 可为数值常数；不自行添加容差，工具无法核验不等于答错。"
+        if zh and plan.numerical_policy == _NUMERICAL_POLICY else plan.numerical_policy
+    )
+    lines.extend([
+        follow_through, numerical,
+        "如需调整，请在本题原有评分标准中修改。" if zh else
+        "To change these rules, edit this question's existing rubric.",
+    ])
+    return [{
+        "issue_id": f"math-rubric:{question.q_id}:{plan.plan_id}",
+        "q_id": question.q_id, "field": "rubric", "code": "math_rubric_advisory",
+        "severity": "warning", "status": "open",
+        "details": {"message": "\n".join(line for line in lines if line)},
+    }]
+
+
+def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> dict:
     presentation = dict((question.source or {}).get("presentation") or {})
     # Older manually entered drafts used a value outside the public contract.
     # Normalize on read so their details remain usable without rewriting data.
@@ -897,7 +998,10 @@ def _serialize_problem(question) -> dict:
         "test_cases": question.test_cases,
         "material_provenance": presentation.get("material_provenance", {}),
         "ai_completion_provenance": presentation.get("ai_completion_provenance", {}),
-        "preparation_issues": _effective_question_issues(presentation),
+        "preparation_issues": [
+            *_effective_question_issues(presentation),
+            *_math_rubric_advisory(question, math_plan, feedback_language),
+        ],
     }
 
 
@@ -5583,6 +5687,7 @@ def _run_snapshot_payload(*, task_id: str, owner_id: str, run_id: str) -> dict:
     questions = grading_runs._questions_for_run(
         assignment_id=task_id, frozen_setup=frozen_setup,
     )
+    math_plans = _math_plans_for_projection(run_id, questions)
 
     presentations = workflow_repository.list_student_presentations(task_id)
     frozen_manifest = (frozen_setup.input_manifest if frozen_setup else {}) or {}
@@ -5688,7 +5793,10 @@ def _run_snapshot_payload(*, task_id: str, owner_id: str, run_id: str) -> dict:
     return {
         "results": rendered_results,
         "problem_data": {
-            question.q_id: _serialize_problem(question) for question in questions
+            question.q_id: _serialize_problem(
+                question, math_plan=math_plans.get(question.q_id),
+                feedback_language=((frozen_setup.setup if frozen_setup else {}) or {}).get("feedback_language", "zh"),
+            ) for question in questions
         },
         "student_data": student_data,
     }

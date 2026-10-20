@@ -1200,13 +1200,16 @@ def persisted_result_counters(run_id: str) -> tuple[int, int]:
 
 
 def upsert_result(run_id: str, *, worker_id: str,
-                  grade_result: education.GradeResultDTO, inherited_review: dict | None = None) -> education.GradeResultDTO:
+                  grade_result: education.GradeResultDTO, inherited_review: dict | None = None,
+                  checkpoint_event: tuple[str, dict] | None = None) -> education.GradeResultDTO:
     """Persist one graded (run, revision, question) result. AI columns are immutable
     once written; re-grading the same triple is rejected rather than overwritten.
 
     The live lease and frozen membership checks share this transaction with the
     insert. A stale worker therefore cannot add a row after cancellation,
-    completion, release, or lease takeover.
+    completion, release, or lease takeover. Optional final evidence is committed
+    with the result, so stop/retry cannot observe a reviewed trace without its
+    corresponding score and reconstruct an older expert vote.
     """
     now = time.time()
     with session_scope() as session:
@@ -1323,6 +1326,18 @@ def upsert_result(run_id: str, *, worker_id: str,
                 new_score=score, new_comment=inherited_review.get("new_comment", ""),
                 comment=inherited_review.get("new_comment", ""),
                 confirmed=bool(inherited_review.get("confirmed")), review_sequence=1, created_at=now,
+            ))
+            session.flush()
+        if checkpoint_event is not None:
+            message, payload = checkpoint_event
+            next_seq = (session.scalar(
+                select(func.max(GradingRunEventRecord.sequence)).where(
+                    GradingRunEventRecord.grading_run_id == run_id
+                )
+            ) or 0) + 1
+            session.add(GradingRunEventRecord(
+                id=_new_event_id(), grading_run_id=run_id, sequence=next_seq,
+                level="info", message=message, payload=payload, created_at=now,
             ))
             session.flush()
         return _result_to_dto(record)

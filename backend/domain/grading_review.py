@@ -75,6 +75,8 @@ def review_state(correction: dict) -> tuple[bool, bool]:
                                           *(correction.get("initial_review_reasons") or [])]
                for part in reason.split(",")}
     pending = blocked or (not reviewed and (low_confidence or (not expert_scores and confidence_needs_attention(conf))
-                                            or disagreement or partial or bool(reasons & {"partial_experts", "degraded_to_single"})))
+                                            or disagreement or partial or bool(reasons & {
+                                                "partial_experts", "degraded_to_single", "math_scoring_uncertainty",
+                                            })))
     return pending, reviewed
 

@@ -149,7 +149,23 @@ class AllExpertsFailed(Exception):
 async def run_multi_expert(**kwargs) -> Correction:
     from backend.skills.math_grading import math_review_scope
     with math_review_scope():
-        return await _run_multi_expert(**kwargs)
+        return _apply_math_review_advisory(await _run_multi_expert(**kwargs))
+
+
+def _apply_math_review_advisory(correction: Correction) -> Correction:
+    """Keep a residual evidence concern visible without changing score/confidence."""
+    from backend.skills.math_grading import read_math_trace
+
+    for expert in correction.expert_results:
+        trace = read_math_trace(expert) if _is_successful_expert(expert) else None
+        assessment = trace.get("assessment") if trace else None
+        if isinstance(assessment, dict) and assessment.get("needs_review") is True:
+            correction.requires_human_review = True
+            correction.review_reasons = list(dict.fromkeys([
+                *correction.review_reasons, "math_scoring_uncertainty",
+            ]))
+            break
+    return correction
 
 
 async def _run_multi_expert(
@@ -601,7 +617,7 @@ def _weighted_average_fallback(
 
     final_score = min(max(float(weighted_score.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)), 0.0), problem.max_score)
     from backend.skills.math_grading import weighted_math_steps
-    return Correction(
+    return _apply_math_review_advisory(Correction(
         q_id=problem.q_id,
         type=problem.type,
         score=final_score,
@@ -611,7 +627,7 @@ def _weighted_average_fallback(
         steps=weighted_math_steps(expert_results, weights, problem.max_score, final_score),
         expert_results=expert_results + failures,
         synthesis_method="weighted_average",
-    )
+    ))
 
 
 def _expert_to_correction(
@@ -628,7 +644,7 @@ def _expert_to_correction(
     accordion, but they do NOT contribute to score/comment.
     """
     expert_results = [expert] + list(extra_experts or [])
-    return Correction(
+    return _apply_math_review_advisory(Correction(
         q_id=q_id,
         type=q_type,
         score=round_ai_score(expert.score, expert.max_score),
@@ -640,4 +656,4 @@ def _expert_to_correction(
         logs=expert.logs,
         expert_results=expert_results,
         synthesis_method=synthesis_method,
-    )
+    ))

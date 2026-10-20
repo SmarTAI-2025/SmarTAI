@@ -1,7 +1,9 @@
 """Frozen rubric plans survive retries without mixing old scoring engines."""
 import asyncio
 import json
+from copy import deepcopy
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import delete, select
@@ -14,8 +16,10 @@ from backend.domain.errors import VersionConflict
 from backend.models import Correction, ExpertResult, ProblemInfo, StepScore, TaskGradingSetup
 from backend.services import grading_adapter, math_grading_context as context
 from backend.services import math_rubric_plan as rubric
+from backend.services import task_facade
 from backend.services.grading_checkpoints import CheckpointWriteError, MATH_TRACE_EVENT, saved_experts
 from backend.tests.test_grading_checkpoints import prepare, retry, stop
+from backend.tests.test_postgres_integration import pg_database  # noqa: F401
 from backend.tests.test_task_grading_retry import case, finish, start  # noqa: F401
 
 
@@ -72,6 +76,188 @@ def final_math_correction(question, plan, provider_id="provider"):
     return Correction(q_id=question.q_id, type=question.type, score=9, max_score=10,
         confidence=.9, comment="Rechecked.", steps=[step], expert_results=experts,
         synthesis_method="multi_sample")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("samples", [1, 2])
+@pytest.mark.parametrize("residual_concern", [True, False])
+async def test_actual_math_review_advisory_survives_projection_and_teacher_confirmation(
+    case, monkeypatch, samples, residual_concern,
+):
+    from backend.agents.grading_agent import _grade_single_answer
+    from backend.domain.grading_review import review_state
+    from backend.models import StudentAnswerInfo
+    from backend.skills import math_grading as skill
+    from backend.tests.test_multi_expert_robustness import _FakeProvider, _FakeRegistry
+
+    run_id = start(case, f"residual-review-{samples}-{residual_concern}")["job_id"]
+    checkpoints, questions, revisions, setup = prepare(case, run_id)
+    question, student = questions[0], revisions[0][1]
+    p = context.problem_from_question(question)
+    plan = rubric.fallback_math_rubric_plan(p)
+    checkpoints.save_math_plan(p, plan)
+    draft = skill.MathAssessment(
+        route_id="holistic", route_reason="Use the whole original rubric.",
+        claims=[skill.Claim(id="s1", quote="4", verdict="supported", reason="The result is stated.")],
+        score=8, confidence=.95, rationale="The conclusion earns credit; the omitted condition needs checking.",
+        comment="8 points; check the omitted condition.", needs_review=True,
+    )
+    reviewed = draft.model_copy(update={"needs_review": residual_concern})
+    calls = []
+
+    async def model_call(_provider, **kwargs):
+        calls.append(kwargs["output_model"])
+        if kwargs["output_model"] is skill.ExpertReview:
+            result = skill.ExpertReview(revisions=[skill.ExpertRevision(
+                expert_index=index, source_quote="4", reason="Checked the stated conclusion.",
+                assessment=reviewed,
+            ) for index in range(samples)])
+        else:
+            assert kwargs["output_model"] is skill.MathAssessment
+            result = draft if len(calls) <= samples else reviewed
+        return result.model_copy(deep=True), SimpleNamespace(content="{}", duration_ms=1)
+
+    monkeypatch.setattr(skill, "structured_llm_call", model_call)
+    monkeypatch.setattr(skill.kb_tool, "retrieve_for_grading", AsyncMock(return_value=[]))
+    provider = _FakeProvider(setup.setup["selected_provider_ids"][0])
+    with context.math_plans_context({p.q_id: plan}):
+        correction = await _grade_single_answer(
+            problem=p, answer=StudentAnswerInfo(q_id=p.q_id, number=p.number, type=p.type, content="4"),
+            student_id=student, registry=_FakeRegistry([provider]), multi_sample_n=samples,
+            aggregation_method="weighted_average",
+        )
+    assert len(calls) == samples + 1
+    assert correction.score == 8 and correction.confidence == .95
+    assert correction.review_reasons == (["math_scoring_uncertainty"] if residual_concern else [])
+    checkpoints.save_correction(student, correction)
+    grades.mark_completed(run_id, worker_id="checkpoint-test", completed=1, failed=1)
+    result, = grades.list_results_for_run(run_id)
+    public = task_facade._serialize_correction(result)
+    assert public["score"] == 8 and public["confidence"] == .95
+    assert all(expert["raw_output"] is None for expert in public["expert_results"])
+    assert review_state(public) == (residual_concern, False)
+    assert not task_facade._correction_review_blocks_finalization(result)
+    response = task_facade.update_correction_review(
+        task_id=case[0], owner_id=case[1], display_student_id=student, q_id=p.q_id,
+        teacher_score=8, teacher_comment=correction.comment, confirm=True,
+        expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision,
+    )
+    assert review_state(response["correction"]) == (False, True)
+    assert response["correction"]["initial_review_reasons"] == public["initial_review_reasons"]
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("ai_original", [True, False])
+def test_question_advisory_projects_once_without_mutating_source_or_input_identity(case, language, ai_original):
+    flow = workflows.get_live_workflow(case[0], owner_id=case[1])
+    workflows.update_workflow(case[0], owner_id=case[1], grading_setup={
+        **flow.grading_setup, "feedback_language": language,
+    })
+    with session_scope() as session:
+        question = session.scalar(select(AssignmentQuestionRecord).where(
+            AssignmentQuestionRecord.assignment_id == case[0], AssignmentQuestionRecord.q_id == "q1",
+        ))
+        source = deepcopy(question.source or {})
+        presentation = source.setdefault("presentation", {})
+        presentation.update(review_status="confirmed", max_score_review_status="confirmed")
+        if ai_original:
+            presentation["ai_completion_provenance"] = {"criterion": {"source_kind": "ai_generated"}}
+        question.source = source
+    run_id = start(case, f"rubric-advice-{language}-{ai_original}")["job_id"]
+    checkpoints, questions, _, frozen = prepare(case, run_id)
+    original_manifest = deepcopy(frozen.input_manifest)
+    q = questions[0]
+    original_source = deepcopy(q.source)
+    p = context.problem_from_question(q)
+    plan = rubric.fallback_math_rubric_plan(p)
+    checkpoints.save_math_plan(p, plan)
+
+    public = task_facade.get_task(task_id=case[0], owner_id=case[1])
+    projected = public["problem_data"][q.q_id]
+    advisory, = [item for item in projected["preparation_issues"] if item["code"] == "math_rubric_advisory"]
+    assert projected["review_status"] == "confirmed"
+    assert advisory["severity"] == "warning" and advisory["field"] == "rubric"
+    message = advisory["details"]["message"]
+    if language == "zh":
+        assert "本轮 AI 评分解释" in message and "无需额外确认" in message
+        assert ("原标准来自AI生成" if ai_original else "原标准来自提供的材料") in message
+        assert "no reliable item allocation" not in message
+        assert "AI interpretation:" not in message
+    else:
+        assert "AI scoring interpretation" in message and "does not require confirmation" in message
+        assert ("from AI-generated material" if ai_original else "from provided material") in message
+    assert set(advisory["details"]) == {"message"}
+    assert not task_facade._math_rubric_advisory(q, plan.model_copy(update={"advisories": ()}), language)
+    assert public["problem_data"][questions[1].q_id]["preparation_issues"] == []
+    assert task_facade._run_snapshot_payload(task_id=case[0], owner_id=case[1], run_id=run_id)["problem_data"][q.q_id] == projected
+    assert workflows.get_run_setup(run_id).input_manifest == original_manifest
+    assert q.source == original_source
+    assert rubric.math_rubric_fingerprint(context.problem_from_question(q)) == plan.input_fingerprint
+    with session_scope() as session:
+        assert session.get(AssignmentQuestionRecord, q.id).source == original_source
+    assert task_facade._question_review_blockers(questions) == []
+
+
+@pytest.mark.parametrize("change", ["question", "provenance", "setup", "run", "old_engine"])
+def test_rubric_advisory_never_leaks_from_obsolete_inputs_or_engine(case, change):
+    run_id = start(case, f"rubric-advice-identity-{change}")["job_id"]
+    checkpoints, questions, _, _ = prepare(case, run_id)
+    q = questions[0]
+    plan = rubric.fallback_math_rubric_plan(context.problem_from_question(q))
+    checkpoints.save_math_plan(context.problem_from_question(q), plan)
+    if change in {"question", "provenance"}:
+        with session_scope() as session:
+            row = session.get(AssignmentQuestionRecord, q.id)
+            if change == "question":
+                row.criterion += " Only the final result earns credit."
+            else:
+                source = deepcopy(row.source or {})
+                source.setdefault("presentation", {})["ai_completion_provenance"] = {"criterion": {}}
+                row.source = source
+    elif change == "setup":
+        flow = workflows.get_live_workflow(case[0], owner_id=case[1])
+        workflows.update_workflow(case[0], owner_id=case[1], grading_setup={
+            **flow.grading_setup, "teacher_notes": "Different grading preference.",
+        })
+    elif change == "run":
+        workflows.update_workflow(case[0], owner_id=case[1], grading_job_id=None, presentation_status="grading_setup")
+    else:
+        old_run(run_id)
+    public = task_facade.get_task(task_id=case[0], owner_id=case[1])
+    assert not any(item["code"] == "math_rubric_advisory"
+                   for item in public["problem_data"][q.q_id]["preparation_issues"])
+    if change != "old_engine":
+        snapshot = task_facade._run_snapshot_payload(task_id=case[0], owner_id=case[1], run_id=run_id)
+        assert any(item["code"] == "math_rubric_advisory"
+                   for item in snapshot["problem_data"][q.q_id]["preparation_issues"])
+
+
+def test_question_advisory_explains_actual_ai_additions_and_distinct_scoring_routes():
+    p = problem()
+    plan = rubric._build_plan(rubric._question_input(p), rubric._Explanation(
+        effective_criterion="按原有过程8分、结果2分；替代解法采用单独约定的扣分方法。",
+        routes=(
+            rubric.MathRubricRoute(id="main", description="原有解法", applies_when="适用原有评分项",
+                mode="points", items=(
+                    rubric.MathRubricItem(id="method", description="过程", points=8, source="provided"),
+                    rubric.MathRubricItem(id="result", description="结果", points=2, source="provided"),
+                )),
+            rubric.MathRubricRoute(id="alternative", description="替代方法", applies_when="另一种有效解法",
+                mode="deductions", minimum_score=6, minimum_condition="nonblank",
+                items=(rubric.MathRubricItem(id="error", description="独立错误", points=1, source="ai"),)),
+        ),
+        follow_through="同一错误只在首次发生处扣分。",
+        numerical_policy="必须保留单位。",
+        advisories=("替代方法规则由 AI 补充，请按需修改原标准。",),
+    ))
+    question = SimpleNamespace(q_id=p.q_id, source={})
+    issue, = task_facade._math_rubric_advisory(question, plan, "zh")
+    message = issue["details"]["message"]
+    assert "得分制: 原有解法" in message and "扣分制: 替代方法" in message
+    assert "过程: 8 分（原文）" in message and "独立错误: 1 分（AI解释）" in message
+    assert "非空作答最低 6 分" in message and plan.follow_through in message
+    assert plan.numerical_policy in message and plan.advisories[0] in message
+    assert "input_fingerprint" not in message and plan.plan_id not in message
 
 
 def test_public_projection_hides_only_math_trace_without_mutating_expert():
@@ -136,7 +322,9 @@ def test_final_trace_failure_cannot_publish_or_change_a_result(case, monkeypatch
     else:
         def fail(*args, **kwargs):
             raise OperationalError("event storage unavailable", {}, RuntimeError("database failed"))
-        monkeypatch.setattr(grades, "record_event", fail)
+        # Fail after the result insert has flushed, while creating its trace.
+        # The transaction must roll back both instead of publishing a score.
+        monkeypatch.setattr(grades, "_new_event_id", fail)
     previous = [row.model_dump() for row in grades.list_results_for_run(run_id)]
     with pytest.raises(CheckpointWriteError, match="question_checkpoint_failed"):
         checkpoints.save_correction(student, correction)
