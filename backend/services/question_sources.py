@@ -25,6 +25,7 @@ from backend.recognition.models import EvidenceModel, RecognitionSourceRefV1, Re
 from backend.recognition.runtime import RecognitionCapacity
 from backend.services.recognition_artifacts import RecognitionArtifactStore
 from backend.services.recognition_runs import RecognitionRunService
+from backend.services.recognition_timeouts import apply_source_timeout_profile
 from backend.services.question_source_batches import read_question_pdf_batches
 from backend.services.stage_provider_routing import (
     StageProviderRoute, build_owner_baidu_ocr_skill, stage_provider_configuration_fingerprint,
@@ -155,7 +156,8 @@ class QuestionSourceRead:
 async def read_question_source(*, owner_id, task_id, content, filename, content_type=None,
                                route: StageProviderRoute, registry, stored_file_id=None,
                                extraction_hint="", options=None, purpose="problems", reporter=None, text_reader=None,
-                               allow_vision=None, binding=None, retry_key=None, acknowledge_pending_retry=False):
+                               allow_vision=None, binding=None, retry_key=None, acknowledge_pending_retry=False,
+                               timeout_profile=None):
     from backend.services.source_files import persist_problem_source
 
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
@@ -214,6 +216,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                 service=service, request=native_request, content=content, engine=None,
                 total_pages=total_pages, reporter=reporter, binding=binding, allow_native_partial=True,
                 retry_key=retry_key, acknowledge_pending_retry=acknowledge_pending_retry,
+                timeout_profile=timeout_profile,
             )
             return QuestionSourceRead(text, summary, stored_file_id)
 
@@ -225,6 +228,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                     service=service, request=request, content=content, engine=engine,
                     total_pages=total_pages, reporter=reporter, binding=binding, retry_key=retry_key,
                     acknowledge_pending_retry=acknowledge_pending_retry,
+                    timeout_profile=timeout_profile,
                 )
             except RecognitionError as exc:
                 if exc.code != "provider_vision_not_supported" or not allow_vision or engine is None:
@@ -233,8 +237,10 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                 # Replan without vision; no second provider request is made.
                 return await read_native_question_pdf()
             return QuestionSourceRead(text, summary, stored_file_id)
+        timed_request = apply_source_timeout_profile(request, engine=engine, timeout_profile=timeout_profile,
+                                                     total_pages=total_pages)
         run = await service.run(
-            request, content, engine=engine, prompt_version=PROMPT_VERSION, authorized_owner_id=owner_id, binding=binding,
+            timed_request, content, engine=engine, prompt_version=PROMPT_VERSION, authorized_owner_id=owner_id, binding=binding,
             retry_key=retry_key, acknowledge_pending_retry=acknowledge_pending_retry,
         )
         if media_type == "application/pdf" and allow_vision and engine is not None and run.safe_error_code == "provider_vision_not_supported":

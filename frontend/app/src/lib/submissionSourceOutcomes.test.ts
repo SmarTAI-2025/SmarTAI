@@ -48,6 +48,28 @@ describe("submission source reason copy", () => {
     expect(getSubmissionPageErrorLabel(item, { page: 3, error_code: "unrecognized_code" }, "zh-CN")).toContain("该页尚未成功识别");
   });
 
+  it.each(["zh-CN", "en-US"] as const)("explains that local capacity pressure leaves the request unsent (%s)", (locale) => {
+    const copy = getSubmissionSourceReasonCopy(source({
+      reason_code: "provider_capacity_unavailable",
+      failure_phase: "ocr",
+    }), locale);
+
+    expect(copy.description).toContain(locale === "zh-CN" ? "尚未向模型发送本次请求" : "this request was not sent to the model");
+    expect(copy.description).toContain(locale === "zh-CN" ? "任务资料已保留" : "Your task data is preserved");
+    expect(copy.nextStep).toContain(locale === "zh-CN" ? "稍后重试" : "Retry later");
+  });
+
+  it.each(["zh-CN", "en-US"] as const)("labels an unsent page request separately from the source's uncertain request (%s)", (locale) => {
+    const item = source({ reason_code: "provider_submit_uncertain" });
+    const label = getSubmissionPageErrorLabel(item, { page: 2, error_code: "provider_capacity_unavailable" }, locale);
+
+    expect(label).toBe(locale === "zh-CN" ? "第 2 页：等待调用资源超时" : "Page 2: Timed out waiting for model capacity");
+    expect(locale === "zh-CN"
+      ? ["上次调用是否计费尚无法确认。重试可能再次消耗额度。", "上次调用是否完成尚不确定，再次调用可能重复消耗额度。"]
+      : ["The previous call’s billing status is unknown. Retrying may use additional quota.", "It is unclear whether the previous call completed. Calling again may use quota twice."]
+    ).toContain(getSubmissionSourceReasonCopy(item, locale).nextStep);
+  });
+
   it.each([
     ["shared_pool_daily_limit_reached", "recognition", "共享模型日额度已用完。", "Shared model daily allowance exhausted."],
     ["shared_pool_disabled", "recognition", "平台共享模型当前关闭。", "The shared model pool is disabled."],

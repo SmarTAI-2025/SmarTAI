@@ -200,7 +200,7 @@ RECOGNITION_ERROR_CODES = frozenset({
     "provider_request_failed", "provider_request_rejected", "provider_response_invalid",
     "provider_recitation_blocked", "provider_content_blocked",
     "provider_result_too_large", "provider_result_unavailable", "provider_download_url_rejected",
-    "provider_submit_uncertain", "provider_task_failed", "provider_timeout", "provider_unavailable",
+    "provider_submit_uncertain", "provider_task_failed", "provider_timeout", "provider_capacity_unavailable", "provider_unavailable",
     "provider_unreachable", "provider_endpoint_tls_failed", "provider_upstream_unavailable",
     "provider_model_or_endpoint_not_found", "ocr_empty_result", "ocr_file_too_large",
     "ocr_input_invalid", "ocr_unsupported_file",

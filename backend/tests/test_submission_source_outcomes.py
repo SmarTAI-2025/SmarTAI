@@ -487,7 +487,8 @@ async def test_teacher_identity_confirmation_resolves_current_attention_without_
 
 
 @pytest.mark.asyncio
-async def test_model_without_image_support_reaches_teacher_as_vision_reason(monkeypatch):
+@pytest.mark.parametrize("error_code", ["provider_vision_not_supported", "provider_capacity_unavailable"])
+async def test_ocr_rejection_reaches_teacher_with_specific_reason(monkeypatch, error_code):
     owner_id, task_id = _seed_task()
     old_run = grading_repository.create_run(
         task_id,
@@ -526,7 +527,7 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
     class UnsupportedVisionSkill:
         async def recognize_images(self, _images, _purpose):
             from backend.llm.providers import ProviderRequestError
-            raise ProviderRequestError("provider_vision_not_supported", status_code=400)
+            raise ProviderRequestError(error_code)
 
     monkeypatch.setattr(
         task_facade,
@@ -537,7 +538,7 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
     from unittest.mock import AsyncMock
     from backend.llm.providers import ProviderRequestError
     registry.provider = type("RejectingProvider", (), {"provider_id": "test-provider", "supports_vision": True,
-        "ainvoke_vision": AsyncMock(side_effect=ProviderRequestError("provider_vision_not_supported", status_code=400))})()
+        "ainvoke_vision": AsyncMock(side_effect=ProviderRequestError(error_code))})()
     await task_facade.run_task_submission_parsing(
         task_id=task_id,
         owner_id=owner_id,
@@ -556,7 +557,7 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
 
     task = task_facade.get_task(task_id=task_id, owner_id=owner_id)
     assert task["status"] == "error"
-    assert task["error"] == "provider_vision_not_supported"
+    assert task["error"] == error_code
     assert task["last_failed_job_id"] == queued["job_id"]
     assert task["grading_job_id"] is None
     assert task["submission_source_summary"] == {
@@ -569,11 +570,11 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
     source = task["submission_sources"][0]
     assert source["status"] == "failed"
     assert source["internal_status"] == "parse_failed"
-    assert source["reason_code"] == "provider_vision_not_supported"
+    assert source["reason_code"] == error_code
     assert source["failure_phase"] == "ocr"
     operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
-    assert operation.error_code == "provider_vision_not_supported"
-    assert operation.progress["error_detail"] == "provider_vision_not_supported"
+    assert operation.error_code == error_code
+    assert operation.progress["error_detail"] == error_code
     retry_upload = task_facade.load_submission_retry_upload(
         task_id=task_id,
         owner_id=owner_id,
@@ -595,9 +596,9 @@ async def test_model_without_image_support_reaches_teacher_as_vision_reason(monk
         task_id=task_id,
         owner_id=owner_id,
     )
-    assert state["error"] == "provider_vision_not_supported"
+    assert state["error"] == error_code
     assert state["last_failed_job_id"] == queued["job_id"]
-    assert state["progress"]["error_detail"] == "provider_vision_not_supported"
+    assert state["progress"]["error_detail"] == error_code
 
 
 def test_provider_failure_during_image_read_is_classified_as_ocr():
@@ -609,6 +610,9 @@ def test_provider_failure_during_image_read_is_classified_as_ocr():
         "provider_endpoint_non_public_address", "image/png"
     ) == "ocr"
     assert _source_read_failure_phase("provider_timeout", "text/plain") == "recognition"
+    assert _source_read_failure_phase("provider_capacity_unavailable", "image/png") == "ocr"
+    assert _source_read_failure_phase("provider_capacity_unavailable", "application/pdf") == "ocr"
+    assert _source_read_failure_phase("provider_capacity_unavailable", "text/plain") == "recognition"
 
 
 @pytest.mark.asyncio

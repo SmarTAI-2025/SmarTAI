@@ -53,11 +53,26 @@ class BudgetSnapshot(EvidenceModel):
     bounded_output_tokens: bool
     output_limit_exceeded: bool
     duration_ms: float
-    global_remaining_seconds: float
+    global_remaining_seconds: float | None
     locator_duration_ms: float | None
     read_duration_ms: float | None
     locator_remaining_seconds: float | None
     read_remaining_seconds: float | None
+
+
+def validate_budget_timing(snapshot: BudgetSnapshot, policy: RecognitionPolicyV1) -> None:
+    """Absence of a deadline is an explicit policy, never restored time credit."""
+    if policy.timeout_mode == "response_only":
+        if any(getattr(snapshot, name) is not None for name in (
+            "global_remaining_seconds", "locator_remaining_seconds", "read_remaining_seconds",
+        )):
+            raise ValueError("response-only evidence cannot invent a cumulative deadline")
+    elif snapshot.global_remaining_seconds is None or any(
+        (getattr(snapshot, phase + "_duration_ms") is None)
+        != (getattr(snapshot, phase + "_remaining_seconds") is None)
+        for phase in ("locator", "read")
+    ):
+        raise ValueError("legacy evidence must retain its cumulative deadlines")
 
 
 class LogicalBudgetSnapshotV2(EvidenceModel):
@@ -149,6 +164,11 @@ class RecognitionBudget:
         elapsed_seconds: float = 0,
     ):
         self._source, self._policy, self._capabilities = _copy_context(source, policy, capabilities)
+        if self._policy.timeout_mode == "response_only" and (
+            self._capabilities is None or self._capabilities.candidate_kind != "vision"
+            or self._source.scope == "knowledge_document"
+        ):
+            raise RecognitionError("recognition_request_invalid")
         self._bounded_output = bool(self._capabilities and self._capabilities.bounded_output_tokens)
         self._clock = clock
         self._lock = threading.Lock()
@@ -192,27 +212,36 @@ class RecognitionBudget:
         if type(phase) is not str or phase not in {"locator", "read"}:
             raise RecognitionError("recognition_request_invalid")
 
-    def _remaining(self, now: float, phase: Phase | None, *, start: bool) -> float:
-        remaining = self._policy.total_seconds - (now - self._started)
+    def _remaining(self, now: float, phase: Phase | None, *, start: bool) -> float | None:
         if phase is not None:
             self._valid_phase(phase)
             if start:
                 # A resumed phase conservatively includes elapsed operation time.
                 self._phase_starts.setdefault(phase, now - self._elapsed_seconds)
-            if phase in self._phase_starts:
-                limit = self._policy.locator_seconds if phase == "locator" else self._policy.read_seconds
-                remaining = min(remaining, limit - (now - self._phase_starts[phase]))
+        if self._policy.timeout_mode == "response_only":
+            return None
+        remaining = self._policy.total_seconds - (now - self._started)
+        if phase in self._phase_starts:
+            limit = self._policy.locator_seconds if phase == "locator" else self._policy.read_seconds
+            remaining = min(remaining, limit - (now - self._phase_starts[phase]))
         return max(0.0, remaining)
 
     def start_phase(self, phase: Phase) -> None:
         self.remaining(phase)
 
-    def remaining(self, phase: Phase | None = None) -> float:
+    def remaining(self, phase: Phase | None = None) -> float | None:
         with self._lock:
             result = self._remaining(self._now(), phase, start=True)
-            if result <= 0:
+            if result is not None and result <= 0:
                 raise RecognitionError("recognition_timeout")
             return result
+
+    def local_timeout(self, seconds: float, phase: Phase | None = None) -> float:
+        """Bound one local step; only legacy policies also spend elapsed time."""
+        if type(seconds) not in {int, float} or not math.isfinite(seconds) or seconds <= 0:
+            raise RecognitionError("recognition_request_invalid")
+        remaining = self.remaining(phase)
+        return float(seconds) if remaining is None else min(seconds, remaining)
 
     def _charged_output(self) -> int:
         return sum(record.output_tokens if record.output_tokens is not None else record.requested_output
@@ -278,7 +307,8 @@ class RecognitionBudget:
         except (ValidationError, ValueError, TypeError, AttributeError):
             raise RecognitionError("recognition_response_invalid") from None
         with self._lock:
-            if self._remaining(self._now(), "locator" if kind == "locator" else "read", start=True) <= 0:
+            remaining = self._remaining(self._now(), "locator" if kind == "locator" else "read", start=True)
+            if remaining is not None and remaining <= 0:
                 raise RecognitionError("recognition_timeout")
             caps = self._capabilities
             if caps is None or not caps.visual_inputs or (kind == "locator" and not caps.target_location):
@@ -302,6 +332,52 @@ class RecognitionBudget:
             if kind == "initial":
                 self._cached_initial_regions.update(region_keys)
 
+    def _check_reservation(self, kind, max_output_tokens, region_keys):
+        remaining = self._remaining(self._now(), "locator" if kind == "locator" else "read", start=True)
+        if remaining is not None and remaining <= 0:
+            raise RecognitionError("recognition_timeout")
+        caps = self._capabilities
+        if caps is None or not caps.visual_inputs:
+            raise RecognitionError("recognition_input_unsupported")
+        counts = self._logical_counts()
+        if self._bounded_output and (
+            self._output_overrun or self._charged_output() + max_output_tokens > self._policy.max_output_tokens
+        ):
+            raise RecognitionError("recognition_budget_exhausted")
+        if kind == "locator":
+            if counts[kind] >= self._policy.max_locator_calls:
+                raise RecognitionError("recognition_budget_exhausted")
+        else:
+            if sum(counts[name] for name in ("initial", "empty_recovery", "patch")) >= self._policy.max_calls:
+                raise RecognitionError("recognition_budget_exhausted")
+            if kind == "initial":
+                self._check_initial_limit(counts, region_keys)
+            else:
+                if (not caps.response_recheck
+                        or (kind == "patch" and (not caps.semantic_repair or not self._policy.enable_repair))):
+                    raise RecognitionError("recognition_input_unsupported")
+                limit = self._policy.max_empty_recoveries if kind == "empty_recovery" else self._policy.max_patches
+                key = region_keys[0]
+                if (counts[kind] >= limit or counts["empty_recovery"] + counts["patch"] >= 6
+                        or key in self._extra_regions):
+                    raise RecognitionError("recognition_budget_exhausted")
+                initial = self._reservations.get(self._initial_regions.get(key))
+                expected = "empty" if kind == "empty_recovery" else "ok"
+                cached_ok = kind == "patch" and key in self._cached_initial_regions
+                if not cached_ok and (initial is None or initial.outcome != expected):
+                    raise RecognitionError("recognition_request_invalid")
+
+    def preflight(
+        self, kind: CallKind, max_output_tokens: int, *, region_keys: tuple[str, ...] = (),
+    ) -> None:
+        """Check allowance before durable authorization without charging a call."""
+        if type(kind) is not str or kind not in {"locator", "initial", "empty_recovery", "patch"}:
+            raise RecognitionError("recognition_request_invalid")
+        self._valid_output_request(max_output_tokens)
+        self._valid_regions(kind, region_keys)
+        with self._lock:
+            self._check_reservation(kind, max_output_tokens, region_keys)
+
     def reserve(
         self,
         kind: CallKind,
@@ -314,38 +390,7 @@ class RecognitionBudget:
         self._valid_output_request(max_output_tokens)
         self._valid_regions(kind, region_keys)
         with self._lock:
-            if self._remaining(self._now(), "locator" if kind == "locator" else "read", start=True) <= 0:
-                raise RecognitionError("recognition_timeout")
-            caps = self._capabilities
-            if caps is None or not caps.visual_inputs:
-                raise RecognitionError("recognition_input_unsupported")
-            counts = self._logical_counts()
-            if self._bounded_output and (
-                self._output_overrun or self._charged_output() + max_output_tokens > self._policy.max_output_tokens
-            ):
-                raise RecognitionError("recognition_budget_exhausted")
-            if kind == "locator":
-                if counts[kind] >= self._policy.max_locator_calls:
-                    raise RecognitionError("recognition_budget_exhausted")
-            else:
-                if sum(counts[name] for name in ("initial", "empty_recovery", "patch")) >= self._policy.max_calls:
-                    raise RecognitionError("recognition_budget_exhausted")
-                if kind == "initial":
-                    self._check_initial_limit(counts, region_keys)
-                else:
-                    if (not caps.response_recheck
-                            or (kind == "patch" and (not caps.semantic_repair or not self._policy.enable_repair))):
-                        raise RecognitionError("recognition_input_unsupported")
-                    limit = self._policy.max_empty_recoveries if kind == "empty_recovery" else self._policy.max_patches
-                    key = region_keys[0]
-                    if (counts[kind] >= limit or counts["empty_recovery"] + counts["patch"] >= 6
-                            or key in self._extra_regions):
-                        raise RecognitionError("recognition_budget_exhausted")
-                    initial = self._reservations.get(self._initial_regions.get(key))
-                    expected = "empty" if kind == "empty_recovery" else "ok"
-                    cached_ok = kind == "patch" and key in self._cached_initial_regions
-                    if not cached_ok and (initial is None or initial.outcome != expected):
-                        raise RecognitionError("recognition_request_invalid")
+            self._check_reservation(kind, max_output_tokens, region_keys)
             ticket = BudgetTicket()
             self._reservations[ticket] = _Reservation(kind, max_output_tokens, region_keys)
             if kind == "initial":

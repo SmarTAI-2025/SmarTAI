@@ -178,7 +178,7 @@ async def test_acknowledged_restart_retries_only_failed_page_with_durable_worker
     provider.provider_id = "test-provider"
     failed_page_images = []
 
-    async def recognize(_prompt, images, **_kwargs):
+    async def network_response(_prompt, images, **_kwargs):
         # Select page 2 by its distinct aspect ratio rather than call order.
         with Image.open(io.BytesIO(images[0].data)) as image:
             second_page = image.width / image.height > 0.8
@@ -189,6 +189,14 @@ async def test_acknowledged_restart_retries_only_failed_page_with_durable_worker
                     raise asyncio.CancelledError()
                 raise ProviderRequestError("provider_upstream_unavailable", status_code=503)
         return provider.ainvoke_vision.return_value
+
+    async def recognize(prompt, images, **kwargs):
+        from backend.llm.request_timeouts import current_response_scope
+        # This test provider replaces the HTTP adapter. Model its explicit
+        # request boundary so the real durable worker can guard every send.
+        scope = current_response_scope()
+        assert scope is not None
+        return await scope.run_response(lambda: network_response(prompt, images, **kwargs))
 
     provider.ainvoke_vision.side_effect = recognize
     provider.ainvoke = AsyncMock(return_value=SimpleNamespace(content=json.dumps({
@@ -430,10 +438,11 @@ async def test_submission_queue_persists_archive_and_has_no_request_task():
     assert operation.status == "pending"
     assert set(operation.payload) == {
         "input_file_id", "source_ids", "base_workflow_revision", "identity_mode",
-        "roster_entries", "roster_name", "recognition_provider_id",
+        "roster_entries", "roster_name", "recognition_provider_id", "recognition_timeout_profile",
         "replace_confirmed",
         "provider_configuration_fingerprint", "question_snapshot",
     }
+    assert operation.payload["recognition_timeout_profile"] == "source-response-300-v1"
     sources = source_outcome_repository.list_sources(
         operation_id=operation.id, owner_id=owner_id, attempt=operation.attempt,
     )
@@ -629,6 +638,58 @@ async def test_submission_worker_reuses_result_artifact_without_provider_call(mo
         task = task_facade.get_task(task_id=task_id, owner_id=owner_id)
         assert task["submission_source_summary"]["failed"] == 1
         assert task["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_submission_reader_lease_loss_stops_old_worker_without_failing_sources(monkeypatch):
+    from backend.domain.errors import LeaseLost
+
+    owner_id, task_id = _seed_task(with_question=True)
+    registry = _Registry()
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("first.txt", "first answer")
+        archive.writestr("second.txt", "second answer")
+    queued = task_facade.queue_task_submission_parsing(
+        task_id=task_id, owner_id=owner_id, filename="answers.zip",
+        content=buffer.getvalue(), content_type="application/zip", registry=registry,
+    )
+    old = workflow_repository.claim_operation(
+        queued["job_id"], owner_id=owner_id, worker_id="old", lease_seconds=60,
+    )
+    lost = LeaseLost("The recognition send guard lost its execution lease.")
+    reads, replacement = [], []
+
+    async def read(**kwargs):
+        reads.append(kwargs["filename"])
+        workflow_repository.release_operation(
+            old.id, owner_id=owner_id, worker_id="old", lease_token=old.lease_token,
+        )
+        replacement.append(workflow_repository.claim_operation(
+            old.id, owner_id=owner_id, worker_id="replacement", lease_seconds=60,
+        ))
+        raise lost
+
+    monkeypatch.setattr(task_facade, "read_question_source", read)
+    with pytest.raises(LeaseLost) as caught:
+        await task_facade.run_durable_submission_recognition(
+            LeasedOperation(old, worker_id="old", lease_seconds=60)
+        )
+
+    assert caught.value is lost
+    assert reads == ["first.txt"]
+    current = workflow_repository.get_operation(old.id, owner_id=owner_id)
+    assert current.lease_token == replacement[0].lease_token
+    assert current.status == "running" and current.error_code is None
+    assert current.artifact_refs == replacement[0].artifact_refs
+    sources = source_outcome_repository.list_sources(
+        operation_id=old.id, owner_id=owner_id, attempt=old.attempt,
+    )
+    assert len(sources) == 1
+    assert source_outcome_repository.get_outcome(sources[0].id, owner_id=owner_id) is None
+    task = task_facade.get_task(task_id=task_id, owner_id=owner_id)
+    assert task["error"] is None and task["student_data"] == {}
 
 
 def test_stale_submission_lease_cannot_commit_or_fail_current_attempt():

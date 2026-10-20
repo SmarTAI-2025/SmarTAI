@@ -40,7 +40,7 @@ class RecognitionCallSessionV2:
                        occurrence_id=f"{kind}:{len(self.records(kind)):04d}")
         phase = "locator" if kind == "locator" else "read"
         # Neither corrupt evidence nor a previous failed/pending submit authorizes a retry.
-        found = await self.service.lookup(source, request, timeout_seconds=min(10, budget.remaining(phase)), **options)
+        found = await self.service.lookup(source, request, timeout_seconds=budget.local_timeout(10, phase), **options)
         if found.status == "hit":
             receipt = found.receipt
             leaf = receipt.envelope.payload
@@ -51,9 +51,18 @@ class RecognitionCallSessionV2:
         if found.status != "miss":
             raise RecognitionError("recognition_cache_" + found.status)
         guard = getattr(self.service, "before_dispatch", None)
-        if guard is not None:
-            await guard(source, request, region_keys=region_keys, **options)
-        outcome = await dispatch()
+        if policy.timeout_mode == "response_only":
+            # Local admission must finish before a durable marker can claim a
+            # model submission may exist. The provider invokes this at its send
+            # boundary, before starting the independently bounded response.
+            async def before_send():
+                if guard is not None:
+                    await guard(source, request, region_keys=region_keys, **options)
+            outcome = await dispatch(before_send=before_send)
+        else:
+            if guard is not None:
+                await guard(source, request, region_keys=region_keys, **options)
+            outcome = await dispatch()
         self._pending = request, options, None, budget
         return outcome
 
@@ -66,7 +75,7 @@ class RecognitionCallSessionV2:
             try:
                 receipt = await self.service.record(
                     self.source, request, leaf,
-                    timeout_seconds=min(10, budget.remaining("locator" if kind == "locator" else "read")), **options,
+                    timeout_seconds=budget.local_timeout(10, "locator" if kind == "locator" else "read"), **options,
                 )
             except RecognitionError as exc:
                 error = exc.code

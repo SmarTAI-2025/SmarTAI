@@ -5,8 +5,9 @@ Each provider implements: `ainvoke(messages) -> LLMResponse`.
 
 Gemini proxy compatibility:
   The supported langchain-google-genai 4.x client uses Google's HTTP SDK.
-  Keep the established per-call synchronous client path when an explicit
-  SmarTAI proxy is configured, and native async otherwise. Do not reintroduce
+  Keep the established per-call synchronous client path for legacy calls when
+  an explicit SmarTAI proxy is configured. Response-only OCR uses that fresh
+  client's cancellable async API. Do not reintroduce
   the removed legacy transport="rest" parameter or infer machine credentials.
 """
 from __future__ import annotations
@@ -40,6 +41,9 @@ from backend.llm.endpoint_policy import (
 )
 from backend.llm.provider_catalog import effective_wire_protocol
 from backend.llm.image_capability import is_explicit_image_rejection, explicitly_rejects_images
+from backend.llm.request_timeouts import (
+    current_response_scope, current_response_timeout_seconds, provider_local_step,
+)
 from backend.models import ProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -125,6 +129,35 @@ class ProviderRequestError(RuntimeError):
         self.code = code
         self.status_code = status_code
         self.retry_after = retry_after
+
+
+async def _wait_provider_local(awaitable):
+    scope = current_response_scope()
+    return await scope.wait_local(awaitable) if scope is not None else await awaitable
+
+
+def _request_definitely_rejected(exc: BaseException) -> bool:
+    """Only concrete request-local evidence can clear a submission marker."""
+    import httpx2  # The locked Anthropic SDK uses distinct transport exceptions.
+    from backend.domain.errors import DomainError
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, DomainError):
+            return False  # Application/fencing HTTP statuses are not upstream evidence.
+        if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout,
+                            httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.PoolTimeout)):
+            return True
+        # Google SDK errors use integer `code`; OpenAI/Anthropic use status_code.
+        status = getattr(exc, "status_code", None)
+        if status is None:
+            status = getattr(exc, "code", None)
+        if type(status) is int and status in {400, 401, 402, 403, 404, 413, 415, 422, 429}:
+            return True
+        # __context__ can refer to an earlier retry. Only explicit cause chains
+        # describe this request; never clear an unknown attempt from old 429s.
+        exc = exc.__cause__
+    return False
 
 
 def validate_provider_api_key(api_key: str) -> None:
@@ -417,19 +450,23 @@ class BaseProvider(ABC):
     async def _call_capacity(self, messages: List[BaseMessage], *, response_timeout: float | None = None):
         from backend.services.execution_control import current_execution
         from backend.progress.recognition_activity import report_provider_state
-        await report_provider_state(self, "queued")
+        scope = current_response_scope()
+        if scope is None:
+            await report_provider_state(self, "queued")
         control = current_execution()
         admitted = False
         # SDK timeouts bound individual network reads, not admission or an
         # upstream stream that keeps sending keep-alives. Bound this whole
         # attempt so one waiter cannot occupy a workflow worker indefinitely.
-        deadline = asyncio.timeout(float(settings.llm_timeout))
+        deadline = asyncio.timeout(float(settings.llm_timeout) if scope is None else None)
         try:
+            if scope is not None:
+                await provider_local_step(report_provider_state(self, "queued"), best_effort=True)
             if control is not None:
-                await control.check(self)
+                await provider_local_step(control.check(self))
             scheduler = get_scheduler()
             async with deadline:
-                async with scheduler.lease(
+                lease = scheduler.lease(
                     key=quota_key(self.config, endpoint_key(self.config)),
                     rpm=max(0, int(self.config.rpm or 0)),
                     owner=self.config.scheduling_owner or "anonymous",
@@ -438,16 +475,18 @@ class BaseProvider(ABC):
                                        max(1, int(settings.max_concurrent_llm_per_provider))),
                     memory=request_memory(messages),
                     ready=lambda: not self._endpoint_breaker().is_open,
-                ):
+                )
+                async with scope.local_admission(lease) if scope is not None else lease:
                     admitted = True
                     if control is not None:
-                        await control.check(self)
+                        await provider_local_step(control.check(self))
                     # Time spent waiting for RPM/capacity is not provider
                     # response time. Give the admitted request its full budget.
-                    await report_provider_state(self, "responding")
-                    deadline.reschedule(asyncio.get_running_loop().time() + (
-                        float(settings.llm_timeout) if response_timeout is None else response_timeout
-                    ))
+                    if scope is None:
+                        await report_provider_state(self, "responding")
+                        deadline.reschedule(asyncio.get_running_loop().time() + (
+                            float(settings.llm_timeout) if response_timeout is None else response_timeout
+                        ))
                     try:
                         yield
                     except Exception as exc:
@@ -458,8 +497,8 @@ class BaseProvider(ABC):
                         raise
                     else:
                         if control is not None:
-                            await control.succeeded(self)
-            await report_provider_state(self, "processing")
+                            await provider_local_step(control.succeeded(self), best_effort=scope is not None)
+            await provider_local_step(report_provider_state(self, "processing"), best_effort=scope is not None)
         except TimeoutError as exc:
             if not deadline.expired():
                 raise
@@ -475,7 +514,24 @@ class BaseProvider(ABC):
 
         finally:
             from backend.progress.recognition_activity import finish_provider_request
-            await finish_provider_request()
+            await provider_local_step(finish_provider_request(), best_effort=scope is not None)
+
+    async def _invoke_response(self, invoke, *, timeout_seconds=None):
+        scope = current_response_scope()
+        if scope is None:
+            return await invoke()
+        from backend.progress.recognition_activity import report_provider_state
+
+        async def ready():
+            await provider_local_step(report_provider_state(self, "responding"), best_effort=True)
+
+        previous_attempts = scope.attempt_count
+        try:
+            return await scope.run_response(invoke, timeout_seconds=timeout_seconds, before_request=ready)
+        except Exception as exc:
+            if scope.attempt_count > previous_attempts and _request_definitely_rejected(exc):
+                scope.rejected()
+            raise
 
     def _record_duration(self, duration_ms: float) -> None:
         get_scheduler().record_success(
@@ -515,22 +571,35 @@ class BaseProvider(ABC):
     async def ainvoke(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:
         """Invoke the LLM. Default: native async. Gemini overrides this."""
         generation_kwargs = self._generation_kwargs(max_output_tokens)
+        if (scope := current_response_scope()) is not None:
+            generation_kwargs["timeout"] = scope.seconds
         self._ensure_async_primitives()
-        client = await self._get_client()
+        client = await _wait_provider_local(self._get_client())
         # Admission combines actual-start RPM, quota concurrency and resources;
         # queued calls do not reserve minute quota or occupy capacity slots.
-        await self._endpoint_breaker().before_call()
+        await _wait_provider_local(self._endpoint_breaker().before_call())
         async with self._call_capacity(messages):
             t0 = time.perf_counter()
             try:
-                response = await client.ainvoke(messages, **generation_kwargs)
-                self._endpoint_breaker().record_success()
-                content = _response_text(response.content if hasattr(response, "content") else response)
+                if scope is None:
+                    response = await client.ainvoke(messages, **generation_kwargs)
+                    self._endpoint_breaker().record_success()
+                    content = _response_text(response.content if hasattr(response, "content") else response)
+                else:
+                    async def invoke():
+                        nonlocal t0
+                        t0 = time.perf_counter()
+                        response = await client.ainvoke(messages, **generation_kwargs)
+                        content = _response_text(response.content if hasattr(response, "content") else response)
+                        return content, _response_metadata(response)
+
+                    content, metadata = await self._invoke_response(invoke)
+                    self._endpoint_breaker().record_success()
                 duration_ms = (time.perf_counter() - t0) * 1000
                 self._record_duration(duration_ms)
                 logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(content)} chars)")
                 return LLMResponse(content=content, provider=self.provider_id, model=self.model,
-                                   duration_ms=duration_ms, **_response_metadata(response))
+                                   duration_ms=duration_ms, **(_response_metadata(response) if scope is None else metadata))
             except Exception as e:
                 if _is_overload_failure(e):
                     self._endpoint_breaker().record_failure()
@@ -599,7 +668,9 @@ class GeminiProvider(BaseProvider):
             return await super().ainvoke(messages, max_output_tokens=max_output_tokens)
 
         # Local proxy mode: sync invoke in threadpool, fresh client per call
-        async with get_scheduler().proxy_slots:
+        scope = current_response_scope()
+        slots = get_scheduler().proxy_slots
+        async with scope.local_admission(slots) if scope is not None else slots:
             return await self._invoke_proxy(messages, generation_kwargs)
 
     async def _invoke_proxy(self, messages: List[BaseMessage], generation_kwargs: dict[str, Any]) -> LLMResponse:
@@ -607,9 +678,11 @@ class GeminiProvider(BaseProvider):
 
         # Prepare before RPM admission; at most 50 per-call clients can wait.
         # Preparation uses the default pool, separate from the 50 SDK workers.
-        local_client = await to_thread.run_sync(self._build_client_sync)
+        local_client = await _wait_provider_local(to_thread.run_sync(self._build_client_sync))
+        if current_response_scope() is not None:
+            return await self._invoke_proxy_async(messages, generation_kwargs, local_client)
         self._ensure_async_primitives()
-        await self._endpoint_breaker().before_call()
+        await _wait_provider_local(self._endpoint_breaker().before_call())
         async with self._call_capacity(messages):
             t0 = time.perf_counter()
             try:
@@ -654,6 +727,41 @@ class GeminiProvider(BaseProvider):
                     type(e).__name__,
                 )
                 raise
+
+    async def _invoke_proxy_async(self, messages, generation_kwargs, local_client):
+        """New OCR keeps a fresh proxy client, with cancellable full responses."""
+        try:
+            self._ensure_async_primitives()
+            await _wait_provider_local(self._endpoint_breaker().before_call())
+            async with self._call_capacity(messages):
+                try:
+                    async def invoke():
+                        started = time.perf_counter()
+                        response = await local_client.ainvoke(
+                            messages, **generation_kwargs, timeout=current_response_timeout_seconds(),
+                        )
+                        content = _response_text(response.content if hasattr(response, "content") else response)
+                        return content, _response_metadata(response), (time.perf_counter() - started) * 1000
+
+                    content, metadata, duration_ms = await self._invoke_response(invoke)
+                    self._endpoint_breaker().record_success()
+                    self._record_duration(duration_ms)
+                    return LLMResponse(content=content, provider=self.provider_id, model=self.model,
+                                       duration_ms=duration_ms, **metadata)
+                except Exception as exc:
+                    if _is_overload_failure(exc):
+                        self._endpoint_breaker().record_failure()
+                    raise
+        finally:
+            async def close():
+                await local_client.aclose()
+
+            # Public 4.x aclose closes the fresh sync and async transports on
+            # this loop. A caller cancellation cannot cancel that short cleanup;
+            # its own local-step deadline still bounds it to ten seconds.
+            cleanup = asyncio.create_task(provider_local_step(close(), best_effort=True))
+            cleanup.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+            await asyncio.shield(cleanup)
 
 
 # ─── OpenAI / Zhipu / Anthropic ──────────────────────────────────────────────
@@ -1052,7 +1160,11 @@ class SafeRelayProvider(BaseProvider):
     def _response_timeout_override() -> float | None:
         from backend.services.execution_control import current_execution
         control = current_execution()
-        return control.response_timeout_seconds if control is not None else None
+        run_seconds = control.response_timeout_seconds if control is not None else None
+        call_seconds = current_response_timeout_seconds()
+        if call_seconds is None:
+            return run_seconds
+        return call_seconds if run_seconds is None else min(call_seconds, run_seconds)
 
     def __init__(self, config: ProviderConfig):
         super().__init__(config)
@@ -1192,14 +1304,23 @@ class SafeRelayProvider(BaseProvider):
     async def _relay_call(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:
         started = time.perf_counter()
         headers, payload = self._request_parts(messages, max_output_tokens=max_output_tokens)
-        client = await self._relay_client()
+        client = await _wait_provider_local(self._relay_client())
         request_options = {}
         seconds = self._response_timeout_override()
         if seconds is not None:
-            # Override only this grading request, not the cached client: other
+            # Override only this scoped request, not the cached client: other
             # workflows keep their existing relay timeout. The outer deadline
             # still caps total time even if chunks continue arriving.
             request_options["timeout"] = httpx.Timeout(seconds, connect=min(seconds, 15.0))
+        return await self._invoke_response(
+            lambda: self._relay_response(messages, client=client, headers=headers, payload=payload,
+                                         request_options=request_options, started=started),
+            timeout_seconds=seconds,
+        )
+
+    async def _relay_response(self, messages, *, client, headers, payload, request_options, started):
+        if current_response_scope() is not None:
+            started = time.perf_counter()
         try:
             response = await client.post(
                 self._target_url,
@@ -1268,8 +1389,8 @@ class SafeRelayProvider(BaseProvider):
         self._ensure_async_primitives()
         # DNS validation/client construction must finish before minute quota
         # admission; a delayed cold start must not accumulate a send burst.
-        await self._relay_client()
-        await self._endpoint_breaker().before_call()
+        await _wait_provider_local(self._relay_client())
+        await _wait_provider_local(self._endpoint_breaker().before_call())
         async with self._call_capacity(messages, response_timeout=self._response_timeout_override()):
             try:
                 options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}

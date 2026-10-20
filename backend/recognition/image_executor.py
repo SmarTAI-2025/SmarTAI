@@ -11,6 +11,7 @@ from backend.recognition.engine import EngineReadInputV1, RecognitionEngine
 from backend.recognition.executor import (
     ImageDetailPageV1, ReadUnitV1, RecognitionReadBatchV1, _snapshot, build_read_batch,
 )
+from backend.recognition.local_limits import bounded_recognition_progress
 from backend.recognition.models import NormalizedRegionV1, RecognitionSourceRefV1
 from backend.recognition.planner import RecognitionPlanV1
 from backend.recognition.runtime import RecognitionCapacity, region_budget_key, run_initial_read
@@ -37,6 +38,8 @@ async def read_image_plan(
     call_session=None,
 ) -> RecognitionReadBatchV1:
     source, plan = _snapshot(source, plan, engine)
+    if plan.policy.timeout_mode == "response_only":
+        progress = bounded_recognition_progress(progress)
     if source.owner_id != authorized_owner_id or source.content_type not in {"image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"} or not isinstance(image_bytes, bytes) or hashlib.sha256(image_bytes).hexdigest() != source.input_sha256:
         raise RecognitionError("recognition_source_mismatch")
     if plan.source_kind != "image" or plan.total_pages != 1 or plan.requested_pages != [1]:
@@ -65,11 +68,11 @@ async def read_image_plan(
                 command = ImagePrepareRequest(content_type=source.content_type, region=region.as_tuple())
                 if local_reader is not None:
                     prepared = (await local_reader.read(
-                        image_bytes, command, timeout_seconds=min(10, budget.remaining("read")),
+                        image_bytes, command, timeout_seconds=budget.local_timeout(10, "read"),
                     )).evidence
                 else:
                     prepared = await read_image_evidence(
-                        image_bytes, command, timeout_seconds=min(10, budget.remaining("read")), progress=progress,
+                        image_bytes, command, timeout_seconds=budget.local_timeout(10, "read"), progress=progress,
                     )
                 metadata = ImagePreparedMetadata.model_validate({
                     name: getattr(prepared, name) for name in ImagePreparedMetadata.model_fields

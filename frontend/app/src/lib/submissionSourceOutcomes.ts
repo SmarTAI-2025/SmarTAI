@@ -100,6 +100,15 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     description: tx(locale, "平台共享模型当前不可用，本次识别请求未发送。", "The shared model pool is currently unavailable. This recognition request was not sent."),
     nextStep: tx(locale, "请在模型与 BYOK 页面配置自己的模型。", "Configure your own BYOK model."),
   }),
+  provider_capacity_unavailable: (locale) => ({
+    title: tx(locale, "等待调用资源超时", "Timed out waiting for model capacity"),
+    description: tx(locale,
+      "SmarTAI 未能在限定时间内取得调用名额，尚未向模型发送本次请求。任务资料已保留。",
+      "SmarTAI could not obtain capacity before the deadline; this request was not sent to the model. Your task data is preserved."),
+    nextStep: tx(locale,
+      "请稍后重试；持续出现时请联系管理员检查服务器资源。",
+      "Retry later; if this persists, ask an administrator to check server resources."),
+  }),
   question_source_pages_out_of_range: (locale) => ({
     title: tx(locale, "请调整识别范围", "Adjust the recognition scope"),
     description: tx(locale, "填写的页码超出了 PDF 总页数，这份资料尚未调用识别模型。", "A selected page is outside this PDF. No recognition model was called for this source."),

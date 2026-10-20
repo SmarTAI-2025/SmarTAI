@@ -189,3 +189,19 @@ async def test_raw_sdk_auth_failure_is_specific_without_leaking_body():
         await engine.recognize(request())
     assert exc.value.code == "provider_auth_failed" and not exc.value.submission_may_exist
     assert "PRIVATE_AUTH_BODY" not in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_local_capacity_failure_stays_unsent_and_retryable_through_ocr_adapter():
+    from backend.services.background_errors import is_retryable_background_error
+    from backend.domain.source_outcomes import source_diagnostic_is_valid
+
+    provider, engine = llm()
+    provider.ainvoke_vision.side_effect = ProviderRequestError("provider_capacity_unavailable")
+    with pytest.raises(RecognitionError) as exc:
+        await engine.recognize(request())
+    assert exc.value.code == "provider_capacity_unavailable"
+    assert not exc.value.submission_may_exist
+    assert is_retryable_background_error(exc.value.code)
+    assert source_diagnostic_is_valid("parse_failed", exc.value.code, "ocr")
+    assert provider.ainvoke_vision.await_count == 1

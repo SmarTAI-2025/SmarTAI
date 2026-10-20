@@ -221,7 +221,8 @@ class RecognitionCallService:
         )
         started = time.monotonic()
         try:
-            async with asyncio.timeout(min(timeout_seconds, policy.total_seconds)):
+            async with asyncio.timeout(timeout_seconds if policy.timeout_mode == "response_only"
+                                       else min(timeout_seconds, policy.total_seconds)):
                 identity = await run_in_threadpool(model_cache_identity, source, request, capabilities=capabilities,
                                                   policy=policy, prompt_version=prompt_version)
                 context = dict(source=source, identity=identity, binding=binding, authorized_owner_id=owner)
@@ -264,7 +265,8 @@ class RecognitionCallService:
             raise RecognitionError("recognition_artifact_invalid") from None
         started = time.monotonic()
         try:
-            async with asyncio.timeout(min(timeout_seconds, policy.total_seconds)):
+            async with asyncio.timeout(timeout_seconds if policy.timeout_mode == "response_only"
+                                       else min(timeout_seconds, policy.total_seconds)):
                 def prepare():
                     identity = model_cache_identity(source, request, capabilities=capabilities, policy=policy, prompt_version=prompt_version)
                     envelope = build_artifact(identity=identity, source=source, payload_kind=_KINDS[kind], payload=payload)

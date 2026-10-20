@@ -78,6 +78,7 @@ from backend.models import (
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import source_files as source_file_service
 from backend.services import task_facade
+from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE
 from backend.services.teacher_score_constraints import teacher_score_requirements
 from backend.services.stage_provider_routing import (
     StageProviderRoute,
@@ -1761,6 +1762,9 @@ async def _start_question_preparation(
                 "job_id": active.id,
                 "workflow_revision": workflow.workflow_revision,
             }
+        # A retry must retain the original OCR identity, including legacy
+        # timeouts, so a deployment cannot bypass a pending provider submit.
+        timeout_contract = (replay.payload or {}) if replay is not None else retry_source_contract
         operation_payload = {
             **({"manual_saved_sources": manual_saved_sources} if manual_saved_sources else {}),
             **({"retry_origin_id": retry_origin_id} if retry_origin_id and replay is None else {}),
@@ -1782,6 +1786,10 @@ async def _start_question_preparation(
             **({"generation_language": request.generation_language} if request.generation_language else {}),
             "score_policy": request.score_policy.model_dump(mode="json"),
             "recognition_provider_id": recognition_provider_id,
+            "recognition_timeout_profile": (
+                timeout_contract.get("recognition_timeout_profile")
+                if timeout_contract is not None else SOURCE_TIMEOUT_PROFILE
+            ),
             "provider_configuration_fingerprint": (
                 provider_configuration_fingerprint
             ),
@@ -2403,6 +2411,7 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
             allow_vision=draft.role not in {"rubric", "programming_tests"} or payload.get("enable_material_ocr") is True,
             retry_key=retry_key,
             acknowledge_pending_retry=bool((operation.payload or {}).get("acknowledged_restart_from")),
+            timeout_profile=(operation.payload or {}).get("recognition_timeout_profile"),
         )
         if not result.text.strip():
             raise RecognitionError("ocr_empty_result")
