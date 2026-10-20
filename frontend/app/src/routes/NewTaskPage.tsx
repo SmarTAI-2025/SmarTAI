@@ -223,7 +223,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
 
       <form title={frontier ? demoLockedText(locale) : undefined} data-draft-width="900" id="new-task-form" onSubmit={handleSubmit} className="mx-auto mt-[35px] min-h-[510px] w-full max-w-[900px] rounded-[8px] border bg-card p-5 sm:p-10 xl:px-[49px] xl:pb-[39px] xl:pt-[39px]">
         {frontier ? <p className="mb-5 text-sm text-muted-foreground">{demoLockedText(locale)}</p> : null}
-        <fieldset disabled={frontier} className="grid gap-5 xl:block">
+        <fieldset disabled={frontier} className="grid min-w-0 grid-cols-1 gap-5 xl:block">
           <div>
             <label htmlFor="new-task-name" className="block text-[14px] font-semibold leading-5 text-foreground">{t("newTaskNameLabel")}</label>
             <input
@@ -238,7 +238,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
             />
           </div>
 
-          <div className="grid gap-5 md:grid-cols-2 md:gap-10 xl:mt-[22px]">
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 md:gap-10 xl:mt-[22px]">
             <div>
               <label htmlFor="new-task-semester" className="block text-[14px] font-semibold leading-5 text-foreground">{t("newTaskSemesterLabel")}</label>
               <p className="sr-only">{t("newTaskSemesterHint")}</p>
@@ -294,7 +294,7 @@ function NewTaskForm({ scope, taskQuery }: { scope: string; taskQuery: ReturnTyp
             />
           </div>}
 
-          <div className="flex h-14 items-center justify-between gap-4 rounded-[8px] border bg-slate-50 px-4 dark:bg-slate-800/50 xl:mt-[27px]">
+          <div className="flex min-h-14 items-center justify-between gap-4 rounded-[8px] border bg-slate-50 px-4 dark:bg-slate-800/50 xl:mt-[27px]">
             <div className="min-w-0">
               <p className="text-[13px] font-semibold text-foreground">{t("newTaskModelSummaryLabel")}</p>
               <p className="mt-1 truncate text-xs text-muted-foreground">{modelSummary}</p>
