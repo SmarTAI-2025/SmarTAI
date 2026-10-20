@@ -21,7 +21,7 @@ from backend.skills.base import (
     classify_skill_error,
 )
 from backend.tools import knowledge as kb_tool
-from backend.tools.structured_llm import PermanentLLMError, structured_llm_call
+from backend.tools.structured_llm import PermanentLLMError, TransientLLMError, structured_llm_call
 
 TRACE_VERSION = "math_evidence_v1"
 VERIFICATION_BUDGET_SECONDS = 20.0
@@ -265,6 +265,21 @@ def read_math_trace(expert: ExpertResult) -> dict | None:
     return None
 
 
+def _validate_claim_identity(original: MathAssessment, revised: MathAssessment):
+    """A tool's claim reference must keep pointing to the same submitted text."""
+    quotes = {claim.id: claim.quote for claim in revised.claims}
+    if any(quotes.get(claim.id) != claim.quote for claim in original.claims):
+        raise ValueError("review_changed_claim_identity")
+
+
+def _critical_failure(error: BaseException) -> bool:
+    from sqlalchemy.exc import SQLAlchemyError
+    from backend.domain.errors import DomainError
+    from backend.services.grading_checkpoints import CheckpointWriteError
+    from backend.services.math_grading_context import _has_critical_plan_failure
+    return _has_critical_plan_failure(error, (SQLAlchemyError, DomainError, CheckpointWriteError))
+
+
 async def review_math_experts(problem, answer, experts, provider, *, language="en", grading_setup=None):
     """Resolve concrete disagreements once, retaining weights and provenance."""
     from backend.services.math_grading_context import get_math_plan
@@ -285,7 +300,8 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
     other_dispute = (len(route_ids) > 1 or
                      len({expert.score for expert in experts}) > 1 or
                      len({_json([d.model_dump() for d in a.deductions]) for a in assessments}) > 1)
-    if not (disputed or other_dispute or any(a.needs_review for a in assessments)) or not take_review_budget():
+    requested_review = any(a.needs_review for a in assessments)
+    if not (disputed or other_dispute or requested_review) or not take_review_budget():
         return experts
     try:
         review, _ = await structured_llm_call(
@@ -296,7 +312,10 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                 "Return revisions only when a specific error in an expert's judgment can be supported "
                 "by the original text; source_quote must be verbatim from the student answer. "
                 "A revision contains expert_index (zero-based), reason, source_quote, and complete "
-                "MathAssessment. Preserve undisputed awards. Do not invent consensus or change the "
+                "MathAssessment. Preserve undisputed awards unless an explicit needs_review concern "
+                "provides source evidence for correcting them. Keep existing claim IDs and their "
+                "exact quotes unchanged; add new IDs only for newly identified original text. "
+                "Do not invent consensus or change the "
                 "rubric. Unknown tools are not evidence of an error. Empty revisions is valid. "
                 "Explain concrete residual disagreement; produce no mandatory-review instructions."
                 + authoritative_score_instruction(problem.max_score), language, grading_setup),
@@ -313,12 +332,13 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
             if index >= len(experts) or revision.source_quote not in (answer.content or ""):
                 continue
             old, candidate = assessments[index], revision.assessment
-            if len(route_ids) == 1 and old.awards:
+            if len(route_ids) == 1 and old.awards and not requested_review:
                 new_awards = {award.item_id: award.score for award in candidate.awards}
                 if any(new_awards.get(key) != value
                        for key, value in signatures[index].items() if key not in disputed):
                     continue
             try:
+                _validate_claim_identity(old, candidate)
                 score, steps = score_assessment(candidate, plan, answer.content or "")
             except ValueError:
                 continue
@@ -336,7 +356,9 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                 "raw_output": _json(trace),
             })
         return revised
-    except Exception:
+    except Exception as exc:
+        if _critical_failure(exc):
+            raise
         return experts  # A failed optional review never erases valid grades.
 
 
@@ -451,7 +473,7 @@ class MathGradingSkill(GradingSkill):
                 # A malformed detailed graph must not stop an otherwise
                 # gradeable answer. This is one new direct grading interaction.
                 kind, _ = classify_skill_error(exc)
-                if isinstance(exc, PermanentLLMError) or kind in {
+                if _critical_failure(exc) or isinstance(exc, (PermanentLLMError, TransientLLMError)) or kind in {
                     "daily_quota_exhausted", "quota_exhausted", "transient_llm"
                 }:
                     raise
@@ -485,12 +507,17 @@ class MathGradingSkill(GradingSkill):
                             "Return a complete ledger with a concrete score; retain supported credit. "
                             "Do not extend the tool result to a different relation or the entire answer. "
                             "Do not propose further tools or reconstruct missing student work. "
+                            "Preserve all existing claim IDs and their exact original quotes; "
+                            "add new IDs only for newly identified original text. "
                             "State a specific residual concern only when teacher attention would help.",
                         }), output_model=MathAssessment)
+                    _validate_claim_identity(draft, reviewed)
                     reviewed_score, reviewed_steps = score_assessment(reviewed, plan, answer.content or "")
                     draft, score, steps = reviewed, reviewed_score, reviewed_steps
                     duration += response.duration_ms or 0
-                except Exception:
+                except Exception as exc:
+                    if _critical_failure(exc):
+                        raise
                     # The existing valid grade remains useful; do not invent
                     # a failure or another model loop because review failed.
                     pass
@@ -502,7 +529,11 @@ class MathGradingSkill(GradingSkill):
                                   "assessment": draft.model_dump(mode="json"), "evidence": evidence}),
             )
         except Exception as exc:
+            if _critical_failure(exc):
+                raise
             kind, friendly = classify_skill_error(exc)
+            if isinstance(exc, TransientLLMError) and kind == "general":
+                kind = "transient_llm"
             return self._blank_result(problem.q_id, problem.max_score, friendly, error_kind=kind)
         finally:
             if cm:

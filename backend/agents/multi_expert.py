@@ -328,25 +328,9 @@ async def _run_multi_expert(
         # error Correction with synthesis_method='all_failed'.
         raise AllExpertsFailed(failures)
 
-    if len(successes) == 1:
-        # Degraded path: only one sample produced a real answer. No IS
-        # possible. The failed siblings remain in expert_results.
-        logger.info(
-            f"{mode} degraded_to_single for q_id={problem.q_id}: "
-            f"{len(failures)} of {len(results)} samples failed"
-        )
-        correction = _expert_to_correction(
-            problem.q_id,
-            problem.type,
-            successes[0],
-            synthesis_method="degraded_to_single",
-            extra_experts=failures,
-        )
-        correction.review_reasons = ["partial_experts"]
-        return correction
-
     # One bounded review sees original work and item-level evidence, including
-    # equal-total/opposite-item disagreements. Configured weights still apply.
+    # equal-total/opposite-item disagreements or a surviving expert's concern.
+    # Configured weights still apply.
     if getattr(skill_cls, "uses_math_evidence", False):
         from backend.skills.math_grading import review_math_experts
         review_provider = providers[0]
@@ -362,6 +346,20 @@ async def _run_multi_expert(
         finally:
             if reporter:
                 await reporter._emit_message(f"{student_id}/{problem.q_id}: synthesize_experts_finished")
+
+    if len(successes) == 1:
+        # Review any deferred concern before returning the surviving grade.
+        # Failed siblings remain visible and never vote.
+        logger.info(
+            f"{mode} degraded_to_single for q_id={problem.q_id}: "
+            f"{len(failures)} of {len(results)} samples failed"
+        )
+        correction = _expert_to_correction(
+            problem.q_id, problem.type, successes[0],
+            synthesis_method="degraded_to_single", extra_experts=failures,
+        )
+        correction.review_reasons = ["partial_experts"]
+        return correction
 
     # ── Synthesis (≥ 2 successes) ─────────────────────────────────────────
     if mode == "multi_sample":

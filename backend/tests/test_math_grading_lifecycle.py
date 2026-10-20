@@ -1,5 +1,6 @@
 """Frozen rubric plans survive retries without mixing old scoring engines."""
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -10,10 +11,10 @@ from backend.db import grading_repository as grades, workflow_repository as work
 from backend.db.models import AssignmentQuestionRecord, GradingRunEventRecord
 from backend.db.session import session_scope
 from backend.domain.errors import VersionConflict
-from backend.models import ExpertResult, ProblemInfo, TaskGradingSetup
+from backend.models import Correction, ExpertResult, ProblemInfo, StepScore, TaskGradingSetup
 from backend.services import grading_adapter, math_grading_context as context
 from backend.services import math_rubric_plan as rubric
-from backend.services.grading_checkpoints import CheckpointWriteError, saved_experts
+from backend.services.grading_checkpoints import CheckpointWriteError, MATH_TRACE_EVENT, saved_experts
 from backend.tests.test_grading_checkpoints import prepare, retry, stop
 from backend.tests.test_task_grading_retry import case, finish, start  # noqa: F401
 
@@ -50,6 +51,97 @@ def old_run(run_id):
                 key: value for key, value in event.payload.items()
                 if key not in {"math_grading_engine_version", "math_plan_id"}
             }
+
+
+def final_math_correction(question, plan, provider_id="provider"):
+    from backend.skills.math_grading import MathAssessment, TRACE_VERSION
+
+    original = MathAssessment(route_id=plan.routes[0].id, route_reason="Original rubric",
+        claims=[{"id": "s1", "quote": "4", "verdict": "supported", "reason": "Stated result."}],
+        score=8, confidence=.9, rationale="Original scoring evidence.", comment="Original.")
+    revised = original.model_copy(update={"score": 9, "rationale": "Rechecked scoring evidence."})
+    trace = {"version": TRACE_VERSION, "plan_id": plan.plan_id,
+             "assessment": revised.model_dump(mode="json"),
+             "original_assessment": original.model_dump(mode="json"),
+             "evidence": [{"claim_id": "s1", "status": "unknown"}],
+             "targeted_review": {"provider": "reviewer", "reason": "Credit follows the teacher rule."}}
+    step = StepScore(step_no=1, desc=revised.rationale, score=9, is_correct=False)
+    experts = [ExpertResult(provider=f"model#sample{index}", provider_id=provider_id,
+        score=9, max_score=10, confidence=.9, comment="Rechecked.", steps=[step],
+        raw_output=json.dumps(trace)) for index in (1, 2)]
+    return Correction(q_id=question.q_id, type=question.type, score=9, max_score=10,
+        confidence=.9, comment="Rechecked.", steps=[step], expert_results=experts,
+        synthesis_method="multi_sample")
+
+
+def test_public_projection_hides_only_math_trace_without_mutating_expert():
+    question = SimpleNamespace(q_id="q1", id="question", type="计算题", max_score=10)
+    correction = final_math_correction(question, rubric.fallback_math_rubric_plan(problem()))
+    original = correction.model_dump(mode="json")
+    ordinary = correction.expert_results[0].model_copy(update={"raw_output": "ordinary model output"})
+    correction.expert_results.append(ordinary)
+    result = grading_adapter.correction_to_result(
+        run_id="run", revision_id="revision", question=question, student_id="student",
+        correction=correction,
+    )
+    assert [expert["raw_output"] for expert in result.ai_expert_results] == [
+        None, None, "ordinary model output",
+    ]
+    assert correction.expert_results[0].model_dump(mode="json") == original["expert_results"][0]
+    assert result.ai_score == correction.score
+    assert result.ai_steps == [step.model_dump() for step in correction.steps]
+
+
+def test_final_math_trace_is_private_and_preserves_revised_samples(case):
+    from backend.progress.grading_activity import public_event
+
+    run_id = start(case, "final-math-trace")["job_id"]
+    checkpoints, questions, revisions, setup = prepare(case, run_id)
+    question, student = questions[0], revisions[0][1]
+    plan = rubric.fallback_math_rubric_plan(context.problem_from_question(question))
+    checkpoints.save_math_plan(context.problem_from_question(question), plan)
+    correction = final_math_correction(question, plan, setup.setup["selected_provider_ids"][0])
+    checkpoints.save_correction(student, correction)
+    event, = [row for row in grades.list_events(run_id) if row["message"] == MATH_TRACE_EVENT]
+    assert public_event(event) is None
+    assert event["payload"]["math_grading_engine_version"] == context.MATH_GRADING_ENGINE_VERSION
+    assert event["payload"]["student_id"] == student
+    assert event["payload"]["q_id"] == question.q_id
+    assert event["payload"]["score"] == 9
+    for index, saved in enumerate(event["payload"]["experts"]):
+        expert = correction.expert_results[index]
+        assert saved["provider"] == f"model#sample{index + 1}"
+        assert saved["provider_id"] == expert.provider_id
+        assert saved["math_plan_id"] == plan.plan_id
+        assert saved["trace"] == json.loads(expert.raw_output)
+        assert saved["trace"]["original_assessment"]["score"] == 8
+        assert saved["trace"]["assessment"]["score"] == 9
+        assert saved["trace"]["targeted_review"]["reason"] == "Credit follows the teacher rule."
+    persisted, = grades.list_results_for_run(run_id)
+    assert persisted.ai_score == 9
+    assert all(expert["raw_output"] is None for expert in persisted.ai_expert_results)
+    assert all(expert.raw_output is not None for expert in correction.expert_results)
+
+
+@pytest.mark.parametrize("failure", ["storage", "lease"])
+def test_final_trace_failure_cannot_publish_or_change_a_result(case, monkeypatch, failure):
+    run_id = start(case, f"final-trace-{failure}")["job_id"]
+    checkpoints, questions, revisions, _ = prepare(case, run_id)
+    question, student = questions[0], revisions[0][1]
+    plan = rubric.fallback_math_rubric_plan(context.problem_from_question(question))
+    checkpoints.save_math_plan(context.problem_from_question(question), plan)
+    correction = final_math_correction(question, plan)
+    if failure == "lease":
+        stop(case, run_id)
+    else:
+        def fail(*args, **kwargs):
+            raise OperationalError("event storage unavailable", {}, RuntimeError("database failed"))
+        monkeypatch.setattr(grades, "record_event", fail)
+    previous = [row.model_dump() for row in grades.list_results_for_run(run_id)]
+    with pytest.raises(CheckpointWriteError, match="question_checkpoint_failed"):
+        checkpoints.save_correction(student, correction)
+    assert [row.model_dump() for row in grades.list_results_for_run(run_id)] == previous
+    assert not [row for row in grades.list_events(run_id) if row["message"] == MATH_TRACE_EVENT]
 
 
 def test_one_plan_precedes_all_students_and_is_reused_without_another_call(monkeypatch):

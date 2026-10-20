@@ -55,6 +55,14 @@ def response():
     return SimpleNamespace(content="{}", duration_ms=1)
 
 
+def expert_for(draft, plan, text, *, evidence=None):
+    score, steps = grading.score_assessment(draft, plan, text)
+    return grading.ExpertResult(provider="mock:math", score=score, max_score=plan.max_score,
+        confidence=.9, comment=draft.comment, steps=steps, raw_output=json.dumps({
+            "version": grading.TRACE_VERSION, "plan_id": plan.plan_id,
+            "assessment": draft.model_dump(), "evidence": evidence or []}))
+
+
 @pytest.fixture
 def provider():
     return SimpleNamespace(provider_id="mock:math")
@@ -136,6 +144,78 @@ async def test_multi_expert_self_concerns_wait_for_combined_review(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_shared_self_concern_can_correct_equal_item_scores(monkeypatch, provider):
+    p, a, plan = problem(), answer(), plan_for()
+    experts = [expert_for(assessment(needs_review=True), plan, a.content) for _ in range(2)]
+    review = grading.ExpertReview(revisions=[grading.ExpertRevision(
+        expert_index=i, source_quote=a.content, reason="Review found missing method justification.",
+        assessment=assessment(6, 0)) for i in range(2)])
+    monkeypatch.setattr(grading, "structured_llm_call", AsyncMock(return_value=(review, response())))
+    with math_plans_context({"q1": plan}), grading.math_review_scope():
+        result = await grading.review_math_experts(p, a, experts, provider)
+    assert [expert.score for expert in result] == [6, 6]
+    assert all("targeted_review" in grading.read_math_trace(expert) for expert in result)
+
+
+@pytest.mark.asyncio
+async def test_surviving_expert_gets_deferred_review(monkeypatch):
+    from backend.agents import multi_expert
+    from backend.tests.test_multi_expert_robustness import _FakeProvider, _FakeRegistry
+    p, a, plan = problem(), answer(), plan_for()
+    good, bad = _FakeProvider("good"), _FakeProvider("bad")
+    calls = []
+
+    async def model(route, **kwargs):
+        calls.append((route.provider_id, kwargs["output_model"]))
+        if route is bad:
+            raise TimeoutError("Provider failed")
+        if kwargs["output_model"] is grading.MathAssessment:
+            return assessment(needs_review=True), response()
+        assert kwargs["output_model"] is grading.ExpertReview
+        return grading.ExpertReview(revisions=[grading.ExpertRevision(
+            expert_index=0, source_quote=a.content, reason="Missing method justification.",
+            assessment=assessment(6, 0))]), response()
+
+    monkeypatch.setattr(grading, "structured_llm_call", model)
+    monkeypatch.setattr(multi_expert, "get_skill_for_type", lambda _: CalculationSkill)
+    with math_plans_context({"q1": plan}):
+        result = await multi_expert.run_multi_expert(
+            problem=p, answer=a, student_id="s", registry=_FakeRegistry([good, bad]),
+            aggregation_method="weighted_average")
+    assert result.score == 6 and result.synthesis_method == "degraded_to_single"
+    assert sum(model is grading.ExpertReview for _, model in calls) == 1
+    assert result.review_reasons == ["partial_experts"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["evidence_feedback", "expert_review"])
+async def test_review_cannot_retarget_existing_tool_claim_id(monkeypatch, provider, stage):
+    p, a, plan = problem(), answer("6*7=41; 1+1=2"), plan_for()
+    draft = assessment(text="6*7=41", needs_review=True)
+    changed = assessment(8, 2, text="1+1=2")  # Reuses s1 for unrelated correct text.
+    evidence = [{"claim_id": "s1", "status": "refuted", "reason": "41 != 42"}]
+    original = expert_for(draft, plan, a.content, evidence=evidence)
+    if stage == "evidence_feedback":
+        draft.checks = [grading.Verification(claim_id="s1", context_quote=p.stem,
+                    request={"student_expression": "41", "reference_expression": "42"})]
+        monkeypatch.setattr(CalculationSkill, "_verify", AsyncMock(return_value=evidence))
+        call = AsyncMock(side_effect=[(draft, response()), (changed, response())])
+        monkeypatch.setattr(grading, "structured_llm_call", call)
+        with math_plans_context({"q1": plan}), grading.math_review_scope():
+            result = await CalculationSkill(provider).grade(p, a)
+    else:
+        review = grading.ExpertReview(revisions=[grading.ExpertRevision(
+            expert_index=0, source_quote="1+1=2", reason="Changed claim", assessment=changed)])
+        monkeypatch.setattr(grading, "structured_llm_call", AsyncMock(return_value=(review, response())))
+        with math_plans_context({"q1": plan}), grading.math_review_scope():
+            result = (await grading.review_math_experts(p, a, [original], provider))[0]
+    trace = grading.read_math_trace(result)
+    assert result.score == 8
+    assert trace["assessment"]["claims"][0]["quote"] == "6*7=41"
+    assert trace["evidence"] == evidence
+
+
+@pytest.mark.asyncio
 async def test_bad_graph_uses_one_direct_llm_fallback(monkeypatch, provider):
     p, a, plan = problem(), answer(), plan_for()
     bad = assessment(text="Student never wrote this.")
@@ -169,6 +249,35 @@ async def test_nonretryable_provider_failure_does_not_launch_direct_fallback(mon
     with math_plans_context({"q1": plan_for()}):
         result = await CalculationSkill(provider).grade(problem(), answer())
     assert result.error_kind and result.steps == [] and call.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_typed_transient_failure_never_becomes_structure_fallback(monkeypatch, provider):
+    from backend.tools.structured_llm import TransientLLMError
+    call = AsyncMock(side_effect=TransientLLMError("transport interrupted"))
+    monkeypatch.setattr(grading, "structured_llm_call", call)
+    with math_plans_context({"q1": plan_for()}):
+        result = await CalculationSkill(provider).grade(problem(), answer())
+    assert result.error_kind == "transient_llm" and call.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["initial", "feedback", "expert_review"])
+async def test_wrapped_storage_error_is_not_silently_downgraded(monkeypatch, provider, stage):
+    from sqlalchemy.exc import OperationalError
+    from backend.tools.structured_llm import TransientLLMError
+    failure = TransientLLMError("request interrupted")
+    failure.__cause__ = OperationalError("SELECT daily_usage", {}, OSError("disk I/O error"))
+    p, a, plan = problem(), answer(), plan_for()
+    draft = assessment(needs_review=True)
+    call = AsyncMock(side_effect=([(draft, response()), failure] if stage == "feedback" else failure))
+    monkeypatch.setattr(grading, "structured_llm_call", call)
+    with math_plans_context({"q1": plan}), grading.math_review_scope(), pytest.raises(TransientLLMError):
+        if stage == "expert_review":
+            await grading.review_math_experts(p, a, [expert_for(draft, plan, a.content)], provider)
+        else:
+            await CalculationSkill(provider).grade(p, a)
+    assert call.await_count == (2 if stage == "feedback" else 1)
 
 
 @pytest.mark.asyncio

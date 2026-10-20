@@ -174,6 +174,17 @@ def correction_to_result(
                 "error_kind": "parse_failed",
             }))
 
+    from backend.skills.math_grading import read_math_trace
+
+    public_experts = []
+    for expert in normalized_experts:
+        payload = expert.model_dump()
+        if read_math_trace(expert) is not None:
+            # The full graph stays in private checkpoints. Keep the existing
+            # public field and all scored evidence without mutating the vote.
+            payload["raw_output"] = None
+        public_experts.append(payload)
+
     return education.GradeResultDTO(
         id="", grading_run_id=run_id, submission_revision_id=revision_id,
         question_id=question.id, student_id=student_id, q_id=q_id,
@@ -182,7 +193,7 @@ def correction_to_result(
         ai_comment=correction.comment or "",
         ai_steps=[s.model_dump() for s in normalized_steps],
         ai_confidence=None if method == "paused" else correction.confidence,
-        ai_expert_results=[e.model_dump() for e in normalized_experts],
+        ai_expert_results=public_experts,
         ai_synthesis_method=method,
         requires_review=needs_review,
         review_reasons=review_reasons,

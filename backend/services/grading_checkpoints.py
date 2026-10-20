@@ -16,6 +16,7 @@ from backend.services.math_grading_context import (
 
 _current = ContextVar("grading_checkpoints", default=None)
 EVENT = "grading_expert_checkpoint"
+MATH_TRACE_EVENT = "grading_math_final_trace"
 
 
 class CheckpointWriteError(RuntimeError):
@@ -168,10 +169,29 @@ class GradingCheckpoints:
 
     def save_correction(self, student_id, correction):
         from backend.services.grading_adapter import correction_to_result
+        from backend.skills.math_grading import read_math_trace
+
         result = correction_to_result(run_id=self.run_id,
             revision_id=self.revisions[student_id], question=self.questions[correction.q_id],
             student_id=student_id, correction=correction)
+        traces = [
+            {"provider_id": expert.provider_id, "provider": expert.provider,
+             "math_plan_id": trace.get("plan_id"), "trace": trace}
+            for expert in correction.expert_results
+            if (trace := read_math_trace(expert)) is not None
+        ]
         try:
+            if traces:
+                # Expert checkpoints precede arbitration. Preserve its final
+                # evidence before the public result drops internal raw_output.
+                repository.record_event(
+                    self.run_id, worker_id=self.worker_id, level="info",
+                    message=MATH_TRACE_EVENT,
+                    payload={"math_grading_engine_version": MATH_GRADING_ENGINE_VERSION,
+                             "student_id": student_id, "q_id": correction.q_id,
+                             "score": correction.score, "synthesis_method": correction.synthesis_method,
+                             "experts": traces},
+                )
             repository.upsert_result(self.run_id, worker_id=self.worker_id, grade_result=result)
         except Exception as exc:
             raise CheckpointWriteError("question_checkpoint_failed") from exc
