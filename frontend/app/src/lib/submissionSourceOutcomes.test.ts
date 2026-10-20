@@ -41,7 +41,7 @@ describe("submission source reason copy", () => {
     const error = { page: 2, error_code: "provider_upstream_unavailable" };
     expect(getSubmissionPageErrorLabel(item, error, "zh-CN")).toBe("第 2 页：模型服务暂时不可用");
     expect(getSubmissionPageErrorLabel(item, { ...error, status_code: 503 }, "en-US")).toBe("Page 2: The model service is temporarily unavailable (HTTP 503)");
-    expect(getSubmissionSourceReasonCopy(item, "zh-CN").nextStep).toContain("是否计费尚无法确认");
+    expect(getSubmissionSourceReasonCopy(item, "zh-CN").nextStep).toContain("再次调用可能重复消耗额度");
     for (const status_code of [null, 0, 999, Number.NaN]) {
       expect(getSubmissionPageErrorLabel(item, { ...error, status_code }, "en-US")).not.toContain("HTTP");
     }

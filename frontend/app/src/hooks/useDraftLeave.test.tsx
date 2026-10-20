@@ -81,8 +81,8 @@ it("native beforeunload is present only for unsaved changes or business work", a
 });
 it("server changes preserve current input, demand explicit conflict resolution, and never submit", async () => {
   setup(); await ready(); type("old local"); await save(); type("new input"); fireEvent.click(screen.getByText("server changes"));
-  expect(screen.getByLabelText("name")).toHaveValue("new input"); await screen.findByText(/任务内容已更新/); fireEvent.click(screen.getByRole("button", { name: "暂存" })); await screen.findByText(/请先选择保留当前输入或恢复旧草稿/);
-  fireEvent.click(screen.getByText("核对后恢复旧草稿")); expect(screen.getByLabelText("name")).toHaveValue("old local"); await save();
+  expect(screen.getByLabelText("name")).toHaveValue("new input"); await screen.findByText(/任务内容已更新/); fireEvent.click(screen.getByRole("button", { name: "暂存" })); await screen.findByText(/请先选择保留当前输入或恢复保留的内容/);
+  fireEvent.click(screen.getByText("恢复保留的内容")); expect(screen.getByLabelText("name")).toHaveValue("old local"); await save();
 });
 it("can explicitly keep current input after a server update and save without submitting", async () => {
   setup(); await ready(); type("old local"); await save(); type("new input");

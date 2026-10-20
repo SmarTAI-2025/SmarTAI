@@ -150,7 +150,7 @@ export function DraftActions({ locale: displayLocale }: { locale?: string }) {
       <p>{tx("仅保存在此浏览器，7 天内可恢复。", "Stored only in this browser and recoverable for 7 days.")}</p>
       <details><summary className="cursor-pointer">{tx("保存说明", "Storage details")}</summary><p className="mt-1 max-w-lg">{tx("退出登录或清理浏览器数据会清除草稿。每页最多 64 MiB，总计 128 MiB、30 份。", "Signing out or clearing browser data removes drafts. Limits: 64 MiB per page, 128 MiB total, and 30 drafts.")}</p></details>
     </div>
-    {editable.map((item) => <div key={item.scope}>{item.notice ? <p role="status" className="mt-2 text-xs">{draftMessage(item.notice, locale)}</p> : null}{item.hasConflict ? <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={item.keepCurrent} className="rounded border px-3 py-2 text-sm">{tx("保留当前输入", "Keep current input")}</button><button type="button" onClick={item.restore} className="rounded border px-3 py-2 text-sm">{tx("核对后恢复旧草稿", "Review and restore saved draft")}</button></div> : null}</div>)}
+    {editable.map((item) => <div key={item.scope}>{item.notice ? <p role="status" className="mt-2 text-xs">{draftMessage(item.notice, locale)}</p> : null}{item.hasConflict ? <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={item.keepCurrent} className="rounded border px-3 py-2 text-sm">{tx("保留当前输入", "Keep current input")}</button><button type="button" onClick={item.restore} className="rounded border px-3 py-2 text-sm">{tx("恢复保留的内容", "Restore preserved content")}</button></div> : null}</div>)}
     {error ? <p role="alert" className="mt-2 text-danger">{error}</p> : null}
     {deleteError ? <p role="alert" className="mt-2 text-danger">{draftMessage(deleteError, locale)}</p> : null}
   </section>;

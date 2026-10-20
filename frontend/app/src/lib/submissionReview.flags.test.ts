@@ -42,7 +42,7 @@ describe("OCR review labels", () => {
   it.each(["very_low_confidence", "recognition_low_confidence", "low_confidence"])("keeps uncalibrated %s out of the required queue", (flag) => {
     const answer = { q_id: "q1", number: "1", type: "proof", content: "Readable answer", flag: [flag] };
     expect(answerReviewAttention(answer)).toBe("advisory");
-    expect(formatSubmissionFlag(flag, "zh-CN")).toContain("可继续");
+    expect(formatSubmissionFlag(flag, "zh-CN")).toContain(flag === "recognition_low_confidence" ? "请对照原件核对文字和公式" : "可继续");
     expect(answerReviewAttention({ ...answer, flag: ["recognition_failed"] })).toBe("blocking");
     expect(answerReviewAttention({ ...answer, flag: ["recognition_repaired_needs_confirmation"] })).toBe("blocking");
     expect(answerReviewAttention({ ...answer, review_status: "confirmed" })).toBe("none");

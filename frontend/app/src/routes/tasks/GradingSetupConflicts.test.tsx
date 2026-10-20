@@ -149,12 +149,12 @@ it("still protects a concurrent task setting change until the teacher resolves i
   saved = { ...defaults, strictness: 20 };
   revision++;
   await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
-  await screen.findByText(/任务内容已更新，当前输入已保留/);
+  await screen.findByText(/任务内容已更新，请核对当前输入/);
   expect(slider).toHaveValue("70");
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   expect(putJSON).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "暂存" }));
-  await screen.findByText(/请先选择保留当前输入或恢复旧草稿/);
+  await screen.findByText(/请先选择保留当前输入或恢复保留的内容/);
   await user.click(screen.getByRole("button", { name: "保留当前输入" }));
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   await screen.findByText("Grading summary");
@@ -187,7 +187,7 @@ it("blocks an unavailable selected model with validation, without a false draft 
   fireEvent.change(slider, { target: { value: "70" } });
   enabled = false;
   await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
-  expect(screen.queryAllByText(/任务内容已更新，当前输入已保留/)).toHaveLength(0);
+  expect(screen.queryAllByText(/任务内容已更新，请核对当前输入/)).toHaveLength(0);
   await user.click(screen.getByRole("button", { name: "暂存" }));
   await screen.findByText(/已暂存 ·/);
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
@@ -222,7 +222,7 @@ it("releases the save guard after a rejected stale write and still requires conf
     throw new APIError(409, "workflow_revision_conflict", { detail: { code: "workflow_revision_conflict" } });
   });
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
-  await screen.findByText(/任务内容已更新，当前输入已保留/);
+  await screen.findByText(/任务内容已更新，请核对当前输入/);
   expect(slider).toHaveValue("70");
   expect(slider).toBeEnabled();
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
