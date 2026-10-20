@@ -184,3 +184,96 @@ async def test_public_cleanup_loop_scans_at_start_and_retries_pending_work(monke
     with pytest.raises(asyncio.CancelledError):
         await account_closure.account_closure_loop(frontier_only=True)
     assert calls == ["scan", {"frontier_only": True}]
+
+
+@pytest.mark.asyncio
+async def test_delayed_task_usage_cannot_recreate_deleted_guest_history(enabled, tmp_path, monkeypatch):
+    """A real task request can finish its separate analytics write after exit."""
+    from threading import Event
+    from backend.api import tasks as task_api
+    from backend.db.models import AssignmentRecord
+    from backend.services import task_deletion
+    from backend.tests.test_source_cleanup import _finish_task_delete, _task_delete_worker
+
+    guest = issue(enabled)
+    owner = guest["user"]["id"]
+    storage = LocalStorage(tmp_path / "objects")
+    monkeypatch.setattr(account_closure, "get_storage", lambda: storage)
+    monkeypatch.setattr(task_deletion, "get_storage", lambda: storage)
+    entered, resume = Event(), Event()
+    real_track = task_api.track_usage_event
+
+    def delayed_track(**kwargs):
+        entered.set()
+        assert resume.wait(10), "cleanup did not release the delayed usage write"
+        real_track(**kwargs)
+
+    monkeypatch.setattr(task_api, "track_usage_event", delayed_track)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(task, enabled, guest)
+        try:
+            assert entered.wait(10), "task request did not reach its analytics write"
+            with session_scope() as session:
+                task_id = session.scalar(select(AssignmentRecord.id).where(
+                    AssignmentRecord.teacher_id == owner))
+            assert task_id is not None
+            assert enabled.post("/auth/frontier-demo-session/end", headers=headers(guest["token"])).status_code == 200
+            assert account_closure.process_one_closure(frontier_only=True, raise_errors=True)
+            await _finish_task_delete(_task_delete_worker(), task_id)
+            release_claim(owner)
+            assert account_closure.process_one_closure(frontier_only=True, raise_errors=True)
+            with session_scope() as session:
+                assert session.get(UserRecord, owner) is None
+                assert session.scalar(select(AdminUsageEventRecord).where(
+                    AdminUsageEventRecord.user_id == owner)) is None
+        finally:
+            resume.set()
+        assert pending.result(timeout=10)["task_id"] == task_id
+
+    with session_scope() as session:
+        assert session.scalar(select(AdminUsageEventRecord).where(
+            AdminUsageEventRecord.user_id == owner)) is None
+
+
+def test_staged_guest_usage_is_drained_before_cleanup_finishes(tmp_path, monkeypatch):
+    """An analytics transaction already in progress cannot outlive deletion."""
+    from threading import Event
+    from backend.analytics.admin_usage import record_usage_event_in_session
+
+    monkeypatch.setattr(settings, "frontier_demo_session_cooldown_seconds", 0)
+    guest = frontier_demo.issue_user()
+    storage = LocalStorage(tmp_path / "objects")
+    monkeypatch.setattr(account_closure, "get_storage", lambda: storage)
+    frontier_demo.queue_cleanup(owner_id=guest.id)
+    staged, resume, cleanup_started = Event(), Event(), Event()
+
+    def stage_usage():
+        with session_scope() as session:
+            record_usage_event_in_session(session, event_name="task_created",
+                user_id=guest.id, role=guest.role)
+            staged.set()
+            assert resume.wait(10), "cleanup did not release the analytics transaction"
+
+    def cleanup():
+        cleanup_started.set()
+        return account_closure.process_one_closure(frontier_only=True, raise_errors=True)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        writing = pool.submit(stage_usage)
+        try:
+            assert staged.wait(10), "analytics transaction did not start"
+            deleting = pool.submit(cleanup)
+            assert cleanup_started.wait(10), "cleanup did not start"
+            try:
+                deleting.result(timeout=1)
+            except TimeoutError:
+                pass  # Cleanup may wait until the in-flight writer commits.
+        finally:
+            resume.set()
+        writing.result(timeout=10)
+        assert deleting.result(timeout=10)
+
+    with session_scope() as session:
+        assert session.get(UserRecord, guest.id) is None
+        assert session.scalar(select(AdminUsageEventRecord).where(
+            AdminUsageEventRecord.user_id == guest.id)) is None
