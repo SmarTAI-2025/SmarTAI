@@ -57,7 +57,7 @@ from backend.db.models import (
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.confidence_policy import question_issue_requires_confirmation
+from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_requires_confirmation
 from backend.domain.errors import (
     DomainError,
     DuplicateActiveRun,
@@ -881,6 +881,7 @@ def _serialize_problem(question) -> dict:
         "type": question.type,
         "stem": question.stem,
         "criterion": question.criterion,
+        "recognition_confidence": confidence_value(presentation.get("recognition_confidence")),
         "max_score": max_score,
         "max_score_source": presentation.get("max_score_source") or (
             "default_10" if max_score == 10 else "legacy"
@@ -2364,6 +2365,7 @@ def _replace_draft_questions(
                     "question_structure": structure.model_dump(),
                     "rubric_point_summary": rubric_summary.model_dump(),
                     "solution_code": raw.get("solution_code"),
+                    "recognition_confidence": raw.get("recognition_confidence"),
                     "material_provenance": raw.get("material_provenance", {}),
                     "ai_completion_provenance": raw.get("ai_completion_provenance", {}),
                     "preparation_issues": raw.get("preparation_issues", []),
@@ -3492,7 +3494,7 @@ def apply_question_patches_atomic(
         "stem", "criterion", "max_score", "reference_answer", "test_cases"
     }
     allowed_presentation = {
-        "review_status", "solution_code", "material_provenance",
+        "review_status", "solution_code", "material_provenance", "recognition_confidence",
         "ai_completion_provenance", "preparation_issues",
         "max_score_source", "max_score_review_status",
     }
@@ -4422,7 +4424,7 @@ def grading_readiness(
                 if {question.q_id for question in questions} - {answer.q_id for answer in revision.answers}:
                     issues.append("submission_recognition_blocked")
                 recognition_review_ids.extend(answer.id for answer in revision.answers
-                                              if "recognition_needs_review" in (answer.flag or []))
+                                              if confidence_needs_attention(_answer_recognition_confidence(answer.flag)))
                 for answer in revision.answers:
                     if _answer_recognition_failures(answer.flag):
                         issues.append("submission_recognition_blocked")
@@ -4473,9 +4475,8 @@ def _answer_recognition_failures(flags):
 
 
 def _answer_recognition_confidence(flags):
-    from backend.domain.confidence_policy import confidence_value
     for flag in flags or []:
-        if flag.startswith("recognition_confidence:"):
+        if flag.startswith("answer_recognition_confidence:"):
             try:
                 return confidence_value(float(flag.split(":", 1)[1]))
             except ValueError:
@@ -4486,7 +4487,10 @@ def _answer_recognition_confidence(flags):
 def _public_answer_flags(flags):
     # Existing clients understand recognition_failed. Preserve the precise
     # source evidence too; projecting it must not mutate the stored answer.
-    result = [flag for flag in flags or [] if not flag.startswith("recognition_confidence:")]
+    result = [flag for flag in flags or []
+              if not flag.startswith(("recognition_confidence:", "answer_recognition_confidence:"))
+              and flag not in {"recognition_low_confidence", "recognition_very_low_confidence",
+                               "low_confidence", "very_low_confidence", "recognition_needs_review"}]
     if _answer_recognition_failures(result) and "recognition_failed" not in result:
         result.append("recognition_failed")
     return result
@@ -4496,6 +4500,15 @@ def _effective_question_issues(presentation):
     issues = []
     for issue in presentation.get("preparation_issues", []):
         coverage = (issue.get("details") or {}).get("coverage") or {}
+        # Old source scores/labels were broadcast to every question. They are
+        # not per-question assessments; keep actual failure evidence visible,
+        # including incomplete question fragments from saved-text recovery.
+        if (issue.get("code") in {"recognition_partial", "recognition_needs_review"}
+                and not (issue.get("code") == "recognition_partial" and issue.get("severity") == "blocking")
+                and (issue.get("details") or {}).get("confidence_scope") != "question"
+                and not (issue.get("details") or {}).get("error_code")
+                and not any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))):
+            continue
         if (issue.get("field") != "answer" and issue.get("code") in {"recognition_partial", "recognition_needs_review"} and issue.get("status") != "resolved"
                 and ((issue.get("details") or {}).get("error_code")
                      or any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets")))):
@@ -5195,8 +5208,8 @@ def update_student_answer(
                 *patch["flag"], *sorted(_REQUIRED_ANSWER_CONFIRMATION_FLAGS.intersection(target.flag or [])),
             ]))
         if patch.get("flag") is not None:
-            patch = {**patch, "flag": [*[flag for flag in patch["flag"] if not flag.startswith("recognition_confidence:")],
-                                       *[flag for flag in target.flag or [] if flag.startswith("recognition_confidence:")]]}
+            patch = {**patch, "flag": [*_public_answer_flags(patch["flag"]),
+                                       *[flag for flag in target.flag or [] if flag.startswith("answer_recognition_confidence:")]]}
         flags_changed = patch.get("flag") is not None and list(patch["flag"]) != list(target.flag or [])
         if patch.get("review_status") == "confirmed" and any(
             flag in failed_flags

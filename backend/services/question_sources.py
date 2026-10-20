@@ -323,30 +323,28 @@ def recognition_requires_confirmation(summary):
     return recognition_has_failure(summary) or confidence_requires_review((summary or {}).get("confidence"))
 
 
-def recognition_needs_review(summary):
-    from backend.domain.confidence_policy import confidence_needs_attention
-    if not summary:
-        return False
-    coverage = summary.get("coverage") or {}
-    return bool(confidence_needs_attention(summary.get("confidence")) or summary.get("confidence") == "low" or summary.get("error_code") or any(
-        coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets", "unverified_targets")
-    ))
-
-
 def attach_recognition_review(packages, sources):
-    """Carry recognition uncertainty into the existing final review, idempotently."""
+    """Project per-question confidence and concrete source failures separately."""
+    from backend.domain.confidence_policy import confidence_needs_attention
+
+    for q_id, problem in packages.items():
+        confidence = problem.get("recognition_confidence")
+        if confidence_needs_attention(confidence):
+            issue_id = f"recognition_confidence_{q_id}"
+            issues = problem.setdefault("preparation_issues", [])
+            if not any(item.get("issue_id") == issue_id for item in issues):
+                issues.append(dict(
+                    issue_id=issue_id, q_id=q_id, field="stem", severity="warning",
+                    status="open", code="low_confidence", source_ids=[],
+                    details=dict(confidence=confidence, confidence_scope="question"),
+                ))
     for source in sources:
         summary = source.get("recognition")
         if not summary:
             continue
         coverage = summary.get("coverage") or {}
-        partial = any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets", "unverified_targets"))
-        informational = (bool(coverage.get("unverified_targets"))
-            and not any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
-            and not summary.get("error_code")
-            and "low_confidence_content" not in summary.get("confidence_reasons", []))
         incomplete = any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
-        if not recognition_needs_review(summary):
+        if not recognition_has_failure(summary):
             continue
         for q_id, problem in packages.items():
             issue_id = "recognition_" + hashlib.sha256(f"{summary.get('operation_id')}:{q_id}".encode()).hexdigest()[:24]
@@ -355,10 +353,9 @@ def attach_recognition_review(packages, sources):
                 continue
             problem["review_status"] = "needs_review"
             issues.append(dict(
-                issue_id=issue_id, q_id=q_id, field="stem", severity="blocking" if incomplete or summary.get("error_code") else "info" if informational else "warning", status="open",
-                code="recognition_partial" if partial else "recognition_needs_review",
+                issue_id=issue_id, q_id=q_id, field="stem", severity="blocking", status="open",
+                code="recognition_partial" if incomplete else "recognition_needs_review",
                 source_ids=[summary["operation_id"]], details=dict(coverage=coverage,
                     artifact_ids=summary.get("artifact_ids", []), error_code=summary.get("error_code"),
-                    confidence=summary.get("confidence"),
-                    confidence_reasons=summary.get("confidence_reasons", [])),
+                    confidence_scope="source"),
             ))

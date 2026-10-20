@@ -97,7 +97,7 @@ def test_individual_blank_confirmation_clears_required_failure_but_preserves_evi
 def test_blank_or_uncalibrated_review_is_not_a_recognition_failure(content, flags):
     _seeded, args = _case(flags=flags, content=content)
     before = task_facade.get_task(**args, full=True)
-    assert before["student_data"]["S001"]["stu_ans"][0]["flag"] == flags
+    assert before["student_data"]["S001"]["stu_ans"][0]["flag"] == []
     assert task_facade.grading_readiness(**args)["blocking_issues"] == []
     task_facade.update_student_answer(
         **args, display_student_id="S001", q_id="q1", patch={"review_status": "confirmed"},
@@ -116,7 +116,7 @@ def test_uncalibrated_low_labels_do_not_require_confirmation(low_flag):
         expected_revision=before["workflow_revision"],
     )
     assert confirmed["answer"]["content"] == "Visible student work"
-    assert low_flag in confirmed["answer"]["flag"]
+    assert low_flag not in confirmed["answer"]["flag"]
     assert task_facade.grading_readiness(**args)["blocking_issues"] == []
 
 
@@ -220,11 +220,11 @@ def test_source_failure_is_required_even_with_high_confidence():
 
 
 def test_recognition_confidence_is_numeric_metadata_and_survives_teacher_edit():
-    _seeded, args = _case(flags=["recognition_confidence:0.72", "recognition_low_confidence"])
+    _seeded, args = _case(flags=["answer_recognition_confidence:0.72"])
     before = task_facade.get_task(**args, full=True)
     answer = before["student_data"]["S001"]["stu_ans"][0]
     assert answer["recognition_confidence"] == .72
-    assert not any(flag.startswith("recognition_confidence:") for flag in answer["flag"])
+    assert not any(flag.startswith("answer_recognition_confidence:") for flag in answer["flag"])
     changed = task_facade.update_student_answer(**args, display_student_id="S001", q_id="q1",
         patch={"content": "Teacher transcribed content", "flag": [], "review_status": "confirmed"},
         expected_revision=before["workflow_revision"])

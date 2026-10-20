@@ -65,7 +65,7 @@ describe("submission review confirmation", () => {
   function suggestAnswers() {
     for (const student of Object.values(state.data.student_data)) {
       student.identity_status = "matched";
-      student.stu_ans[0].flag = ["recognition_low_confidence"];
+      Object.assign(student.stu_ans[0], { flag: [], recognition_confidence: .4 });
     }
   }
 

@@ -194,7 +194,7 @@ async def test_text_only_mixed_pdf_keeps_native_text_and_marks_missing_scan(tmp_
     )
     assert "Exercise 1" in result.text
     assert result.recognition["coverage"]["failed_pages"] == [2]
-    assert question_sources.recognition_needs_review(result.recognition)
+    assert question_sources.recognition_has_failure(result.recognition)
     with pytest.raises(RecognitionError, match="provider_vision_not_supported"):
         await question_sources.read_question_source(**args, content=pdf([None]))
     provider.ainvoke_vision.assert_not_awaited()

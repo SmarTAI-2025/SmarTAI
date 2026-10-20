@@ -9,6 +9,7 @@ import math
 from typing import Annotated, List, Optional, Literal, Dict, Any
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_serializer, model_validator
 
+from backend.domain.confidence_policy import confidence_value
 from backend.services.question_structure import (
     MajorQuestionStructureV1,
     RubricPointSummaryV1,
@@ -26,6 +27,10 @@ def _optional_confidence(value: Any) -> float:
 
 
 GradingConfidence = Annotated[float, BeforeValidator(_optional_confidence)]
+
+# Like grading, recognition receives an item-specific model assessment.
+# Old artifacts and unavailable/invalid assessments remain unknown.
+RecognitionConfidence = Annotated[float | None, BeforeValidator(confidence_value)]
 
 class StepScore(BaseModel):
     step_no: int
@@ -167,6 +172,7 @@ class ProblemInfo(BaseModel):
     type: str = Field(description="Question type: 概念题/计算题/编程题/证明题/推理题/选择题/多选题/填空题/其他")
     stem: str = Field(description="Complete question stem including all text, formulas, and code")
     criterion: str = Field(description="Grading rubric/criteria")
+    recognition_confidence: RecognitionConfidence = Field(default=None, ge=0, le=1)
     max_score: float = Field(
         default=10.0,
         gt=0,
@@ -275,6 +281,24 @@ class StudentAnswerInfo(BaseModel):
         max_length=100,
         description="Recognition issues/flags",
     )
+    recognition_confidence: RecognitionConfidence = Field(default=None, ge=0, le=1)
+
+    @model_serializer(mode="wrap")
+    def retain_answer_confidence(self, handler):
+        data = handler(self)
+        if "flag" not in data:
+            return data
+        data["flag"] = [
+            flag for flag in data["flag"]
+            if not flag.startswith(("recognition_confidence:", "answer_recognition_confidence:"))
+            and flag not in {"recognition_low_confidence", "recognition_very_low_confidence",
+                             "low_confidence", "very_low_confidence"}
+        ]
+        if self.recognition_confidence is not None:
+            # Reuse the existing durable flag storage, with explicit answer
+            # scope so legacy file scores can never become per-answer scores.
+            data["flag"].append(f"answer_recognition_confidence:{self.recognition_confidence}")
+        return data
 
     @field_validator("q_id", mode="before")
     @classmethod

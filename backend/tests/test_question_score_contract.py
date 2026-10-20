@@ -667,7 +667,8 @@ def test_question_review_acknowledges_recognition_without_changing_content_or_su
         source = dict(question.source)
         presentation = dict(source["presentation"])
         presentation["preparation_issues"] = [
-            {"issue_id": "ocr", "field": "stem", "code": "recognition_needs_review", "status": "open", "severity": "warning"},
+            {"issue_id": "ocr", "field": "stem", "code": "low_confidence", "status": "open", "severity": "warning",
+             "details": {"confidence": .4, "confidence_scope": "question"}},
         ]
         if blocking_issue:
             presentation["preparation_issues"].append({

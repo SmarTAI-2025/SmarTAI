@@ -13,7 +13,7 @@ from backend.db import assignment_repository, file_repository, submission_reposi
 from backend.db import submission_upload_repository
 from backend.domain.errors import DomainError, ValidationError
 from backend.services.recognition_artifacts import RecognitionArtifactBindingV1
-from backend.services.question_sources import read_question_source, recognition_needs_review
+from backend.services.question_sources import read_question_source
 from backend.services.stage_provider_routing import StageProviderRoute, stage_provider_configuration_fingerprint
 from backend.storage import get_storage
 from backend.tools.file_processing import extract_raw_files_from_archive, inspect_upload_content
@@ -128,7 +128,7 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
                     return stored
 
                 await persist_original(filename, content, inspect_upload_content(content, filename, content_type).content_type)
-                texts, needs_review = [], False
+                texts = []
                 for item in raw_sources:
                     if item.pre_error_code or item.content is None:
                         raise ValidationError("One upload source cannot be read.",
@@ -140,9 +140,6 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
                         route=route, registry=registry, stored_file_id=stored.id, purpose="submissions",
                         reporter=reporter, binding=binding)
                     texts.append(f"[Source file: {item.filename}]\n{result.text}")
-                    needs_review = needs_review or bool(
-                        recognition_needs_review(result.recognition)
-                    )
                     if sum(map(len, texts)) > MAX_TRANSCRIPT_CHARS:
                         raise ValidationError("Submission text exceeds the parse budget; it was not truncated.",
                                               code="submission_upload_limit_exceeded")
@@ -155,9 +152,6 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
                     raise ValidationError("Answers could not be mapped reliably.",
                                           code=parsed.stable_error_code or "no_matching_answer")
                 raw_answers = parsed.student.get("stu_ans") or []
-                if needs_review:
-                    for answer in raw_answers:
-                        answer["flag"] = list(dict.fromkeys([*(answer.get("flag") or []), "recognition_needs_review"]))
                 answers = _build_answers({q.q_id: q for q in questions}, raw_answers)
                 if len({a["q_id"] for a in answers}) != len(answers):
                     raise ValidationError("Duplicate question mapping.", code="no_matching_answer")

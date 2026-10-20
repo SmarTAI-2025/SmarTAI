@@ -39,10 +39,10 @@ describe("OCR review labels", () => {
     expect(studentNeedsAttention({ stu_id: "s1", stu_name: "Sample", stu_ans: answers }, answers.map(answer => ({ id: answer.q_id, label: answer.number, type: answer.type, stem: "" })))).toBe(false);
   });
 
-  it.each(["very_low_confidence", "recognition_low_confidence", "low_confidence"])("keeps uncalibrated %s out of the required queue", (flag) => {
+  it.each(["very_low_confidence", "recognition_low_confidence", "low_confidence"])("retires uncalibrated %s from all review advice", (flag) => {
     const answer = { q_id: "q1", number: "1", type: "proof", content: "Readable answer", flag: [flag] };
-    expect(answerReviewAttention(answer)).toBe("advisory");
-    expect(formatSubmissionFlag(flag, "zh-CN")).toContain(flag === "recognition_low_confidence" ? "请对照原件核对文字和公式" : "可继续");
+    expect(answerReviewAttention(answer)).toBe("none");
+    expect(answerReviewNotes(answer, "zh-CN")).toEqual([]);
     expect(answerReviewAttention({ ...answer, flag: ["recognition_failed"] })).toBe("blocking");
     expect(answerReviewAttention({ ...answer, flag: ["recognition_repaired_needs_confirmation"] })).toBe("blocking");
     expect(answerReviewAttention({ ...answer, review_status: "confirmed" })).toBe("none");
@@ -56,6 +56,18 @@ describe("OCR review labels", () => {
     expect(answerReviewAttention(incomplete)).toBe("blocking");
     expect(answerReviewNotes(incomplete, "en-US").map(note => note.severity).sort()).toEqual(recognition_confidence < .6 ? ["advisory", "blocking"] : ["blocking"]);
     expect(answerReviewNotes(incomplete, "en-US").some(note => note.label.includes("pages:2"))).toBe(false);
+  });
+
+  it("shows advice only on the low-confidence answer, across questions and students", () => {
+    const scores = [[.96, .3], [.6, null]];
+    const attention = scores.map(student => student.map((recognition_confidence, i) => {
+      const answer = { q_id: `q${i}`, number: `${i}`, type: "proof", content: "Literal work",
+        recognition_confidence, flag: ["recognition_low_confidence"] };
+      const notes = answerReviewNotes(answer, "zh-CN");
+      expect(notes).toHaveLength(recognition_confidence === .3 ? 1 : 0);
+      return answerReviewAttention(answer);
+    }));
+    expect(attention).toEqual([["none", "advisory"], ["none", "none"]]);
   });
 
   it.each(["recognition_failed_pages:2", "recognition_unprocessed_pages:2"])("keeps server-projected page failure %s blocked after confirmation", (flag) => {
