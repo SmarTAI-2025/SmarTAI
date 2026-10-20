@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from backend.db.session import session_scope
 from backend.db.models import (AccountClosureRecord, BlockedRegistrationEmailRecord, UserRecord,
     AssignmentRecord, KnowledgeDocumentRecord, KnowledgeStorageRecord, StoredFileRecord,
@@ -18,14 +18,22 @@ from backend.services.email_registration import normalize_email
 from backend.storage import get_storage
 
 
-def _claim():
+def _claim(*, frontier_only=False):
     now = time.time()
     with session_scope() as session:
         lock_administration(session)
-        row = session.scalar(select(AccountClosureRecord).where(
+        candidates = select(AccountClosureRecord).where(
             AccountClosureRecord.status != "completed",
             (AccountClosureRecord.lease_until.is_(None)) | (AccountClosureRecord.lease_until < now),
-        ).order_by(AccountClosureRecord.created_at).limit(1).with_for_update())
+        )
+        if frontier_only:
+            candidates = candidates.where(AccountClosureRecord.mode == "frontier_demo")
+        # Retry eligibility becomes the queue time after a failed/waiting pass.
+        # An old failing guest must not reclaim every poll ahead of ready peers.
+        row = session.scalar(candidates.order_by(
+            func.coalesce(AccountClosureRecord.lease_until, AccountClosureRecord.created_at),
+            AccountClosureRecord.created_at, AccountClosureRecord.id,
+        ).limit(1).with_for_update())
         if row is None:
             return None
         row.lease_token = uuid.uuid4().hex
@@ -42,13 +50,18 @@ def _release(closure_id, token, code=None):
             row.error_code = code
 
 
-def process_one_closure(*, raise_errors: bool = False) -> bool:
-    claimed = _claim()
+def process_one_closure(*, raise_errors: bool = False, frontier_only: bool = False) -> bool:
+    claimed = _claim(frontier_only=frontier_only)
     if claimed is None:
         return False
     closure_id, user_id, token = claimed
     try:
         with session_scope() as session:
+            closure = session.get(AccountClosureRecord, closure_id)
+            user = session.get(UserRecord, user_id)
+            from backend.services.frontier_demo import is_frontier_user
+            if closure.mode == "frontier_demo" and user is not None and not is_frontier_user(user):
+                raise RuntimeError("invalid_frontier_cleanup_identity")
             task_ids = list(session.scalars(select(AssignmentRecord.id).where(AssignmentRecord.teacher_id == user_id)))
         if task_ids:
             from backend.services.task_facade import delete_task
@@ -96,6 +109,8 @@ def process_one_closure(*, raise_errors: bool = False) -> bool:
                 return True
             user = session.scalar(select(UserRecord).where(UserRecord.id == user_id).with_for_update())
             if user is not None:
+                if closure.mode == "frontier_demo" and not is_frontier_user(user):
+                    raise RuntimeError("invalid_frontier_cleanup_identity")
                 if (session.scalar(select(AssignmentRecord.id).where(AssignmentRecord.teacher_id == user_id).limit(1))
                     or session.scalar(select(KnowledgeDocumentRecord.id).where(KnowledgeDocumentRecord.owner_id == user_id).limit(1))
                     or session.scalar(select(KnowledgeStorageRecord.id).where(KnowledgeStorageRecord.owner_id == user_id).limit(1))
@@ -115,9 +130,20 @@ def process_one_closure(*, raise_errors: bool = False) -> bool:
                     | (EmailVerificationRequestRecord.normalized_email == email)))
                 if email:
                     session.execute(delete(InviteCodeRecord).where(InviteCodeRecord.email == email))
-                session.execute(update(AdminUsageEventRecord).where(AdminUsageEventRecord.user_id == user_id).values(user_id="closed_" + uuid.uuid4().hex, dimensions=None))
+                if closure.mode == "frontier_demo":
+                    session.execute(delete(AdminUsageEventRecord).where(AdminUsageEventRecord.user_id == user_id))
+                else:
+                    session.execute(update(AdminUsageEventRecord).where(AdminUsageEventRecord.user_id == user_id).values(user_id="closed_" + uuid.uuid4().hex, dimensions=None))
                 session.delete(user)
                 session.flush()
+            if closure.mode == "frontier_demo":
+                # Temporary guests have no permanent closure/audit identity.
+                # Ordinary account closure keeps its existing audit contract.
+                session.execute(delete(AdminAuditLogRecord).where(
+                    (AdminAuditLogRecord.target_user_id == user_id)
+                    | (AdminAuditLogRecord.actor_id == user_id)))
+                session.delete(closure)
+                return True
             requested = session.scalar(select(AdminAuditLogRecord).where(
                 AdminAuditLogRecord.target_user_id == user_id,
                 AdminAuditLogRecord.action == "account_closure_requested"
@@ -143,10 +169,18 @@ def process_one_closure(*, raise_errors: bool = False) -> bool:
         return True
 
 
-async def account_closure_loop():
+async def account_closure_loop(*, frontier_only: bool = False):
+    next_scan = 0.0
     while True:
         try:
-            active_pass = asyncio.create_task(asyncio.to_thread(process_one_closure))
+            def run_pass():
+                nonlocal next_scan
+                if frontier_only and time.monotonic() >= next_scan:
+                    from backend.services.frontier_demo import queue_cleanup
+                    queue_cleanup()
+                    next_scan = time.monotonic() + 60
+                return process_one_closure(frontier_only=frontier_only)
+            active_pass = asyncio.create_task(asyncio.to_thread(run_pass))
             try:
                 await asyncio.shield(active_pass)
             except asyncio.CancelledError:

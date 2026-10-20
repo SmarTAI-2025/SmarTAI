@@ -157,8 +157,12 @@ async def worker_loop(*, worker_id: str, poll_seconds: int | None = None,
     limit = settings.workload_max_in_flight
 
     async def dispatch(run_id):
+        from backend.services.demo_logging import demo_log_context
         try:
-            await process_run(run_id=run_id, worker_id=worker_id, registry=registry)
+            with session_scope() as session:
+                owner_id = session.scalar(select(GradingRunRecord.teacher_id).where(GradingRunRecord.id == run_id))
+            with demo_log_context(owner_id or ""):
+                await process_run(run_id=run_id, worker_id=worker_id, registry=registry)
         except LeaseLost:
             pass  # Another worker, a busy owner, or server capacity won admission.
         except asyncio.CancelledError:

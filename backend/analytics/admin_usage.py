@@ -13,9 +13,9 @@ import time
 import uuid
 from typing import Any, Iterable, Mapping
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
-from backend.db.models import AdminUsageEventRecord
+from backend.db.models import AdminUsageEventRecord, UserRecord
 from backend.db.session import session_scope
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,15 @@ def record_usage_event_in_session(
     """Add one bounded event to an existing transaction."""
     if not event_name or len(event_name) > 64:
         raise ValueError("event_name must be 1-64 characters")
+    from backend.services.frontier_demo import USER_PREFIX
+    if user_id and user_id.startswith(USER_PREFIX):
+        # Serialize guest usage with final cleanup. A no-op UPDATE also locks
+        # SQLite, where SELECT FOR UPDATE cannot protect a late event insert.
+        locked = session.execute(update(UserRecord).where(
+            UserRecord.id == user_id,
+        ).values(updated_at=UserRecord.updated_at))
+        if locked.rowcount != 1:
+            return
     safe_dimensions = {
         str(key)[:64]: value
         for key, value in (dimensions or {}).items()

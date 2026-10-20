@@ -27,7 +27,45 @@ SESSION_SECONDS = 2 * 3600
 def is_frontier_user(user) -> bool:
     # IDs are generated only by this service. The prefix also survives worker
     # recovery where request-local auth_scope is intentionally not persisted.
-    return bool(user and str(user.id).startswith(USER_PREFIX) and not user.password_hash)
+    return bool(user and str(user.id).startswith(USER_PREFIX)
+                and user.role == "teacher" and not user.email and not user.password_hash)
+
+
+def queue_cleanup(*, owner_id: str | None = None) -> int:
+    """Revoke and durably queue ended/expired guests, including after restart.
+
+    The absolute two-hour lifetime is unchanged. Daily admission counters are
+    deliberately independent of guest deletion, so ending a session cannot
+    buy another allowance. An explicit owner is used only by the end route.
+    """
+    from backend.db.models import AccountClosureRecord
+    from backend.db.session import session_scope
+    from backend.services.admin_transactions import lock_administration
+    now = time.time()
+    with session_scope() as session:
+        lock_administration(session)
+        candidates = select(UserRecord).where(
+            UserRecord.id.startswith(USER_PREFIX, autoescape=True),
+            UserRecord.role == "teacher", UserRecord.password_hash == "",
+            (UserRecord.email.is_(None)) | (UserRecord.email == ""),
+            ~select(AccountClosureRecord.id).where(
+                AccountClosureRecord.user_id == UserRecord.id).exists(),
+        )
+        if owner_id is not None:
+            candidates = candidates.where(UserRecord.id == owner_id)
+        else:
+            candidates = candidates.where(
+                (UserRecord.created_at <= now - SESSION_SECONDS)
+                | UserRecord.is_active.is_(False))
+        users = list(session.scalars(candidates.order_by(UserRecord.created_at).limit(100).with_for_update()))
+        for user in users:
+            user.is_active = False
+            user.auth_version += 1
+            user.auth_invalid_before = now
+            user.updated_at = now
+            session.add(AccountClosureRecord(id=uuid.uuid4().hex, user_id=user.id,
+                mode="frontier_demo", status="pending", created_at=now))
+        return len(users)
 
 
 def _expired():
