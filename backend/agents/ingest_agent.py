@@ -1652,11 +1652,13 @@ Return one JSON object with this shape:
 Rules:
 - Only emit requested targets and known q_id values.
 - For criterion/reference_answer, use text_value and omit test_cases.
-- For criterion, express scoring allocations only as percentages totaling 100%. If the source
-  uses absolute points, preserve the relative weights but convert them using the known question's
-  max_score. Never copy an absolute point total into text_value. Exception: for objective
-  questions (选择题/多选题/填空题) do not generate a percentage rubric — emit the result-based
-  rule only when the source supports it (e.g. "答案唯一: 答对满分, 答错 0 分"), otherwise omit.
+- For criterion, preserve the teacher's original scoring method and amounts: absolute points,
+  percentages, deduction rules, score floors, blank-answer rules, consequential-error treatment,
+  accepted alternative methods, scope and exceptions. Do not convert deductions into award
+  percentages or invent a 100% allocation. Keep the source wording and restrictions; do not
+  replace the teacher's policy with a stricter reference-solution checklist. For objective
+  questions (选择题/多选题/填空题), emit a result-based rule only when the source supports it,
+  otherwise omit. The known max_score is context, not permission to rewrite source rules.
 - For test_cases, only emit candidates for programming questions and use test_cases.
 - confidence is match confidence, not grading confidence.
 - exact is allowed only when the source has an explicit matching question number or title.

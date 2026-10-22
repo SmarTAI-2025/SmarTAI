@@ -231,6 +231,19 @@ beforeEach(() => {
   });
 });
 
+it.each(["zh-CN", "en-US"])("explains an ambiguous source match and keeps confirmation available (%s)", (locale) => {
+  testState.locale = locale;
+  taskData.problem_data.Q2.preparation_issues = [{ issue_id: "ambiguous", q_id: "Q2", field: "rubric",
+    code: "ambiguous_question_match", severity: "warning", status: "open" }];
+  renderPage();
+  const card = within(document.querySelector('[data-question-id="Q2"]') as HTMLElement);
+  expect(card.getByText(locale === "zh-CN"
+    ? "资料无法唯一匹配到本题，请对照原件核对内容并确认。"
+    : "The source cannot be uniquely matched to this question. Check the content against the original and confirm.")).toBeVisible();
+  expect(card.queryByText("ambiguous_question_match")).not.toBeInTheDocument();
+  expect(card.getByRole("button", { name: locale === "zh-CN" ? "第 2 题 · 待确认" : "Question 2 · Confirm review" })).toBeEnabled();
+});
+
 it("edits type beside number through the existing versioned field save, including Other", async () => {
   taskData.problem_data.Q1.type = "short";
   mutateAsync.mockResolvedValue({ workflow_revision: 8 });

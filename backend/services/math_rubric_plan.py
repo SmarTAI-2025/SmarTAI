@@ -20,7 +20,7 @@ from backend.tools.structured_llm import (
 
 
 SCHEMA_VERSION = "math_rubric_v1"
-INTERPRETATION_VERSION = "math_rubric_interpretation_v1"
+INTERPRETATION_VERSION = "math_rubric_interpretation_v2"
 Score = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Text = Annotated[str, Field(min_length=1, max_length=20000)]
 
@@ -318,6 +318,54 @@ def _amount_value(amount: str, unit: str, maximum: float) -> Decimal:
     return Decimal(amount) * (Decimal(str(maximum)) / 100 if unit in {"%", "％"} else 1)
 
 
+def _score_context_clause(clause: str, original: str, maximum: float) -> bool:
+    """Recognize score context, not earned/lost item allocations.
+
+    Keep matches anchored: a method's maximum or a conditional cap must still
+    pass the existing item/cap validation. All context remains in the plan text.
+    """
+    number = r"\d+(?:\.\d+)?"
+    unit = r"(?:分|points?|marks?|%|％)"
+    count = r"(?:\d+|[一二三四五六七八九十百两]+)"
+    batch = rf"(?:指定|共|共计|本次)?\s*{count}\s*(?:道)?题"
+    patterns = {
+        "maximum": rf"(?:(?:{batch}\s*)?(?:每(?:小)?题|单题|本题)?\s*满分|"
+                   r"(?:each|per) question(?: is worth| worth| maximum(?: score)?)?)",
+        "total": r"(?:(?:本题)?(?:总分|总计|合计)|total(?: score)?)",
+        "start": r"(?:从|起始(?:分数)?(?:为)?|start(?:ing)? (?:from|at))",
+        "blank": r"(?:空白(?:作答|答案)?(?:得|计|给)?|blank(?: answers?)?(?: receive| get| score)?)",
+    }
+    match = re.fullmatch(
+        rf"(?:得分范围|分数范围|score range|scores? range(?: from)?)\s*[:：=]?\s*"
+        rf"({number})\s*(?:至|到|[-–]|to)\s*({number})\s*({unit})", clause, re.I,
+    )
+    if match:
+        if (_amount_value(match[1], match[3], maximum) != 0
+                or _amount_value(match[2], match[3], maximum) != Decimal(str(maximum))):
+            raise ValueError("source score range requires source-preserving holistic scoring")
+        return True
+    for kind, prefix in patterns.items():
+        match = re.fullmatch(
+            rf"{prefix}\s*[:：=]?\s*({number})\s*({unit})"
+            + (r"\s*(?:起计|开始(?:计分)?)?" if kind == "start" else ""), clause, re.I,
+        )
+        if not match:
+            continue
+        value = _amount_value(match[1], match[2], maximum)
+        if kind == "total" and not clause.startswith("本题") and re.search(
+            rf"{batch}\s*[,，]?\s*每(?:小)?题|\d+\s+questions?\s*[,;]?\s*(?:each|per) question",
+            original, re.I,
+        ):
+            return True  # Explicit whole-assignment total, not this question's budget.
+        if kind == "blank":
+            if not 0 <= value <= Decimal(str(maximum)):
+                raise ValueError("source blank score conflicts with the question maximum")
+        elif value != Decimal(str(maximum)):
+            raise ValueError("source total or starting score conflicts with the question maximum")
+        return True
+    return False
+
+
 def _validate_source_rules(context: dict, explanation: _Explanation) -> None:
     """Conservatively reject a ledger that changes recognizable source rules.
 
@@ -332,6 +380,8 @@ def _validate_source_rules(context: dict, explanation: _Explanation) -> None:
         r"[，,；;、\n。]|(?<!\d)\.(?!\d)", original,
     ) if part.strip()]
     for clause in clauses:
+        if structured and _score_context_clause(clause, original, context["max_score"]):
+            continue
         if _FLOOR_MARKER.search(clause):
             match = _FLOOR_RULE.fullmatch(clause)
             if not match:
@@ -347,15 +397,6 @@ def _validate_source_rules(context: dict, explanation: _Explanation) -> None:
             raise ValueError("caps require source-preserving holistic scoring")
         amounts = _AMOUNT.findall(clause)
         if not amounts or not structured:
-            continue
-        # A standalone total does not assign a scoring item.
-        if re.fullmatch(
-            r"(?:本题)?(?:满分|总分|总计|total(?: score)?)\s*[:：=]?\s*\d+(?:\.\d+)?\s*(?:分|points?|marks?)?",
-            clause, re.I,
-        ):
-            if any(_amount_value(a, u, context["max_score"]) != Decimal(str(context["max_score"]))
-                   for a, u in amounts):
-                raise ValueError("source total conflicts with the question maximum")
             continue
         mode = "deductions" if _DEDUCTION.search(clause) else "points"
         for amount, unit in amounts:

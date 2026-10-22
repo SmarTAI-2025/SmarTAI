@@ -62,6 +62,12 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
   if (issue.code === "manual_completion_required") return locale === "zh-CN"
     ? "请补齐缺失资料并确认本题；完成前不能批改。"
     : "Complete the missing materials and confirm this question before grading.";
+  if (issue.code === "ambiguous_question_match") return locale === "zh-CN"
+    ? "资料无法唯一匹配到本题，请对照原件核对内容并确认。"
+    : "The source cannot be uniquely matched to this question. Check the content against the original and confirm.";
+  if (issue.code === "unmapped_source_content") return locale === "zh-CN"
+    ? "原文件中有内容尚未匹配，请核对本题是否完整。"
+    : "Some source content is unmatched. Check whether this question is complete.";
   if (!["recognition_partial", "recognition_needs_review", "low_confidence"].includes(issue.code) && !questionHasLowConfidence(issue)) return null;
   const zh = locale === "zh-CN";
   const coverage = issue.details?.coverage as Record<string, unknown[]> | undefined;
