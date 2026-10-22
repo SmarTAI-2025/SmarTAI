@@ -104,6 +104,7 @@ def saved(owner):
     ("answer", "passed", "image_probe_answer_correct"),
     ("I support images", "inconclusive", "image_probe_answer_incorrect"),
     ("wrong", "inconclusive", "image_probe_answer_incorrect"),
+    ("truncated", "inconclusive", "image_probe_response_truncated"),
     (ProviderRequestError("provider_vision_not_supported", status_code=400), "unsupported", "provider_vision_not_supported"),
     (TimeoutError(), "inconclusive", "expert_verification_timeout"),
     (ProviderRequestError("provider_auth_failed", status_code=401), "inconclusive", "expert_verification_auth_failed"),
@@ -118,13 +119,16 @@ async def test_opt_in_probe_is_single_and_checks_answer(outcome, state, reason, 
     pixels, answer = make_image_challenge()
     monkeypatch.setattr(experts, "make_image_challenge", lambda: (pixels, answer))
     monkeypatch.setattr(settings, "custom_provider_verification_cooldown_seconds", 0)
-    call = AsyncMock(side_effect=outcome) if isinstance(outcome, Exception) else AsyncMock(return_value=SimpleNamespace(content=answer if outcome == "answer" else outcome))
+    call = AsyncMock(side_effect=outcome) if isinstance(outcome, Exception) else AsyncMock(return_value=SimpleNamespace(
+        content=answer if outcome in {"answer", "truncated"} else outcome,
+        finish_reason="length" if outcome == "truncated" else "stop"))
     provider.ainvoke_vision = call
     monkeypatch.setattr(experts, "build_provider", lambda config: provider)
     response = await experts.verify_provider_image(provider_id, current=user, registry=registry)
     assert response["image_capability_status"] == state
     assert response["image_reason"] == reason
     assert call.await_count == 1
+    assert call.call_args.kwargs["max_output_tokens"] == 256
     prompt, images = call.call_args.args
     assert images[0].data == pixels and images[0].filename is None and answer not in prompt
     stored = get_provider_config(user.id, provider_id, master_key=settings.provider_encryption_key)

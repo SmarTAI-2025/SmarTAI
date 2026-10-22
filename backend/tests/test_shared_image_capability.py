@@ -45,7 +45,7 @@ async def test_shared_opt_in_probe_charges_once_without_storing_key_and_isolates
     assert len(calls) == 1 and usage()["requests"] == 1
     assert calls[0][0][0].content[1]["image_url"]["url"].startswith("data:image/png;base64,")
     assert answer not in calls[0][0][0].content[0]["text"]
-    assert calls[0][1] == {"max_output_tokens": 64}
+    assert calls[0][1] == {"max_output_tokens": 256}
     current = _build_scoped_registry(User(id="teacher", username="teacher"))
     assert current.list_configs()[0]["image_capability_status"] == "passed"
     _teacher("other-image-owner")
