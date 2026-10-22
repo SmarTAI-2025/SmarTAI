@@ -151,6 +151,7 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
     from backend.services.math_rubric_plan import (
         fallback_math_rubric_plan, math_rubric_fingerprint, prepare_math_rubric_plan,
     )
+    from backend.progress.grading_activity import observe_auxiliary_request
 
     checkpoints = current_checkpoints()
     plans = {}
@@ -191,9 +192,10 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
                 plan = fallback_math_rubric_plan(problem)
             else:
                 try:
-                    plan = await prepare_math_rubric_plan(
-                        problem, provider, grading_setup=grading_setup, reporter=reporter,
-                    )
+                    async with observe_auxiliary_request(reporter, provider):
+                        plan = await prepare_math_rubric_plan(
+                            problem, provider, grading_setup=grading_setup, reporter=reporter,
+                        )
                 except (CheckpointWriteError, DomainError, SQLAlchemyError):
                     raise
                 except Exception as exc:
