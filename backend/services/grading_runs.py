@@ -467,7 +467,8 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             for res in outcome.results:
                 try:
                     grading_repository.upsert_result(
-                        run_id=run_id, worker_id=worker_id, grade_result=res
+                        run_id=run_id, worker_id=worker_id, grade_result=res,
+                        inherited_review=checkpoints.teacher_review_for(res),
                     )
                 except VersionConflict:
                     pass

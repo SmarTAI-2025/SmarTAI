@@ -277,6 +277,28 @@ def read_math_trace(expert: ExpertResult) -> dict | None:
     return None
 
 
+def _deduction_signature(assessment: MathAssessment) -> tuple:
+    """Compare actual error locations/rules, not model-local IDs or wording."""
+    quotes = {claim.id: claim.quote for claim in assessment.claims}
+    return tuple(sorted((item.rule_id, quotes.get(item.claim_id, ""), item.occurrences,
+                         quotes.get(item.caused_by, ""))
+                        for item in assessment.deductions))
+
+
+def math_scoring_disagreement(experts: list[ExpertResult]) -> bool:
+    """Residual item disagreements remain advice even when totals coincide."""
+    signatures = set()
+    for expert in experts:
+        trace = read_math_trace(expert)
+        if expert.error_kind or not trace or not isinstance(trace.get("assessment"), dict):
+            continue
+        assessment = MathAssessment.model_validate(trace["assessment"])
+        signatures.add((trace.get("plan_id"), assessment.route_id, expert.score,
+                        tuple(sorted((award.item_id, award.score) for award in assessment.awards)),
+                        _deduction_signature(assessment)))
+    return len(signatures) > 1
+
+
 def _validate_claim_identity(original: MathAssessment, revised: MathAssessment):
     """A tool's claim reference must keep pointing to the same submitted text."""
     quotes = {claim.id: claim.quote for claim in revised.claims}
@@ -311,7 +333,7 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                 if len({signature.get(key) for signature in signatures}) > 1}
     other_dispute = (len(route_ids) > 1 or
                      len({expert.score for expert in experts}) > 1 or
-                     len({_json([d.model_dump() for d in a.deductions]) for a in assessments}) > 1)
+                     len({_deduction_signature(a) for a in assessments}) > 1)
     requested_review = any(a.needs_review for a in assessments)
     if not (disputed or other_dispute or requested_review) or not take_review_budget():
         return experts
@@ -489,7 +511,9 @@ class MathGradingSkill(GradingSkill):
                     "daily_quota_exhausted", "quota_exhausted", "transient_llm"
                 }:
                     raise
-                return await self._direct(problem, answer, plan, prompt, unit, chunks)
+                return await self._direct(problem, answer, plan, prompt, unit, chunks,
+                    fallback={"reason": "invalid_detailed_assessment", "error_type": type(exc).__name__,
+                              "draft": draft.model_dump(mode="json") if draft else None})
             if draft.checks:
                 await self._substep(unit, "verify_result")
                 try:
@@ -551,7 +575,7 @@ class MathGradingSkill(GradingSkill):
             if cm:
                 await cm.__aexit__(None, None, None)
 
-    async def _direct(self, problem, answer, plan, prompt, unit, chunks):
+    async def _direct(self, problem, answer, plan, prompt, unit, chunks, *, fallback=None):
         await self._substep(unit, "llm_grade")
         result, response = await structured_llm_call(
             self.provider,
@@ -572,5 +596,6 @@ class MathGradingSkill(GradingSkill):
                              is_correct=score == problem.max_score)],
             knowledge_citations=kb_tool.citations(chunks), duration_ms=response.duration_ms,
             raw_output=_json({"version": TRACE_VERSION, "plan_id": plan.plan_id,
-                              "direct": result.model_dump(mode="json"), "evidence": []}),
+                              "direct": result.model_dump(mode="json"), "evidence": [],
+                              **({"fallback": fallback} if fallback else {})}),
         )

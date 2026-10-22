@@ -4866,18 +4866,21 @@ def start_task_grading(
                 or any(old.get(key) != input_manifest.get(key) for key in stable_keys)
                 or content_questions(old.get("questions", [])) != content_questions(input_manifest["questions"])):
             raise VersionConflict("Grading inputs changed; review the setup before starting a new run.", code="grading_inputs_changed")
-        from backend.services.grading_checkpoints import saved_experts, saved_math_plans
+        from backend.services.grading_checkpoints import saved_experts, saved_math_plans, teacher_review_snapshots
         # A failed-only retry keeps the actual shared rules, rather than asking
         # a model to redistribute the same question's points. Old-engine or
         # missing-plan mathematical results are rerun in this new run.
         plans = saved_math_plans(latest.id, questions=questions) if math_qids else {}
-        reusable = [result.model_dump(mode="json") for result in grading_repository.list_results_for_run(latest.id)
+        previous_results = grading_repository.list_results_for_run(latest.id)
+        reusable = [result.model_dump(mode="json") for result in previous_results
                     if result.effective_score is not None and math.isfinite(result.effective_score)
                     and (result.q_id not in math_qids or result.q_id in plans)
                     and ("grading_paused" not in result.initial_review_reasons or result.teacher_review)]
         if len(reusable) == len(questions) * len(frozen_revision_ids):
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
         input_manifest.update(retry_from_run_id=latest.id, reused_results=reusable, retry_scope="failed_only")
+        input_manifest["teacher_review_overrides"] = teacher_review_snapshots(
+            old, previous_results, questions=questions, revision_ids=frozen_revision_ids)
         if math_qids:
             input_manifest["math_rubric_plans"] = {
                 qid: plan.model_dump(mode="json") for qid, plan in plans.items()

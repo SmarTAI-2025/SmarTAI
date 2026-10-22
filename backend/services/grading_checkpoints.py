@@ -1,5 +1,7 @@
 """Lease-fenced, per-expert checkpoints; no provider calls during stop/review."""
 from contextvars import ContextVar
+import hashlib
+import json
 import time
 
 from sqlalchemy import select
@@ -61,15 +63,78 @@ def saved_math_plans(run_id, *, questions=None):
     return matching_math_plans(questions, plans) if questions is not None else plans
 
 
+def _review_question_fingerprint(question):
+    """Teacher judgments survive model changes, not changes to the graded work."""
+    from backend.services.math_rubric_plan import _question_input
+
+    source = _question_input(question)
+    payload = {
+        "question_id": question.id,
+        # Human decisions depend on source content, not the AI interpreter's
+        # implementation version. Old AI remains fenced independently.
+        "rubric_input": {key: value for key, value in source.items()
+                         if key not in {"schema_version", "interpretation_version"}},
+        "test_cases": question.test_cases,
+        "solution_code": (question.source or {}).get("presentation", {}).get("solution_code"),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def matching_teacher_review(manifest, *, student_id, revision_id, question):
+    for item in manifest.get("teacher_review_overrides", []):
+        if (item.get("student_id") == student_id
+                and item.get("submission_revision_id") == revision_id
+                and item.get("question_id") == question.id
+                and item.get("q_id") == question.q_id
+                and item.get("question_fingerprint") == _review_question_fingerprint(question)):
+            return item.get("teacher_review")
+    return None
+
+
+def teacher_review_snapshots(previous_manifest, results, *, questions, revision_ids):
+    """Carry human overrides separately from version-fenced AI checkpoints."""
+    current = {question.id: question for question in questions}
+    snapshots = {}
+    for item in previous_manifest.get("teacher_review_overrides", []):
+        question = current.get(item.get("question_id"))
+        if question is not None and item.get("submission_revision_id") in revision_ids:
+            review = matching_teacher_review(previous_manifest, student_id=item.get("student_id"),
+                revision_id=item["submission_revision_id"], question=question)
+            if review:
+                snapshots[(item["submission_revision_id"], question.id)] = item
+    previous = {item["id"]: QuestionDTO.model_validate(item)
+                for item in previous_manifest.get("questions", []) if "assignment_id" in item}
+    for result in results:
+        question, old_question = current.get(result.question_id), previous.get(result.question_id)
+        if (not result.teacher_review or question is None or old_question is None
+                or result.submission_revision_id not in revision_ids
+                or _review_question_fingerprint(old_question) != _review_question_fingerprint(question)):
+            continue
+        snapshots[(result.submission_revision_id, question.id)] = {
+            "student_id": result.student_id, "submission_revision_id": result.submission_revision_id,
+            "question_id": question.id, "q_id": question.q_id,
+            "question_fingerprint": _review_question_fingerprint(question),
+            "teacher_review": result.teacher_review,
+        }
+    return list(snapshots.values())
+
+
 class GradingCheckpoints:
     def __init__(self, *, run_id, worker_id, questions, frozen_revisions):
         self.run_id, self.worker_id = run_id, worker_id
         self.questions = {q.q_id: q for q in questions}
         self.revisions = {student: revision.id for revision, student in frozen_revisions}
+        from backend.db import workflow_repository
+        setup = workflow_repository.get_run_setup(run_id)
+        self.manifest = (setup.input_manifest if setup else {}) or {}
         self.math_plans = saved_math_plans(run_id, questions=questions)
         math_qids = {q.q_id for q in questions if uses_math_grading(q.type)}
         self.saved = {checkpoint_key(item): item for item in saved_experts(run_id)
                       if expert_matches_plan(item, math_qids, self.math_plans)}
+
+    def teacher_review_for(self, result):
+        return matching_teacher_review(self.manifest, student_id=result.student_id,
+            revision_id=result.submission_revision_id, question=self.questions[result.q_id])
 
     def get_math_plan(self, problem):
         from backend.services.math_rubric_plan import math_rubric_fingerprint
@@ -193,6 +258,7 @@ class GradingCheckpoints:
                      "experts": traces},
                 )
             repository.upsert_result(self.run_id, worker_id=self.worker_id, grade_result=result,
+                                     inherited_review=self.teacher_review_for(result),
                                      checkpoint_event=checkpoint_event)
         except Exception as exc:
             raise CheckpointWriteError("question_checkpoint_failed") from exc
@@ -304,9 +370,12 @@ def persist_paused_results(session, run):
                 initial_review_reasons=result.initial_review_reasons, result_status=result.result_status,
                 created_at=now, updated_at=now)
             session.add(record)
-            if preserved and result.teacher_review:
+            review = (result.teacher_review if preserved else None) or matching_teacher_review(
+                manifest, student_id=frozen.student_id, revision_id=frozen.submission_revision_id,
+                question=question)
+            if review:
                 from backend.db.models import TeacherReviewRecord
-                review = result.teacher_review
+                repository._apply_teacher_review_state(record, confirmed=bool(review.get("confirmed")))
                 session.add(TeacherReviewRecord(id=repository._new_review_id(), grade_result_id=record.id,
                     teacher_id=run.teacher_id, previous_score=result.ai_score, previous_comment=result.ai_comment,
                     new_score=review["new_score"], new_comment=review.get("new_comment", ""),

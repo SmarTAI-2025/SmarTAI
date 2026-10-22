@@ -395,6 +395,11 @@ async def _grade_single_answer(
                 synthesis_method=synthesis_method,
             ), grading_setup)
         except Exception as e:
+            from backend.skills.math_grading import _critical_failure
+            if _critical_failure(e):
+                # Both fan-in layers already propagate this marker. A storage
+                # or lease failure must reach the run, not become an AI vote.
+                raise CheckpointWriteError("grading_critical_failure") from e
             logger.error(
                 "Error grading student/q_id; exception_type=%s",
                 type(e).__name__,

@@ -154,17 +154,20 @@ async def run_multi_expert(**kwargs) -> Correction:
 
 def _apply_math_review_advisory(correction: Correction) -> Correction:
     """Keep a residual evidence concern visible without changing score/confidence."""
-    from backend.skills.math_grading import read_math_trace
+    from backend.skills.math_grading import math_scoring_disagreement, read_math_trace
 
+    unresolved = math_scoring_disagreement(correction.expert_results)
     for expert in correction.expert_results:
         trace = read_math_trace(expert) if _is_successful_expert(expert) else None
         assessment = trace.get("assessment") if trace else None
         if isinstance(assessment, dict) and assessment.get("needs_review") is True:
-            correction.requires_human_review = True
-            correction.review_reasons = list(dict.fromkeys([
-                *correction.review_reasons, "math_scoring_uncertainty",
-            ]))
+            unresolved = True
             break
+    if unresolved:
+        correction.requires_human_review = True
+        correction.review_reasons = list(dict.fromkeys([
+            *correction.review_reasons, "math_scoring_uncertainty",
+        ]))
     return correction
 
 
@@ -569,6 +572,9 @@ async def _synthesize(
         )
 
     except Exception as e:
+        from backend.skills.math_grading import _critical_failure
+        if _critical_failure(e):
+            raise
         logger.warning(
             "Synthesis LLM call failed for q_id=%s; exception_type=%s; "
             "falling back to weighted_average",

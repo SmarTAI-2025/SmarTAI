@@ -227,6 +227,10 @@ async def test_bad_graph_uses_one_direct_llm_fallback(monkeypatch, provider):
         result = await CalculationSkill(provider).grade(p, a)
     assert result.score == 8 and result.steps[0].score == 8
     assert "direct" in grading.read_math_trace(result)
+    diagnostic = grading.read_math_trace(result)["fallback"]
+    assert diagnostic["reason"] == "invalid_detailed_assessment"
+    assert diagnostic["error_type"] == "ValueError"
+    assert diagnostic["draft"] == bad.model_dump(mode="json")
     assert call.await_count == 2
     assert call.await_args.kwargs["output_model"] is grading.DirectMathGrade
 
