@@ -17,6 +17,7 @@ from backend.domain.errors import LeaseLost
 from backend.services import task_facade
 from backend.services.workflow_worker import LeasedOperation
 from backend.storage import get_storage
+from backend.services.source_files import persist_problem_source
 from backend.tests.test_task_background_workflows import _BackgroundTasks, _Registry, _seed_task
 
 
@@ -117,6 +118,8 @@ def _claim_auxiliary_operation(owner_id, operation_id, *, worker_id="fresh-worke
 @pytest.mark.asyncio
 async def test_fresh_material_worker_reads_artifact_and_keeps_text_out_of_payload(monkeypatch):
     owner_id, task_id = _seed_task(with_question=True)
+    original, _ = persist_problem_source(storage=get_storage(), owner_id=owner_id, task_id=task_id,
+        original_name="rubric.txt", content=b"rubric text", content_type="text/plain")
     text_artifact = file_repository.save_file(
         storage=get_storage(), owner_id=owner_id, kind="material_import_text",
         original_name="material-source.txt", content=b"rubric text",
@@ -127,6 +130,7 @@ async def test_fresh_material_worker_reads_artifact_and_keeps_text_out_of_payloa
         operation_type="material_source", input_hash="b" * 64,
         payload={
             "text_artifact_id": text_artifact.id, "filename": "rubric.txt",
+            "original_stored_file_id": original.id, "original_sha256": original.sha256,
             "targets": ["criterion"], "structure_mode": "organized",
             "extraction_hint": "", "base_workflow_revision": 0,
         }, expires_at=10**12,
@@ -247,6 +251,8 @@ async def test_auxiliary_worker_discovers_result_saved_before_checkpoint(
 ):
     owner_id, task_id = _seed_task(with_question=True, criterion="")
     if operation_type == "material_import":
+        original, _ = persist_problem_source(storage=get_storage(), owner_id=owner_id, task_id=task_id,
+            original_name="rubric.txt", content=b"rubric text", content_type="text/plain")
         text_artifact = file_repository.save_file(
             storage=get_storage(), owner_id=owner_id, kind="material_import_text",
             original_name="material-source.txt", content=b"rubric text",
@@ -257,6 +263,7 @@ async def test_auxiliary_worker_discovers_result_saved_before_checkpoint(
             operation_type="material_source", input_hash="f" * 64,
             payload={
                 "text_artifact_id": text_artifact.id, "filename": "rubric.txt",
+                "original_stored_file_id": original.id, "original_sha256": original.sha256,
                 "targets": ["criterion"], "structure_mode": "organized",
                 "extraction_hint": "", "base_workflow_revision": 0,
             }, expires_at=10**12,

@@ -44,6 +44,11 @@ def test_both_preflight_aliases_route_each_purpose_to_shared_adapter(client_regi
     response = client.post(f"/tasks/{task}/{alias}", headers=headers(owner),
         data=dict(role=role, enable_material_ocr="true"), files={"file": ("source.png", PNG_1X1, "image/png")})
     assert response.status_code >= 400, response.text
+    if role in {"rubric", "programming_tests"}:
+        assert response.status_code == 415
+        assert response.json()["detail"]["code"] == "source_type_not_allowed"
+        read.assert_not_awaited()
+        return
     read.assert_awaited_once()
     assert read.call_args.kwargs["purpose"] == purpose
     assert read.call_args.kwargs["owner_id"] == owner
@@ -65,6 +70,7 @@ def test_material_preflight_reaches_shared_reader_without_applying(client_regist
     assert response.status_code >= 400, response.text
     read.assert_awaited_once()
     assert read.call_args.kwargs["purpose"] == {"criterion":"rubric", "reference_answer":"reference", "test_cases":"test_cases"}[target]
+    assert read.call_args.kwargs["allow_vision"] is (target == "reference_answer")
     mutate.assert_not_called()
 
 

@@ -278,7 +278,7 @@ def test_task_problem_contract_serializes_and_edits_authoritative_max_score():
     ]
 
 
-def test_question_preparation_capabilities_expose_all_role_images_with_test_ocr_opt_in():
+def test_question_preparation_capabilities_restrict_teacher_ocr_by_role():
     owner_id = "score-capability-owner"
     task_id = "score-capability-task"
     _seed_question_task(owner_id, task_id)
@@ -292,8 +292,10 @@ def test_question_preparation_capabilities_expose_all_role_images_with_test_ocr_
     )
 
     assert ".jpg" in capabilities["source_roles"]["problem"]["accepted_extensions"]
-    assert ".webp" in capabilities["source_roles"]["rubric"]["accepted_extensions"]
-    assert ".jpg" in capabilities["source_roles"]["programming_tests"]["accepted_extensions"]
+    assert capabilities["source_roles"]["rubric"]["accepted_extensions"] == [".md", ".pdf", ".txt"]
+    assert capabilities["source_roles"]["programming_tests"]["accepted_extensions"] == [".json", ".md", ".pdf", ".txt"]
+    assert capabilities["source_roles"]["rubric"]["allow_vision"] is False
+    assert capabilities["source_roles"]["programming_tests"]["allow_vision"] is False
     assert capabilities["reader"]["images"] is True
 
 
@@ -310,8 +312,10 @@ def test_question_preparation_capabilities_keep_images_selectable_without_vision
         registry=registry,
     )
 
-    for role in ("problem", "reference_answer", "rubric", "programming_tests"):
+    for role in ("problem", "reference_answer"):
         assert ".png" in capabilities["source_roles"][role]["accepted_extensions"]
+    for role in ("rubric", "programming_tests"):
+        assert ".png" not in capabilities["source_roles"][role]["accepted_extensions"]
     assert ".json" in capabilities["source_roles"]["programming_tests"]["accepted_extensions"]
     assert capabilities["reader"]["ocr"] is False
     assert capabilities["reader"]["images"] is False
@@ -322,10 +326,11 @@ def test_question_preparation_capabilities_keep_images_selectable_without_vision
     ("role", "filename", "content_type", "has_vision", "error_code"),
     [
         ("problem", "questions.png", "image/png", True, None),
-        ("reference_answer", "answers.webp", "image/webp", True, None),
-        ("rubric", "rubric.jpg", "image/jpeg", True, None),
+        ("reference_answer", "answers.webp", "image/webp", True, "source_type_not_allowed"),
+        ("reference_answer", "answers.png", "image/png", True, None),
+        ("rubric", "rubric.jpg", "image/jpeg", True, "source_type_not_allowed"),
         ("problem", "questions.png", "image/png", False, None),
-        ("programming_tests", "cases.png", "image/png", True, None),
+        ("programming_tests", "cases.png", "image/png", True, "source_type_not_allowed"),
         ("programming_tests", "cases.json", "application/json", False, None),
         ("rubric", "rubric.json", "application/json", True, "source_type_not_allowed"),
     ],

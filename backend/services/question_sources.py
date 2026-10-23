@@ -34,6 +34,7 @@ from backend.skills.recognition_reader import BaiduRecognitionEngine, LLMRecogni
 from backend.storage import get_storage
 from backend.tools.file_processing import extract_text_from_upload, inspect_upload_content
 from backend.tools.pdf_evidence import PdfIndexRequest, read_pdf_evidence
+from backend.services.upload_contract import UploadContractError, upload_role_for_purpose, validate_upload
 
 _CAPACITIES = weakref.WeakKeyDictionary()
 _CACHE = RecognitionByteCache()
@@ -160,8 +161,14 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                                timeout_profile=None):
     from backend.services.source_files import persist_problem_source
 
+    try:
+        role = upload_role_for_purpose(purpose)
+        validate_upload(role, filename, content)
+    except UploadContractError as exc:
+        raise RecognitionError(exc.code) from None
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
-    allow_vision = purpose not in {"rubric", "test_cases"} if allow_vision is None else allow_vision is True
+    restricted_role = role in {"rubric", "programming_tests"}
+    allow_vision = not restricted_role and (allow_vision is None or allow_vision is True)
     reporter = reporter or ProgressReporter(f"recognition-{task_id}")
     inspection = inspect_upload_content(content, filename, content_type)
     media_type = inspection.content_type
@@ -255,6 +262,8 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         raise RecognitionError("recognition_already_running")
     assembly = run.assembly
     if assembly is None or assembly.document is None:
+        if restricted_role and run.safe_error_code in {"ocr_empty_result", "visual_capability_unavailable"}:
+            raise RecognitionError("material_ocr_not_allowed_for_role")
         raise RecognitionError(run.safe_error_code or "recognition_artifact_unavailable")
     document = assembly.document
     text = document.final_markdown
@@ -270,6 +279,8 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
             page_diagnostics=recognition_page_diagnostics(assembly),
         )
     if not text.strip():
+        if restricted_role:
+            raise RecognitionError("material_ocr_not_allowed_for_role")
         if not allow_vision and run.safe_error_code == "visual_capability_unavailable":
             raise RecognitionError("material_ocr_confirmation_required")
         if run.safe_error_code == "visual_capability_unavailable" and route.provider is not None:
