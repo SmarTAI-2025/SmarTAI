@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from .candidate_fixtures import assessment_reply, plan_reply
+from .reliability_v2 import feedback_v2
 
 
 def registry_for(providers):
@@ -81,7 +82,14 @@ async def evaluate_group(cases, provider=None, *, student_names=None):
             # No happy-path direct fallback fixture: an invalid detailed
             # fixture must be visible as failure, not hidden by oracle credit.
             raise AssertionError("unexpected direct fallback in fixed valid corpus")
-        return output_model.model_validate(assessment_reply(case)), SimpleNamespace(duration_ms=0, content="{}")
+        reply = assessment_reply(case)
+        if "APPLY SCOPED EVIDENCE" in user_prompt:
+            evidence = json.loads(user_prompt.split("\nAPPLY SCOPED EVIDENCE (one pass):\n", 1)[1])["evidence"]
+            reply = feedback_v2(reply, evidence)
+        parsed = output_model.model_validate(reply)
+        if kwargs.get("validate_output"):
+            kwargs["validate_output"](parsed)
+        return parsed, SimpleNamespace(duration_ms=0, content="{}")
 
     actual_verify = math_verification.verify_math
     async def verification(request):

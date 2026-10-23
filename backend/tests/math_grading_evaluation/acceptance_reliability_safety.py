@@ -2,8 +2,7 @@
 
 No other test module, scoring algorithm or parser is imported as a fake. The
 provider returns the B1 raw JSON fixture; only absent KB, registry selection and
-explicit storage/reporter failure injection are substituted. Production is v1
-until CORE supplies an integration_ready candidate. Failures remain real failures.
+explicit storage/reporter failure injection are substituted. The fixed CORE v2 candidate is under independent acceptance. Failures remain real failures.
 """
 import asyncio
 from copy import deepcopy
@@ -132,7 +131,11 @@ def scenario(monkeypatch):
     assignment = assignments.create_assignment(teacher_id=owner, course_id=course.id, name="Synthetic B2")
     fixture = deepcopy(next(c for c in CASES if c["id"] == "R01_real_tool_feedback"))
     for stage in ("assessment", "feedback"):
-        fixture["wire"][stage]["claims"][0]["quote"] = "41\n" + ANSWER_CANARY
+        # v2 binds a numeric check to a numeric source span. Keep the private
+        # canary as a separate actual statement instead of mixing it into 41.
+        # Both statements still occur in the same unchanged synthetic answer.
+        fixture["wire"][stage]["claims"].append(dict(id="private_source", quote=ANSWER_CANARY,
+            item_ids=[], verdict="unknown", reason="独立合成来源保密探针，无额外得分。"))
     for index in range(2):
         assignments.add_question(assignment_id=assignment.id, teacher_id=owner, q_id=f"q{index+1}",
             order_index=index, type="计算题", stem=fixture["problem"]["stem"],
@@ -305,8 +308,12 @@ def test_reporter_failure_is_not_a_holistic_plan(failure_type, phase, record_pro
         record_property("returned_modes_instead_of_error", [r.mode for p in result.values() for r in p.routes])
         record_property("synthetic_provider_entries", len(events))
         return result
-    with pytest.raises(failure_type):
+    with pytest.raises(CheckpointWriteError) as caught:
         asyncio.run(invoke())
+    if failure_type is OSError:
+        assert isinstance(caught.value.__cause__, OSError)
+        record_property("propagated_type", "CheckpointWriteError")
+        record_property("cause_type", "OSError")
     assert all(e["stage"] == "plan" for e in events)
 
 
@@ -326,8 +333,12 @@ def test_assessment_reporter_failure_propagates_through_batch(scenario, failure_
         record_property("persisted_scores", [r.ai_score for r in grades.list_results_for_run(run_id)])
         return result
     record_property("failure_type", failure_type.__name__)
-    with pytest.raises(failure_type):
+    with pytest.raises(CheckpointWriteError) as caught:
         asyncio.run(invoke())
+    if failure_type is OSError:
+        assert isinstance(caught.value.__cause__, OSError)
+        record_property("propagated_type", "CheckpointWriteError")
+        record_property("cause_type", "OSError")
     assert grades.list_results_for_run(run_id) == []
     assert all(e["stage"] == "plan" for e in scenario.events)
 

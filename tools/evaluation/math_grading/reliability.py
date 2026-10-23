@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, patch
 
 from .candidate import registry_for
 from .reliability_cases import BASE, CASES, corpus_hash
+from .reliability_v2 import CANDIDATE, wire_v2, feedback_v2
 
 
 class UnexpectedPrompt(AssertionError):
@@ -28,14 +29,15 @@ class UnexpectedPrompt(AssertionError):
 
 
 def stage_of(messages):
-    """Classify the baseline's actual prompt, never infer from call ordinal."""
+    """Classify the candidate's actual prompt, never infer from call ordinal."""
     humans = [str(m.content) for m in messages if getattr(m, "type", "") == "human"]
     system = "\n".join(str(m.content) for m in messages if getattr(m, "type", "") == "system")
     if not humans:
         raise UnexpectedPrompt("no human prompt")
     initial, latest = humans[0], humans[-1]
     if len(humans) > 1 and "could not be parsed" in latest:
-        return "format_repair", initial
+        return ("source_repair" if "preserve_claim_quotes" in latest and "APPLY SCOPED EVIDENCE" not in initial
+                else "format_repair"), initial
     if "APPLY SCOPED EVIDENCE" in initial:
         return "tool_feedback", initial
     if "INPUT DATA:" in initial:
@@ -54,7 +56,7 @@ def stage_of(messages):
 class RawProvider:
     """Hand-authored wire responses. Deliberately has no access to the oracle."""
     def __init__(self, wire, index, events):
-        self.wire = deepcopy(wire)
+        self.wire = wire_v2(wire)
         self.index = index
         self.provider_id = f"synthetic:raw-json-{index}"
         self.events = events
@@ -75,8 +77,8 @@ class RawProvider:
             payload = self.wire["plan"]
         elif stage == "expert_review":
             payload = self.wire.get("review", {"revisions": []})
-        elif stage == "format_repair":
-            payload = self.wire.get("repair", "{invalid fixture on repair too")
+        elif stage in {"format_repair", "source_repair"}:
+            payload = self.wire.get(stage if stage == "source_repair" else "repair", "{invalid fixture on repair too")
         else:
             data = json.loads(prompt.split("\nINPUT DATA:\n", 1)[1].split("\nAPPLY SCOPED EVIDENCE", 1)[0])
             event["plan_id"] = data["rubric_plan"]["plan_id"]
@@ -102,6 +104,9 @@ class RawProvider:
                     for c in payload.get("claims", []):
                         c["item_ids"] = []
                     event["fixture_envelope"] = "respond_to_holistic_fallback"
+        if stage == "tool_feedback":
+            scoped = json.loads(prompt.split("\nAPPLY SCOPED EVIDENCE (one pass):\n", 1)[1])
+            payload = feedback_v2(payload, scoped["evidence"])
         content = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
         if self.wire.get("fence") and not isinstance(payload, str):
             content = "```json\n" + content + "\n```"
@@ -182,9 +187,11 @@ def observe(case, row):
     traces = [t for t in row["traces"] if t]
     assessments = [t["assessment"] for t in traces if isinstance(t.get("assessment"), dict)]
     final_claims = [c for a in assessments for c in a.get("claims", [])]
-    initial_parsed = [t.get("fallback", {}).get("draft") or t.get("original_assessment") or t.get("assessment")
+    initial_parsed = [t.get("initial_assessment") or t.get("fallback", {}).get("draft") or t.get("original_assessment")
                       for t in traces]
     initial_claims = [c for a in initial_parsed if isinstance(a, dict) for c in a.get("claims", [])]
+    initial_statements = [c for c in initial_claims if c.get("kind", "statement") == "statement"]
+    final_statements = [c for c in final_claims if c.get("kind", "statement") == "statement"]
     initial_wire_claims = []
     for e in row["events"]:
         if e["stage"] != "assessment" or "raw_response" not in e:
@@ -204,12 +211,19 @@ def observe(case, row):
         plan_modes=[r["mode"] for p in row["plans"] for r in p["routes"]],
         ledger_experts=sum(bool(a.get("awards") or a.get("deductions")) for a in assessments),
         initial_wire_claims=len(initial_wire_claims),
-        initial_wire_literal_matches=sum(c.get("quote", "") in case["answer"] for c in initial_wire_claims),
+        initial_wire_omissions=sum(c.get("kind") == "omission" for c in initial_wire_claims),
+        initial_wire_literal_matches=sum(bool(c.get("quote")) and c["quote"] in case["answer"]
+            for c in initial_wire_claims if c.get("kind", "statement") == "statement"),
         first_retained_draft_claims=len(initial_claims),
-        first_retained_draft_literal_matches=sum(c.get("quote", "") in case["answer"] for c in initial_claims),
-        final_claims=len(final_claims),
-        final_literal_source_matches=sum(c.get("quote", "") in case["answer"] for c in final_claims),
-        source_match_scope="literal substring diagnostic, not mathematical validity; first retained draft uses final if original is absent",
+        first_retained_draft_statement_claims=len(initial_statements),
+        first_retained_draft_literal_matches=sum(bool(c.get("quote")) and c["quote"] in case["answer"] for c in initial_statements),
+        final_claims=len(final_claims), final_statement_claims=len(final_statements),
+        final_literal_source_matches=sum(bool(c.get("quote")) and c["quote"] in case["answer"] for c in final_statements),
+        first_retained_draft_available=any(isinstance(a, dict) for a in initial_parsed),
+        initial_validation_failures=[f for t in traces for f in t.get("assessment_validation_failures", [])],
+        final_omissions=sum(c.get("kind") == "omission" for c in final_claims),
+        rejected_checks=[c for t in traces for c in t.get("rejected_checks", [])],
+        source_match_scope="literal statement substring diagnostic, not mathematical validity; omission cites original obligation; missing initial draft is not reconstructed from final",
         applicability_decision=next((t.get("tool_applicability") for t in traces if t.get("tool_applicability")), None),
         tool_opportunity_expected=case["oracle"].get("applicable"),
         tools_executed=len(row["tool_calls"]), tool_statuses=dict(Counter(e.get("status") for e in evidence)),
@@ -280,7 +294,9 @@ def contract_failures(case, row):
     if o.get("reject_empty_claims"):
         require(not any(not a.get("claims") for a in assessments), "empty_claims_accepted_as_detailed")
     if o.get("missing_obligation"):
-        require(any(a.get("missing_obligations") or a.get("omissions") for a in assessments),
+        require(any(a.get("missing_obligations") or a.get("omissions") or
+                    any(c.get("kind") == "omission" and not c.get("quote") and c.get("source_quote")
+                        for c in a.get("claims", [])) for a in assessments),
                 "missing_obligation_not_retained")
     if o.get("source_repair"):
         require(stages["source_repair"] == o["source_repair"], "bounded_source_repair_not_executed")
@@ -336,18 +352,18 @@ def summarize(rows):
 async def execute(cases=CASES):
     rows = [await evaluate(case) for case in cases]
     return dict(schema_version=1, kind="synthetic_raw_json_program_path", accuracy_claim=False,
-        baseline=BASE, revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        baseline=BASE, candidate=CANDIDATE, adapter="reliability_v2", revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         corpus_sha256=corpus_hash(), results=rows, summary=summarize(rows),
         groups={g: summarize([r for r in rows if r["group"] == g]) for g in sorted({r["group"] for r in rows})},
         limits=["No real model calls or teacher accuracy labels.",
                 "Selected cases are adversarial program probes, not a representative distribution.",
-                "Raw fixtures target baseline v1 envelopes; B2 requires exact CORE integration_ready.",
+                "Immutable B1 fixtures translated only at the v2 wire boundary; fixed CORE candidate.",
                 "Source normalized matcher and lifecycle probes are reported separately."])
 
 
 def markdown(report):
     s = report["summary"]
-    lines = ["# B1 raw JSON reliability baseline", "", f"Production baseline: `{report['baseline']}`.",
+    lines = ["# B2 raw JSON independent acceptance", "", f"Production baseline: `{report['baseline']}`; candidate: `{report.get('candidate')}`.",
         f"Corpus SHA256: `{report['corpus_sha256']}`.", "",
         "Synthetic program-path observations only; **not model accuracy**. No upstream calls or paid usage.", "",
         f"All-case denominator {s['total']}; scores {s['score_available']['count']}; detailed {s['detailed_structure']['count']}; "

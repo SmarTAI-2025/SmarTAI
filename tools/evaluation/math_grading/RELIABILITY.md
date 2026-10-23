@@ -1,10 +1,53 @@
-# Independent reliability acceptance (B1)
+# Independent reliability acceptance (B1 / B2)
 
 Production baseline: `109acaec30db917b52c0ca827f15a4b5830647e8` (merged PR250/251).
 This directory's older T4 corpus and reports remain historical evidence. These
 new files do not change production code or reuse T4's mocked structured replies.
 
-## What the new run proves
+
+## B2 fixed candidate: acceptance failed
+
+CORE marked `integration_ready` at
+`d51a8474c275115abb46ac2961f0954d0470ed2f`. See the
+[B2 acceptance findings](reports/B2-ACCEPTANCE-d51a8474.md),
+[raw JSON report](reports/reliability-b2-d51a8474.md), and
+[safety report](reports/reliability-b2-safety-d51a8474.md).
+
+- Independent explicit gate: **65 passed / 3 failed** (42 authored cases plus
+  26 boundary probes). R13/R14 lose the deductions plan for an explicit
+  no-repeat policy; R29 is rejected before CAS instead of producing unknown
+  evidence. These original expectations remain red.
+- Persistence/cancellation/storage/reporter/public-event gate: **18 passed**.
+- Harness and existing candidate regressions plus compatibility controls:
+  **40 passed**. This suite alone never establishes capability acceptance.
+- Older T4 replay: 40/40 included, 36 useful scores; K05/K06 are intended
+  failures, while C08/C09 unexpectedly lose their explicit deductions plan.
+  The older adapter intentionally refuses to invent a happy fallback for those
+  cases. Do not interpret its null outcomes as proof production cannot return
+  a direct grade.
+
+`reliability_v2.py` translates only internal wire fields. Frozen B1 corpus,
+oracles, teacher/student text and all historical reports remain byte-identical.
+The adapter supplies original `source_quote`, explicit unlimited repetition for
+per-error rules, original error policy, declared error-origin verdict, omission
+claims, and actual evidence IDs. Unconfirmed applicability stays uncertain;
+no score is derived from the oracle or tool. Source repair uses the real shared
+format/domain repair call. Reporter faults require `CheckpointWriteError` with
+the original `OSError` cause and no fallback result.
+
+For privacy/recovery fixtures, the unchanged synthetic answer's numeric span
+and private canary are separate source claims, so v2 can bind the numeric check
+without dropping the canary from private trace redaction tests. Source metrics
+separate statements from omissions and never use final claims to invent a
+missing initial draft. First parsed drafts may still contain validation errors.
+
+Run the explicit gate as its own pytest target (not alongside its parent test
+directory, which can suppress this non-test_ file during collection). Existing
+reproduction commands below use disposable configuration and no network.
+Historical B1 and preparation sections below describe their original runs;
+the linked B2 report is the current fixed-candidate result.
+
+## What the raw JSON run proves
 
 `reliability.py` supplies **raw JSON strings through provider.ainvoke**. The real
 `grade_batch`, rubric compiler, JSON extraction/format handling/repair, assessment
@@ -105,7 +148,7 @@ For the intentionally red capability gate, replace the final filename with
 known-red B1 gates outside default `test_*.py` discovery; run it **explicitly** for
 acceptance. It is not a skipped test or an acceptance waiver.
 
-## B2 remains pending
+## Historical B1 handoff: B2 was pending
 
 At B1 delivery CORE is `source_interface_ready`, not `integration_ready`. Do not
 run an uncommitted moving core tree and report final acceptance. Await its exact
@@ -126,7 +169,7 @@ production integration tests must be inspected or supplemented in B2. No real
 model quality claim can be restored by these synthetic tests; paid retesting and
 the remaining global 6-call budget belong solely to the coordinating task.
 
-## B2 preparation supplement: persistence, cancellation and faults
+## Historical B2 preparation on the baseline
 
 The subsequent authorized preparation adds
 `backend/tests/math_grading_evaluation/acceptance_reliability_safety.py` and the
@@ -148,7 +191,7 @@ registry selection returns the raw JSON fixture provider, never a network SDK.
 All selected tests, including setup errors or unfinished cases, remain in the
 report denominator. A nonzero exit is an acceptance failure, not hidden as xfail.
 
-Current [safety report](reports/reliability-b2-safety-109acaec.md) / [JSON](reports/reliability-b2-safety-109acaec.json):
+Baseline preparation [safety report](reports/reliability-b2-safety-109acaec.md) / [JSON](reports/reliability-b2-safety-109acaec.json):
 **18 selected, 15 passed, 3 failed**, five pre-existing SWIG deprecation warnings.
 
 Passing probes use real repositories and disposable persistence to show:

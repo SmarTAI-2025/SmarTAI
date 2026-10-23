@@ -36,6 +36,7 @@ def main():
     args = parser.parse_args()
     from .run import isolated_imports
     from .reliability_cases import BASE, corpus_hash
+    from .reliability_v2 import CANDIDATE
     import pytest
     root = Path(__file__).resolve().parents[3]
     test_path = root / "backend/tests/math_grading_evaluation/acceptance_reliability_safety.py"
@@ -45,7 +46,7 @@ def main():
         code = pytest.main(["-q", "-p", "no:cacheprovider", "--tb=short", str(test_path)], plugins=[results])
     assert corpus_hash() == before_hash, "B1 semantic oracle changed during safety preparation"
     rows = results.case_rows()
-    report = dict(kind="B2_preparation_not_final_acceptance", recorded_at=datetime.now(timezone.utc).isoformat(),
+    report = dict(kind="B2_exact_candidate_safety_acceptance", candidate=CANDIDATE, recorded_at=datetime.now(timezone.utc).isoformat(),
         revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         production_baseline=BASE, b1_corpus_sha256=before_hash,
         test_source_sha256=hashlib.sha256(test_path.read_bytes()).hexdigest(),
@@ -54,11 +55,11 @@ def main():
         limits=["Disposable SQLite only; no PostgreSQL or production storage.",
                 "Synthetic raw JSON provider; no model quality claim.",
                 "Reporter fault injection is distinct from intentionally best-effort progress sinks.",
-                "Final candidate acceptance requires CORE integration_ready plus exact commit/path."])
+                "Safety acceptance for the fixed integration_ready candidate, not model quality or production acceptance."])
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-    lines = ["# B2 safety preparation", "", f"Revision: `{report['revision']}`; production baseline `{BASE}`.",
-             "", "Not final B2 acceptance. Disposable SQLite and synthetic provider only.",
+    lines = ["# B2 fixed-candidate safety acceptance", "", f"Revision: `{report['revision']}`; production baseline `{BASE}`.",
+             "", "Disposable SQLite and synthetic provider only; the capability gate is reported separately.",
              "", f"All-case denominator {len(rows)}; outcomes: `{report['totals']}`; exit {code}.", "",
              "| Probe | Outcome | Evidence |", "|---|---|---|"]
     for row in rows:
