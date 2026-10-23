@@ -646,9 +646,13 @@ async def verify_provider_image(
         validate_provider_api_key(provider.config.api_key)
         response = await asyncio.wait_for(provider.ainvoke_vision(
             IMAGE_CHALLENGE_PROMPT, [VisionImage(data=pixels, media_type="image/png")],
-            max_output_tokens=64,
+            # Some compatible models include reasoning in the output budget.
+            # Keep the single optional probe bounded without clipping a short answer.
+            max_output_tokens=256,
         ), timeout=max(5, min(int(settings.llm_timeout), int(settings.custom_provider_verification_timeout_seconds))))
-        if response.content.strip() == answer:
+        if getattr(response, "finish_reason", None) == "length":
+            reason = "image_probe_response_truncated"
+        elif response.content.strip() == answer:
             state, reason = "passed", "image_probe_answer_correct"
     except Exception as exc:
         if is_explicit_image_rejection(exc):

@@ -1631,6 +1631,7 @@ function verificationReasonSummary(reason: string, zh: boolean) {
     provider_upstream_unavailable: ["模型服务暂不可用", "Unavailable"],
     provider_response_invalid: ["响应格式异常", "Invalid response"],
     image_probe_answer_incorrect: ["测试答案不符", "Answer mismatch"],
+    image_probe_response_truncated: ["测试响应未完成", "Response truncated"],
     provider_vision_not_supported: ["不支持图片", "No image support"],
     shared_pool_daily_limit_reached: ["今日共享额度用完", "Daily quota used"],
     shared_pool_disabled: ["共享模型已关闭", "Shared pool off"],
@@ -1649,6 +1650,7 @@ function imageReasonLabel(reason: string, zh: boolean) {
   const labels: Record<string, string[]> = {
     image_probe_answer_correct: ["测试图片答案正确", "Test image answer was correct"],
     image_probe_answer_incorrect: ["测试答案不正确，不能据此判定不支持图片", "Incorrect test answer; image support remains uncertain"],
+    image_probe_response_truncated: ["模型达到本次测试的输出上限，答案尚未完成；图片能力仍未确认，可稍后重试。", "The model reached the test output limit before completing its answer. Image support remains unconfirmed; try again later."],
     provider_vision_not_supported: ["不支持图片，仍可处理文字资料", "Images unsupported; text sources can still be used"],
     expert_verification_timeout: ["图像测试请求超时，本次未能确认是否支持图片。请稍后重试。", "The image test timed out. Image support remains unconfirmed. Try again later."],
     expert_verification_rate_limited: ["上游限流，请稍后再试", "Upstream rate limit"],
