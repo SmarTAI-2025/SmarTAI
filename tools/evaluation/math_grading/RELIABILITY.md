@@ -1,11 +1,33 @@
-# Independent reliability acceptance (B1 / B2)
+# Independent reliability acceptance (B1 / B2 / B3)
 
 Production baseline: `109acaec30db917b52c0ca827f15a4b5830647e8` (merged PR250/251).
 This directory's older T4 corpus and reports remain historical evidence. These
 new files do not change production code or reuse T4's mocked structured replies.
 
 
-## B2 fixed candidate: acceptance failed
+## B3 fixed candidate: offline contract passed
+
+The unchanged semantic gates passed on
+`e69aec05aa33351ffb248526919d6996abc2bf6a`. See the
+[B3 acceptance report](reports/B3-ACCEPTANCE-e69aec05.md).
+
+- 42/42 raw JSON case contracts and 26/26 boundary probes passed.
+- 18/18 persisted recovery/safety probes and 40/40 harness/regression tests passed.
+- All 40 historical T4 cases are included; 38 eligible score intervals passed,
+  with only the two intentionally injected model failures lacking scores.
+- Actual raw replay coverage: scores 40/42, detailed 33/42, ledgers 31/42;
+  24/42 cases made 33 real tool calls (19 refuted, 13 supported, 1 unknown).
+  All six checks-empty opportunities actually ran tools.
+
+R13/R14 now keep the original no-repeat wording and score 9/8; C08/C09 also
+score 9/8 under their original rules. R29 reaches the real worker, returns
+unknown, retains score 10 and adds no feedback request. B changed only report
+labels/candidate metadata, with no fixture, oracle, parser, scoring or test change.
+These are synthetic program-contract passes, not real model quality or general
+proof-completeness validation. PR252/254 integration is a separate candidate.
+Historical B1/B2 evidence remains intact below.
+
+## Historical B2 fixed candidate: acceptance failed
 
 CORE marked `integration_ready` at
 `d51a8474c275115abb46ac2961f0954d0470ed2f`. See the

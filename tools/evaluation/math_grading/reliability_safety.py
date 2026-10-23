@@ -1,4 +1,4 @@
-"""Run independent B2 safety preparation on disposable storage, never live DB."""
+"""Run independent B3 safety acceptance on disposable storage, never live DB."""
 import argparse
 from collections import Counter
 from datetime import datetime, timezone
@@ -46,7 +46,7 @@ def main():
         code = pytest.main(["-q", "-p", "no:cacheprovider", "--tb=short", str(test_path)], plugins=[results])
     assert corpus_hash() == before_hash, "B1 semantic oracle changed during safety preparation"
     rows = results.case_rows()
-    report = dict(kind="B2_exact_candidate_safety_acceptance", candidate=CANDIDATE, recorded_at=datetime.now(timezone.utc).isoformat(),
+    report = dict(kind="B3_exact_candidate_safety_acceptance", candidate=CANDIDATE, recorded_at=datetime.now(timezone.utc).isoformat(),
         revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         production_baseline=BASE, b1_corpus_sha256=before_hash,
         test_source_sha256=hashlib.sha256(test_path.read_bytes()).hexdigest(),
@@ -58,7 +58,7 @@ def main():
                 "Safety acceptance for the fixed integration_ready candidate, not model quality or production acceptance."])
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-    lines = ["# B2 fixed-candidate safety acceptance", "", f"Revision: `{report['revision']}`; production baseline `{BASE}`.",
+    lines = ["# B3 fixed-candidate safety acceptance", "", f"Revision: `{report['revision']}`; production baseline `{BASE}`.",
              "", "Disposable SQLite and synthetic provider only; the capability gate is reported separately.",
              "", f"All-case denominator {len(rows)}; outcomes: `{report['totals']}`; exit {code}.", "",
              "| Probe | Outcome | Evidence |", "|---|---|---|"]

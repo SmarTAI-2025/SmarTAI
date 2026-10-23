@@ -363,7 +363,7 @@ async def execute(cases=CASES):
 
 def markdown(report):
     s = report["summary"]
-    lines = ["# B2 raw JSON independent acceptance", "", f"Production baseline: `{report['baseline']}`; candidate: `{report.get('candidate')}`.",
+    lines = ["# B3 raw JSON independent acceptance", "", f"Production baseline: `{report['baseline']}`; candidate: `{report.get('candidate')}`.",
         f"Corpus SHA256: `{report['corpus_sha256']}`.", "",
         "Synthetic program-path observations only; **not model accuracy**. No upstream calls or paid usage.", "",
         f"All-case denominator {s['total']}; scores {s['score_available']['count']}; detailed {s['detailed_structure']['count']}; "

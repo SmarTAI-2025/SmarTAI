@@ -6,7 +6,7 @@ convert an unknown tool result into a mathematical judgment.
 """
 from copy import deepcopy
 
-CANDIDATE = "d51a8474c275115abb46ac2961f0954d0470ed2f"
+CANDIDATE = "e69aec05aa33351ffb248526919d6996abc2bf6a"
 
 
 def plan_v2(payload):
