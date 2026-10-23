@@ -368,11 +368,28 @@ _DEDUCTION_AMOUNT_TOKEN = re.compile(
 )
 _REPEATED = re.compile(r"每|不限次数|each|every|per\b|unlimited", re.I)
 _LIMIT_RULE = re.compile(rf"(?:最多|上限|at most|up to)\s*({_NUMBER})\s*(?:次|times?\b)", re.I)
+# A causal policy needs both a same-error/correct-continuation subject and a
+# no-repeat action. Keep the entire clause anchored so a condition, negation,
+# or independent later error cannot acquire this executable causal policy.
+_ERROR_CONTINUATION = (
+    r"(?:同源(?:的)?(?:后续)?错误|同一(?:个)?错误|"
+    r"同一根因(?:造成|导致)的后续错误|承接(?:同一)?错误(?:值)?的后续错误|"
+    r"正确(?:承接|沿用)(?:错误(?:中间)?(?:值|结果))?(?:的后续(?:计算|推导))?)"
+)
 _NO_REPEAT = re.compile(
-    r"^(?:同源错误|同一(?:个)?错误|同一根因造成的后续错误|承接(?:同一)?错误(?:值)?的后续错误)"
-    r"(?:只扣一次|不重复扣分|不再扣分)$|"
+    rf"^{_ERROR_CONTINUATION}(?:只扣一次|不(?:重复|再)扣(?:分)?)$|"
     r"^(?:do not deduct (?:again|twice) for (?:the same error|consequential errors)|"
     r"consequential errors (?:are not penalized again|receive no further deduction))$", re.I,
+)
+# Waiving a separate conclusion penalty has a different scope from causal
+# follow-through. Preserve its source as an exemption, without changing the
+# policy for other errors or creating a zero-valued deduction item.
+_NO_SEPARATE_DEDUCTION = re.compile(
+    r"^(?:最终)?(?:结论|答案|结果)(?:项)?(?:不另(?:行)?|不单独)扣(?:分)?$",
+)
+_ERROR_POLICY_MARKER = re.compile(
+    r"只扣一次|不重复扣|不再扣|不另(?:行)?扣|不单独扣|"
+    r"deduct.*(?:again|twice)|penalized again|further deduction", re.I,
 )
 _EXEMPTION = re.compile(r"不扣(?:分)?|免扣(?:分)?|no (?:point )?(?:deduction|penalty)|comments? only", re.I)
 _FLOOR_RULE = re.compile(
@@ -508,7 +525,10 @@ def _source_policies(original: str, maximum: float) -> tuple[list[str], str]:
             if _NO_REPEAT.fullmatch(part):
                 no_repeat = part
                 continue
-            if re.search(r"不重复扣|不再扣|deduct.*(?:again|twice)", part, re.I):
+            if _NO_SEPARATE_DEDUCTION.fullmatch(part):
+                exemptions.append(part)
+                continue
+            if _ERROR_POLICY_MARKER.search(part):
                 raise ValueError("unsupported_error_policy")
             amounts = [_amount_value(a, u, maximum) for a, u in _AMOUNT.findall(part)]
             zero = bool(amounts) and all(v == 0 for v in amounts) and _DEDUCTION.search(part)
