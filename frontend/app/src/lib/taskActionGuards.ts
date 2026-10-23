@@ -1015,8 +1015,8 @@ export function classifyRecoverableError(
       title: tx(locale, "原文件空间已满", "Original-file storage is full"),
       description: tx(
         locale,
-        "本次文件未保存，正在清理已完成任务的原文件。请稍后上传，或选择更小的文件。",
-        "This file was not saved. Originals from completed tasks are being cleared. Upload again later or choose a smaller file.",
+        "本次文件未保存。请稍后重试，或选择更小的文件。",
+        "This file was not saved. Try again later or choose a smaller file.",
       ),
       actionLabel: tx(locale, "选择更小文件", "Choose a smaller file"),
       actionKind: "reupload",

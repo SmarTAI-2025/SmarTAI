@@ -220,7 +220,8 @@ describe("question source recovery guidance", () => {
     expect(info.actionKind).toBe("reupload");
     expect(info.actionLabel).toBe("选择更小文件");
     expect(info.description).toContain("本次文件未保存");
-    expect(info.description).toContain("正在清理");
+    expect(info.description).not.toContain("正在清理");
+    expect(info.description).toContain("稍后重试");
     expect(info.title).not.toContain("模型");
     expect(info.technicalDetails).toContainEqual({ label: "原文件额度", value: "512 MB" });
   });

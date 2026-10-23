@@ -65,7 +65,7 @@ for (const stage of ["problems", "submissions"] as const) {
         await page.goto(`/tasks/recovery-task/${stage}/progress`);
         const reason = page.getByText(locale === "zh-CN" ? /PDF 第 8 页/ : /Affected PDF pages: 8/);
         await expect(reason).toBeVisible();
-        await expect(reason).toContainText("RECITATION");
+        await expect(reason).toContainText(locale === "zh-CN" ? "版权限制" : "copyright restrictions");
         const retry = page.getByRole("button", { name: /重试失败项|Retry failed/i });
         await expect(retry).toBeDisabled();
         await page.reload();
@@ -112,7 +112,7 @@ for (const width of [1280, 390]) {
       ],
     } } }));
     await page.goto("/tasks/recovery-task/upload/problems");
-    await expect(page.getByText("资料库文件可直接使用，无需重新上传。")).toBeVisible();
+    await expect(page.getByText("资料库文件已就绪。")).toBeVisible();
     await page.getByRole("button", { name: "上传新文件", exact: true }).click();
     await expect(page.getByText("待重新选择：saved.pdf")).toBeVisible();
     const start = page.getByRole("button", { name: "重新识别全部资料", exact: true });

@@ -504,6 +504,10 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   }
 
   const sourceLabel = maxScoreSourceLabel(problem.max_score_source, locale);
+  const scoringGuidance = questionReviewIssues(problem).flatMap(issue =>
+    issue.code === "math_rubric_advisory" && typeof issue.details?.message === "string" && issue.details.message.trim()
+      ? [{ id: issue.issue_id, message: issue.details.message }] : [],
+  );
   return (
     <section className="min-w-0 px-5 py-5 sm:px-6">
       <div className="flex items-start justify-between gap-3">
@@ -560,6 +564,12 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           <RubricPointStatus summary={savedSummary} locale={locale} />
         </div>
       )}
+      {scoringGuidance.map(({ id, message }) => (
+        <details key={id} className="mt-3 text-sm">
+          <summary className="cursor-pointer font-medium text-primary">{tx(locale, "查看 AI 补充评分说明", "View AI scoring guidance")}</summary>
+          <p className="mt-2 whitespace-pre-wrap break-words leading-6 text-foreground">{message}</p>
+        </details>
+      ))}
     </section>
   );
 }
