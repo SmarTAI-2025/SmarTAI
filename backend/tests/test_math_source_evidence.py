@@ -26,6 +26,9 @@ def test_presentation_differences_locate_the_actual_original_span(source, quote)
     (r"$x \in R$", r"$x \in \mathbb{R}$"),
     ("$x=1$", r"\( x=1"), ("x=1", "$$x=1$"),
     (r"Cost \$5", "Cost 5"), ("x=1 and x=1", "$x = 1$"),
+    ("x=10", "x=1"), ("x=1.25", "x=1"), ("x=1e3", "x=1"),
+    (r"\alpha", "alpha"), ("123", "23"), ("alpha=1", "pha=1"),
+    ("αβ=1", "β=1"),
 ])
 def test_changed_or_ambiguous_evidence_is_not_accepted(source, quote):
     assert match_source_quote(source, quote) is None
@@ -38,3 +41,18 @@ def test_exact_match_and_limits():
     assert match_source_quote("abc", " ") is None
     assert match_source_quote("abc\0def", "abc") is None
     assert match_source_quote("a" * 500001, "a") is None
+
+
+def test_chinese_rule_can_quote_a_phrase_and_punctuation_is_not_decimal():
+    assert match_source_quote("每个独立错误扣1分", "独立错误扣1分").text == "独立错误扣1分"
+    assert match_source_quote("x=1. Therefore...", "x=1").text == "x=1"
+
+
+@pytest.mark.parametrize("source,quote,expected", [
+    ("Hence $x=1$.", r"Hence \(x = 1\)", "Hence $x=1$"),
+    ("$x=1$, done.", r"\(x = 1\), done.", "$x=1$, done."),
+    ("Hence $x=1$.", "Hence $x=1", "Hence $x=1$"),
+    ("$a+x=1$", "x = 1", "x=1"),
+])
+def test_complete_formula_retains_paired_delimiters_without_adding_content(source, quote, expected):
+    assert match_source_quote(source, quote).text == expected

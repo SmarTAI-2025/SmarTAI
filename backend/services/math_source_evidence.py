@@ -19,7 +19,10 @@ _MATH_SPAN = re.compile(
     r"\$(?!\$)(?P<inline>(?:\\.|[^$])+?)\$|"
     r"\\\((?P<paren>[\s\S]+?)\\\)|\\\[(?P<bracket>[\s\S]+?)\\\])"
 )
-_TOKEN = re.compile(r"\\[A-Za-z]+|\\[^\s]|\w+|[^\s]", re.UNICODE)
+_TOKEN = re.compile(
+    r"\\[A-Za-z]+|\\[^\s]|(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?|"
+    r"[A-Za-z_\u0370-\u03ff][A-Za-z_0-9\u0370-\u03ff]*|[^\s]"
+)
 _LIMIT = 500_000
 
 
@@ -45,6 +48,16 @@ def _tokens(text: str) -> list[tuple[str, int, int]]:
             for start, end in parts for match in _TOKEN.finditer(text, start, end)]
 
 
+def _include_complete_math_delimiters(source: str, first: int, last: int) -> tuple[int, int]:
+    # Preserve paired delimiters when all formula content is present, without
+    # expanding a subexpression into additional mathematical content.
+    for span in _MATH_SPAN.finditer(source):
+        inner = list(_TOKEN.finditer(source, span.start(span.lastgroup), span.end(span.lastgroup)))
+        if inner and first <= inner[0].start() and last >= inner[-1].end():
+            first, last = min(first, span.start()), max(last, span.end())
+    return first, last
+
+
 def match_source_quote(source: str, quote: str) -> SourceMatch | None:
     """Return one unambiguous original span; None means unresolved, not wrong.
 
@@ -61,7 +74,15 @@ def match_source_quote(source: str, quote: str) -> SourceMatch | None:
     if start >= 0:
         if source.find(quote, start + 1) >= 0:
             return None
-        return SourceMatch(source[start:start + len(quote)], start, start + len(quote), "exact")
+        end = start + len(quote)
+        # A literal substring is still not a valid quotation if it truncates
+        # a number/name/TeX command: x=1 cannot be quoted from x=10.
+        if any(token.start() < boundary < token.end()
+               for token in _TOKEN.finditer(source) for boundary in (start, end)):
+            return None
+        first, last = _include_complete_math_delimiters(source, start, end)
+        return SourceMatch(source[first:last], first, last,
+                           "exact" if (first, last) == (start, end) else "format")
     source_tokens, quote_tokens = _tokens(source), _tokens(quote)
     if not quote_tokens or not source_tokens:
         return None
@@ -80,4 +101,8 @@ def match_source_quote(source: str, quote: str) -> SourceMatch | None:
     token_index = bisect_left(offsets, index)
     first = source_tokens[token_index][1]
     last = source_tokens[token_index + len(quote_tokens) - 1][2]
+    # When the excerpt contains an entire formula, preserve its original
+    # paired delimiters too. Otherwise "Hence $x=1$" could become "Hence $x=1".
+    # Never expand a quoted subexpression into additional mathematical content.
+    first, last = _include_complete_math_delimiters(source, first, last)
     return SourceMatch(source[first:last], first, last, "format")
