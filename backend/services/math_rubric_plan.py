@@ -494,10 +494,24 @@ def _score_context_clause(clause: str, original: str, maximum: float) -> bool:
     return False
 
 
-def _source_clauses(original: str) -> list[str]:
-    return [part.strip(" :：.") for part in re.split(
+def _source_clauses(original: str, maximum: float | None = None) -> list[str]:
+    clauses = [part.strip(" :：.") for part in re.split(
         r"[，,；;、\n。]|(?<!\d)\.(?!\d)", original,
     ) if part.strip()]
+    if maximum is None:
+        return clauses
+    result = []
+    for clause in clauses:
+        for separator in re.finditer(r"[:：]", clause):
+            heading = clause[:separator.start()].strip()
+            # Only a complete, validated score context can be a heading.
+            # Keep conditional rules and method caps attached to their scope.
+            if _score_context_clause(heading, original, maximum):
+                result.extend([heading, clause[separator.end():].strip()])
+                break
+        else:
+            result.append(clause)
+    return result
 
 
 def _occurrences(quote: str) -> int | None:
@@ -642,7 +656,7 @@ def _validate_source_rules(context: dict, explanation: _Explanation) -> None:
     exemptions, _ = _source_policies(original, maximum)
     floor_rules: list[tuple[Decimal, str]] = []
     allocations: list[tuple[str, str, Decimal]] = []
-    for clause in _source_clauses(original):
+    for clause in _source_clauses(original, maximum):
         for token, _ in _DEDUCTION_AMOUNT_TOKEN.findall(clause):
             _number_value(token)  # Reject unrecognized/signed amounts even on AI-labelled items.
         if _score_context_clause(clause, original, maximum):
