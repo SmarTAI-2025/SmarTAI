@@ -19,6 +19,7 @@ from backend.domain.confidence_policy import confidence_needs_attention, confide
 
 from backend.agents.ingest_agent import (
     AICompletionCandidateOutput,
+    MaterialImportCandidateOutput,
     extract_problems,
     extract_problems_from_ocr_markdown,
     generate_missing_question_materials,
@@ -41,6 +42,7 @@ from backend.services.background_errors import classify_background_error
 from backend.services.question_structure import (
     MajorQuestionStructureV1,
     QuestionRubricValidationError,
+    validate_generated_math_rubric_percentages,
     validate_rubric_points,
 )
 from backend.skills.question_score import resolve_question_score_policy
@@ -50,6 +52,30 @@ from backend.services.teacher_score_constraints import (
 
 
 SourceRow = Tuple[ProblemSourceDraft, str]
+
+
+def _is_overall_rubric(draft: ProblemSourceDraft) -> bool:
+    # The existing UI labels this exact combination as "Overall Rules".
+    # Uploaded extraction sources and per-question descriptions still need matching.
+    return (draft.role == "rubric" and draft.source_kind == "inline_text"
+            and draft.structure_mode == "extract_from_source")
+
+
+def _overall_rubric_candidates(draft, text, problems):
+    if not _is_overall_rubric(draft):
+        return None
+    value = text.strip()
+    if not value:
+        raise ValueError("Material document is empty.")
+    # Bind the policy document, not a guessed per-question rewrite. Scope,
+    # exceptions, deductions and floors remain verbatim for the shared rubric plan.
+    return [MaterialImportCandidateOutput(
+        q_id=q_id, target="criterion", text_value=value, confidence=1.0,
+        match_status="exact", source_excerpt=value[:600],
+        source_location="Teacher-selected overall rubric scope",
+        reason="Teacher supplied overall rules; original scope and exceptions are retained.",
+    ) for q_id in problems]
+
 
 QUESTION_PREPARATION_WORKFLOW = "question_preparation"
 QUESTION_PREPARATION_STAGE_SEQUENCE = (
@@ -464,6 +490,17 @@ def _validate_major_question_candidates(
             validate_teacher_subpart_rubric(
                 candidate.text_value or "", problem, problem.get("teacher_subpart_points") or {},
             )
+            try:
+                validate_generated_math_rubric_percentages(
+                    candidate.text_value or "",
+                    question_type=str(problem.get("type") or ""),
+                    has_subparts=bool(structure.subparts),
+                )
+            except ValueError as exc:
+                raise ValidationError(
+                    "The generated mathematical rubric percentages must total 100%.",
+                    code="provider_response_invalid",
+                ) from exc
         if candidate.target == "reference_answer" and structure.subparts:
             normalized_answer = unicodedata.normalize(
                 "NFKC", candidate.text_value or ""
@@ -698,6 +735,7 @@ async def prepare_question_packages(
             score_policy.mode == "per_question"
             or any(
                 draft.role in {"reference_answer", "rubric", "programming_tests"}
+                and not _is_overall_rubric(draft)
                 for draft, _text in source_rows
             )
         )
@@ -740,20 +778,22 @@ async def prepare_question_packages(
             target = target_by_role.get(draft.role)
             if target is None:
                 continue
-            parsed = await _run_base_provider_stage(
-                parse_material_import_to_candidates(
-                    text=text,
-                    problems_data=problem_data,
-                    targets=[target],
-                    structure_mode=draft.structure_mode,
-                    extraction_hint=draft.extraction_hint,
-                    provider=provider,
-                    reporter=reporter,
-                    manage_progress_lifecycle=False,
-                ),
-                stage="uploaded_materials_aligned",
-                on_failed=on_base_failed,
-            )
+            parsed = _overall_rubric_candidates(draft, text, problem_data)
+            if parsed is None:
+                parsed = await _run_base_provider_stage(
+                    parse_material_import_to_candidates(
+                        text=text,
+                        problems_data=problem_data,
+                        targets=[target],
+                        structure_mode=draft.structure_mode,
+                        extraction_hint=draft.extraction_hint,
+                        provider=provider,
+                        reporter=reporter,
+                        manage_progress_lifecycle=False,
+                    ),
+                    stage="uploaded_materials_aligned",
+                    on_failed=on_base_failed,
+                )
             for candidate in parsed:
                 selected_candidates[(candidate.q_id, target)].append(
                     (candidate, draft)
@@ -1081,12 +1121,20 @@ async def prepare_ocr_question_packages(
                     problem.setdefault("preparation_issues", []).append(_issue(
                         q_id, "programming_tests", "material_parser_provider_required", "warning", [draft.source_token]))
             continue
-        for number, value in split_ocr_markdown_sections(text):
-            q_id = by_number.get(number.strip())
+        overall = _overall_rubric_candidates(draft, text, problem_data)
+        matches = ([(item.q_id, item.text_value, item.source_location, item.reason) for item in overall]
+                   if overall is not None else [
+                       (by_number.get(number.strip()), value, f"question {number}", "Exact OCR question-number heading")
+                       for number, value in split_ocr_markdown_sections(text)])
+        for q_id, value, source_location, reason in matches:
             if q_id is None or not value.strip():
                 continue
-            problem_data[q_id][target] = value.strip()
             provenance = dict(problem_data[q_id].get("material_provenance") or {})
+            if target in provenance and problem_data[q_id].get(target) != value.strip():
+                problem_data[q_id].setdefault("preparation_issues", []).append(_issue(
+                    q_id, _issue_field(target), "source_conflict", "warning",
+                    [provenance[target].get("source_filename", ""), draft.filename]))
+            problem_data[q_id][target] = value.strip()
             provenance[target] = {
                 "import_job_id": reporter.job_id,
                 "source_kind": draft.source_kind,
@@ -1095,8 +1143,8 @@ async def prepare_ocr_question_packages(
                 "confidence": 1.0,
                 "match_status": "exact",
                 "source_excerpt": value.strip()[:600],
-                "source_location": f"question {number}",
-                "reason": "Exact OCR question-number heading",
+                "source_location": source_location,
+                "reason": reason,
                 "authority": "uploaded_reference" if target == "reference_answer" else "uploaded_material",
                 "recognition": draft.recognition,
                 "review_status": "pending",

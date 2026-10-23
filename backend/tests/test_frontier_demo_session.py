@@ -393,11 +393,28 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(e
 
     async def model_response(self, messages, **kwargs):
         dispatched.append(self.config.scheduling_owner)
-        return LLMResponse(content=json.dumps({
-            "score": 4, "max_score": 5, "confidence": 0.95,
-            "comment": "Synthetic answer correctly explains the concept.",
-            "steps": [], "hits": [],
-        }), provider=self.provider_id, model=self.model, duration_ms=0)
+        # The production mathematical path prepares one shared question plan
+        # before requesting the student's evidence assessment.
+        if "Prepare ONE shared scoring plan" in messages[0].content:
+            payload = {
+                "effective_criterion": "Award up to 5 points for a correct explanation.",
+                "routes": [{"id": "whole", "description": "Concept coverage",
+                            "applies_when": "All answers", "mode": "holistic"}],
+                "follow_through": "No calculation follow-through is relevant.",
+                "numerical_policy": "No numeric comparison is relevant.",
+                "advisories": [],
+            }
+        else:
+            payload = {
+                "route_id": "whole", "route_reason": "Apply the shared conceptual rubric.",
+                "score": 4, "confidence": 0.95,
+                "claims": [{"id": "s1", "quote": "Synthetic explanation",
+                            "verdict": "supported", "reason": "Covers the principal concept."}],
+                "rationale": "4/5 for the principal concept; one supporting detail is missing.",
+                "comment": "Synthetic answer correctly explains the concept.",
+            }
+        return LLMResponse(content=json.dumps(payload), provider=self.provider_id,
+                           model=self.model, duration_ms=0)
 
     monkeypatch.setattr(FakeProvider, "ainvoke", model_response)
     demo = issue(enabled)
@@ -444,7 +461,7 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(e
         assert grading_repository.get_run(run_id=run_id).status == "failed"
     else:
         asyncio.run(grading_runs.process_run(run_id=run_id, worker_id="demo-current-main-worker"))
-        assert dispatched == [owner_id]
+        assert dispatched == [owner_id, owner_id]
         result = enabled.get(f"/tasks/{task_id}/result", headers=headers(demo["token"]))
         assert result.status_code == 200, result.text
         assert result.json()["status"] == "completed"
@@ -452,4 +469,4 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(e
         assert correction["score"] == 4
         assert correction["max_score"] == 5
         with session_scope() as db:
-            assert db.scalar(select(FrontierDemoDailyUsageRecord)).requests == 1
+            assert db.scalar(select(FrontierDemoDailyUsageRecord)).requests == 2

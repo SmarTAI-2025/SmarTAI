@@ -7,7 +7,7 @@ from __future__ import annotations
 import time
 import math
 from typing import Annotated, List, Optional, Literal, Dict, Any
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr, field_validator, model_serializer, model_validator
 
 from backend.domain.confidence_policy import confidence_value
 from backend.services.question_structure import (
@@ -167,6 +167,9 @@ class TestCase(BaseModel):
 
 
 class ProblemInfo(BaseModel):
+    # Internal provenance for the frozen rubric interpreter; absent from both
+    # serialization and the public API/LLM schema.
+    _math_rubric_source: dict[str, Any] = PrivateAttr(default_factory=dict)
     q_id: str = Field(description="Unique question ID, starting from 'q1'")
     number: str = Field(description="Display question number, e.g. '1', '2.3', 'III.'")
     type: str = Field(description="Question type: 概念题/计算题/编程题/证明题/推理题/选择题/多选题/填空题/其他")
@@ -200,8 +203,8 @@ class ProblemInfo(BaseModel):
     reference_answer: Optional[str] = Field(
         default=None,
         description="Teacher-supplied reference answer (calculation-style problems). "
-                    "If None, CalculationSkill will ask the LLM to generate sympy code "
-                    "and execute it in the sandbox to compute a reference value.",
+                    "Mathematical grading considers the original work and rubric "
+                    "and verifies supported individual relations when useful.",
     )
     solution_code: Optional[str] = None
     test_cases: Optional[List[TestCase]] = Field(

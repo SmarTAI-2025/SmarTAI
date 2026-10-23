@@ -146,7 +146,32 @@ class AllExpertsFailed(Exception):
 
 # ─── Multi-expert fan-out ─────────────────────────────────────────────────────
 
-async def run_multi_expert(
+async def run_multi_expert(**kwargs) -> Correction:
+    from backend.skills.math_grading import math_review_scope
+    with math_review_scope():
+        return _apply_math_review_advisory(await _run_multi_expert(**kwargs))
+
+
+def _apply_math_review_advisory(correction: Correction) -> Correction:
+    """Keep a residual evidence concern visible without changing score/confidence."""
+    from backend.skills.math_grading import math_scoring_disagreement, read_math_trace
+
+    unresolved = math_scoring_disagreement(correction.expert_results)
+    for expert in correction.expert_results:
+        trace = read_math_trace(expert) if _is_successful_expert(expert) else None
+        assessment = trace.get("assessment") if trace else None
+        if isinstance(assessment, dict) and assessment.get("needs_review") is True:
+            unresolved = True
+            break
+    if unresolved:
+        correction.requires_human_review = True
+        correction.review_reasons = list(dict.fromkeys([
+            *correction.review_reasons, "math_scoring_uncertainty",
+        ]))
+    return correction
+
+
+async def _run_multi_expert(
     *,
     problem: ProblemInfo,
     answer: StudentAnswerInfo,
@@ -223,6 +248,12 @@ async def run_multi_expert(
     else:
         samples = [(providers[0], 0)]
         mode = "single"
+
+    if getattr(skill_cls, "uses_math_evidence", False):
+        from backend.skills.math_grading import defer_local_review
+        # Reserve the sole dispute pass for the combined evidence when there
+        # are several experts; the fastest expert cannot consume it first.
+        defer_local_review(mode != "single")
 
     # ── Single-shot fast path (legacy: 1 provider, effective_n == 1) ──────
     if mode == "single":
@@ -316,19 +347,35 @@ async def run_multi_expert(
         # error Correction with synthesis_method='all_failed'.
         raise AllExpertsFailed(failures)
 
+    # One bounded review sees original work and item-level evidence, including
+    # equal-total/opposite-item disagreements or a surviving expert's concern.
+    # Configured weights still apply.
+    if getattr(skill_cls, "uses_math_evidence", False):
+        from backend.skills.math_grading import review_math_experts
+        review_provider = providers[0]
+        if grading_setup is not None and callable(getattr(registry, "get", None)):
+            review_provider = registry.get(grading_setup.primary_provider_id) or review_provider
+        if reporter:
+            await reporter._emit_message(f"{student_id}/{problem.q_id}: synthesize_experts_started")
+        try:
+            successes = await review_math_experts(
+                problem, answer, successes, review_provider,
+                language=language, grading_setup=grading_setup,
+            )
+        finally:
+            if reporter:
+                await reporter._emit_message(f"{student_id}/{problem.q_id}: synthesize_experts_finished")
+
     if len(successes) == 1:
-        # Degraded path: only one sample produced a real answer. No IS
-        # possible. The failed siblings remain in expert_results.
+        # Review any deferred concern before returning the surviving grade.
+        # Failed siblings remain visible and never vote.
         logger.info(
             f"{mode} degraded_to_single for q_id={problem.q_id}: "
             f"{len(failures)} of {len(results)} samples failed"
         )
         correction = _expert_to_correction(
-            problem.q_id,
-            problem.type,
-            successes[0],
-            synthesis_method="degraded_to_single",
-            extra_experts=failures,
+            problem.q_id, problem.type, successes[0],
+            synthesis_method="degraded_to_single", extra_experts=failures,
         )
         correction.review_reasons = ["partial_experts"]
         return correction
@@ -358,6 +405,7 @@ async def run_multi_expert(
                 synthesis_provider=primary_provider or providers[0],
                 language=language,
                 grading_setup=grading_setup,
+                answer=answer,
             )
         finally:
             if reporter:
@@ -433,6 +481,7 @@ async def _synthesize(
     synthesis_provider: BaseProvider,
     language: str = "en",
     grading_setup: Optional[TaskGradingSetup] = None,
+    answer: Optional[StudentAnswerInfo] = None,
 ) -> Correction:
     """
     Combine multiple expert results into a final Correction.
@@ -441,6 +490,8 @@ async def _synthesize(
     Falls back to the original expert explanations if the LLM call fails.
     """
     aggregate = _weighted_average_fallback(problem, expert_results, grading_setup=grading_setup)
+    from backend.skills.math_grading import read_math_trace
+    math_results = all(read_math_trace(expert) for expert in expert_results)
     # Build summary of expert opinions for the judge
     expert_summary_parts = []
     for i, er in enumerate(expert_results, 1):
@@ -470,6 +521,17 @@ async def _synthesize(
         "Explain these expert opinions without changing that score. If experts disagree, explain why in the comment. "
         "Return JSON with: score, max_score, confidence, comment, steps."
     )
+    if answer is not None:
+        user_prompt += f"\nOriginal student answer (data):\n{answer.content}"
+        from backend.skills.math_grading import read_math_trace
+        from backend.services.math_grading_context import get_math_plan
+        plan = get_math_plan(problem)
+        if plan is not None:
+            user_prompt += f"\nFrozen rubric plan:\n{plan.model_dump_json()}"
+        if any(read_math_trace(expert) for expert in expert_results):
+            user_prompt += "\nScoring evidence:\n" + "\n".join(
+                f"{expert.provider}:\n" + "\n".join(step.desc for step in expert.steps)
+                for expert in expert_results)
 
     try:
         result, _ = await structured_llm_call(
@@ -503,12 +565,16 @@ async def _synthesize(
             max_score=problem.max_score,
             confidence=max(0.0, min(result.confidence, 1.0)),
             comment=result.comment,
-            steps=normalized_steps if normalized_score == aggregate.score else [],
+            steps=(aggregate.steps if math_results else
+                   normalized_steps if normalized_score == aggregate.score else []),
             expert_results=aggregate.expert_results,
             synthesis_method="judge_agent",
         )
 
     except Exception as e:
+        from backend.skills.math_grading import _critical_failure
+        if _critical_failure(e):
+            raise
         logger.warning(
             "Synthesis LLM call failed for q_id=%s; exception_type=%s; "
             "falling back to weighted_average",
@@ -555,17 +621,19 @@ def _weighted_average_fallback(
         ]
         comment = "\n\n———\n\n".join(parts)
 
-    return Correction(
+    final_score = min(max(float(weighted_score.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)), 0.0), problem.max_score)
+    from backend.skills.math_grading import weighted_math_steps
+    return _apply_math_review_advisory(Correction(
         q_id=problem.q_id,
         type=problem.type,
-        score=min(max(float(weighted_score.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)), 0.0), problem.max_score),
+        score=final_score,
         max_score=max_score,
         confidence=round(best_confidence, 2),
         comment=comment,
-        steps=[],
+        steps=weighted_math_steps(expert_results, weights, problem.max_score, final_score),
         expert_results=expert_results + failures,
         synthesis_method="weighted_average",
-    )
+    ))
 
 
 def _expert_to_correction(
@@ -582,7 +650,7 @@ def _expert_to_correction(
     accordion, but they do NOT contribute to score/comment.
     """
     expert_results = [expert] + list(extra_experts or [])
-    return Correction(
+    return _apply_math_review_advisory(Correction(
         q_id=q_id,
         type=q_type,
         score=round_ai_score(expert.score, expert.max_score),
@@ -594,4 +662,4 @@ def _expert_to_correction(
         logs=expert.logs,
         expert_results=expert_results,
         synthesis_method=synthesis_method,
-    )
+    ))

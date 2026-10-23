@@ -1652,11 +1652,13 @@ Return one JSON object with this shape:
 Rules:
 - Only emit requested targets and known q_id values.
 - For criterion/reference_answer, use text_value and omit test_cases.
-- For criterion, express scoring allocations only as percentages totaling 100%. If the source
-  uses absolute points, preserve the relative weights but convert them using the known question's
-  max_score. Never copy an absolute point total into text_value. Exception: for objective
-  questions (选择题/多选题/填空题) do not generate a percentage rubric — emit the result-based
-  rule only when the source supports it (e.g. "答案唯一: 答对满分, 答错 0 分"), otherwise omit.
+- For criterion, preserve the teacher's original scoring method and amounts: absolute points,
+  percentages, deduction rules, score floors, blank-answer rules, consequential-error treatment,
+  accepted alternative methods, scope and exceptions. Do not convert deductions into award
+  percentages or invent a 100% allocation. Keep the source wording and restrictions; do not
+  replace the teacher's policy with a stricter reference-solution checklist. For objective
+  questions (选择题/多选题/填空题), emit a result-based rule only when the source supports it,
+  otherwise omit. The known max_score is context, not permission to rewrite source rules.
 - For test_cases, only emit candidates for programming questions and use test_cases.
 - confidence is match confidence, not grading confidence.
 - exact is allowed only when the source has an explicit matching question number or title.
@@ -1802,6 +1804,21 @@ Rules:
 - teacher_subpart_points contains authoritative teacher allocations. Preserve each named label's
   points exactly in criterion; allocate only the unspecified remainder. Do not replace explicit
   allocations with an even split. A subpart remains inside its single major-question package.
+- For calculation, proof/reasoning and concept rubrics, define mathematical goals or obligations,
+  not a mandatory copy of the reference solution. Accept valid alternative methods unless the
+  question explicitly requires one. Allocate by the importance of those goals, never by counting
+  student steps or splitting equally across generic dimensions. Preserve any provided scoring
+  rules verbatim and label newly inferred details as AI additions; do not claim they came from
+  the teacher. Positive allocations must sum to 100% (or max_score for labelled subparts).
+  If an existing rule instead uses deductions, retain its per-error amount, repetition limit,
+  cap, floor and blank/nonblank applicability; deduction amounts need not sum to the maximum.
+  Do not invent a minimum, a fixed partial-credit cap, or full credit merely from a correct result.
+- In those mathematical rubrics, distinguish the first error, correct downstream reasoning on an
+  erroneous intermediate value, a later independent error, and a separately scored conclusion.
+  Specify their treatment for this question; do not impose universal half/full credit downstream.
+  Include relevant precision, domain/assumptions, units and integration constants. For proofs,
+  address theorem hypotheses, logical gaps/circularity and cases; for concepts distinguish full,
+  partial, missing and contradictory coverage, accepting synonyms and suitable examples.
 - reference_answer: a correct model answer or derivation suitable for teacher review. Cover every
   labelled subpart in question_structure, in source order, without creating separate q_ids. If an
   existing teacher answer contains only a final answer, preserve that conclusion and expand it

@@ -1,7 +1,7 @@
 """Factual grading telemetry. Never serialize prompts, steps or provider errors.
 
-The observer is scoped to one expert assessment, not one HTTP request. Retries
-and auxiliary requests cannot inflate completed counts or change grading policy.
+Counters are scoped to one expert assessment, not one HTTP request. Retries and
+auxiliary requests cannot inflate completed counts or change grading policy.
 """
 from __future__ import annotations
 
@@ -124,6 +124,20 @@ class GradingActivity:
             previous = unit["state"]
             if previous == state and state != "retrying":
                 return
+            if unit.get("auxiliary"):
+                # Shared rubric preparation is a real request, not a completed
+                # student assessment. Keep its waits visible without counters.
+                if state not in {"queued", "responding", "retrying"}:
+                    return
+                activity = {"code": state}
+                for key in ("attempt", "max_attempts", "retry_at"):
+                    if _number(details.get(key)):
+                        activity[key] = details[key]
+                if isinstance(details.get("reason"), str) and details["reason"] in REASONS:
+                    activity["reason"] = details["reason"]
+                unit["state"] = state
+                await self.reporter.publish_grading_activity({"grading_activity": activity})
+                return
             model = self.models[unit["key"]]
             if previous:
                 model[previous] -= 1
@@ -138,6 +152,26 @@ class GradingActivity:
         except Exception:
             # An observability failure must never turn a valid score into failure.
             logger.warning("Grading activity update failed", exc_info=False)
+
+
+@asynccontextmanager
+async def observe_auxiliary_request(reporter, provider):
+    """Expose request activity before expert counters exist, preserving callers."""
+    unit = None
+    if callable(getattr(reporter, "publish_grading_activity", None)):
+        try:
+            from backend.services.execution_control import provider_key
+            observer = getattr(reporter, "grading_activity", None)
+            if not isinstance(observer, GradingActivity):
+                observer = GradingActivity(reporter, total=0)
+            unit = {"observer": observer, "key": provider_key(provider), "state": None, "auxiliary": True}
+        except Exception:
+            logger.warning("Grading auxiliary activity setup failed", exc_info=False)
+    token = _current.set(unit)
+    try:
+        yield
+    finally:
+        _current.reset(token)
 
 
 @asynccontextmanager

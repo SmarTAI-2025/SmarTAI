@@ -5,11 +5,14 @@ import {
   buildResultsModel,
   correctionScoreSource,
   correctionReviewDraftScore,
+  correctionReviewAttention,
+  correctionReviewNextBlocked,
   correctionReviewReasonIds,
   effectiveCorrectionScore,
   formatCorrectionScoreSource,
   formatConfidence,
   reviewConfirmationScore,
+  reviewReasonLabel,
   summarizeReviewScoreSources,
 } from "./resultsModel";
 
@@ -32,6 +35,22 @@ function correction(patch: Partial<Correction> = {}): Correction {
 }
 
 describe("review score presentation", () => {
+  it("shows a residual math concern as optional despite high confidence and clears it after confirmation", () => {
+    const pending = correction({
+      score: 8, provisional_score: 8, confidence: .95,
+      expert_results: [{ provider: "math", score: 8, max_score: 10, confidence: .95, comment: "Check the omitted condition.", steps: [] }],
+      review_reasons: ["math_scoring_uncertainty"],
+    });
+    expect(correctionReviewAttention(pending)).toBe("advisory");
+    expect(correctionReviewNextBlocked(pending)).toBe(false);
+    expect(reviewReasonLabel("math_scoring_uncertainty", "zh-CN")).toBe("评分依据仍有疑点，建议核对");
+    expect(reviewReasonLabel("math_scoring_uncertainty", "en-US")).toBe("Scoring evidence needs checking");
+    expect(correctionReviewAttention({
+      ...pending, teacher_score: 8, review_status: "confirmed", review_reasons: [],
+      initial_review_reasons: ["math_scoring_uncertainty"],
+    })).toBe("none");
+  });
+
   it("preserves unknown confidence in display and excludes it from averages", () => {
     const result = { task_id: "T", status: "graded", timestamp: 0, results: [{ student_id: "S", corrections: [
       correction({ q_id: "unknown", confidence: null, score: 7, review_reasons: [] }),

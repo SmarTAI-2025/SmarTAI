@@ -1199,14 +1199,25 @@ def persisted_result_counters(run_id: str) -> tuple[int, int]:
         return completed, failed
 
 
+def _apply_teacher_review_state(result, *, confirmed: bool) -> None:
+    """Apply the same current state for a fresh or inherited human judgment."""
+    result.result_status = (education.GradeResultStatus.GRADED.value if confirmed
+                            else education.GradeResultStatus.NEEDS_REVIEW.value)
+    result.requires_review = not confirmed
+    result.review_reasons = [] if confirmed else ["teacher_edit_pending_confirmation"]
+
+
 def upsert_result(run_id: str, *, worker_id: str,
-                  grade_result: education.GradeResultDTO, inherited_review: dict | None = None) -> education.GradeResultDTO:
+                  grade_result: education.GradeResultDTO, inherited_review: dict | None = None,
+                  checkpoint_event: tuple[str, dict] | None = None) -> education.GradeResultDTO:
     """Persist one graded (run, revision, question) result. AI columns are immutable
     once written; re-grading the same triple is rejected rather than overwritten.
 
     The live lease and frozen membership checks share this transaction with the
     insert. A stale worker therefore cannot add a row after cancellation,
-    completion, release, or lease takeover.
+    completion, release, or lease takeover. Optional final evidence is committed
+    with the result, so stop/retry cannot observe a reviewed trace without its
+    corresponding score and reconstruct an older expert vote.
     """
     now = time.time()
     with session_scope() as session:
@@ -1317,12 +1328,25 @@ def upsert_result(run_id: str, *, worker_id: str,
             score = inherited_review["new_score"]
             if not math.isfinite(score) or not 0 <= score <= record.ai_max_score:
                 raise ValidationError("review_score_out_of_range")
+            _apply_teacher_review_state(record, confirmed=bool(inherited_review.get("confirmed")))
             session.add(TeacherReviewRecord(
                 id=_new_review_id(), grade_result_id=record.id, teacher_id=run.teacher_id,
                 previous_score=record.ai_score, previous_comment=record.ai_comment,
                 new_score=score, new_comment=inherited_review.get("new_comment", ""),
                 comment=inherited_review.get("new_comment", ""),
                 confirmed=bool(inherited_review.get("confirmed")), review_sequence=1, created_at=now,
+            ))
+            session.flush()
+        if checkpoint_event is not None:
+            message, payload = checkpoint_event
+            next_seq = (session.scalar(
+                select(func.max(GradingRunEventRecord.sequence)).where(
+                    GradingRunEventRecord.grading_run_id == run_id
+                )
+            ) or 0) + 1
+            session.add(GradingRunEventRecord(
+                id=_new_event_id(), grading_run_id=run_id, sequence=next_seq,
+                level="info", message=message, payload=payload, created_at=now,
             ))
             session.flush()
         return _result_to_dto(record)
@@ -1550,14 +1574,7 @@ def add_teacher_review(
             created_at=now,
         )
         session.add(review)
-        if confirm:
-            result.result_status = education.GradeResultStatus.GRADED.value
-            result.requires_review = False
-            result.review_reasons = []
-        else:
-            result.result_status = education.GradeResultStatus.NEEDS_REVIEW.value
-            result.requires_review = True
-            result.review_reasons = ["teacher_edit_pending_confirmation"]
+        _apply_teacher_review_state(result, confirmed=confirm)
         result.updated_at = now
         session.flush()
         return _review_to_dto(review)

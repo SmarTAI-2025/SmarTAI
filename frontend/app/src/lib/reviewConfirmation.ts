@@ -45,6 +45,7 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
 }
 
 export function recognitionIssueLabel(issue: PreparationIssue, locale: string): string | null {
+  if (issue.code === "math_rubric_advisory" && typeof issue.details?.message === "string") return issue.details.message;
   if (issue.details?.review_display_reason === "empty_stem") return locale === "zh-CN"
     ? "题干为空，请对照原件补齐并确认。" : "Question text is empty. Complete it against the source and confirm.";
   if (issue.details?.review_display_reason === "missing_rubric") return locale === "zh-CN"
@@ -61,6 +62,12 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
   if (issue.code === "manual_completion_required") return locale === "zh-CN"
     ? "请补齐缺失资料并确认本题；完成前不能批改。"
     : "Complete the missing materials and confirm this question before grading.";
+  if (issue.code === "ambiguous_question_match") return locale === "zh-CN"
+    ? "资料无法唯一匹配到本题，请对照原件核对内容并确认。"
+    : "The source cannot be uniquely matched to this question. Check the content against the original and confirm.";
+  if (issue.code === "unmapped_source_content") return locale === "zh-CN"
+    ? "原文件中有内容尚未匹配，请核对本题是否完整。"
+    : "Some source content is unmatched. Check whether this question is complete.";
   if (!["recognition_partial", "recognition_needs_review", "low_confidence"].includes(issue.code) && !questionHasLowConfidence(issue)) return null;
   const zh = locale === "zh-CN";
   const coverage = issue.details?.coverage as Record<string, unknown[]> | undefined;
@@ -89,7 +96,7 @@ export function submissionRecognitionIncomplete(task?: Pick<Task, "submission_so
 export function questionReviewConfirmed(problem: ProblemInfo): boolean {
   return problem.review_status === "confirmed" && !questionReviewBlocked(problem) &&
     problem.max_score_review_status === "confirmed" &&
-    !(problem.preparation_issues ?? []).some(issue => issue.status === "open");
+    !(problem.preparation_issues ?? []).some(issue => issue.status === "open" && issue.code !== "math_rubric_advisory");
 }
 export interface ReviewBlocker { label: string; href: string }
 export function questionReviewBlocked(problem: ProblemInfo): boolean {
@@ -120,7 +127,7 @@ export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
   const confirmed = problem.review_status === "confirmed";
   const issues: PreparationIssue[] = (problem.preparation_issues ?? []).flatMap(issue => {
     const severity = questionIssueSeverity(issue, problem);
-    if (severity === "none" || (confirmed && severity === "advisory")) return [];
+    if (severity === "none" || (confirmed && severity === "advisory" && issue.code !== "math_rubric_advisory")) return [];
     const confidence = questionConfidence(issue, problem);
     return [{ ...issue, severity: severity === "blocking" ? "blocking" as const : "warning" as const,
       details: { ...issue.details, ...(confidence !== null ? { confidence } : {}),

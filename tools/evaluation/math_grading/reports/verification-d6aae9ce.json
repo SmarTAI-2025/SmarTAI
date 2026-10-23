@@ -1,0 +1,584 @@
+{
+  "schema_version": 1,
+  "mode": "verify",
+  "revision": "d6aae9ce671c9b48e0d7ff9d392ec17aa49b33ac",
+  "base_revision": "0304ff2e0cc294ada51c99af8d5ab07540cb61a8",
+  "corpus_sha256": "41c52a9344d7801a332688700bd4873939a6887e507854c8cb7042a8732ff418",
+  "label_kind": "synthetic_explicit_rule",
+  "accuracy_claim": false,
+  "scope": "math verification only; status never awards points",
+  "results": [
+    {
+      "id": "C10",
+      "request": {
+        "student_expression": "Integral(sin(x),(x,0,pi))",
+        "reference_expression": "2",
+        "comparison": "numeric"
+      },
+      "evidence": {
+        "status": "supported",
+        "method": "exact",
+        "reason": "The finite constant expressions are exactly equal.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "No physical units were asserted or checked."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "numeric",
+          "student_domain_requirements": [],
+          "reference_domain_requirements": []
+        }
+      },
+      "allowed_statuses": [
+        "supported"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C11",
+      "request": {
+        "student_expression": "1.5707963",
+        "reference_expression": "pi/2",
+        "comparison": "numeric",
+        "allow_approximation": true,
+        "absolute_tolerance": 1e-07
+      },
+      "evidence": {
+        "status": "supported",
+        "method": "numeric",
+        "reason": "The constants meet the supplied tolerance.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "No physical units were asserted or checked."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "numeric",
+          "student_domain_requirements": [],
+          "reference_domain_requirements": [
+            "True"
+          ],
+          "absolute_error": "0.0000000267948966192313216916397514421",
+          "allowed_error": "0.000000100000000000000000000000000000",
+          "tolerance_rule": "abs(student-reference) <= max(atol, rtol*abs(reference))"
+        }
+      },
+      "allowed_statuses": [
+        "supported"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C12",
+      "request": {
+        "student_expression": "1.57",
+        "reference_expression": "pi/2",
+        "comparison": "numeric",
+        "allow_approximation": true,
+        "absolute_tolerance": 1e-07
+      },
+      "evidence": {
+        "status": "refuted",
+        "method": "numeric",
+        "reason": "The constants exceed the supplied tolerance.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "No physical units were asserted or checked."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "numeric",
+          "student_domain_requirements": [],
+          "reference_domain_requirements": [
+            "True"
+          ],
+          "absolute_error": "0.000796326794896619231321691639751",
+          "allowed_error": "0.000000100000000000000000000000000000",
+          "tolerance_rule": "abs(student-reference) <= max(atol, rtol*abs(reference))"
+        }
+      },
+      "allowed_statuses": [
+        "refuted"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C13",
+      "request": {
+        "student_expression": "1.5707963",
+        "reference_expression": "pi/2",
+        "comparison": "numeric"
+      },
+      "evidence": {
+        "status": "refuted",
+        "method": "exact",
+        "reason": "The constants are not exactly equal; approximation was not permitted.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "No physical units were asserted or checked."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "numeric",
+          "student_domain_requirements": [],
+          "reference_domain_requirements": [
+            "True"
+          ]
+        }
+      },
+      "allowed_statuses": [
+        "refuted"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C14",
+      "request": {
+        "student_expression": "e-1",
+        "reference_expression": "E-1",
+        "comparison": "numeric"
+      },
+      "evidence": {
+        "status": "supported",
+        "method": "exact",
+        "reason": "The finite constant expressions are exactly equal.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "No physical units were asserted or checked."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "numeric",
+          "student_domain_requirements": [],
+          "reference_domain_requirements": []
+        }
+      },
+      "allowed_statuses": [
+        "supported"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C15",
+      "request": {
+        "student_expression": "(1+i)*(1-i)",
+        "reference_expression": "2",
+        "comparison": "numeric"
+      },
+      "evidence": {
+        "status": "supported",
+        "method": "exact",
+        "reason": "The finite constant expressions are exactly equal.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "No physical units were asserted or checked."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "numeric",
+          "student_domain_requirements": [],
+          "reference_domain_requirements": []
+        }
+      },
+      "allowed_statuses": [
+        "supported"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C16",
+      "request": {
+        "student_expression": "0+1*i",
+        "reference_expression": "I",
+        "comparison": "numeric"
+      },
+      "evidence": {
+        "status": "supported",
+        "method": "exact",
+        "reason": "The finite constant expressions are exactly equal.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "No physical units were asserted or checked."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "numeric",
+          "student_domain_requirements": [],
+          "reference_domain_requirements": []
+        }
+      },
+      "allowed_statuses": [
+        "supported"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C17",
+      "request": {
+        "student_expression": "a/2",
+        "reference_expression": "a/2",
+        "comparison": "numeric"
+      },
+      "evidence": {
+        "status": "unknown",
+        "method": "numeric",
+        "reason": "Unbound free variables cannot be treated as numeric constants.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "No physical units were asserted or checked."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "numeric",
+          "student_domain_requirements": [
+            "True"
+          ],
+          "reference_domain_requirements": [
+            "True"
+          ]
+        }
+      },
+      "allowed_statuses": [
+        "unknown"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C18",
+      "request": {
+        "student_expression": "x**2+2*x+1",
+        "reference_expression": "(x+1)**2",
+        "comparison": "equivalence",
+        "assumptions": {
+          "x": {
+            "real": true
+          }
+        }
+      },
+      "evidence": {
+        "status": "supported",
+        "method": "symbolic",
+        "reason": "Symbolic reduction establishes this relation on the stated domain.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "x: real=True",
+          "No physical units were asserted or checked."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "equivalence",
+          "student_domain_requirements": [],
+          "reference_domain_requirements": []
+        }
+      },
+      "allowed_statuses": [
+        "supported"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C19",
+      "request": {
+        "student_expression": "(x**2-1)/(x-1)",
+        "reference_expression": "x+1",
+        "comparison": "equivalence",
+        "assumptions": {
+          "x": {
+            "real": true
+          }
+        }
+      },
+      "evidence": {
+        "status": "refuted",
+        "method": "counterexample",
+        "reason": "A checked assignment in the requested domain refutes the relation.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "x: real=True",
+          "No physical units were asserted or checked."
+        ],
+        "counterexample": "x=1",
+        "details": {
+          "comparison": "equivalence",
+          "student_domain_requirements": [
+            "Ne(x - 1, 0)"
+          ],
+          "reference_domain_requirements": [],
+          "witness_kind": "domain",
+          "assignment": {
+            "x": "1"
+          },
+          "student_value": "undefined",
+          "reference_value": "2"
+        }
+      },
+      "allowed_statuses": [
+        "refuted",
+        "unknown"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C20",
+      "request": {
+        "student_expression": "sqrt(x**2)",
+        "reference_expression": "x",
+        "comparison": "equivalence",
+        "assumptions": {
+          "x": {
+            "real": true
+          }
+        }
+      },
+      "evidence": {
+        "status": "refuted",
+        "method": "counterexample",
+        "reason": "A checked assignment in the requested domain refutes the relation.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "x: real=True",
+          "No physical units were asserted or checked."
+        ],
+        "counterexample": "x=-1",
+        "details": {
+          "comparison": "equivalence",
+          "student_domain_requirements": [
+            "True"
+          ],
+          "reference_domain_requirements": [],
+          "witness_kind": "value",
+          "assignment": {
+            "x": "-1"
+          },
+          "student_value": "1",
+          "reference_value": "-1"
+        }
+      },
+      "allowed_statuses": [
+        "refuted"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C21",
+      "request": {
+        "student_expression": "sqrt(x**2)",
+        "reference_expression": "x",
+        "comparison": "equivalence",
+        "assumptions": {
+          "x": {
+            "nonnegative": true
+          }
+        }
+      },
+      "evidence": {
+        "status": "supported",
+        "method": "symbolic",
+        "reason": "Symbolic reduction establishes this relation on the stated domain.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "x: nonnegative=True",
+          "No physical units were asserted or checked."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "equivalence",
+          "student_domain_requirements": [
+            "True"
+          ],
+          "reference_domain_requirements": []
+        }
+      },
+      "allowed_statuses": [
+        "supported"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C22",
+      "request": {
+        "student_expression": "100",
+        "reference_expression": "1",
+        "comparison": "numeric",
+        "student_unit": "cm",
+        "reference_unit": "m"
+      },
+      "evidence": {
+        "status": "supported",
+        "method": "exact",
+        "reason": "The finite constant expressions are exactly equal.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "Student magnitude converted to the reference unit; absolute tolerance is in that reference unit."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "numeric",
+          "student_domain_requirements": [],
+          "reference_domain_requirements": [],
+          "student_unit": "cm",
+          "reference_unit": "m"
+        }
+      },
+      "allowed_statuses": [
+        "supported"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C23",
+      "request": {
+        "student_expression": "3",
+        "reference_expression": "3",
+        "comparison": "numeric",
+        "student_unit": "s",
+        "reference_unit": "m/s**2"
+      },
+      "evidence": {
+        "status": "refuted",
+        "method": "units",
+        "reason": "The supplied units have different physical dimensions.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "numeric",
+          "student_domain_requirements": [],
+          "reference_domain_requirements": [],
+          "student_unit": "s",
+          "reference_unit": "m/s**2"
+        }
+      },
+      "allowed_statuses": [
+        "refuted"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C24",
+      "request": {
+        "student_expression": "x**2",
+        "reference_expression": "x**2+C",
+        "comparison": "antiderivative",
+        "variable": "x"
+      },
+      "evidence": {
+        "status": "unknown",
+        "method": "integration_constant",
+        "reason": "The reference includes an arbitrary constant absent from the student expression; derivative equality alone does not verify the family.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "No physical units were asserted or checked.",
+          "Compares two primitives, not a primitive against an integrand."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "antiderivative",
+          "student_domain_requirements": [],
+          "reference_domain_requirements": [],
+          "integration_constants": {
+            "student": [],
+            "reference": [
+              "C"
+            ]
+          },
+          "variable": "x",
+          "derivative_domain_requirements": [
+            [],
+            []
+          ],
+          "derivatives_equal": true
+        }
+      },
+      "allowed_statuses": [
+        "refuted",
+        "unknown"
+      ],
+      "passed": true
+    },
+    {
+      "id": "C25",
+      "request": {
+        "student_expression": "x**2+C1",
+        "reference_expression": "x**2+C",
+        "comparison": "antiderivative",
+        "variable": "x"
+      },
+      "evidence": {
+        "status": "supported",
+        "method": "derivative",
+        "reason": "Symbolic reduction establishes this relation on the stated domain.",
+        "conditions": [
+          "Evidence applies only to this requested relation and supplied conditions.",
+          "The caller must check the conditions against the original problem.",
+          "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+          "No physical units were asserted or checked.",
+          "Compares two primitives, not a primitive against an integrand.",
+          "Equality of derivatives is only modulo constants on each connected domain component."
+        ],
+        "counterexample": null,
+        "details": {
+          "comparison": "antiderivative",
+          "student_domain_requirements": [],
+          "reference_domain_requirements": [],
+          "integration_constants": {
+            "student": [
+              "C1"
+            ],
+            "reference": [
+              "C"
+            ]
+          },
+          "variable": "x",
+          "derivative_domain_requirements": [
+            [],
+            []
+          ]
+        }
+      },
+      "allowed_statuses": [
+        "supported"
+      ],
+      "passed": true
+    }
+  ],
+  "candidate_acceptance": "not_executed",
+  "created_at": "2026-10-20T15:20:34.783122+00:00",
+  "runtime": {
+    "python": "3.13.13 | packaged by conda-forge | (main, Apr  8 2026, 02:29:07) [Clang 19.1.7 ]",
+    "sympy": "1.14.0",
+    "pydantic": "2.13.1"
+  }
+}

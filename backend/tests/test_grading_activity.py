@@ -30,6 +30,126 @@ def recorder(total=2):
 
 
 @pytest.mark.asyncio
+async def test_plan_requests_are_public_before_expert_activity_without_counting_answers(monkeypatch):
+    from contextlib import asynccontextmanager
+    from backend.llm import providers
+    from backend.models import ProblemInfo
+    from backend.progress.grading_activity import public_event
+    from backend.services import math_grading_context as context, math_rubric_plan as rubric
+    from backend.tools.structured_llm import _before_retry_sleep, TransientLLMError
+
+    p = provider("Gemini")
+    p._endpoint_breaker = lambda: Obj(is_open=False)
+    reporter = ProgressReporter("plan-activity", 1, 2)
+    rows = []
+    reporter.set_event_sink(lambda event, payload: rows.append({
+        "sequence": len(rows) + 1, "created_at": event.ts,
+        "message": event.message, "payload": payload,
+    }))
+    question = ProblemInfo(q_id="q1", number="1", type="计算题", stem="2 + 2",
+                           criterion="Method 8, result 2.", max_score=10)
+
+    @asynccontextmanager
+    async def lease(**kwargs):
+        yield
+
+    monkeypatch.setattr(providers, "get_scheduler", lambda: Obj(lease=lease))
+
+    async def prepare(value, selected, **kwargs):
+        # Exercise the real provider admission and structured retry hooks,
+        # without dispatching a model request.
+        async with providers.BaseProvider._call_capacity(selected, []):
+            assert public_event(rows[-1])["code"] == "responding"
+            assert (await reporter.snapshot()).completed_units == 0
+        await _before_retry_sleep(Obj(
+            args=[selected], outcome=Obj(exception=lambda: TransientLLMError("PRIVATE_ERROR")),
+            next_action=Obj(sleep=1), attempt_number=1,
+        ))
+        assert public_event(rows[-1])["code"] == "retrying"
+        async with providers.BaseProvider._call_capacity(selected, []):
+            pass
+        return rubric.fallback_math_rubric_plan(value)
+
+    monkeypatch.setattr(rubric, "prepare_math_rubric_plan", prepare)
+    plans = await context.prepare_math_plans({"q1": question}, _FakeRegistry([p]), reporter=reporter)
+    assert plans["q1"].input_fingerprint == rubric.math_rubric_fingerprint(question)
+    assert reporter.grading_activity is None
+    public = [event for row in rows if (event := public_event(row))]
+    assert [event["code"] for event in public] == ["queued", "responding", "retrying", "queued", "responding"]
+    assert public[2]["attempt"] == 2 and public[2]["reason"] == "unavailable"
+    assert all("model_progress" not in row["payload"] for row in rows)
+    assert all(row["payload"]["completed_units"] == 0 for row in rows)
+    count = len(rows)
+    with context.math_plans_context(plans):
+        await context.prepare_math_plans({"q1": question}, _FakeRegistry([p]), reporter=reporter)
+    await report_provider_state(p, "responding")  # auxiliary scope has ended
+    assert len(rows) == count
+
+    reporter.grading_activity = GradingActivity(reporter, 2)
+    async with observe_expert(reporter, p, [(p, 0)]) as unit:
+        await report_provider_state(p, "responding")
+        unit["successful"] = True
+    model = rows[-1]["payload"]["model_progress"][0]
+    assert model["total"] == 2 and model["succeeded"] == 1
+    assert model["failed"] == model["responding"] == model["retrying"] == 0
+    assert "PRIVATE_ERROR" not in json.dumps(rows) and "secret-key" not in json.dumps(rows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError])
+async def test_plan_activity_restores_existing_observer_on_failure_and_cancellation(monkeypatch, failure):
+    from copy import deepcopy
+    from backend.models import ProblemInfo
+    from backend.progress.recognition_activity import report_provider_state as provider_state
+    from backend.services import math_grading_context as context, math_rubric_plan as rubric
+
+    p = provider("Gemini")
+    reporter, events = recorder()
+    observer = reporter.grading_activity
+    question = ProblemInfo(q_id="q1", number="1", type="计算题", stem="2 + 2",
+                           criterion="Method 8, result 2.", max_score=10)
+
+    async def prepare(*args, **kwargs):
+        await provider_state(p, "responding")
+        await provider_state(p, "retrying", attempt=2, max_attempts=3, retry_at=123,
+                             reason="timeout", raw_error="PRIVATE_ERROR", prompt="PRIVATE_PROMPT")
+        raise failure("PRIVATE_FAILURE")
+
+    monkeypatch.setattr(rubric, "prepare_math_rubric_plan", prepare)
+    async with observe_expert(reporter, p, [(p, 0)]) as unit:
+        await report_provider_state(p, "responding")
+        before = deepcopy(observer.models)
+        count = len(events)
+        if failure is asyncio.CancelledError:
+            with pytest.raises(asyncio.CancelledError):
+                await context.prepare_math_plans({"q1": question}, _FakeRegistry([p]), reporter=reporter)
+        else:
+            plans = await context.prepare_math_plans({"q1": question}, _FakeRegistry([p]), reporter=reporter)
+            assert plans["q1"].input_fingerprint == rubric.math_rubric_fingerprint(question)
+        assert reporter.grading_activity is observer
+        assert observer.models == before
+        auxiliary = [row for row in events[count:] if "grading_activity" in row]
+        assert [row["grading_activity"]["code"] for row in auxiliary] == ["responding", "retrying"]
+        assert all("model_progress" not in row for row in auxiliary)
+        assert auxiliary[-1]["grading_activity"] == {
+            "code": "retrying", "attempt": 2, "max_attempts": 3,
+            "retry_at": 123, "reason": "timeout",
+        }
+        # The outer expert's unit is restored, not left in auxiliary mode.
+        await report_provider_state(p, "queued")
+        assert events[-1]["model_progress"][0]["queued"] == 1
+        unit["successful"] = True
+    model = events[-1]["model_progress"][0]
+    assert model["total"] == 2 and model["succeeded"] == 1
+    assert model["failed"] == model["cancelled"] == model["queued"] == 0
+    assert (await reporter.snapshot()).completed_units == 0
+    count = len(events)
+    await report_provider_state(p, "responding")
+    assert len(events) == count
+    assert "PRIVATE" not in json.dumps(events) and "secret-key" not in json.dumps(events)
+
+
+@pytest.mark.asyncio
 async def test_fast_model_finishes_other_questions_while_slow_waits(monkeypatch):
     fast, slow = provider("Gemini"), provider("Tsinghua")
     fast_done, release_slow = asyncio.Event(), asyncio.Event()
@@ -57,8 +177,15 @@ async def test_fast_model_finishes_other_questions_while_slow_waits(monkeypatch)
     reporter, events = recorder(3)
     problems = {f"q{i}": {"q_id": f"q{i}", "type": "简答题", "number": str(i), "stem": "question", "criterion": "Correctness", "max_score": 10} for i in range(3)}
     students = {"s": {"stu_id": "s", "stu_ans": [{"q_id": q, "content": "answer"} for q in problems]}}
-    task = asyncio.create_task(grade_batch(student_store=students, problem_store=problems,
-        registry=_FakeRegistry([fast, slow]), reporter=reporter, aggregation_method="weighted_average"))
+    # This test isolates expert scheduling after question-level preparation.
+    # Freeze real plans so the fake provider is never asked to interpret rules.
+    from backend.models import ProblemInfo
+    from backend.services.math_grading_context import math_plans_context
+    from backend.services.math_rubric_plan import fallback_math_rubric_plan
+    with math_plans_context({qid: fallback_math_rubric_plan(ProblemInfo(**raw))
+                             for qid, raw in problems.items()}):
+        task = asyncio.create_task(grade_batch(student_store=students, problem_store=problems,
+            registry=_FakeRegistry([fast, slow]), reporter=reporter, aggregation_method="weighted_average"))
     try:
         await asyncio.wait_for(fast_done.wait(), 2)
         await asyncio.sleep(0)

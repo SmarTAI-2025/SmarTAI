@@ -99,6 +99,9 @@ export function correctionReviewNotes(correction: Correction, locale: Locale) {
     add(text(`置信度 ${correction.confidence} 较低，建议核对确认。`, `Low confidence (${correction.confidence}); review suggested.`));
   }
   if (hasPartialExperts(correction)) add(text("部分专家完成，已保留有效评分和评语，建议核对。", "Some experts completed. Valid scores and feedback are retained; review suggested."));
+  if (!correctionReviewBlocked(correction) && correctionReviewReasonIds(correction).includes("math_scoring_uncertainty")) {
+    add(reviewReasonLabel("math_scoring_uncertainty", locale));
+  }
   if (correctionReviewBlocked(correction)) for (const reason of correctionReviewReasonIds(correction)) {
     if (["low_confidence", "partial_experts", "degraded_to_single", "high_indecisiveness", "score_spread_high", "minority_veto"].includes(reason)) continue;
     add(reviewReasonLabel(reason, locale), "blocking");

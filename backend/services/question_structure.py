@@ -97,6 +97,38 @@ class QuestionRubricValidationError(ValueError):
         super().__init__(summary.issue_code or "rubric_subpart_points_invalid")
 
 
+def validate_generated_math_rubric_percentages(
+    criterion: str, *, question_type: str, has_subparts: bool,
+) -> None:
+    """Check a newly generated, simple additive percentage allocation.
+
+    This is not a new editor/teacher validation gate. Existing teacher text,
+    conditional routes, deduction policies and nested subpart allocations are
+    interpreted by the question-scoped grading plan instead of being flattened
+    into one arbitrary percentage total.
+    """
+    if has_subparts or question_type.strip().casefold() not in {
+        "计算题", "证明题", "推理题", "概念题",
+        "calculation", "proof", "reasoning", "concept",
+    }:
+        return
+    text = unicodedata.normalize("NFKC", criterion)
+    if re.search(
+        r"扣|最低|保底|封顶|最多|最高|上限|误差|精度|容差|若|如果|否则|或|"
+        r"\b(?:deduct|minimum|floor|cap|maximum|tolerance|precision|if|otherwise|or)\b",
+        text, re.I,
+    ):
+        return
+    if re.search(r"\([^)]*%[^)]*\)", text):
+        return  # Nested weights are not another top-level allocation.
+    text = re.sub(r"(?:总计|合计|总共|\btotal)\s*[:：]?\s*100\s*%", "", text, flags=re.I)
+    if re.search(r"[-−]\s*\d+(?:\.\d+)?\s*%", text):
+        raise ValueError("generated_math_rubric_percentage_mismatch")
+    allocations = re.findall(r"(?<![\d.])(\d+(?:\.\d+)?)\s*%", text)
+    if allocations and sum(map(Decimal, allocations), Decimal(0)) != Decimal(100):
+        raise ValueError("generated_math_rubric_percentage_mismatch")
+
+
 _PAREN_LABEL_RE = re.compile(
     r"(?P<label>[（(](?:[0-9]{1,2}|[A-Za-z]|[ivxIVX]{1,6})[)）])"
 )

@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="2" time="1.526" timestamp="2026-10-20T23:40:19.198710+08:00" hostname="Shuangyues-MacBook-Pro.local"><testcase classname="backend.tests.math_grading_evaluation.test_candidate" name="test_subparts_keep_one_question_result_and_progress_unit[zh-Simplified Chinese]" time="0.130"><failure message="pydantic_core._pydantic_core.ValidationError: 2 validation errors for TaskGradingSetup&#10;selected_provider_ids&#10;  Field required [type=missing, input_value={'feedback_language': 'zh'}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.13/v/missing&#10;primary_provider_id&#10;  Field required [type=missing, input_value={'feedback_language': 'zh'}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.13/v/missing">language = 'zh', label = 'Simplified Chinese'
+
+    @pytest.mark.parametrize("language,label", [("zh", "Simplified Chinese"), ("en", "English")])
+    def test_subparts_keep_one_question_result_and_progress_unit(language, label):
+        from backend.agents import grading_agent
+        from backend.progress.tracker import ProgressReporter
+        case = deepcopy(next(c for c in CASES if c["id"] == "P05"))
+        case["problem"]["stem"] = (
+            "无空气阻力竖直上抛。(a)写出重力做功与势能关系；"
+            "(b)结合动能定理证明机械能守恒。"
+        )
+        reporter = ProgressReporter(f"evaluation-subparts-{language}", 1, 1)
+        actual_batch = grading_agent.grade_batch
+
+        async def with_reporter(**kwargs):
+            kwargs.update(reporter=reporter, language=language,
+                          grading_setup=TaskGradingSetup(feedback_language=language))
+            return await actual_batch(**kwargs)
+
+        async def run():
+            with patch.object(grading_agent, "grade_batch", with_reporter):
+                rows = await evaluate_group([case])
+            return rows, await reporter.snapshot()
+
+&gt;       rows, progress = asyncio.run(run())
+                         ^^^^^^^^^^^^^^^^^^
+
+backend/tests/math_grading_evaluation/test_candidate.py:90:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/opt/anaconda3/envs/smartai/lib/python3.13/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/anaconda3/envs/smartai/lib/python3.13/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/envs/smartai/lib/python3.13/asyncio/base_events.py:725: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/math_grading_evaluation/test_candidate.py:87: in run
+    rows = await evaluate_group([case])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tools/evaluation/math_grading/candidate.py:115: in evaluate_group
+    batch = await grade_batch(student_store=students, problem_store=problem_store,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+kwargs = {'aggregation_method': 'single', 'language': 'zh', 'multi_sample_n': 1, 'problem_store': {'P05': {'criterion': '重力做功与势能关系5分，联系动能定理推出总能量不变5分。', 'max_score': 10, 'number': 'P05', 'q_id': 'P05', ...}}, ...}
+
+    async def with_reporter(**kwargs):
+        kwargs.update(reporter=reporter, language=language,
+&gt;                     grading_setup=TaskGradingSetup(feedback_language=language))
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       pydantic_core._pydantic_core.ValidationError: 2 validation errors for TaskGradingSetup
+E       selected_provider_ids
+E         Field required [type=missing, input_value={'feedback_language': 'zh'}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.13/v/missing
+E       primary_provider_id
+E         Field required [type=missing, input_value={'feedback_language': 'zh'}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.13/v/missing
+
+backend/tests/math_grading_evaluation/test_candidate.py:82: ValidationError</failure></testcase><testcase classname="backend.tests.math_grading_evaluation.test_candidate" name="test_subparts_keep_one_question_result_and_progress_unit[en-English]" time="0.003"><failure message="pydantic_core._pydantic_core.ValidationError: 2 validation errors for TaskGradingSetup&#10;selected_provider_ids&#10;  Field required [type=missing, input_value={'feedback_language': 'en'}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.13/v/missing&#10;primary_provider_id&#10;  Field required [type=missing, input_value={'feedback_language': 'en'}, input_type=dict]&#10;    For further information visit https://errors.pydantic.dev/2.13/v/missing">language = 'en', label = 'English'
+
+    @pytest.mark.parametrize("language,label", [("zh", "Simplified Chinese"), ("en", "English")])
+    def test_subparts_keep_one_question_result_and_progress_unit(language, label):
+        from backend.agents import grading_agent
+        from backend.progress.tracker import ProgressReporter
+        case = deepcopy(next(c for c in CASES if c["id"] == "P05"))
+        case["problem"]["stem"] = (
+            "无空气阻力竖直上抛。(a)写出重力做功与势能关系；"
+            "(b)结合动能定理证明机械能守恒。"
+        )
+        reporter = ProgressReporter(f"evaluation-subparts-{language}", 1, 1)
+        actual_batch = grading_agent.grade_batch
+
+        async def with_reporter(**kwargs):
+            kwargs.update(reporter=reporter, language=language,
+                          grading_setup=TaskGradingSetup(feedback_language=language))
+            return await actual_batch(**kwargs)
+
+        async def run():
+            with patch.object(grading_agent, "grade_batch", with_reporter):
+                rows = await evaluate_group([case])
+            return rows, await reporter.snapshot()
+
+&gt;       rows, progress = asyncio.run(run())
+                         ^^^^^^^^^^^^^^^^^^
+
+backend/tests/math_grading_evaluation/test_candidate.py:90:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/opt/anaconda3/envs/smartai/lib/python3.13/asyncio/runners.py:195: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/opt/anaconda3/envs/smartai/lib/python3.13/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/envs/smartai/lib/python3.13/asyncio/base_events.py:725: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/math_grading_evaluation/test_candidate.py:87: in run
+    rows = await evaluate_group([case])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tools/evaluation/math_grading/candidate.py:115: in evaluate_group
+    batch = await grade_batch(student_store=students, problem_store=problem_store,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+kwargs = {'aggregation_method': 'single', 'language': 'zh', 'multi_sample_n': 1, 'problem_store': {'P05': {'criterion': '重力做功与势能关系5分，联系动能定理推出总能量不变5分。', 'max_score': 10, 'number': 'P05', 'q_id': 'P05', ...}}, ...}
+
+    async def with_reporter(**kwargs):
+        kwargs.update(reporter=reporter, language=language,
+&gt;                     grading_setup=TaskGradingSetup(feedback_language=language))
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       pydantic_core._pydantic_core.ValidationError: 2 validation errors for TaskGradingSetup
+E       selected_provider_ids
+E         Field required [type=missing, input_value={'feedback_language': 'en'}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.13/v/missing
+E       primary_provider_id
+E         Field required [type=missing, input_value={'feedback_language': 'en'}, input_type=dict]
+E           For further information visit https://errors.pydantic.dev/2.13/v/missing
+
+backend/tests/math_grading_evaluation/test_candidate.py:82: ValidationError</failure></testcase></testsuite></testsuites>
