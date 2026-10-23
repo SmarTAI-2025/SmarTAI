@@ -90,6 +90,7 @@ from backend.services.background_errors import (
 from backend.services.question_preparation_identity import (
     question_preparation_input_hash as _question_preparation_input_hash,
     source_fingerprint as _source_fingerprint,
+    validate_preparation_source_roles,
 )
 from backend.services.question_sources import read_question_source, question_recognition_options, attach_recognition_review, recognition_has_failure, recognition_requires_confirmation
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_requires_review
@@ -1571,6 +1572,7 @@ async def _start_question_preparation(
                 and isinstance(source_ref.get("stored_file_id"), str)
             ):
                 job_artifact_refs.append(source_ref["stored_file_id"])
+        validate_preparation_source_roles(draft.role for draft, _, _ in sources)
         ordered_source_inputs = [
             {
                 "source_token": draft.source_token,
@@ -1843,6 +1845,8 @@ async def manually_complete_question_preparation(
         checkpoint = failed.checkpoint or {}
         if "manual_saved_sources" in (failed.payload or {}) or (failed.payload or {}).get("question_preparation_version") != 2:
             raise InvalidTransition("Saved-text AI recovery has been retired.", code="saved_text_recovery_retired")
+        validate_preparation_source_roles(ref.get("role") for ref in (failed.payload or {}).get("source_refs", [])
+                                          if isinstance(ref, dict))
         has_checkpoint = (checkpoint.get("questions_extracted_artifact_id") or checkpoint.get("incremental_saving_units")
                           or checkpoint.get("incremental_view_from_units"))
         if has_checkpoint:

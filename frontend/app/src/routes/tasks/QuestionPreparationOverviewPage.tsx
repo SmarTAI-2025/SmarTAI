@@ -419,7 +419,7 @@ function sortProblems(problems: ProblemInfo[], locale: string) {
 function issueCodeLabel(code: PreparationIssue["code"], locale: string) {
   const labels: Record<PreparationIssue["code"], [string, string]> = {
     low_confidence: ["匹配置信度较低，请与原文件核对", "Low-confidence match; compare with the source"],
-    source_conflict: ["多份教师资料内容不一致", "Teacher sources disagree"],
+    source_conflict: ["教师资料内容存在冲突，请核对", "Teacher material contains conflicting content; please review"],
     ai_source_conflict: ["SmarTAI 结果与原文件存在冲突", "SmarTAI output conflicts with the source"],
     ambiguous_question_match: ["无法唯一匹配到题号", "Question match is ambiguous"],
     unmapped_source_content: ["原文件中有内容尚未匹配", "Some source content is unmatched"],

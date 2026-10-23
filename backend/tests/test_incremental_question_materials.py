@@ -66,6 +66,98 @@ def parsed_material(number, text):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("function_mode", [False, True])
+@pytest.mark.parametrize("conflict", [False, True])
+async def test_test_case_fragments_merge_without_loss_in_saved_and_manual_views(monkeypatch, function_mode, conflict):
+    from backend.models import TestCase
+    from backend.services.task_execution import stop_task_run
+
+    owner, task, operation, pipeline = await material_setup(monkeypatch, [("programming_tests", "Test cases")])
+    problem, tests = [source[0] for source in pipeline.sources]
+    def case(value, result):
+        return TestCase(**(dict(function_name="solve", function_args=[value], expected_return=result, io_mode="function")
+            if function_mode else dict(input=value, expected_output=result))).model_dump()
+    first, second = case("1", "2"), case("2", "4")
+    extra = case("1", "3") if conflict else case("3", "6")
+    def material(number, cases):
+        return inc._rows([dict(number=number, test_cases=cases, material_provenance={"test_cases": dict(
+            source_token=tests.source_token, source_filename=tests.filename, source_kind="upload",
+            authority="uploaded_material", review_status="pending", scope="question")})])
+
+    # Parts finish out of order. Each result is persisted with the real store.
+    await pipeline.finish(pipeline._chunk_key(tests, "later", 1, ""), material("1", [second, extra]))
+    await pipeline.finish(pipeline._chunk_key(tests, "earlier", 0, ""), material("1", [first, second]))
+    await pipeline.finish(pipeline._chunk_key(tests, "other", 2, ""), material("2", [case("9", "18")]))
+    await pipeline.finish(pipeline._chunk_key(problem, "questions", 0, ""), inc._rows([
+        row(index, criterion="Teacher rubric.", reference_answer="Teacher answer.") for index in (1, 2)]))
+    _, saved = persisted(owner, operation)
+    assert saved["q1"]["test_cases"] == [first, second, extra]
+    assert saved["q2"]["test_cases"] == [case("9", "18")]
+    assert any(issue["code"] == "source_conflict" and issue["field"] == "programming_tests"
+               for issue in saved["q1"]["preparation_issues"]) is conflict
+
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    stop_task_run(task_id=task, owner_id=owner, job_id=operation.operation_id, expected_revision=workflow.workflow_revision)
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    forbidden = AsyncMock(side_effect=AssertionError("Manual test-case merging must never call AI"))
+    monkeypatch.setattr(inc, "structured_llm_call", forbidden)
+    monkeypatch.setattr(inc, "generate_missing_question_materials", forbidden)
+    response = await api.manually_complete_question_preparation(task, operation.operation_id,
+        api.ManualQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision), current=SimpleNamespace(id=owner))
+    assert response["status"] == "ready_for_review"
+    published = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]
+    assert published["q1"]["test_cases"] == saved["q1"]["test_cases"]
+    assert published["q2"]["test_cases"] == saved["q2"]["test_cases"]
+    assert any(issue.get("details", {}).get("reason") == "test_case_output_conflict"
+               for issue in published["q1"]["preparation_issues"]) is conflict
+    forbidden.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gap", [False, True])
+async def test_repeated_test_case_groups_are_complete_unless_pages_are_missing(monkeypatch, gap):
+    from backend.models import TestCase
+    pages = [dict(page_number=page, text=text) for page, text in zip(
+        (1, 3, 4) if gap else (1, 2, 3),
+        ['Question 1\n{"input":"1","expected_output":"2"}',
+         'Question 1\n{"input":"2","expected_output":"4"}',
+         'Question 2\n{"input":"9","expected_output":"18"}'])]
+    text = "\n\n".join(page["text"] for page in pages)
+    owner, _, operation, pipeline = await material_setup(monkeypatch, [("programming_tests", text)])
+    async def read(source, *, on_pages):
+        if source[0].role == "programming_tests":
+            for page in pages:
+                await on_pages([page])
+            if gap:
+                return source[0], text, {**source[2], "source_error": "recognition_response_invalid",
+                    "recognition": {"coverage": {"failed_pages": [2], "processed_pages": [1, 3, 4]}}}
+        return source
+    pipeline.read_source = read
+    monkeypatch.setattr(inc, "_extract_problems_call", AsyncMock(return_value=inc._rows([
+        row(i, criterion="Teacher rubric.", reference_answer="Teacher answer.") for i in (1, 2)])))
+    async def material(*args, **kwargs):
+        prompt = kwargs["user_prompt"]
+        number, value, output = ("2", "9", "18") if '"input":"9"' in prompt else (
+            ("1", "2", "4") if '"input":"2"' in prompt else ("1", "1", "2"))
+        return inc._MaterialItems(items=[inc._MaterialItem(number=number,
+            test_cases=[TestCase(input=value, expected_output=output)])]), None
+    monkeypatch.setattr(inc, "structured_llm_call", material)
+    generation = AsyncMock(side_effect=AssertionError("Supplied material must not be generated"))
+    monkeypatch.setattr(inc, "generate_missing_question_materials", generation)
+    if gap:
+        with pytest.raises(RecognitionError):
+            await pipeline.run()
+    else:
+        await pipeline.run()
+    _, rows = persisted(owner, operation)
+    assert [case["input"] for case in rows["q1"]["test_cases"]] == ["1", "2"]
+    assert [case["input"] for case in rows["q2"]["test_cases"]] == ["9"]
+    assert any(issue["code"] == "recognition_partial" and issue["field"] == "programming_tests"
+        for row in rows.values() for issue in row["preparation_issues"]) is gap
+    generation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("role,target,other", [
     ("problem", "stem", "criterion"),
     ("rubric", "criterion", "reference_answer"),

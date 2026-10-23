@@ -6,6 +6,13 @@ const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id:
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
+  it("explains conflicting test expectations and requires confirmation before proceeding", () => {
+    const marker = issue({ code: "source_conflict", field: "programming_tests", details: { reason: "test_case_output_conflict" } });
+    expect(recognitionIssueLabel(marker, "zh-CN")).toContain("同一输入对应了不同预期输出");
+    expect(recognitionIssueLabel(marker, "en-US")).toContain("different expected outputs for the same input");
+    expect(questionReviewNextBlocked(question({ preparation_issues: [marker] }))).toBe(true);
+  });
+
   it("keeps a new shared rubric explanation visible after material confirmation without reopening its gate", () => {
     const warning = issue({
       code: "math_rubric_advisory", field: "rubric",

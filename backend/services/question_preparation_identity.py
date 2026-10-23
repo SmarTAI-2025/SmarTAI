@@ -1,7 +1,20 @@
 """Pure frozen-input identities shared by execution and manual projection."""
 import hashlib
 import json
-from typing import Any, Mapping, Sequence
+from collections import Counter
+from typing import Any, Iterable, Mapping, Sequence
+
+from backend.domain.errors import ValidationError
+
+
+def validate_preparation_source_roles(roles: Iterable[str]) -> None:
+    """Each preparation role has one source, regardless of input mode."""
+    counts = Counter(roles)
+    for role in ("problem", "reference_answer", "rubric", "programming_tests"):
+        if counts[role] > 1:
+            raise ValidationError(
+                "Use at most one source for each preparation material role.",
+                code="question_preparation_source_limit", details={"role": role, "max_sources": 1})
 
 
 def source_fingerprint(payload: dict) -> str:

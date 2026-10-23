@@ -26,7 +26,8 @@ class SourceQuestionUnit:
 
 
 def source_question_units(pages: dict[int, str], *, source_complete=False,
-                          known_numbers: set[str] | None = None) -> list[SourceQuestionUnit]:
+                          known_numbers: set[str] | None = None,
+                          allow_repeated_numbers=False) -> list[SourceQuestionUnit]:
     """Identify bounded source text, without inferring content or inventing IDs.
 
     Only a next explicit heading in contiguous saved pages closes a question.
@@ -64,6 +65,10 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
             records.append(SourceQuestionUnit(number, body,
                 tuple(page for page, start, stop in offsets if stop > match.start() and start < end),
                 bool(next_known or final), "next_heading" if next_known else "source_end" if final else "open"))
+    # Test material may list independent case groups under the same question
+    # number. Keep the normal gap/end-of-source checks for each group.
+    if allow_repeated_numbers:
+        return records
     counts = Counter(unit.number for unit in records)
     return [SourceQuestionUnit(unit.number, unit.text, unit.pages,
         unit.complete and counts[unit.number] == 1,

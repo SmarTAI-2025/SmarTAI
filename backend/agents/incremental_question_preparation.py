@@ -35,6 +35,7 @@ from backend.services.question_preparation_artifacts import (
     preparation_snapshot_digest, read_incremental_preparation_units,
 )
 from backend.services.question_sources import question_recognition_options
+from backend.services.question_preparation_identity import validate_preparation_source_roles
 from backend.services.question_structure import annotate_major_question_structures
 from backend.services.teacher_score_constraints import explicit_teacher_scores, normalize_question_number
 from backend.skills.question_score import resolve_question_score_policy
@@ -56,6 +57,26 @@ class _MaterialItems(BaseModel):
 def _digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
                                     separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
+def _merge_test_cases(previous, incoming):
+    """Union complete cases without choosing between contradictory expectations."""
+    result, seen, outputs = [], set(), {}
+    conflict = False
+    for case in [*(previous or []), *incoming]:
+        fingerprint = _digest(case)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        result.append(deepcopy(case))
+        identity = (["function", case["function_name"], case.get("function_args")]
+                    if case.get("function_name") else ["stdin", case.get("input", "")])
+        expected = case.get("expected_return") if case.get("function_name") else case.get("expected_output", "")
+        key = _digest(identity)
+        if key in outputs and outputs[key] != expected:
+            conflict = True
+        outputs[key] = expected
+    return result, conflict
 
 
 def _rows(items):
@@ -93,6 +114,7 @@ def _material_identity(row):
 class IncrementalQuestionPreparation:
     def __init__(self, *, operation, sources, provider, provider_id, reporter,
                  score_policy, read_source, generation_language=None, ocr_only=False):
+        validate_preparation_source_roles(draft.role for draft, _, _ in sources)
         self.operation, self.sources = operation, sources
         self.provider = _SubmissionSafeProvider(provider, reporter=reporter) if provider else None
         self.provider_id, self.reporter = provider_id, reporter
@@ -311,7 +333,13 @@ class IncrementalQuestionPreparation:
                     value = material.get(field)
                     if value:
                         previous = row.get(field)
-                        if previous and previous != value:
+                        if field == "test_cases":
+                            value, conflict = _merge_test_cases(previous, value)
+                            if conflict:
+                                row["preparation_issues"].append({
+                                    **_issue("q1", "programming_tests", "source_conflict", "warning", [provenance["source_token"]]),
+                                    "details": {"reason": "test_case_output_conflict"}})
+                        elif previous and previous != value:
                             row["preparation_issues"].append(_issue("q1", _issue_field(field), "source_conflict", "warning", [provenance["source_token"]]))
                             continue
                         row[field] = deepcopy(value)
@@ -486,7 +514,7 @@ class IncrementalQuestionPreparation:
             await self.operation.heartbeat()
             for page in ready:
                 pages[page["page_number"]] = page["text"]
-            units = source_question_units(pages)
+            units = source_question_units(pages, allow_repeated_numbers=draft.role == "programming_tests")
             repeated = sorted({normalize_question_number(unit.number) for unit in units if unit.closure == "repeated_heading"})
             previous = self.operation.checkpoint_data.get("incremental_source_invalidations") or {}
             if repeated and previous.get(draft.source_token) != repeated:
@@ -511,7 +539,8 @@ class IncrementalQuestionPreparation:
                 self.failures["source:" + draft.source_token] = RecognitionError(payload["source_error"],
                     failed_pages=coverage.get("failed_pages"), processed_pages=coverage.get("processed_pages"),
                     page_diagnostics=recognition.get("page_diagnostics"))
-            units = source_question_units(pages, source_complete=not incomplete) if pages else []
+            units = source_question_units(pages, source_complete=not incomplete,
+                allow_repeated_numbers=draft.role == "programming_tests") if pages else []
             invalid_numbers = sorted({normalize_question_number(unit.number)
                 for unit in units if unit.closure == "repeated_heading"})
             if invalid_numbers:
@@ -578,6 +607,11 @@ class IncrementalQuestionPreparation:
 
     async def _chunk(self, draft, text, index, count, *, complete=None, source_context="", expected_numbers=()):
         kind = "extract" if draft.role == "problem" else "material"
+        if kind == "extract" and self.wanted:
+            # Page headings establish boundaries, not the teacher's selection.
+            # An intentionally skipped heading must not trigger missing-item retries.
+            wanted = {normalize_question_number(number) for number in self.wanted}
+            expected_numbers = [number for number in expected_numbers if normalize_question_number(number) in wanted]
         key = self._chunk_key(draft, text, index, source_context, complete)
         if key in self.units and key not in self.incomplete_units:
             await self.schedule_ready()
