@@ -1,9 +1,26 @@
-# Independent reliability acceptance (B1 / B2 / B3)
+# Independent reliability acceptance (B1 / B2 / B3 / B4)
 
 Production baseline: `109acaec30db917b52c0ca827f15a4b5830647e8` (merged PR250/251).
 This directory's older T4 corpus and reports remain historical evidence. These
 new files do not change production code or reuse T4's mocked structured replies.
 
+
+## B4 fixed-candidate recheck: passed
+
+On `d023fc9012078496785a28f6adc2692f6110beca`, all 68 original contracts,
+18 safety gates and 31 incremental cases pass. The two original cross-line
+scope failures retain identical inputs and expectations. Three added controls
+cover following-line negation, English hypotheses and independent formula lines.
+See the [B4 recheck report](reports/B4-ACCEPTANCE-d023fc90.md).
+This is selected offline-contract acceptance, not live model or production quality.
+
+## Historical B4 on abf6: incremental acceptance failed
+
+On `abf6da1f24a560e3f160e01cd33b45889e535b09`, the original 68 contracts and
+18 safety gates pass; 26 of 28 new boundaries pass. Two new failures retain
+cross-line negation/hypothesis scope expectations. See the concise
+[B4 report](reports/B4-ACCEPTANCE-abf6da1f.md) and its small evidence file.
+No previous inputs/oracles or production code were changed.
 
 ## B3 fixed candidate: offline contract passed
 
