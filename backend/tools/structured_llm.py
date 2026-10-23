@@ -45,7 +45,10 @@ MATH_MARKDOWN_SYSTEM_INSTRUCTION = (
     "\n\nMARKDOWN MATH CONTRACT: In every prose field, wrap inline mathematics in "
     "`$...$` and display mathematics in `$$...$$`. Never leave LaTeX commands "
     "such as `\\int`, `\\mu`, or `\\times` bare. Do not add math delimiters "
-    "inside source code, code blocks, test input, or expected output. Inside JSON, "
+    "inside source code, code blocks, test input, or expected output. "
+    "Evidence fields named quote, context_quote, and source_quote are verbatim source "
+    "text, not prose: copy their original characters, whitespace, quotes and math "
+    "delimiters without formatting or translation. Inside JSON, "
     "escape a TeX backslash exactly once and encode each line break exactly once; "
     "the decoded field must contain one backslash per TeX command and real newlines, "
     "not the visible characters `\\n`. Never use triple-dollar delimiters."
@@ -450,6 +453,7 @@ _CODE_FIELD_NAMES = frozenset(
         "expected_return",
     }
 )
+_VERBATIM_EVIDENCE_FIELD_NAMES = frozenset({"quote", "context_quote", "source_quote"})
 
 
 def normalize_code_line_breaks(text: str) -> str:
@@ -543,7 +547,7 @@ def _clean_strings(data: Any, field_name: Optional[str] = None) -> Any:
     elif isinstance(data, str):
         if field_name in _SOURCE_CODE_FIELD_NAMES:
             return normalize_code_line_breaks(data)
-        if field_name in _CODE_FIELD_NAMES:
+        if field_name in _CODE_FIELD_NAMES or field_name in _VERBATIM_EVIDENCE_FIELD_NAMES:
             return data
         return format_math_and_quotes(data)
     return data
@@ -577,6 +581,7 @@ def _protect_json_math_escapes(source: str) -> str:
             return token
         if (
             field_name in _CODE_FIELD_NAMES
+            or field_name in _VERBATIM_EVIDENCE_FIELD_NAMES
             or (field_name == "text_value" and has_code_candidate)
             or _SOURCE_CODE_START_RE.match(token[1:-1])
         ):

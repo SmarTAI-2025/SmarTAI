@@ -335,6 +335,38 @@ def test_direct_grade_rejects_whitespace_only_rationale():
         grading.DirectMathGrade(score=8, rationale=" \n ", comment="Partial credit.")
 
 
+@pytest.mark.asyncio
+async def test_original_formula_survives_real_json_parser_and_deduction_scoring():
+    """Do not mock the parser whose formatting used to discard this graph."""
+    from backend.llm.providers import LLMResponse
+
+    p = problem(kind="证明题")
+    a = answer(r"\(2+2=5\)")
+    plan = plan_for(p, mode="deductions")
+    payload = grading.MathAssessment(
+        route_id="main", route_reason="Teacher's deduction rule applies.",
+        claims=[grading.Claim(id="s1", quote=a.content, item_ids=["error"],
+                              verdict="refuted", reason="One arithmetic error.")],
+        deductions=[grading.Deduction(error_id="e1", rule_id="error", claim_id="s1",
+                                      reason="One independent error.")],
+        confidence=.9, comment="One point deducted.",
+    )
+    calls = []
+
+    async def invoke(messages):
+        calls.append(messages)
+        assert len(calls) == 1, "A valid source quotation must not trigger a fallback call"
+        return LLMResponse(content=payload.model_dump_json(), provider="replay", model="raw-json",
+                           duration_ms=1)
+
+    with math_plans_context({p.q_id: plan}):
+        result = await ProofSkill(SimpleNamespace(provider_id="replay", ainvoke=invoke)).grade(p, a)
+    trace = grading.read_math_trace(result)
+    assert result.score == 9 and not result.error_kind
+    assert len(calls) == 1 and "direct" not in trace
+    assert trace["assessment"]["claims"][0]["quote"] == a.content
+
+
 def test_deductions_apply_only_teacher_floor_and_no_negative_frontend_steps():
     plan = plan_for(mode="deductions", floor=6, nonblank=True)
     draft = grading.MathAssessment(route_id="main", route_reason="Teacher deduction rule",
