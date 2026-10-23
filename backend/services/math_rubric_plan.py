@@ -21,8 +21,8 @@ from backend.tools.structured_llm import (
 from backend.services.math_source_evidence import match_source_quote
 
 
-SCHEMA_VERSION = "math_rubric_v1"
-INTERPRETATION_VERSION = "math_rubric_interpretation_v2"
+SCHEMA_VERSION = "math_rubric_v2"
+INTERPRETATION_VERSION = "math_rubric_interpretation_v3"
 Score = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Text = Annotated[str, Field(min_length=1, max_length=20000)]
 
@@ -102,7 +102,7 @@ class MathRubricSourceLocation(BaseModel):
 class MathRubricPlan(_Explanation):
     """Immutable JSON-safe internal contract; route order is significant."""
 
-    schema_version: Literal["math_rubric_v1"] = SCHEMA_VERSION
+    schema_version: Literal["math_rubric_v2"] = SCHEMA_VERSION
     plan_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     max_score: float = Field(gt=0, allow_inf_nan=False)
@@ -655,7 +655,8 @@ provider failures retain the existing execution/retry semantics.
     if language not in {"zh", "en"}:
         raise ValueError("invalid rubric explanation language")
     if reporter:
-        await reporter._emit_message("Preparing shared question scoring rules")
+        from backend.services.math_grading_context import report_math_progress
+        await report_math_progress(reporter._emit_message, "Preparing shared question scoring rules")
     failures: list[str] = []
 
     class ValidatedExplanation(_Explanation):
@@ -704,5 +705,6 @@ provider failures retain the existing execution/retry semantics.
     )
     plan = MathRubricPlan(plan_id=_content_hash(payload), **payload)
     if reporter:
-        await reporter._emit_message("Shared question scoring rules prepared")
+        from backend.services.math_grading_context import report_math_progress
+        await report_math_progress(reporter._emit_message, "Shared question scoring rules prepared")
     return plan

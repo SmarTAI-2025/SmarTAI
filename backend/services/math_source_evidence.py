@@ -8,7 +8,7 @@ more context instead of guessing which occurrence the model meant.
 """
 from __future__ import annotations
 
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 import re
 from typing import Literal
@@ -72,17 +72,25 @@ def match_source_quote(source: str, quote: str) -> SourceMatch | None:
         return None
     start = source.find(quote)
     if start >= 0:
-        if source.find(quote, start + 1) >= 0:
-            return None
-        end = start + len(quote)
         # A literal substring is still not a valid quotation if it truncates
         # a number/name/TeX command: x=1 cannot be quoted from x=10.
-        if any(token.start() < boundary < token.end()
-               for token in _TOKEN.finditer(source) for boundary in (start, end)):
-            return None
-        first, last = _include_complete_math_delimiters(source, start, end)
-        return SourceMatch(source[first:last], first, last,
-                           "exact" if (first, last) == (start, end) else "format")
+        tokens = list(_TOKEN.finditer(source))
+        starts = [token.start() for token in tokens]
+        def boundary_ok(position):
+            index = bisect_right(starts, position) - 1
+            return index < 0 or not tokens[index].start() < position < tokens[index].end()
+        located = None
+        while start >= 0:
+            end = start + len(quote)
+            if boundary_ok(start) and boundary_ok(end):
+                if located is not None:
+                    return None
+                located = start, end
+            start = source.find(quote, start + 1)
+        if located is not None:
+            first, last = _include_complete_math_delimiters(source, *located)
+            return SourceMatch(source[first:last], first, last,
+                               "exact" if (first, last) == located else "format")
     source_tokens, quote_tokens = _tokens(source), _tokens(quote)
     if not quote_tokens or not source_tokens:
         return None

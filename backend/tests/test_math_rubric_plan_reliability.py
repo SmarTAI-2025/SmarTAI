@@ -25,7 +25,8 @@ def score_errors(plan, count):
     texts = [f"{n}+1={n+2}" for n in range(count)]
     draft = MathAssessment(route_id="goals", route_reason="Shared rule applies",
         claims=[Claim(id=f"c{n}", quote=t, verdict="refuted", reason="Independent error")
-                for n, t in enumerate(texts)],
+                for n, t in enumerate(texts)] or [Claim(id="valid", quote="Valid argument",
+                    verdict="supported", reason="Submitted argument has no identified error.")],
         deductions=[Deduction(error_id=f"e{n}", rule_id="major", claim_id=f"c{n}",
                               reason="Independent error") for n in range(count)],
         comment="Explicit teacher rule", rationale="No independent errors" if not count else "")
@@ -130,15 +131,17 @@ async def test_correction_does_not_swallow_cancellation():
 
 @pytest.mark.asyncio
 async def test_prepared_event_storage_failure_is_not_downgraded():
+    from backend.services.grading_checkpoints import CheckpointWriteError
     class Reporter:
         async def _emit_message(self, message):
             if message == "Shared question scoring rules prepared":
                 raise OSError("synthetic storage failure")
 
     rule = "每个重要错误扣一分"
-    with pytest.raises(OSError, match="synthetic storage failure"):
+    with pytest.raises(CheckpointWriteError, match="math_progress_write_failed") as caught:
         await rubric.prepare_math_rubric_plan(question(criterion=rule),
             raw_provider(candidate(rule)), reporter=Reporter())
+    assert isinstance(caught.value.__cause__, OSError)
 
 
 @pytest.mark.asyncio

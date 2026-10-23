@@ -43,6 +43,12 @@ def test_exact_match_and_limits():
     assert match_source_quote("a" * 500001, "a") is None
 
 
+def test_invalid_substrings_do_not_make_a_valid_token_occurrence_ambiguous():
+    assert match_source_quote("ENERGY E result", "E").text == "E"
+    assert match_source_quote("x=10 then x=1", "x=1").text == "x=1"
+    assert match_source_quote("IDENTITY I result", "I").text == "I"
+
+
 def test_chinese_rule_can_quote_a_phrase_and_punctuation_is_not_decimal():
     assert match_source_quote("每个独立错误扣1分", "独立错误扣1分").text == "独立错误扣1分"
     assert match_source_quote("x=1. Therefore...", "x=1").text == "x=1"
