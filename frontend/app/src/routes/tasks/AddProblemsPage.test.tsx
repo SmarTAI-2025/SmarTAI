@@ -467,7 +467,7 @@ describe("image failure recovery uses explicit drafts", () => {
     const user = userEvent.setup(); renderPage(); await uploadProblemFile(user);
     preflightMutateAsync.mockRejectedValueOnce(new APIError(422, "image_recognition_unconfirmed", { detail: { code: "image_recognition_unconfirmed" } }));
     await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
-    expect(await screen.findByText(/所选模型已通过图片能力验证/)).toHaveTextContent("请换清晰文件或换模型");
+    expect(await screen.findByText(/图片未识别成功/)).toHaveTextContent("请换清晰文件或更换模型");
     expect(screen.queryByRole("button", { name: "暂存并去验证" })).not.toBeInTheDocument();
     expect(screen.queryByText(/当前配置不支持图片输入/)).not.toBeInTheDocument();
   });

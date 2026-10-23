@@ -282,7 +282,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
           <label htmlFor={inputId} className="flex min-h-[92px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed bg-slate-50/60 px-4 py-4 text-center outline-none hover:border-primary dark:bg-slate-900/30">
             <FileUp className="h-5 w-5 text-primary" />
             <span className="mt-2 max-w-full truncate text-sm font-semibold">{file?.name ?? tx(locale, "选择一份资料文件", "Choose a material file")}</span>
-            <span className="mt-1 text-xs text-muted-foreground">{file ? `${formatBytes(file.size)} · ${tx(locale, "文件已就绪，无需重新选择", "File ready; no need to reselect")}` : tx(locale, "尚未选择文件 · PDF / TXT / Markdown", "No file selected · PDF / TXT / Markdown")}</span>
+            <span className="mt-1 text-xs text-muted-foreground">{file ? `${formatBytes(file.size)} · ${tx(locale, "文件已就绪", "File ready")}` : tx(locale, "尚未选择文件 · PDF / TXT / Markdown", "No file selected · PDF / TXT / Markdown")}</span>
           </label>
           <input id={inputId} className="sr-only" type="file" accept=".pdf,.txt,.md,.markdown" aria-invalid={Boolean(uploadError)} aria-describedby={uploadError ? `${inputId}-error` : undefined} onChange={(event) => { selectFile(event.target.files?.[0]); event.target.value = ""; }} />
         </div>
@@ -396,8 +396,8 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
         toast.success(tx(locale, "资料已移除", "Material removed"), {
           description: tx(
             locale,
-            "系统会在后台自动清理原文件；完成前仍计入知识库占用，无需手动重试。",
-            "The source file will be cleaned automatically in the background. It remains charged to knowledge storage until cleanup finishes; no manual retry is needed.",
+            "正在自动清理原文件；完成前仍占用资料库空间。",
+            "The source file is being cleaned automatically. It still uses library storage until cleanup finishes.",
           ),
         });
       } else {

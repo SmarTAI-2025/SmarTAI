@@ -88,10 +88,10 @@ function QuestionMaterialImportPageForm() {
       if ([403, 404, 410].includes(normalizeAPIError(error).status)) {
         setPrepared(null); setPreparedStatus("ready");
         setPreparedNotice(locale === "zh-CN"
-          ? "上次上传的资料引用已失效。请核对当前来源后重新开始；已选文件仍在时无需重新选择。"
-          : "The previous upload reference expired. Check the current source and start again; a file that is still selected does not need to be reselected.");
+          ? "上次上传的资料已失效，请检查所选文件后重新开始。"
+          : "The previous upload expired. Check the selected file and start again.");
       } else {
-        setPreparedStatus("unavailable"); setPreparedNotice(locale === "zh-CN" ? "暂时无法检查已上传资料，请重试检查，暂时无需重传。" : "The uploaded material could not be checked. Retry validation; no new upload is needed yet.");
+        setPreparedStatus("unavailable"); setPreparedNotice(locale === "zh-CN" ? "暂时无法检查已上传资料，请重试检查。" : "Unable to check the uploaded material. Retry the check.");
       }
     });
     return () => { cancelled = true; };
@@ -117,8 +117,8 @@ function QuestionMaterialImportPageForm() {
   const referenceError = !references.blocked ? null : references.status("material-import") === "missing"
     ? (locale === "zh-CN" ? "资料库文件已删除或不可访问，请重新选择资料来源。" : "The library file was deleted or is inaccessible. Choose a source again.")
     : references.status("material-import") === "unavailable"
-      ? (locale === "zh-CN" ? "暂时无法核对资料，请重试检查，暂时无需重传。" : "The material could not be checked. Retry validation; no new upload is needed yet.")
-      : (locale === "zh-CN" ? "正在检查资料引用，请稍候，暂时无需重传。" : "Checking the material reference. Please wait; no new upload is needed yet.");
+      ? (locale === "zh-CN" ? "暂时无法检查资料，请重试检查。" : "Unable to check the material. Retry the check.")
+      : (locale === "zh-CN" ? "正在检查资料…" : "Checking the material…");
   const taskReady = taskQuery.data?.status === "problems_ready";
   const hasSource = sourceMode === "library" ? Boolean(selectedMaterial) : Boolean(selectedFile);
   const gateMessage = taskQuery.isError
@@ -138,7 +138,7 @@ function QuestionMaterialImportPageForm() {
     || targets.length === 0
     || !hasSource;
   const actionMessage = formError
-    ?? (taskQuery.isLoading || expertsQuery.isLoading || preparedStatus === "checking" ? (locale === "zh-CN" ? "正在检查任务、模型或文件，请稍候，暂时无需重传。" : "Checking the task, model or file. Please wait; no new upload is needed yet.") : null)
+    ?? (taskQuery.isLoading || expertsQuery.isLoading || preparedStatus === "checking" ? (locale === "zh-CN" ? "正在检查任务、模型和文件…" : "Checking the task, model and file…") : null)
     ?? (localDraft.conflict ? (locale === "zh-CN" ? "任务已有更新，请先处理下方草稿冲突提示。" : "The task has changed. Resolve the draft conflict below first.") : null)
     ?? referenceError
     ?? preparedNotice
@@ -551,7 +551,7 @@ function UploadSourcePicker({ locale, file, inputRef, saveToLibrary, onChoose, o
         </button>
         <input ref={inputRef} type="file" className="sr-only" accept={ACCEPTED_EXTENSIONS.join(",")} onChange={onFileChange} />
       </div>
-      {file ? <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "文件已就绪，无需重新选择。" : "File ready; no need to reselect."}</p> : null}
+      {file ? <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "文件已就绪。" : "File ready."}</p> : null}
       <label className="mt-3 inline-flex items-center gap-2 text-[12px] text-muted-foreground">
         <input type="checkbox" checked={saveToLibrary} onChange={(event) => onSaveChange(event.target.checked)} className="h-4 w-4 rounded border-border accent-primary" />
         {materialImportText(locale, "saveToLibrary")}

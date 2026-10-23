@@ -128,7 +128,7 @@ describe("course material deletion", () => {
     await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith(
       "资料已移除",
       {
-        description: "系统会在后台自动清理原文件；完成前仍计入知识库占用，无需手动重试。",
+        description: "正在自动清理原文件；完成前仍占用资料库空间。",
       },
     ));
     expect(screen.queryByRole("button", { name: /重试|清理/ })).not.toBeInTheDocument();

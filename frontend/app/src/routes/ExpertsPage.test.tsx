@@ -406,7 +406,7 @@ describe("ExpertsPage editable vendor Base URL", () => {
       verification_error_code: "expert_verification_region_unsupported",
     }];
     renderPage();
-    expect(screen.getAllByText(/服务商不支持当前网络出口所在地区/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/服务商不支持当前网络所在地区/).length).toBeGreaterThan(0);
     expect(screen.queryByText("expert_verification_region_unsupported")).not.toBeInTheDocument();
   });
 
@@ -457,10 +457,10 @@ describe("ExpertsPage editable vendor Base URL", () => {
   });
 
   it.each([
-    ["expert_verification_timeout", "zh-CN", "图像测试请求超时，本次未能确认是否支持图片。请稍后重试。"],
-    ["expert_verification_timeout", "en-US", "The image test timed out. Image support remains unconfirmed. Try again later."],
-    ["private-unknown-error", "zh-CN", "图像测试未能完成，本次未能确认是否支持图片。请稍后重试。"],
-    ["private-unknown-error", "en-US", "The image test could not complete. Image support remains unconfirmed. Try again later."],
+    ["expert_verification_timeout", "zh-CN", "图像测试超时，图片能力待确认。请稍后重试。"],
+    ["expert_verification_timeout", "en-US", "Image test timed out; support is unconfirmed. Retry later."],
+    ["private-unknown-error", "zh-CN", "图像测试未完成，图片能力待确认。请稍后重试。"],
+    ["private-unknown-error", "en-US", "Image test incomplete; support is unconfirmed. Retry later."],
   ])("explains inconclusive image reason %s in %s without exposing codes", (reason, locale, message) => {
     window.localStorage.setItem("smartai_locale", locale);
     hookState.experts = [{

@@ -1064,7 +1064,7 @@ function TeacherMaterialConfirmation({
             {tx(locale, "本次生成资料已由教师确认", "This run's generated materials were teacher-confirmed")}
           </span>
         ) : null}
-        <span className="text-xs text-muted-foreground">{tx(locale, "资料会随当前任务持续保留；仍可在题目审核页查看，最终评分继续由教师复核。", "These materials remain attached to the current task and stay available in question review; final scores remain subject to teacher review.")}</span>
+        <span className="text-xs text-muted-foreground">{tx(locale, "资料已保存在当前任务，可在题目审核页查看。", "Materials are saved with this task and available in question review.")}</span>
       </div>
     </section>
   );
@@ -1239,7 +1239,7 @@ function stepsFromSnapshot(snapshot: TaskStateSnapshot, locale: Locale): RunStep
     const completeDetail = step.id === "task"
       ? tx(locale, "任务已创建", "Task created")
       : step.id === "questions"
-        ? tx(locale, `已识别 ${snapshot.problem_count} 题；人工确认状态请查看审核页面`, `${snapshot.problem_count} questions recognized; see question review for confirmation status`)
+        ? tx(locale, `已识别 ${snapshot.problem_count} 题`, `${snapshot.problem_count} questions recognized`)
         : step.id === "submissions"
           ? tx(locale, `已识别 ${snapshot.student_count} 份作答`, `${snapshot.student_count} submissions recognized`)
           : tx(locale, `已处理 ${snapshot.student_count * snapshot.problem_count} 题次`, `${snapshot.student_count * snapshot.problem_count} responses processed`);
@@ -1260,8 +1260,8 @@ function liveDemoWorkflowFailureMessage(locale: Locale, detail: string) {
   if (detail === "provider_unreachable") {
     return tx(
       locale,
-      "模型服务暂时不可用：上游服务调用失败，请稍后重试。可打开任务查看已完成的内容。",
-      "The model service is temporarily unavailable. The upstream request failed; please retry shortly. Open the task to inspect any completed work.",
+      "模型服务暂时不可用，请稍后重试。已完成的内容可在任务中查看。",
+      "The model service is unavailable. Retry later or open the task to view completed work.",
     );
   }
   if (detail === "shared_pool_daily_limit_reached") {
@@ -1271,7 +1271,7 @@ function liveDemoWorkflowFailureMessage(locale: Locale, detail: string) {
       "The daily demo limit has been reached. Please try again after the allowance resets.",
     );
   }
-  return tx(locale, `后端已停止本次运行：${detail}`, `The backend stopped this run: ${detail}`);
+  return tx(locale, `本次运行已停止：${detail}`, `This run stopped: ${detail}`);
 }
 
 function errorMessage(error: unknown) {

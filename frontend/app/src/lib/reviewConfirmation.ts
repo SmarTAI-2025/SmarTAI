@@ -45,7 +45,8 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
 }
 
 export function recognitionIssueLabel(issue: PreparationIssue, locale: string): string | null {
-  if (issue.code === "math_rubric_advisory" && typeof issue.details?.message === "string") return issue.details.message;
+  if (issue.code === "math_rubric_advisory") return locale === "zh-CN"
+    ? "本题含 AI 补充评分说明，建议核对评分标准。" : "AI scoring guidance was added. Review the rubric.";
   if (issue.details?.review_display_reason === "empty_stem") return locale === "zh-CN"
     ? "题干为空，请对照原件补齐并确认。" : "Question text is empty. Complete it against the source and confirm.";
   if (issue.details?.review_display_reason === "missing_rubric") return locale === "zh-CN"
@@ -84,9 +85,9 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
     ? `置信度 ${questionConfidence(issue)} 较低，建议核对确认。`
     : `Low confidence (${questionConfidence(issue)}); review suggested.`;
   if (onlyUnverifiedTargets(issue)) return zh
-    ? "已定位题号；请对照原文件确认题干完整。这是常规确认，尚未发现具体缺失。"
-    : "Question numbers were located. Confirm the complete wording against the source; no specific omission was detected.";
-  return zh ? "来源提示可对照原文件核对；尚无本题严重识别错误的证据。" : "The source recommends checking the original; this does not identify a blocking error in this question.";
+    ? "请对照原文件核对题干。"
+    : "Check the question text against the original.";
+  return zh ? "建议对照原文件核对本题。" : "Check this question against the original.";
 }
 
 export function submissionRecognitionIncomplete(task?: Pick<Task, "submission_source_summary" | "submission_sources">): boolean {

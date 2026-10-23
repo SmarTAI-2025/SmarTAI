@@ -269,15 +269,15 @@ function sourceCleanupCopy(locale: Locale, finalization: TaskFinalizationRespons
   if (cleanup.status === "retrying") {
     return tx(
       locale,
-      `有 ${cleanup.retrying_count} 个原文件刚才未能彻底清理，系统正在自动重试；无需手动操作，成功前仍计入空间占用。`,
-      `${cleanup.retrying_count} original file(s) could not be fully cleaned just now. Automatic retry is in progress; no manual action is needed, and their bytes remain charged until it succeeds.`,
+      `正在自动重试清理 ${cleanup.retrying_count} 个原文件；完成前仍占用存储空间。`,
+      `Cleanup is retrying automatically for ${cleanup.retrying_count} original file(s). They still use storage until it finishes.`,
     );
   }
   if (cleanup.status === "pending") {
     return tx(
       locale,
-      `系统正在自动清理 ${cleanup.pending_count} 个任务原文件；无需等待或手动操作。`,
-      `${cleanup.pending_count} task original(s) are being cleaned automatically; no waiting or manual action is required.`,
+      `正在自动清理 ${cleanup.pending_count} 个任务原文件。`,
+      `Cleaning ${cleanup.pending_count} task original(s) automatically.`,
     );
   }
   return tx(

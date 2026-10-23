@@ -74,7 +74,7 @@ function UsageSummary({ usage }: { usage: AdminOverview["usage"] }) {
           ) : null}
         </>
       ) : (
-        <p className="mt-4 text-sm text-muted-foreground">当前没有可用的使用事件。统计不会把未知数据显示成 0。</p>
+        <p className="mt-4 text-sm text-muted-foreground">暂无使用记录。</p>
       )}
     </Card>
   );

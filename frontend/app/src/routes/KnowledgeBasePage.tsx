@@ -372,8 +372,8 @@ function KnowledgeStorageUsageDetails({
         <p role="status" className="mt-3 text-[11px] leading-4 text-muted-foreground">
           {tx(
             locale,
-            `系统正在后台自动清理 ${usage.cleanup_pending_count} 份资料；完成前 ${formatBytes(usage.cleanup_pending_bytes)} 仍计入占用，无需手动操作。`,
-            `The system is automatically cleaning ${usage.cleanup_pending_count} document(s) in the background. ${formatBytes(usage.cleanup_pending_bytes)} remains charged until complete; no manual action is needed.`,
+            `正在自动清理 ${usage.cleanup_pending_count} 份资料；完成前仍占用 ${formatBytes(usage.cleanup_pending_bytes)}。`,
+            `Cleaning ${usage.cleanup_pending_count} document(s) automatically. ${formatBytes(usage.cleanup_pending_bytes)} remains in use until it finishes.`,
           )}
         </p>
       ) : (

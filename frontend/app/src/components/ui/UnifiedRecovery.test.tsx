@@ -18,7 +18,7 @@ it.each(["provider_rate_limited", "provider_daily_quota_exceeded"])("renders tru
     expect(screen.getByText(/本轮已停止/)).toBeInTheDocument();
   } else {
     expect(screen.getByRole("button", { name: "重试失败项" })).toBeEnabled();
-    expect(screen.getByText(/当前信息不足以确定是分钟限制还是日额度/)).toBeInTheDocument();
+    expect(screen.getByText(/模型请求受限/)).toBeInTheDocument();
   }
 });
 
@@ -26,7 +26,7 @@ it("distinguishes unverified targets from actual missing source evidence", () =>
   const issue: PreparationIssue = { issue_id: "i", field: "stem", code: "recognition_partial", severity: "warning", status: "open",
     details: { coverage: { unverified_targets: ["1.1.5"] } } };
   expect(questionIssueNeedsReview(issue)).toBe(false);
-  expect(recognitionIssueLabel(issue, "zh-CN")).toContain("尚未发现具体缺失");
+  expect(recognitionIssueLabel(issue, "zh-CN")).toBe("请对照原文件核对题干。");
   issue.details = { coverage: { failed_pages: [2, 3], missing_targets: ["1.1.7"] } };
   expect(questionIssueNeedsReview(issue)).toBe(true);
   expect(recognitionIssueLabel(issue, "zh-CN")).toBe("识别失败的页码：2, 3；未找到的题号：1.1.7");

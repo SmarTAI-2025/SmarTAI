@@ -31,8 +31,9 @@ describe("task contract compatibility", () => {
       detail: { code: "provider_recitation_blocked", failed_pages: [8], processed_pages: [1, 2, 3] },
     }), { locale: "zh-CN", returnTo: "/tasks/test/upload/problems" });
     expect(info.description).toContain("PDF 第 8 页");
-    expect(info.description).toContain("RECITATION");
-    expect(info.description).toContain("不代表模型缺少图片能力");
+    expect(info.description).toContain("版权限制");
+    expect(info.description).toContain("调整题号或页码范围");
+    expect(info.description).not.toContain("不代表模型缺少图片能力");
     expect(info.actionLabel).toBe("更换模型");
     expect(info.actionHref).toContain("returnTo=");
   });
@@ -173,7 +174,7 @@ describe("question source recovery guidance", () => {
 
     expect(info.actionKind).toBe("byok");
     expect(info.actionHref).toContain("/settings/byok");
-    expect(info.description).toContain("没有可用的视觉模型");
+    expect(info.description).toContain("支持图片识别的模型");
   });
 
   it("routes role or MIME rejection back to file selection", () => {
@@ -218,7 +219,8 @@ describe("question source recovery guidance", () => {
     expect(info.title).toBe("原文件空间已满");
     expect(info.actionKind).toBe("reupload");
     expect(info.actionLabel).toBe("选择更小文件");
-    expect(info.description).toContain("无需手动重试清理");
+    expect(info.description).toContain("本次文件未保存");
+    expect(info.description).toContain("正在清理");
     expect(info.title).not.toContain("模型");
     expect(info.technicalDetails).toContainEqual({ label: "原文件额度", value: "512 MB" });
   });
@@ -352,7 +354,7 @@ describe("background task failure guidance", () => {
       locale, providerFailures: [{ code: "provider_recitation_blocked", pages: [8] }],
     });
     expect(info.description).toContain(locale === "zh-CN" ? "PDF 第 8 页" : "PDF pages: 8");
-    expect(info.description).toContain("RECITATION");
+    expect(info.description).toContain(locale === "zh-CN" ? "版权限制" : "copyright restrictions");
     expect(info.description).toContain(locale === "zh-CN" ? "重试可能再次消耗额度" : "Retrying may use additional quota");
     expect(info.actionKind).toBe("refresh");
   });
@@ -409,7 +411,7 @@ describe("background task failure guidance", () => {
     });
 
     expect(info.title).toBe("模型密钥或授权无效");
-    expect(info.description).toContain("套餐");
+    expect(info.description).toContain("模型权限和可用额度");
     expect(info.actionKind).toBe("byok");
     expect(info.actionHref).toContain("/settings/byok");
     expect(info.actionHref).toContain("returnTo=");
@@ -477,7 +479,7 @@ describe("background task failure guidance", () => {
     const info = classifyRecoverableError("vision_provider_required", { locale: "zh-CN" });
 
     expect(info.title).toBe("尚未选择可用的视觉模型");
-    expect(info.description).toContain("OCR");
+    expect(info.description).toContain("支持图片识别的模型");
     expect(info.actionKind).toBe("byok");
   });
 
@@ -503,7 +505,8 @@ describe("background task failure guidance", () => {
   it("does not call provider overload a daily account limit", () => {
     const info = classifyRecoverableError("provider_overloaded", { locale: "zh-CN" });
     expect(info.title).toBe("模型服务当前拥堵");
-    expect(info.description).toContain("并非已确认的每日额度耗尽");
+    expect(info.description).not.toContain("每日额度耗尽");
+    expect(info.description).toContain("稍后重试");
     expect(info.actionKind).toBe("retry");
   });
 
@@ -552,7 +555,7 @@ describe("background task failure guidance", () => {
     const info = classifyRecoverableError("ocr_empty_result", { locale: "zh-CN" });
 
     expect(info.title).toBe("OCR 没有读到可用文字");
-    expect(info.description).toContain("不能据此判定模型不支持图片");
+    expect(info.description).toContain("请换清晰文件或更换模型");
     expect(info.actionKind).toBe("reupload");
   });
 

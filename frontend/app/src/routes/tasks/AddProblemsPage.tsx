@@ -149,8 +149,8 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
     ? missingReferences
       ? tx(locale, "原文件已过期、删除或不可访问，请重新选择文件或资料库条目。", "The original file expired, was deleted, or is inaccessible. Reselect a file or library item.")
       : unavailableReferences
-        ? tx(locale, "暂时无法核对文件，尚不能确定是否需要重传。请点击资料卡片中的“重试检查”。", "The file could not be checked, so it is not yet known whether another upload is needed. Use Retry check on the source card.")
-        : tx(locale, "正在核对已上传文件，请稍候；暂时无需重新上传。", "Checking the uploaded file. Please wait; no new upload is needed yet.")
+        ? tx(locale, "暂时无法检查文件，请点击资料卡片中的“重试检查”。", "Unable to check the file. Select Retry check on the source card.")
+        : tx(locale, "正在检查已上传文件…", "Checking the uploaded file…")
     : expertsQuery.isLoading
     ? tx(locale, "正在读取模型配置。", "Loading model configuration.")
     : expertsQuery.isError
@@ -472,8 +472,8 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
           label={tx(locale, "题目识别模型", "Question recognition model")}
           hint={tx(
             locale,
-            "可直接开始识别，无需先做图片测试。图片与扫描件需要模型支持图片输入。",
-            "Start recognition without an image test. Images and scans need image input support.",
+            "图片与扫描件需要支持图片输入的模型。",
+            "Images and scans need a model that supports image input.",
           )}
           experts={enabledExperts}
           value={recognitionProviderId}
@@ -733,8 +733,8 @@ function SourceEditor({
         {referenceStatus === "missing" ? <p role="alert" className="mb-3 text-xs text-danger">{tx(locale, "原文件已过期、删除或不可用，请重新选择文件或资料库条目。填写的信息仍保留。", "The original file expired, was deleted, or is unavailable. Reselect a file or library item; your form is preserved.")}</p> : null}
         {referenceStatus === "unavailable" ? <p role="alert" className="mb-3 text-xs text-danger">{tx(locale, "暂时无法核对文件，请重试。", "Unable to check the file. Please try again.")} <button type="button" className="underline" onClick={onRetryReference}>{tx(locale, "重试检查", "Retry check")}</button></p> : null}
         {needsFileReselection ? <p role="alert" className="mb-3 text-xs text-warning">{tx(locale, `“${source.fileName}” 仅保留了文件名，请重新选择文件，或从课程资料库选择。`, `Only the filename “${source.fileName}” is retained. Reselect the file or choose it from the course library.`)}</p> : null}
-        {source.sourceMode === "upload" && source.storedFileId && referenceStatus === "ready" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "已上传文件可继续使用，无需重新选择。", "Uploaded file is available. No need to select it again.")}</p> : null}
-        {source.sourceMode === "library" && source.libraryMaterial && referenceStatus === "ready" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "资料库文件可直接使用，无需重新上传。", "The library file is available. No need to upload it again.")}</p> : null}
+        {source.sourceMode === "upload" && source.storedFileId && referenceStatus === "ready" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "已上传文件可继续使用。", "Uploaded file is ready to use.")}</p> : null}
+        {source.sourceMode === "library" && source.libraryMaterial && referenceStatus === "ready" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "资料库文件已就绪。", "Library file is ready to use.")}</p> : null}
         <div className={cn("grid gap-2 rounded-[8px] bg-muted/60 p-1", source.role === "rubric" ? "grid-cols-3" : "grid-cols-2")}>
           <ModeButton active={source.sourceMode === "upload"} disabled={disabled} onClick={() => onUpdate({ sourceMode: "upload", libraryMaterial: null })} icon={<UploadCloud className="h-4 w-4" />} label={tx(locale, "上传新文件", "Upload File")} />
           {source.role === "rubric" ? (

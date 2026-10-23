@@ -65,7 +65,7 @@ describe("SettingsPage task-original storage", () => {
 
     expect(await screen.findByText("5.0 MB")).toBeInTheDocument();
     expect(screen.getByText("/ 512.0 MB")).toBeInTheDocument();
-    expect(screen.getByText(/1 个原文件刚才未能彻底清理/)).toHaveTextContent("无需手动操作");
+    expect(screen.getByText(/正在自动重试清理 1 个原文件/)).toHaveTextContent("完成前仍占用 1.0 MB");
     expect(screen.getByText(/课程资料库单独计算/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /清理|重试/ })).not.toBeInTheDocument();
     expect(mocks.getSourceStorageUsage).toHaveBeenCalledTimes(1);

@@ -17,8 +17,8 @@ export function StudentUnavailablePage() {
         </h1>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           {zh
-            ? "当前版本只开放教师批改工作台。你的学生账号不会获得教师任务或数据权限。"
-            : "This release currently includes the teacher grading workspace only. Student accounts do not receive teacher task or data access."}
+            ? "目前仅支持教师使用。"
+            : "SmarTAI is currently available to teachers only."}
         </p>
         <Link
           to="/login"

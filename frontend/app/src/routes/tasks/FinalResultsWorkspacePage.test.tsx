@@ -194,7 +194,7 @@ describe("FinalResultsWorkspacePage task-status refresh", () => {
 
     render(<TestTree />);
 
-    expect(await screen.findByText(/Automatic retry is in progress; no manual action is needed/)).toBeInTheDocument();
+    expect(await screen.findByText(/Cleanup is retrying automatically for 1 original file/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /retry cleanup/i })).not.toBeInTheDocument();
   });
 });
