@@ -26,6 +26,7 @@ def question(**changes):
 
 def item(id, description, points, **changes):
     return {"id": id, "description": description, "points": points,
+            "source_quote": "" if description.startswith("AI") else description,
             "source": "provided", "max_occurrences": 1, **changes}
 
 
@@ -51,7 +52,9 @@ class ReplayProvider:
     provider_id = "rubric-local-replay"
 
     def __init__(self, *responses):
-        self.responses = list(responses)
+        # One candidate may fail domain validation as well as JSON/schema
+        # validation. Replaying it once models an unsuccessful bounded repair.
+        self.responses = list(responses) if len(responses) != 1 else [responses[0], deepcopy(responses[0])]
         self.messages = []
 
     async def ainvoke(self, messages):

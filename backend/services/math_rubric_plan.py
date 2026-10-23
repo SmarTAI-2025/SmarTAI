@@ -8,15 +8,17 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.tools.structured_llm import (
     StructuredOutputBoundsError, StructuredOutputInvalidError, structured_llm_call,
 )
+from backend.services.math_source_evidence import match_source_quote
 
 
 SCHEMA_VERSION = "math_rubric_v1"
@@ -30,9 +32,18 @@ class MathRubricItem(BaseModel):
 
     id: Text
     description: Text
+    source_quote: str = Field(default="", max_length=20000)
     points: Score
     source: Literal["provided", "ai"]
     max_occurrences: int | None = Field(default=1, ge=1, strict=True)
+
+
+class MathRubricExemption(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: Text
+    description: Text
+    source_quote: Text
 
 
 class MathRubricRoute(BaseModel):
@@ -45,11 +56,17 @@ class MathRubricRoute(BaseModel):
     items: tuple[MathRubricItem, ...] = Field(default=(), max_length=100)
     minimum_score: Score = 0
     minimum_condition: Literal["always", "nonblank"] = "always"
+    exemptions: tuple[MathRubricExemption, ...] = Field(default=(), max_length=100)
+    error_policy: Literal["rubric", "no_repeat_deduction"] = "rubric"
+    error_policy_source_quote: str = Field(default="", max_length=20000)
 
     @model_validator(mode="after")
     def validate_items(self):
         if len({item.id for item in self.items}) != len(self.items):
             raise ValueError("duplicate rubric item id")
+        ids = [item.id for item in (*self.items, *self.exemptions)]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate rubric rule id")
         if self.mode == "holistic":
             if self.items:
                 raise ValueError("holistic routes cannot carry an item ledger")
@@ -72,6 +89,16 @@ class _Explanation(BaseModel):
     advisories: tuple[str, ...] = Field(default=(), max_length=20)
 
 
+class MathRubricSourceLocation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    route_id: str
+    rule_id: str
+    kind: Literal["item", "exemption", "error_policy"]
+    start: int
+    end: int
+
+
 class MathRubricPlan(_Explanation):
     """Immutable JSON-safe internal contract; route order is significant."""
 
@@ -80,6 +107,9 @@ class MathRubricPlan(_Explanation):
     input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     max_score: float = Field(gt=0, allow_inf_nan=False)
     original_criterion: str
+    compilation_status: Literal["compiled", "repaired", "holistic"] = "compiled"
+    compilation_reason: str = ""
+    source_locations: tuple[MathRubricSourceLocation, ...] = ()
 
     @model_validator(mode="after")
     def validate_scores(self):
@@ -181,8 +211,18 @@ _FALLBACK_ADVISORY = (
 )
 
 
-def _build_plan(context: dict, explanation: _Explanation) -> MathRubricPlan:
+def _build_plan(context: dict, explanation: _Explanation, *, status="compiled", reason="") -> MathRubricPlan:
     original = context["criterion"]
+    locations = []
+    for route in explanation.routes:
+        sources = [(item.id, "item", item.source_quote) for item in route.items]
+        sources += [(rule.id, "exemption", rule.source_quote) for rule in route.exemptions]
+        sources += [("", "error_policy", route.error_policy_source_quote)]
+        for rule_id, kind, quote in sources:
+            match = match_source_quote(original, quote) if quote else None
+            if match:
+                locations.append(dict(route_id=route.id, rule_id=rule_id, kind=kind,
+                                      start=match.start, end=match.end))
     # Include literal source even when a model forgets/rewrites a restriction.
     effective = (
         f"Original criterion ({context['criterion_source']}; preserved verbatim):\n{original}\n\n"
@@ -203,12 +243,15 @@ def _build_plan(context: dict, explanation: _Explanation) -> MathRubricPlan:
         "input_fingerprint": _content_hash(context),
         "max_score": context["max_score"],
         "original_criterion": original,
+        "compilation_status": status,
+        "compilation_reason": reason,
+        "source_locations": locations,
         "advisories": list(dict.fromkeys(explanation.advisories)),
     }
     return MathRubricPlan(plan_id=_content_hash(payload), **payload)
 
 
-def fallback_math_rubric_plan(problem) -> MathRubricPlan:
+def fallback_math_rubric_plan(problem, *, reason="unavailable_item_allocation") -> MathRubricPlan:
     """No model call. Preserve all source restrictions in a holistic plan."""
     context = _question_input(problem)
     return _build_plan(context, _Explanation(
@@ -229,7 +272,7 @@ def fallback_math_rubric_plan(problem) -> MathRubricPlan:
         follow_through=_FOLLOW_THROUGH,
         numerical_policy=_NUMERICAL_POLICY,
         advisories=(_FALLBACK_ADVISORY,),
-    ))
+    ), status="holistic", reason=reason)
 
 
 PLAN_SYSTEM_PROMPT = """Prepare ONE shared scoring plan for a mathematics/physics question,
@@ -258,10 +301,17 @@ holistic: empty items, use when the restrictions cannot reliably fit a numeric i
 (e.g. a conditional cap that this schema cannot express); keep all restrictions in the effective
 criterion. Never erase a rule merely to fit the schema.
 
-Each item needs an id, description, points, source=provided|ai, max_occurrences.
-Use provided ONLY for a verbatim rule INCLUDING its amount quoted from criterion with matching
-points (or a directly converted percentage). If criterion_source is ai, all items must be ai.
+Each item needs an id, description, source_quote, points, source=provided|ai, max_occurrences.
+description is readable display text; source_quote independently quotes the original rule,
+including its amount and any repetition limit, without translation or mathematical formatting.
+Use an empty source_quote only for a genuine AI addition with no original allocation.
+Use provided ONLY for a sourced original rule with matching points (or a directly converted
+percentage). An ai label NEVER permits changing an explicit original amount or restriction.
+If criterion_source is ai, all items must be ai.
 An interpreted or supplemented rule is ai even if inspired by teacher text.
+Explicit zero deductions belong in exemptions (id, description, source_quote), not positive-loss
+items. The compiler preserves explicit exemptions and same-cause no-repeat policies from source.
+Do not invent an exemption or error_policy. Unsupported/ambiguous policies remain holistic.
 effective_criterion explains the complete scoring procedure and distinguishes original rules
 from AI additions. The original criterion is separately preserved by code.
 follow_through explicitly addresses first error, correct downstream reasoning on an erroneous
@@ -289,33 +339,92 @@ def _validate_provenance(context: dict, explanation: _Explanation) -> None:
     original = context["criterion"]
     for route in explanation.routes:
         for item in route.items:
-            if item.source == "provided":
-                if context["criterion_source"] != "provided" or item.description not in original:
-                    raise ValueError("provided rubric item must quote its original rule")
-                amounts = re.findall(r"(\d+(?:\.\d+)?)\s*(%|％|分|points?\b|marks?\b)", item.description, re.I)
-                valid = any(
-                    Decimal(amount) * (Decimal(str(context["max_score"])) / 100 if unit in {"%", "％"} else 1)
-                    == Decimal(str(item.points))
-                    for amount, unit in amounts
-                )
-                if not valid:
-                    raise ValueError("provided rubric points lack an exact source amount")
+            if item.source == "provided" and context["criterion_source"] != "provided":
+                raise ValueError("source_origin_changed")
+            match = match_source_quote(original, item.source_quote)
+            if item.source_quote and match is None:
+                raise ValueError("source_quote_unresolved")
+            if item.source == "provided" and not item.source_quote:
+                raise ValueError("source_quote_required")
+            if match is not None:
+                amounts = _AMOUNT.findall(match.text)
+                if not any(_amount_value(a, u, context["max_score"]) == Decimal(str(item.points))
+                           for a, u in amounts):
+                    raise ValueError("source_amount_changed")
 
 
-_AMOUNT = re.compile(r"(\d+(?:\.\d+)?)\s*(%|％|分|points?\b|marks?\b)", re.I)
+# Finite numeric vocabulary, not an interpreter for arbitrary grading prose.
+_ENGLISH_NUMBERS = dict(zip(
+    ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"), range(11),
+))
+_NUMBER = (r"(?:[-−－]?[0-9０-９]+(?:[.．][0-9０-９]+)?|[零〇一二两三四五六七八九十百千点半]+|"
+           r"\b(?:" + "|".join(_ENGLISH_NUMBERS) + r"|half)\b)")
+_AMOUNT = re.compile(rf"({_NUMBER})\s*(%|％|分|points?\b|marks?\b)", re.I)
 _FLOOR_MARKER = re.compile(r"最低|保底|至少得|至少保留|minimum|floor|at least", re.I)
-_CAP_MARKER = re.compile(r"最高|最多得|上限|不超过|封顶|at most|capp?ed|maximum", re.I)
+_CAP_MARKER = re.compile(r"最高|最多(?:得|扣)|上限|不超过|封顶|at most|up to|capp?ed|maximum", re.I)
 _DEDUCTION = re.compile(r"扣|deduct|lose|loss|penalt", re.I)
+_DEDUCTION_AMOUNT_TOKEN = re.compile(
+    r"(?:扣(?:除)?|deduct|lose)\s*([^\s，,；;。]+?)\s*(分|points?\b|marks?\b)", re.I,
+)
+_REPEATED = re.compile(r"每|不限次数|each|every|per\b|unlimited", re.I)
+_LIMIT_RULE = re.compile(rf"(?:最多|上限|at most|up to)\s*({_NUMBER})\s*(?:次|times?\b)", re.I)
+_NO_REPEAT = re.compile(
+    r"^(?:同源错误|同一(?:个)?错误|同一根因造成的后续错误|承接(?:同一)?错误(?:值)?的后续错误)"
+    r"(?:只扣一次|不重复扣分|不再扣分)$|"
+    r"^(?:do not deduct (?:again|twice) for (?:the same error|consequential errors)|"
+    r"consequential errors (?:are not penalized again|receive no further deduction))$", re.I,
+)
+_EXEMPTION = re.compile(r"不扣(?:分)?|免扣(?:分)?|no (?:point )?(?:deduction|penalty)|comments? only", re.I)
 _FLOOR_RULE = re.compile(
     r"^(?:(非空(?:白)?(?:作答|答案)?|有作答|non[- ]?(?:blank|empty)(?: answers?)?)"
     r"\s*[:：]?\s*)?"
     r"(?:最低(?:得分)?|保底(?:分)?|至少得|至少保留|minimum(?: score)?|floor(?: score)?)"
-    r"\s*[:：=]?\s*(\d+(?:\.\d+)?)\s*(?:分|points?|marks?)?$", re.I,
+    rf"\s*[:：=]?\s*({_NUMBER})\s*(分|points?|marks?|%|％)?$", re.I,
 )
 
 
+def _number_value(value: str) -> Decimal:
+    value = unicodedata.normalize("NFKC", value)
+    if value.lower() in _ENGLISH_NUMBERS:
+        return Decimal(_ENGLISH_NUMBERS[value.lower()])
+    if re.fullmatch(r"\d+(?:\.\d+)?", value):
+        return Decimal(value)
+    if value == "半" or value.lower() == "half":
+        return Decimal("0.5")
+    digits = {c: n for n, c in enumerate("零一二三四五六七八九")}
+    digits.update({"〇": 0, "两": 2})
+    integer, *fraction = value.split("点")
+    if len(fraction) > 1 or not integer:
+        raise ValueError("unsupported_source_number")
+    if all(c in digits for c in integer):
+        total = int("".join(str(digits[c]) for c in integer))
+    else:
+        total, digit, previous_unit = 0, None, 10000
+        for char in integer:
+            if char in digits:
+                if digit not in (None, 0):
+                    raise ValueError("unsupported_source_number")
+                digit = digits[char]
+            elif char in "十百千":
+                unit = {"十": 10, "百": 100, "千": 1000}[char]
+                if unit >= previous_unit or (digit is None and unit != 10):
+                    raise ValueError("unsupported_source_number")
+                total += (1 if digit is None else digit) * unit
+                digit, previous_unit = None, unit
+            else:
+                raise ValueError("unsupported_source_number")
+        if digit and previous_unit >= 100 and not re.search(r"[零〇][一二两三四五六七八九]$", integer):
+            raise ValueError("unsupported_source_number")  # e.g. 一百一 is colloquially ambiguous.
+        total += digit or 0
+    if fraction:
+        if not fraction[0] or any(c not in digits for c in fraction[0]):
+            raise ValueError("unsupported_source_number")
+        return Decimal(f"{total}." + "".join(str(digits[c]) for c in fraction[0]))
+    return Decimal(total)
+
+
 def _amount_value(amount: str, unit: str, maximum: float) -> Decimal:
-    return Decimal(amount) * (Decimal(str(maximum)) / 100 if unit in {"%", "％"} else 1)
+    return _number_value(amount) * (Decimal(str(maximum)) / 100 if unit in {"%", "％"} else 1)
 
 
 def _score_context_clause(clause: str, original: str, maximum: float) -> bool:
@@ -324,12 +433,12 @@ def _score_context_clause(clause: str, original: str, maximum: float) -> bool:
     Keep matches anchored: a method's maximum or a conditional cap must still
     pass the existing item/cap validation. All context remains in the plan text.
     """
-    number = r"\d+(?:\.\d+)?"
+    number = _NUMBER
     unit = r"(?:分|points?|marks?|%|％)"
     count = r"(?:\d+|[一二三四五六七八九十百两]+)"
     batch = rf"(?:指定|共|共计|本次)?\s*{count}\s*(?:道)?题"
     patterns = {
-        "maximum": rf"(?:(?:{batch}\s*)?(?:每(?:小)?题|单题|本题)?\s*满分|"
+        "maximum": rf"(?:(?:{batch}\s*)?(?:每(?:小)?题|单题|本题)(?:\s*满分)?|满分|"
                    r"(?:each|per) question(?: is worth| worth| maximum(?: score)?)?)",
         "total": r"(?:(?:本题)?(?:总分|总计|合计)|total(?: score)?)",
         "start": r"(?:从|起始(?:分数)?(?:为)?|start(?:ing)? (?:from|at))",
@@ -366,79 +475,166 @@ def _score_context_clause(clause: str, original: str, maximum: float) -> bool:
     return False
 
 
-def _validate_source_rules(context: dict, explanation: _Explanation) -> None:
-    """Conservatively reject a ledger that changes recognizable source rules.
-
-    This is deliberately not a natural-language rubric parser. Unrepresentable
-    conditions/caps stay in a holistic plan with the exact source, rather than
-    being converted to an unconditional numeric rule.
-    """
-    original = context["criterion"]
-    structured = [route for route in explanation.routes if route.mode != "holistic"]
-    floor_rules: list[tuple[Decimal, str]] = []
-    clauses = [part.strip(" :：.") for part in re.split(
+def _source_clauses(original: str) -> list[str]:
+    return [part.strip(" :：.") for part in re.split(
         r"[，,；;、\n。]|(?<!\d)\.(?!\d)", original,
     ) if part.strip()]
-    for clause in clauses:
-        if structured and _score_context_clause(clause, original, context["max_score"]):
+
+
+def _occurrences(quote: str) -> int | None:
+    limit = _LIMIT_RULE.search(quote)
+    if limit:
+        number = _number_value(limit[1])
+        if number != number.to_integral_value() or number < 1:
+            raise ValueError("unsupported_occurrence_limit")
+        return int(number)
+    return None if _REPEATED.search(quote) else 1
+
+
+def _source_policies(original: str, maximum: float) -> tuple[list[str], str]:
+    exemptions, no_repeat = [], ""
+    # Keep a condition and its exemption together (e.g. 'minor slips, comments
+    # only, no deduction'). Never turn the trailing 'no deduction' into a
+    # blanket exemption for every error.
+    for sentence in re.split(r"[；;\n。]|(?<!\d)\.(?!\d)", original):
+        sentence = sentence.strip(" :：.")
+        if not sentence:
+            continue
+        if _NO_REPEAT.fullmatch(sentence):
+            no_repeat = sentence
+            continue
+        parts = [sentence] if not _AMOUNT.search(sentence) else _source_clauses(sentence)
+        for part in parts:
+            if _NO_REPEAT.fullmatch(part):
+                no_repeat = part
+                continue
+            if re.search(r"不重复扣|不再扣|deduct.*(?:again|twice)", part, re.I):
+                raise ValueError("unsupported_error_policy")
+            amounts = [_amount_value(a, u, maximum) for a, u in _AMOUNT.findall(part)]
+            zero = bool(amounts) and all(v == 0 for v in amounts) and _DEDUCTION.search(part)
+            if zero or (_EXEMPTION.search(part) and not amounts):
+                if re.fullmatch(r"不扣(?:分)?|免扣(?:分)?|no (?:deduction|penalty)", part, re.I):
+                    raise ValueError("exemption_condition_unresolved")
+                exemptions.append(part)
+    return list(dict.fromkeys(exemptions)), no_repeat
+
+
+def _canonicalize_explanation(context: dict, explanation: _Explanation) -> _Explanation:
+    if all(route.mode == "holistic" for route in explanation.routes):
+        return explanation
+    original = context["criterion"]
+    exemptions, no_repeat = _source_policies(original, context["max_score"])
+    routes = []
+    for route in explanation.routes:
+        if route.mode == "holistic":
+            routes.append(route)
+            continue
+        items = []
+        for item in route.items:
+            match = match_source_quote(original, item.source_quote)
+            items.append(item.model_copy(update={"source_quote": match.text}) if match else item)
+        supplied = {}
+        for exemption in route.exemptions:
+            match = match_source_quote(original, exemption.source_quote)
+            if match is None or match.text not in exemptions:
+                raise ValueError("exemption_not_in_source")
+            supplied[match.text] = exemption.model_copy(update={"source_quote": match.text})
+        rules = tuple(supplied.get(quote) or MathRubricExemption(
+            id="exempt_" + _content_hash(quote)[:12], description=quote, source_quote=quote,
+        ) for quote in exemptions)
+        if route.error_policy == "no_repeat_deduction" and not no_repeat:
+            raise ValueError("error_policy_not_in_source")
+        if route.error_policy_source_quote:
+            match = match_source_quote(original, route.error_policy_source_quote)
+            if match is None or match.text != no_repeat:
+                raise ValueError("error_policy_not_in_source")
+        routes.append(MathRubricRoute(**{
+            **route.model_dump(), "items": tuple(items), "exemptions": rules,
+            "error_policy": "no_repeat_deduction" if no_repeat else "rubric",
+            "error_policy_source_quote": no_repeat,
+        }))
+    return explanation.model_copy(update={"routes": tuple(routes)})
+
+
+def _validate_source_rules(context: dict, explanation: _Explanation) -> None:
+    """Validate finite explicit rules; ambiguous conditions retain holistic text."""
+    original, maximum = context["criterion"], context["max_score"]
+    structured = [route for route in explanation.routes if route.mode != "holistic"]
+    if not structured:
+        if any(route.minimum_score or route.exemptions or route.error_policy != "rubric"
+               for route in explanation.routes):
+            raise ValueError("holistic_policies_must_remain_in_source")
+        return
+    exemptions, _ = _source_policies(original, maximum)
+    floor_rules: list[tuple[Decimal, str]] = []
+    allocations: list[tuple[str, str, Decimal]] = []
+    for clause in _source_clauses(original):
+        for token, _ in _DEDUCTION_AMOUNT_TOKEN.findall(clause):
+            _number_value(token)  # Reject unrecognized/signed amounts even on AI-labelled items.
+        if _score_context_clause(clause, original, maximum):
             continue
         if _FLOOR_MARKER.search(clause):
             match = _FLOOR_RULE.fullmatch(clause)
             if not match:
-                if structured or any(route.minimum_score for route in explanation.routes):
-                    raise ValueError("conditional minimum requires source-preserving holistic scoring")
-                continue
+                raise ValueError("unsupported_conditional_minimum")
             if not match[1] and re.search(r"非空|有作答|non[- ]?(?:blank|empty)", original, re.I):
-                if structured:
-                    raise ValueError("minimum has a condition outside its clause")
-            floor_rules.append((Decimal(match[2]), "nonblank" if match[1] else "always"))
+                raise ValueError("minimum_condition_outside_clause")
+            floor_rules.append((_amount_value(match[2], match[3] or "分", maximum),
+                                "nonblank" if match[1] else "always"))
             continue
-        if _CAP_MARKER.search(clause) and structured:
-            raise ValueError("caps require source-preserving holistic scoring")
-        amounts = _AMOUNT.findall(clause)
-        if not amounts or not structured:
-            continue
+        # A count cap is not a score cap. All other caps remain unsupported.
+        if _CAP_MARKER.search(_LIMIT_RULE.sub("", clause)):
+            raise ValueError("unsupported_score_cap")
         mode = "deductions" if _DEDUCTION.search(clause) else "points"
-        for amount, unit in amounts:
-            value = _amount_value(amount, unit, context["max_score"])
-            matching_items = [
-                item
-                for route in structured for item in route.items
-                if route.mode == mode and clause in item.description
-                and Decimal(str(item.points)) == value
-            ]
-            if not matching_items:
-                raise ValueError("an explicit source allocation was changed or omitted")
-            if mode == "deductions" and re.search(r"每|each|every|per\b", clause, re.I):
-                limit = re.search(r"(?:最多|上限|at most|up to)\s*(\d+)\s*(?:次|times?)", clause, re.I)
-                occurrences = int(limit[1]) if limit else None
-                if not any(item.max_occurrences == occurrences for item in matching_items):
-                    raise ValueError("source deduction repetition was changed")
+        for amount, unit in _AMOUNT.findall(clause):
+            value = _amount_value(amount, unit, maximum)
+            if mode == "deductions" and value == 0 and any(clause in q for q in exemptions):
+                continue
+            allocations.append((clause, mode, value))
     for route in explanation.routes:
         if route.mode == "holistic":
-            # Its text, including all conditional minima, is authoritative.
             if route.minimum_score:
-                raise ValueError("holistic minima must remain in source text")
+                raise ValueError("holistic_policies_must_remain_in_source")
             continue
         if floor_rules:
             if len(set(floor_rules)) != 1 or (
                 Decimal(str(route.minimum_score)), route.minimum_condition
             ) != floor_rules[0]:
-                raise ValueError("source minimum amount or applicability was changed")
+                raise ValueError("source_minimum_changed")
         elif route.minimum_score:
-            raise ValueError("a minimum cannot be invented")
+            raise ValueError("invented_minimum")
+        covered_ids = set()
+        for clause, mode, value in allocations:
+            matches = [item for item in route.items if route.mode == mode
+                       and clause in item.source_quote and Decimal(str(item.points)) == value]
+            if not matches:
+                raise ValueError("source_allocation_changed_or_omitted")
+            if len(matches) != 1 or matches[0].id in covered_ids:
+                raise ValueError("ambiguous_source_allocation")
+            covered_ids.update(item.id for item in matches)
+        if allocations and covered_ids != {item.id for item in route.items}:
+            raise ValueError("unsourced_additional_allocation")
         for item in route.items:
-            if item.max_occurrences is None:
-                if item.description not in original or not re.search(
-                    r"每|每次|不限次数|each|every|per\b|unlimited", item.description, re.I,
-                ):
-                    raise ValueError("unlimited deduction requires an explicit repeated-error rule")
-            elif item.max_occurrences != 1:
-                if item.description not in original or not re.search(
-                    rf"(?:最多|上限|at most|up to)\s*{item.max_occurrences}\s*(?:次|times?)",
-                    item.description, re.I,
-                ):
-                    raise ValueError("repeated deduction limit lacks an exact source")
+            if route.mode == "deductions":
+                if item.source_quote:
+                    if not _DEDUCTION.search(item.source_quote):
+                        raise ValueError("source_allocation_role_changed")
+                    if item.max_occurrences != _occurrences(item.source_quote):
+                        raise ValueError("source_repetition_changed")
+                elif item.max_occurrences != 1:
+                    raise ValueError("repetition_requires_source")
+
+
+def _validated_explanation(context: dict, explanation: _Explanation) -> _Explanation:
+    _validate_provenance(context, explanation)
+    canonical = _canonicalize_explanation(context, explanation)
+    _validate_source_rules(context, canonical)
+    _build_plan(context, canonical)  # Includes sum, floor, and question bounds.
+    return canonical
+
+
+class _UnrepresentableRubric(Exception):
+    """A source policy cannot fit this ledger; another model call cannot fix it."""
 
 
 async def prepare_math_rubric_plan(problem, provider, *, grading_setup=None, reporter=None) -> MathRubricPlan:
@@ -460,6 +656,25 @@ provider failures retain the existing execution/retry semantics.
         raise ValueError("invalid rubric explanation language")
     if reporter:
         await reporter._emit_message("Preparing shared question scoring rules")
+    failures: list[str] = []
+
+    class ValidatedExplanation(_Explanation):
+        @model_validator(mode="after")
+        def validate_compilation(self):
+            try:
+                _validated_explanation(context, self)
+            except ValueError as exc:
+                # Only stable codes from our validation enter plan diagnostics.
+                reason = str(exc)
+                failures.append(reason if re.fullmatch(r"[a-z_]+", reason) else "invalid_item_ledger")
+                if reason in {"unsupported_conditional_minimum", "minimum_condition_outside_clause",
+                              "unsupported_score_cap", "unsupported_error_policy",
+                              "exemption_condition_unresolved", "unsupported_source_number",
+                              "unsupported_occurrence_limit"}:
+                    raise _UnrepresentableRubric(reason) from exc
+                raise
+            return self
+
     prompt = PLAN_SYSTEM_PROMPT + "\n" + _PREFERENCES_POLICY + (
         "\nWrite newly generated explanation text in "
         + ("Simplified Chinese" if language == "zh" else "English")
@@ -470,17 +685,16 @@ provider failures retain the existing execution/retry semantics.
         explanation, _ = await structured_llm_call(
             provider, system_prompt=prompt,
             user_prompt=json.dumps({"question": context, "grading_preferences": preferences}, ensure_ascii=False),
-            output_model=_Explanation,
+            output_model=ValidatedExplanation,
         )
-    except (StructuredOutputInvalidError, StructuredOutputBoundsError):
-        plan = fallback_math_rubric_plan(problem)
+    except (StructuredOutputInvalidError, StructuredOutputBoundsError, _UnrepresentableRubric):
+        plan = fallback_math_rubric_plan(problem, reason=failures[0] if failures else "invalid_structured_output")
     else:
-        try:
-            _validate_provenance(context, explanation)
-            _validate_source_rules(context, explanation)
-            plan = _build_plan(context, explanation)
-        except (ValidationError, ValueError):
-            plan = fallback_math_rubric_plan(problem)
+        canonical = _validated_explanation(context, explanation)
+        holistic = all(route.mode == "holistic" for route in canonical.routes)
+        plan = _build_plan(context, canonical,
+            status="holistic" if holistic else ("repaired" if failures else "compiled"),
+            reason=failures[0] if failures else ("model_selected_holistic" if holistic else ""))
     # Keep authenticated settings in the actual content identity, including on
     # compilation fallback. Question fingerprint remains question-only; the
     # run owner also compares its complete setup before reusing this plan.
