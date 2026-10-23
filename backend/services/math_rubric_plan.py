@@ -392,6 +392,8 @@ _ERROR_POLICY_MARKER = re.compile(
     r"deduct.*(?:again|twice)|penalized again|further deduction", re.I,
 )
 _EXEMPTION = re.compile(r"不扣(?:分)?|免扣(?:分)?|no (?:point )?(?:deduction|penalty)|comments? only", re.I)
+_NO_COMPARISON_PENALTY = re.compile(r"不按(?:参考|标准)(?:答案|解法|步骤)(?:逐步)?对照扣分")
+_NO_CAUSAL_PENALTY = re.compile(r"(?:不能因为|不因为|不因)(?P<ground>[^，,；;。\n]+?)(?:而|就)?扣分")
 _FLOOR_RULE = re.compile(
     r"^(?:(非空(?:白)?(?:作答|答案)?|有作答|non[- ]?(?:blank|empty)(?: answers?)?)"
     r"\s*[:：]?\s*)?"
@@ -508,6 +510,24 @@ def _occurrences(quote: str) -> int | None:
     return None if _REPEATED.search(quote) else 1
 
 
+def _exemption_action(clause: str) -> bool:
+    # Recognize an explicit negative penalty action, not any sentence with
+    # both '不' and '扣分'. Keep preceding conditions in the original clause.
+    action = re.split(r"[，,]", clause)[-1].strip()
+    if _NO_COMPARISON_PENALTY.fullmatch(action):
+        return True
+    if re.search(r"不因|不能因为", clause):
+        causal = _NO_CAUSAL_PENALTY.fullmatch(action)
+        if causal and not re.search(
+            r"(?:不|不再|不予|免|无需|毋须|不要)$|则|才|否则|除非|如果|若|扣", causal["ground"],
+        ):
+            return True
+        # E.g. '不能因为方法正确就不扣分' denies an exemption. Do not let
+        # the adjacent '不扣分' substring turn it into an exemption instead.
+        raise ValueError("unsupported_exemption_scope")
+    return bool(_EXEMPTION.search(clause))
+
+
 def _source_policies(original: str, maximum: float) -> tuple[list[str], str]:
     exemptions, no_repeat = [], ""
     # Keep a condition and its exemption together (e.g. 'minor slips, comments
@@ -521,6 +541,22 @@ def _source_policies(original: str, maximum: float) -> tuple[list[str], str]:
             no_repeat = sentence
             continue
         parts = [sentence] if not _AMOUNT.search(sentence) else _source_clauses(sentence)
+        zero_deductions = [part for part in parts if _DEDUCTION.search(part)
+                           and (amounts := [_amount_value(a, u, maximum) for a, u in _AMOUNT.findall(part)])
+                           and all(value == 0 for value in amounts)]
+        verbal_exemptions = [part for part in parts if not _AMOUNT.search(part) and _exemption_action(part)]
+        if zero_deductions or (verbal_exemptions and _AMOUNT.search(sentence)):
+            amounts = [_amount_value(a, u, maximum) for a, u in _AMOUNT.findall(sentence)]
+            if all(value == 0 for value in amounts):
+                # Keep any preceding condition with its zero deduction. A
+                # comma does not make 'if ..., minor slips cost 0' unconditional.
+                parts = [sentence]
+            elif any(not _AMOUNT.search(part) and part not in verbal_exemptions
+                     and not _NO_REPEAT.fullmatch(part) and not _NO_SEPARATE_DEDUCTION.fullmatch(part)
+                     for part in parts):
+                # A mixed-rate sentence with detached prose may condition
+                # either rule. Do not guess that scope or discard the prose.
+                raise ValueError("unsupported_exemption_scope")
         for part in parts:
             if _NO_REPEAT.fullmatch(part):
                 no_repeat = part
@@ -532,11 +568,30 @@ def _source_policies(original: str, maximum: float) -> tuple[list[str], str]:
                 raise ValueError("unsupported_error_policy")
             amounts = [_amount_value(a, u, maximum) for a, u in _AMOUNT.findall(part)]
             zero = bool(amounts) and all(v == 0 for v in amounts) and _DEDUCTION.search(part)
-            if zero or (_EXEMPTION.search(part) and not amounts):
+            if zero or (not amounts and _exemption_action(part)):
                 if re.fullmatch(r"不扣(?:分)?|免扣(?:分)?|no (?:deduction|penalty)", part, re.I):
                     raise ValueError("exemption_condition_unresolved")
                 exemptions.append(part)
     return list(dict.fromkeys(exemptions)), no_repeat
+
+
+def _match_policy_quote(original: str, quote: str, policies: list[str]) -> str | None:
+    """Align a complete policy plus actual trailing sentence separators.
+
+    Locate the supplied quotation first. Only its trailing separators may lie
+    beyond the unique authoritative span; never expand a partial rule or join
+    separate rules. Saved text and locations still come from the original.
+    """
+    supplied = match_source_quote(original, quote)
+    if supplied is None:
+        return None
+    matches = []
+    for policy in policies:
+        source = match_source_quote(original, policy)
+        if (source is not None and supplied.start == source.start and supplied.end >= source.end
+                and re.fullmatch(r"[\s；;。.]*", original[source.end:supplied.end])):
+            matches.append(source.text)
+    return matches[0] if len(matches) == 1 else None
 
 
 def _canonicalize_explanation(context: dict, explanation: _Explanation) -> _Explanation:
@@ -555,18 +610,17 @@ def _canonicalize_explanation(context: dict, explanation: _Explanation) -> _Expl
             items.append(item.model_copy(update={"source_quote": match.text}) if match else item)
         supplied = {}
         for exemption in route.exemptions:
-            match = match_source_quote(original, exemption.source_quote)
-            if match is None or match.text not in exemptions:
+            quote = _match_policy_quote(original, exemption.source_quote, exemptions)
+            if quote is None:
                 raise ValueError("exemption_not_in_source")
-            supplied[match.text] = exemption.model_copy(update={"source_quote": match.text})
+            supplied[quote] = exemption.model_copy(update={"source_quote": quote})
         rules = tuple(supplied.get(quote) or MathRubricExemption(
             id="exempt_" + _content_hash(quote)[:12], description=quote, source_quote=quote,
         ) for quote in exemptions)
         if route.error_policy == "no_repeat_deduction" and not no_repeat:
             raise ValueError("error_policy_not_in_source")
         if route.error_policy_source_quote:
-            match = match_source_quote(original, route.error_policy_source_quote)
-            if match is None or match.text != no_repeat:
+            if _match_policy_quote(original, route.error_policy_source_quote, [no_repeat]) is None:
                 raise ValueError("error_policy_not_in_source")
         routes.append(MathRubricRoute(**{
             **route.model_dump(), "items": tuple(items), "exemptions": rules,
@@ -690,7 +744,7 @@ provider failures retain the existing execution/retry semantics.
                 failures.append(reason if re.fullmatch(r"[a-z_]+", reason) else "invalid_item_ledger")
                 if reason in {"unsupported_conditional_minimum", "minimum_condition_outside_clause",
                               "unsupported_score_cap", "unsupported_error_policy",
-                              "exemption_condition_unresolved", "unsupported_source_number",
+                              "exemption_condition_unresolved", "unsupported_exemption_scope", "unsupported_source_number",
                               "unsupported_occurrence_limit"}:
                     raise _UnrepresentableRubric(reason) from exc
                 raise
