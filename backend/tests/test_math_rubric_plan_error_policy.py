@@ -116,7 +116,7 @@ async def test_conditional_negated_or_broader_policies_are_not_silently_relaxed(
     assert plan.routes[0].mode == "holistic"
     assert plan.compilation_reason == "unsupported_error_policy"
     assert source in plan.effective_criterion
-    assert len(provider.messages) == 1
+    assert len(provider.messages) == 0
 
 
 @pytest.mark.asyncio
@@ -151,7 +151,7 @@ async def test_negated_waiver_cannot_become_an_executable_zero_penalty(policy):
     assert not plan.routes[0].exemptions
     assert plan.compilation_reason == "unsupported_exemption_scope"
     assert plan.original_criterion == source and source in plan.effective_criterion
-    assert len(provider.messages) == 1  # No extra repair/review round for unsupported policy scope.
+    assert len(provider.messages) == 0  # Source-only scope failure needs no model request.
 
 
 @pytest.mark.asyncio
@@ -168,7 +168,7 @@ async def test_followthrough_exception_survives_all_sentence_boundaries(separato
     assert not plan.routes[0].error_policy_source_quote
     assert plan.compilation_reason == "unsupported_error_policy"
     assert plan.original_criterion == source and source in plan.effective_criterion
-    assert len(provider.messages) == 1
+    assert len(provider.messages) == 0
 
 
 @pytest.mark.asyncio
@@ -177,7 +177,7 @@ async def test_detached_exemption_exception_is_not_lost():
     provider = raw_provider(candidate("每个错误扣1分"))
     plan = await rubric.prepare_math_rubric_plan(question(criterion=source), provider)
     assert plan.routes[0].mode == "holistic" and not plan.routes[0].exemptions
-    assert source in plan.effective_criterion and len(provider.messages) == 1
+    assert source in plan.effective_criterion and len(provider.messages) == 0
 
 
 @pytest.mark.asyncio

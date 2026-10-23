@@ -212,7 +212,7 @@ async def test_truly_conditional_policies_retain_source_without_another_call(suf
     assert plan.compilation_status == "holistic"
     assert plan.compilation_reason.startswith("unsupported_")
     assert source in plan.effective_criterion
-    assert len(provider.messages) == 1
+    assert len(provider.messages) == 0
 
 
 @pytest.mark.asyncio
@@ -264,4 +264,4 @@ async def test_variable_deduction_cap_does_not_become_fixed_rate(rule):
     plan = await rubric.prepare_math_rubric_plan(question(criterion=rule), provider)
     assert plan.routes[0].mode == "holistic"
     assert plan.compilation_reason == "unsupported_score_cap"
-    assert len(provider.messages) == 1
+    assert len(provider.messages) == 0

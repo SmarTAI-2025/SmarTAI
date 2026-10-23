@@ -70,7 +70,7 @@ async def test_mixed_amounts_with_detached_condition_do_not_create_blanket_exemp
     plan = await rubric.prepare_math_rubric_plan(question(criterion=source), provider)
     assert plan.routes[0].mode == "holistic"
     assert plan.compilation_reason == "unsupported_exemption_scope"
-    assert len(provider.messages) == 1
+    assert len(provider.messages) == 0
     assert source in plan.effective_criterion
 
 
@@ -175,7 +175,7 @@ async def test_mixed_numeric_and_verbal_policy_does_not_drop_detached_condition(
     plan = await rubric.prepare_math_rubric_plan(question(criterion=source), provider)
     assert plan.routes[0].mode == "holistic"
     assert plan.compilation_reason == "unsupported_exemption_scope"
-    assert len(provider.messages) == 1
+    assert len(provider.messages) == 0
 
 
 @pytest.mark.asyncio
