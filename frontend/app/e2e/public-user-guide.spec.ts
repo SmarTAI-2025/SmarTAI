@@ -56,7 +56,7 @@ for (const language of ['zh', 'en'] as const) {
     const note = page.locator('#questions-4 details');
     await expect(note).not.toHaveAttribute('open');
     await note.locator('summary').click();
-    await expect(note.locator('div')).toContainText(language === 'zh' ? '消耗额度' : 'consuming quota');
+    await expect(note.locator('div')).toContainText(language === 'zh' ? '不调用模型' : 'without calling a model');
     await page.locator('#language-toggle').click();
     const other = language === 'zh' ? 'en' : 'zh';
     await expect(page.locator('body')).toHaveAttribute('data-language', other);

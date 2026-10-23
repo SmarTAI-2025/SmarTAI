@@ -1,8 +1,7 @@
-"""Real saved OCR evidence -> durable organization -> original review DTOs."""
+"""Structured drafts restore to the original matrix; historical AI recovery is retired."""
 import io
 import hashlib
 import json
-import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,9 +11,7 @@ from starlette.datastructures import Headers
 
 from backend.api import task_preparation
 from backend.db import file_repository, workflow_repository
-from backend.domain.errors import RecognitionError
 from backend.services import task_facade
-from backend.services.recognition_recovery import saved_recognition
 from backend.services.task_execution import stop_task_run
 from backend.storage import get_storage
 from backend.tests.test_question_preparation_recovery import _RecoveryRegistry, _claim, _seed_task
@@ -47,116 +44,72 @@ async def save_pages(owner, task, stored, data, *, purpose="problems", final=Tru
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stopped", [False, True])
-@pytest.mark.parametrize("legacy_empty_handoff", [False, True])
-async def test_question_saved_pages_are_organized_without_rereading_or_generating(monkeypatch, stopped, legacy_empty_handoff):
+@pytest.mark.parametrize("with_targets", [False, True])
+async def test_raw_only_questions_enter_original_matrix_without_ai_or_source_loss(monkeypatch, stopped, with_targets):
     owner, task = _seed_task()
     registry = _RecoveryRegistry()
     data, mime = source_file(pdf=True, pages=8)
     draft = await task_preparation.preflight_problem_source(task_id=task,
         file=UploadFile(io.BytesIO(data), filename="eight-pages.pdf", headers=Headers({"content-type": mime})),
         inline_text=None, library_material_id=None, stored_file_id=None, structure_mode="organized", role="problem",
-        extraction_hint="", save_to_library=False, recognition_provider_id="test-provider",
-        current=SimpleNamespace(id=owner), registry=registry)
+        extraction_hint="", recognition_options=json.dumps({"targets": [str(i) for i in range(1, 8)]}) if with_targets else None,
+        save_to_library=False, recognition_provider_id="test-provider", current=SimpleNamespace(id=owner), registry=registry)
     queued = await task_preparation._start_question_preparation(task_id=task,
         request=task_preparation.StartQuestionPreparationRequest(source_tokens=[draft["source_token"]],
             expected_workflow_revision=0, recognition_provider_id="test-provider"),
         current=SimpleNamespace(id=owner), registry=registry, background_tasks=None, allow_prepared_source_reuse=False)
     origin = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
     stored = file_repository.get_file(file_id=origin.payload["source_refs"][0]["stored_file_id"], owner_id=owner)
-    source_example = "Example input: 10 20; expected output: 30."
-    source_pairs = "1 → 2\n3 → 4"
-    source_json_case = {"input": "7 8", "expected_output": "15"}
-    cases = [
-        {"input": "10 20", "expected_output": "30", "source_excerpt": source_example},
-        source_json_case,  # No source or excerpt, but an exact case in uploaded text.
-        {"input": "10 20", "expected_output": "30"},  # Plain labelled original; omitted source and excerpt.
-        {"input": "2 3", "expected_output": "5"},  # Created; omitted provenance.
-        {"input": "4 5", "expected_output": "9", "source": "llm_generated"},
-        {"input": "10 20", "expected_output": "3", "source": "teacher", "source_excerpt": source_example},
-        {"input": "1", "expected_output": "4", "source": "llm_generated", "source_excerpt": source_pairs},
-        {"input": "1", "expected_output": "2", "source_excerpt": source_pairs},
-        {"input": "3", "expected_output": "4"},
-    ]
-    assembly = await save_pages(owner, task, stored, data, final=not stopped, text=[
-        "1. Saved literal question 1. (a) First part. (b) Second part. Rubric: (a) 3 points\n"
-        + source_example + "\n" + json.dumps(source_json_case) + "\n" + source_pairs,
-        *[f"{i}. Saved literal question {i}." for i in range(2, 8)], RuntimeError("failed page")])
+    assembly = await save_pages(owner, task, stored, data, final=not stopped)
     assert assembly.document.coverage.failed_pages == [8]
+    evidence = {item.id for item in file_repository.list_files(owner_id=owner, assignment_id=task)}
     if stopped:
         stop_task_run(task_id=task, owner_id=owner, job_id=origin.id, expected_revision=queued["workflow_revision"])
     else:
         task_facade._fail_operation(task, owner, origin.id, origin.attempt, "question_source_incomplete")
-    provider_calls = []
-    async def organize(messages):
-        provider_calls.append(messages)
-        assert "Saved literal question 1" in messages[-1].content
-        assert "Saved literal question 7" in messages[-1].content
-        return SimpleNamespace(content=json.dumps({"problems": [dict(q_id=f"q{i}", number=str(i), type="short",
-            stem=f"Saved literal question {i}." + (" (a) First part. (b) Second part." if i == 1 else ""),
-            criterion="(a) 3 points" if i == 1 else "", test_cases=cases if i == 1 else None,
-            source_incomplete=(i == 7)) for i in range(1, 8)]}))
-    registry.provider = SimpleNamespace(provider_id="test-provider", supports_vision=False, ainvoke=organize)
-    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
-    forbidden = AsyncMock(side_effect=AssertionError("must not reread or generate"))
+    forbidden = AsyncMock(side_effect=AssertionError("manual review cannot read sources or call a provider"))
     monkeypatch.setattr(task_preparation, "_recognize_saved_question_sources", forbidden)
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", forbidden)
+    monkeypatch.setattr(task_facade, "_registry_for_owner", forbidden)
     revision = workflow_repository.get_workflow(task, owner_id=owner).workflow_revision
-    if legacy_empty_handoff:
-        from backend.services import question_preparation_manual
-        with monkeypatch.context() as legacy:
-            legacy.setattr(question_preparation_manual, "saved_question_sources", lambda _: None)
-            empty = await task_preparation.manually_complete_question_preparation(task, origin.id,
-                task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=revision), current=SimpleNamespace(id=owner))
-            assert empty["status"] == "ready_for_review"
-            revision = empty["workflow_revision"]
     response = await task_preparation.manually_complete_question_preparation(task, origin.id,
         task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=revision), current=SimpleNamespace(id=owner))
-    assert isinstance(response, dict), getattr(response, "body", response)
-    assert response["status"] == "started"
-    assert task_facade.task_state(task_id=task, owner_id=owner)["recovering_saved_text"] is True
-    await task_preparation.run_durable_question_preparation(_claim(owner, response["job_id"], "saved-text"))
-    operation = workflow_repository.get_operation(response["job_id"], owner_id=owner)
-    assert operation.status == "done", (operation.error_code, operation.checkpoint)
-    assert len(provider_calls) == 1 and forbidden.await_count == 0
-    for read in (task_facade.get_task(task_id=task, owner_id=owner), await task_facade.async_task_state(task_id=task, owner_id=owner)):
-        assert read["status"] == "problems_ready" and read["problem_count"] == 7
-    problems = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]
-    assert [case["source"] for case in problems["q1"]["test_cases"]] == [
-        "teacher", "teacher", "teacher", "llm_generated", "llm_generated", "llm_generated",
-        "llm_generated", "teacher", "teacher"]
-    assert [case["input"] for case in problems["q1"]["test_cases"]] == [case["input"] for case in cases]
-    assert all("source_excerpt" not in case for case in problems["q1"]["test_cases"])
-    from sqlalchemy import select
-    from backend.db.models import AssignmentQuestionRecord
-    from backend.db.session import session_scope
-    with session_scope() as session:
-        stored_question = session.scalar(select(AssignmentQuestionRecord).where(
-            AssignmentQuestionRecord.assignment_id == task, AssignmentQuestionRecord.q_id == "q1"))
-        assert stored_question.test_cases == problems["q1"]["test_cases"]
-    assert task_facade.task_state(task_id=task, owner_id=owner)["recovering_saved_text"] is False
-    assert problems["q1"]["stem"] == "Saved literal question 1. (a) First part. (b) Second part."
-    assert problems["q1"]["criterion"] == "(a) 3 points" and not problems["q1"].get("reference_answer")
-    assert not problems["q1"]["rubric_point_summary"]["is_valid"]
-    assert not any(issue["code"] == "recognition_partial" for issue in problems["q1"]["preparation_issues"])
-    assert any(issue["code"] == "recognition_partial" for issue in problems["q7"]["preparation_issues"])
-    assert task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+    assert response["status"] == "ready_for_review"
+    rows = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]
+    if with_targets:
+        assert [row["number"] for row in rows.values()] == [str(i) for i in range(1, 8)]
+        assert all(row["stem"] == "" and row["type"] == "" for row in rows.values())
+    else:
+        assert rows == {} and response["first_question_id"] is None
+        # Reopening an empty matrix is idempotent; raw text never launches AI.
+        repeated = await task_preparation.manually_complete_question_preparation(task, origin.id,
+            task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=response["workflow_revision"]), current=SimpleNamespace(id=owner))
+        assert repeated == response
+    assert forbidden.call_count == 0
+    assert evidence <= {item.id for item in file_repository.list_files(owner_id=owner, assignment_id=task)}
+    retained = file_repository.get_file(file_id=stored.id, owner_id=owner)
+    assert retained.availability_status == "available"
+    with get_storage().open(retained.storage_key) as original:
+        assert original.read() == data
+    assert workflow_repository.get_operation(origin.id, owner_id=owner).status == "error"
+
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("recovery", ["initial", "retry", "manual"])
+@pytest.mark.parametrize("stopped", [False, True])
 @pytest.mark.parametrize("target_source", ["options", "hint"])
-async def test_requested_missing_questions_remain_editable_after_organization_and_retry(monkeypatch, recovery, target_source):
+async def test_structured_partial_questions_restore_known_missing_rows_into_existing_editor(monkeypatch, stopped, target_source):
+    from backend.agents.incremental_question_preparation import IncrementalQuestionPreparation, _rows
     from backend.db import assignment_repository
     from backend.domain.errors import ValidationError
+    from backend.progress.tracker import ProgressReporter
 
     owner, task = _seed_task()
     registry = _RecoveryRegistry()
-    data, mime = source_file(pdf=True, pages=1)
     numbers = ["1.1.5", "1.1.7", "1.1.20", "1.1.29", "1.1.31", "1.2.3", "1.2.16"]
     recognized = [numbers[0], numbers[1], numbers[5]]
-    draft = await task_preparation.preflight_problem_source(task_id=task,
-        file=UploadFile(io.BytesIO(data), filename="questions.pdf", headers=Headers({"content-type": mime})),
-        inline_text=None, library_material_id=None, stored_file_id=None, structure_mode="organized", role="problem",
+    literal = "\n".join(f"{number}. Saved literal question {number}." for number in recognized)
+    draft = await task_preparation.preflight_problem_source(task_id=task, file=None,
+        inline_text=literal, library_material_id=None, stored_file_id=None, structure_mode="organized", role="problem",
         extraction_hint="题号: " + ", ".join(numbers) if target_source == "hint" else "",
         recognition_options=json.dumps({"targets": numbers}) if target_source == "options" else None, save_to_library=False,
         recognition_provider_id="test-provider", current=SimpleNamespace(id=owner), registry=registry)
@@ -164,101 +117,61 @@ async def test_requested_missing_questions_remain_editable_after_organization_an
         request=task_preparation.StartQuestionPreparationRequest(source_tokens=[draft["source_token"]],
             expected_workflow_revision=0, recognition_provider_id="test-provider"),
         current=SimpleNamespace(id=owner), registry=registry, background_tasks=None, allow_prepared_source_reuse=False)
-    origin = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
-    stored = file_repository.get_file(file_id=origin.payload["source_refs"][0]["stored_file_id"], owner_id=owner)
-    literal = "\n".join(f"{number}. Saved literal question {number}." for number in recognized)
-    await save_pages(owner, task, stored, data, text=[literal])
-    task_facade._fail_operation(task, owner, origin.id, origin.attempt, "question_source_incomplete")
-    organize = AsyncMock(return_value=SimpleNamespace(content=json.dumps({"problems": [
-        dict(q_id=f"q{i}", number=number, type="short", stem=f"Saved literal question {number}.", criterion="")
-        for i, number in enumerate(recognized, start=1)]})))
-    registry.provider = SimpleNamespace(provider_id="test-provider", supports_vision=False, ainvoke=organize)
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
-    forbidden = AsyncMock(side_effect=AssertionError("must not reread or generate"))
-    monkeypatch.setattr(task_preparation, "_recognize_saved_question_sources", forbidden)
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", forbidden)
+    operation = _claim(owner, queued["job_id"], "persist-structured")
+    inputs = task_preparation._rehydrate_question_preparation_inputs(operation)
+    pipeline = IncrementalQuestionPreparation(operation=operation, sources=inputs["sources"],
+        provider=registry.provider, provider_id="test-provider", reporter=ProgressReporter(operation.operation_id),
+        score_policy=inputs["score_policy"], read_source=AsyncMock(side_effect=AssertionError("already structured")))
+    rows = _rows([dict(number=number, type="short", stem=f"Saved literal question {number}.",
+        criterion="Teacher rubric: award 10 points." if index == 0 else "", max_score=10,
+        reference_answer="Teacher answer" if index == 0 else "") for index, number in enumerate(recognized)])
+    await pipeline.finish("extract:" + draft["source_token"] + ":0", rows)
+    if stopped:
+        stop_task_run(task_id=task, owner_id=owner, job_id=operation.operation_id,
+            expected_revision=workflow_repository.get_workflow(task, owner_id=owner).workflow_revision)
+    else:
+        task_facade._fail_operation(task, owner, operation.operation_id, operation.attempt,
+            "question_targets_incomplete", expected_lease_token=operation.lease_token)
+    forbidden = AsyncMock(side_effect=AssertionError("manual review cannot invoke AI"))
+    monkeypatch.setattr(task_facade, "_registry_for_owner", forbidden)
     revision = workflow_repository.get_workflow(task, owner_id=owner).workflow_revision
-    response = await task_preparation.manually_complete_question_preparation(task, origin.id,
+    response = await task_preparation.manually_complete_question_preparation(task, operation.operation_id,
         task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=revision), current=SimpleNamespace(id=owner))
-    assert response["status"] == "started"
-    if recovery != "initial":
-        # Keep the three extracted rows, but fail before the final package can be saved.
-        with monkeypatch.context() as failed_save:
-            def fail_save(**_):
-                raise RuntimeError("temporary package save failure")
-            failed_save.setattr(task_preparation, "save_final_question_packages_artifact", fail_save)
-            await task_preparation.run_durable_question_preparation(_claim(owner, response["job_id"], "failed-save"))
-        failed = workflow_repository.get_operation(response["job_id"], owner_id=owner)
-        assert failed.status == "error" and failed.checkpoint["questions_extracted_artifact_id"]
-        assert not assignment_repository.list_questions(task, teacher_id=owner)
-        revision = workflow_repository.get_workflow(task, owner_id=owner).workflow_revision
-        if recovery == "manual":
-            response = await task_preparation.manually_complete_question_preparation(task, failed.id,
-                task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=revision), current=SimpleNamespace(id=owner))
-            assert response["status"] == "ready_for_review"
-            # Manual review is now the recovery path; the old retry must not overwrite edits.
-            rejected = await task_preparation.retry_question_preparation(task_id=task, job_id=failed.id,
-                request=task_preparation.RetryQuestionPreparationRequest(expected_workflow_revision=response["workflow_revision"]),
-                background_tasks=None, current=SimpleNamespace(id=owner), registry=registry)
-            assert rejected.status_code == 409
-            assert json.loads(rejected.body)["error"]["code"] == "question_preparation_retry_not_available"
-        else:
-            response = await task_preparation.retry_question_preparation(task_id=task, job_id=failed.id,
-                request=task_preparation.RetryQuestionPreparationRequest(expected_workflow_revision=revision),
-                background_tasks=None, current=SimpleNamespace(id=owner), registry=registry)
-            assert response["status"] == "started"
-    if recovery != "manual":
-        await task_preparation.run_durable_question_preparation(_claim(owner, response["job_id"], "complete-seven"))
-        operation = workflow_repository.get_operation(response["job_id"], owner_id=owner)
-        assert operation.status == "done", (operation.error_code, operation.checkpoint)
-    assert organize.await_count == 1 and forbidden.await_count == 0
-    assert len(assignment_repository.list_questions(task, teacher_id=owner)) == 7
-    for read in (task_facade.get_task(task_id=task, owner_id=owner), await task_facade.async_task_state(task_id=task, owner_id=owner)):
-        assert read["status"] == "problems_ready" and read["problem_count"] == 7
+    assert response["status"] == "ready_for_review" and forbidden.call_count == 0
     problems = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]
+    assert len(assignment_repository.list_questions(task, teacher_id=owner)) == 7
     assert {row["number"] for row in problems.values()} == set(numbers)
-    assert [row["question_structure"]["major_order"] for row in problems.values()] == list(range(7))
     assert [problems[f"q{i}"]["stem"] for i in range(1, 4)] == [f"Saved literal question {number}." for number in recognized]
-    for i in range(4, 8):
-        row = problems[f"q{i}"]
+    assert problems["q1"]["criterion"] == "Teacher rubric: award 10 points."
+    assert problems["q1"]["reference_answer"] == "Teacher answer"
+    for q_id in ("q4", "q5", "q6", "q7"):
+        row = problems[q_id]
         assert not row["stem"] and not row["criterion"] and not row.get("reference_answer")
         assert row["question_structure"]["major_number"] == row["number"]
         assert row["number"] in set(numbers) - set(recognized)
-        assert row["review_status"] == "needs_review"
         marker = next(issue for issue in row["preparation_issues"] if issue["code"] == "manual_completion_required")
         assert marker["details"]["required_fields"] == ["stem", "criterion"]
-    assert "question_manual_completion_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
     with pytest.raises(ValidationError):
         task_facade.update_problem(task_id=task, owner_id=owner, q_id="q4", patch={"review_status": "confirmed"})
     task_facade.update_problem(task_id=task, owner_id=owner, q_id="q4",
         patch={"stem": "Teacher-filled question 4", "criterion": "Award 10 points for the solution."})
     task_facade.update_problem(task_id=task, owner_id=owner, q_id="q4", patch={"review_status": "confirmed"})
     assert task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]["q4"]["review_status"] == "confirmed"
+    rejected = await task_preparation.retry_question_preparation(task_id=task, job_id=operation.operation_id,
+        request=task_preparation.RetryQuestionPreparationRequest(expected_workflow_revision=response["workflow_revision"]),
+        background_tasks=None, current=SimpleNamespace(id=owner), registry=registry)
+    assert rejected.status_code == 409
+    assert json.loads(rejected.body)["error"]["code"] == "question_preparation_retry_not_available"
 
 
-@pytest.mark.asyncio
-async def test_saved_evidence_keeps_distinct_fragments_and_rejects_other_original(monkeypatch):
-    owner, task = _seed_task()
-    data, mime = source_file(pdf=True, pages=1)
-    stored = file_repository.save_file(storage=get_storage(), owner_id=owner, assignment_id=task,
-        kind="problem_source", original_name="source.pdf", content=data, content_type=mime)
-    await save_pages(owner, task, stored, data, final=False, text=["1. First saved fragment"])
-    # Different artifact identity simulates a separately authorized retry.
-    # Use another request's saved final evidence rather than relying on a success cache.
-    await save_pages(owner, task, stored, data, text=["1. Later saved fragment"])
-    recovered = saved_recognition(owner_id=owner, task_id=task, stored_file_id=stored.id,
-        purpose="problems", before=time.time())
-    assert "First saved fragment" in recovered.text and "Later saved fragment" in recovered.text
-    other = file_repository.save_file(storage=get_storage(), owner_id=owner, assignment_id=task,
-        kind="problem_source", original_name="other.pdf", content=data + b"\n", content_type=mime)
-    with pytest.raises(RecognitionError):
-        saved_recognition(owner_id=owner, task_id=task, stored_file_id=other.id, purpose="problems",
-            before=time.time(), artifact_ids=recovered.artifact_ids)
+
+
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stopped", [False, True])
-async def test_submission_saved_text_survives_handoff_and_repeated_task_reads(monkeypatch, stopped):
+async def test_submission_raw_text_handoff_opens_manual_rows_without_model_calls(monkeypatch, stopped):
     from backend.db import assignment_repository
     from backend.services.submission_manual_review import continue_manually
     owner, task = _seed_task(with_question=True)
@@ -278,69 +191,69 @@ async def test_submission_saved_text_survives_handoff_and_repeated_task_reads(mo
     calls = []
     async def organize(messages):
         calls.append(messages)
-        assert "Saved literal question 1" in messages[-1].content
-        return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One", stu_ans=[
-            dict(q_id="q1", number="1", type="short", content="Saved wrong answer -2", flag=[]),
-            dict(q_id="q2", number="2", type="short", content="", flag=[])])))
+        raise AssertionError("Manual recovery cannot dispatch a model")
     registry.provider = SimpleNamespace(provider_id="test-provider", supports_vision=False, ainvoke=organize)
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
     forbidden = AsyncMock(side_effect=AssertionError("must not reread the original"))
     monkeypatch.setattr(task_facade, "read_question_source", forbidden)
     response = await continue_manually(task_id=task, owner_id=owner, job_id=origin.id,
         expected_revision=workflow_repository.get_workflow(task, owner_id=owner).workflow_revision)
-    assert response["status"] == "started"
-    assert (await task_facade.async_task_state(task_id=task, owner_id=owner))["recovering_saved_text"] is True
-    await task_facade.run_durable_submission_recognition(_claim(owner, response["job_id"], "saved-answers"))
-    operation = workflow_repository.get_operation(response["job_id"], owner_id=owner)
-    assert operation.status == "done", (operation.error_code, operation.checkpoint)
-    assert len(calls) == 1 and forbidden.await_count == 0
+    assert response["status"] == "ready_for_review"
+    assert (await task_facade.async_task_state(task_id=task, owner_id=owner))["recovering_saved_text"] is False
+    assert not calls and forbidden.await_count == 0
+    assert file_repository.get_file(file_id=stored.id, owner_id=owner).availability_status == "available"
     for _ in range(2):
         for read in (task_facade.get_task(task_id=task, owner_id=owner), await task_facade.async_task_state(task_id=task, owner_id=owner),
                      task_facade.list_tasks(owner_id=owner)[task]):
             assert read["status"] == "submissions_ready" and not read["error"]
     student = next(iter(task_facade.get_task(task_id=task, owner_id=owner)["student_data"].values()))
     answers = {answer["q_id"]: answer for answer in student["stu_ans"]}
-    assert answers["q1"]["content"] == "Saved wrong answer -2"
-    assert not task_facade._answer_recognition_failures(answers["q1"]["flag"])
-    assert "recognition_manual_pending" in answers["q2"]["flag"]
+    assert all(answer["content"] == "" and "recognition_manual_pending" in answer["flag"]
+               for answer in answers.values())
 
 
 @pytest.mark.asyncio
-async def test_completed_organization_chunks_are_retained_on_stop_and_skipped_on_resume():
-    import asyncio
-    from copy import deepcopy
-    from backend.models import QuestionScorePolicy
-    from backend.progress.tracker import ProgressReporter
-    from backend.services.question_preparation_manual import prepare_saved_question_packages
-    text = "1. First problem. " + "a" * 70 + "\n\n2. Second problem. " + "b" * 70
-    draft = SimpleNamespace(role="problem", extraction_hint="")
-    calls, saved, submitted = [], [], []
-    async def invoke(messages):
-        calls.append(messages[-1].content)
-        if len(calls) == 2:
-            raise asyncio.CancelledError()
-        number = "1" if "First problem" in messages[-1].content else "2"
-        return SimpleNamespace(content=json.dumps({"problems": [dict(q_id="q1", number=number,
-            type="short", stem="First problem" if number == "1" else "Second problem", criterion="", source_incomplete=False)]}))
-    async def checkpoint(packages, *, completed_chunks):
-        saved.append((deepcopy(packages), completed_chunks))
-    async def submitting():
-        submitted.append(True)
-    async def failed(*_):
-        raise AssertionError("Cancellation must retain the in-flight fence")
-    options = dict(provider=SimpleNamespace(provider_id="synthetic", ainvoke=invoke),
-        reporter=ProgressReporter("saved-chunks"), score_policy=QuestionScorePolicy(), ocr_only=False,
-        on_started=submitting, on_extracted=checkpoint, on_failed=failed,
-        chunk_settings={"chunk_chars": 110, "chunk_overlap": 0})
-    with pytest.raises(asyncio.CancelledError):
-        await prepare_saved_question_packages([(draft, text, {})], recovered=None, **options)
-    assert len(saved) == 1 and saved[0][0]["q1"]["stem"] == "First problem"
-    # An explicitly resumed worker consumes the last verified chunk checkpoint.
-    recovered, completed = saved[0]
-    result = await prepare_saved_question_packages([(draft, text, {})], recovered=recovered,
-        completed_chunks=completed, **options)
-    assert len(calls) == 3 and calls[0] != calls[2] and calls[1] == calls[2]
-    assert [item["stem"] for item in result.values()] == ["First problem", "Second problem"]
+@pytest.mark.parametrize("entrypoint", ["start", "retry", "worker", "manual"])
+async def test_retired_question_text_recovery_never_dispatches_provider(monkeypatch, entrypoint):
+    from backend.db.session import session_scope
+    from backend.tests.test_question_preparation_recovery import _queue_question_preparation
+    owner, task = _seed_task()
+    source, queued, _ = await _queue_question_preparation(owner, task)
+    registry = _RecoveryRegistry()
+    forbidden = AsyncMock(side_effect=AssertionError("retired recovery cannot resolve a provider"))
+    monkeypatch.setattr(task_facade, "_registry_for_owner", forbidden)
+    legacy = {"artifacts": {source["source_token"]: ["retained-original"]}}
+    if entrypoint == "start":
+        result = await task_preparation._start_question_preparation(task_id=task,
+            request=task_preparation.StartQuestionPreparationRequest(source_tokens=[source["source_token"]],
+                expected_workflow_revision=queued["workflow_revision"], recognition_provider_id="test-provider"),
+            current=SimpleNamespace(id=owner), registry=registry, background_tasks=None,
+            allow_prepared_source_reuse=True, manual_saved_sources=legacy)
+    else:
+        with session_scope() as session:
+            record = session.get(workflow_repository.WorkflowOperationRecord, queued["job_id"])
+            record.payload = {**record.payload, "manual_saved_sources": legacy}
+        if entrypoint == "worker":
+            await task_preparation.run_durable_question_preparation(_claim(owner, queued["job_id"], "retired-worker"))
+            result = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
+            assert result.status == "error" and result.error_code == "saved_text_recovery_retired"
+        else:
+            operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
+            task_facade._fail_operation(task, owner, operation.id, operation.attempt, "provider_rate_limited")
+            revision = workflow_repository.get_workflow(task, owner_id=owner).workflow_revision
+            if entrypoint == "retry":
+                result = await task_preparation.retry_question_preparation(task_id=task, job_id=operation.id,
+                    request=task_preparation.RetryQuestionPreparationRequest(expected_workflow_revision=revision),
+                    background_tasks=None, current=SimpleNamespace(id=owner), registry=registry)
+            else:
+                result = await task_preparation.manually_complete_question_preparation(task, operation.id,
+                    task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=revision),
+                    current=SimpleNamespace(id=owner))
+    if entrypoint != "worker":
+        assert result.status_code == 409
+        assert json.loads(result.body)["error"]["code"] == "saved_text_recovery_retired"
+    assert forbidden.call_count == 0
+
 
 
 @pytest.mark.parametrize("case,excerpt,text,teacher", [
@@ -383,21 +296,3 @@ def test_saved_test_case_requires_one_original_pair(source, first, second, with_
     for inputs, outputs in ((first, second), (second, first)):
         mixed = {**inputs, output_field: outputs[output_field]}
         assert not _saved_test_case_supported(mixed, excerpt, source)
-
-
-@pytest.mark.asyncio
-async def test_saved_organization_respects_targets_and_does_not_invent_missing_material():
-    from backend.models import QuestionScorePolicy
-    from backend.progress.tracker import ProgressReporter
-    from backend.services.question_preparation_manual import prepare_saved_question_packages
-    response = {"problems": [dict(q_id=f"q{i}", number=str(i), type="short",
-        stem=f"Saved question {i}", criterion="Invented rubric", reference_answer="Invented solution") for i in (1, 2)]}
-    provider = SimpleNamespace(provider_id="synthetic", ainvoke=AsyncMock(return_value=SimpleNamespace(content=json.dumps(response))))
-    source = (SimpleNamespace(role="problem", extraction_hint=""), "Saved question 1\nSaved question 2",
-              {"recognition_options": {"targets": ["1", "3"]}})
-    result = await prepare_saved_question_packages([source], provider=provider, reporter=ProgressReporter("scope"),
-        score_policy=QuestionScorePolicy(), ocr_only=False, recovered=None,
-        on_started=AsyncMock(), on_extracted=AsyncMock(), on_failed=AsyncMock())
-    assert [row["number"] for row in result.values()] == ["1", "3"]
-    assert result["q1"]["criterion"] == result["q1"]["reference_answer"] == ""
-    assert result["q2"]["stem"] == "" and result["q2"]["type"] == "other"

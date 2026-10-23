@@ -78,6 +78,39 @@ def test_postgres_task_metadata_compare_and_update_is_atomic(pg_database):
     test_invalid_tags_roll_back_name_and_semester_and_enforce_owner()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["pause", "failure", "fields", "28_questions"])
+async def test_postgres_incremental_question_results_survive_independent_work(pg_database, monkeypatch, case):
+    from backend.tests import test_incremental_question_preparation as cases
+    if case == "28_questions":
+        await cases.test_real_worker_roundtrip_multiple_snapshot_sizes(monkeypatch, 28)
+    else:
+        run = {
+            "pause": cases.test_one_chunk_is_durable_while_another_waits_and_manual_never_calls_model,
+            "failure": cases.test_one_chunk_failure_does_not_cancel_other_questions,
+            "fields": cases.test_failed_field_keeps_valid_answer_and_retries_only_rubric,
+        }[case]
+        await run(monkeypatch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", [False, True])
+@pytest.mark.parametrize("bad_field", ["content", "type"])
+async def test_postgres_partial_submission_manual_preserves_valid_siblings(pg_database, monkeypatch, stop, bad_field):
+    from backend.tests.test_submission_partial_responses import (
+        test_unlabelled_response_persists_valid_siblings_before_repair_or_manual,
+    )
+    await test_unlabelled_response_persists_valid_siblings_before_repair_or_manual(monkeypatch, stop, bad_field)
+
+
+@pytest.mark.asyncio
+async def test_postgres_retry_preserves_question_boundary_evidence(pg_database, monkeypatch):
+    from backend.tests.test_incremental_question_review_edges import (
+        test_changed_model_copy_preserves_source_boundary_evidence,
+    )
+    await test_changed_model_copy_preserves_source_boundary_evidence(monkeypatch, True)
+
+
 @pytest.mark.parametrize("kind", ["question", "student"])
 @pytest.mark.parametrize("actions", [("add", "add"), ("add", "delete"), ("delete", "delete")])
 def test_postgres_review_row_mutations_have_one_winner(pg_database, kind, actions):

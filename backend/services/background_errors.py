@@ -18,6 +18,7 @@ from backend.tools.structured_llm import PermanentLLMError, RateLimitError, Stru
 
 
 SAFE_BACKGROUND_ERROR_CODES = frozenset({
+    "saved_text_recovery_retired",
     "operation_cancelled",
     "workflow_failed",
     "no_provider_configured",

@@ -1,8 +1,10 @@
-"""Handoff saved answers, organizing saved recognition text only when needed."""
+"""Open saved answer structures for manual review without dispatching a model."""
 import uuid
 import asyncio
 import time
 from copy import deepcopy
+
+from fastapi.concurrency import run_in_threadpool
 
 from backend.agents.ingest_agent import _ocr_identity_candidate
 from backend.db import assignment_repository, source_outcome_repository, workflow_repository
@@ -43,30 +45,10 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
         upload = {"filename": origin.payload["filename"], "retry_from": origin.payload["retry_from"]}
         reusable = {}
     else:
-        upload = task_facade.load_submission_retry_upload(task_id=task_id, owner_id=owner_id, job_id=source_origin_id)
-        reusable = task_facade._reusable_submission_results(
+        upload = await run_in_threadpool(task_facade.load_submission_retry_upload,
+            task_id=task_id, owner_id=owner_id, job_id=source_origin_id)
+        reusable = await run_in_threadpool(task_facade._reusable_submission_results,
             owner_id=owner_id, task_id=task_id, payload={"retry_from": upload["retry_from"]}, questions=questions, include_incomplete=True)
-        if not origin.payload.get("manual_saved_sources"):
-            from backend.services.recognition_recovery import saved_recognition
-            artifacts = {}
-            for source in source_outcome_repository.list_sources(operation_id=origin.id, owner_id=owner_id, attempt=origin.attempt):
-                saved = reusable.get((source.original_name, source.sha256))
-                if saved and not task_facade._submission_result_incomplete(saved):
-                    continue
-                recovered = saved_recognition(owner_id=owner_id, task_id=task_id,
-                    stored_file_id=source.stored_file_id, purpose="submissions", before=origin.completed_at or origin.updated_at)
-                if recovered.text:
-                    artifacts[source.stored_file_id] = recovered.artifact_ids
-            if artifacts:
-                queued = task_facade.queue_task_submission_parsing(task_id=task_id, owner_id=owner_id,
-                    filename=upload["filename"], content=upload["content"], content_type=upload["content_type"],
-                    registry=task_facade._registry_for_owner(owner_id), identity_mode=upload["identity_mode"],
-                    roster_entries=upload["roster_entries"], roster_name=upload["roster_name"],
-                    recognition_provider_id=origin.payload["recognition_provider_id"],
-                    replace_confirmed=upload["replace_confirmed"], retry_from=upload["retry_from"],
-                    expected_workflow_revision=expected_revision,
-                    manual_saved_sources={"before": origin.completed_at or origin.updated_at, "artifacts": artifacts})
-                return {key: value for key, value in queued.items() if not key.startswith("_")}
     # A separate local operation keeps the stopped attempt and source outcomes
     # immutable. The model worker does not dispatch this operation type.
     row, _ = workflow_repository.create_operation(
@@ -74,7 +56,7 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
         input_hash=task_facade._hash_json([job_id, origin.attempt, expected_revision, student_count]), retry_existing=True,
         payload={**(origin.payload or {}), "retry_from": upload["retry_from"], "manual_origin_id": job_id, "source_origin_id": source_origin_id,
                  "manual_pause": origin.error_code == "operation_cancelled" or bool((origin.payload or {}).get("manual_pause")),
-                 "source_page_diagnostics": (origin.checkpoint or {}).get("source_page_diagnostics", {})})
+                 "source_state_refs": (origin.checkpoint or {}).get("source_state_refs", {})})
     worker = "manual-review-" + uuid.uuid4().hex
     row = workflow_repository.claim_operation(row.id, owner_id=owner_id, worker_id=worker, lease_seconds=300)
     try:
@@ -88,7 +70,7 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
         workflow_repository.save_operation_checkpoint(row.id, owner_id=owner_id,
             expected_attempt=row.attempt, expected_checkpoint_revision=row.checkpoint_revision,
             expected_lease_token=row.lease_token, stage="manual_sources",
-            checkpoint={"source_page_diagnostics": row.payload["source_page_diagnostics"]}, artifact_refs=origin.artifact_refs)
+            checkpoint={"source_state_refs": row.payload["source_state_refs"]}, artifact_refs=origin.artifact_refs)
         if count_handoff:
             saved_source = next((result for result in source_outcome_repository.list_source_results(
                 operation_id=origin.id, owner_id=owner_id, attempt=origin.attempt)
@@ -158,7 +140,9 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
                 student["stu_id"] = f"{student['stu_id']}-{source.source_id[-8:]}"
                 student["identity_status"] = "needs_review"
             used_ids.add(student["stu_id"])
-            fill_manual_answers(student, questions, paused=origin.error_code == "operation_cancelled" or (origin.payload or {}).get("manual_pause"))
+            fill_manual_answers(student, questions,
+                paused=origin.error_code == "operation_cancelled" or (origin.payload or {}).get("manual_pause"),
+                uncertain="provider_submit_uncertain" in {origin.error_code, outcome.get("stable_error_code")})
             student.update(source_id=None if unknown_count else source.source_id, stored_file_id=source.stored_file_id,
                 source_filename=source.filename)
             students.append(student)
@@ -187,7 +171,7 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
             workflow_repository.release_operation(row.id, owner_id=owner_id, worker_id=worker, lease_token=row.lease_token)
 
 
-def fill_manual_answers(student, questions, *, paused=False, incomplete_source=False):
+def fill_manual_answers(student, questions, *, paused=False, incomplete_source=False, uncertain=False):
     """Shared matrix completion: never turn unread text into a student's blank answer."""
     answers = {answer["q_id"]: answer for answer in student.get("stu_ans", [])}
     for question in questions:
@@ -195,6 +179,10 @@ def fill_manual_answers(student, questions, *, paused=False, incomplete_source=F
             answers[question.q_id] = dict(q_id=question.q_id, number=question.number,
                 type=question.type, content="", flag=["recognition_manual_pending"])
         answer = answers[question.q_id]
+        if uncertain and task_facade._answer_recognition_failures(answer.get("flag")):
+            answer["flag"] = list(dict.fromkeys([*answer.get("flag", []), "recognition_failed"]))
+        if task_facade._metadata_only_recognition_fields(answer.get("flag"), answer.get("content")):
+            continue
         if task_facade._answer_recognition_failures(answer.get("flag")) or (incomplete_source and not answer.get("content", "").strip()):
             answer["flag"] = list(dict.fromkeys([*answer.get("flag", []), "recognition_manual_pending",
                 "recognition_paused" if paused else "recognition_incomplete"]))

@@ -53,7 +53,7 @@ export function RecoverableActionState({
     : ["重试等待", "页数上限", "字符上限", "文件上限", "原文件已用", "原文件额度", "本次上传"];
   const visibleDetails = info.technicalDetails.filter(item => detailLabels.includes(item.label)
     && /^\d[\d.,\s]*(?:B|KB|MB|GB)?$/.test(item.value));
-  const primary = workflowRecovery ? (info.dailyQuotaExhausted ? undefined : { ...workflowRecovery.retry, label: workflowRecovery.retry.label ?? (stopped ? info.actionLabel : workflowRetryLabel(locale)) }) : primaryAction ?? (info.actionHref
+  const primary = workflowRecovery ? (info.dailyQuotaExhausted || info.retryUnavailable ? undefined : { ...workflowRecovery.retry, label: workflowRecovery.retry.label ?? (stopped ? info.actionLabel : workflowRetryLabel(locale)) }) : primaryAction ?? (info.actionHref
     ? { label: info.actionLabel, href: info.actionHref }
     : undefined);
   const secondary = workflowRecovery ? { label: workflowBackLabel(locale), href: workflowRecovery.configurationHref, state: workflowRecovery.configurationState, disabled: workflowRecovery.retry.busy } : secondaryAction;

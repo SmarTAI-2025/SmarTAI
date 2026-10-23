@@ -6,7 +6,6 @@ question records.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -39,11 +38,8 @@ from backend.agents.ingest_agent import (
     parse_material_import_to_candidates,
 )
 from backend.agents.question_preparation_agent import (
-    QUESTION_PREPARATION_STAGE_SEQUENCE,
     prepare_ocr_question_packages,
     prepare_question_packages,
-    provider_submission_is_uncertain,
-    requested_major_question_materials,
 )
 from backend.api.errors import domain_error_response
 from backend.auth import require_task_teacher as require_teacher
@@ -91,18 +87,9 @@ from backend.services.background_errors import (
     classify_background_error,
     safe_background_error_code,
 )
-from backend.services.question_preparation_artifacts import (
-    QUESTIONS_EXTRACTED_STAGE,
-    UPLOADED_MATERIALS_ALIGNED_STAGE,
-    find_base_preparation_artifact,
-    find_final_question_packages_artifact,
-    find_question_candidate_artifact,
-    read_base_preparation_artifact,
-    read_final_question_packages_artifact,
-    read_question_candidate_artifact,
-    save_base_preparation_artifact,
-    save_final_question_packages_artifact,
-    save_question_candidate_artifact,
+from backend.services.question_preparation_identity import (
+    question_preparation_input_hash as _question_preparation_input_hash,
+    source_fingerprint as _source_fingerprint,
 )
 from backend.services.question_sources import read_question_source, question_recognition_options, attach_recognition_review, recognition_has_failure, recognition_requires_confirmation
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_requires_review
@@ -338,6 +325,7 @@ def _stable_vision_error(
 
 
 class StartQuestionPreparationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
     source_tokens: list[str] = Field(min_length=1, max_length=20)
     expected_workflow_revision: int = Field(ge=0)
     replace_confirmed: bool = False
@@ -355,6 +343,7 @@ class StartQuestionPreparationRequest(BaseModel):
 
 
 class RetryQuestionPreparationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
     recognition_provider_id: str | None = Field(default=None, max_length=240)
     expected_workflow_revision: int = Field(ge=0)
     acknowledge_possible_duplicate_call: bool = Field(default=False, strict=True)
@@ -365,44 +354,6 @@ class ManualQuestionPreparationRequest(BaseModel):
     model_config = {"extra": "forbid"}
     expected_workflow_revision: int = Field(ge=0)
     question_count: int | None = Field(default=None, ge=1, le=500, strict=True)
-
-
-def _question_preparation_input_hash(
-    *,
-    ordered_source_inputs: Sequence[Mapping[str, Any]],
-    logical_input_revision: int,
-    replace_confirmed: bool,
-    generation_policy: str,
-    score_policy: Mapping[str, Any],
-    recognition_provider_id: str,
-    provider_configuration_fingerprint: str,
-    acknowledged_restart_from: str | None = None,
-    generation_language: str | None = None,
-    manual_saved_sources: dict | None = None,
-) -> str:
-    """Hash the ordered logical input independently of retry claim revisions."""
-
-    return hashlib.sha256(
-        json.dumps(
-            {
-                "sources": list(ordered_source_inputs),
-                "base_revision": logical_input_revision,
-                "replace_confirmed": replace_confirmed,
-                "generation_policy": generation_policy,
-                **({"manual_saved_sources": manual_saved_sources} if manual_saved_sources else {}),
-                **({"generation_language": generation_language} if generation_language else {}),
-                "score_policy": dict(score_policy),
-                "recognition_provider_id": recognition_provider_id,
-                "provider_configuration_fingerprint": (
-                    provider_configuration_fingerprint
-                ),
-                **({"acknowledged_restart_from": acknowledged_restart_from}
-                   if acknowledged_restart_from else {}),
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-    ).hexdigest()
 
 
 def _resolve_recognition_provider(
@@ -456,7 +407,7 @@ def question_preparation_capabilities(
     return {
         "contract_version": 2,
         "operation": "question_preparation",
-        "stage_sequence": list(QUESTION_PREPARATION_STAGE_SEQUENCE),
+        "stage_sequence": [],
         "source_roles": {
             "problem": {
                 **common,
@@ -1407,29 +1358,6 @@ def _detect_candidates(text: str) -> list[dict]:
     return candidates[:200]
 
 
-def _source_fingerprint(payload: dict) -> str:
-    selected = {
-        key: payload.get(key)
-        for key in (
-            "sha256", "filename", "content_type", "source_kind",
-            "library_material_id", "structure_mode", "role",
-            "extraction_hint", "save_to_library", "targets", "recognition_options", "enable_material_ocr",
-            "base_workflow_revision", "recognition_provider_id",
-            "recognition_configuration_fingerprint",
-        )
-    }
-    if payload.get("defer_recognition") is True:
-        selected["defer_recognition"] = True
-    # For an upload/inline source, this ID is an output of optional library
-    # retention, assigned after input_hash was frozen. Only a library-selected
-    # source uses the material ID as input identity. This also preserves retry
-    # compatibility for previously saved uploads without weakening their
-    # content, source-file, provider or prepared-text checks.
-    if selected["source_kind"] != "library":
-        selected["library_material_id"] = None
-    return hashlib.sha256(json.dumps(selected, sort_keys=True).encode()).hexdigest()
-
-
 def _validated_question_source_ref(
     *, operation, payload: dict, task_id: str, owner_id: str
 ) -> dict:
@@ -1552,6 +1480,9 @@ async def _start_question_preparation(
     # preparation is published only to the durable workflow worker below.
     del background_tasks
     try:
+        if manual_saved_sources is not None or (retry_source_contract is not None and (
+                "manual_saved_sources" in retry_source_contract or retry_source_contract.get("question_preparation_version") != 2)):
+            raise InvalidTransition("Saved-text AI recovery has been retired.", code="saved_text_recovery_retired")
         workflow = workflow_repository.get_live_workflow(
             task_id, owner_id=current.id
         )
@@ -1704,7 +1635,6 @@ async def _start_question_preparation(
                 code="stale_revision",
             )
         restart_origin = acknowledged_restart_from or (retry_source_contract or {}).get("acknowledged_restart_from")
-        manual_saved_sources = manual_saved_sources or (retry_source_contract or {}).get("manual_saved_sources")
         operation_hash = _question_preparation_input_hash(
             ordered_source_inputs=ordered_source_inputs,
             logical_input_revision=logical_input_revision,
@@ -1717,7 +1647,6 @@ async def _start_question_preparation(
                 provider_configuration_fingerprint
             ),
             acknowledged_restart_from=restart_origin,
-            manual_saved_sources=manual_saved_sources,
         )
         replay = task_facade.find_task_operation(
             task_id=task_id, owner_id=current.id,
@@ -1766,7 +1695,7 @@ async def _start_question_preparation(
         # timeouts, so a deployment cannot bypass a pending provider submit.
         timeout_contract = (replay.payload or {}) if replay is not None else retry_source_contract
         operation_payload = {
-            **({"manual_saved_sources": manual_saved_sources} if manual_saved_sources else {}),
+            "question_preparation_version": 2,
             **({"retry_origin_id": retry_origin_id} if retry_origin_id and replay is None else {}),
             **({"acknowledged_restart_from": restart_origin} if restart_origin else {}),
             "contract_version": 1,
@@ -1807,6 +1736,8 @@ async def _start_question_preparation(
                 initial_checkpoint_stage="sources_validated",
                 initial_checkpoint={
                     "contract_version": 1,
+                    "incremental_version": 1,
+                    "preparation_counts": {"questions": 0, "stems": 0, "reference_answers": 0, "rubrics": 0},
                     "stage": "sources_validated",
                     "base_workflow_revision": claim_base_revision,
                     "claimed_workflow_revision": claim_base_revision + 1,
@@ -1910,28 +1841,22 @@ async def manually_complete_question_preparation(
                 or (not count_pending and workflow.workflow_revision != _question_preparation_recovery_revision(failed))):
             raise VersionConflict("The task changed after question preparation.", code="stale_revision")
         checkpoint = failed.checkpoint or {}
-        has_base = checkpoint.get("aligned_base_artifact_id") or checkpoint.get("questions_extracted_artifact_id")
+        if "manual_saved_sources" in (failed.payload or {}) or (failed.payload or {}).get("question_preparation_version") != 2:
+            raise InvalidTransition("Saved-text AI recovery has been retired.", code="saved_text_recovery_retired")
+        has_base = (checkpoint.get("questions_extracted_artifact_id") or checkpoint.get("incremental_saving_units")
+                    or checkpoint.get("incremental_view_from_units"))
         if not has_base:
-            from backend.services.question_preparation_manual import saved_question_sources
-            saved_sources = (await run_in_threadpool(saved_question_sources, failed)
-                             if request.question_count is None else None)
-            if saved_sources:
-                return await _start_question_preparation(
-                    task_id=task_id, current=current, background_tasks=BackgroundTasks(),
-                    registry=task_facade._registry_for_owner(current.id),
-                    request=StartQuestionPreparationRequest(
-                        source_tokens=failed.payload["source_tokens"],
-                        expected_workflow_revision=request.expected_workflow_revision,
-                        replace_confirmed=bool(failed.payload.get("replace_confirmed")),
-                        recognition_provider_id=failed.payload["recognition_provider_id"],
-                        score_policy=QuestionScorePolicy.model_validate(failed.payload.get("score_policy") or {})),
-                    allow_prepared_source_reuse=True, retry_source_contract=failed.payload,
-                    manual_saved_sources=saved_sources)
             if count_pending and request.question_count is None:
                 return {"status": "ready_for_review", "task_id": task_id,
                         "workflow_revision": workflow.workflow_revision, "first_question_id": None}
             from backend.services.question_preparation_manual import blank_manual_question_packages
-            packages = blank_manual_question_packages(failed, request.question_count or 0)
+            if request.question_count is None:
+                # Even a stop before the first worker checkpoint must retain
+                # the explicit target list/teacher outline from frozen inputs.
+                from backend.services.question_preparation_manual import initial_manual_question_packages
+                packages = await run_in_threadpool(initial_manual_question_packages, failed)
+            else:
+                packages = blank_manual_question_packages(failed, request.question_count)
             missing = list(packages)
         else:
             if request.question_count is not None:
@@ -1944,7 +1869,7 @@ async def manually_complete_question_preparation(
             operation_id=failed.id, expected_operation_attempt=failed.attempt,
             expected_checkpoint_revision=failed.checkpoint_revision,
             operation_checkpoint={**(failed.checkpoint or {}), "manual_completion_question_ids": missing,
-                                  "manual_question_count_required": not has_base and not packages},
+                                  "manual_question_count_required": not packages},
             operation_artifact_refs=failed.artifact_refs,
             recognition_provider_id=(failed.payload or {}).get("recognition_provider_id"),
             manual_recovery=True,
@@ -1982,6 +1907,7 @@ async def retry_question_preparation(
             )
         submission_uncertain = bool(
             failed.error_code == "provider_submit_uncertain"
+            or (failed.checkpoint or {}).get("incremental_inflight_units")
             or (failed.checkpoint or {}).get("base_provider_inflight_stage")
             or list(
                 (failed.checkpoint or {}).get(
@@ -2001,6 +1927,8 @@ async def retry_question_preparation(
                 code="stale_revision",
             )
         payload = dict(failed.payload or {})
+        if "manual_saved_sources" in payload or payload.get("question_preparation_version") != 2:
+            raise InvalidTransition("Saved-text AI recovery has been retired.", code="saved_text_recovery_retired")
         frozen_provider_id = payload.get("recognition_provider_id")
         if not isinstance(frozen_provider_id, str) or not frozen_provider_id:
             raise InvalidTransition(
@@ -2092,6 +2020,10 @@ def _merge_question_preparation_checkpoint_progress(
     """Keep persisted per-major counters authoritative across worker restarts."""
 
     merged = dict(snapshot)
+    if checkpoint.get("incremental_version") == 1:
+        merged["preparation_counts"] = dict(checkpoint.get("preparation_counts") or {})
+        merged["stage_sequence"] = []
+        return merged
     if "generation_question_ids" not in checkpoint:
         return merged
     generation_ids = list(checkpoint.get("generation_question_ids") or [])
@@ -2125,6 +2057,8 @@ def _rehydrate_question_preparation_inputs(operation):
     """Rebuild request-independent inputs from one frozen durable operation."""
 
     payload = dict(operation.payload or {})
+    if "manual_saved_sources" in payload or payload.get("question_preparation_version") != 2:
+        raise InvalidTransition("Saved-text AI recovery has been retired.", code="saved_text_recovery_retired")
     if (
         payload.get("contract_version") != 1
         or payload.get("owner_id") != operation.owner_id
@@ -2355,7 +2289,6 @@ def _rehydrate_question_preparation_inputs(operation):
         recognition_provider_id=recognition_provider_id,
         provider_configuration_fingerprint=frozen_provider_fingerprint,
         acknowledged_restart_from=payload.get("acknowledged_restart_from"),
-        manual_saved_sources=payload.get("manual_saved_sources"),
     )
     if expected_input_hash != operation.input_hash:
         raise _question_preparation_recovery_error(
@@ -2374,7 +2307,7 @@ def _rehydrate_question_preparation_inputs(operation):
     }
 
 
-async def _recognize_saved_question_sources(sources, *, operation, route, registry, reporter):
+async def _recognize_saved_question_sources(sources, *, operation, route, registry, reporter, allow_partial=False, on_pages=None):
     """Read owner-bound originals inside the existing progress worker.
 
     Frozen source inputs stay immutable, including their prepared-text hash.
@@ -2412,6 +2345,8 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
             retry_key=retry_key,
             acknowledge_pending_retry=bool((operation.payload or {}).get("acknowledged_restart_from")),
             timeout_profile=(operation.payload or {}).get("recognition_timeout_profile"),
+            allow_partial=allow_partial,
+            on_pages=on_pages,
         )
         if not result.text.strip():
             raise RecognitionError("ocr_empty_result")
@@ -2424,6 +2359,9 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
             role=draft.role, existing_material_id=draft.library_material_id,
         )
         updated = {**payload, "recognition": result.recognition, "saved_material": saved}
+        from backend.services.question_sources import recognition_has_failure
+        if recognition_has_failure(result.recognition):
+            updated["source_error"] = result.recognition.get("error_code") or "ocr_incomplete"
         resolved.append((draft.model_copy(update={
             "recognition": result.recognition,
             "recognition_requires_review": recognition_requires_confirmation(result.recognition),
@@ -2434,789 +2372,61 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
 
 
 async def run_durable_question_preparation(operation) -> None:
-    """Resume one fully published question-preparation operation under lease."""
+    """Prepare independently persisted units under the existing workflow lease."""
+    from backend.agents.incremental_question_preparation import IncrementalQuestionPreparation
 
     remove_reporter(operation.operation_id)
     reporter = get_or_create_reporter(operation.operation_id)
+    pipeline = None
     try:
         inputs = _rehydrate_question_preparation_inputs(operation)
-        sources = inputs["sources"]
         route = inputs["route"]
-        recognition_provider_id = inputs["recognition_provider_id"]
-        await reporter.configure_workflow(
-            "question_preparation",
-            QUESTION_PREPARATION_STAGE_SEQUENCE,
+
+        async def read_source(source, *, on_pages=None):
+            return (await _recognize_saved_question_sources(
+                [source], operation=operation, route=route,
+                registry=inputs["registry"], reporter=reporter, allow_partial=True, on_pages=on_pages,
+            ))[0]
+
+        pipeline = IncrementalQuestionPreparation(
+            operation=operation, sources=list(inputs["sources"]), provider=route.provider,
+            provider_id=inputs["recognition_provider_id"], reporter=reporter,
+            score_policy=inputs["score_policy"], read_source=read_source,
+            generation_language=inputs["generation_language"], ocr_only=route.is_baidu_ocr,
         )
-        await reporter.set_phase("parsing")
-        await operation.update_progress(
-            (await reporter.snapshot()).model_dump(mode="json")
-        )
-
-        if (operation.payload or {}).get("manual_saved_sources"):
-            from backend.services.question_preparation_manual import restore_saved_question_sources
-            sources = await run_in_threadpool(restore_saved_question_sources, operation, sources)
-        else:
-            sources = await _recognize_saved_question_sources(
-                sources, operation=operation, route=route, registry=inputs["registry"], reporter=reporter,
-            )
-
-        payload = dict(operation.payload or {})
-        artifact_context = {
-            "owner_id": operation.owner_id,
-            "task_id": operation.assignment_id,
-            "operation_id": operation.operation_id,
-            "attempt": operation.attempt,
-            "input_hash": operation.input_hash,
-            "provider_record_id": recognition_provider_id,
-        }
-        # Explicit retries may select another model. Carry only verified
-        # completed units; preserve their original operation as audit evidence.
-        if payload.get("retry_origin_id") and not operation.checkpoint_data.get("retry_origin_copied"):
-            origin = workflow_repository.get_operation(payload["retry_origin_id"], owner_id=operation.owner_id)
-            old_payload, old_checkpoint = origin.payload or {}, origin.checkpoint or {}
-            if (origin.assignment_id != operation.assignment_id or origin.operation_type != "question_preparation"
-                    or origin.status != "error" or any(old_payload.get(key) != payload.get(key)
-                        for key in ("source_content_hashes", "source_text_hashes", "source_refs", "score_policy", "generation_policy", "generation_language"))):
-                raise _question_preparation_recovery_error("Retry sources changed.")
-            copied = {}
-            refs = []
-            old_attempts = old_checkpoint.get("artifact_attempts") or {}
-
-            def previous_context(artifact_id):
-                if artifact_id not in origin.artifact_refs:
-                    raise _question_preparation_recovery_error("Retry artifact is not owned by the original operation.")
-                return dict(owner_id=origin.owner_id, task_id=origin.assignment_id, operation_id=origin.id,
-                    attempt=old_attempts.get(artifact_id, origin.attempt), input_hash=origin.input_hash,
-                    provider_record_id=old_payload["recognition_provider_id"])
-
-            for stage, field in ((QUESTIONS_EXTRACTED_STAGE, "questions_extracted_artifact_id"),
-                                 (UPLOADED_MATERIALS_ALIGNED_STAGE, "aligned_base_artifact_id")):
-                artifact_id = old_checkpoint.get(field)
-                if artifact_id:
-                    envelope = read_base_preparation_artifact(artifact_id, stage=stage, **previous_context(artifact_id))
-                    if envelope is None:
-                        raise _question_preparation_recovery_error("Retry base artifact is unavailable.")
-                    stored = save_base_preparation_artifact(**artifact_context, stage=stage,
-                        problem_data=envelope.payload.problem_data, issues=envelope.payload.issues,
-                        operation_lease_token=operation.lease_token)
-                    copied[field] = stored.id
-                    refs.append(stored.id)
-            question_artifacts = {}
-            for q_id, artifact_id in (old_checkpoint.get("question_artifact_ids") or {}).items():
-                order = list(old_checkpoint.get("question_ids") or []).index(q_id)
-                envelope = read_question_candidate_artifact(artifact_id, q_id=q_id, question_order=order, **previous_context(artifact_id))
-                if envelope is None:
-                    raise _question_preparation_recovery_error("Retry question artifact is unavailable.")
-                stored = save_question_candidate_artifact(**artifact_context, q_id=q_id, question_order=order,
-                    candidates=envelope.payload.candidates, operation_lease_token=operation.lease_token)
-                question_artifacts[q_id] = stored.id
-                refs.append(stored.id)
-            await operation.checkpoint(stage="sources_validated", checkpoint={**operation.checkpoint_data, **copied,
-                **({"manual_extraction_chunks": old_checkpoint["manual_extraction_chunks"]}
-                   if old_checkpoint.get("manual_extraction_chunks") else {}),
-                "question_artifact_ids": question_artifacts, "completed_question_ids": list(question_artifacts),
-                "retry_origin_copied": origin.id}, artifact_refs=list(dict.fromkeys([*operation.artifact_refs, *refs])))
-        retry_contract = operation.checkpoint_data.get("retry_frozen_contract")
-        raw_artifact_attempts = operation.checkpoint_data.get(
-            "artifact_attempts"
-        ) or {}
-        if not isinstance(raw_artifact_attempts, dict):
-            raise _question_preparation_recovery_error(
-                "The question-preparation artifact lineage is invalid."
-            )
-        artifact_attempts: dict[str, int] = {}
-        for artifact_id, attempt in raw_artifact_attempts.items():
-            if (
-                not isinstance(artifact_id, str)
-                or artifact_id not in operation.artifact_refs
-                or isinstance(attempt, bool)
-                or not isinstance(attempt, int)
-                or not 1 <= attempt <= operation.attempt
-            ):
-                raise _question_preparation_recovery_error(
-                    "The question-preparation artifact lineage is invalid."
-                )
-            artifact_attempts[artifact_id] = attempt
-        if operation.attempt > 1:
-            expected_retry_contract = {
-                "contract_version": 1,
-                "operation_id": operation.operation_id,
-                "from_attempt": operation.attempt - 1,
-                "to_attempt": operation.attempt,
-                "input_hash": operation.input_hash,
-                "provider_record_id": recognition_provider_id,
-                "source_content_hashes": payload["source_content_hashes"],
-                "source_text_hashes": payload["source_text_hashes"],
-            }
-            if retry_contract != expected_retry_contract:
-                raise _question_preparation_recovery_error(
-                    "The question-preparation retry artifact contract is invalid."
-                )
-        elif retry_contract is not None:
-            raise _question_preparation_recovery_error(
-                "The question-preparation retry artifact contract is invalid."
-            )
-
-        def _artifact_context_for(artifact_id: object) -> dict[str, Any]:
-            stable_id = str(artifact_id or "")
-            return {
-                **artifact_context,
-                "attempt": artifact_attempts.get(
-                    stable_id,
-                    operation.attempt,
-                ),
-            }
-
-        def _record_artifact_attempt(
-            *artifact_ids: str,
-        ) -> dict[str, int]:
-            updated = dict(artifact_attempts)
-            for artifact_id in artifact_ids:
-                updated[artifact_id] = operation.attempt
-            artifact_attempts.clear()
-            artifact_attempts.update(updated)
-            return updated
-
-        checkpoint_lock = asyncio.Lock()
-
-        def _checkpoint_payload(stage: str, **changes: Any) -> dict[str, Any]:
-            checkpoint = dict(operation.checkpoint_data or {})
-            checkpoint.update({
-                "contract_version": 1,
-                "operation_id": operation.operation_id,
-                "attempt": operation.attempt,
-                "stage": stage,
-                "base_workflow_revision": payload["base_workflow_revision"],
-                "claimed_workflow_revision": payload[
-                    "claimed_workflow_revision"
-                ],
-                "provider_record_id": recognition_provider_id,
-                "source_content_hashes": payload["source_content_hashes"],
-                "source_text_hashes": payload["source_text_hashes"],
-                "updated_at": time.time(),
-            })
-            checkpoint.update(changes)
-            return checkpoint
-
-        async def _write_checkpoint(
-            stage: str,
-            *,
-            artifact_refs: Sequence[str] | None = None,
-            **changes: Any,
-        ) -> dict[str, Any]:
-            checkpoint = _checkpoint_payload(stage, **changes)
-            refs = list(dict.fromkeys(
-                list(operation.artifact_refs)
-                + list(artifact_refs or [])
-            ))
-            await operation.checkpoint(
-                stage=stage,
-                checkpoint=checkpoint,
-                artifact_refs=refs,
-            )
-            snapshot = (await reporter.snapshot()).model_dump(mode="json")
-            snapshot = _merge_question_preparation_checkpoint_progress(
-                snapshot,
-                checkpoint,
-            )
-            await operation.update_progress(snapshot)
-            return checkpoint
-
-        def _read_or_find_base(stage: str, checkpoint_field: str):
-            artifact_id = operation.checkpoint_data.get(checkpoint_field)
-            if artifact_id is not None:
-                envelope = read_base_preparation_artifact(
-                    artifact_id,
-                    stage=stage,
-                    **_artifact_context_for(artifact_id),
-                )
-                if envelope is None:
-                    raise _question_preparation_recovery_error(
-                        "A required base artifact is unavailable.",
-                        code="question_preparation_artifact_invalid",
-                    )
-                return str(artifact_id), envelope
-            stored = find_base_preparation_artifact(
-                stage=stage,
-                **artifact_context,
-            )
-            if stored is None:
-                return None, None
-            envelope = read_base_preparation_artifact(
-                stored.id,
-                stage=stage,
-                **artifact_context,
-            )
-            return stored.id, envelope
-
-        final_artifact_id = operation.checkpoint_data.get("final_artifact_id")
-        final_envelope = None
-        if final_artifact_id is not None:
-            final_envelope = read_final_question_packages_artifact(
-                final_artifact_id,
-                **_artifact_context_for(final_artifact_id),
-            )
-        else:
-            final_artifact = find_final_question_packages_artifact(
-                **artifact_context
-            )
-            if final_artifact is not None:
-                final_artifact_id = final_artifact.id
-                final_envelope = read_final_question_packages_artifact(
-                    final_artifact.id,
-                    **artifact_context,
-                )
-        if final_artifact_id is not None and final_envelope is None:
-            raise _question_preparation_recovery_error(
-                "The final question-package artifact is invalid.",
-                code="question_preparation_artifact_invalid",
-            )
-        if final_envelope is not None:
-            packages = final_envelope.payload.problem_data
-            async with checkpoint_lock:
-                await _write_checkpoint(
-                    "question_packages_prepared",
-                    artifact_refs=[str(final_artifact_id)],
-                    artifact_attempts=artifact_attempts,
-                    question_ids=list(packages),
-                    completed_question_ids=list(
-                        operation.checkpoint_data.get(
-                            "completed_question_ids"
-                        )
-                        or []
-                    ),
-                    failed_question_ids=[],
-                    provider_inflight_question_ids=[],
-                    base_provider_inflight_stage=None,
-                    final_artifact_id=final_artifact_id,
-                )
-            await _run_question_preparation(
-                task_id=operation.assignment_id,
-                owner_id=operation.owner_id,
-                job_id=operation.operation_id,
-                job_attempt=operation.attempt,
-                sources=sources,
-                provider=route.provider,
-                claimed_workflow_revision=inputs[
-                    "claimed_workflow_revision"
-                ],
-                replace_confirmed=inputs["replace_confirmed"],
-                score_policy=inputs["score_policy"],
-                generation_language=inputs["generation_language"],
-                recognition_provider_id=recognition_provider_id,
-                ocr_only=route.is_baidu_ocr,
-                durable_operation=operation,
-                prebuilt_packages=packages,
-            )
-            return
-
-        extracted_id, extracted_envelope = _read_or_find_base(
-            QUESTIONS_EXTRACTED_STAGE,
-            "questions_extracted_artifact_id",
-        )
-        aligned_id, aligned_envelope = _read_or_find_base(
-            UPLOADED_MATERIALS_ALIGNED_STAGE,
-            "aligned_base_artifact_id",
-        )
-        inflight_base_stage = operation.checkpoint_data.get(
-            "base_provider_inflight_stage"
-        )
-        recovered_base_stages = {
-            QUESTIONS_EXTRACTED_STAGE: extracted_envelope is not None and not operation.checkpoint_data.get("manual_extraction_chunks"),
-            UPLOADED_MATERIALS_ALIGNED_STAGE: aligned_envelope is not None,
-        }
-        if (
-            inflight_base_stage
-            and not recovered_base_stages.get(str(inflight_base_stage), False)
-        ):
-            raise RuntimeError("provider_submit_uncertain")
-
-        recovered_candidates: dict[
-            str, list[AICompletionCandidateOutput]
-        ] = {}
-        question_artifact_ids = dict(
-            operation.checkpoint_data.get("question_artifact_ids") or {}
-        )
-        completed_question_ids: list[str] = []
-        question_ids: list[str] = []
-        generation_question_ids: list[str] = []
-        if aligned_envelope is not None:
-            aligned_problem_data = aligned_envelope.payload.problem_data
-            question_ids = list(aligned_problem_data)
-            requested_targets = requested_major_question_materials(
-                aligned_problem_data
-            )
-            target_question_ids = {
-                str(target["q_id"]) for target in requested_targets
-            }
-            generation_question_ids = [
-                q_id for q_id in question_ids if q_id in target_question_ids
-            ]
-            unknown_artifact_ids = (
-                set(question_artifact_ids) - set(generation_question_ids)
-            )
-            if unknown_artifact_ids:
-                raise _question_preparation_recovery_error(
-                    "A question artifact references an unknown generation unit.",
-                    code="question_preparation_artifact_invalid",
-                )
-            for question_order, q_id in enumerate(question_ids):
-                if q_id not in target_question_ids:
-                    continue
-                artifact_id = question_artifact_ids.get(q_id)
-                if artifact_id is not None:
-                    envelope = read_question_candidate_artifact(
-                        artifact_id,
-                        q_id=q_id,
-                        question_order=question_order,
-                        **_artifact_context_for(artifact_id),
-                    )
-                    if envelope is None:
-                        raise _question_preparation_recovery_error(
-                            "A completed question artifact is unavailable.",
-                            code="question_preparation_artifact_invalid",
-                        )
-                else:
-                    stored = find_question_candidate_artifact(
-                        q_id=q_id,
-                        question_order=question_order,
-                        **artifact_context,
-                    )
-                    if stored is None:
-                        continue
-                    artifact_id = stored.id
-                    envelope = read_question_candidate_artifact(
-                        stored.id,
-                        q_id=q_id,
-                        question_order=question_order,
-                        **artifact_context,
-                    )
-                if envelope is None:
-                    raise _question_preparation_recovery_error(
-                        "A question artifact is invalid.",
-                        code="question_preparation_artifact_invalid",
-                    )
-                question_artifact_ids[q_id] = str(artifact_id)
-                completed_question_ids.append(q_id)
-                recovered_candidates[q_id] = [
-                    AICompletionCandidateOutput.model_validate(
-                        candidate.model_dump(mode="json")
-                    )
-                    for candidate in envelope.payload.candidates
-                ]
-
-            checkpoint_completed = set(
-                operation.checkpoint_data.get("completed_question_ids") or []
-            )
-            if checkpoint_completed - set(completed_question_ids):
-                raise _question_preparation_recovery_error(
-                    "A completed question has no verified artifact.",
-                    code="question_preparation_artifact_invalid",
-                )
-            checkpoint_failed = set(
-                operation.checkpoint_data.get("failed_question_ids") or []
-            )
-            if checkpoint_failed - set(generation_question_ids):
-                raise _question_preparation_recovery_error(
-                    "A failed question references an unknown generation unit."
-                )
-            if checkpoint_failed:
-                raise RuntimeError("ai_completion_failed")
-            checkpoint_inflight = set(
-                operation.checkpoint_data.get(
-                    "provider_inflight_question_ids"
-                )
-                or []
-            )
-            if checkpoint_inflight - set(generation_question_ids):
-                raise _question_preparation_recovery_error(
-                    "An in-flight question references an unknown generation unit."
-                )
-            if checkpoint_inflight - set(completed_question_ids):
-                raise RuntimeError("provider_submit_uncertain")
-
-        discovered_refs = [
-            str(artifact_id)
-            for artifact_id in (
-                extracted_id,
-                aligned_id,
-                *question_artifact_ids.values(),
-            )
-            if artifact_id
-        ]
-        async with checkpoint_lock:
-            await _write_checkpoint(
-                (
-                    "solution_units_generated"
-                    if completed_question_ids
-                    else (
-                        UPLOADED_MATERIALS_ALIGNED_STAGE
-                        if aligned_envelope is not None
-                        else (
-                            QUESTIONS_EXTRACTED_STAGE
-                            if extracted_envelope is not None
-                            else "sources_validated"
-                        )
-                    )
-                ),
-                artifact_refs=discovered_refs,
-                question_ids=question_ids,
-                generation_question_ids=generation_question_ids,
-                completed_question_ids=completed_question_ids,
-                failed_question_ids=[],
-                provider_inflight_question_ids=[],
-                question_error_codes={},
-                base_provider_inflight_stage=None,
-                questions_extracted_artifact_id=extracted_id,
-                aligned_base_artifact_id=aligned_id,
-                question_artifact_ids=question_artifact_ids,
-            )
-
-        question_order_by_id: dict[str, int] = {
-            q_id: index for index, q_id in enumerate(question_ids)
-        }
-
-        async def _on_extraction_started() -> None:
-            async with checkpoint_lock:
-                await _write_checkpoint(
-                    "questions_extracting",
-                    base_provider_inflight_stage=QUESTIONS_EXTRACTED_STAGE,
-                )
-
-        async def _on_questions_extracted(
-            problem_data: dict[str, dict[str, Any]],
-            *, completed_chunks: int | None = None,
-        ) -> None:
-            await operation.heartbeat()
-            if not problem_data and completed_chunks is not None:
-                async with checkpoint_lock:
-                    await _write_checkpoint(QUESTIONS_EXTRACTED_STAGE,
-                        manual_extraction_chunks=completed_chunks, base_provider_inflight_stage=None)
-                return
-            artifact = await run_in_threadpool(
-                save_base_preparation_artifact,
-                stage=QUESTIONS_EXTRACTED_STAGE,
-                problem_data=problem_data,
-                issues={},
-                operation_lease_token=operation.lease_token,
-                **artifact_context,
-            )
-            envelope = read_base_preparation_artifact(
-                artifact.id,
-                stage=QUESTIONS_EXTRACTED_STAGE,
-                **artifact_context,
-            )
-            if envelope is None:
-                raise _question_preparation_recovery_error(
-                    "The extracted-question artifact could not be verified.",
-                    code="question_preparation_artifact_invalid",
-                )
-            async with checkpoint_lock:
-                await _write_checkpoint(
-                    QUESTIONS_EXTRACTED_STAGE,
-                    artifact_refs=[artifact.id],
-                    artifact_attempts=_record_artifact_attempt(artifact.id),
-                    question_ids=list(envelope.payload.problem_data),
-                    base_provider_inflight_stage=None,
-                    questions_extracted_artifact_id=artifact.id,
-                    **({"manual_extraction_chunks": completed_chunks} if completed_chunks is not None else {}),
-                )
-
-        async def _on_base_alignment_started() -> None:
-            async with checkpoint_lock:
-                await _write_checkpoint(
-                    "uploaded_materials_aligning",
-                    base_provider_inflight_stage=(
-                        UPLOADED_MATERIALS_ALIGNED_STAGE
-                    ),
-                )
-
-        async def _on_base_failed(stage: str, exc: Exception) -> None:
-            uncertain = provider_submission_is_uncertain(exc)
-            async with checkpoint_lock:
-                changes: dict[str, Any] = {
-                    "base_error_code": (
-                        "provider_submit_uncertain"
-                        if uncertain
-                        else _question_preparation_failure_code(exc)
-                    )
-                }
-                if not uncertain:
-                    changes["base_provider_inflight_stage"] = None
-                await _write_checkpoint(f"{stage}_failed", **changes)
-
-        async def _on_base_prepared(
-            problem_data: dict[str, dict[str, Any]],
-            issues: dict[str, list[dict[str, Any]]],
-        ) -> None:
-            await operation.heartbeat()
-            artifact = await run_in_threadpool(
-                save_base_preparation_artifact,
-                stage=UPLOADED_MATERIALS_ALIGNED_STAGE,
-                problem_data=problem_data,
-                issues=issues,
-                operation_lease_token=operation.lease_token,
-                **artifact_context,
-            )
-            envelope = read_base_preparation_artifact(
-                artifact.id,
-                stage=UPLOADED_MATERIALS_ALIGNED_STAGE,
-                **artifact_context,
-            )
-            if envelope is None:
-                raise _question_preparation_recovery_error(
-                    "The aligned-question artifact could not be verified.",
-                    code="question_preparation_artifact_invalid",
-                )
-            aligned_questions = envelope.payload.problem_data
-            question_ids[:] = list(aligned_questions)
-            question_order_by_id.clear()
-            question_order_by_id.update({
-                q_id: index for index, q_id in enumerate(question_ids)
-            })
-            requested = requested_major_question_materials(aligned_questions)
-            target_ids = {str(target["q_id"]) for target in requested}
-            generation_question_ids[:] = [
-                q_id for q_id in question_ids if q_id in target_ids
-            ]
-            async with checkpoint_lock:
-                await _write_checkpoint(
-                    UPLOADED_MATERIALS_ALIGNED_STAGE,
-                    artifact_refs=[artifact.id],
-                    artifact_attempts=_record_artifact_attempt(artifact.id),
-                    question_ids=question_ids,
-                    generation_question_ids=generation_question_ids,
-                    completed_question_ids=[],
-                    failed_question_ids=[],
-                    provider_inflight_question_ids=[],
-                    question_error_codes={},
-                    base_provider_inflight_stage=None,
-                    aligned_base_artifact_id=artifact.id,
-                )
-
-        async def _on_question_started(q_id: str) -> None:
-            async with checkpoint_lock:
-                inflight = list(
-                    operation.checkpoint_data.get(
-                        "provider_inflight_question_ids"
-                    )
-                    or []
-                )
-                if q_id not in inflight:
-                    inflight.append(q_id)
-                inflight.sort(key=generation_question_ids.index)
-                await _write_checkpoint(
-                    "solution_unit_submitting",
-                    provider_inflight_question_ids=inflight,
-                )
-
-        async def _on_question_completed(
-            q_id: str,
-            candidates: list[AICompletionCandidateOutput],
-        ) -> None:
-            await operation.heartbeat()
-            question_order = question_order_by_id[q_id]
-            artifact = await run_in_threadpool(
-                save_question_candidate_artifact,
-                q_id=q_id,
-                question_order=question_order,
-                candidates=candidates,
-                operation_lease_token=operation.lease_token,
-                **artifact_context,
-            )
-            envelope = read_question_candidate_artifact(
-                artifact.id,
-                q_id=q_id,
-                question_order=question_order,
-                **artifact_context,
-            )
-            if envelope is None:
-                raise _question_preparation_recovery_error(
-                    "The major-question artifact could not be verified.",
-                    code="question_preparation_artifact_invalid",
-                )
-            async with checkpoint_lock:
-                inflight = [
-                    item
-                    for item in (
-                        operation.checkpoint_data.get(
-                            "provider_inflight_question_ids"
-                        )
-                        or []
-                    )
-                    if item != q_id
-                ]
-                completed = list(
-                    operation.checkpoint_data.get("completed_question_ids")
-                    or []
-                )
-                if q_id not in completed:
-                    completed.append(q_id)
-                completed.sort(key=generation_question_ids.index)
-                artifact_ids = dict(
-                    operation.checkpoint_data.get("question_artifact_ids")
-                    or {}
-                )
-                artifact_ids[q_id] = artifact.id
-                error_codes = dict(
-                    operation.checkpoint_data.get("question_error_codes")
-                    or {}
-                )
-                error_codes.pop(q_id, None)
-                await _write_checkpoint(
-                    "solution_units_generated",
-                    artifact_refs=[artifact.id],
-                    artifact_attempts=_record_artifact_attempt(artifact.id),
-                    provider_inflight_question_ids=inflight,
-                    completed_question_ids=completed,
-                    question_artifact_ids=artifact_ids,
-                    question_error_codes=error_codes,
-                )
-
-        async def _on_question_failed(q_id: str, exc: Exception) -> None:
-            code = _question_preparation_failure_code(exc)
-            uncertain = provider_submission_is_uncertain(exc)
-            async with checkpoint_lock:
-                changes: dict[str, Any] = {}
-                if not uncertain:
-                    changes["provider_inflight_question_ids"] = [
-                        item
-                        for item in (
-                            operation.checkpoint_data.get(
-                                "provider_inflight_question_ids"
-                            )
-                            or []
-                        )
-                        if item != q_id
-                    ]
-                    failed = list(
-                        operation.checkpoint_data.get("failed_question_ids")
-                        or []
-                    )
-                    if q_id not in failed:
-                        failed.append(q_id)
-                    failed.sort(key=generation_question_ids.index)
-                    changes["failed_question_ids"] = failed
-                error_codes = dict(
-                    operation.checkpoint_data.get("question_error_codes")
-                    or {}
-                )
-                error_codes[q_id] = (
-                    "provider_submit_uncertain" if uncertain else code
-                )
-                changes["question_error_codes"] = error_codes
-                await _write_checkpoint("solution_unit_failed", **changes)
-
-        async def _on_packages_prepared(
-            packages: dict[str, dict[str, Any]],
-        ) -> dict[str, dict[str, Any]]:
-            await operation.heartbeat()
-            artifact = await run_in_threadpool(
-                save_final_question_packages_artifact,
-                problem_data=packages,
-                operation_lease_token=operation.lease_token,
-                **artifact_context,
-            )
-            envelope = read_final_question_packages_artifact(
-                artifact.id,
-                **artifact_context,
-            )
-            if envelope is None:
-                raise _question_preparation_recovery_error(
-                    "The final question-package artifact could not be verified.",
-                    code="question_preparation_artifact_invalid",
-                )
-            async with checkpoint_lock:
-                await _write_checkpoint(
-                    "question_packages_prepared",
-                    artifact_refs=[artifact.id],
-                    artifact_attempts=_record_artifact_attempt(artifact.id),
-                    question_ids=list(envelope.payload.problem_data),
-                    provider_inflight_question_ids=[],
-                    base_provider_inflight_stage=None,
-                    final_artifact_id=artifact.id,
-                )
-            return envelope.payload.problem_data
-
+        await pipeline.copy_retry_units()
+        packages = await pipeline.run()
+        # Final publication remains one fenced transaction. Incremental drafts
+        # already exist independently if this transaction fails or loses its lease.
         await _run_question_preparation(
-            task_id=operation.assignment_id,
-            owner_id=operation.owner_id,
-            job_id=operation.operation_id,
-            job_attempt=operation.attempt,
-            sources=sources,
-            provider=route.provider,
+            task_id=operation.assignment_id, owner_id=operation.owner_id,
+            job_id=operation.operation_id, job_attempt=operation.attempt,
+            sources=pipeline.sources, provider=route.provider,
             claimed_workflow_revision=inputs["claimed_workflow_revision"],
-            replace_confirmed=inputs["replace_confirmed"],
-            score_policy=inputs["score_policy"],
+            replace_confirmed=inputs["replace_confirmed"], score_policy=inputs["score_policy"],
             generation_language=inputs["generation_language"],
-            recognition_provider_id=recognition_provider_id,
-            ocr_only=route.is_baidu_ocr,
-            durable_operation=operation,
-            recovered_extracted_problem_data=(
-                extracted_envelope.payload.problem_data
-                if extracted_envelope is not None
-                else None
-            ),
-            on_extraction_started=_on_extraction_started,
-            on_questions_extracted=_on_questions_extracted,
-            on_base_alignment_started=_on_base_alignment_started,
-            on_base_failed=_on_base_failed,
-            recovered_base_problem_data=(
-                aligned_envelope.payload.problem_data
-                if aligned_envelope is not None
-                else None
-            ),
-            recovered_base_issues=(
-                aligned_envelope.payload.issues
-                if aligned_envelope is not None
-                else None
-            ),
-            on_base_prepared=_on_base_prepared,
-            recovered_candidates_by_question=recovered_candidates,
-            completed_question_ids=completed_question_ids,
-            on_question_started=_on_question_started,
-            on_question_completed=_on_question_completed,
-            on_question_failed=_on_question_failed,
-            on_packages_prepared=_on_packages_prepared,
+            recognition_provider_id=inputs["recognition_provider_id"],
+            ocr_only=route.is_baidu_ocr, durable_operation=operation, prebuilt_packages=packages,
         )
     except LeaseLost:
         raise
     except Exception as exc:
         error_code = _question_preparation_failure_code(exc)
-        if (
-            operation.checkpoint_data.get("base_provider_inflight_stage")
-            or operation.checkpoint_data.get(
-                "provider_inflight_question_ids"
-            )
-        ):
+        if operation.checkpoint_data.get("incremental_inflight_units"):
             error_code = "provider_submit_uncertain"
-        logger.warning(
-            "Durable question preparation failed; job_id=%s error_code=%s "
-            "exception_type=%s",
-            operation.operation_id,
-            error_code,
-            type(exc).__name__,
-        )
+        logger.warning("Durable question preparation failed; job_id=%s error_code=%s exception_type=%s",
+                       operation.operation_id, error_code, type(exc).__name__)
         await reporter.set_error(error_code)
         snapshot = (await reporter.snapshot()).model_dump(mode="json")
         if isinstance(exc, RecognitionError) and exc.details:
             snapshot["recognition_failure"] = exc.details
-        snapshot = _merge_question_preparation_checkpoint_progress(
-            snapshot,
-            operation.checkpoint_data,
-        )
+        snapshot = _merge_question_preparation_checkpoint_progress(snapshot, operation.checkpoint_data)
         task_facade._fail_operation(
-            operation.assignment_id,
-            operation.owner_id,
-            operation.operation_id,
-            operation.attempt,
-            error_code,
-            expected_lease_token=operation.lease_token,
-            operation_progress=snapshot,
+            operation.assignment_id, operation.owner_id, operation.operation_id, operation.attempt,
+            error_code, expected_lease_token=operation.lease_token, operation_progress=snapshot,
         )
     finally:
         remove_reporter(operation.operation_id)
-
 
 async def _run_question_preparation(
     *, task_id: str, owner_id: str, job_id: str, job_attempt: int,
@@ -3264,19 +2474,14 @@ async def _run_question_preparation(
 ) -> None:
     reporter = get_or_create_reporter(job_id)
     try:
+        if durable_operation is not None and (
+                "manual_saved_sources" in durable_operation.payload or durable_operation.payload.get("question_preparation_version") != 2):
+            raise InvalidTransition("Saved-text AI recovery has been retired.", code="saved_text_recovery_retired")
         if prebuilt_packages is not None:
             packages = {
                 str(q_id): dict(problem)
                 for q_id, problem in prebuilt_packages.items()
             }
-        elif durable_operation is not None and durable_operation.payload.get("manual_saved_sources"):
-            from backend.services.question_preparation_manual import prepare_saved_question_packages
-            packages = await prepare_saved_question_packages(sources, provider=provider,
-                reporter=reporter, score_policy=score_policy, ocr_only=ocr_only,
-                recovered=recovered_extracted_problem_data, on_started=on_extraction_started,
-                on_extracted=on_questions_extracted, on_failed=on_base_failed,
-                completed_chunks=durable_operation.checkpoint_data.get("manual_extraction_chunks", 0),
-                chunk_settings=durable_operation.payload["manual_saved_sources"])
         elif ocr_only:
             packages = await prepare_ocr_question_packages(
                 [(draft, text) for draft, text, _payload in sources],
@@ -3312,9 +2517,11 @@ async def _run_question_preparation(
                 provider_submission_safe=(durable_operation is not None),
             )
         # Restored final artifacts must obey the same frozen teacher policy.
-        if not (durable_operation is not None and durable_operation.payload.get("manual_saved_sources")):
+        if not (durable_operation is not None and durable_operation.checkpoint_data.get("incremental_version") == 1):
             attach_recognition_review(packages, [payload for _draft, _text, payload in sources])
-            teacher_score_requirements(packages, score_policy, check_rubrics=True)
+        else:
+            attach_recognition_review(packages, [])
+        teacher_score_requirements(packages, score_policy, check_rubrics=True)
         if on_packages_prepared is not None:
             packages = await on_packages_prepared(packages)
         snapshot = (await reporter.snapshot()).model_dump(mode="json")
@@ -3323,12 +2530,13 @@ async def _run_question_preparation(
                 snapshot,
                 durable_operation.checkpoint_data,
             )
+        terminal_steps = 0 if durable_operation is not None and durable_operation.checkpoint_data.get("incremental_version") == 1 else 8
         terminal_snapshot = {
             **snapshot,
             "phase": "done",
             "current_step": "committing_question_packages",
-            "total_steps": 8,
-            "completed_steps": 8,
+            "total_steps": terminal_steps,
+            "completed_steps": terminal_steps,
         }
         operation_checkpoint = dict(
             durable_operation.checkpoint_data
@@ -3375,8 +2583,8 @@ async def _run_question_preparation(
         )
         await reporter.set_stage_progress(
             "committing_question_packages",
-            total_steps=8,
-            completed_steps=8,
+            total_steps=terminal_steps,
+            completed_steps=terminal_steps,
             message="Question packages committed.",
         )
         await reporter.set_phase("done")

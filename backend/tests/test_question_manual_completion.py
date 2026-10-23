@@ -8,17 +8,17 @@ from backend.db.session import session_scope
 from backend.domain.errors import ValidationError
 from backend.services import task_facade
 from backend.tests.test_question_preparation_recovery import (
-    _RecoveryRegistry, _claim, _fake_preparer, _queue_question_preparation, _seed_task,
+    _RecoveryRegistry, _claim, _install_incremental_preparer, _queue_question_preparation, _seed_task,
 )
 
 
-async def failed_preparation(monkeypatch, failed_question="q2"):
+async def failed_preparation(monkeypatch, failed_question="q2", failure_questions=None):
     owner, task = _seed_task()
     _, response, _ = await _queue_question_preparation(owner, task, source_text="1. First.\n2. Second.")
     calls = []
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _RecoveryRegistry())
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls,
-        question_count=2, known_failure_question=failed_question, record_base_provider_calls=True))
+    _install_incremental_preparer(monkeypatch, calls,
+        question_count=2, known_failure_question=failed_question, failure_questions=failure_questions, record_base_provider_calls=True)
     await task_preparation.run_durable_question_preparation(_claim(owner, response["job_id"], "manual-test"))
     workflow = workflow_repository.get_workflow(task, owner_id=owner)
     return owner, task, response["job_id"], workflow.workflow_revision, calls
@@ -39,6 +39,19 @@ async def manual(owner, task, job, revision):
     return result
 
 
+@pytest.mark.parametrize("policy,maximum,source", [
+    ({"mode": "uniform", "uniform_max_score": 7}, 7, "uniform"),
+    ({"mode": "per_question", "per_question_text": "第1题：8分"}, 8, "per_question_text"),
+    ({"mode": "default_10"}, 10, "default_10"),
+])
+def test_empty_manual_rows_keep_frozen_teacher_score_policy(policy, maximum, source):
+    from backend.services.question_preparation_manual import blank_manual_question_packages
+    operation = SimpleNamespace(payload={"score_policy": policy}, error_code="operation_cancelled")
+    saved = blank_manual_question_packages(operation, 1)["manual-1"]
+    assert saved["max_score"] == maximum and saved["max_score_source"] == source
+    assert saved["type"] == "" and saved["stem"] == "" and saved["criterion"] == ""
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stopped_after", [None, "q1", "q2"])
 async def test_paused_question_handoff_keeps_completed_questions_and_sources(monkeypatch, stopped_after):
@@ -49,8 +62,8 @@ async def test_paused_question_handoff_keeps_completed_questions_and_sources(mon
     calls = []
     if stopped_after:
         monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: _RecoveryRegistry())
-        monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls,
-            question_count=2, cancel_after_question=stopped_after, record_base_provider_calls=True))
+        _install_incremental_preparer(monkeypatch, calls,
+            question_count=2, cancel_after_question=stopped_after, record_base_provider_calls=True)
         with pytest.raises(asyncio.CancelledError):
             await task_preparation.run_durable_question_preparation(_claim(owner, queued["job_id"], "stopped-manual"))
     workflow = workflow_repository.get_workflow(task, owner_id=owner)
@@ -81,6 +94,7 @@ async def test_paused_question_handoff_keeps_completed_questions_and_sources(mon
         assert result["first_question_id"] == "manual-1"
         questions = assignment_repository.list_questions(task, teacher_id=owner)
         assert len(questions) == 2 and all(not q.stem and not q.criterion for q in questions)
+        assert all(q.type == "" for q in questions)
         assert "question_manual_completion_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
         # A new count cannot replace rows already being edited, even with a current revision.
         duplicate = await task_preparation.manually_complete_question_preparation(task, queued["job_id"],
@@ -179,7 +193,7 @@ async def test_manual_completion_rejects_stale_foreign_or_unverified_results(mon
         operation = workflow_repository.get_operation(job, owner_id=owner)
         with session_scope() as session:
             record = session.get(workflow_repository.WorkflowOperationRecord, job)
-            record.checkpoint = {**operation.checkpoint, "aligned_base_artifact_id": "unverified-artifact"}
+            record.checkpoint = {**operation.checkpoint, "questions_extracted_artifact_id": "unverified-artifact"}
     else:
         workflow_repository.update_workflow(task, owner_id=owner, last_failed_job_id=None)
     response = await manual(actor, task, job, revision)
@@ -190,7 +204,7 @@ async def test_manual_completion_rejects_stale_foreign_or_unverified_results(mon
 
 @pytest.mark.asyncio
 async def test_all_question_units_failed_can_enter_manual_review(monkeypatch):
-    owner, task, job, revision, calls = await failed_preparation(monkeypatch, failed_question="q1")
+    owner, task, job, revision, calls = await failed_preparation(monkeypatch, failure_questions=["q1", "q2"])
     before_calls = list(calls)
     result = await manual(owner, task, job, revision)
     assert result["status"] == "ready_for_review" and calls == before_calls

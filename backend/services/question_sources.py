@@ -157,7 +157,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                                route: StageProviderRoute, registry, stored_file_id=None,
                                extraction_hint="", options=None, purpose="problems", reporter=None, text_reader=None,
                                allow_vision=None, binding=None, retry_key=None, acknowledge_pending_retry=False,
-                               timeout_profile=None):
+                               timeout_profile=None, allow_partial=False, on_pages=None):
     from backend.services.source_files import persist_problem_source
 
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
@@ -169,7 +169,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         text = await (text_reader or extract_text_from_upload)(content, filename, purpose=purpose, reporter=reporter)
         return QuestionSourceRead(text, stored_file_id=stored_file_id)
     total_pages = None
-    if media_type == "application/pdf" and purpose == "problems":
+    if media_type == "application/pdf":
         index = await read_pdf_evidence(content, PdfIndexRequest(window_pages=1), progress=reporter)
         total_pages = index.total_pages
         if scope.pages and max(scope.pages) > index.total_pages:
@@ -216,7 +216,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                 service=service, request=native_request, content=content, engine=None,
                 total_pages=total_pages, reporter=reporter, binding=binding, allow_native_partial=True,
                 retry_key=retry_key, acknowledge_pending_retry=acknowledge_pending_retry,
-                timeout_profile=timeout_profile,
+                timeout_profile=timeout_profile, allow_partial=allow_partial, on_pages=on_pages,
             )
             return QuestionSourceRead(text, summary, stored_file_id)
 
@@ -228,9 +228,11 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                     service=service, request=request, content=content, engine=engine,
                     total_pages=total_pages, reporter=reporter, binding=binding, retry_key=retry_key,
                     acknowledge_pending_retry=acknowledge_pending_retry,
-                    timeout_profile=timeout_profile,
+                    timeout_profile=timeout_profile, allow_partial=allow_partial, on_pages=on_pages,
                 )
             except RecognitionError as exc:
+                if not allow_vision and exc.code == "visual_capability_unavailable":
+                    raise RecognitionError("material_ocr_confirmation_required", **(exc.details or {})) from None
                 if exc.code != "provider_vision_not_supported" or not allow_vision or engine is None:
                     raise
                 # An actual image rejection says nothing about native PDF text.
@@ -262,7 +264,14 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     # page artifacts for recovery, but never let missing source evidence become
     # an apparently unanswered question in the structure parser.
     coverage = document.coverage
-    if coverage.failed_pages or coverage.unprocessed_pages or coverage.missing_targets:
+    if on_pages is not None:
+        ready = [dict(page_number=page.page_number,
+            text="\n".join(span.final_text for span in page.spans if span.final_text))
+            for page in document.pages if page.page_number in coverage.processed_pages]
+        if ready:
+            await on_pages(ready)
+    incomplete = bool(coverage.failed_pages or coverage.unprocessed_pages or coverage.missing_targets)
+    if incomplete and not (allow_partial and text.strip()):
         raise RecognitionError(
             run.safe_error_code or assembly.safe_error_code or "question_source_incomplete",
             failed_pages=sorted(set(coverage.failed_pages) | set(coverage.unprocessed_pages)),
@@ -278,10 +287,11 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         failure_code = image_quality_failure(failure_code, document)
         raise RecognitionError(failure_code)
     summary = dict(
-        schema_version=1, operation_id=run.operation_id, status=run.status,
+        schema_version=1, operation_id=run.operation_id, status="failed" if incomplete else run.status,
         artifact_ids=list(run.artifact_ids), coverage=document.coverage.model_dump(mode="json"),
         confidence=document.confidence, warning_codes=document.warning_codes,
-        confidence_reasons=document.confidence_reasons, error_code=run.safe_error_code,
+        confidence_reasons=document.confidence_reasons,
+        error_code=(run.safe_error_code or assembly.safe_error_code or "question_source_incomplete") if incomplete else run.safe_error_code,
         page_diagnostics=recognition_page_diagnostics(assembly),
         usage=run.current_usage.model_dump(mode="json"), operation_usage=run.operation_usage.model_dump(mode="json"),
         requires_review=True,

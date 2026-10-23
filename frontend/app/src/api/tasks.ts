@@ -229,7 +229,7 @@ export function retryQuestionPreparation(input: {
 export function manuallyCompleteQuestionPreparation(input: {
   taskId: string; jobId: string; expectedWorkflowRevision: number;
   questionCount?: number;
-}): Promise<{ status: "ready_for_review" | "started" | "already_running"; task_id: string; workflow_revision: number; first_question_id?: string | null }> {
+}): Promise<{ status: "ready_for_review"; task_id: string; workflow_revision: number; first_question_id?: string | null }> {
   return postJSON(`/tasks/${encodeURIComponent(input.taskId)}/question-preparation/${encodeURIComponent(input.jobId)}/manual-review`,
     { expected_workflow_revision: input.expectedWorkflowRevision,
       ...(input.questionCount !== undefined ? { question_count: input.questionCount } : {}) });

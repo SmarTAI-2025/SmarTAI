@@ -13,7 +13,7 @@ from backend.tests.test_grading_source_readiness import _seed_legacy_structured_
 from backend.tests.test_task_stage_contract import _client
 from backend.tests.test_task_background_workflows import _seed_task, _BackgroundTasks
 from backend.tests.test_question_material_format_repair import Provider, valid
-from backend.tests.test_question_preparation_recovery import _queue_question_preparation, _RecoveryRegistry, _claim, _fake_preparer
+from backend.tests.test_question_preparation_recovery import _queue_question_preparation, _RecoveryRegistry, _claim, _install_incremental_preparer
 
 
 @pytest.mark.parametrize("language,opposite", [("en", "zh"), ("zh", "en")])
@@ -63,13 +63,10 @@ async def test_language_is_frozen_in_worker_retry_and_restored_input(monkeypatch
     owner, task_id = _seed_task()
     _, queued, _ = await _queue_question_preparation(owner, task_id, generation_language="en")
     calls = []
-    fake = _fake_preparer(calls, question_count=1, known_failure_question="q1")
     languages = []
-    async def prepare(*args, **kwargs):
-        languages.append(kwargs["generation_language"])
-        return await fake(*args, **kwargs)
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _RecoveryRegistry())
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", prepare)
+    _install_incremental_preparer(monkeypatch, calls, question_count=1,
+        known_failure_question="q1", generation_languages=languages)
     await task_preparation.run_durable_question_preparation(_claim(owner, queued["job_id"], "language-test"))
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner)
     assert languages == ["en"]

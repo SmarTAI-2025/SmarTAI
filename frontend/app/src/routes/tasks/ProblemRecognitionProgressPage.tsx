@@ -15,6 +15,7 @@ import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { TaskExecutionControls } from "@/components/tasks/TaskExecutionControls";
 import { TaskPausedState } from "@/components/tasks/TaskPausedState";
+import { ManualHandoffState } from "@/components/tasks/ManualHandoffState";
 import { RecognitionActivity, RecognitionRequestStatus } from "@/components/tasks/RecognitionActivity";
 import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
@@ -22,7 +23,7 @@ import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
-import { manualReviewDestination } from "@/lib/taskFlow";
+import { getTaskDestination, manualReviewDestination } from "@/lib/taskFlow";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import type { JobProgress, TaskStatus } from "@/types";
 
@@ -69,6 +70,10 @@ export function ProblemRecognitionProgressPage() {
 
   if (taskId && status === "draft" && !taskQuery.isFetching && !progressQuery.isFetching) {
     return <Navigate to={`/tasks/${taskId}/upload/problems`} replace />;
+  }
+
+  if (taskState && status === "finalized") {
+    return <Navigate to={getTaskDestination(taskState)} replace />;
   }
 
   if (taskId && status && QUESTION_WORKSPACE_STATUSES.has(status) && !openingManual) {
@@ -137,10 +142,10 @@ export function ProblemRecognitionProgressPage() {
       info.actionKind = "retry";
     }
     const canRetryPreparedSources = Boolean(
-      failedJobId && recognitionProviderId && taskState,
+      !info.retryUnavailable && failedJobId && recognitionProviderId && taskState,
     );
     const retryPreparedSources = async () => {
-      if (retrying.current || retryPreparation.isPending) return;
+      if (info.retryUnavailable || retrying.current || retryPreparation.isPending) return;
       if (!taskId || !failedJobId || !recognitionProviderId || !taskState) return;
       if (submissionUncertain && acknowledgedJobId !== failedJobId) return;
       setRetryFailure(null);
@@ -164,7 +169,7 @@ export function ProblemRecognitionProgressPage() {
     return (
       <ProgressPageFrame title={t("problemProgressTitle")} returnState={{ imageRecoveryModel: recognitionProviderId }}>
         <div className="grid grid-cols-1 gap-4">
-          {failedJobId ? (
+          {failedJobId && !info.retryUnavailable ? (
             <StageProviderSelect
               id="question-retry-provider"
               label={locale === "zh-CN" ? "题目识别模型" : "Question recognition model"}
@@ -173,11 +178,12 @@ export function ProblemRecognitionProgressPage() {
                 : "Your source materials are preserved. Choose a model and retry without uploading again."}
               experts={enabledExperts}
               value={recognitionProviderId}
-              disabled={retryPreparation.isPending || expertsQuery.isLoading}
+              disabled={openingManual || retryPreparation.isPending || expertsQuery.isLoading}
               locale={locale}
               onChange={(id) => { setProviderChoice({ jobId: failedJobId, id }); setRetryFailure(null); }}
             />
           ) : null}
+          <SavedPreparationCounts progress={progressQuery.progress} locale={locale} />
           <RecognitionActivity progress={progressQuery.progress} locale={locale} incomplete={!paused} />
           {!paused && <QuestionGenerationFailureSummary
             progress={progressQuery.progress}
@@ -191,10 +197,11 @@ export function ProblemRecognitionProgressPage() {
               {locale === "zh-CN" ? "我了解可能再次计费，确认重试未完成的题目" : "I understand possible additional charges and confirm retrying incomplete questions"}
             </label>
           ) : null}
-          {paused && !retryFailure ? <TaskPausedState status="problems_paused"
+          {openingManual ? <ManualHandoffState stage="questions" locale={locale} /> : null}
+          {paused && !retryFailure && !info.retryUnavailable ? <TaskPausedState status="problems_paused"
             onContinue={() => void retryPreparedSources()} onManual={failedJobId ? () => void openManualReview() : undefined}
             busy={isRefreshing || retryPreparation.isPending || manualPreparation.isPending || openingManual}
-            disabled={!canRetryPreparedSources} /> : <RecoverableActionState
+            manualBusy={openingManual} disabled={!canRetryPreparedSources} /> : <RecoverableActionState
             info={info}
             locale={locale}
             usageContext={{ providerIds: [recognitionProviderId], providers: expertsQuery.data ?? [] }}
@@ -202,18 +209,18 @@ export function ProblemRecognitionProgressPage() {
             workflowRecovery={{
               retry: { onClick: () => void retryPreparedSources(),
                 busy: isRefreshing || retryPreparation.isPending,
-                disabled: !canRetryPreparedSources || (submissionUncertain && acknowledgedJobId !== failedJobId) },
+                disabled: openingManual || !canRetryPreparedSources || (submissionUncertain && acknowledgedJobId !== failedJobId) },
               configurationHref: `/tasks/${taskId}/upload/problems`,
               configurationState: { imageRecoveryModel: recognitionProviderId },
             }}
             additionalActions={[
-              ...(failedJobId ? [{
-                label: locale === "zh-CN" ? "人工继续处理" : "Continue manually",
-                busy: manualPreparation.isPending,
+              ...(failedJobId && !info.retryUnavailable ? [{
+                label: openingManual ? (locale === "zh-CN" ? "正在打开…" : "Opening…") : (locale === "zh-CN" ? "人工继续处理" : "Continue manually"),
+                busy: openingManual || manualPreparation.isPending,
                 disabled: retryPreparation.isPending || openingManual,
                 onClick: openManualReview,
               }] : []),
-              { label: t("problemProgressRefresh"), onClick: () => void refresh(), busy: isRefreshing || retryPreparation.isPending },
+              { label: t("problemProgressRefresh"), onClick: () => void refresh(), busy: isRefreshing || retryPreparation.isPending, disabled: openingManual },
             ]}
           />}
         </div>
@@ -310,14 +317,13 @@ export function ProblemRecognitionProgressPage() {
             {activeStageLabel}
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            {progressQuery.data?.recovering_saved_text
-              ? (locale === "zh-CN" ? "正在整理已保存的识别文字，完成后自动进入复核。" : "Organizing saved recognition text. Review will open when ready.")
-              : queued ? queuedDescription : t("problemProgressBackgroundDescription")}
+            {queued ? queuedDescription : t("problemProgressBackgroundDescription")}
           </p>
           </div>
           <SmarTAIMascot variant="thinking" size="md" className="hidden sm:inline-flex" />
         </div>
 
+        <SavedPreparationCounts progress={progress} locale={locale} />
         <div className="mt-6 flex items-center gap-3">
           <div
             className="relative h-2 flex-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"
@@ -366,8 +372,8 @@ export function ProblemRecognitionProgressPage() {
 
         {!queued && <RecognitionRequestStatus progress={progress} locale={locale} stale={progressQuery.isError} />}
 
-        <div className="mt-8 grid min-h-0 flex-1 gap-6 md:grid-cols-[210px_minmax(0,1fr)] md:gap-16">
-          <ol className="grid content-start gap-3" aria-label={t("problemProgressStepsLabel")}>
+        <div className={cn("mt-8 grid min-h-0 flex-1 gap-6", steps.length > 0 && "md:grid-cols-[210px_minmax(0,1fr)] md:gap-16")}>
+          {steps.length > 0 ? <ol className="grid content-start gap-3" aria-label={t("problemProgressStepsLabel")}>
             {steps.map((step) => (
               <RecognitionStepItem
                 key={step.code}
@@ -375,7 +381,7 @@ export function ProblemRecognitionProgressPage() {
                 label={getStageLabel(step, locale, t)}
               />
             ))}
-          </ol>
+          </ol> : null}
 
           <div className="relative min-h-64 min-w-0 md:min-h-0"><RecognitionActivity progress={progress} locale={locale} fill /></div>
         </div>
@@ -562,23 +568,13 @@ function RecoveryState({
   );
 }
 
-const UNIFIED_STAGE_SEQUENCE = [
-  "validating_sources",
-  "extracting_questions",
-  "aligning_uploaded_materials",
-  "generating_solutions",
-  "aligning_rubrics",
-  "preparing_programming_tests",
-  "detecting_conflicts",
-  "committing_question_packages",
-];
-
-const LEGACY_STAGE_SEQUENCE = [
-  "source_prepared",
-  "calling_recognition",
-  "organizing_structure",
-  "completed",
-];
+function SavedPreparationCounts({ progress, locale }: { progress: JobProgress | null; locale: Locale }) {
+  const counts = progress?.preparation_counts;
+  if (!counts) return null;
+  return <p role="status" className="mt-4 rounded-lg bg-muted/50 px-4 py-3 text-sm text-muted-foreground">{locale === "zh-CN"
+    ? `已保存：题干 ${counts.stems} · 标答 ${counts.reference_answers} · 评分标准 ${counts.rubrics}`
+    : `Saved: question text ${counts.stems} · Reference answers ${counts.reference_answers} · Rubrics ${counts.rubrics}`}</p>;
+}
 
 const STAGE_LABEL_KEYS: Record<string, MessageKey> = {
   validating_sources: "problemProgressStepValidateSources",
@@ -614,16 +610,14 @@ const STAGE_LABEL_KEYS: Record<string, MessageKey> = {
 };
 
 function getRecognitionSteps(progress: JobProgress | null): RecognitionStep[] {
-  const backendSequence = (progress?.stage_sequence ?? []).filter(Boolean);
+  const backendSequence = progress?.stage_sequence?.filter(Boolean);
   const currentStep = progress?.current_step ?? null;
-  const sequence = backendSequence.length
-    ? backendSequence
-    : currentStep && LEGACY_STAGE_SEQUENCE.includes(currentStep)
-      ? LEGACY_STAGE_SEQUENCE
-      : UNIFIED_STAGE_SEQUENCE;
+  // An empty sequence is intentional. Older snapshots can show their current
+  // recorded step, but must not invent planned work or mark unrelated steps done.
+  const sequence = backendSequence ?? (currentStep ? [currentStep] : []);
   const completed = Math.max(
     0,
-    Math.min(sequence.length, progress?.completed_steps ?? 0),
+    Math.min(sequence.length, backendSequence ? progress?.completed_steps ?? 0 : 0),
   );
   const currentIndex = currentStep ? sequence.indexOf(currentStep) : -1;
   const fallbackActiveIndex = Math.min(completed, sequence.length - 1);

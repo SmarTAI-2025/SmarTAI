@@ -1,7 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProblemRecognitionProgressPage } from "./ProblemRecognitionProgressPage";
+import type { JobProgress } from "@/types";
+
+let progressOverride: Partial<JobProgress> = {};
+let locale = "zh-CN";
+beforeEach(() => { progressOverride = {}; locale = "zh-CN"; });
 
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({ data: [], isError: false, isLoading: false }),
@@ -47,6 +52,7 @@ vi.mock("@/hooks/useTaskProgress", () => ({
       active_question_ids: ["q4", "q5"],
       failed_question_ids: [],
       messages: [],
+      ...progressOverride,
     },
     refetch: vi.fn(),
   }),
@@ -57,10 +63,22 @@ vi.mock("@/components/new-task/NewTaskStepper", () => ({
 }));
 
 vi.mock("@/i18n/I18nProvider", () => ({
-  useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }),
+  useI18n: () => ({ locale, t: (key: string) => key }),
 }));
 
 describe("ProblemRecognitionProgressPage major-question generation", () => {
+  it.each(["zh-CN", "en-US"])("shows independently saved fields and honors an empty actual stage list (%s)", language => {
+    locale = language;
+    progressOverride = { stage_sequence: [], current_step: "reading_source", stage_metrics: {}, active_question_ids: [],
+      preparation_counts: { questions: 3, stems: 3, reference_answers: 1, rubrics: 0 } };
+    render(<MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}><Routes>
+      <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
+    </Routes></MemoryRouter>);
+    expect(screen.getByText(language === "zh-CN" ? "已保存：题干 3 · 标答 1 · 评分标准 0" : "Saved: question text 3 · Reference answers 1 · Rubrics 0")).toBeVisible();
+    expect(screen.queryByRole("list", { name: "problemProgressStepsLabel" })).not.toBeInTheDocument();
+    expect(screen.queryByText("problemProgressStepGenerateSolutions")).not.toBeInTheDocument();
+    expect(screen.getByText("problemProgressStepReadSources")).toBeVisible();
+  });
   it("shows factual completed and active major-question counts", () => {
     render(
       <MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}>

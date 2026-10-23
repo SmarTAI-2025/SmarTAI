@@ -80,6 +80,8 @@ class ProgressReporter:
         self,
         workflow: str,
         stage_sequence: Sequence[str],
+        *,
+        parallel: bool = False,
     ) -> None:
         """Publish the stable workflow contract before reporting stage progress.
 
@@ -93,7 +95,7 @@ class ProgressReporter:
         normalized_stages = [stage.strip() for stage in stage_sequence]
         if not normalized_workflow:
             raise ValueError("workflow must not be empty")
-        if not normalized_stages or any(not stage for stage in normalized_stages):
+        if (not normalized_stages and not parallel) or any(not stage for stage in normalized_stages):
             raise ValueError("stage_sequence requires named stages")
         if len(set(normalized_stages)) != len(normalized_stages):
             raise ValueError("stage_sequence must not contain duplicates")

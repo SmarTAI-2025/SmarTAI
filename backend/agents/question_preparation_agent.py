@@ -1211,6 +1211,6 @@ def _issue(q_id: str, field: str, code: str, severity: str, source_ids: List[str
         "code": code,
         "severity": severity,
         "source_ids": list(dict.fromkeys(source_ids)),
-        "details": {},
+        "details": {"incomplete": True} if code == "recognition_partial" and severity == "blocking" else {},
         "status": "open",
     }

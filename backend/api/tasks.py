@@ -496,7 +496,9 @@ async def parse_submissions_endpoint(
             filename, content_type = stored.original_name, stored.content_type
         if workflow.last_failed_job_id == workflow.parse_job_id and workflow.parse_job_id:
             failed = workflow_repository.get_operation(workflow.parse_job_id, owner_id=current.id)
-            if failed.error_code == "provider_submit_uncertain" or (failed.checkpoint or {}).get("ocr_inflight_source_id"):
+            task_facade.require_current_submission_pipeline(failed.payload)
+            if (failed.error_code == "provider_submit_uncertain" or (failed.checkpoint or {}).get("ocr_inflight_source_id")
+                    or (failed.checkpoint or {}).get("structure_inflight")):
                 if not acknowledge_possible_duplicate_call:
                     raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")
                 restart_origin = f"{failed.id}:{failed.attempt}"
@@ -601,11 +603,15 @@ async def retry_submission_recognition_endpoint(
                 code="stale_revision",
             )
         failed = workflow_repository.get_operation(job_id, owner_id=current.id)
+        if failed.assignment_id != task_id or failed.operation_type != "submission_recognition":
+            raise NotFound("submission_recognition")
+        task_facade.require_current_submission_pipeline(failed.payload)
         summary = source_outcome_repository.summarize_sources(operation_id=job_id, owner_id=current.id, attempt=failed.attempt)
         legacy_partial = workflow.parse_job_id == job_id and bool(summary.failed_count)
         if workflow.last_failed_job_id != job_id and not legacy_partial:
             raise InvalidTransition("Only the latest failed input can be retried.", code="submission_retry_not_available")
-        uncertain = failed.error_code == "provider_submit_uncertain" or bool((failed.checkpoint or {}).get("ocr_inflight_source_id"))
+        uncertain = failed.error_code == "provider_submit_uncertain" or bool(
+            (failed.checkpoint or {}).get("ocr_inflight_source_id") or (failed.checkpoint or {}).get("structure_inflight"))
         if uncertain and not request.acknowledge_possible_duplicate_call:
             raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")
         retry = task_facade.load_submission_retry_upload(
@@ -626,7 +632,6 @@ async def retry_submission_recognition_endpoint(
             recognition_provider_id=request.recognition_provider_id,
             replace_confirmed=retry["replace_confirmed"] or legacy_partial,
             retry_from=retry["retry_from"],
-            manual_saved_sources=failed.payload.get("manual_saved_sources"),
             acknowledged_restart_from=(f"{failed.id}:{failed.attempt}" if uncertain or
                 (failed.error_code == "operation_cancelled" and request.acknowledge_possible_duplicate_call) else None),
             expected_workflow_revision=request.expected_workflow_revision,

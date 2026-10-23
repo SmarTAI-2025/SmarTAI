@@ -238,6 +238,7 @@ async def test_submission_failure_diagnostics_survive_reporter_eviction(monkeypa
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reason", [None, "recognition_response_invalid", "provider_recitation_blocked", "provider_content_blocked"])
 async def test_question_failure_diagnostics_survive_reporter_eviction(monkeypatch, reason):
+    from backend.agents import incremental_question_preparation
     from backend.api import task_preparation
     from backend.progress.tracker import remove_reporter
     from backend.services import task_facade
@@ -247,14 +248,14 @@ async def test_question_failure_diagnostics_survive_reporter_eviction(monkeypatc
     owner, task = _seed_task()
     _, queued, _ = await _queue_question_preparation(owner, task)
 
-    async def failed_prepare(_sources, _provider, **kwargs):
+    async def failed_extract(_text, _provider, **kwargs):
         if reason:
             await kwargs["reporter"].record_provider_failure(RecognitionError(reason), pages=[8])
             raise RecognitionError("provider_submit_uncertain", submission_may_exist=True)
         provider = SimpleNamespace(ainvoke=AsyncMock(side_effect=gemini_unavailable()))
         await _SubmissionSafeProvider(provider, reporter=kwargs["reporter"]).ainvoke("fixture")
 
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", failed_prepare)
+    monkeypatch.setattr(incremental_question_preparation, "_extract_problems_call", failed_extract)
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _RecoveryRegistry())
     await task_preparation.run_durable_question_preparation(_claim(owner, queued["job_id"], "test"))
     remove_reporter(queued["job_id"])
