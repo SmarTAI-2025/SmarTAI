@@ -2,6 +2,9 @@ import { expect, test } from "@playwright/test";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 
+// Each case owns its page routes, mutable fixtures and screenshot paths.
+test.describe.configure({ mode: "parallel" });
+
 for (const mode of ["individual", "overview-all", "detail-all", "advisory", "math-advisory"]) for (const locale of ["zh-CN", "en-US"]) {
   test(`${mode} ${locale}: confirmation, live results and queue stay consistent`, async ({ page }, testInfo) => {
     const zh = locale === "zh-CN", taskId = "asg_review_status";

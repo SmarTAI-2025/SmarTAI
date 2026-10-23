@@ -235,8 +235,8 @@ jobs:
               exit 1
             fi
           done
-          # Files use isolated browser contexts/API fixtures; keep each file
-          # sequential and run two files concurrently on each isolated runner.
+          # Keep the suite's existing file isolation; explicitly independent
+          # cases may opt into parallel mode within the two-worker limit.
           npm run e2e -- --workers=2 --shard=${{ matrix.shard }}/3
       - name: Run controlled grading retry E2E
         if: matrix.shard == 1
