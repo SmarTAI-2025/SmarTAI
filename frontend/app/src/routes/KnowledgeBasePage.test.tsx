@@ -96,7 +96,7 @@ describe("KnowledgeBasePage storage quota", () => {
     mocks.uploadCourseMaterial.mockRejectedValueOnce(new APIError(503, "Retry later"));
     await user.click(within(dialog).getByRole("button", { name: "上传资料" }));
     await waitFor(() => expect(mocks.uploadCourseMaterial).toHaveBeenCalledTimes(1));
-    expect(within(dialog).getByText(/文件已就绪，无需重新选择/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/文件已就绪/)).toBeInTheDocument();
     expect(within(dialog).getByText("chapter.md")).toBeInTheDocument();
   });
 

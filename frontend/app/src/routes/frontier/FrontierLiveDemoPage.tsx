@@ -1260,8 +1260,8 @@ function liveDemoWorkflowFailureMessage(locale: Locale, detail: string) {
   if (detail === "provider_unreachable") {
     return tx(
       locale,
-      "模型服务暂时不可用：上游服务调用失败，请稍后重试。可打开任务查看已完成的内容。",
-      "The model service is temporarily unavailable. The upstream request failed; please retry shortly. Open the task to inspect any completed work.",
+      "模型服务暂时不可用，请稍后重试。已完成的内容可在任务中查看。",
+      "The model service is unavailable. Retry later or open the task to view completed work.",
     );
   }
   if (detail === "shared_pool_daily_limit_reached") {
@@ -1271,7 +1271,7 @@ function liveDemoWorkflowFailureMessage(locale: Locale, detail: string) {
       "The daily demo limit has been reached. Please try again after the allowance resets.",
     );
   }
-  return tx(locale, `后端已停止本次运行：${detail}`, `The backend stopped this run: ${detail}`);
+  return tx(locale, `本次运行已停止：${detail}`, `This run stopped: ${detail}`);
 }
 
 function errorMessage(error: unknown) {

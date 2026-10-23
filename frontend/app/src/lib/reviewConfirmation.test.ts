@@ -6,7 +6,7 @@ const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id:
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
-  it("keeps a new shared rubric explanation visible after material confirmation without reopening its gate", () => {
+  it("shows a short localized rubric hint without reopening the confirmation gate", () => {
     const warning = issue({
       code: "math_rubric_advisory", field: "rubric",
       details: { message: "本轮 AI 评分解释：原有明确规则优先；后续错误不重复扣分。" },
@@ -16,7 +16,9 @@ describe("review hard failures", () => {
       preparation_issues: [warning],
     });
     expect(questionReviewIssues(problem)).toEqual([warning]);
-    expect(recognitionIssueLabel(warning, "zh-CN")).toBe(warning.details?.message);
+    expect(recognitionIssueLabel(warning, "zh-CN")).toBe("本题含 AI 补充评分说明，建议核对评分标准。");
+    expect(recognitionIssueLabel(warning, "en-US")).toBe("AI scoring guidance was added. Review the rubric.");
+    expect(warning.details?.message).toContain("本轮 AI 评分解释");
     expect(questionReviewConfirmed(problem)).toBe(true);
     expect(questionReviewBlocked(problem)).toBe(false);
     expect(questionReviewNextBlocked(problem)).toBe(false);

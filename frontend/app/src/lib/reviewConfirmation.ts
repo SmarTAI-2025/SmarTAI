@@ -45,7 +45,8 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
 }
 
 export function recognitionIssueLabel(issue: PreparationIssue, locale: string): string | null {
-  if (issue.code === "math_rubric_advisory" && typeof issue.details?.message === "string") return issue.details.message;
+  if (issue.code === "math_rubric_advisory") return locale === "zh-CN"
+    ? "本题含 AI 补充评分说明，建议核对评分标准。" : "AI scoring guidance was added. Review the rubric.";
   if (issue.details?.review_display_reason === "empty_stem") return locale === "zh-CN"
     ? "题干为空，请对照原件补齐并确认。" : "Question text is empty. Complete it against the source and confirm.";
   if (issue.details?.review_display_reason === "missing_rubric") return locale === "zh-CN"

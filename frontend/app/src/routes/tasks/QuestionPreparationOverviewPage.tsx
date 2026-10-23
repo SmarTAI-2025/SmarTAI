@@ -437,7 +437,7 @@ function issueCodeLabel(code: PreparationIssue["code"], locale: string) {
     manual_completion_required: ["补齐缺失资料并确认后才能批改", "Complete and confirm the missing materials before grading"],
     required_review_confirmation: ["严重问题已修正，请确认本题后继续", "The blocking issue was corrected; confirm this question to continue"],
     rubric_step_reference_conflict: ["评分步骤与标答步骤未正确对应", "Rubric steps do not align with reference-answer steps"],
-    math_rubric_advisory: ["本题评分标准有统一解释，建议查看", "Review the shared scoring interpretation for this question"],
+    math_rubric_advisory: ["本题含 AI 补充评分说明，建议核对评分标准", "AI scoring guidance was added. Review the rubric"],
     invalid_test_case: ["测试样例结构无效", "Invalid test case structure"],
     reference_solution_failed_case: ["参考解未通过测试样例", "Reference solution failed a test"],
     default_max_score_requires_review: ["当前使用默认 10 分，请确认题目满分", "Default 10-point maximum; confirm the score"],
