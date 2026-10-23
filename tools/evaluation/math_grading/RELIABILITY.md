@@ -121,7 +121,75 @@ exemption and error policy execution, sourced conditions, meaningful applicabili
 decisions, mixed-path review, shared budget, failed-review advice and new version
 recovery. The four current recovery probes are in-process only: persisted run/
 checkpoint recovery, actual cancellation during a worker, reporter/storage
-fault propagation and public event redaction are **unverified** here. Their
+fault propagation and public event redaction were **unverified in B1**. Their
 production integration tests must be inspected or supplemented in B2. No real
 model quality claim can be restored by these synthetic tests; paid retesting and
 the remaining global 6-call budget belong solely to the coordinating task.
+
+## B2 preparation supplement: persistence, cancellation and faults
+
+The subsequent authorized preparation adds
+`backend/tests/math_grading_evaluation/acceptance_reliability_safety.py` and the
+isolated `reliability_safety` runner. It still executes baseline production code,
+not a moving CORE tree or a final integrated candidate. Original B1 fixtures,
+semantic expectations and baseline reports remain unchanged.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 /opt/anaconda3/envs/smartai/bin/python \
+  -m tools.evaluation.math_grading.reliability_safety \
+  --output /private/tmp/math-reliability-safety-replay.json
+```
+
+The runner initializes a fresh SQLite database and storage before backend import.
+The explicit test file refuses collection without that disposable configuration,
+before any autouse database reset can run. Synthetic users/questions/provider
+configuration are created only there. The fake key is not a real credential;
+registry selection returns the raw JSON fixture provider, never a network SDK.
+All selected tests, including setup errors or unfinished cases, remain in the
+report denominator. A nonzero exit is an acceptance failure, not hidden as xfail.
+
+Current [safety report](reports/reliability-b2-safety-109acaec.md) / [JSON](reports/reliability-b2-safety-109acaec.json):
+**18 selected, 15 passed, 3 failed**, five pre-existing SWIG deprecation warnings.
+
+Passing probes use real repositories and disposable persistence to show:
+
+- Stopping between expert checkpoint and final aggregation preserves a valid
+  zero. Two failed-only retries reload the exact plans and expert without a new
+  provider entry; original history stays unchanged. This uses new run/worker
+  objects and real database round trips, not an operating-system restart.
+- Changed criterion/setup cannot reuse failed-only work; a fresh whole-batch run
+  has no inherited plans/votes. A deliberately obsolete engine cannot reuse
+  mathematical scores, plans or experts. This is a generic engine guard; specific
+  v1 retirement remains a separate final-integration gate.
+- Revoked leases prevent late checkpoint writes. Storage failures at plan,
+  expert and final-result boundaries propagate `CheckpointWriteError`; no
+  fallback grade/final trace is published. The real final transaction rolls back.
+- A real `math_verification.py --worker` process is cancelled after stdin
+  transmission starts. It is killed/reaped (return code -9), its PID disappears,
+  and a subsequent actual verification succeeds. No dummy subprocess or fake
+  mathematical evidence replaces it.
+- Private source canaries exist in real persisted plans/traces, while paginated
+  public activity history, public progress and live reporter events omit them.
+  Pagination advances past filtered private events; result DTOs omit raw traces.
+  Public scoring steps may intentionally quote student evidence; this is not a
+  blanket assertion that authorized result pages contain no student text.
+
+The three red probes expose two orchestration boundaries for `OSError`:
+
+| Fault injection | Observed baseline behavior | Required behavior |
+|---|---|---|
+| Reporter before plan request | returns holistic, zero provider entries | propagate the reporter fault |
+| Reporter after successful plan parsing | returns holistic, one provider entry | propagate, not replace the parsed plan |
+| Reporter before per-question assessment | returns all_failed; two persisted results with null score | propagate the runtime fault, not classify it as model failure |
+
+The equivalent `CheckpointWriteError` probes pass. These cases inject exceptions
+raised by reporter methods; they do not redefine intentionally best-effort
+progress event sinks as transactional checkpoints. No production repair was made.
+The main source boundaries are `math_grading_context.prepare_math_plans`' broad
+compilation fallback and the skill/agent assessment exception handling. CORE must
+verify these same semantic expectations against its final integration commit.
+
+SQLite safety coverage is now established on the baseline within the above
+limits. PostgreSQL/distributed execution, real models, production behavior and
+the final v2 integrated candidate remain unverified; B2 still awaits an explicit
+`integration_ready` handoff with exact commit/path.
