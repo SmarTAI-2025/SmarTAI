@@ -392,6 +392,14 @@ _ERROR_POLICY_MARKER = re.compile(
     r"deduct.*(?:again|twice)|penalized again|further deduction", re.I,
 )
 _EXEMPTION = re.compile(r"不扣(?:分)?|免扣(?:分)?|no (?:point )?(?:deduction|penalty)|comments? only", re.I)
+_WAIVER_NEGATION = re.compile(
+    r"并非|并不|不是|不能|不可|不得|不应|不允许|不予|禁止|不要|不再|没有|无需|毋须|"
+    r"\b(?:not|never|cannot|can't|mustn't)\b", re.I,
+)
+_POLICY_LIMITATION = re.compile(
+    r"但|然而|不过|除非|除外|例外|仅当|仅在|前提是|不适用|不包括|不包含|"
+    r"\b(?:unless|except|however|but|only if|only when|provided that|does not apply)\b", re.I,
+)
 _NO_COMPARISON_PENALTY = re.compile(r"不按(?:参考|标准)(?:答案|解法|步骤)(?:逐步)?对照扣分")
 _NO_CAUSAL_PENALTY = re.compile(r"(?:不能因为|不因为|不因)(?P<ground>[^，,；;。\n]+?)(?:而|就)?扣分")
 _FLOOR_RULE = re.compile(
@@ -539,7 +547,14 @@ def _exemption_action(clause: str) -> bool:
         # E.g. '不能因为方法正确就不扣分' denies an exemption. Do not let
         # the adjacent '不扣分' substring turn it into an exemption instead.
         raise ValueError("unsupported_exemption_scope")
-    return bool(_EXEMPTION.search(clause))
+    matches = list(_EXEMPTION.finditer(clause))
+    for match in matches:
+        # Negation must precede the waiver action in the same comma clause.
+        # A preceding condition or a later 'if ... not ...' is not a denial.
+        prefix = re.split(r"[，,]", clause[:match.start()])[-1]
+        if _WAIVER_NEGATION.search(prefix):
+            raise ValueError("unsupported_exemption_scope")
+    return bool(matches)
 
 
 def _source_policies(original: str, maximum: float) -> tuple[list[str], str]:
@@ -582,10 +597,24 @@ def _source_policies(original: str, maximum: float) -> tuple[list[str], str]:
                 raise ValueError("unsupported_error_policy")
             amounts = [_amount_value(a, u, maximum) for a, u in _AMOUNT.findall(part)]
             zero = bool(amounts) and all(v == 0 for v in amounts) and _DEDUCTION.search(part)
+            if zero:
+                action = re.split(r"[，,]", part)[-1]
+                deduction = _DEDUCTION.search(action)
+                prefix = action[:deduction.start()] if deduction else ""
+                if _WAIVER_NEGATION.search(prefix) or re.search(r"(?:不|勿|未)\s*$", prefix):
+                    raise ValueError("unsupported_exemption_scope")
             if zero or (not amounts and _exemption_action(part)):
                 if re.fullmatch(r"不扣(?:分)?|免扣(?:分)?|no (?:deduction|penalty)", part, re.I):
                     raise ValueError("exemption_condition_unresolved")
                 exemptions.append(part)
+    # A qualifier in a separate clause may restrict an earlier policy. Only
+    # an exemption retains its complete condition for the assessor; the fixed
+    # no-repeat flag cannot represent exceptions. Never silently drop them.
+    if exemptions or no_repeat:
+        spans = [match for quote in exemptions if (match := match_source_quote(original, quote))]
+        for limitation in _POLICY_LIMITATION.finditer(original):
+            if not any(span.start <= limitation.start() and limitation.end() <= span.end for span in spans):
+                raise ValueError("unsupported_error_policy" if no_repeat else "unsupported_exemption_scope")
     return list(dict.fromkeys(exemptions)), no_repeat
 
 

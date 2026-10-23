@@ -135,3 +135,71 @@ async def test_policy_role_and_source_cannot_be_changed_by_model(tamper):
     assert plan.routes[0].mode == "holistic"
     assert plan.compilation_reason == ("exemption_not_in_source" if tamper == "invent_exemption" else "error_policy_not_in_source")
     assert len(provider.messages) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", [
+    "小错不能免扣分", "小错并非不扣分", "小错不是不扣分", "小错不得免扣分",
+    "小错不应自动免扣分", "小错不能扣0分", "小错不扣0分",
+    "Minor errors are not comments only", "Minor errors do not receive no penalty",
+])
+async def test_negated_waiver_cannot_become_an_executable_zero_penalty(policy):
+    source = "每个错误扣1分；" + policy + "。"
+    provider = raw_provider(candidate("每个错误扣1分"))
+    plan = await rubric.prepare_math_rubric_plan(question(criterion=source), provider)
+    assert plan.routes[0].mode == "holistic"
+    assert not plan.routes[0].exemptions
+    assert plan.compilation_reason == "unsupported_exemption_scope"
+    assert plan.original_criterion == source and source in plan.effective_criterion
+    assert len(provider.messages) == 1  # No extra repair/review round for unsupported policy scope.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("separator", ["，", "；", "。", "\n"])
+@pytest.mark.parametrize("restriction", ["但最终答案错误时例外", "最终答案错误时除外",
+                                         "不过最终结果错误时仍要扣分", "仅在最终答案正确时",
+                                         "前提是最终答案正确"])
+async def test_followthrough_exception_survives_all_sentence_boundaries(separator, restriction):
+    source = "每个错误扣1分，同源后续错误不重复扣分" + separator + restriction + "。"
+    provider = raw_provider(candidate("每个错误扣1分"))
+    plan = await rubric.prepare_math_rubric_plan(question(criterion=source), provider)
+    assert plan.routes[0].mode == "holistic"
+    assert plan.routes[0].error_policy == "rubric"
+    assert not plan.routes[0].error_policy_source_quote
+    assert plan.compilation_reason == "unsupported_error_policy"
+    assert plan.original_criterion == source and source in plan.effective_criterion
+    assert len(provider.messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_detached_exemption_exception_is_not_lost():
+    source = "每个错误扣1分；小错不扣分；但影响最终答案时例外。"
+    provider = raw_provider(candidate("每个错误扣1分"))
+    plan = await rubric.prepare_math_rubric_plan(question(criterion=source), provider)
+    assert plan.routes[0].mode == "holistic" and not plan.routes[0].exemptions
+    assert source in plan.effective_criterion and len(provider.messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_complete_conditional_exemption_does_not_change_unrelated_followthrough():
+    source = "每个错误扣1分；同源后续错误不重复扣分；除非影响结果，小错扣0分。"
+    plan = await rubric.prepare_math_rubric_plan(question(criterion=source),
+                                               raw_provider(candidate("每个错误扣1分")))
+    assert plan.routes[0].mode == "deductions"
+    assert plan.routes[0].error_policy == "no_repeat_deduction"
+    assert [e.source_quote for e in plan.routes[0].exemptions] == ["除非影响结果，小错扣0分"]
+    assert ledger(plan)[0] == 9 and ledger(plan, independent=True)[0] == 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", [
+    "仅在没有影响结果时，小错不扣分", "仅在没有影响结果时，小错扣0分",
+    "Minor slips receive no penalty if they do not change the result",
+])
+async def test_negation_in_retained_condition_does_not_deny_waiver(policy):
+    source = "每个错误扣1分；" + policy
+    provider = raw_provider(candidate("每个错误扣1分"))
+    plan = await rubric.prepare_math_rubric_plan(question(criterion=source), provider)
+    assert plan.routes[0].mode == "deductions"
+    assert [exemption.source_quote for exemption in plan.routes[0].exemptions] == [policy]
+    assert len(provider.messages) == 1
