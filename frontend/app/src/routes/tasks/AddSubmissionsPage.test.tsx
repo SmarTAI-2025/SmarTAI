@@ -511,7 +511,7 @@ describe("submitted input recovery", () => {
     expect(container.querySelector("#submission-roster-required")).toHaveTextContent("missing-roster.csv");
     fireEvent.change(container.querySelectorAll('input[type="file"]')[1]!, { target: { files: [new File(["student_id,name\nS1,Alex"], "roster.csv")] } });
     expect(screen.queryByText(/请重新选择名单文件/)).not.toBeInTheDocument();
-    expect(screen.getByText("名单已就绪，无需重新选择。")).toBeInTheDocument();
+    expect(screen.getByText("名单已就绪。")).toBeInTheDocument();
     expect(mutateAsync).not.toHaveBeenCalled();
   });
   it("labels restored failed-job inputs as a full restart and applies edited identity options", async () => {
@@ -520,8 +520,8 @@ describe("submitted input recovery", () => {
     const { router } = renderPage();
     await screen.findByText("saved.zip");
     expect(screen.getByText("saved-roster.csv (2)")).toBeInTheDocument();
-    expect(screen.getByText(/可直接重试，无需重新上传/)).toBeInTheDocument();
-    expect(screen.getByText("名单已就绪，无需重新选择。")).toBeInTheDocument();
+    expect(screen.getByText(/原文件与设置已恢复，可直接重试/)).toBeInTheDocument();
+    expect(screen.getByText("名单已就绪。")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" })).toHaveAttribute("aria-checked", "true");
     expect(mutateAsync).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityManual" }));

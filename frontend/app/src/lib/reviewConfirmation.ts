@@ -49,7 +49,8 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
   if (issue.code === "source_conflict" && issue.details?.reason === "test_case_output_conflict") return locale === "zh-CN"
     ? "测试用例中，同一输入对应了不同预期输出，请核对。"
     : "Test cases have different expected outputs for the same input. Please review.";
-  if (issue.code === "math_rubric_advisory" && typeof issue.details?.message === "string") return issue.details.message;
+  if (issue.code === "math_rubric_advisory") return locale === "zh-CN"
+    ? "本题含 AI 补充评分说明，建议核对评分标准。" : "AI scoring guidance was added. Review the rubric.";
   if (issue.details?.review_display_reason === "empty_stem") return locale === "zh-CN"
     ? "题干为空，请对照原件补齐并确认。" : "Question text is empty. Complete it against the source and confirm.";
   if (issue.details?.review_display_reason === "missing_rubric") return locale === "zh-CN"

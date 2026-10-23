@@ -13,7 +13,7 @@ const copy = {
   applyFilter: ["应用筛选", "Apply filter"],
   interpreting: ["理解中…", "Interpreting…"],
   filterPrivacyHint: ["本地预设优先；未识别时模型只解析这句指令，不接收学生成绩。", "Local presets run first; on fallback, the model sees only this instruction, not student scores."],
-  localRecognized: ["本地规则已识别 · 未调用模型", "Matched locally · no model call"],
+  localRecognized: ["筛选已应用 · 未调用模型", "Filter applied · no model call"],
   modelInterpreted: ["模型仅解析指令", "Model interpreted instruction only"],
   dismiss: ["关闭提示", "Dismiss"],
   modelSettings: ["查看模型配置", "View model settings"],

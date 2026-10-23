@@ -593,8 +593,8 @@ export function classifyRecoverableError(
       title: tx(locale, "作答状态需要重新确认", "The submission state needs confirmation"),
       description: tx(
         locale,
-        "请刷新任务状态后重试，无需重新上传已保存的文件。",
-        "Refresh the task and try again. Saved files do not need to be uploaded again.",
+        "文件已保存，请刷新任务状态后重试。",
+        "Your files are saved. Refresh the task and try again.",
       ),
       actionLabel: tx(locale, "刷新任务状态", "Refresh task state"),
       actionKind: "refresh",
@@ -725,8 +725,8 @@ export function classifyRecoverableError(
       title: tx(locale, "模型密钥或授权无效", "Model API key or authorization is invalid"),
       description: tx(
         locale,
-        "模型返回了授权错误，可能是密钥无效、额度未开通，或当前账号无权使用该模型（例如所选模型不在套餐内）。请在“模型与 BYOK”更新密钥并确认模型可用后再重试。",
-        "The model returned an authorization error — the key may be invalid, quota not enabled, or your account lacks access to this model (for example, it isn't included in your plan). Update the key in Models & BYOK and confirm access, then retry.",
+        "请在“模型与 BYOK”检查 API Key、模型权限和可用额度后重试。",
+        "Check the API key, model access, and available quota in Models & BYOK, then retry.",
       ),
       actionLabel: tx(locale, "前往 BYOK 配置", "Open BYOK settings"),
       actionHref: `/settings/byok${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
@@ -827,8 +827,8 @@ export function classifyRecoverableError(
       title: tx(locale, "尚未选择可用的视觉模型", "No usable vision model is selected"),
       description: tx(
         locale,
-        "这份文件需要图像识别（OCR），但当前阶段没有可用的视觉模型。请添加或启用支持视觉输入的模型后重试，或上传可复制文字版文件。",
-        "This file needs image recognition (OCR), but no usable vision model is available for this stage. Add or enable a vision-capable model and retry, or upload a text-based file.",
+        "请选用支持图片识别的模型，或上传可复制文字版文件。",
+        "Select a model that supports image recognition, or upload a text-based file.",
       ),
       actionLabel: tx(locale, "选择支持 OCR 的模型", "Choose an OCR-capable model"),
       actionHref: `/settings/byok${byokReturnTo ? `?returnTo=${encodeURIComponent(byokReturnTo)}` : ""}`,
@@ -841,7 +841,7 @@ export function classifyRecoverableError(
   if (code === "question_targets_incomplete") {
     return {
       title: tx(locale, "未找齐指定题目", "Some requested questions were not found"),
-      description: tx(locale, "本次读取的内容未包含全部目标题目。请核对题号，补充所在页码，或换模型重试。若原件包含扫描文字或复杂公式，建议使用支持图片识别的模型。已上传资料仍保留。", "The recognized content did not include all requested questions. Check the numbers, add page numbers, or retry with another model. Scanned text or complex formulas may need image recognition. Your uploaded sources are preserved."),
+      description: tx(locale, "请核对题号和页码后重试；扫描件或复杂公式可改用图片识别模型。已上传资料仍保留。", "Check question and page numbers, then retry. For scans or complex formulas, try an image-capable model. Your uploaded sources are saved."),
       actionLabel: tx(locale, "检查题号与页码", "Check question and page numbers"),
       actionKind: "retry", tone: "warning", technicalDetails,
     };
@@ -995,7 +995,7 @@ export function classifyRecoverableError(
         ? tx(locale, "PDF 读取服务正忙", "PDF extraction is busy")
         : tx(locale, "PDF 读取超时", "PDF extraction timed out"),
       description: code === "pdf_extraction_busy"
-        ? tx(locale, "原文件已保存。稍等片刻后直接重试，不需要重新整理整批文件。", "The original is saved. Wait briefly and retry; the batch does not need to be rebuilt.")
+        ? tx(locale, "原文件已保存，请稍后重试。", "The original is saved. Please try again later.")
         : tx(locale, "原文件已保存，但本次 PDF 读取超过时间上限。请拆分或优化 PDF 后重试。", "The original is saved, but PDF extraction exceeded its time limit. Split or optimize the PDF, then retry."),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
@@ -1032,8 +1032,8 @@ export function classifyRecoverableError(
       title: tx(locale, "原文件空间已满", "Original-file storage is full"),
       description: tx(
         locale,
-        "本次文件尚未保存。后台会继续自动清理已完成任务的原文件，无需手动重试清理；请稍后再上传，或选择更小的文件。",
-        "This file was not saved. The backend will keep cleaning originals from completed tasks automatically; no manual cleanup retry is needed. Upload again later or choose a smaller file.",
+        "本次文件未保存。请稍后重试，或选择更小的文件。",
+        "This file was not saved. Try again later or choose a smaller file.",
       ),
       actionLabel: tx(locale, "选择更小文件", "Choose a smaller file"),
       actionKind: "reupload",
@@ -1109,8 +1109,8 @@ export function classifyRecoverableError(
       title: tx(locale, "资料来源已变化", "The source material has changed"),
       description: tx(
         locale,
-        "为避免把旧资料识别结果写入当前任务，请重新选择或上传这份资料，再启动识别。",
-        "To avoid writing stale results into this task, select or upload this material again before restarting recognition.",
+        "请重新选择或上传资料，再开始识别。",
+        "Select or upload the material again, then restart recognition.",
       ),
       actionLabel: tx(locale, "重新选择资料", "Select material again"),
       actionKind: "reselect",
@@ -1253,8 +1253,8 @@ function providerConfigurationErrorCopy(
     provider_response_invalid: [
       "模型服务返回了无法识别的响应",
       "The model service returned an invalid response",
-      "模型返回的结果格式不符合本步骤要求，系统未将它当作成功结果。原文件和已完成步骤仍保留。请重试未完成步骤，或更换模型后继续。",
-      "The model returned a format this step could not process. It was not accepted as a successful result. Your files and completed steps are preserved. Retry the unfinished step or change models.",
+      "请重试未完成步骤，或更换模型。原文件和已完成步骤已保留。",
+      "Retry the unfinished step or change models. Your files and completed steps are saved.",
     ],
     ocr_credential_not_found: [
       "所选 OCR 凭据已不存在",

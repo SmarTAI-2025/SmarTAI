@@ -143,7 +143,7 @@ export function QuestionAnalysisDetail({
 
       <div className="mt-2 grid gap-0.5 text-[10px] leading-4 text-muted-foreground">
         <p>{tx(locale, "搜索只筛选题目；输入中文时在选词完成后应用。", "Search filters questions only and waits for IME composition.")}</p>
-        <p>{tx(locale, "输入框聚焦时方向键只编辑文本；退出输入框后，↑/↓ 切换题目。", "Arrow keys edit text while the input is focused; after leaving it, ↑/↓ switch questions.")}</p>
+        <p>{tx(locale, "退出输入框后，可用 ↑/↓ 切换题目。", "Outside the search box, use ↑/↓ to switch questions.")}</p>
       </div>
 
       <div className="mt-4 grid items-start gap-4 lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]">
