@@ -85,9 +85,9 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
     ? `置信度 ${questionConfidence(issue)} 较低，建议核对确认。`
     : `Low confidence (${questionConfidence(issue)}); review suggested.`;
   if (onlyUnverifiedTargets(issue)) return zh
-    ? "请对照原文件核对题干。"
-    : "Check the question text against the original.";
-  return zh ? "建议对照原文件核对本题。" : "Check this question against the original.";
+    ? "已定位题号；请对照原文件确认题干完整。这是常规确认，尚未发现具体缺失。"
+    : "Question numbers were located. Confirm the complete wording against the source; no specific omission was detected.";
+  return zh ? "来源提示可对照原文件核对；尚无本题严重识别错误的证据。" : "The source recommends checking the original; this does not identify a blocking error in this question.";
 }
 
 export function submissionRecognitionIncomplete(task?: Pick<Task, "submission_source_summary" | "submission_sources">): boolean {

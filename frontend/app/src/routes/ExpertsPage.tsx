@@ -1022,8 +1022,8 @@ function OfficialProviderLinks({
           <h2 className="text-sm font-semibold">{zh ? "服务商官方入口" : "Official provider links"}</h2>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             {zh
-              ? "在服务商官网查看用量与余额。"
-              : "Check usage and balance on the provider’s website."}
+              ? "用量与余额以服务商官网为准；SmarTAI 不读取或估算账户余额。"
+              : "Usage and balance come from each provider. SmarTAI does not read or estimate account balances."}
           </p>
         </div>
         {loading ? (
@@ -1558,7 +1558,7 @@ function expertErrorMessage(code: string | null | undefined, locale: "zh-CN" | "
     expert_verification_encoding_error: ["验证请求包含无法编码的字符，请检查 API key 和配置内容。", "The verification request contains characters that cannot be encoded. Check the API key and configuration."],
     provider_model_access_denied: ["服务商或中转站以团队模型权限为由拒绝了本次请求。若该模型在其他调用中可用，请联系管理员核查本次请求。", "The provider or relay rejected this request due to team/model access. If the model works in other calls, ask the administrator to investigate this request."],
     expert_verification_auth_failed: ["密钥无效或没有调用权限。", "The key is invalid or lacks permission."],
-    expert_verification_region_unsupported: ["服务商不支持当前网络所在地区，请检查服务可用地区或改选模型。", "The provider does not support this network region. Check supported regions or choose another model."],
+    expert_verification_region_unsupported: ["服务商不支持当前网络出口所在地区。请确认网络和服务可用地区；更换密钥未必能解决。", "The provider does not support the current network region. Check network and regional availability; replacing the key may not help."],
     expert_verification_model_not_found: ["模型或接口地址未找到，请核对模型 ID 和 Base URL。", "The model or endpoint was not found. Check the model ID and Base URL."],
     expert_verification_rate_limited: ["服务商限制了本次请求，请稍后再试。", "The provider rate-limited this request. Try again later."],
     expert_verification_timeout: ["验证请求超时，配置已保留。请稍后重试。", "The verification request timed out. Your configuration is unchanged. Try again later."],
@@ -1650,7 +1650,7 @@ function imageReasonLabel(reason: string, zh: boolean) {
   const labels: Record<string, string[]> = {
     image_probe_answer_correct: ["测试图片答案正确", "Test image answer was correct"],
     image_probe_answer_incorrect: ["测试答案不正确，图片能力待确认", "Incorrect test answer; image support remains uncertain"],
-    image_probe_response_truncated: ["测试输出达到上限，图片能力待确认。请重试。", "The test hit its output limit. Image support is unconfirmed. Retry the test."],
+    image_probe_response_truncated: ["模型达到本次测试的输出上限，答案尚未完成；图片能力仍未确认，可稍后重试。", "The model reached the test output limit before completing its answer. Image support remains unconfirmed; try again later."],
     provider_vision_not_supported: ["不支持图片，仍可处理文字资料", "Images unsupported; text sources can still be used"],
     expert_verification_timeout: ["图像测试超时，图片能力待确认。请稍后重试。", "Image test timed out; support is unconfirmed. Retry later."],
     expert_verification_rate_limited: ["上游限流，请稍后再试", "Upstream rate limit"],

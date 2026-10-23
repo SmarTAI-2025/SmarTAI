@@ -985,7 +985,7 @@ describe("FrontierLiveDemoPage", () => {
     vi.mocked(getTaskState).mockResolvedValue(taskState("graded"));
     vi.mocked(getTask).mockResolvedValue(taskWithQuestions());
     render(<I18nProvider><MemoryRouter initialEntries={["/frontier/live?taskId=asg_demo123"]}><FrontierLiveDemoPage /></MemoryRouter></I18nProvider>);
-    expect(await screen.findByText(/4 questions recognized/i)).toBeInTheDocument();
+    expect(await screen.findByText(/see question review for confirmation status/i)).toBeInTheDocument();
     expect(screen.queryByText(/teacher rubric confirmed/i)).not.toBeInTheDocument();
   });
 

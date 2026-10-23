@@ -27,7 +27,7 @@ export function RequireAdminSession({ children }: { children: ReactNode }) {
   if (expired || user.isError || !user.data) return <SignInAgain from={from} />;
   if (user.data.role !== "admin" || user.data.is_read_only) return <AuthFrame><AuthCard>
     <h1 className="text-xl font-semibold">{zh ? "没有管理权限" : "Administrator access required"}</h1>
-    <p className="my-4 text-sm text-muted-foreground">{zh ? "请更换管理员账号后继续。" : "Switch to an administrator account to continue."}</p>
+    <p className="my-4 text-sm text-muted-foreground">{zh ? "当前账号不能进入管理端。历史批改任务不会因此删除。" : "This account cannot access administration. Existing grading tasks are preserved."}</p>
     <Button disabled={logout.isPending} onClick={() => logout.mutate()}>{zh ? "退出当前账号" : "Sign out"}</Button>
     <Link className="ml-4 text-primary" to="/login">{zh ? "更换账号" : "Switch account"}</Link>
   </AuthCard></AuthFrame>;

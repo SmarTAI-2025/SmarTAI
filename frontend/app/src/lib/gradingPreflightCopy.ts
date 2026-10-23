@@ -19,7 +19,7 @@ const copy = {
   notApplicable: ["不适用", "Not required"],
   expertCombination: ["专家组合", "Model Selection"],
   aggregation: ["综合方法", "Synthesis"],
-  expertNote: ["请核对本次批改使用的模型。", "Check the models selected for this run."],
+  expertNote: ["本次批改使用已保存的任务级模型；若模型被停用，开始前会明确阻止并提示调整。", "This run uses the saved task-level models. If one is disabled, grading is blocked with a clear setup action."],
   scoringStrategy: ["评分策略", "Scoring Strategy"],
   strictness: ["严格度", "Strictness"],
   partialAllowed: ["允许部分分", "Partial credit allowed"],

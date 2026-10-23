@@ -49,7 +49,7 @@ export function AdminUserDetailPage() {
         setError("该账号可能参与其他教师的批改任务，请先处理相关任务后再销户。");
         return;
       }
-      setError(status === 409 ? "当前账号状态不允许此操作，请刷新后检查；不能限制自己或最后一个管理员。" : status === 403 ? "管理权限已变化，请重新登录确认。" : "暂时无法确认操作结果，请重试。");
+      setError(status === 409 ? "当前账号状态不允许此操作，请刷新后检查；不能限制自己或最后一个管理员。" : status === 403 ? "管理权限已变化，请重新登录确认。" : "操作结果尚未确认。请重试核对；重试使用相同操作编号，避免重复执行。");
     } finally { busyRef.current = false; setBusy(false); }
   }
   if (user.isLoading) return <p role="status">正在加载账号…</p>;
@@ -62,7 +62,7 @@ export function AdminUserDetailPage() {
     <Link className="text-sm font-medium text-primary" to="/admin/users">← 返回用户管理</Link>
     <SectionHeader title={u.username} description={`${u.email || "未设置邮箱"} · ${u.role === "admin" ? "管理员" : u.role === "student" ? "历史学生账号" : "教师账号"}`} />
     {u.closure && <Card className="border-amber-300"><p role="status">该账号正在销户，无法恢复使用或重复执行管理操作。</p><Link className="mt-3 inline-block font-medium text-primary" to={`/admin/closures/${u.closure.id}`}>查看销户进度 →</Link></Card>}
-    <Card><h2 className="text-base font-semibold">业务使用权限：{!u.is_active ? "禁止登录" : u.is_read_only ? "只读浏览" : "正常使用"}</h2><p className="mb-4 mt-2 text-sm text-muted-foreground">只读账号可浏览保留的历史批改任务。</p><div className="flex flex-wrap gap-3">
+    <Card><h2 className="text-base font-semibold">业务使用权限：{!u.is_active ? "禁止登录" : u.is_read_only ? "只读浏览" : "正常使用"}</h2><p className="mb-4 mt-2 text-sm text-muted-foreground">只读保留历史批改任务，可继续浏览；不会删除或撤销批改任务。</p><div className="flex flex-wrap gap-3">
       <Button variant="secondary" disabled={restricted || (u.is_active && !u.is_read_only)} onClick={() => access("normal", "恢复正常使用", "恢复新建、上传、批改和修改权限。已退出的账号仍需重新登录。")}>恢复正常使用</Button>
       <Button variant="secondary" disabled={restricted || u.is_read_only} onClick={() => access("read_only", "停用业务，保留只读", "用户仍可登录和浏览历史批改任务；禁止新建、上传、识别、批改及修改。现有任务不删除，登录也不撤销。")}>停用业务（只读）</Button>
       <Button variant="secondary" disabled={restricted || !u.is_active} onClick={() => access("login_blocked", "禁止登录", "立即退出全部登录，保留账号、用户名、邮箱和历史任务；这些身份暂不能再次注册。")}>禁止登录</Button>
@@ -72,7 +72,7 @@ export function AdminUserDetailPage() {
       <Button variant="secondary" disabled={Boolean(u.closure)} onClick={() => open({ label: "撤销全部登录", path: "sessions/revoke", method: "post", body: {}, effect: "所有设备需要重新登录。历史批改任务和结果不受影响。", dangerous: true })}>撤销全部登录</Button>
       <Button variant="secondary" disabled={Boolean(u.closure) || !u.email || !u.is_active} onClick={() => open({ label: "发送密码重置邮件", path: "password-reset", method: "post", body: {}, effect: "链接发送到账号绑定邮箱。仅发送邮件不影响现有登录；用户成功重置密码后，全部旧登录失效。" })}>发送密码重置邮件</Button>
     </div></Card>
-    <Card><h2 className="font-semibold">管理员授权</h2><p className="mb-4 mt-2 text-sm text-muted-foreground">为需要管理平台的人员授予管理员权限。</p><Button variant="secondary" disabled={restricted} onClick={() => open({ label: u.role === "admin" ? "撤销管理员授权" : "授予管理员权限", path: "role", method: "patch", body: { role: u.role === "admin" ? "teacher" : "admin" }, effect: "更改管理角色后，目标账号的全部登录立即失效，需要重新登录。不能撤销最后一个有效管理员。", dangerous: true })}>{u.role === "admin" ? "撤销管理员授权" : "授予管理员权限"}</Button></Card>
+    <Card><h2 className="font-semibold">管理员授权</h2><p className="mb-4 mt-2 text-sm text-muted-foreground">只为需要承担平台管理职责的人授权。普通注册无需经过这里审批。</p><Button variant="secondary" disabled={restricted} onClick={() => open({ label: u.role === "admin" ? "撤销管理员授权" : "授予管理员权限", path: "role", method: "patch", body: { role: u.role === "admin" ? "teacher" : "admin" }, effect: "更改管理角色后，目标账号的全部登录立即失效，需要重新登录。不能撤销最后一个有效管理员。", dangerous: true })}>{u.role === "admin" ? "撤销管理员授权" : "授予管理员权限"}</Button></Card>
     <Card className="border-red-200"><h2 className="font-semibold text-danger">销户</h2><p className="mb-4 mt-2 text-sm text-muted-foreground">删除账号及业务数据。清理完成后按销户方式释放用户名与邮箱；清理失败时保留进度。</p><div className="flex flex-wrap gap-3">
       <Button variant="danger" disabled={restricted} onClick={() => open({ label: "正常销户", path: "closure", method: "post", body: { mode: "normal" }, effect: "立即禁止登录，随后删除账号、批改任务、教材和上传文件。完成后用户名与邮箱均释放，可以重新注册。确认后开始删除，无法通过恢复账号撤回。", dangerous: true })}>正常销户</Button>
       <Button variant="danger" disabled={restricted || !u.email} onClick={() => open({ label: "拉黑销户", path: "closure", method: "post", body: { mode: "blacklist" }, effect: "立即禁止登录，随后删除账号及业务数据。完成后用户名释放，原邮箱仍禁止注册；只匹配该邮箱，不封禁学校域名、IP 或设备。确认后开始删除，无法通过恢复账号撤回。", dangerous: true })}>拉黑销户</Button>

@@ -1064,7 +1064,7 @@ function TeacherMaterialConfirmation({
             {tx(locale, "本次生成资料已由教师确认", "This run's generated materials were teacher-confirmed")}
           </span>
         ) : null}
-        <span className="text-xs text-muted-foreground">{tx(locale, "资料已保存在当前任务，可在题目审核页查看。", "Materials are saved with this task and available in question review.")}</span>
+        <span className="text-xs text-muted-foreground">{tx(locale, "资料会随当前任务持续保留；仍可在题目审核页查看，最终评分继续由教师复核。", "These materials remain attached to the current task and stay available in question review; final scores remain subject to teacher review.")}</span>
       </div>
     </section>
   );
@@ -1239,7 +1239,7 @@ function stepsFromSnapshot(snapshot: TaskStateSnapshot, locale: Locale): RunStep
     const completeDetail = step.id === "task"
       ? tx(locale, "任务已创建", "Task created")
       : step.id === "questions"
-        ? tx(locale, `已识别 ${snapshot.problem_count} 题`, `${snapshot.problem_count} questions recognized`)
+        ? tx(locale, `已识别 ${snapshot.problem_count} 题；人工确认状态请查看审核页面`, `${snapshot.problem_count} questions recognized; see question review for confirmation status`)
         : step.id === "submissions"
           ? tx(locale, `已识别 ${snapshot.student_count} 份作答`, `${snapshot.student_count} submissions recognized`)
           : tx(locale, `已处理 ${snapshot.student_count * snapshot.problem_count} 题次`, `${snapshot.student_count * snapshot.problem_count} responses processed`);

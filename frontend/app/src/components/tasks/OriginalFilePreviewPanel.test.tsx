@@ -106,13 +106,13 @@ describe("OriginalFilePreviewPanel", () => {
     );
 
     expect(screen.getByText("系统正在自动清理原文件")).toBeInTheDocument();
-    expect(screen.getByText(/完成后释放空间/)).toBeInTheDocument();
+    expect(screen.getByText(/无需手动操作/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
 
     rerender(
       <OriginalFilePreviewPanel descriptor={{ ...pending, unavailable_reason: "storage_delete_failed" }} displayName={pending.display_name} previewKind="pdf" loadState="idle" errorCode={null} previewUrl={null} onClose={vi.fn()} onRetry={onRetry} t={t} />,
     );
-    expect(screen.getByText(/正在自动重试/)).toBeInTheDocument();
+    expect(screen.getByText(/系统会在后台继续重试/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
 
     rerender(
@@ -136,7 +136,7 @@ describe("OriginalFilePreviewPanel", () => {
     );
 
     expect(screen.getByRole("button", { name: "查看原文件" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /正在自动重试/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /系统会在后台继续重试/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
     expect(onOpen).not.toHaveBeenCalled();
   });

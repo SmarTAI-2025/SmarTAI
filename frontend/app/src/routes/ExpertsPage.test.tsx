@@ -406,7 +406,7 @@ describe("ExpertsPage editable vendor Base URL", () => {
       verification_error_code: "expert_verification_region_unsupported",
     }];
     renderPage();
-    expect(screen.getAllByText(/服务商不支持当前网络所在地区/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/服务商不支持当前网络出口所在地区/).length).toBeGreaterThan(0);
     expect(screen.queryByText("expert_verification_region_unsupported")).not.toBeInTheDocument();
   });
 

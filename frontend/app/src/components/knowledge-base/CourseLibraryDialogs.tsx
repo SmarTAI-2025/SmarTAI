@@ -396,8 +396,8 @@ export function MaterialDialog({ material, courses, groups, onClose, onSaved, on
         toast.success(tx(locale, "资料已移除", "Material removed"), {
           description: tx(
             locale,
-            "正在自动清理原文件；完成前仍占用资料库空间。",
-            "The source file is being cleaned automatically. It still uses library storage until cleanup finishes.",
+            "系统会在后台自动清理原文件；完成前仍计入知识库占用，无需手动重试。",
+            "The source file will be cleaned automatically in the background. It remains charged to knowledge storage until cleanup finishes; no manual retry is needed.",
           ),
         });
       } else {

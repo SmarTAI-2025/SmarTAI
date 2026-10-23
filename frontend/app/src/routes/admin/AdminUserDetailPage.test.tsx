@@ -28,7 +28,7 @@ describe("administrator account actions", () => {
     await user.type(screen.getByLabelText(/操作原因/), "review access");
     mocks.request.mockRejectedValueOnce({ status: 503 });
     await user.click(screen.getByRole("button", { name: "确认操作" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法确认操作结果");
+    expect(await screen.findByRole("alert")).toHaveTextContent("操作结果尚未确认");
     const first = mocks.request.mock.calls[0][0];
     let finish!: (v: unknown) => void;
     mocks.request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));

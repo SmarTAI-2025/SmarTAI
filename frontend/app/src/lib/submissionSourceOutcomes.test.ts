@@ -45,7 +45,7 @@ describe("submission source reason copy", () => {
     for (const status_code of [null, 0, 999, Number.NaN]) {
       expect(getSubmissionPageErrorLabel(item, { ...error, status_code }, "en-US")).not.toContain("HTTP");
     }
-    expect(getSubmissionPageErrorLabel(item, { page: 3, error_code: "unrecognized_code" }, "zh-CN")).toContain("该页未识别成功");
+    expect(getSubmissionPageErrorLabel(item, { page: 3, error_code: "unrecognized_code" }, "zh-CN")).toContain("该页尚未成功识别");
   });
 
   it.each(["zh-CN", "en-US"] as const)("explains that local capacity pressure leaves the request unsent (%s)", (locale) => {

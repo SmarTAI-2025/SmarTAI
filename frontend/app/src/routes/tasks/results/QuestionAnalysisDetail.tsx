@@ -142,7 +142,7 @@ export function QuestionAnalysisDetail({
         questions={visibleQuestions} onSelect={goToQuestion} />
 
       <div className="mt-2 grid gap-0.5 text-[10px] leading-4 text-muted-foreground">
-        <p>{tx(locale, "可搜索并筛选题目。", "Search to filter questions.")}</p>
+        <p>{tx(locale, "搜索只筛选题目；输入中文时在选词完成后应用。", "Search filters questions only and waits for IME composition.")}</p>
         <p>{tx(locale, "退出输入框后，可用 ↑/↓ 切换题目。", "Outside the search box, use ↑/↓ to switch questions.")}</p>
       </div>
 

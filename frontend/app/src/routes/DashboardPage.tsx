@@ -679,7 +679,7 @@ function buildInsightSummary(
       : tasksState.isError
         ? "Task status is temporarily unavailable."
         : counts.total === 0
-          ? "No grading tasks yet. Select “New Grading Task” to get started."
+          ? "No grading tasks yet. Create one to start the task workflow."
           : `${counts.action === 1 ? "1 task needs" : `${counts.action} tasks need`} your input, ${counts.processing === 1 ? "1 is" : `${counts.processing} are`} running, and ${counts.results === 1 ? "1 has" : `${counts.results} have`} results ready for review.`;
     const modelSummary = modelsState.isLoading
       ? " Model configuration is loading."
@@ -698,7 +698,7 @@ function buildInsightSummary(
     : tasksState.isError
       ? "任务状态暂时不可用，请重试后再查看。"
       : counts.total === 0
-        ? "还没有批改任务，点击“新建批改任务”开始。"
+        ? "还没有批改任务。创建任务后，这里会优先整理需要继续、后台处理中和已生成结果的任务。"
         : `${counts.action} 个任务需要你继续，${counts.processing} 个正在后台处理，${counts.results} 个已生成结果可进入复核。`;
   const modelSummary = modelsState.isLoading
     ? " 模型配置正在读取。"

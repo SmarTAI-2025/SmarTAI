@@ -31,9 +31,8 @@ describe("task contract compatibility", () => {
       detail: { code: "provider_recitation_blocked", failed_pages: [8], processed_pages: [1, 2, 3] },
     }), { locale: "zh-CN", returnTo: "/tasks/test/upload/problems" });
     expect(info.description).toContain("PDF 第 8 页");
-    expect(info.description).toContain("版权限制");
-    expect(info.description).toContain("调整题号或页码范围");
-    expect(info.description).not.toContain("不代表模型缺少图片能力");
+    expect(info.description).toContain("RECITATION");
+    expect(info.description).toContain("不代表模型缺少图片能力");
     expect(info.actionLabel).toBe("更换模型");
     expect(info.actionHref).toContain("returnTo=");
   });
@@ -355,7 +354,7 @@ describe("background task failure guidance", () => {
       locale, providerFailures: [{ code: "provider_recitation_blocked", pages: [8] }],
     });
     expect(info.description).toContain(locale === "zh-CN" ? "PDF 第 8 页" : "PDF pages: 8");
-    expect(info.description).toContain(locale === "zh-CN" ? "版权限制" : "copyright restrictions");
+    expect(info.description).toContain("RECITATION");
     expect(info.description).toContain(locale === "zh-CN" ? "重试可能再次消耗额度" : "Retrying may use additional quota");
     expect(info.actionKind).toBe("refresh");
   });
@@ -506,8 +505,7 @@ describe("background task failure guidance", () => {
   it("does not call provider overload a daily account limit", () => {
     const info = classifyRecoverableError("provider_overloaded", { locale: "zh-CN" });
     expect(info.title).toBe("模型服务当前拥堵");
-    expect(info.description).not.toContain("每日额度耗尽");
-    expect(info.description).toContain("稍后重试");
+    expect(info.description).toContain("并非已确认的每日额度耗尽");
     expect(info.actionKind).toBe("retry");
   });
 
@@ -556,7 +554,7 @@ describe("background task failure guidance", () => {
     const info = classifyRecoverableError("ocr_empty_result", { locale: "zh-CN" });
 
     expect(info.title).toBe("OCR 没有读到可用文字");
-    expect(info.description).toContain("请换清晰文件或更换模型");
+    expect(info.description).toContain("不能据此判定模型不支持图片");
     expect(info.actionKind).toBe("reupload");
   });
 

@@ -732,7 +732,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, prev
                           {expert.comment ? <MarkdownMath className="mt-1 text-[11px] leading-5">{expert.comment}</MarkdownMath> : null}
                           {!expert.error_kind ? <ScoringSteps locale={locale} steps={expert.steps} /> : null}
                           {expert.knowledge_citations?.length ? <div className="mt-2 border-t pt-2">
-                            <p>{tx(locale, "参考资料", "References")}</p>
+                            <p>{tx(locale, "检索参考（不等于结论已核实）", "Retrieved references (not verified support)")}</p>
                             {expert.knowledge_citations.map((citation) => <KnowledgeCitationPreview key={citation.citation_id} citation={citation} />)}
                           </div> : null}
                         </li>

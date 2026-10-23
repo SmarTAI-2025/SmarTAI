@@ -58,10 +58,10 @@ export function ImageRecognitionRecovery({ error, expert, returnTo, controller, 
   }
   return <div role="alert" className="mt-4 rounded-lg border border-amber-300 bg-card p-4 text-sm">
     <p>{passed
-      ? (zh ? "图片未识别成功。请换清晰文件或更换模型；更换前会暂存文件和填写内容。" : "Image recognition failed. Try a clearer file or another model. Your file and input will be saved before switching.")
+      ? (zh ? "当前文件需要图片识别，所选模型已通过图片能力验证。识别效果差可能来自文件模糊或模型识别效果，请换清晰文件或换模型后继续。离开前会暂存文件和填写内容，返回后无需重新上传。" : "This file needs image recognition. The model passed image verification. Poor results may come from a blurry file or model accuracy. Try a clearer file or another model; files and fields will be saved before leaving.")
       : unsupported
-        ? (zh ? "所选模型不支持图片输入，请更换模型。更换前会暂存文件和填写内容。" : "This model does not support image input. Change models to continue; your file and input will be saved first.")
-        : (zh ? "请验证模型的图片识别能力，或更换模型。离开前会暂存文件和填写内容。" : "Verify image support or change models. Your file and input will be saved before leaving.")}</p>
+        ? (zh ? "当前文件需要图片识别，但所选模型的当前配置不支持图片输入。请更换模型后继续。离开前会暂存文件和填写内容，返回后无需重新上传。" : "This file needs image recognition, but the current configuration explicitly rejects images. Change models to continue; files and fields will be saved before leaving.")
+        : (zh ? "当前文件需要图片识别，暂时无法确认所选模型能否处理图片。你可以验证图片能力，或更换模型后继续。离开前会暂存文件和填写内容，返回后无需重新上传。" : "This file needs image recognition; image support is uncertain. Verify or change models. Files and fields will be saved before leaving.")}</p>
     <div className="mt-3 flex flex-wrap gap-2">
       {!unsupported && !passed ? <button type="button" disabled={saving || leave.saving} onClick={() => void saveAndGo("verify")} className="rounded border px-3 py-2">{zh ? "暂存并去验证" : "Save and verify"}</button> : null}
       <button type="button" disabled={saving || leave.saving} onClick={() => void saveAndGo("change")} className="rounded border px-3 py-2">{zh ? "暂存并更换模型" : "Save and change model"}</button>

@@ -90,7 +90,7 @@ function ConfigEditor({ initial, reload, onDirty, onSaved }: { initial: Business
       if (status === 409) { setConflict(true); setError("配置发生冲突，可能已被其他管理员修改。请放弃更改并载入最新配置，核对后重新保存。"); }
       else if (status === 422) setError("配置值无效。请检查域名格式与数字范围；域名只填根域名，* 必须单独使用。");
       else if (status === 403 || status === 401) setError("管理员权限已变化，请重新登录核对。");
-      else setError("暂时无法确认保存结果。修改已保留，请重试保存。");
+      else setError("暂时无法确认是否保存。当前修改已保留，再次保存会安全复用本次请求。");
     } finally { active.current = false; setBusy(false); }
   }
   async function refresh() {

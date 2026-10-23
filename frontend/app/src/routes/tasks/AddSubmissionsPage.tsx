@@ -362,7 +362,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
             {selectedFile
               ? `${formatFileSize(selectedFile.size)} · ${localText(locale, "文件已就绪", "File ready")} · ${t("submissionUploadOcrLimit")}`
               : canRetryOriginal || hasStoredFile
-                ? localText(locale, "原文件已保留。", "The original file is saved.")
+                ? localText(locale, "原文件已保留，无需重新选择。", "The original file is saved. No need to select it again.")
               : t("submissionUploadFormats")}
           </p>
           <span className="mt-[17px] inline-flex h-10 min-w-[130px] items-center justify-center rounded-[8px] border bg-card px-4 text-[14px] font-semibold text-foreground">

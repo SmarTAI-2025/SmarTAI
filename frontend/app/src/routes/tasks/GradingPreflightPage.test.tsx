@@ -333,7 +333,7 @@ describe("GradingPreflightPage regrade mode", () => {
       <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />
       <Route path="/tasks/:taskId/grading/progress" element={<div>Grading started</div>} />
     </Routes></MemoryRouter>);
-    expect(screen.getByText(/To review, go back before the countdown ends/)).toBeInTheDocument();
+    expect(screen.getByText(/Pending confirmation does not block/)).toBeInTheDocument();
     expect(screen.getByText(/1 question awaits confirmation/)).toBeInTheDocument();
     act(() => { vi.advanceTimersByTime(9_000); });
     expect(mutateAsync).not.toHaveBeenCalled();

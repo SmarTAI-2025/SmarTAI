@@ -13,7 +13,7 @@ export function AdminUsersPage() {
   const result = users.data;
   const items = Array.isArray(result) ? result : result?.items ?? [];
   return <div className="space-y-5">
-    <SectionHeader title="用户管理" description="管理账号权限与违规账号。普通用户通过邮箱验证注册。" />
+    <SectionHeader title="用户管理" description="处理账号权限与违规情况。普通用户继续通过现有邮箱流程注册，无需管理员逐人审批。" />
     <Card className="flex flex-wrap gap-4">
       <label className="grid grow gap-1 text-sm"><span>搜索用户</span><input className="h-10 rounded-md border bg-background px-3" placeholder="用户名或邮箱" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} /></label>
       <label className="grid gap-1 text-sm"><span>角色</span><select className="h-10 rounded-md border bg-background px-3" value={role} onChange={e => { setRole(e.target.value); setPage(1); }}><option value="">全部</option><option value="teacher">教师</option><option value="admin">管理员</option><option value="student">历史学生账号</option></select></label>

@@ -143,16 +143,16 @@ export function SettingsPage() {
                   <p className="mt-3 rounded-[8px] bg-amber-50 px-3 py-2 text-[11px] leading-4 text-amber-800">
                     {tx(
                       locale,
-                      `正在自动重试清理 ${sourceUsage.retrying_cleanup_count} 个原文件；完成前仍占用 ${formatBytes(sourceUsage.retrying_cleanup_bytes)}。`,
-                      `Cleanup is retrying automatically for ${sourceUsage.retrying_cleanup_count} original file(s). ${formatBytes(sourceUsage.retrying_cleanup_bytes)} remains in use until it finishes.`,
+                      `${sourceUsage.retrying_cleanup_count} 个原文件刚才未能彻底清理，系统正在自动重试；无需手动操作，成功前 ${formatBytes(sourceUsage.retrying_cleanup_bytes)} 仍计入占用。`,
+                      `${sourceUsage.retrying_cleanup_count} original file(s) could not be fully cleaned just now. The backend is retrying automatically; no manual action is needed, and ${formatBytes(sourceUsage.retrying_cleanup_bytes)} remains charged until cleanup succeeds.`,
                     )}
                   </p>
                 ) : sourceUsage.cleanup_pending_count > 0 ? (
                   <p className="mt-3 text-[11px] leading-4 text-muted-foreground">
                     {tx(
                       locale,
-                      `正在清理 ${sourceUsage.cleanup_pending_count} 个原文件，完成后释放 ${formatBytes(sourceUsage.cleanup_pending_bytes)}。`,
-                      `Cleaning ${sourceUsage.cleanup_pending_count} original file(s). ${formatBytes(sourceUsage.cleanup_pending_bytes)} will be freed when it finishes.`,
+                      `系统正在自动清理 ${sourceUsage.cleanup_pending_count} 个待删除原文件；清理成功后会自动释放 ${formatBytes(sourceUsage.cleanup_pending_bytes)}。`,
+                      `The backend is automatically cleaning ${sourceUsage.cleanup_pending_count} original file(s) pending deletion. ${formatBytes(sourceUsage.cleanup_pending_bytes)} will be released when cleanup succeeds.`,
                     )}
                   </p>
                 ) : null}

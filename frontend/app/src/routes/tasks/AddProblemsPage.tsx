@@ -149,8 +149,8 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
     ? missingReferences
       ? tx(locale, "原文件已过期、删除或不可访问，请重新选择文件或资料库条目。", "The original file expired, was deleted, or is inaccessible. Reselect a file or library item.")
       : unavailableReferences
-        ? tx(locale, "暂时无法检查文件，请点击资料卡片中的“重试检查”。", "Unable to check the file. Select Retry check on the source card.")
-        : tx(locale, "正在检查已上传文件…", "Checking the uploaded file…")
+        ? tx(locale, "暂时无法核对文件，尚不能确定是否需要重传。请点击资料卡片中的“重试检查”。", "The file could not be checked, so it is not yet known whether another upload is needed. Use Retry check on the source card.")
+        : tx(locale, "正在核对已上传文件，请稍候；暂时无需重新上传。", "Checking the uploaded file. Please wait; no new upload is needed yet.")
     : expertsQuery.isLoading
     ? tx(locale, "正在读取模型配置。", "Loading model configuration.")
     : expertsQuery.isError
@@ -472,8 +472,8 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
           label={tx(locale, "题目识别模型", "Question recognition model")}
           hint={tx(
             locale,
-            "图片与扫描件需要支持图片输入的模型。",
-            "Images and scans need a model that supports image input.",
+            "可直接开始识别，无需先做图片测试。图片与扫描件需要模型支持图片输入。",
+            "Start recognition without an image test. Images and scans need image input support.",
           )}
           experts={enabledExperts}
           value={recognitionProviderId}

@@ -103,7 +103,7 @@ it("preserves edits after uncertain failure and reuses the same request key", as
   const user = await edit("未完成任务原件配额（字节）", "0");
   await user.type(screen.getByLabelText("修改原因"), "暂停新增占用");
   await user.click(screen.getByRole("button", { name: "保存全局配置" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法确认保存结果");
+  expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法确认是否保存");
   expect(screen.queryByText("private database details")).not.toBeInTheDocument();
   expect(screen.getByLabelText("未完成任务原件配额（字节）")).toHaveValue("0");
   await user.click(screen.getByRole("button", { name: "保存全局配置" }));

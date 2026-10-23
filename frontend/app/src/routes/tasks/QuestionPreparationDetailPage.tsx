@@ -515,7 +515,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-bold text-foreground">{tx(locale, "本题满分与评分标准", "Maximum Score and Rubric")}</h3>
           </div>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">{sourceLabel} · {tx(locale, "若列出分项分值，合计须等于本题满分。", "Explicit point allocations must add up to the maximum.")}</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{sourceLabel} · {tx(locale, "小问仍属于同一道大题；若评分标准写出分项分值，合计必须等于本题满分。", "Subparts remain inside one major question. Explicit rubric points must equal this maximum.")}</p>
         </div>
         {!readOnly ? <button type="button" aria-label={tx(locale, `修改第 ${problem.number || "—"} 题满分与评分标准`, `Edit score and rubric for question ${problem.number || "—"}`)} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(null); }); else setEditing(true); }} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
           {editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}
@@ -576,7 +576,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
 
 function RubricPointStatus({ summary, locale }: { summary: ProblemInfo["rubric_point_summary"]; locale: string }) {
   if (!summary?.has_explicit_subpart_points) {
-    return <p className="text-xs text-muted-foreground">{tx(locale, "也可用百分比或文字描述评分标准。", "Percentage or written rubrics are also supported.")}</p>;
+    return <p className="text-xs text-muted-foreground">{tx(locale, "未写明小问绝对分值时，可继续使用百分比或自由文本评分标准。", "Percentage or free-text rubrics remain valid when no explicit subpart points are stated.")}</p>;
   }
   const label = tx(
     locale,

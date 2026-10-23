@@ -65,7 +65,7 @@ for (const stage of ["problems", "submissions"] as const) {
         await page.goto(`/tasks/recovery-task/${stage}/progress`);
         const reason = page.getByText(locale === "zh-CN" ? /PDF 第 8 页/ : /Affected PDF pages: 8/);
         await expect(reason).toBeVisible();
-        await expect(reason).toContainText(locale === "zh-CN" ? "版权限制" : "copyright restrictions");
+        await expect(reason).toContainText("RECITATION");
         const retry = page.getByRole("button", { name: /重试失败项|Retry failed/i });
         await expect(retry).toBeDisabled();
         await page.reload();

@@ -272,7 +272,7 @@ export function GradingPreflightPage() {
                 {summary.flaggedAnswers > 0 || hasSourceWarnings ? <Link to={submissionReviewHref} className="hover:underline">{copy(locale, "editSubmissions")}</Link> : null}
               </div>
             ) : null}
-            {countdownActive && hasReviewWarnings ? <p className="text-xs">{locale === "zh-CN" ? "如需核对，请在倒计时结束前返回。" : "To review, go back before the countdown ends."}</p> : null}
+            {countdownActive && hasReviewWarnings ? <p className="text-xs">{locale === "zh-CN" ? "待确认本身不阻止批改；可在倒计时结束前返回核对。" : "Pending confirmation does not block grading. You can return to review before the countdown ends."}</p> : null}
           </section>
 
           <section className={cn("min-h-[130px] rounded-[10px] border bg-card px-6 py-5 sm:px-8", historyView ? "" : "mt-[30px]")} aria-labelledby="preflight-task-summary">
@@ -390,7 +390,7 @@ export function GradingPreflightPage() {
             {historyView ? (
               <>
                 <p className="max-w-[600px] text-right text-[12px] leading-5 text-muted-foreground">
-                  {locale === "en-US" ? "Settings used for this grading run." : "本次批改使用的设置。"}
+                  {locale === "en-US" ? "This is the configuration snapshot used for the completed grading run." : "这里保留本次已执行批改所使用的配置快照，不会再次启动批改。"}
                 </p>
                 <Link
                   to={`/tasks/${taskId}/review`}

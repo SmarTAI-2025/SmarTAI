@@ -554,7 +554,7 @@ export function classifyRecoverableError(
   if (code === "submission_recognition_blocked") {
     return {
       title: tx(locale, "作答仍有关键问题待处理", "Some answers need correction and confirmation"),
-      description: tx(locale, "请补齐识别失败的作答，并确认已修正内容后继续。", "Repair failed transcriptions and confirm the corrected answers before continuing."),
+      description: tx(locale, "请补齐识别失败的作答，并确认已修正内容后继续。学生真实留白和普通低置信提醒不会阻止批改。", "Repair failed transcriptions and confirm the corrected answers before continuing. Genuine blank responses and ordinary confidence warnings do not block grading."),
       actionLabel: tx(locale, "校对作答", "Review submissions"),
       actionHref: taskHref("/submissions"),
       actionKind: "reselect", tone: "danger", technicalDetails,
@@ -664,8 +664,8 @@ export function classifyRecoverableError(
     return {
       title: tx(locale, "模型调用正在排队", "Model capacity is busy"),
       description: tx(locale,
-        "等待模型调用名额超时，尚未向模型发送请求。任务资料已保留，请稍后重试。",
-        "Waiting for model capacity timed out. This request was not sent to the model. Your task data is saved; try again later."),
+        "SmarTAI 未能在限定时间内取得调用名额，尚未向模型发送本次请求。任务资料已保留，请稍后重试；持续出现时请联系管理员检查服务器资源。",
+        "SmarTAI could not obtain capacity before the deadline; this request was not sent to the model. Your task data is preserved. Retry later; if this persists, ask an administrator to check server resources."),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
       tone: "warning",
@@ -744,8 +744,8 @@ export function classifyRecoverableError(
         ? tx(locale, "模型停止了原文转写", "The model stopped transcribing this content")
         : tx(locale, "模型限制了这次内容输出", "The model blocked this content output"),
       description: pageHint + (code === "provider_recitation_blocked"
-        ? tx(locale, "模型因版权限制停止转写。请调整题号或页码范围，或更换模型；原文件和填写内容已保留。", "The model stopped transcription due to copyright restrictions. Adjust the question or page range, or change models. Your file and input are saved.")
-        : tx(locale, "模型因内容限制停止识别。请调整识别范围或更换模型；原文件和填写内容已保留。", "The model stopped recognition due to content restrictions. Adjust the scope or change models. Your file and input are saved.")),
+        ? tx(locale, "服务商将输出判定为可能复述受版权保护的原文（RECITATION），因此没有返回识别结果。这不代表模型缺少图片能力。请确认题号或页码只包含所需内容，或更换识别模型后重试；原文件和填写内容仍保留。", "The provider flagged the output as possible recitation of copyrighted text (RECITATION) and returned no transcription. This does not mean the model lacks image support. Check that the target questions or pages match what you need, or change the recognition model. Your file and input are preserved.")
+        : tx(locale, "服务商已接收请求，但因内容策略停止输出。这不代表图片测试失败。请调整所需识别范围或更换模型；原文件和填写内容仍保留。", "The provider received the request but stopped output under its content policy. This is not an image-test failure. Adjust the requested scope or change models; your file and input are preserved.")),
       actionLabel: tx(locale, "更换模型", "Change model"),
       actionHref: `/settings/byok${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`,
       actionKind: "byok", tone: "warning", technicalDetails,
@@ -842,8 +842,8 @@ export function classifyRecoverableError(
       title: tx(locale, "OCR 没有读到可用文字", "OCR found no usable text"),
       description: tx(
         locale,
-        "请换清晰文件或更换模型。也可在模型配置页验证图片识别能力。",
-        "Try a clearer file or another model. You can also verify image support in model settings.",
+        "图片识别未得到可靠文字，可能来自文件模糊或模型识别效果，不能据此判定模型不支持图片。请换清晰文件或换模型；图片能力未确认时也可在模型配置页主动验证。",
+        "Image recognition did not yield reliable text. Blurry input or model accuracy may cause this; it does not prove lack of image support. Try a clearer file or another model; if capability is uncertain, verify it in model settings.",
       ),
       actionLabel: tx(locale, "重新选择文件", "Choose the file again"),
       actionKind: "reupload",
@@ -917,8 +917,8 @@ export function classifyRecoverableError(
       title: tx(locale, "逐文件识别结果保存未完成", "Per-file outcomes were not fully saved"),
       description: tx(
         locale,
-        "识别结果未完整保存，任务已暂停。原文件已保留，请重试；若仍失败，请联系管理员。",
-        "Some recognition results could not be saved, so the task paused. The originals are saved. Retry; if it still fails, contact your administrator.",
+        "识别结果未完整保存，任务已暂停。原文件仍保留，请重试；若再次失败，请提供任务编号联系管理员。",
+        "Some recognition results could not be saved, so the task paused. The originals are retained. Retry; if it fails again, contact an administrator with the task ID.",
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
@@ -1070,8 +1070,8 @@ export function classifyRecoverableError(
       title: tx(locale, "模型限额暂时不可用", "The model rate limit is temporarily unavailable"),
       description: tx(
         locale,
-        `模型请求受限，本轮已停止，成功部分已保留。请查看服务商用量、稍后重试或更换模型。${wait}`,
-        `Model requests are limited. This run has stopped and successful results are saved. Check provider usage, retry later, or change models.${wait}`,
+        `服务商仍返回限流，本轮已停止，自动尝试最多 3 次。当前信息不足以确定是分钟限制还是日额度。可查看官网用量、切换模型，或按原配置重新排队；成功部分保留。${wait}`,
+        `The provider still reports a limit. This run has stopped after at most 3 automatic attempts. The response does not identify a minute or daily limit. Check usage, switch models, or rejoin the queue with the same settings; saved results are kept.${wait}`,
       ),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
@@ -1230,8 +1230,8 @@ function providerConfigurationErrorCopy(
     provider_request_rejected: [
       "模型接口未接受本次请求",
       "The model API did not accept this request",
-      "请核对模型名称、接口地址和 API 协议，或更换模型后重试。原文件和填写内容已保留。",
-      "Check the model name, endpoint, and API protocol, or retry with another model. Your file and input are saved.",
+      "服务商认为本次请求的参数或格式不符合接口要求，当前信息不足以确定具体参数。这不能证明模型不支持图片。请核对模型名称、接口地址和 API 协议，或换模型重试；原文件和填写内容仍保留。",
+      "The provider rejected the request parameters or format; the exact parameter is not known. This does not establish a lack of image support. Check the model name, endpoint and API protocol, or try another model. Your file and input are preserved.",
     ],
     provider_response_invalid: [
       "模型服务返回了无法识别的响应",
@@ -1322,7 +1322,7 @@ function uncertainProviderCauseCopy(failure: ProviderFailure, locale: Locale) {
     provider_rate_limited: ["模型请求受到限流", "The model request was rate limited", "本次运行最近记录到服务商限流", "The latest recorded model failure in this run was provider rate limiting"],
     provider_response_invalid: ["模型返回结果无法使用", "The model response could not be used", "本次运行最近记录到模型返回结果未通过格式校验", "The latest recorded model failure in this run was an invalid response format"],
     recognition_response_invalid: ["识别结果无法使用", "The recognition response could not be used", "返回的识别结果未通过有效性校验，无法作为已完成结果使用", "The recognition response failed validation and could not be accepted as completed"],
-    provider_recitation_blocked: ["模型停止了原文转写", "The model stopped transcribing this content", "模型因版权限制停止转写，请调整识别范围或更换模型", "The model stopped transcription due to copyright restrictions. Adjust the scope or change models"],
+    provider_recitation_blocked: ["模型停止了原文转写", "The model stopped transcribing this content", "服务商将输出判定为可能复述受版权保护的原文（RECITATION），停止返回识别结果。请调整所需识别范围或更换模型", "The provider flagged possible recitation of copyrighted text (RECITATION) and stopped transcription. Adjust the requested scope or change models"],
     provider_content_blocked: ["模型限制了这次内容输出", "The model blocked this content output", "服务商因内容策略停止输出识别结果。请调整所需识别范围或更换模型", "The provider stopped transcription under its content policy. Adjust the requested scope or change models"],
   };
   if (typeof failure.code !== "string" || !Object.hasOwn(copies, failure.code)) return null;
@@ -1348,7 +1348,7 @@ function providerTransientErrorCopy(
   if (code === "provider_overloaded") {
     return {
       title: tx(locale, "模型服务当前拥堵", "The model service is busy"),
-      description: tx(locale, "资料已保留，请稍后重试或更换模型。", "Your files are saved. Retry later or choose another model."),
+      description: tx(locale, "供应商暂时无法接收请求，并非已确认的每日额度耗尽。资料已保留，请稍后重试或选择另一个已启用模型。", "The provider is temporarily overloaded; this does not confirm a daily quota limit. Your files are preserved. Retry later or select another enabled model."),
     };
   }
   if (code === "grading_provider_transient") {
