@@ -26,7 +26,7 @@ def _unfence(text):
     return text
 
 
-def expression(text):
+def expression(text, *, allow_unknown_functions=False):
     """Return supported-looking arithmetic without evaluating user text."""
     text = _unfence(text)
     if not text or len(text) > 2048:
@@ -56,7 +56,7 @@ def expression(text):
             except InvalidOperation:
                 return None
         if isinstance(node, ast.Call) and (not isinstance(node.func, ast.Name)
-                or node.func.id not in _FUNCTIONS or node.keywords):
+                or (node.func.id not in _FUNCTIONS and not allow_unknown_functions) or node.keywords):
             return None
         if isinstance(node, ast.Name) and node.id not in _FUNCTIONS and not re.fullmatch(
                 r"[A-Za-z][A-Za-z0-9]{0,2}", node.id):
@@ -65,7 +65,7 @@ def expression(text):
 
 
 def _identity(text):
-    parsed = expression(text)
+    parsed = expression(text, allow_unknown_functions=True)
     if parsed is None:
         return None
     tree = _tree(parsed)
@@ -83,8 +83,8 @@ def _identity(text):
     return ast.dump(tree, include_attributes=False)
 
 
-def quantity(text):
-    parsed = expression(text)
+def quantity(text, *, allow_unknown_functions=False):
+    parsed = expression(text, allow_unknown_functions=allow_unknown_functions)
     if parsed is not None:
         return parsed, None
     # Do not split on an operator space (e.g. "x + y") or invent units.
@@ -116,7 +116,10 @@ def _bound_units(expr, sources):
     units = set()
     for source in sources:
         for part in _pieces(source):
-            value = quantity(part)
+            # A syntactically bound unknown function is still genuine source
+            # text. The worker decides support and returns unknown; binding
+            # must not confuse unavailable mathematics with invented input.
+            value = quantity(part, allow_unknown_functions=True)
             if value and _identity(value[0]) == target:
                 units.add(value[1])
     return units

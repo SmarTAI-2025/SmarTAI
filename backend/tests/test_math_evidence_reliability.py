@@ -300,3 +300,18 @@ def test_local_quote_repair_must_retain_located_missing_obligation():
     with pytest.raises(g.StructuredOutputInvalidError) as exc:
         validator(repair)
     assert "repair_changed_valid_source_claim" in exc.value.repair_context
+
+
+@pytest.mark.asyncio
+async def test_bound_unknown_function_returns_worker_unknown_without_feedback():
+    p, a = problem(), answer("f(1)")
+    p.reference_answer = "f(1)"
+    initial = assessment(8, 2, text=a.content, checks=[g.Verification(claim_id="s1",
+        context_quote=p.reference_answer, request={"student_expression": "f(1)", "reference_expression": "f(1)"})])
+    provider, calls = raw_provider(initial)
+    with math_plans_context({p.q_id: plan_for(p)}), g.math_review_scope():
+        result = await CalculationSkill(provider).grade(p, a)
+    trace = g.read_math_trace(result)
+    assert result.score == 10 and len(calls) == 1 and not result.error_kind
+    assert trace["evidence"][0]["status"] == "unknown" and "binding_issue" not in trace["evidence"][0]
+    assert not trace["review_pending"] and trace["tool_applicability"] == "applicable"
