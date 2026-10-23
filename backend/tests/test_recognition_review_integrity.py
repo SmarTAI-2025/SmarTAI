@@ -298,3 +298,15 @@ def test_historical_missing_answer_row_cannot_bypass_grading_gate():
         patch={"content": "Teacher transcribed q2", "review_status": "confirmed"},
         expected_revision=current["workflow_revision"])
     assert task_facade.grading_readiness(**args)["ready"]
+
+
+def test_explicit_partial_evidence_survives_reference_answer_projection():
+    from backend.agents.question_preparation_agent import _issue
+    from backend.services.task_facade import _effective_question_issues
+    for field in ("stem", "rubric", "answer"):
+        issue = _issue("q1", field, "recognition_partial", "blocking", ["source-1"])
+        projected = _effective_question_issues({"preparation_issues": [issue]})[0]
+        assert projected["details"]["incomplete"] is True
+        assert projected["severity"] == ("warning" if field == "answer" else "blocking")
+        resolved = _effective_question_issues({"preparation_issues": [{**projected, "status": "resolved"}]})[0]
+        assert resolved["status"] == "resolved"

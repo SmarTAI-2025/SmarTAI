@@ -152,6 +152,26 @@ beforeEach(() => {
 });
 
 describe("StudentAnswerReviewPage review shortcuts", () => {
+  it("does not label an invalid confidence field as a low confidence score", () => {
+    taskData.student_data.S001.stu_ans[0].flag = ["recognition_manual_pending", "recognition_invalid_fields:recognition_confidence"];
+    renderPage();
+    expect(screen.getByText("待核对：识别置信度")).toBeInTheDocument();
+    expect(screen.queryByText("低置信", { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByText(/recognition_invalid_fields/)).not.toBeInTheDocument();
+  });
+  it.each([false, true])("confirms metadata-only failures without changing verified content (editing=%s)", async editing => {
+    const user = userEvent.setup();
+    taskData.student_data.S001.stu_ans[0].flag = ["recognition_manual_pending", "recognition_failed", "recognition_invalid_fields:type", "recognition_metadata_review"];
+    renderPage();
+    expect(screen.queryByText("recognition_metadata_review")).not.toBeInTheDocument();
+    expect(screen.queryByText("识别失败，请修正并确认")).not.toBeInTheDocument();
+    expect(screen.getByText("待核对：题型")).toBeInTheDocument();
+    if (editing) await user.click(screen.getByRole("button", { name: "修改" }));
+    await user.click(screen.getByRole("button", { name: editing ? /第 1 题 · 保存并确认/ : /第 1 题 · 待确认/ }));
+    expect(mutations.answer).toHaveBeenCalledWith(expect.objectContaining({ qId: "Q1", reviewStatus: "confirmed" }));
+    if (editing) expect(mutations.answer).toHaveBeenCalledWith(expect.objectContaining({ content: "Student answer one" }));
+    expect(mutations.answer.mock.calls[0][0].flag).toBeUndefined();
+  });
   it.each([false, true])("uses individual confirmation for a pending blank (editing=%s), never bulk confirmation", async editing => {
     const user = userEvent.setup();
     taskData.student_data.S001.stu_ans[0].content = "";

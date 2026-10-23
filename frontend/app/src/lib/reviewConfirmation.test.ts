@@ -6,6 +6,13 @@ const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id:
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
+  it("explains conflicting test expectations and requires confirmation before proceeding", () => {
+    const marker = issue({ code: "source_conflict", field: "programming_tests", details: { reason: "test_case_output_conflict" } });
+    expect(recognitionIssueLabel(marker, "zh-CN")).toContain("同一输入对应了不同预期输出");
+    expect(recognitionIssueLabel(marker, "en-US")).toContain("different expected outputs for the same input");
+    expect(questionReviewNextBlocked(question({ preparation_issues: [marker] }))).toBe(true);
+  });
+
   it("shows a short localized rubric hint without reopening the confirmation gate", () => {
     const warning = issue({
       code: "math_rubric_advisory", field: "rubric",
@@ -179,5 +186,37 @@ describe("review hard failures", () => {
     const task = { task_id: "T1", submission_sources: [{ source_id: "source-1", file_name: "sample.pdf", status: "identity_needs_review", internal_status: "identity_conflict" }], student_data: {} } as unknown as Task;
     expect(submissionReviewBlockers(task, "zh-CN")[0].href).toBe("/tasks/T1/submissions#student-count");
     expect(submissionConfirmationBlockers(task, "zh-CN")).toHaveLength(1);
+  });
+});
+
+
+describe("incremental review contract", () => {
+  it.each(["stem", "rubric", "answer"] as const)("preserves projected incomplete %s evidence without page metadata", field => {
+    const partial = issue({ code: "recognition_partial", field, severity: field === "answer" ? "warning" : "blocking",
+      source_ids: ["source-1"], details: { incomplete: true } });
+    const problem = question({ preparation_issues: [partial] });
+    expect(questionReviewIssues(problem)).toHaveLength(1);
+    expect(questionReviewBlocked(problem)).toBe(field !== "answer");
+    expect(questionReviewNextBlocked(problem)).toBe(field !== "answer");
+    expect(recognitionIssueLabel(partial, "zh-CN")).toContain("来源内容不完整");
+    expect(recognitionIssueLabel(partial, "en-US")).toContain("Source content is incomplete");
+    expect(questionReviewIssues({ ...problem, preparation_issues: [{ ...partial, status: "resolved" }] })).toEqual([]);
+  });
+
+  it("keeps an explicit blocking fragment visible before enriched details arrive", () => {
+    const partial = issue({ code: "recognition_partial", severity: "blocking", details: {} });
+    expect(questionReviewBlocked(question({ preparation_issues: [partial] }))).toBe(true);
+  });
+
+  it("permits metadata confirmation but requires it before continuation", () => {
+    const answer = { q_id: "q1", number: "1", type: "", content: "Verified answer", flag: [
+      "recognition_invalid_fields:type", "recognition_manual_pending", "recognition_failed", "recognition_metadata_review"] };
+    expect(answerReviewBlocked(answer)).toBe(false);
+    expect(answerReviewNextBlocked(answer)).toBe(true);
+    expect(answerReviewBlocked({ ...answer, flag: answer.flag.filter(flag => flag !== "recognition_metadata_review") })).toBe(true);
+    expect(answerReviewBlocked({ ...answer, content: "" })).toBe(true);
+    for (const flag of ["recognition_failed_pages:2", "recognition_unprocessed_pages:3", "recognition_incomplete", "parse_failed", "provider_submit_uncertain", "recognition_invalid_fields:content"]) {
+      expect(answerReviewBlocked({ ...answer, flag: [...answer.flag, flag] })).toBe(true);
+    }
   });
 });

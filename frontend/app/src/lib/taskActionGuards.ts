@@ -200,6 +200,7 @@ export interface RecoverableErrorInfo {
   tone: "danger" | "warning" | "primary";
   retryAfterSeconds?: number;
   dailyQuotaExhausted?: boolean;
+  retryUnavailable?: boolean;
   showUsageLinks?: boolean;
   technicalDetails: Array<{ label: string; value: string }>;
 }
@@ -509,6 +510,22 @@ export function classifyRecoverableError(
       description: tx(locale, "手动补全的题目仍有必填内容或尚未确认，批改没有启动。", "Some manually completed questions have missing materials or await confirmation. Grading has not started."),
       actionLabel: tx(locale, "补全题目资料", "Complete question materials"),
       actionHref: taskHref("/questions"), actionKind: "reselect", tone: "warning", technicalDetails,
+    };
+  }
+  if (code === "saved_text_recovery_retired") {
+    return {
+      title: tx(locale, "此旧整理任务已停用", "This older organization task is retired"),
+      description: tx(locale, "此任务来自已停用的旧流程，请新建任务并重新上传资料。", "This task uses a retired workflow. Create a new task and upload your materials again."),
+      actionLabel: tx(locale, "新建任务", "Create a new task"),
+      actionHref: "/tasks/new", actionKind: "reselect", retryUnavailable: true, tone: "warning", technicalDetails,
+    };
+  }
+  if (code === "question_preparation_artifact_invalid" || code === "question_preparation_artifact_conflict") {
+    return {
+      title: tx(locale, "题目结果保存或恢复未完成", "Question results could not be saved or restored"),
+      description: tx(locale, "已保存的识别内容仍保留。本次整理结果未能通过保存校验，可重试失败项或进入人工复核。", "Saved recognition content is retained. The organized result could not pass the save checks. Retry failed items or continue to manual review."),
+      actionLabel: tx(locale, "重试失败项", "Retry failed items"),
+      actionKind: "retry", tone: "danger", technicalDetails,
     };
   }
   if (code === "question_preparation_manual_unavailable") {

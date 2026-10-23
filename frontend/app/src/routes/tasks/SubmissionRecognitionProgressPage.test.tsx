@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
@@ -44,24 +44,43 @@ beforeEach(() => {
 });
 
 describe("submission recognition completion", () => {
-  it.each(["started", "already_running"])("waits for saved answers after a %s handoff", async responseStatus => {
+  it.each(["error", "submissions_paused"] as const)("shows an immediate handoff view during a slow %s request and restores recovery after rejection", async status => {
+    snapshot = { ...detail, status, last_failed_job_id: "new-job", error: "operation_cancelled" };
+    let reject!: (error: unknown) => void;
+    manuallyComplete.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    expect(screen.getByText("正在打开人工复核")).toBeVisible();
+    expect(screen.getByRole("button", { name: "正在打开…" })).toBeDisabled();
+    expect(screen.queryByRole("heading", { name: "作答校对页面" })).not.toBeInTheDocument();
+    reject(new Error("Recovery request failed"));
+    expect(await screen.findByRole("button", { name: "人工继续处理" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    expect(await screen.findByRole("heading", { name: "作答校对页面" })).toBeVisible();
+    expect(manuallyComplete).toHaveBeenCalledTimes(2);
+  });
+  it.each(["started", "already_running"])("rejects a retired %s handoff instead of entering implicit AI recovery", async responseStatus => {
     snapshot = { ...detail, status: "submissions_paused", last_failed_job_id: "new-job", error: "operation_cancelled" };
-    manuallyComplete.mockImplementation(async () => {
-      snapshot = { ...detail, status: "parsing_submissions", recovering_saved_text: true };
-      return { status: responseStatus };
-    });
+    manuallyComplete.mockResolvedValue({ status: responseStatus });
     const view = () => <I18nProvider><MemoryRouter initialEntries={["/tasks/T/submissions/progress"]}><Routes>
       <Route path="/tasks/:taskId/submissions/progress" element={<SubmissionRecognitionProgressPage />} />
       <Route path="/tasks/:taskId/submissions" element={<h1>作答校对页面</h1>} />
     </Routes></MemoryRouter></I18nProvider>;
-    const { rerender } = render(view());
+    render(view());
     fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
-    await waitFor(() => expect(screen.getByRole("progressbar")).toBeInTheDocument());
+    expect(await screen.findByRole("heading", { name: "此旧整理任务已停用" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "作答校对页面" })).not.toBeInTheDocument();
-    snapshot = { ...snapshot, status: "submissions_ready", submission_sources: [source("parsed")],
-      submission_source_summary: { uploaded: 1, parsed: 1, failed: 0, pending: 0, identity_needs_review: 0 } };
-    rerender(view());
-    expect(await screen.findByRole("heading", { name: "作答校对页面" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
+  });
+  it("keeps direct visits to retired jobs out of both retry and retired manual recovery", async () => {
+    snapshot = { ...detail, status: "error", last_failed_job_id: "new-job", error: "saved_text_recovery_retired" };
+    show();
+    expect(screen.getByRole("heading", { name: "此旧整理任务已停用" })).toBeVisible();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
+    expect(manuallyComplete).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "人工继续处理" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "新建任务" })).toHaveAttribute("href", "/tasks/new");
   });
   it("opens manual review from a paused task without a model selection", async () => {
     snapshot = { ...detail, status: "submissions_paused", last_failed_job_id: "new-job", error: "operation_cancelled" };

@@ -13,6 +13,7 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import event, select, update
 
 from backend.agents.ingest_agent import AICompletionCandidateOutput
+from backend.agents import incremental_question_preparation as incremental
 from backend.api import task_preparation
 from backend.db import assignment_repository, file_repository, workflow_repository
 from backend.db.session import get_engine, session_scope
@@ -20,6 +21,7 @@ from backend.domain.errors import DomainError, LeaseLost, VersionConflict
 from backend.llm.providers import ProviderRequestError
 from backend.models import QuestionScorePolicy
 from backend.services import task_facade
+from backend.services import question_preparation_artifacts as preparation_artifacts
 from backend.services.question_structure import build_major_question_structure
 from backend.storage import get_storage
 from backend.storage.local import LocalStorage
@@ -77,11 +79,11 @@ async def test_manually_paused_question_preparation_can_continue_with_saved_sour
     assert resumed.payload["acknowledged_restart_from"]
     calls = []
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _RecoveryRegistry())
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls,
-        question_count=2, record_base_provider_calls=True))
+    _install_incremental_preparer(monkeypatch, calls,
+        question_count=2, record_base_provider_calls=True)
     await task_preparation.run_durable_question_preparation(_claim(owner, retry["job_id"], "continued"))
     assert task_facade.get_task(task_id=task, owner_id=owner)["status"] == "problems_ready"
-    assert calls == ["questions_extracted", "uploaded_materials_aligned", "q1", "q2"]
+    assert calls == ["questions_extracted", "q1", "q2"]
 
 
 @pytest.mark.asyncio
@@ -90,8 +92,8 @@ async def test_changed_model_retry_keeps_verified_question_units(monkeypatch):
     _, response, _ = await _queue_question_preparation(owner, task, source_text="1. First.\n2. Second.")
     calls = []
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _RecoveryRegistry())
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls,
-        question_count=2, known_failure_question="q2", record_base_provider_calls=True))
+    _install_incremental_preparer(monkeypatch, calls,
+        question_count=2, known_failure_question="q2", record_base_provider_calls=True)
     await task_preparation.run_durable_question_preparation(_claim(owner, response["job_id"], "first"))
     workflow = workflow_repository.get_workflow(task, owner_id=owner)
     changed = _RecoveryRegistry("different-model")
@@ -100,12 +102,12 @@ async def test_changed_model_retry_keeps_verified_question_units(monkeypatch):
             use_current_configuration=True), background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=changed)
     assert retry["job_id"] != response["job_id"]
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: changed)
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls,
-        question_count=2, record_base_provider_calls=True))
+    _install_incremental_preparer(monkeypatch, calls,
+        question_count=2, record_base_provider_calls=True)
     await task_preparation.run_durable_question_preparation(_claim(owner, retry["job_id"], "changed-model"))
     final = workflow_repository.get_operation(retry["job_id"], owner_id=owner)
     assert final.status == "done", final.error_code
-    assert calls == ["questions_extracted", "uploaded_materials_aligned", "q1", "q2", "q2"]
+    assert calls == ["questions_extracted", "q1", "q2", "q2"]
     assert final.checkpoint["retry_origin_copied"] == response["job_id"]
 
 
@@ -159,17 +161,6 @@ def _candidates(q_id: str) -> list[AICompletionCandidateOutput]:
             text_value=answer,
         ),
     ]
-
-
-def _apply_candidates(
-    problem_data: dict[str, dict],
-    candidates_by_question: dict[str, list[AICompletionCandidateOutput]],
-) -> dict[str, dict]:
-    output = {q_id: dict(problem) for q_id, problem in problem_data.items()}
-    for q_id, candidates in candidates_by_question.items():
-        for candidate in candidates:
-            output[q_id][candidate.target] = candidate.text_value
-    return output
 
 
 async def _queue_question_preparation(
@@ -347,79 +338,90 @@ def _run_publish_pair(first_call, second_call):
         return [future.result(timeout=20) for future in futures]
 
 
-def _fake_preparer(
-    provider_calls: list[str],
-    *,
-    question_count: int,
-    cancel_after_question: str | None = None,
-    cancel_after_question_started: str | None = None,
-    cancel_after_extraction_started: bool = False,
-    known_failure_question: str | None = None,
-    record_base_provider_calls: bool = False,
+_REAL_INCREMENTAL_BEGIN = incremental.IncrementalQuestionPreparation.begin
+_REAL_INCREMENTAL_FINISH = incremental.IncrementalQuestionPreparation.finish
+
+
+def _install_incremental_preparer(
+    monkeypatch, provider_calls, *, question_count,
+    cancel_after_question=None, cancel_after_question_started=None,
+    cancel_after_extraction_started=False, known_failure_question=None,
+    failure_questions=None, record_base_provider_calls=False, generation_languages=None,
 ):
-    async def prepare(_sources, _provider, **kwargs):
-        recovered_base = kwargs.get("recovered_base_problem_data")
-        recovered_extracted = kwargs.get("recovered_extracted_problem_data")
-        if recovered_base is None:
-            if recovered_extracted is None:
-                await kwargs["on_extraction_started"]()
-                if cancel_after_extraction_started:
-                    raise asyncio.CancelledError
-                if record_base_provider_calls:
-                    provider_calls.append("questions_extracted")
-                extracted = _questions(question_count)
-                await kwargs["on_questions_extracted"](extracted)
-            else:
-                extracted = {
-                    q_id: dict(problem)
-                    for q_id, problem in recovered_extracted.items()
-                }
-            base = extracted
-            if record_base_provider_calls:
-                await kwargs["on_base_alignment_started"]()
-                provider_calls.append("uploaded_materials_aligned")
-            await kwargs["on_base_prepared"](base, {})
-        else:
-            base = {
-                q_id: dict(problem) for q_id, problem in recovered_base.items()
-            }
+    """Fake only model boundaries; exercise real incremental artifacts and fences."""
+    stopped = False
+    identities = {}
+    failures = set(failure_questions or ([known_failure_question] if known_failure_question else []))
 
-        recovered = {
-            q_id: [
-                AICompletionCandidateOutput.model_validate(candidate)
-                for candidate in candidates
-            ]
-            for q_id, candidates in (
-                kwargs.get("recovered_candidates_by_question") or {}
-            ).items()
-        }
-        all_candidates = dict(recovered)
-        for q_id in base:
-            if q_id in recovered:
-                continue
-            await kwargs["on_question_started"](q_id)
-            if q_id == cancel_after_question_started:
-                raise asyncio.CancelledError
-            provider_calls.append(q_id)
-            if q_id == known_failure_question:
-                error = ProviderRequestError(
-                    "provider_rate_limited",
-                    status_code=429,
-                )
-                await kwargs["on_question_failed"](q_id, error)
-                raise error
-            candidates = _candidates(q_id)
-            await kwargs["on_question_completed"](q_id, candidates)
-            all_candidates[q_id] = candidates
-            if q_id == cancel_after_question:
-                raise asyncio.CancelledError
-        return _apply_candidates(base, all_candidates)
+    async def begin(self, key):
+        if stopped:
+            raise asyncio.CancelledError
+        await _REAL_INCREMENTAL_BEGIN(self, key)
 
-    return prepare
+    async def extract(*_args, **_kwargs):
+        nonlocal stopped
+        if cancel_after_extraction_started:
+            stopped = True
+            raise asyncio.CancelledError
+        if record_base_provider_calls:
+            provider_calls.append("questions_extracted")
+        return _questions(question_count)
+
+    async def generate(data, targets, *_args, **_kwargs):
+        nonlocal stopped
+        if generation_languages is not None:
+            generation_languages.append(_kwargs.get("generation_language"))
+        row = data["q1"]
+        q_id = "q" + row["number"]
+        identity = incremental._base_identity({key: value for key, value in row.items() if key != "teacher_subpart_points"})
+        identities[identity] = q_id
+        if q_id == cancel_after_question_started:
+            stopped = True
+            raise asyncio.CancelledError
+        provider_calls.append(q_id)
+        if q_id in failures:
+            raise ProviderRequestError("provider_rate_limited", status_code=429)
+        requested = {target["target"] for target in targets}
+        return [candidate.model_copy(update={"q_id": "q1", "target_id": "q1:" + candidate.target})
+                for candidate in _candidates(q_id) if candidate.target in requested]
+
+    async def finish(self, key, rows=None, error=None):
+        nonlocal stopped
+        await _REAL_INCREMENTAL_FINISH(self, key, rows, error)
+        if key.startswith("generation:") and error is None and identities.get(key.split(":", 1)[1]) == cancel_after_question:
+            stopped = True
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(incremental, "_major_question_generation_concurrency", lambda _: 1)
+    monkeypatch.setattr(incremental, "_extract_problems_call", extract)
+    monkeypatch.setattr(incremental, "generate_missing_question_materials", generate)
+    monkeypatch.setattr(incremental.IncrementalQuestionPreparation, "begin", begin)
+    monkeypatch.setattr(incremental.IncrementalQuestionPreparation, "finish", finish)
+
+
+def _generated_artifacts(operation):
+    """Current field artifacts grouped by original displayed question number."""
+    from backend.services.question_preparation_artifacts import read_base_preparation_artifact, QUESTIONS_EXTRACTED_STAGE
+    result = {}
+    for key, file_id in (operation.checkpoint.get("incremental_unit_artifacts") or {}).items():
+        if not key.startswith("generated:"):
+            continue
+        envelope = read_base_preparation_artifact(file_id, stage=QUESTIONS_EXTRACTED_STAGE,
+            owner_id=operation.owner_id, task_id=operation.assignment_id, operation_id=operation.id,
+            attempt=operation.checkpoint["artifact_attempts"][file_id], input_hash=operation.input_hash,
+            provider_record_id=operation.payload["recognition_provider_id"])
+        row = envelope.payload.problem_data["q1"]
+        result.setdefault("q" + row["number"], {})[key.rsplit(":", 1)[1]] = file_id
+    return result
+
+
+def _completed_questions(operation):
+    return sorted(q_id for q_id, fields in _generated_artifacts(operation).items()
+                  if {"criterion", "reference_answer"} <= set(fields))
 
 
 @pytest.mark.asyncio
-async def test_start_publishes_only_to_durable_worker_and_commits_one_major_artifact(
+async def test_start_publishes_only_to_durable_worker_and_commits_verified_field_artifacts(
     monkeypatch,
 ):
     owner_id, task_id = _seed_task()
@@ -446,32 +448,21 @@ async def test_start_publishes_only_to_durable_worker_and_commits_one_major_arti
         "_registry_for_owner",
         lambda _owner: _RecoveryRegistry(),
     )
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(provider_calls, question_count=1),
-    )
+    _install_incremental_preparer(monkeypatch, provider_calls, question_count=1)
     await task_preparation.run_durable_question_preparation(
         _claim(owner_id, operation.id, "worker-one")
     )
 
     completed = workflow_repository.get_operation(operation.id, owner_id=owner_id)
     questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
-    artifacts = file_repository.list_files(
-        owner_id=owner_id,
-        assignment_id=task_id,
-    )
-    major_artifacts = [
-        item for item in artifacts
-        if item.kind == "question_preparation_question_v1"
-    ]
     assert provider_calls == ["q1"]
     assert completed.status == "done"
     assert completed.checkpoint_stage == "question_packages_committed"
     assert completed.checkpoint["stage"] == "question_packages_committed"
-    assert completed.progress["completed_question_ids"] == ["q1"]
+    assert _completed_questions(completed) == ["q1"]
     assert [(item.q_id, item.max_score) for item in questions] == [("q1", 10)]
-    assert len(major_artifacts) == 1
+    assert _completed_questions(completed) == ["q1"]
+    assert set(_generated_artifacts(completed)["q1"]) == {"criterion", "reference_answer"}
 
 
 @pytest.mark.asyncio
@@ -488,15 +479,11 @@ async def test_restart_reuses_q1_artifact_and_calls_only_unfinished_q2(monkeypat
         "_registry_for_owner",
         lambda _owner: _RecoveryRegistry(),
     )
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(
+    _install_incremental_preparer(monkeypatch,
             provider_calls,
             question_count=2,
             cancel_after_question="q1",
-        ),
-    )
+        )
     first = _claim(owner_id, response["job_id"], "worker-old")
     with pytest.raises(asyncio.CancelledError):
         await task_preparation.run_durable_question_preparation(first)
@@ -505,15 +492,11 @@ async def test_restart_reuses_q1_artifact_and_calls_only_unfinished_q2(monkeypat
         response["job_id"], owner_id=owner_id
     )
     assert after_crash.status == "running"
-    assert after_crash.checkpoint["completed_question_ids"] == ["q1"]
+    assert _completed_questions(after_crash) == ["q1"]
     assert provider_calls == ["q1"]
 
     _expire_lease(after_crash.id)
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(provider_calls, question_count=2),
-    )
+    _install_incremental_preparer(monkeypatch, provider_calls, question_count=2)
     await task_preparation.run_durable_question_preparation(
         _claim(owner_id, after_crash.id, "worker-new")
     )
@@ -521,7 +504,7 @@ async def test_restart_reuses_q1_artifact_and_calls_only_unfinished_q2(monkeypat
     completed = workflow_repository.get_operation(after_crash.id, owner_id=owner_id)
     assert provider_calls == ["q1", "q2"]
     assert completed.status == "done"
-    assert completed.checkpoint["completed_question_ids"] == ["q1", "q2"]
+    assert _completed_questions(completed) == ["q1", "q2"]
     questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
     assert [question.q_id for question in questions] == ["q1", "q2"]
     with pytest.raises(LeaseLost):
@@ -548,15 +531,11 @@ async def test_inflight_base_without_artifact_is_not_replayed(monkeypatch):
         "_registry_for_owner",
         lambda _owner: _RecoveryRegistry(),
     )
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(
+    _install_incremental_preparer(monkeypatch,
             provider_calls,
             question_count=1,
             cancel_after_extraction_started=True,
-        ),
-    )
+        )
     first = _claim(owner_id, response["job_id"], "worker-old")
     with pytest.raises(asyncio.CancelledError):
         await task_preparation.run_durable_question_preparation(first)
@@ -569,11 +548,8 @@ async def test_inflight_base_without_artifact_is_not_replayed(monkeypatch):
         provider_was_replayed = True
         raise AssertionError("provider must not be replayed")
 
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        forbidden_prepare,
-    )
+    monkeypatch.setattr(incremental, "_extract_problems_call", forbidden_prepare)
+    monkeypatch.setattr(incremental, "generate_missing_question_materials", forbidden_prepare)
     await task_preparation.run_durable_question_preparation(
         _claim(owner_id, first.operation_id, "worker-new")
     )
@@ -685,32 +661,26 @@ async def test_inflight_major_question_without_artifact_is_not_replayed(
         "_registry_for_owner",
         lambda _owner: _RecoveryRegistry(),
     )
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(
+    _install_incremental_preparer(monkeypatch,
             provider_calls,
             question_count=1,
             cancel_after_question_started="q1",
-        ),
-    )
+        )
     first = _claim(owner_id, response["job_id"], "worker-old")
     with pytest.raises(asyncio.CancelledError):
         await task_preparation.run_durable_question_preparation(first)
 
     crashed = workflow_repository.get_operation(first.operation_id, owner_id=owner_id)
-    assert crashed.checkpoint["provider_inflight_question_ids"] == ["q1"]
+    assert len(crashed.checkpoint["incremental_inflight_units"]) == 1
+    assert crashed.checkpoint["incremental_inflight_units"][0].startswith("generation:")
     assert provider_calls == []
     _expire_lease(first.operation_id)
 
     async def forbidden_prepare(*args, **kwargs):
         raise AssertionError("an uncertain major question must not be replayed")
 
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        forbidden_prepare,
-    )
+    monkeypatch.setattr(incremental, "_extract_problems_call", forbidden_prepare)
+    monkeypatch.setattr(incremental, "generate_missing_question_materials", forbidden_prepare)
     await task_preparation.run_durable_question_preparation(
         _claim(owner_id, first.operation_id, "worker-new")
     )
@@ -753,11 +723,8 @@ async def test_frozen_prepared_source_text_tamper_fails_before_provider(
     async def forbidden_prepare(*args, **kwargs):
         raise AssertionError("tampered source must fail before provider use")
 
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        forbidden_prepare,
-    )
+    monkeypatch.setattr(incremental, "_extract_problems_call", forbidden_prepare)
+    monkeypatch.setattr(incremental, "generate_missing_question_materials", forbidden_prepare)
     operation = _claim(owner_id, response["job_id"], "worker-one")
     await task_preparation.run_durable_question_preparation(operation)
     failed = workflow_repository.get_operation(operation.operation_id, owner_id=owner_id)
@@ -784,11 +751,8 @@ async def test_same_provider_record_configuration_change_fails_closed(
     async def forbidden_prepare(*args, **kwargs):
         raise AssertionError("changed provider configuration must not be used")
 
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        forbidden_prepare,
-    )
+    monkeypatch.setattr(incremental, "_extract_problems_call", forbidden_prepare)
+    monkeypatch.setattr(incremental, "generate_missing_question_materials", forbidden_prepare)
     operation = _claim(owner_id, response["job_id"], "worker-one")
     await task_preparation.run_durable_question_preparation(operation)
     failed = workflow_repository.get_operation(operation.operation_id, owner_id=owner_id)
@@ -813,11 +777,7 @@ async def test_final_artifact_saved_before_crash_commits_without_provider_replay
         "_registry_for_owner",
         lambda _owner: _RecoveryRegistry(),
     )
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(provider_calls, question_count=1),
-    )
+    _install_incremental_preparer(monkeypatch, provider_calls, question_count=1)
     original_commit = task_facade._replace_draft_questions
 
     def crash_before_commit(*args, **kwargs):
@@ -828,7 +788,7 @@ async def test_final_artifact_saved_before_crash_commits_without_provider_replay
     with pytest.raises(asyncio.CancelledError):
         await task_preparation.run_durable_question_preparation(first)
     crashed = workflow_repository.get_operation(first.operation_id, owner_id=owner_id)
-    assert crashed.checkpoint["final_artifact_id"] in crashed.artifact_refs
+    assert crashed.checkpoint["questions_extracted_artifact_id"] in crashed.artifact_refs
     assert provider_calls == ["q1"]
 
     _expire_lease(first.operation_id)
@@ -837,11 +797,8 @@ async def test_final_artifact_saved_before_crash_commits_without_provider_replay
     async def forbidden_prepare(*args, **kwargs):
         raise AssertionError("final artifact must bypass provider preparation")
 
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        forbidden_prepare,
-    )
+    monkeypatch.setattr(incremental, "_extract_problems_call", forbidden_prepare)
+    monkeypatch.setattr(incremental, "generate_missing_question_materials", forbidden_prepare)
     await task_preparation.run_durable_question_preparation(
         _claim(owner_id, first.operation_id, "worker-new")
     )
@@ -851,71 +808,74 @@ async def test_final_artifact_saved_before_crash_commits_without_provider_replay
 
 
 @pytest.mark.asyncio
-async def test_orphan_final_artifact_is_discovered_without_provider_replay(
-    monkeypatch,
-):
+@pytest.mark.parametrize("recovery", ["worker", "manual", "tampered_hint", "tampered_options"])
+async def test_orphan_field_artifact_is_discovered_without_provider_replay(monkeypatch, recovery):
     owner_id, task_id = _seed_task()
-    _source, response, _background = await _queue_question_preparation(
-        owner_id,
-        task_id,
-    )
-    provider_calls: list[str] = []
-    monkeypatch.setattr(
-        task_facade,
-        "_registry_for_owner",
-        lambda _owner: _RecoveryRegistry(),
-    )
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(provider_calls, question_count=1),
-    )
-    original_read = task_preparation.read_final_question_packages_artifact
+    _source, response, _background = await _queue_question_preparation(owner_id, task_id)
+    provider_calls = []
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: _RecoveryRegistry())
+    _install_incremental_preparer(monkeypatch, provider_calls, question_count=1)
+    original_read = incremental.read_base_preparation_artifact
+    orphan_ids = []
 
-    def crash_before_final_checkpoint(*args, **kwargs):
-        raise asyncio.CancelledError
+    def crash_after_last_field_saved(file_id, **kwargs):
+        saved = original_read(file_id, **kwargs)
+        # The second field from one completed provider response reached immutable
+        # storage, but finish has not yet published its manifest pointer.
+        if saved.payload.problem_data["q1"].get("ai_completion_provenance", {}).get("reference_answer"):
+            orphan_ids.append(file_id)
+            raise asyncio.CancelledError
+        return saved
 
-    monkeypatch.setattr(
-        task_preparation,
-        "read_final_question_packages_artifact",
-        crash_before_final_checkpoint,
-    )
+    monkeypatch.setattr(incremental, "read_base_preparation_artifact", crash_after_last_field_saved)
     first = _claim(owner_id, response["job_id"], "worker-old")
     with pytest.raises(asyncio.CancelledError):
         await task_preparation.run_durable_question_preparation(first)
-
     crashed = workflow_repository.get_operation(first.operation_id, owner_id=owner_id)
-    assert "final_artifact_id" not in crashed.checkpoint
-    assert any(
-        item.kind == "question_preparation_packages_v1"
-        for item in file_repository.list_files(
-            owner_id=owner_id,
-            assignment_id=task_id,
-        )
-    )
+    assert len(orphan_ids) == 1 and orphan_ids[0] not in crashed.artifact_refs
+    assert len(crashed.checkpoint["incremental_saving_units"]) == 1
+    assert any(key.endswith(":reference_answer") for key in crashed.checkpoint["incremental_saving_units"])
+    assert set(_generated_artifacts(crashed)["q1"]) == {"criterion"}
     assert provider_calls == ["q1"]
-
-    _expire_lease(first.operation_id)
-    monkeypatch.setattr(
-        task_preparation,
-        "read_final_question_packages_artifact",
-        original_read,
-    )
+    monkeypatch.setattr(incremental, "read_base_preparation_artifact", original_read)
 
     async def forbidden_prepare(*args, **kwargs):
-        raise AssertionError("the orphan final artifact must bypass the provider")
+        raise AssertionError("persisted fields must bypass the provider")
 
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        forbidden_prepare,
-    )
-    await task_preparation.run_durable_question_preparation(
-        _claim(owner_id, first.operation_id, "worker-new")
-    )
-    completed = workflow_repository.get_operation(first.operation_id, owner_id=owner_id)
-    assert completed.status == "done"
-    assert completed.checkpoint_stage == "question_packages_committed"
+    monkeypatch.setattr(incremental, "_extract_problems_call", forbidden_prepare)
+    monkeypatch.setattr(incremental, "generate_missing_question_materials", forbidden_prepare)
+    if recovery == "worker":
+        _expire_lease(first.operation_id)
+        await task_preparation.run_durable_question_preparation(_claim(owner_id, first.operation_id, "worker-new"))
+        completed = workflow_repository.get_operation(first.operation_id, owner_id=owner_id)
+        assert completed.status == "done", completed.error_code
+        assert completed.checkpoint_stage == "question_packages_committed"
+        assert _completed_questions(completed) == ["q1"]
+        assert _generated_artifacts(completed)["q1"]["reference_answer"] == orphan_ids[0]
+    else:
+        from backend.services.task_execution import stop_task_run
+        workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+        stop_task_run(task_id=task_id, owner_id=owner_id, job_id=first.operation_id,
+            expected_revision=workflow.workflow_revision)
+        workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
+        if recovery.startswith("tampered_"):
+            with session_scope() as session:
+                source_record = session.get(workflow_repository.WorkflowOperationRecord, _source["source_token"])
+                source_record.payload = {**source_record.payload, **(
+                    {"extraction_hint": "题号: 2"} if recovery == "tampered_hint"
+                    else {"recognition_options": {"targets": ["2"]}})}
+        result = await task_preparation.manually_complete_question_preparation(task_id, first.operation_id,
+            task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision),
+            current=SimpleNamespace(id=owner_id))
+        if recovery.startswith("tampered_"):
+            assert result.status_code in {409, 422}
+            assert not assignment_repository.list_questions(task_id, teacher_id=owner_id)
+            assert provider_calls == ["q1"]
+            return
+        assert result["status"] == "ready_for_review"
+    question = assignment_repository.list_questions(task_id, teacher_id=owner_id)[0]
+    assert question.criterion == _candidates("q1")[0].text_value
+    assert question.reference_answer == _candidates("q1")[1].text_value
     assert provider_calls == ["q1"]
 
 
@@ -1160,43 +1120,36 @@ def test_question_preparation_hash_preserves_source_order():
     )
 
 
-def test_maximum_major_question_checkpoint_fits_bounded_contract():
-    question_ids = [f"q{index}" for index in range(1, 201)]
-    artifact_ids = {
-        q_id: f"file_{index:032x}"
-        for index, q_id in enumerate(question_ids, start=1)
-    }
+def test_maximum_incremental_question_checkpoint_fits_bounded_contract():
+    units = {}
+    for index in range(200):
+        identity = f"{index:064x}"
+        for key in (f"extract:source:{index}:{identity}", f"score:{identity}",
+                    *(f"generated:{identity}:{target}" for target in
+                      ("criterion", "reference_answer", "solution_code", "test_cases"))):
+            units[key] = f"file_{len(units):032x}"
+    snapshot_id = "file_current_snapshot"
+    refs = [*units.values(), snapshot_id]
     checkpoint = {
-        "stage": "solution_units_generated",
-        "question_ids": question_ids,
-        "generation_question_ids": question_ids,
-        "completed_question_ids": question_ids,
-        "failed_question_ids": [],
-        "provider_inflight_question_ids": [],
-        "question_error_codes": {},
-        "question_artifact_ids": artifact_ids,
-        "artifact_attempts": {
-            artifact_id: 1 for artifact_id in artifact_ids.values()
-        },
+        "stage": "incremental_preparation", "incremental_version": 1,
+        "question_ids": [f"q{index}" for index in range(1, 201)],
+        "incremental_unit_artifacts": units,
+        "incremental_empty_units": ["initial"],
+        "incremental_inflight_units": [f"generation:{index:064x}" for index in range(200)],
+        "incremental_errors": {}, "incremental_saving_units": {},
+        "questions_extracted_artifact_id": snapshot_id,
+        "preparation_counts": dict(questions=200, stems=200, rubrics=200, reference_answers=200),
+        "artifact_attempts": {file_id: 1 for file_id in refs},
         "retry_frozen_contract": {
-            "contract_version": 1,
-            "operation_id": "op-maximum-checkpoint",
-            "from_attempt": 1,
-            "to_attempt": 2,
-            "input_hash": "a" * 64,
-            "provider_record_id": "provider-one",
+            "contract_version": 1, "operation_id": "op-maximum-checkpoint", "from_attempt": 1, "to_attempt": 2,
+            "input_hash": "a" * 64, "provider_record_id": "provider-one",
             "source_content_hashes": {"source-one": "b" * 64},
             "source_text_hashes": {"source-one": "c" * 64},
         },
     }
-    assert workflow_repository._validate_json_object(
-        checkpoint,
-        field="checkpoint",
-        max_bytes=workflow_repository.MAX_OPERATION_CHECKPOINT_BYTES,
-    ) == checkpoint
-    assert workflow_repository._validate_artifact_refs(
-        list(artifact_ids.values())
-    ) == list(artifact_ids.values())
+    assert workflow_repository._validate_json_object(checkpoint, field="checkpoint",
+        max_bytes=workflow_repository.MAX_OPERATION_CHECKPOINT_BYTES) == checkpoint
+    assert workflow_repository._validate_artifact_refs(refs) == refs
 
 
 @pytest.mark.parametrize("requested_provider_id", [None, "test-provider"])
@@ -1288,7 +1241,7 @@ async def test_uncertain_restart_requires_ack_and_preserves_original_evidence(mo
     assert pending.payload["source_tokens"] == original.payload["source_tokens"]
     calls = []
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _RecoveryRegistry())
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls, question_count=1))
+    _install_incremental_preparer(monkeypatch, calls, question_count=1)
     await task_preparation.run_durable_question_preparation(
         _claim(owner_id, pending.id, "worker-acknowledged-restart"))
     assert workflow_repository.get_operation(pending.id, owner_id=owner_id).status == "done"
@@ -1398,31 +1351,31 @@ def test_stale_worker_cannot_publish_discoverable_preparation_artifact(
         "attempt": stale.attempt,
         "input_hash": stale.input_hash,
         "provider_record_id": stale.payload["recognition_provider_id"],
-        "stage": task_preparation.QUESTIONS_EXTRACTED_STAGE,
+        "stage": preparation_artifacts.QUESTIONS_EXTRACTED_STAGE,
     }
 
     with pytest.raises(LeaseLost):
-        task_preparation.save_base_preparation_artifact(
+        preparation_artifacts.save_base_preparation_artifact(
             problem_data=_questions(1),
             issues={},
             storage=storage,
             operation_lease_token=stale.lease_token,
             **context,
         )
-    assert task_preparation.find_base_preparation_artifact(
+    assert preparation_artifacts.find_base_preparation_artifact(
         storage=storage,
         **context,
     ) is None
     assert not any(path.is_file() for path in tmp_path.rglob("*"))
 
-    stored = task_preparation.save_base_preparation_artifact(
+    stored = preparation_artifacts.save_base_preparation_artifact(
         problem_data=_questions(1),
         issues={},
         storage=storage,
         operation_lease_token=current.lease_token,
         **context,
     )
-    assert task_preparation.find_base_preparation_artifact(
+    assert preparation_artifacts.find_base_preparation_artifact(
         storage=storage,
         **context,
     ).id == stored.id
@@ -1444,16 +1397,12 @@ async def test_safe_retry_reuses_four_successful_questions_and_calls_only_q5(
         "_registry_for_owner",
         lambda _owner: _RecoveryRegistry(),
     )
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(
+    _install_incremental_preparer(monkeypatch,
             provider_calls,
             question_count=5,
             known_failure_question="q5",
             record_base_provider_calls=True,
-        ),
-    )
+        )
     first = _claim(owner_id, response["job_id"], "worker-first-attempt")
     await task_preparation.run_durable_question_preparation(first)
 
@@ -1461,13 +1410,12 @@ async def test_safe_retry_reuses_four_successful_questions_and_calls_only_q5(
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     assert failed.status == "error"
     assert failed.error_code == "provider_rate_limited"
-    assert failed.checkpoint["completed_question_ids"] == [
+    assert _completed_questions(failed) == [
         "q1", "q2", "q3", "q4",
     ]
-    assert failed.checkpoint["failed_question_ids"] == ["q5"]
+    assert list(failed.checkpoint["incremental_errors"].values()) == ["provider_rate_limited"]
     assert provider_calls == [
         "questions_extracted",
-        "uploaded_materials_aligned",
         "q1", "q2", "q3", "q4", "q5",
     ]
 
@@ -1485,22 +1433,18 @@ async def test_safe_retry_reuses_four_successful_questions_and_calls_only_q5(
     pending = workflow_repository.get_operation(failed.id, owner_id=owner_id)
     assert retried["status"] == "started"
     assert pending.attempt == failed.attempt + 1
-    assert pending.checkpoint["completed_question_ids"] == [
+    assert _completed_questions(pending) == [
         "q1", "q2", "q3", "q4",
     ]
-    assert pending.checkpoint["failed_question_ids"] == []
+    assert pending.checkpoint.get("incremental_inflight_units") == []
     assert pending.checkpoint["retry_frozen_contract"]["from_attempt"] == 1
     assert set(pending.checkpoint["artifact_attempts"].values()) == {1}
 
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(
+    _install_incremental_preparer(monkeypatch,
             provider_calls,
             question_count=5,
             record_base_provider_calls=True,
-        ),
-    )
+        )
     await task_preparation.run_durable_question_preparation(
         _claim(owner_id, pending.id, "worker-second-attempt")
     )
@@ -1508,25 +1452,22 @@ async def test_safe_retry_reuses_four_successful_questions_and_calls_only_q5(
     completed = workflow_repository.get_operation(pending.id, owner_id=owner_id)
     assert completed.status == "done"
     assert completed.attempt == 2
-    assert completed.checkpoint["completed_question_ids"] == [
+    assert _completed_questions(completed) == [
         "q1", "q2", "q3", "q4", "q5",
     ]
     assert provider_calls == [
         "questions_extracted",
-        "uploaded_materials_aligned",
         "q1", "q2", "q3", "q4", "q5",
         "q5",
     ]
     artifact_attempts = completed.checkpoint["artifact_attempts"]
-    inherited_question_ids = failed.checkpoint["question_artifact_ids"]
+    inherited_question_ids = _generated_artifacts(failed)
     assert {
         artifact_attempts[artifact_id]
-        for artifact_id in inherited_question_ids.values()
+        for fields in inherited_question_ids.values() for artifact_id in fields.values()
     } == {1}
-    assert artifact_attempts[
-        completed.checkpoint["question_artifact_ids"]["q5"]
-    ] == 2
-    assert artifact_attempts[completed.checkpoint["final_artifact_id"]] == 2
+    assert {artifact_attempts[file_id] for file_id in _generated_artifacts(completed)["q5"].values()} == {2}
+    assert artifact_attempts[completed.checkpoint["questions_extracted_artifact_id"]] == 2
 
 
 @pytest.mark.asyncio
@@ -1545,16 +1486,12 @@ async def test_multiple_safe_retries_keep_mixed_attempt_artifact_lineage(
         "_registry_for_owner",
         lambda _owner: _RecoveryRegistry(),
     )
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(
+    _install_incremental_preparer(monkeypatch,
             provider_calls,
             question_count=5,
-            known_failure_question="q3",
+            failure_questions=["q3", "q5"],
             record_base_provider_calls=True,
-        ),
-    )
+        )
     await task_preparation.run_durable_question_preparation(
         _claim(owner_id, response["job_id"], "worker-attempt-one")
     )
@@ -1573,16 +1510,12 @@ async def test_multiple_safe_retries_keep_mixed_attempt_artifact_lineage(
         registry=_RecoveryRegistry(),
     )
 
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(
+    _install_incremental_preparer(monkeypatch,
             provider_calls,
             question_count=5,
             known_failure_question="q5",
             record_base_provider_calls=True,
-        ),
-    )
+        )
     await task_preparation.run_durable_question_preparation(
         _claim(owner_id, attempt_one.id, "worker-attempt-two")
     )
@@ -1591,17 +1524,15 @@ async def test_multiple_safe_retries_keep_mixed_attempt_artifact_lineage(
     )
     assert attempt_two.status == "error"
     assert attempt_two.attempt == 2
-    assert attempt_two.checkpoint["completed_question_ids"] == [
+    assert _completed_questions(attempt_two) == [
         "q1", "q2", "q3", "q4",
     ]
     attempts_after_two = attempt_two.checkpoint["artifact_attempts"]
-    question_artifacts_after_two = attempt_two.checkpoint[
-        "question_artifact_ids"
-    ]
+    question_artifacts_after_two = _generated_artifacts(attempt_two)
     assert {
-        q_id: attempts_after_two[artifact_id]
-        for q_id, artifact_id in question_artifacts_after_two.items()
-    } == {"q1": 1, "q2": 1, "q3": 2, "q4": 2}
+        q_id: {attempts_after_two[file_id] for file_id in fields.values()}
+        for q_id, fields in question_artifacts_after_two.items()
+    } == {"q1": {1}, "q2": {1}, "q3": {2}, "q4": {1}}
 
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     await task_preparation.retry_question_preparation(
@@ -1614,15 +1545,11 @@ async def test_multiple_safe_retries_keep_mixed_attempt_artifact_lineage(
         current=SimpleNamespace(id=owner_id),
         registry=_RecoveryRegistry(),
     )
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(
+    _install_incremental_preparer(monkeypatch,
             provider_calls,
             question_count=5,
             record_base_provider_calls=True,
-        ),
-    )
+        )
     await task_preparation.run_durable_question_preparation(
         _claim(owner_id, attempt_two.id, "worker-attempt-three")
     )
@@ -1632,17 +1559,16 @@ async def test_multiple_safe_retries_keep_mixed_attempt_artifact_lineage(
     assert completed.attempt == 3
     assert provider_calls == [
         "questions_extracted",
-        "uploaded_materials_aligned",
-        "q1", "q2", "q3",
-        "q3", "q4", "q5",
+        "q1", "q2", "q3", "q4", "q5",
+        "q3", "q5",
         "q5",
     ]
     final_attempts = completed.checkpoint["artifact_attempts"]
-    final_question_artifacts = completed.checkpoint["question_artifact_ids"]
+    final_question_artifacts = _generated_artifacts(completed)
     assert {
-        q_id: final_attempts[artifact_id]
-        for q_id, artifact_id in final_question_artifacts.items()
-    } == {"q1": 1, "q2": 1, "q3": 2, "q4": 2, "q5": 3}
+        q_id: {final_attempts[file_id] for file_id in fields.values()}
+        for q_id, fields in final_question_artifacts.items()
+    } == {"q1": {1}, "q2": {1}, "q3": {2}, "q4": {1}, "q5": {3}}
 
 
 @pytest.mark.asyncio
@@ -1661,19 +1587,15 @@ async def test_safe_retry_rejects_corrupt_inherited_question_artifact(
         "_registry_for_owner",
         lambda _owner: _RecoveryRegistry(),
     )
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(
+    _install_incremental_preparer(monkeypatch,
             provider_calls,
             question_count=2,
             known_failure_question="q2",
-        ),
-    )
+        )
     first = _claim(owner_id, response["job_id"], "worker-corrupt-first")
     await task_preparation.run_durable_question_preparation(first)
     failed = workflow_repository.get_operation(first.operation_id, owner_id=owner_id)
-    q1_artifact_id = failed.checkpoint["question_artifact_ids"]["q1"]
+    q1_artifact_id = _generated_artifacts(failed)["q1"]["criterion"]
     stored = file_repository.get_file(
         file_id=q1_artifact_id,
         owner_id=owner_id,
@@ -1693,11 +1615,7 @@ async def test_safe_retry_rejects_corrupt_inherited_question_artifact(
     )
     pending = workflow_repository.get_operation(failed.id, owner_id=owner_id)
     calls_before_retry_worker = list(provider_calls)
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        _fake_preparer(provider_calls, question_count=2),
-    )
+    _install_incremental_preparer(monkeypatch, provider_calls, question_count=2)
     await task_preparation.run_durable_question_preparation(
         _claim(owner_id, pending.id, "worker-corrupt-second")
     )
@@ -1768,11 +1686,8 @@ async def test_safe_retry_rejects_tampered_frozen_lineage_before_provider(
         "_registry_for_owner",
         lambda _owner: _RecoveryRegistry(),
     )
-    monkeypatch.setattr(
-        task_preparation,
-        "prepare_question_packages",
-        forbidden_prepare,
-    )
+    monkeypatch.setattr(incremental, "_extract_problems_call", forbidden_prepare)
+    monkeypatch.setattr(incremental, "generate_missing_question_materials", forbidden_prepare)
     await task_preparation.run_durable_question_preparation(
         _claim(owner_id, pending.id, "worker-frozen-second")
     )

@@ -336,6 +336,7 @@ async def _extract_problems_call(
     manage_progress_lifecycle: bool = True,
     allow_empty: bool = False,
     partial_source: bool = False,
+    source_context: str = "",
 ) -> Dict[str, Dict[str, Any]]:
     """Run one bounded LLM extraction call on a single chunk of source text.
 
@@ -386,8 +387,9 @@ async def _extract_problems_call(
     user_content = (
         f"**[Source Handling Configuration]**\n{source_guidance}\n\n"
         f"**[Problem Source Document]**\n---\n{text}\n---"
+        + (f"\n**[Supporting source context; not additional questions]**\n---\n{source_context}\n---" if source_context else "")
     )
-    recovery_guidance = ("\nThis is manual recovery of SAVED recognition text. Do not read or reconstruct missing pages. "
+    recovery_guidance = ("\nThis is incremental extraction from supplied source text. Do not reconstruct missing pages. "
         "Retain every available question fragment, even when incomplete. Add boolean source_incomplete=true "
         "only for a question whose opening, continuation, condition or subpart is missing. "
         "A missing page does not make unrelated complete questions incomplete. "
@@ -398,8 +400,7 @@ async def _extract_problems_call(
         "For each test case copied from the source, include source_excerpt: a verbatim excerpt containing that case's "
         "input and expected output (or function name, arguments and expected return) as one original example, "
         "and source=teacher. Never combine values from different examples. "
-        "For a newly created test case use source=llm_generated and leave source_excerpt empty. "
-        "Never claim a created case was supplied by the teacher."
+        "Do not create new test cases. Never claim a created case was supplied by the teacher."
         if partial_source else "")
     messages = [
         SystemMessage(content=PROB_SYSTEM_PROMPT + recovery_guidance),
@@ -419,7 +420,13 @@ async def _extract_problems_call(
             f"Applying source mode {structure_mode} with {len(confirmed_candidates)} confirmed local candidates..."
         )
         await reporter._emit_message(f"Calling {provider.provider_id}...")
-    response = await ainvoke_with_retry(provider, messages)
+    if partial_source:
+        with llm_attempt_budget():
+            response = await ainvoke_with_retry(provider, messages)
+            independent, response = await parse_with_format_repair(
+                provider, messages, response, _IndependentProblemSet, invoke=ainvoke_with_retry)
+    else:
+        response = await ainvoke_with_retry(provider, messages)
     raw_output = response.content
     logger.info(f"extract_problems: LLM returned {len(raw_output)} chars")
 
@@ -433,7 +440,37 @@ async def _extract_problems_call(
             )
         await reporter._emit_message(f"Parsing JSON ({len(raw_output)} chars)...")
 
-    parsed = extract_and_parse_json(raw_output, _PartialProblemSet if partial_source else ProblemSet)
+    if partial_source:
+        raw = independent
+        dropped_items = False
+        retained = []
+        for item in raw.problems:
+            if not isinstance(item, dict):
+                dropped_items = True
+                continue
+            # Only complete, independently typed fields may cross the durable
+            # boundary. Defaults describe missing values, never invented content.
+            fields = {name: item[name] if isinstance(item.get(name), str) else ""
+                      for name in ("number", "stem", "criterion", "reference_answer", "solution_code")}
+            if not any(fields.values()):
+                dropped_items = True
+                continue
+            fields.update(q_id=f"q{len(retained) + 1}",
+                          type=item.get("type") if isinstance(item.get("type"), str) else "",
+                          source_incomplete=item.get("source_incomplete") is True or not fields["stem"])
+            confidence = item.get("recognition_confidence")
+            fields["recognition_confidence"] = confidence if type(confidence) in {int, float} and 0 <= confidence <= 1 else None
+            cases = []
+            for case in item.get("test_cases") if isinstance(item.get("test_cases"), list) else []:
+                try:
+                    cases.append(_PartialTestCase.model_validate(case))
+                except ValueError:
+                    continue
+            fields["test_cases"] = cases or None
+            retained.append(_PartialProblem.model_validate(fields))
+        parsed = _PartialProblemSet(problems=retained)
+    else:
+        parsed = extract_and_parse_json(raw_output, ProblemSet)
 
     if not parsed.problems and not allow_empty:
         if reporter and manage_progress_lifecycle:
@@ -449,11 +486,13 @@ async def _extract_problems_call(
                 problem[field] = ""
         if partial_source:
             for case in problem.get("test_cases") or []:
-                # Only this recovery parser consumes model-authored cases. Do not
+                # Only this incremental parser consumes model-authored cases. Do not
                 # change the teacher-upload default or any completed packages.
                 excerpt = case.pop("source_excerpt", "")
                 case["source"] = "teacher" if _saved_test_case_supported(case, excerpt, text) else "llm_generated"
     logger.info(f"extract_problems: stored {len(prob_dict)} problems")
+    if partial_source and dropped_items:
+        raise PartialQuestionExtractionError(prob_dict)
     return prob_dict
 
 
@@ -515,6 +554,20 @@ class _PartialProblem(ProblemInfo):
 
 class _PartialProblemSet(BaseModel):
     problems: list[_PartialProblem]
+
+
+class _IndependentProblemSet(BaseModel):
+    problems: list[Any] = Field(default_factory=list, max_length=200)
+
+
+class PartialQuestionExtractionError(ValueError):
+    """Keep valid siblings while an unassignable response item needs repair."""
+
+    code = "provider_response_invalid"
+
+    def __init__(self, problems):
+        super().__init__("Some question items could not be read.")
+        self.problems = problems
 
 
 def _chunk_problem_text(
@@ -582,6 +635,92 @@ class SubmissionSourceParseResult:
     retryable: bool
 
 
+class _IndependentStudentSubmission(BaseModel):
+    """Validate the response container before validating independent fields."""
+
+    stu_id: Any = None
+    stu_name: Any = None
+    stu_ans: Any = None
+
+
+def _independent_submission_payload(parsed, source, problems_data, known_question_ids):
+    """Keep bounded verified fields; never convert a malformed answer to blank work."""
+    fallback_id, fallback_name, _ = _ocr_identity_candidate(source.text or "", source.filename)
+    payload = dict(stu_id=fallback_id, stu_name=fallback_name, stu_ans=[])
+    invalid_identity = []
+    for field in ("stu_id", "stu_name"):
+        try:
+            checked = StudentSubmission.model_validate({"stu_id": "", "stu_name": "", "stu_ans": [],
+                                                        field: getattr(parsed, field)})
+            value = getattr(checked, field)
+            if not value.strip():
+                raise ValueError("Missing identity field")
+            payload[field] = value
+        except (ValueError, TypeError):
+            invalid_identity.append(field)
+
+    answers, invalid_ids, unknown = {}, set(), []
+    total = len(payload["stu_id"]) + len(payload["stu_name"])
+    # Reserve space for bounded metadata/markers on every requested answer.
+    content_budget = max(0, 1_000_000 - total - 1024 * len(known_question_ids))
+    # A malformed/oversized answer container cannot erase separately valid
+    # identity fields. Its answers stay unrecognized under the same 1,000 cap.
+    raw_answers = parsed.stu_ans if isinstance(parsed.stu_ans, list) and len(parsed.stu_ans) <= 1000 else []
+    for raw in raw_answers:
+        if not isinstance(raw, dict):
+            continue
+        defaults = dict(q_id="", number="", type="", content="", flag=[], recognition_confidence=None)
+        try:
+            q_id = StudentAnswerInfo.model_validate({**defaults, "q_id": raw.get("q_id")}).q_id
+        except (ValueError, TypeError):
+            continue
+        if q_id not in known_question_ids:
+            if q_id and q_id not in problems_data:
+                unknown.append(q_id)
+            continue
+        candidate, invalid_fields = {**defaults, "q_id": q_id}, []
+        for field in ("number", "type", "content", "flag", "recognition_confidence"):
+            if field not in raw and field in {"flag", "recognition_confidence"}:
+                continue
+            try:
+                checked = StudentAnswerInfo.model_validate({**defaults, field: raw.get(field)})
+                candidate[field] = getattr(checked, field)
+            except (ValueError, TypeError):
+                invalid_fields.append(field)
+        # Bound the aggregate as well as each item, without discarding siblings.
+        size = len(candidate["content"]) + sum(len(flag) for flag in candidate["flag"])
+        if size > content_budget:
+            candidate.update(content="", flag=[])
+            invalid_fields.append("content")
+        else:
+            content_budget -= size
+        answer = StudentAnswerInfo.model_validate(candidate).model_dump()
+        if len(answer["flag"]) > 97:
+            answer["flag"] = answer["flag"][:97]
+            invalid_fields.append("flag")
+        if "recognition_incomplete" in answer["flag"]:
+            invalid_fields.append("content")
+        if invalid_fields:
+            answer["flag"] = list(dict.fromkeys([*answer["flag"], "recognition_manual_pending",
+                "recognition_invalid_fields:" + ",".join(invalid_fields)]))
+            invalid_ids.add(q_id)
+        if q_id in answers:
+            # A duplicate mapping is ambiguous even if both strings are valid.
+            answers[q_id]["flag"] = list(dict.fromkeys([*answers[q_id]["flag"], "recognition_manual_pending"]))
+            invalid_ids.add(q_id)
+        else:
+            answers[q_id] = answer
+    missing = known_question_ids - set(answers)
+    for q_id in missing:
+        answers[q_id] = dict(q_id=q_id, number="", type="", content="", flag=["recognition_manual_pending"])
+    payload["stu_ans"] = [answers[q_id] for q_id in problems_data if q_id in answers]
+    # The same public schema remains the final safety gate for accepted data.
+    payload = StudentSubmission.model_validate(payload).model_dump()
+    payload["recognition"] = dict(missing_question_ids=sorted(missing),
+        repair_question_ids=sorted(missing | invalid_ids), identity_invalid_fields=invalid_identity)
+    return payload, tuple(dict.fromkeys(unknown))[:100]
+
+
 async def parse_student_answer_sources(
     sources: List[Any],
     problems_data: Dict[str, Dict[str, Any]],
@@ -593,6 +732,7 @@ async def parse_student_answer_sources(
     single_attempt: bool = False,
     source_runner=None,
     source_question_ids: dict[str, list[str]] | None = None,
+    independent_answers: bool = False,
 ) -> list[SubmissionSourceParseResult]:
     """Return exactly one durable-ready result for every original source."""
     if not sources:
@@ -692,12 +832,10 @@ async def parse_student_answer_sources(
                 f"**[Student Submission Content]**:\n---\n{source.text}\n---"
             )
             messages = [
-                SystemMessage(content=HW_SYSTEM_PROMPT + (
-                    "\nManual recovery: this is saved, possibly partial recognition text. "
-                    "Never reconstruct missing pages or assume unread work is blank. "
-                    "Preserve every available answer fragment. Use recognition_incomplete in flag "
-                    "for an answer whose continuation or steps are missing; do not flag unrelated complete answers."
-                    if (getattr(source, "recognition", None) or {}).get("manual_saved_text") else "")),
+                SystemMessage(content=HW_SYSTEM_PROMPT +
+                    "\nNever reconstruct missing pages or assume unread work is blank. "
+                    "Preserve available answer fragments; flag an answer recognition_incomplete "
+                    "when its continuation or steps are missing."),
                 HumanMessage(content=user_message),
             ]
             try:
@@ -726,7 +864,8 @@ async def parse_student_answer_sources(
                 )
             try:
                 from backend.tools.structured_llm import parse_with_format_repair
-                parsed, response = await parse_with_format_repair(provider, messages, response, StudentSubmission,
+                parsed, response = await parse_with_format_repair(provider, messages, response,
+                    _IndependentStudentSubmission if independent_answers else StudentSubmission,
                     invoke=ainvoke_with_rate_retry if single_attempt else None)
             except StructuredOutputBoundsError as exc:
                 logger.warning(
@@ -767,7 +906,8 @@ async def parse_student_answer_sources(
                     ),
                 )
 
-            payload = parsed.model_dump()
+            payload, independent_unknown = (_independent_submission_payload(parsed, source, problems_data, known_question_ids)
+                if independent_answers else (parsed.model_dump(), ()))
             payload["source_filename"] = source.filename
             payload["source_id"] = source.source_id
             payload["stored_file_id"] = source.stored_file_id
@@ -791,6 +931,8 @@ async def parse_student_answer_sources(
                 payload["identity_status"] = (
                     "needs_review" if unknown_name or fallback_id else "matched"
                 )
+            if (payload.get("recognition") or {}).get("identity_invalid_fields"):
+                payload["identity_status"] = "needs_review"
 
             candidate = str(payload.get("stu_id") or "").strip() or None
             all_answers = list(payload.get("stu_ans") or [])
@@ -813,12 +955,12 @@ async def parse_student_answer_sources(
                 for answer in all_answers
                 if str(answer.get("q_id") or "") in known_question_ids
             ]
-            unknown_question_ids = tuple(dict.fromkeys(
+            unknown_question_ids = tuple(dict.fromkeys([*independent_unknown, *(
                 str(answer.get("q_id") or "")
                 for answer in all_answers
                 if str(answer.get("q_id") or "")
                 and str(answer.get("q_id") or "") not in problems_data
-            ))[:100]
+            )]))[:100]
             if not matched_answers:
                 return SubmissionSourceParseResult(
                     source_id=source.source_id,
@@ -836,20 +978,21 @@ async def parse_student_answer_sources(
 
             payload["stu_ans"] = matched_answers
             needs_identity_review = payload["identity_status"] != "matched"
+            incomplete = bool((payload.get("recognition") or {}).get("repair_question_ids"))
             return SubmissionSourceParseResult(
                 source_id=source.source_id,
                 stored_file_id=source.stored_file_id,
                 filename=source.filename,
-                status="identity_conflict" if needs_identity_review else "parsed",
+                status="parse_failed" if incomplete else "identity_conflict" if needs_identity_review else "parsed",
                 student=payload,
                 student_candidate=candidate,
                 matched_answer_count=len(matched_answers),
                 unknown_question_ids=unknown_question_ids,
                 stable_error_code=(
-                    "identity_needs_review" if needs_identity_review else None
+                    "submission_parse_invalid" if incomplete else "identity_needs_review" if needs_identity_review else None
                 ),
-                failure_phase="identity" if needs_identity_review else None,
-                retryable=False,
+                failure_phase="structured_parse" if incomplete else "identity" if needs_identity_review else None,
+                retryable=incomplete,
             )
 
     async def process_one(source: Any) -> SubmissionSourceParseResult:
@@ -882,52 +1025,7 @@ async def parse_student_answer_sources(
         for source in sources
     )))
 
-    candidate_groups: dict[str, list[int]] = defaultdict(list)
-    for index, result in enumerate(results):
-        if result.student is not None and result.student_candidate:
-            candidate_groups[_normalize_identity_value(result.student_candidate)].append(index)
-    duplicate_indexes = {
-        index
-        for indexes in candidate_groups.values()
-        if len(indexes) > 1
-        for index in indexes
-    }
-    duplicate_positions: dict[int, int] = {}
-    for indexes in candidate_groups.values():
-        if len(indexes) > 1:
-            duplicate_positions.update({index: position for position, index in enumerate(indexes, 1)})
-
-    normalized_results: list[SubmissionSourceParseResult] = []
-    for index, result in enumerate(results):
-        if result.student is None:
-            normalized_results.append(result)
-            continue
-        student = dict(result.student)
-        if index in duplicate_indexes:
-            candidate = result.student_candidate or "unresolved"
-            duplicate_digest = hashlib.sha256(
-                (
-                    f"{candidate}\0{result.source_id}\0"
-                    f"{duplicate_positions[index]}"
-                ).encode("utf-8")
-            ).hexdigest()[:24]
-            student["stu_id"] = f"duplicate_{duplicate_digest}"
-            student["identity_status"] = "needs_review"
-            normalized_results.append(replace(
-                result,
-                status="identity_conflict",
-                student=student,
-                stable_error_code="duplicate_student_identity",
-                failure_phase="identity",
-            ))
-            continue
-        if result.status == "identity_conflict" and not result.student_candidate:
-            student["stu_id"] = f"unresolved-{result.source_id[-8:]}"
-            student["identity_status"] = "needs_review"
-            normalized_results.append(replace(result, student=student))
-            continue
-        normalized_results.append(result)
-    results = normalized_results
+    results = normalize_submission_source_identities(results)
 
     if reporter:
         recognized = [result for result in results if result.student is not None]
@@ -959,6 +1057,35 @@ async def parse_student_answer_sources(
             message="Consolidating recognized submissions.",
         )
     return results
+
+
+def normalize_submission_source_identities(results):
+    """Apply identity conflicts after all independent sources are available."""
+    candidate_groups: dict[str, list[int]] = defaultdict(list)
+    for index, result in enumerate(results):
+        if result.student is not None and result.student_candidate:
+            candidate_groups[_normalize_identity_value(result.student_candidate)].append(index)
+    positions = {index: position for indexes in candidate_groups.values() if len(indexes) > 1
+                 for position, index in enumerate(indexes, 1)}
+    normalized = []
+    for index, result in enumerate(results):
+        if result.student is None:
+            normalized.append(result)
+            continue
+        student = dict(result.student)
+        if index in positions:
+            digest = hashlib.sha256(
+                f"{result.student_candidate}\0{result.source_id}\0{positions[index]}".encode()
+            ).hexdigest()[:24]
+            student.update(stu_id=f"duplicate_{digest}", identity_status="needs_review")
+            normalized.append(replace(result, status="identity_conflict", student=student,
+                stable_error_code="duplicate_student_identity", failure_phase="identity"))
+        elif result.status == "identity_conflict" and not result.student_candidate:
+            student.update(stu_id=f"unresolved-{result.source_id[-8:]}", identity_status="needs_review")
+            normalized.append(replace(result, student=student))
+        else:
+            normalized.append(result)
+    return normalized
 
 
 _OCR_STUDENT_ID = re.compile(
@@ -1864,6 +1991,12 @@ class AICompletionOutput(BaseModel):
     candidates: List[AICompletionCandidateOutput] = Field(default_factory=list)
 
 
+class _IndependentCompletionOutput(BaseModel):
+    # Decode the complete JSON once, then validate fields independently.
+    # A malformed rubric must not discard a valid answer from the same response.
+    candidates: List[Any] = Field(default_factory=list, max_length=200)
+
+
 async def generate_missing_question_materials(
     problems_data: Dict[str, Dict[str, Any]],
     requested_targets: List[Dict[str, str]],
@@ -1874,6 +2007,7 @@ async def generate_missing_question_materials(
     manage_progress_lifecycle: bool = True,
     generation_language: str | None = None,
     validate_candidates: Callable[[List[AICompletionCandidateOutput]], None] | None = None,
+    allow_partial: bool = False,
 ) -> List[AICompletionCandidateOutput]:
     """Generate Q-09 values in one structured call; this function never stores them."""
 
@@ -1976,7 +2110,7 @@ async def generate_missing_question_materials(
                         )
                     if case.function_name:
                         case.io_mode = "function"
-        if seen != set(expected_targets):
+        if not allow_partial and seen != set(expected_targets):
             raise StructuredOutputInvalidError("The generated materials omitted requested targets.")
         if validate_candidates is not None:
             validate_candidates(parsed.candidates)
@@ -1988,10 +2122,29 @@ async def generate_missing_question_materials(
 
     with llm_attempt_budget():
         response = await ainvoke_with_retry(provider, messages)
-        parsed, _ = await parse_with_format_repair(
-            provider, messages, response, AICompletionOutput,
-            invoke=repair_invoke, validate_output=validate_targets,
-        )
+        if allow_partial:
+            raw, _ = await parse_with_format_repair(
+                provider, messages, response, _IndependentCompletionOutput, invoke=repair_invoke,
+            )
+            accepted = {}
+            duplicates = set()
+            for item in raw.candidates:
+                try:
+                    candidate = AICompletionCandidateOutput.model_validate(item)
+                    validate_targets(AICompletionOutput(candidates=[candidate]))
+                except ValueError:
+                    continue
+                if candidate.target_id in accepted:
+                    duplicates.add(candidate.target_id)
+                accepted[candidate.target_id] = candidate
+            parsed = AICompletionOutput(candidates=[
+                candidate for key, candidate in accepted.items() if key not in duplicates
+            ])
+        else:
+            parsed, _ = await parse_with_format_repair(
+                provider, messages, response, AICompletionOutput,
+                invoke=repair_invoke, validate_output=validate_targets,
+            )
 
     if reporter and manage_progress_lifecycle:
         await reporter.set_stage_progress(

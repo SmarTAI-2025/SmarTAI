@@ -4,6 +4,9 @@ import type { Locale } from "@/i18n/messages";
 
 export function recognitionEventText(event: ProgressEvent | undefined, zh: boolean): string {
   const labels: Record<string, string> = {
+    saved_text_recovery_retired: zh ? "此旧整理任务已停用，请新建任务" : "This older organization task is retired. Create a new task",
+    question_preparation_artifact_invalid: zh ? "题目结果保存或恢复未完成，已保存的识别内容仍保留" : "Question results could not be saved or restored; saved recognition content is retained",
+    question_preparation_artifact_conflict: zh ? "题目结果保存校验未通过，已保存的识别内容仍保留" : "Question results did not pass save checks; saved recognition content is retained",
     activity_preparing: zh ? "正在准备文件" : "Preparing files",
     activity_reading: zh ? "正在读取文件内容" : "Reading file content",
     activity_recognizing: zh ? "正在识别并整理内容" : "Recognizing and organizing content",

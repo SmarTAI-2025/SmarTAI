@@ -15,7 +15,8 @@ from backend.tests.test_recognition_agent import pdf
 
 
 @pytest.mark.asyncio
-async def test_submission_second_page_failure_cannot_return_first_page_as_complete(tmp_path, monkeypatch):
+@pytest.mark.parametrize("incremental", [False, True])
+async def test_submission_second_page_failure_cannot_return_first_page_as_complete(tmp_path, monkeypatch, incremental):
     _agent, request, data, results = setup(tmp_path, pdf=True, pages=2)
     # Match the incident: two scanned pages with no native text layer.
     import fitz
@@ -38,12 +39,14 @@ async def test_submission_second_page_failure_cannot_return_first_page_as_comple
     ]
     registry = SimpleNamespace(list_configs=lambda: [dict(provider_id=provider.provider_id, enabled=True, model="fixture")])
     monkeypatch.setattr(question_sources, "get_storage", lambda: results.store.storage)
+    on_pages = AsyncMock() if incremental else None
     with pytest.raises(RecognitionError) as caught:
         await question_sources.read_question_source(
             owner_id=request.source.owner_id, task_id=request.source.business_id,
             content=data, filename="two-pages.pdf", content_type="application/pdf", purpose="submissions",
             route=StageProviderRoute(route_id=provider.provider_id, kind="llm", provider=provider),
             registry=registry, stored_file_id=request.source.stored_file_id,
+            on_pages=on_pages,
         )
     assert caught.value.code == "provider_submit_uncertain"
     assert caught.value.details == {"failed_pages": [2], "processed_pages": [1], "page_diagnostics": {
@@ -64,14 +67,17 @@ async def test_submission_second_page_failure_cannot_return_first_page_as_comple
             envelope = decode_artifact(stream.read())
         if envelope.payload_kind == "assembly_v2":
             assemblies.append(envelope.payload)
-    assert len(assemblies) == 1
-    assert "Visible answer" in assemblies[0].document.final_markdown
-    assert assemblies[0].document.coverage.failed_pages == [2]
+    assert len(assemblies) == (2 if incremental else 1)
+    assert any("Visible answer" in assembly.document.final_markdown for assembly in assemblies)
+    assert [page for assembly in assemblies for page in assembly.document.coverage.failed_pages] == [2]
+    if incremental:
+        on_pages.assert_awaited_once()
+        assert on_pages.await_args.args[0][0]["page_number"] == 1
 
     args = dict(owner_id=request.source.owner_id, task_id=request.source.business_id,
                 content=data, filename="two-pages.pdf", content_type="application/pdf", purpose="submissions",
                 route=StageProviderRoute(route_id=provider.provider_id, kind="llm", provider=provider),
-                registry=registry, stored_file_id=request.source.stored_file_id)
+                registry=registry, stored_file_id=request.source.stored_file_id, on_pages=on_pages)
     # A new adapter instance reopens durable artifacts; ordinary reentry cannot
     # silently redispatch a request whose billing outcome is uncertain.
     with pytest.raises(RecognitionError):

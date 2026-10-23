@@ -52,3 +52,52 @@ async def test_upload_saves_original_before_recognition_and_worker_reports_failu
     assert job.error_code == "provider_recitation_blocked"
     assert job.progress["recognition_failure"]["failed_pages"] == [1]
     assert job.payload["source_refs"][0]["stored_file_id"] == source["source"]["stored_file_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role,enabled,expected_vision", [
+    ("rubric", False, False), ("rubric", True, True),
+    ("programming_tests", False, False), ("programming_tests", True, True),
+    ("problem", False, True),
+])
+async def test_deferred_material_read_preserves_explicit_ocr_opt_in(monkeypatch, role, enabled, expected_vision):
+    from io import BytesIO
+    from fastapi import UploadFile
+    from backend.api import task_preparation as api
+    from backend.progress.tracker import ProgressReporter
+    from backend.services import task_facade
+    from backend.services.question_sources import QuestionSourceRead
+    from backend.tests.test_question_preparation_recovery import _RecoveryRegistry, _claim
+    from backend.tests.test_task_background_workflows import _seed_task
+    from backend.tests.test_recognition_agent import pdf
+
+    owner, task = _seed_task()
+    registry = _RecoveryRegistry()
+    roles = ["problem"] if role == "problem" else ["problem", role]
+    tokens = []
+    for source_role in roles:
+        source = await api.preflight_problem_source(task_id=task,
+            file=UploadFile(filename=source_role + ".pdf", file=BytesIO(pdf(["Question 1. Teacher material."]))),
+            library_material_id=None, stored_file_id=None, inline_text=None, role=source_role,
+            structure_mode="organized", extraction_hint="", save_to_library=False,
+            recognition_provider_id="test-provider", defer_recognition=True, enable_material_ocr=enabled,
+            current=SimpleNamespace(id=owner), registry=registry)
+        assert isinstance(source, dict), getattr(source, "body", source)
+        tokens.append(source["source_token"])
+    started = await api._start_question_preparation(task_id=task,
+        request=api.StartQuestionPreparationRequest(source_tokens=tokens, expected_workflow_revision=0,
+            recognition_provider_id="test-provider"),
+        current=SimpleNamespace(id=owner), registry=registry, background_tasks=None,
+        allow_prepared_source_reuse=False)
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
+    operation = _claim(owner, started["job_id"], "deferred-ocr-opt-in")
+    inputs = api._rehydrate_question_preparation_inputs(operation)
+    selected = [source for source in inputs["sources"] if source[0].role == role]
+    assert len(selected) == 1 and selected[0][2]["enable_material_ocr"] is enabled
+    read = AsyncMock(return_value=QuestionSourceRead(text="Teacher material.", recognition={}))
+    monkeypatch.setattr(api, "read_question_source", read)
+    await api._recognize_saved_question_sources(selected, operation=operation, route=inputs["route"],
+        registry=registry, reporter=ProgressReporter(operation.operation_id), allow_partial=True)
+    read.assert_awaited_once()
+    assert read.call_args.kwargs["allow_vision"] is expected_vision
+    assert read.call_args.kwargs["allow_partial"] is True

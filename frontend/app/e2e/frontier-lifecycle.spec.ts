@@ -72,9 +72,18 @@ for (const locale of ["zh-CN", "en-US"]) {
       if (path.endsWith("/result")) return json({ ...current(), results: [], timestamp: 1 });
       return json([]);
     });
-    async function returnToDemo() {
+    async function returnToDemo(hoverNotice = false) {
       const quick = page.getByRole("link", { name: zh ? "简明演示" : "Quick Demo", exact: true });
-      if (!await quick.isVisible()) await page.getByRole("button", { name: zh ? "打开导航" : "Open navigation", exact: true }).click();
+      if (!await quick.isVisible()) {
+        if (hoverNotice) {
+          const notice = page.locator('[data-sonner-toast][data-type="success"]').first();
+          await expect(notice).toBeVisible();
+          // Hover pauses toast dismissal: navigation must remain usable while
+          // the real notice is present, not only after its timer expires.
+          await notice.hover();
+        }
+        await page.getByRole("button", { name: zh ? "打开导航" : "Open navigation", exact: true }).click({ timeout: 3000 });
+      }
       await quick.click();
       await expect(page).toHaveURL(new RegExp(`/frontier/live\\?taskId=${task.task_id}$`));
     }
@@ -105,7 +114,7 @@ for (const locale of ["zh-CN", "en-US"]) {
     await page.locator(`a[href="/tasks/${task.task_id}/questions/q1/content#question-q1"]`).first().click();
     await firstQuestion.getByRole("button", { name: zh ? "第 1 题 · 待确认" : "Question 1 · Confirm review", exact: true }).click();
     await expect(firstQuestion.getByRole("button", { name: zh ? "第 1 题 · 已确认" : "Question 1 · Confirmed", exact: true })).toBeVisible();
-    await returnToDemo();
+    await returnToDemo(true);
     await expect(continueButton).toBeEnabled();
     expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`, `/tasks/${task.task_id}/problems/q1`]);
     await continueButton.click();

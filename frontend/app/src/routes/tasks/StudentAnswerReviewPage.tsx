@@ -1082,7 +1082,7 @@ function AnswerStateBadge({ state, answer, locale, t }: {
   locale: Locale;
   t: (key: MessageKey) => string;
 }) {
-  const flagText = (answer?.flag ?? []).join(" · ");
+  const flagText = (answer?.flag ?? []).filter(flag => !flag.startsWith("recognition_invalid_fields:")).join(" · ");
   const lowConfidence = /低置信|low[ -]?confidence|confidence/i.test(flagText);
   return (
     <span className={cn(

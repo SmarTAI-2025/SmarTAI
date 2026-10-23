@@ -29,7 +29,8 @@ export function questionIssueSeverity(issue: PreparationIssue, problem?: Problem
 function questionHasMissingEvidence(issue: PreparationIssue): boolean {
   const coverage = issue.details?.coverage as Record<string, unknown[]> | undefined;
   return ["recognition_partial", "recognition_needs_review"].includes(issue.code) && issue.status !== "resolved"
-    && (Boolean(issue.details?.error_code) || ["failed_pages", "unprocessed_pages", "missing_targets"].some(key => Boolean(coverage?.[key]?.length)));
+    && (issue.details?.incomplete === true || issue.severity === "blocking"
+      || Boolean(issue.details?.error_code) || ["failed_pages", "unprocessed_pages", "missing_targets"].some(key => Boolean(coverage?.[key]?.length)));
 }
 
 /** Qualitative OCR labels are not numeric probabilities or failures. */
@@ -45,6 +46,9 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
 }
 
 export function recognitionIssueLabel(issue: PreparationIssue, locale: string): string | null {
+  if (issue.code === "source_conflict" && issue.details?.reason === "test_case_output_conflict") return locale === "zh-CN"
+    ? "测试用例中，同一输入对应了不同预期输出，请核对。"
+    : "Test cases have different expected outputs for the same input. Please review.";
   if (issue.code === "math_rubric_advisory") return locale === "zh-CN"
     ? "本题含 AI 补充评分说明，建议核对评分标准。" : "AI scoring guidance was added. Review the rubric.";
   if (issue.details?.review_display_reason === "empty_stem") return locale === "zh-CN"
@@ -81,6 +85,9 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
   if (issue.details?.error_code) return zh
     ? "来源读取失败，请重试或修正原件后继续。"
     : "Source reading failed. Retry or correct the source before continuing.";
+  if (issue.code === "recognition_partial" && (issue.details?.incomplete === true || issue.severity === "blocking")) return zh
+    ? "来源内容不完整，请对照原件补齐并确认。"
+    : "Source content is incomplete. Complete it against the original and confirm.";
   if (questionHasLowConfidence(issue)) return zh
     ? `置信度 ${questionConfidence(issue)} 较低，建议核对确认。`
     : `Low confidence (${questionConfidence(issue)}); review suggested.`;
@@ -157,12 +164,23 @@ export function questionReviewBlockers(problems: ProblemInfo[], taskId: string, 
     href: `/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`,
   }));
 }
+export function answerMetadataConfirmationAllowed(answer?: StudentAnswerInfo): boolean {
+  // The server recomputes this marker from saved evidence, never client flags.
+  if (!answer?.content?.trim() || !answer.flag?.includes("recognition_metadata_review")) return false;
+  const fields = answer.flag.filter(flag => flag.startsWith("recognition_invalid_fields:"))
+    .flatMap(flag => flag.split(":", 2)[1].split(","));
+  return fields.length > 0 && fields.every(field => ["number", "type", "flag", "recognition_confidence"].includes(field))
+    && !answer.flag.some(flag => ["parse_failed", "no_matching_answer", "recognition_incomplete", "recognition_paused", "provider_submit_uncertain"].includes(flag)
+      || flag.startsWith("recognition_failed_pages:") || flag.startsWith("recognition_unprocessed_pages:"));
+}
 export function answerReviewBlocked(answer?: StudentAnswerInfo): boolean {
-  return Boolean(answer?.flag?.some(flag => ["recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending"].includes(flag)));
+  if (answerMetadataConfirmationAllowed(answer)) return false;
+  return Boolean(answer?.flag?.some(flag => ["recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending"].includes(flag)
+    || flag.startsWith("recognition_invalid_fields:")));
 }
 export function answerReviewNextBlocked(answer?: StudentAnswerInfo): boolean {
   return answerReviewBlocked(answer) || Boolean(answer?.review_status !== "confirmed"
-    && answer?.flag?.some(flag => ["recognition_repaired_needs_confirmation"].includes(flag)));
+    && answer?.flag?.some(flag => ["recognition_repaired_needs_confirmation", "recognition_metadata_review"].includes(flag)));
 }
 
 function answerHasLowConfidence(answer?: StudentAnswerInfo): boolean {

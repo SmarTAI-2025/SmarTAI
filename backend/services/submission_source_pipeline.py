@@ -51,7 +51,7 @@ class PreparedSubmissionSource:
     recognition: dict | None = None
 
 
-def attach_submission_recognition(results, sources):
+def attach_submission_recognition(results, sources, *, verified_question_ids=()):
     """Keep reading uncertainty separate from student identity and correctness."""
     by_source = {source.source_id: source.recognition for source in sources if source.recognition}
     output = []
@@ -60,7 +60,9 @@ def attach_submission_recognition(results, sources):
         if result.student is None or summary is None:
             output.append(result)
             continue
-        student = {**result.student, "recognition": summary}
+        verified = set(verified_question_ids)
+        student = {**result.student, "recognition": {**result.student.get("recognition", {}), **summary,
+            **({"complete_question_ids": sorted(verified)} if verified else {})}}
         # File assessments stay in source diagnostics. Each parsed answer owns
         # its numeric confidence; only concrete source failures propagate here.
         if recognition_has_failure(summary):
@@ -71,8 +73,14 @@ def attach_submission_recognition(results, sources):
                 pages = (summary.get("coverage") or {}).get(key) or []
                 if pages:
                     flags.append(f"recognition_{key}:" + ",".join(str(page) for page in pages))
-            student["stu_ans"] = [dict(answer, flag=list(dict.fromkeys([*answer.get("flag", []), *flags])))
-                                   for answer in student.get("stu_ans", [])]
+            student["stu_ans"] = [answer if answer.get("q_id") in verified else
+                dict(answer, flag=list(dict.fromkeys([*answer.get("flag", []), *flags])))
+                for answer in student.get("stu_ans", [])]
+        if recognition_has_failure(summary):
+            uncertain = "provider_submit_uncertain" in {result.stable_error_code, summary.get("error_code")}
+            result = replace(result, status="parse_failed",
+                stable_error_code="provider_submit_uncertain" if uncertain else summary.get("error_code") or "submission_parse_failed",
+                failure_phase="recognition", retryable=False if uncertain else bool(summary.get("retryable", True)))
         output.append(replace(result, student=student))
     return output
 
@@ -525,6 +533,7 @@ async def prepare_submission_sources(
     reporter=None,
     recognition_reader=None,
     reuse_source=None,
+    on_source_ready: Callable[[PreparedSubmissionSource], Awaitable[None]] | None = None,
 ) -> list[PreparedSubmissionSource]:
     """Persist originals, then OCR/read each source without batch-wide collapse."""
     container_file: StoredFile | None = None
@@ -586,7 +595,7 @@ async def prepare_submission_sources(
             container_file=container_file,
             operation_lease_token=operation_lease_token,
         )
-        return [PreparedSubmissionSource(
+        source = PreparedSubmissionSource(
             source_id=source_id,
             stored_file_id=stored_file_id,
             filename=raw_sources[0].filename,
@@ -595,9 +604,17 @@ async def prepare_submission_sources(
             pre_error_code=code,
             failure_phase="archive",
             retryable=is_retryable_background_error(code),
-        )]
+        )
+        if on_source_ready is not None:
+            await on_source_ready(source)
+        return [source]
 
     prepared: list[PreparedSubmissionSource] = []
+    async def source_ready(source):
+        prepared.append(source)
+        if on_source_ready is not None:
+            await on_source_ready(source)
+
     for order_index, raw in enumerate(raw_sources):
         try:
             source_id, stored_file_id = await _persist_and_register(
@@ -633,7 +650,7 @@ async def prepare_submission_sources(
             )
             raw = failed_raw
         if raw.pre_error_code:
-            prepared.append(PreparedSubmissionSource(
+            await source_ready(PreparedSubmissionSource(
                 source_id=source_id,
                 stored_file_id=stored_file_id,
                 filename=raw.filename,
@@ -649,7 +666,7 @@ async def prepare_submission_sources(
         if raw.content is None:
             raise RuntimeError("submission_source_persistence_failed")
         if reuse_source is not None and reuse_source(raw, source_id, stored_file_id):
-            prepared.append(PreparedSubmissionSource(
+            await source_ready(PreparedSubmissionSource(
                 source_id=source_id, stored_file_id=stored_file_id,
                 filename=raw.filename, content_type=raw.content_type, text=None,
             ))
@@ -701,7 +718,7 @@ async def prepare_submission_sources(
                     content_type=raw.content_type,
                 )
             if not text.strip():
-                prepared.append(PreparedSubmissionSource(
+                await source_ready(PreparedSubmissionSource(
                     source_id=source_id,
                     stored_file_id=stored_file_id,
                     filename=raw.filename,
@@ -712,7 +729,7 @@ async def prepare_submission_sources(
                     retryable=False,
                 ))
             else:
-                prepared.append(PreparedSubmissionSource(
+                await source_ready(PreparedSubmissionSource(
                     source_id=source_id,
                     stored_file_id=stored_file_id,
                     filename=raw.filename,
@@ -748,7 +765,7 @@ async def prepare_submission_sources(
                 code,
                 type(exc).__name__,
             )
-            prepared.append(PreparedSubmissionSource(
+            await source_ready(PreparedSubmissionSource(
                 source_id=source_id,
                 stored_file_id=stored_file_id,
                 filename=raw.filename,

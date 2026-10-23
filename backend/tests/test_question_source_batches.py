@@ -64,6 +64,30 @@ def fake_result(pages, *, deferred=(), error=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("purpose", ["reference", "rubric", "test_cases", "submissions"])
+async def test_non_question_pdf_sources_enumerate_every_page_and_emit_saved_pages(tmp_path, monkeypatch, purpose):
+    from backend.db import file_repository
+
+    _agent, original, _data, results = setup(tmp_path)
+    data = pdf([f"Material page {page}. Describe the independent source." for page in range(1, 26)])
+    stored = file_repository.save_file(storage=results.store.storage, owner_id=original.source.owner_id,
+        assignment_id=original.source.business_id, kind="problem_source", original_name=f"{purpose}.pdf",
+        content=data, content_type="application/pdf")
+    monkeypatch.setattr(question_sources, "get_storage", lambda: results.store.storage)
+    emitted = []
+    async def on_pages(pages):
+        emitted.extend(pages)
+    read = await question_sources.read_question_source(owner_id=original.source.owner_id,
+        task_id=original.source.business_id, content=data, filename=stored.original_name,
+        stored_file_id=stored.id, registry=None, purpose=purpose, on_pages=on_pages,
+        route=StageProviderRoute(route_id="no-model-needed", kind="llm", provider=None))
+    assert read.recognition["coverage"]["processed_pages"] == list(range(1, 26))
+    assert len(read.recognition["operation_ids"]) == 3
+    assert [page["page_number"] for page in emitted] == list(range(1, 26))
+    assert "Material page 25." in emitted[-1]["text"]
+
+
+@pytest.mark.asyncio
 async def test_deferred_pages_get_smaller_batches_without_repeating_processed_pages():
     calls = []
     async def run(scoped, *_args, **_kwargs):
@@ -79,13 +103,74 @@ async def test_deferred_pages_get_smaller_batches_without_repeating_processed_pa
 
 
 @pytest.mark.asyncio
-async def test_uncertain_batch_stops_without_replaying_or_starting_next_batch():
-    run = AsyncMock(return_value=fake_result(list(range(1, 13)), error="provider_submit_uncertain"))
+@pytest.mark.parametrize("allow_partial", [False, True])
+async def test_uncertain_page_does_not_replay_but_later_untouched_pages_and_batches_continue(allow_partial):
+    calls, callbacks = [], []
+    async def run(scoped, *_args, **_kwargs):
+        calls.append(scoped.pages)
+        if len(calls) == 1:
+            result = fake_result(scoped.pages, deferred=list(range(2, 13)), error="provider_submit_uncertain")
+            result.assembly.document.coverage.failed_pages = [2]
+            result.assembly.document.coverage.unprocessed_pages = list(range(3, 13))
+            result.assembly.raw.read_batch.plan.decisions = []
+            result.assembly.raw.read_batch.units = [SimpleNamespace(page_numbers=[1], candidate=SimpleNamespace(status="ok")),
+                SimpleNamespace(page_numbers=[2], candidate=SimpleNamespace(status="error",
+                    safe_error_code="provider_submit_uncertain", upstream_status_code=503))]
+            return result
+        return fake_result(scoped.pages)
+    async def on_pages(pages):
+        callbacks.extend(page["page_number"] for page in pages)
+    args = dict(service=SimpleNamespace(run=run), request=request(b"pdf"), content=b"pdf", engine=None,
+        total_pages=25, reporter=ProgressReporter("batches"), allow_partial=allow_partial, on_pages=on_pages)
+    if allow_partial:
+        text, summary = await read_question_pdf_batches(**args)
+        assert "Question 25" in text and "Question 2\n" not in text
+        assert summary["status"] == "failed" and summary["error_code"] == "provider_submit_uncertain"
+        assert summary["coverage"]["failed_pages"] == [2]
+        assert summary["page_diagnostics"]["page_errors"] == [dict(page=2, error_code="provider_submit_uncertain", status_code=503)]
+    else:
+        with pytest.raises(RecognitionError) as caught:
+            await read_question_pdf_batches(**args)
+        assert caught.value.code == "provider_submit_uncertain"
+        assert caught.value.details["failed_pages"] == [2]
+        assert 25 in caught.value.details["processed_pages"]
+    assert calls == [list(range(1, 13)), *[[page] for page in range(3, 13)], list(range(13, 25)), [25]]
+    assert sorted(callbacks) == [page for page in range(1, 26) if page != 2]
+
+
+@pytest.mark.asyncio
+async def test_failed_batch_without_any_document_still_attempts_later_batch():
+    calls = []
+    async def run(scoped, *_args, **_kwargs):
+        calls.append(scoped.pages)
+        if len(calls) == 1:
+            raise RecognitionError("provider_submit_uncertain")
+        return fake_result(scoped.pages)
     with pytest.raises(RecognitionError) as caught:
         await read_question_pdf_batches(service=SimpleNamespace(run=run), request=request(b"pdf"),
-            content=b"pdf", engine=None, total_pages=200, reporter=ProgressReporter("batches"))
+            content=b"pdf", engine=None, total_pages=13, reporter=ProgressReporter("batches"))
     assert caught.value.code == "provider_submit_uncertain"
-    assert run.await_count == 1
+    assert calls == [list(range(1, 13)), [13]]
+    assert caught.value.details["processed_pages"] == [13]
+
+
+@pytest.mark.asyncio
+async def test_active_page_eight_failure_keeps_pages_nine_and_ten_independent():
+    calls, saved = [], []
+    async def run(scoped, *_args, **_kwargs):
+        calls.append(scoped.pages)
+        if scoped.pages == [8]:
+            raise RecognitionError("provider_submit_uncertain")
+        return fake_result(scoped.pages)
+    async def on_pages(pages):
+        saved.extend(page["page_number"] for page in pages)
+    text, summary = await read_question_pdf_batches(service=SimpleNamespace(run=run), request=request(b"pdf"),
+        content=b"pdf", engine=SimpleNamespace(), total_pages=10, reporter=ProgressReporter("page-eight"),
+        allow_partial=True, on_pages=on_pages)
+    assert calls == [[page] for page in range(1, 11)]
+    assert saved == [1, 2, 3, 4, 5, 6, 7, 9, 10]
+    assert summary["status"] == "failed" and summary["coverage"]["failed_pages"] == [8]
+    assert "Question 9" in text and "Question 10" in text
 
 
 @pytest.mark.asyncio
