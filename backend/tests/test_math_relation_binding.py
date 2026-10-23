@@ -73,6 +73,30 @@ def test_negations_hypotheses_and_unknown_prefixes_are_not_discarded(quote):
     assert issue == 'student_expression_not_bound'
 
 
+@pytest.mark.parametrize('quote', [
+    '不能推出以下等式：\n7+8=16。', '假设如下等式成立：\n7+8=16。',
+    '7+8=16\n这一步不成立。', 'The following claim is false\n7+8=16.',
+    '假设\n7+8=16。',
+])
+def test_layout_break_keeps_formula_scope(quote):
+    p, plan = context()
+    claim = Claim(id='c', quote=quote, verdict='unknown', reason='Preserve context')
+    assert automatic_checks([claim], p, plan, student_answer=quote) == []
+    issue, _ = check(quote, '7+8', '16', reference_text='')
+    assert issue is not None
+
+
+def test_independent_complete_formula_lines_still_schedule_checks():
+    quote = '2+3=6\n因此 7+8=16。'
+    p, plan = context()
+    claim = Claim(id='c', quote=quote, verdict='unknown', reason='Two assertions')
+    checks = automatic_checks([claim], p, plan, student_answer=quote)
+    assert len(checks) == 2
+    for item in checks:
+        request = MathVerificationRequest(**item['request'])
+        assert binding_error(request, quote, p.stem, problem=p, plan=plan) is None
+
+
 @pytest.mark.parametrize('quote,student,reference', [
     ('2+3=5；7+2=9', '5', '7+2'),
     ('1+1=2=3+3=6', '1+1', '6'),

@@ -96,6 +96,21 @@ def quantity(text, *, allow_unknown_functions=False):
     return None
 
 
+def _relation(text):
+    if re.search(r"[<>!≠≤≥]|==", text):
+        return None
+    split = re.split(r"([=≈])", text)
+    if len(split) < 3:
+        return None
+    terms, operators = [term.strip() for term in split[::2]], split[1::2]
+    values = [quantity(term, allow_unknown_functions=True) for term in terms]
+    if all(value is not None or (index == 0 and re.fullmatch(
+            r"[A-Za-z][A-Za-z0-9]{0,2}'\([A-Za-z][A-Za-z0-9]{0,2}\)", term))
+            for index, (term, value) in enumerate(zip(terms, values))):
+        return terms, operators, values
+    return None
+
+
 def _statements(text):
     # These prefixes assert a following relation; arbitrary prose, negations,
     # questions and local hypotheses are not discarded to expose a formula.
@@ -103,13 +118,24 @@ def _statements(text):
               r"(?:答案|结果)\s*(?:为|是)\s*|"
               r"(?:计算得|可得|由此可得)\s*[:：]?\s*|(?:因此|所以)\s*[,，:：]?\s*|"
               r"(?:thus|hence|therefore)\s*[:,]?\s+)")
-    for part in re.split(r"[;；。\n]", _unfence(text)):
+    def clean(part):
         part = part.strip()
         if part.endswith(".") and not part.endswith(".."):
             part = part[:-1].rstrip()
-        part = re.sub(prefix, "", part, count=1, flags=re.I)
-        if part:
-            yield _unfence(part)
+        return _unfence(re.sub(prefix, "", part, count=1, flags=re.I))
+
+    for sentence in re.split(r"[;；。]", _unfence(text)):
+        lines = [line.strip() for line in sentence.splitlines() if line.strip()]
+        # A layout break is not a new assertion. Split independent formula
+        # lines only when every line is complete mathematical syntax; otherwise
+        # preserve surrounding negations, hypotheses and unknown prose.
+        if len(lines) > 1 and not all(
+                quantity(clean(line), allow_unknown_functions=True) is not None
+                or _relation(clean(line)) is not None for line in lines):
+            lines = [" ".join(lines)]
+        for part in lines:
+            if (part := clean(part)):
+                yield part
 
 
 def _relation_parts(text):
@@ -120,17 +146,8 @@ def _relation_parts(text):
     salvaging a convenient numeric suffix or an operand inside a function.
     """
     for part in _statements(text):
-        if re.search(r"[<>!≠≤≥]|==", part):
-            continue
-        split = re.split(r"([=≈])", part)
-        if len(split) < 3:
-            continue
-        terms, operators = [term.strip() for term in split[::2]], split[1::2]
-        values = [quantity(term, allow_unknown_functions=True) for term in terms]
-        if all(value is not None or (index == 0 and re.fullmatch(
-                r"[A-Za-z][A-Za-z0-9]{0,2}'\([A-Za-z][A-Za-z0-9]{0,2}\)", term))
-                for index, (term, value) in enumerate(zip(terms, values))):
-            yield terms, operators, values
+        if (relation := _relation(part)) is not None:
+            yield relation
 
 
 def _pieces(text):
