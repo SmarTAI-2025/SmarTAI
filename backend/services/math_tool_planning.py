@@ -22,7 +22,9 @@ def _unfence(text):
     text = text.strip()
     for left, right in (("$$", "$$"), ("\\(", "\\)"), ("\\[", "\\]"), ("$", "$")):
         if text.startswith(left) and text.endswith(right) and len(text) >= len(left) + len(right):
-            return text[len(left):-len(right)].strip()
+            inner = text[len(left):-len(right)]
+            if left not in inner and right not in inner:
+                return inner.strip()
     return text
 
 
@@ -94,19 +96,69 @@ def quantity(text, *, allow_unknown_functions=False):
     return None
 
 
+def _statements(text):
+    # These prefixes assert a following relation; arbitrary prose, negations,
+    # questions and local hypotheses are not discarded to expose a formula.
+    prefix = (r"^(?:(?:(?:逐项)?(?:计算|化简|求导|积分|展开)(?:结果)?|答案|结果)\s*[:：]\s*|"
+              r"(?:答案|结果)\s*(?:为|是)\s*|"
+              r"(?:计算得|可得|由此可得)\s*[:：]?\s*|(?:因此|所以)\s*[,，:：]?\s*|"
+              r"(?:thus|hence|therefore)\s*[:,]?\s+)")
+    for part in re.split(r"[;；。\n]", _unfence(text)):
+        part = part.strip()
+        if part.endswith(".") and not part.endswith(".."):
+            part = part[:-1].rstrip()
+        part = re.sub(prefix, "", part, count=1, flags=re.I)
+        if part:
+            yield _unfence(part)
+
+
+def _relation_parts(text):
+    """Complete operands only, with their units and relation operators.
+
+    A derivative label can identify its RHS, but is not sent to CAS as an
+    arithmetic expression. Reject a whole malformed relation instead of
+    salvaging a convenient numeric suffix or an operand inside a function.
+    """
+    for part in _statements(text):
+        if re.search(r"[<>!≠≤≥]|==", part):
+            continue
+        split = re.split(r"([=≈])", part)
+        if len(split) < 3:
+            continue
+        terms, operators = [term.strip() for term in split[::2]], split[1::2]
+        values = [quantity(term, allow_unknown_functions=True) for term in terms]
+        if all(value is not None or (index == 0 and re.fullmatch(
+                r"[A-Za-z][A-Za-z0-9]{0,2}'\([A-Za-z][A-Za-z0-9]{0,2}\)", term))
+                for index, (term, value) in enumerate(zip(terms, values))):
+            yield terms, operators, values
+
+
 def _pieces(text):
-    yield text
-    for match in re.finditer(r"\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]", text):
-        yield match[0]
-    # Explicit equations only; never extract a stray number from prose as a
-    # purported answer or erase the rest of an invalid mathematical step.
-    for part in re.split(r"[;；\n]", _unfence(text)):
-        if part.count("=") == 1 and not re.search(r"[<>!]", part):
-            left, right = part.split("=")
-            if expression(left) is not None and expression(right) is not None:
-                yield left
-                yield right
-                yield f"Eq({left},{right})"
+    for part in _statements(text):
+        if quantity(part, allow_unknown_functions=True) is not None:
+            yield part
+    for terms, operators, values in _relation_parts(text):
+        for term, value in zip(terms, values):
+            if value is not None:
+                yield term
+        for index, operator in enumerate(operators):
+            left, right = values[index:index + 2]
+            if (operator == "=" and left and right and left[1] is None and right[1] is None
+                    and expression(left[0]) is not None and expression(right[0]) is not None):
+                yield f"Eq({left[0]},{right[0]})"
+
+
+def _adjacent_relation(request, text):
+    target = ((_identity(request.student_expression), request.student_unit),
+              (_identity(request.reference_expression), request.reference_unit))
+    for _, operators, values in _relation_parts(text):
+        for index in range(len(operators)):
+            left, right = values[index:index + 2]
+            if left and right:
+                pair = ((_identity(left[0]), left[1]), (_identity(right[0]), right[1]))
+                if target in (pair, pair[::-1]):
+                    return True
+    return False
 
 
 def _bound_units(expr, sources):
@@ -203,18 +255,23 @@ def binding_error(request, claim_quote, context_quote, *, problem, plan):
     sources = (problem.stem, problem.reference_answer or "", plan.effective_criterion)
     if not any(match_source_quote(source, context_quote) for source in sources):
         return "unmatched_context"
-    if not _bound(request.student_expression, [claim_quote], request.student_unit):
+    claim_relation = _adjacent_relation(request, claim_quote)
+    if not _bound(request.student_expression, [claim_quote], request.student_unit) and not claim_relation:
         return "student_expression_not_bound"
     # Prefer an actual reference quantity over the student's equal-valued
     # quantity. Otherwise a missing reference unit could bind back to the
     # bare student value and erase a dimensional mismatch.
     reference_units = set()
-    for source in (problem.reference_answer or "", context_quote, claim_quote):
+    reference_from_claim = False
+    for index, source in enumerate((problem.reference_answer or "", context_quote, claim_quote)):
         reference_units = _bound_units(request.reference_expression, [source])
         if reference_units:
+            reference_from_claim = index == 2
             break
-    if reference_units != {request.reference_unit}:
+    if reference_units != {request.reference_unit} and not (reference_from_claim and claim_relation):
         return "reference_expression_not_bound"
+    if reference_from_claim and not claim_relation:
+        return "relation_not_bound"
     shadowed = _shadowed_constants(problem.stem + "\n" + claim_quote)
     if any(_uses_names(expr, shadowed) for expr in
            (request.student_expression, request.reference_expression)):
@@ -277,16 +334,28 @@ def automatic_checks(claims, problem, plan=None, *, student_answer=None):
         located = match_source_quote(student_answer, claim.quote) if student_answer is not None else None
         whole_answer = bool(located and not student_answer[:located.start].strip()
                             and not student_answer[located.end:].strip())
+        for _, operators, values in _relation_parts(claim.quote):
+            for index, operator in enumerate(operators):
+                left, right = values[index:index + 2]
+                if not left or not right or bool(left[1]) != bool(right[1]):
+                    continue
+                if operator == "≈" and not precision:
+                    continue
+                expressions = [expression(value[0]) for value in (left, right)]
+                if (not all(expressions)
+                        or (_identity(expressions[0]) == _identity(expressions[1]) and left[1] == right[1])
+                        or any(_uses_names(side, shadowed) for side in expressions)
+                        or any(isinstance(node, ast.Name) and node.id not in _FUNCTIONS | {"pi", "E", "e", "I", "i"}
+                               for side in expressions for node in ast.walk(_tree(side)))):
+                    continue
+                checks.append({"claim_id": claim.id, "context_quote": problem.stem,
+                    "request": MathVerificationRequest(student_expression=expressions[1],
+                        reference_expression=expressions[0], student_unit=right[1], reference_unit=left[1],
+                        **(precision if operator == "≈" else {})).model_dump(mode="json"), "origin": "explicit_relation"})
         if text.count("=") == 1 and not re.search(r"[<>!]", text):
             left, right = text.split("=")
             if any(_uses_names(side, shadowed) for side in (left, right)):
                 continue
-            if expression(left) is not None and expression(right) is not None and not any(
-                    isinstance(node, ast.Name) and node.id not in _FUNCTIONS | {"pi", "E", "e", "I", "i"}
-                    for side in (left, right) for node in ast.walk(_tree(expression(side)))):
-                checks.append({"claim_id": claim.id, "context_quote": problem.stem,
-                    "request": MathVerificationRequest(student_expression=expression(right),
-                        reference_expression=expression(left)).model_dump(mode="json"), "origin": "explicit_relation"})
             # x=3 can be a solution/constraint, not an identity for every x.
             # Compare equations as solution sets only when both are explicit.
             ref = _unfence(problem.reference_answer or "")
