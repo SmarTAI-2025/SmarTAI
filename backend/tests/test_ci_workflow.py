@@ -61,7 +61,7 @@ def test_e2e_readiness_probe_uses_http_get(workflow_text: str) -> None:
     """
     assert "name: E2E (Playwright)" in workflow_text, "E2E job must exist"
 
-    e2e_section = _job_section(workflow_text, "e2e")
+    e2e_section = _job_section(workflow_text, "e2e-tests")
     # The old HEAD-based wait-on command must not be the readiness gate. We
     # match the actual command invocation (`npx ... wait-on` or a bare
     # `wait-on` token on a command line), not the word in comments, so a
@@ -120,15 +120,19 @@ def test_postgres_backend_job_installs_pytest_asyncio(workflow_text: str) -> Non
     _assert_locked_test_dependency(postgres_section, "pytest-asyncio")
 
 
+@pytest.mark.parametrize("job_id, check_name", [
+    ("backend-sqlite", "Backend (SQLite)"),
+    ("e2e", "E2E (Playwright)"),
+])
 @pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", ""])
-def test_sqlite_required_check_rejects_incomplete_shards(workflow_text, result):
+def test_required_check_rejects_incomplete_shards(workflow_text, job_id, check_name, result):
     jobs = yaml.safe_load(workflow_text)["jobs"]
-    gate = jobs["backend-sqlite"]
-    assert gate["name"] == "Backend (SQLite)"
-    assert gate["needs"] == "backend-sqlite-tests"
+    gate = jobs[job_id]
+    assert gate["name"] == check_name
+    assert gate["needs"] == f"{job_id}-tests"
     assert gate["if"] == "always()"
     step, = gate["steps"]
-    assert step["env"]["SHARD_RESULT"] == "${{ needs.backend-sqlite-tests.result }}"
+    assert step["env"]["SHARD_RESULT"] == "${{ needs." + job_id + "-tests.result }}"
     completed = subprocess.run(
         ["bash", "-e", "-c", step["run"]],
         env={**os.environ, "SHARD_RESULT": result}, check=False,
@@ -139,11 +143,11 @@ def test_sqlite_required_check_rejects_incomplete_shards(workflow_text, result):
 def test_sqlite_matrix_covers_every_shard_and_retains_diagnostics(workflow_text):
     workflow = yaml.safe_load(workflow_text)
     job = workflow["jobs"]["backend-sqlite-tests"]
-    assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": [1, 2, 3, 4]}}
+    assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": list(range(1, 7))}}
     assert not job.get("continue-on-error", False)
     test = next(step for step in job["steps"] if step.get("name") == "Test (SQLite)")
     assert "backend/tests" in test["run"]
-    assert "--test-shard=${{ matrix.shard }}/4" in test["run"]
+    assert "--test-shard=${{ matrix.shard }}/6" in test["run"]
     assert "--durations=" in test["run"] and "--junitxml=" in test["run"]
     assert not test.get("continue-on-error", False)
     artifact = next(step for step in job["steps"] if step.get("name") == "Preserve SQLite test timings")
@@ -151,6 +155,24 @@ def test_sqlite_matrix_covers_every_shard_and_retains_diagnostics(workflow_text)
     assert "${{ matrix.shard }}" in artifact["with"]["name"]
     assert workflow["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
     assert "github.run_id" in workflow["concurrency"]["group"]
+
+
+def test_e2e_shards_keep_full_suite_and_run_controlled_retry_once(workflow_text):
+    job = yaml.safe_load(workflow_text)["jobs"]["e2e-tests"]
+    assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": [1, 2]}}
+    assert not job.get("continue-on-error", False)
+    run = next(step for step in job["steps"] if step.get("name") == "Run E2E")
+    assert "npm run e2e -- --workers=2 --shard=${{ matrix.shard }}/2" in run["run"]
+    assert not run.get("continue-on-error", False)
+    retry = next(step for step in job["steps"] if step.get("name") == "Run controlled grading retry E2E")
+    assert retry["if"] == "matrix.shard == 1"
+    assert "SMARTAI_RETRY_DEMO_MANIFEST=" in retry["run"]
+    assert "npm run e2e -- e2e/grading-retry.spec.ts" in retry["run"]
+    assert "--shard" not in retry["run"]
+    assert not retry.get("continue-on-error", False)
+    artifact = next(step for step in job["steps"] if step.get("name") == "Preserve failed browser diagnostics")
+    assert artifact["if"] == "failure()"
+    assert "${{ matrix.shard }}" in artifact["with"]["name"]
 
 
 def _assert_locked_test_dependency(job_text: str, package: str) -> None:
