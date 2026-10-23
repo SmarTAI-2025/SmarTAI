@@ -24,9 +24,9 @@ async def failed_preparation(monkeypatch, failed_question="q2", failure_question
     return owner, task, response["job_id"], workflow.workflow_revision, calls
 
 
-async def manual(owner, task, job, revision):
+async def manual(owner, task, job, revision, question_count=None):
     result = await task_preparation.manually_complete_question_preparation(task, job,
-        task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=revision),
+        task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=revision, question_count=question_count),
         current=SimpleNamespace(id=owner))
     if isinstance(result, dict) and result["status"] == "ready_for_review":
         for _ in range(2):
@@ -132,6 +132,9 @@ async def test_paused_question_handoff_keeps_completed_questions_and_sources(mon
 async def test_manual_completion_preserves_success_and_requires_filling_then_confirmation(monkeypatch, fill_reference):
     owner, task, job, revision, calls = await failed_preparation(monkeypatch)
     before_calls = list(calls)
+    refused = await manual(owner, task, job, revision, question_count=2)
+    assert refused.status_code == 409
+    assert not assignment_repository.list_questions(task, teacher_id=owner)
     result = await manual(owner, task, job, revision)
     assert isinstance(result, dict), getattr(result, "body", result)
     assert result["first_question_id"] == "q2"
@@ -181,7 +184,8 @@ async def test_manual_handoff_rechecks_latest_operation_after_reading_artifacts(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["stale", "other_owner", "missing_base", "newer_operation"])
-async def test_manual_completion_rejects_stale_foreign_or_unverified_results(monkeypatch, change):
+@pytest.mark.parametrize("question_count", [None, 2])
+async def test_manual_completion_rejects_stale_foreign_or_unverified_results(monkeypatch, change, question_count):
     owner, task, job, revision, calls = await failed_preparation(monkeypatch)
     before_calls = list(calls)
     actor = owner
@@ -196,7 +200,7 @@ async def test_manual_completion_rejects_stale_foreign_or_unverified_results(mon
             record.checkpoint = {**operation.checkpoint, "questions_extracted_artifact_id": "unverified-artifact"}
     else:
         workflow_repository.update_workflow(task, owner_id=owner, last_failed_job_id=None)
-    response = await manual(actor, task, job, revision)
+    response = await manual(actor, task, job, revision, question_count=question_count)
     assert response.status_code in {404, 409, 422}, response.body
     assert not assignment_repository.list_questions(task, teacher_id=owner)
     assert calls == before_calls
@@ -211,6 +215,98 @@ async def test_all_question_units_failed_can_enter_manual_review(monkeypatch):
     questions = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]
     assert len(questions) == 2 and all(not q["criterion"] for q in questions.values())
     assert "question_manual_completion_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["failed", "empty", "paused"])
+@pytest.mark.parametrize("enter_review_first", [False, True])
+async def test_empty_worker_projection_allows_manual_count_and_completion(monkeypatch, outcome, enter_review_first):
+    import asyncio
+    from unittest.mock import AsyncMock
+    from backend.agents import incremental_question_preparation as incremental
+    from backend.services.task_execution import stop_task_run
+
+    owner, task = _seed_task()
+    _, queued, _ = await _queue_question_preparation(owner, task, source_text="Unrecognized source text.")
+    job = queued["job_id"]
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: _RecoveryRegistry())
+    extract = AsyncMock(return_value={}, side_effect=(
+        ValidationError("Invalid response", code="provider_response_invalid") if outcome == "failed"
+        else asyncio.CancelledError() if outcome == "paused" else None))
+    monkeypatch.setattr(incremental, "_extract_problems_call", extract)
+    generate = AsyncMock(side_effect=AssertionError("No question is available for generation"))
+    monkeypatch.setattr(incremental, "generate_missing_question_materials", generate)
+    operation = _claim(owner, job, "empty-manual")
+    if outcome == "paused":
+        with pytest.raises(asyncio.CancelledError):
+            await task_preparation.run_durable_question_preparation(operation)
+        workflow = workflow_repository.get_workflow(task, owner_id=owner)
+        stop_task_run(task_id=task, owner_id=owner, job_id=job, expected_revision=workflow.workflow_revision)
+    else:
+        await task_preparation.run_durable_question_preparation(operation)
+    saved = workflow_repository.get_operation(job, owner_id=owner)
+    assert saved.status == "error" and saved.checkpoint["incremental_view_from_units"] is True
+    assert not saved.checkpoint.get("question_ids")
+    assert extract.await_count > 0
+    extract_count = extract.await_count
+    extract.side_effect = AssertionError("Manual processing must never invoke AI")
+    revision = workflow_repository.get_workflow(task, owner_id=owner).workflow_revision
+    if enter_review_first:
+        result = await manual(owner, task, job, revision)
+        assert result["status"] == "ready_for_review", getattr(result, "body", result)
+        revision = result["workflow_revision"]
+        reopened = task_facade.get_task(task_id=task, owner_id=owner)
+        assert reopened["manual_question_count_required"] and not reopened["problem_data"]
+        repeated = await manual(owner, task, job, revision)
+        assert repeated["workflow_revision"] == revision
+
+    request = task_preparation.ManualQuestionPreparationRequest(expected_workflow_revision=revision, question_count=2)
+    result = await task_preparation.manually_complete_question_preparation(task, job, request, current=SimpleNamespace(id=owner))
+    assert isinstance(result, dict), getattr(result, "body", result)
+    assert result["first_question_id"] == "manual-1"
+    reopened = task_facade.get_task(task_id=task, owner_id=owner)
+    assert not reopened["manual_question_count_required"]
+    assert list(reopened["problem_data"]) == ["manual-1", "manual-2"]
+    assert all(not row["stem"] and not row["criterion"] and not row["reference_answer"]
+               for row in reopened["problem_data"].values())
+    assert "question_manual_completion_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+    for q_id in reopened["problem_data"]:
+        task_facade.update_problem(task_id=task, owner_id=owner, q_id=q_id,
+            patch={"stem": "Teacher-authored question", "type": "other", "criterion": "Award 10 points for the solution.",
+                   "reference_answer": "Teacher-authored answer"})
+        task_facade.update_problem(task_id=task, owner_id=owner, q_id=q_id, patch={"review_status": "confirmed"})
+    edited = task_facade.get_task(task_id=task, owner_id=owner)
+    assert "question_manual_completion_required" not in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+    for revision in (request.expected_workflow_revision, edited["workflow_revision"]):
+        duplicate = await task_preparation.manually_complete_question_preparation(task, job,
+            request.model_copy(update={"expected_workflow_revision": revision}), current=SimpleNamespace(id=owner))
+        assert duplicate.status_code == 409
+    assert task_facade.get_task(task_id=task, owner_id=owner)["problem_data"] == edited["problem_data"]
+    assert extract.await_count == extract_count
+    generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_manual_count_cannot_replace_frozen_targets_before_worker_starts(monkeypatch):
+    import json
+    from backend.services.task_execution import stop_task_run
+
+    preflight = task_preparation.preflight_problem_source
+    async def targeted(**kwargs):
+        kwargs["recognition_options"] = json.dumps({"targets": ["3", "7"]})
+        return await preflight(**kwargs)
+    monkeypatch.setattr(task_preparation, "preflight_problem_source", targeted)
+    owner, task = _seed_task()
+    _, queued, _ = await _queue_question_preparation(owner, task)
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    stop_task_run(task_id=task, owner_id=owner, job_id=queued["job_id"], expected_revision=workflow.workflow_revision)
+    revision = workflow_repository.get_workflow(task, owner_id=owner).workflow_revision
+    refused = await manual(owner, task, queued["job_id"], revision, question_count=2)
+    assert refused.status_code == 409
+    result = await manual(owner, task, queued["job_id"], revision)
+    assert result["status"] == "ready_for_review"
+    rows = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]
+    assert [row["number"] for row in rows.values()] == ["3", "7"]
 
 
 @pytest.mark.asyncio

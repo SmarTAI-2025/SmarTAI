@@ -1843,25 +1843,28 @@ async def manually_complete_question_preparation(
         checkpoint = failed.checkpoint or {}
         if "manual_saved_sources" in (failed.payload or {}) or (failed.payload or {}).get("question_preparation_version") != 2:
             raise InvalidTransition("Saved-text AI recovery has been retired.", code="saved_text_recovery_retired")
-        has_base = (checkpoint.get("questions_extracted_artifact_id") or checkpoint.get("incremental_saving_units")
-                    or checkpoint.get("incremental_view_from_units"))
-        if not has_base:
-            if count_pending and request.question_count is None:
-                return {"status": "ready_for_review", "task_id": task_id,
-                        "workflow_revision": workflow.workflow_revision, "first_question_id": None}
-            from backend.services.question_preparation_manual import blank_manual_question_packages
-            if request.question_count is None:
-                # Even a stop before the first worker checkpoint must retain
-                # the explicit target list/teacher outline from frozen inputs.
-                from backend.services.question_preparation_manual import initial_manual_question_packages
-                packages = await run_in_threadpool(initial_manual_question_packages, failed)
-            else:
-                packages = blank_manual_question_packages(failed, request.question_count)
-            missing = list(packages)
-        else:
-            if request.question_count is not None:
-                raise InvalidTransition("Verified question drafts already exist; edit them in review.")
+        has_checkpoint = (checkpoint.get("questions_extracted_artifact_id") or checkpoint.get("incremental_saving_units")
+                          or checkpoint.get("incremental_view_from_units"))
+        if has_checkpoint:
             packages, missing = await run_in_threadpool(recover_manual_question_packages, failed)
+        else:
+            # Even a stop before the first worker checkpoint must retain
+            # the explicit target list/teacher outline from frozen inputs.
+            from backend.services.question_preparation_manual import initial_manual_question_packages
+            packages = await run_in_threadpool(initial_manual_question_packages, failed)
+            missing = list(packages)
+        if request.question_count is not None:
+            # A saved checkpoint can contain no questions after all extraction
+            # fails. Only verified rows, including material-only/target rows,
+            # prohibit creating blanks; artifact presence alone does not.
+            if packages:
+                raise InvalidTransition("Verified question drafts already exist; edit them in review.")
+            from backend.services.question_preparation_manual import blank_manual_question_packages
+            packages = blank_manual_question_packages(failed, request.question_count)
+            missing = list(packages)
+        elif count_pending and not packages:
+            return {"status": "ready_for_review", "task_id": task_id,
+                    "workflow_revision": workflow.workflow_revision, "first_question_id": None}
         revision = task_facade._replace_draft_questions(
             task_id, current.id, packages, workflow.problem_file_name or "",
             expected_workflow_revision=request.expected_workflow_revision,

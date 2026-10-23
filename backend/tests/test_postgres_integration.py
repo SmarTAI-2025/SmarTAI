@@ -94,6 +94,15 @@ async def test_postgres_incremental_question_results_survive_independent_work(pg
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["failed", "empty", "paused"])
+async def test_postgres_empty_question_handoff_allows_manual_count(pg_database, monkeypatch, outcome):
+    from backend.tests.test_question_manual_completion import (
+        test_empty_worker_projection_allows_manual_count_and_completion,
+    )
+    await test_empty_worker_projection_allows_manual_count_and_completion(monkeypatch, outcome, True)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stop", [False, True])
 @pytest.mark.parametrize("bad_field", ["content", "type"])
 async def test_postgres_partial_submission_manual_preserves_valid_siblings(pg_database, monkeypatch, stop, bad_field):
