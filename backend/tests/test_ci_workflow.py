@@ -143,11 +143,11 @@ def test_required_check_rejects_incomplete_shards(workflow_text, job_id, check_n
 def test_sqlite_matrix_covers_every_shard_and_retains_diagnostics(workflow_text):
     workflow = yaml.safe_load(workflow_text)
     job = workflow["jobs"]["backend-sqlite-tests"]
-    assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": list(range(1, 7))}}
+    assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": list(range(1, 8))}}
     assert not job.get("continue-on-error", False)
     test = next(step for step in job["steps"] if step.get("name") == "Test (SQLite)")
     assert "backend/tests" in test["run"]
-    assert "--test-shard=${{ matrix.shard }}/6" in test["run"]
+    assert "--test-shard=${{ matrix.shard }}/7" in test["run"]
     assert "--durations=" in test["run"] and "--junitxml=" in test["run"]
     assert not test.get("continue-on-error", False)
     artifact = next(step for step in job["steps"] if step.get("name") == "Preserve SQLite test timings")
@@ -159,10 +159,10 @@ def test_sqlite_matrix_covers_every_shard_and_retains_diagnostics(workflow_text)
 
 def test_e2e_shards_keep_full_suite_and_run_controlled_retry_once(workflow_text):
     job = yaml.safe_load(workflow_text)["jobs"]["e2e-tests"]
-    assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": [1, 2]}}
+    assert job["strategy"] == {"fail-fast": False, "matrix": {"shard": [1, 2, 3]}}
     assert not job.get("continue-on-error", False)
     run = next(step for step in job["steps"] if step.get("name") == "Run E2E")
-    assert "npm run e2e -- --workers=2 --shard=${{ matrix.shard }}/2" in run["run"]
+    assert "npm run e2e -- --workers=2 --shard=${{ matrix.shard }}/3" in run["run"]
     assert not run.get("continue-on-error", False)
     retry = next(step for step in job["steps"] if step.get("name") == "Run controlled grading retry E2E")
     assert retry["if"] == "matrix.shard == 1"

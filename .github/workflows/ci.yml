@@ -15,12 +15,12 @@ concurrency:
 
 jobs:
   backend-sqlite-tests:
-    name: Backend (SQLite shard ${{ matrix.shard }}/6)
+    name: Backend (SQLite shard ${{ matrix.shard }}/7)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     env:
       SMARTAI_RUNTIME_ENVIRONMENT: "test"
       SMARTAI_PROVIDER_ENCRYPTION_KEY: "ci-provider-master-key-0123456789abcdef"
@@ -49,7 +49,7 @@ jobs:
           SMARTAI_SEED_TEST_USERS: "false"
           SMARTAI_GRADING_ENGINE: v2
         run: >-
-          python -m pytest backend/tests -q --test-shard=${{ matrix.shard }}/6
+          python -m pytest backend/tests -q --test-shard=${{ matrix.shard }}/7
           --durations=30 --junitxml=test-results/sqlite-${{ matrix.shard }}.xml
       - name: Preserve SQLite test timings
         if: always()
@@ -179,12 +179,12 @@ jobs:
           test -f dist-admin/admin.html
 
   e2e-tests:
-    name: E2E (Playwright shard ${{ matrix.shard }}/2)
+    name: E2E (Playwright shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     env:
       SMARTAI_RUNTIME_ENVIRONMENT: "test"
       SMARTAI_PROVIDER_ENCRYPTION_KEY: "e2e-provider-master-key-0123456789abcdef"
@@ -237,7 +237,7 @@ jobs:
           done
           # Files use isolated browser contexts/API fixtures; keep each file
           # sequential and run two files concurrently on each isolated runner.
-          npm run e2e -- --workers=2 --shard=${{ matrix.shard }}/2
+          npm run e2e -- --workers=2 --shard=${{ matrix.shard }}/3
       - name: Run controlled grading retry E2E
         if: matrix.shard == 1
         run: |
