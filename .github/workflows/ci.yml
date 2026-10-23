@@ -214,10 +214,7 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
       - name: Install Playwright browsers
-        run: |
-          # The runner's preferred Azure mirror can stall dependency downloads.
-          sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
-          npx playwright install --with-deps --only-shell chromium
+        run: npx playwright install --with-deps --only-shell chromium
       - name: Run E2E
         run: |
           # Start the backend on a fixed port with a throwaway SQLite DB, then
