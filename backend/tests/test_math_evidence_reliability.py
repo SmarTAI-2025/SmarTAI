@@ -87,6 +87,20 @@ def test_omission_is_grounded_in_requirement_not_fabricated_student_quote():
         g.score_assessment(draft, plan_for(p), "Forward established.", problem_text=p.stem)
 
 
+def test_feedback_cannot_retarget_omission_to_another_real_requirement():
+    p, a = problem("证明题"), answer("Forward direction shown.")
+    p.stem = "Prove the forward direction. Prove the reverse direction."
+    draft = assessment(text=a.content)
+    draft.claims.append(g.Claim(id="missing", kind="omission",
+        source_quote="Prove the reverse direction.", verdict="refuted", reason="Reverse omitted"))
+    revised = draft.model_copy(deep=True)
+    revised.claims[-1].source_quote = "Prove the forward direction."
+    validator = g._assessment_validator(plan_for(p), a, p, original=draft)
+    with pytest.raises(g.StructuredOutputInvalidError) as exc:
+        validator(revised)
+    assert "review_changed_claim_identity" in exc.value.repair_context
+
+
 def test_consequences_exemptions_and_rule_limit_are_executed_by_ledger():
     plan = change_route(plan_for(mode="deductions"), error_policy="no_repeat_deduction",
         error_policy_source_quote="Do not deduct the same error twice.", exemptions=[
@@ -129,6 +143,27 @@ def test_equation_constraint_is_not_an_unconditional_identity():
     p.reference_answer = ""
     claim = g.Claim(id="c", quote="x=3", verdict="supported", reason="Solution")
     assert automatic_checks([claim], p) == []
+
+
+@pytest.mark.parametrize("initial_source,revised_source", [("", "42"), ("42", "")])
+@pytest.mark.asyncio
+async def test_statement_feedback_ignores_unused_omission_source_field(initial_source, revised_source):
+    p, a = problem(), answer("42")
+    initial = assessment(8, 2, text="42")
+    initial.claims[0].source_quote = initial_source
+    reviewed = initial.model_copy(deep=True)
+    reviewed.claims[0].source_quote = revised_source
+    reviewed.claims[0].verdict = "supported"
+    reviewed.evidence_judgments = [g.EvidenceJudgment(
+        evidence_id="v1", applicability="applies", reason="The submitted value is the checked value.")]
+    provider, calls = raw_provider(initial, reviewed)
+    with math_plans_context({p.q_id: plan_for(p)}), g.math_review_scope():
+        result = await CalculationSkill(provider).grade(p, a)
+    trace = g.read_math_trace(result)
+    assert len(calls) == 2 and result.score == 10
+    assert trace["assessment"]["claims"][0]["quote"] == "42"
+    assert trace["evidence"][0]["status"] == "supported"
+    assert not trace["review_pending"] and "review_failure" not in trace
 
 
 @pytest.mark.asyncio

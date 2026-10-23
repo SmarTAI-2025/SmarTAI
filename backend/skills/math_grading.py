@@ -404,10 +404,16 @@ def _with_pending_advice(expert, language):
     return expert.model_copy(update={"steps": steps, "raw_output": _json(trace)})
 
 
+def _claim_identity(claim: Claim) -> tuple[str, str, str]:
+    # source_quote locates an omitted obligation only. Echoing or clearing this
+    # unused field on a written statement cannot change its original quote.
+    return claim.kind, claim.quote, claim.source_quote if claim.kind == "omission" else ""
+
+
 def _validate_claim_identity(original: MathAssessment, revised: MathAssessment):
     """A tool's claim reference must keep pointing to the same submitted text."""
-    quotes = {claim.id: (claim.kind, claim.quote, claim.source_quote) for claim in revised.claims}
-    if any(quotes.get(claim.id) != (claim.kind, claim.quote, claim.source_quote) for claim in original.claims):
+    quotes = {claim.id: _claim_identity(claim) for claim in revised.claims}
+    if any(quotes.get(claim.id) != _claim_identity(claim) for claim in original.claims):
         raise ValueError("review_changed_claim_identity")
 
 
@@ -434,7 +440,7 @@ def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=No
                         if (found := match_source_quote(source, claim.source_quote))), None)
                     if found:
                         claim.source_quote = found.text
-            current = {claim.id: (claim.kind, claim.quote, claim.source_quote) for claim in draft.claims}
+            current = {claim.id: _claim_identity(claim) for claim in draft.claims}
             if any(current.get(key) != identity for key, identity in preserved.items()):
                 raise ValueError("repair_changed_valid_source_claim")
             if original is not None:
@@ -454,7 +460,7 @@ def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=No
                         not claim.quote and any(match_source_quote(source, claim.source_quote)
                             for source in (problem.stem, plan.original_criterion, plan.effective_criterion)))
                     if valid:
-                        preserved[claim.id] = (claim.kind, claim.quote, claim.source_quote)
+                        preserved[claim.id] = _claim_identity(claim)
             error = StructuredOutputInvalidError("Invalid mathematical evidence or ledger.")
             error.repair_context = _json({"validation_error": str(exc),
                 "preserve_claim_quotes": preserved, "draft": draft.model_dump(mode="json"),
