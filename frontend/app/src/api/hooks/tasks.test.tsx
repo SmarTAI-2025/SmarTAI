@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -11,12 +11,16 @@ import type {
 } from "@/types";
 import { taskKeys } from "./keys";
 import {
+  useTask,
+  useUpdateStudentAnswer,
   useGenerateTaskResultArtifacts,
   useStartGrading,
   useUpdateCorrectionReview,
 } from "./tasks";
 
 vi.mock("@/api/tasks", () => ({
+  getTask: vi.fn(),
+  updateStudentAnswer: vi.fn(),
   generateTaskResultArtifacts: vi.fn(),
   startGrading: vi.fn(),
   updateCorrectionReview: vi.fn(),
@@ -170,5 +174,41 @@ describe("grading run cache", () => {
       status: "grading",
       grading_job_id: "new-run",
     });
+  });
+});
+
+
+describe("answer review revision fences", () => {
+  it("keeps a newer saved task when an older task read arrives late", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const oldTask = { task_id: "late", workflow_revision: 1, student_data: {} } as Task;
+    const currentTask = { ...oldTask, workflow_revision: 2 };
+    let resolve!: (task: Task) => void;
+    vi.mocked(tasksApi.getTask).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    const { result } = renderHook(() => useTask("late"), { wrapper });
+    await act(async () => { client.setQueryData(taskKeys.detail("late"), currentTask); resolve(oldTask); });
+    expect(client.getQueryData(taskKeys.detail("late"))).toEqual(currentTask);
+    await waitFor(() => expect(result.current.data?.workflow_revision).toBe(2));
+  });
+
+  it("updates both conflicting answers by stable identity and ignores an older save", async () => {
+    const client = new QueryClient();
+    const first = { answer_id: "a1", q_id: "q1", number: "1", type: "short", content: "first", flag: [] };
+    const second = { answer_id: "a2", q_id: "q2", number: "2", type: "short", content: "second", flag: [] };
+    client.setQueryData<Partial<Task>>(taskKeys.detail("review"), { task_id: "review", workflow_revision: 1,
+      student_data: { S1: { stu_id: "S1", stu_name: "Synthetic", stu_ans: [first, second] } } });
+    const conflict = [first, { ...second, q_id: "q1" }].map(answer => ({ ...answer, flag: ["answer_assignment_conflict"] }));
+    vi.mocked(tasksApi.updateStudentAnswer).mockResolvedValueOnce({ status: "ok", stu_id: "S1", q_id: "q2",
+      answer: conflict[1], answers: conflict, workflow_revision: 2 });
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    const { result } = renderHook(() => useUpdateStudentAnswer(), { wrapper });
+    const variables = { taskId: "review", studentId: "S1", qId: "q2", answerId: "a2", targetQId: "q1", expectedWorkflowRevision: 1 };
+    await act(async () => { await result.current.mutateAsync(variables); });
+    const saved = client.getQueryData<Task>(taskKeys.detail("review"))!;
+    expect(saved.student_data.S1.stu_ans).toEqual(conflict);
+    vi.mocked(tasksApi.updateStudentAnswer).mockResolvedValueOnce({ status: "ok", stu_id: "S1", q_id: "q2", answer: second, workflow_revision: 1 });
+    await act(async () => { await result.current.mutateAsync(variables); });
+    expect(client.getQueryData(taskKeys.detail("review"))).toEqual(saved);
   });
 });

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SourceFileDescriptor } from "@/types/sourcePreview";
+import { EMPTY_FILTER_INTENT } from "@/lib/taskFilterIntent";
 import { StudentAnswerReviewPage } from "./StudentAnswerReviewPage";
 
 const sourcePreviewApi = vi.hoisted(() => ({
@@ -11,6 +12,8 @@ const sourcePreviewApi = vi.hoisted(() => ({
 }));
 const taskRefetch = vi.hoisted(() => vi.fn());
 const mutations = vi.hoisted(() => ({ answer: vi.fn(), identity: vi.fn() }));
+const interpretFilterIntent = vi.hoisted(() => vi.fn());
+vi.mock("@/api/analytics", () => ({ interpretFilterIntent }));
 const studentSource: SourceFileDescriptor = {
   source_id: "source-student-1",
   file_id: "file-student-1",
@@ -54,6 +57,7 @@ const taskData = vi.hoisted(() => ({
       identity_status: "matched",
       identity_match_method: "filename",
       stu_ans: [{
+        answer_id: undefined as string | undefined,
         q_id: "Q1",
         number: "1",
         type: "Calculation",
@@ -106,10 +110,13 @@ function renderPage(search = "?question=Q1") {
     { path: "/tasks/:taskId/grading-setup", element: <div>Grading setup</div> },
   ], { initialEntries: [`/tasks/task-1/students/S001${search}`] });
   render(<RouterProvider router={router} />);
+  return router;
 }
 
 beforeEach(() => {
   taskData.student_data.S001.stu_ans.splice(1);
+  taskData.student_data.S001.stu_ans[0].answer_id = undefined;
+  interpretFilterIntent.mockReset();
   taskData.student_data.S001.identity_status = "matched";
   taskData.student_data.S001.stu_ans[0].review_status = "pending";
   taskData.student_data.S001.stu_ans[0].flag = [];
@@ -152,6 +159,36 @@ beforeEach(() => {
 });
 
 describe("StudentAnswerReviewPage review shortcuts", () => {
+  it("keeps both same-question answers independently editable after an Ask selection", async () => {
+    const first = taskData.student_data.S001.stu_ans[0];
+    first.answer_id = "answer-one";
+    first.flag = ["answer_assignment_conflict"];
+    taskData.student_data.S001.stu_ans.push({ ...first, answer_id: "answer-two", content: "Student answer two" });
+    interpretFilterIntent.mockResolvedValue({ ...EMPTY_FILTER_INTENT, execution: {
+      recognized: true, kind: "questions", explanation: "Selected question 1", data: { columns: ["q_id"], rows: [["Q1"]] },
+      selection: { kind: "questions", ids: ["Q1"] }, chart: null,
+    } });
+    const user = userEvent.setup();
+    const router = renderPage();
+    const card = (id: string) => document.querySelector(`[data-question-id="${id}"]`) as HTMLElement;
+    expect(card("answer-one")).toHaveTextContent("Student answer one");
+    expect(card("answer-two")).toHaveTextContent("Student answer two");
+    await user.type(screen.getByRole("textbox", { name: "Ask SmarTAI：当前学生的作答" }), "只看题号1{Enter}");
+    await waitFor(() => expect(interpretFilterIntent).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(new URLSearchParams(router.state.location.search).get("ask_order")).toBe("1"));
+    await waitFor(() => expect(screen.getByText("共 2 题 · 点击定位")).toBeInTheDocument());
+    expect(card("answer-one")).toHaveTextContent("Student answer one");
+    expect(card("answer-two")).toHaveTextContent("Student answer two");
+    await user.click(within(card("answer-one")).getByRole("button", { name: "修改" }));
+    await user.type(within(card("answer-one")).getByRole("textbox"), " first edit");
+    await user.click(within(card("answer-two")).getByRole("button", { name: "修改" }));
+    expect(within(card("answer-one")).getByRole("textbox")).toHaveValue("Student answer one first edit");
+    expect(within(card("answer-two")).getByRole("textbox")).toHaveValue("Student answer two");
+    await user.click(screen.getByRole("button", { name: "清空查询" }));
+    expect(within(card("answer-one")).getByRole("textbox")).toHaveValue("Student answer one first edit");
+    expect(within(card("answer-two")).getByRole("textbox")).toHaveValue("Student answer two");
+    expect(mutations.answer).not.toHaveBeenCalled();
+  });
   it("does not label an invalid confidence field as a low confidence score", () => {
     taskData.student_data.S001.stu_ans[0].flag = ["recognition_manual_pending", "recognition_invalid_fields:recognition_confidence"];
     renderPage();

@@ -145,13 +145,16 @@ def test_postgres_task_identity_migration_preserves_existing_results(pg_database
 
     config = Config("alembic.ini")
     config.attributes.update(database_url=PG_URL, database_heavy=True)
-    command.downgrade(config, "0026_image_capability")
     seeded = _seed_legacy_imports(monkeypatch)
+    # Seed with the current ORM before restoring the historical schema.
+    command.downgrade(config, "0026_image_capability")
     engine = get_engine()
     before = _business_snapshot(engine)
     assert len(before["grade_results"]) == 3
     command.upgrade(config, "head")
     assert _business_snapshot(engine) == before
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT COUNT(*) FROM submission_answers WHERE answer_key != id OR answer_key IS NULL").scalar_one() == 0
     removable, protected, real = [student.id for student in seeded["students"]]
     with session_scope() as session:
         assert session.get(UserRecord, removable) is None
@@ -163,6 +166,22 @@ def test_postgres_task_identity_migration_preserves_existing_results(pg_database
     assert _business_snapshot(engine) == before
     command.upgrade(config, "head")
     assert _business_snapshot(engine) == before
+
+
+@pytest.mark.parametrize("editor", [False, True])
+def test_postgres_unchanged_matching_confirmation(pg_database, editor):
+    from backend.tests.test_answer_assignment_review import test_matching_confirmation_without_rewriting_survives_reload_and_sibling_edit
+    test_matching_confirmation_without_rewriting_survives_reload_and_sibling_edit(editor)
+
+
+def test_postgres_answer_swap_and_grading_gate(pg_database):
+    from backend.tests.test_answer_assignment_review import test_two_answers_swap_via_saved_duplicate_without_overwrite_and_can_grade
+    test_two_answers_swap_via_saved_duplicate_without_overwrite_and_can_grade()
+
+
+def test_postgres_partial_three_way_answer_conflict(pg_database):
+    from backend.tests.test_answer_assignment_review import test_three_way_conflict_only_clears_resolved_answers
+    test_three_way_conflict_only_clears_resolved_answers()
 
 
 def test_postgres_explicit_email_login_and_username_mail_guard(pg_database, monkeypatch):

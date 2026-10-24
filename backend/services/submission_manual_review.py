@@ -179,6 +179,10 @@ def fill_manual_answers(student, questions, *, paused=False, incomplete_source=F
             answers[question.q_id] = dict(q_id=question.q_id, number=question.number,
                 type=question.type, content="", flag=["recognition_manual_pending"])
         answer = answers[question.q_id]
+        if (not uncertain and not incomplete_source
+                and question.q_id in (student.get("recognition") or {}).get("model_review_question_ids", [])
+                and task_facade._answer_matching_confirmation_allowed(answer.get("flag"), answer.get("content"))):
+            continue
         if uncertain and task_facade._answer_recognition_failures(answer.get("flag")):
             answer["flag"] = list(dict.fromkeys([*answer.get("flag", []), "recognition_failed"]))
         if task_facade._metadata_only_recognition_fields(answer.get("flag"), answer.get("content")):

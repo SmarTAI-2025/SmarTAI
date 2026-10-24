@@ -21,6 +21,27 @@ from alembic.script import ScriptDirectory
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_answer_identity_backfills_existing_rows_and_refuses_lossy_downgrade(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, text
+    url = f"sqlite:///{tmp_path / 'answer-identity.db'}"
+    cfg = _alembic_config(url, monkeypatch)
+    command.upgrade(cfg, "0029_initial_content_language")
+    engine = create_engine(url)
+    # Independent migration fixture: the answer payload and its original key
+    # must survive the SQLite table rebuild, just as in a populated database.
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO submission_answers (id, revision_id, question_id, q_id, number, type, content, flag, created_at) VALUES ('a1', 'r1', 'p1', 'q1', 'Section 1 / 1', 'proof', 'Original text', '[]', 1)"))
+    command.upgrade(cfg, "head")
+    with engine.begin() as connection:
+        assert connection.execute(text("SELECT answer_key, content FROM submission_answers WHERE id='a1'")).one() == ("a1", "Original text")
+        connection.execute(text("INSERT INTO submission_answers (id, answer_key, revision_id, question_id, q_id, number, type, content, flag, created_at) VALUES ('a2', 'stable-2', 'r1', 'p1', 'q1', 'Section 1 / 1', 'proof', 'Second text', '[]', 1)"))
+    with pytest.raises(RuntimeError, match="historical revisions"):
+        command.downgrade(cfg, "0029_initial_content_language")
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT content FROM submission_answers ORDER BY id")).scalars().all() == ["Original text", "Second text"]
+    engine.dispose()
+
+
 @pytest.mark.parametrize("previous_head", ["0018_knowledge_ingestion", "0019_admin_usage_events", "0022_account_closures"])
 def test_admin_knowledge_merge_preserves_existing_users(previous_head, tmp_path, monkeypatch):
     from sqlalchemy import create_engine, inspect, text
@@ -33,7 +54,7 @@ def test_admin_knowledge_merge_preserves_existing_users(previous_head, tmp_path,
     command.upgrade(cfg, "head")
     with engine.connect() as connection:
         assert connection.execute(text("SELECT password_hash, auth_version FROM users WHERE id='existing'")).one() == ("legacy-hash", 0)
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == ["0029_initial_content_language"]
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == ["0030_answer_identity"]
     assert {"admin_audit_logs", "admin_usage_events", "knowledge_ingestions", "business_configuration", "user_storage_configuration"} <= set(inspect(engine).get_table_names())
 
 
@@ -235,7 +256,7 @@ def test_mail_migrations_extend_provider_routing_as_one_head(tmp_path, monkeypat
     script = ScriptDirectory.from_config(cfg)
 
     assert [revision.revision for revision in script.get_revisions("heads")] == [
-        "0029_initial_content_language"
+        "0030_answer_identity"
     ]
 
     command.upgrade(cfg, "0012_provider_routing_pref")
