@@ -972,7 +972,7 @@ class IncrementalQuestionPreparation:
         try:
             async with self.gate:
                 await self.begin(key)
-                await self.reporter.mark_question_generation_started(progress_id)
+                await self.reporter.mark_question_generation_started(progress_id, revision=identity)
                 await self.reporter.set_current_step("generating_solutions", message=f"Preparing missing materials for question {row.get('number') or ''}")
                 data = _rows([row])
                 allocation = self.outline.get(normalize_question_number(row.get("number")))
@@ -1005,13 +1005,13 @@ class IncrementalQuestionPreparation:
                             break
                     if pending:
                         raise ValidationError("Some materials could not be completed.", code="provider_response_invalid")
-                await self.reporter.mark_question_generation_finished(progress_id, succeeded=True)
+                await self.reporter.mark_question_generation_finished(progress_id, succeeded=True, revision=identity)
                 await self.finish(key)
         except (asyncio.CancelledError, LeaseLost):
-            await self.reporter.mark_question_generation_cancelled(progress_id)
+            await self.reporter.mark_question_generation_cancelled(progress_id, revision=identity)
             raise
         except Exception as exc:
-            await self.reporter.mark_question_generation_finished(progress_id, succeeded=False,
+            await self.reporter.mark_question_generation_finished(progress_id, succeeded=False, revision=identity,
                 error_code=classify_background_error(exc, "question_preparation_failed"))
             await self.finish(key, error=exc)
 

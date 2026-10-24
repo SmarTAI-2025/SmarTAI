@@ -67,19 +67,21 @@ async def test_selected_source_keeps_section_footer_and_all_seven_questions(monk
 
 
 @pytest.mark.asyncio
-async def test_four_of_seven_keeps_total_and_retry_repairs_the_missing_unit(monkeypatch):
+@pytest.mark.parametrize("complete_first_stem", [False, True])
+async def test_four_of_seven_keeps_total_and_retry_repairs_the_missing_unit(monkeypatch, complete_first_stem):
     owner, task, operation, pipeline = await targeted_setup(monkeypatch)
     pipeline.read_source = page_reader(PAGES)
     calls = []
     visible = asyncio.Event()
     release = asyncio.Event()
     found = ['1.1.5', '1.1.7', '1.2.3', '1.2.16']
+    first_stem = 'For the given finite group, list the order of every element and explain the calculation.'
     async def extract(text, *args, **kwargs):
         calls.append(text)
         if len(calls) == 3:
             visible.set()
             await release.wait()
-        return inc._rows([row(n) for n in found])
+        return inc._rows([row(n, stem=first_stem if n == TARGETS[0] else None) for n in found])
     monkeypatch.setattr(inc, '_extract_problems_call', extract)
     async def generate(data, targets, *args, **kwargs):
         return [generated(t['target'], 'Valid teacher-review material.') for t in targets]
@@ -109,11 +111,18 @@ async def test_four_of_seven_keeps_total_and_retry_repairs_the_missing_unit(monk
     restored = inc.IncrementalQuestionPreparation(operation=next_op, sources=inputs['sources'],
         provider=inputs['route'].provider, provider_id=inputs['recognition_provider_id'],
         reporter=ProgressReporter(next_op.operation_id), score_policy=inputs['score_policy'], read_source=page_reader(PAGES))
-    repair = AsyncMock(return_value=inc._rows([row(n) for n in TARGETS]))
+    repaired = [row(n, stem=first_stem if n == TARGETS[0] else None) for n in TARGETS]
+    if complete_first_stem:
+        repaired[0]['stem'] += ' Include the justification omitted on the first attempt.'
+    repair = AsyncMock(return_value=inc._rows(repaired))
     monkeypatch.setattr(inc, '_extract_problems_call', repair)
     result = await restored.run()
     repair.assert_awaited_once()
     assert {r['number'] for r in result.values() if r['stem']} == set(TARGETS)
+    _, durable = persisted(owner, next_op)
+    assert len(durable) == 7
+    assert durable['q1']['stem'] == repaired[0]['stem']
+    assert all(r['reference_answer'] and r['criterion'] for r in durable.values())
     assert (await restored.reporter.snapshot()).stage_metrics['solution_total_questions'] == 7
     assert (await restored.reporter.snapshot()).stage_metrics['solution_completed_questions'] == 7
 
@@ -223,3 +232,23 @@ async def test_same_extraction_request_includes_optional_footer_identity_contrac
     assert 'page footers' in prompt and 'Distinct exercises may share a number' in prompt
     assert 'Missing section information is not missing question content' in prompt
     assert result['q1']['number'] == 'Section 1 / 1'
+
+
+@pytest.mark.asyncio
+async def test_revised_question_progress_ignores_late_old_generation_results():
+    reporter = ProgressReporter('revision-test')
+    await reporter.configure_question_generation(['target:1', 'target:2'], completed_question_ids=['target:1'])
+    await reporter.mark_question_generation_started('target:1', revision='old')
+    await reporter.mark_question_generation_started('target:1', revision='new')
+    await reporter.mark_question_generation_finished('target:1', succeeded=True, revision='old')
+    await reporter.mark_question_generation_finished('target:1', succeeded=False, revision='old')
+    await reporter.mark_question_generation_cancelled('target:1', revision='old')
+    state = await reporter.snapshot()
+    assert state.total_questions == 2 and state.active_question_ids == ['target:1']
+    assert not state.completed_question_ids and not state.failed_question_ids
+    await reporter.mark_question_generation_finished('target:1', succeeded=True, revision='new')
+    assert (await reporter.snapshot()).stage_metrics['solution_completed_questions'] == 1
+    with pytest.raises(ValueError, match='completed question'):
+        await reporter.mark_question_generation_started('target:1', revision='new')
+    with pytest.raises(ValueError, match='completed question'):
+        await reporter.mark_question_generation_started('target:1')
