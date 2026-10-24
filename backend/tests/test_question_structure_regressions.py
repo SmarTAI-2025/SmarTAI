@@ -56,7 +56,7 @@ def test_collapsing_subparts_preserves_first_uploaded_material_label(numbers):
     rows = {
         "q1": {"number": numbers[0], "stem": "Calculate.", "type": "计算题",
                "criterion": "4分", "reference_answer": "first solution"},
-        "q2": {"number": numbers[1], "stem": "Prove.", "type": "证明题",
+        "q2": {"number": numbers[1], "stem": "Prove.", "type": "推理题",
                "criterion": "6分", "reference_answer": "second solution"},
         "q3": {"number": "2", "stem": "Explain.", "type": "概念题"},
     }

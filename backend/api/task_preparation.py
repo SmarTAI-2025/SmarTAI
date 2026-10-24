@@ -3536,6 +3536,8 @@ async def _run_ai_completion(
             else:
                 patch["fields"][candidate.target] = value
             patch["presentation"]["ai_completion_provenance"][candidate.target] = provenance
+            if candidate.rubric_draft:
+                patch["presentation"]["rubric_draft"] = candidate.rubric_draft
             applied.append(candidate.target_id)
             serialized.append({
                 "candidate_id": candidate_id, "target_id": candidate.target_id,

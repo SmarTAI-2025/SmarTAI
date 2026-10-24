@@ -1,5 +1,5 @@
 {
-  "base": {"q_id": "q1", "type": "proof", "score": 8, "provisional_score": 8, "max_score": 10, "confidence": 0.95, "comment": "Evidence", "steps": [], "teacher_score": null, "review_status": "pending", "review_reasons": [], "initial_review_reasons": [], "expert_results": []},
+  "base": {"q_id": "q1", "type": "reasoning", "score": 8, "provisional_score": 8, "max_score": 10, "confidence": 0.95, "comment": "Evidence", "steps": [], "teacher_score": null, "review_status": "pending", "review_reasons": [], "initial_review_reasons": [], "expert_results": []},
   "cases": [
     {"name": "normal unconfirmed", "patch": {}, "pending": false, "required": false},
     {"name": "expert disagreement", "patch": {"expert_results": [{"provider": "expert", "score": 10, "max_score": 10, "confidence": 0.95, "comment": "Evidence", "steps": [], "error_kind": null}, {"provider": "expert", "score": 6, "max_score": 10, "confidence": 0.95, "comment": "Evidence", "steps": [], "error_kind": null}]}, "pending": true, "required": false},

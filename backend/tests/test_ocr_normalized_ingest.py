@@ -75,7 +75,7 @@ def _published_assignment(suffix: str) -> tuple[str, str, str]:
         q_id="q1",
         order_index=0,
         number="1",
-        type="short",
+        type="concept",
         stem="Question",
         criterion="rubric",
     )
@@ -165,7 +165,7 @@ async def test_student_upload_ocr_creates_answer_revision(monkeypatch):
                 {
                     "q_id": "q1",
                     "number": "1",
-                    "type": "short",
+                    "type": "concept",
                     "content": "OCR answer text",
                     "flag": [],
                 }
@@ -178,7 +178,7 @@ async def test_student_upload_ocr_creates_answer_revision(monkeypatch):
     provider, _ = llm(text="OCR answer text")
     provider.ainvoke = AsyncMock(return_value=SimpleNamespace(content=json.dumps({
         "stu_id": "wrong-ocr-id", "stu_name": "Untrusted identity",
-        "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "OCR answer text", "flag": []}],
+        "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept", "content": "OCR answer text", "flag": []}],
     })))
     registry = SimpleNamespace(list_configs=lambda: [dict(provider_id=provider.provider_id, enabled=True)])
     image, _ = source_file()
@@ -223,7 +223,7 @@ async def test_teacher_upload_uses_selected_student_and_teacher_import_source(
                 {
                     "q_id": "q1",
                     "number": "1",
-                    "type": "short",
+                    "type": "concept",
                     "content": "teacher imported answer",
                     "flag": [],
                 }
@@ -234,7 +234,7 @@ async def test_teacher_upload_uses_selected_student_and_teacher_import_source(
     provider = SimpleNamespace(provider_id="mock:text", config=None, supports_vision=False,
         ainvoke=AsyncMock(return_value=SimpleNamespace(content=json.dumps({
             "stu_id": "wrong-ocr-id", "stu_name": "Ignored identity",
-            "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "teacher imported answer", "flag": []}],
+            "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept", "content": "teacher imported answer", "flag": []}],
         }))))
     registry = SimpleNamespace(list_configs=lambda: [dict(provider_id=provider.provider_id, enabled=True)])
 

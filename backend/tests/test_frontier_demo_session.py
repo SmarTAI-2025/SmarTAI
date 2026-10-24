@@ -383,7 +383,13 @@ def test_demo_task_knowledge_reads_preserve_document_and_citation_ownership(enab
 
 
 @pytest.mark.parametrize("change_provider_before_worker", [False, True])
-def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(enabled, monkeypatch, change_provider_before_worker):
+@pytest.mark.parametrize("criterion,expected_calls", [
+    ("Award up to 5 points for a correct explanation of the concept.", 1),
+    ("Award 5 points for a correct explanation of the concept.", 2),
+])
+def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(
+    enabled, monkeypatch, change_provider_before_worker, criterion, expected_calls,
+):
     from backend.db import assignment_repository, grading_repository, workflow_repository
     from backend.domain.errors import ValidationError
     from backend.services import grading_runs, task_facade
@@ -393,8 +399,8 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(e
 
     async def model_response(self, messages, **kwargs):
         dispatched.append(self.config.scheduling_owner)
-        # The production mathematical path prepares one shared question plan
-        # before requesting the student's evidence assessment.
+        # Source-only unsupported caps skip model compilation; ordinary rules
+        # still prepare one shared plan. Both paths must use the Demo owner.
         if "Prepare ONE shared scoring plan" in messages[0].content:
             payload = {
                 "effective_criterion": "Award up to 5 points for a correct explanation.",
@@ -405,8 +411,10 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(e
                 "advisories": [],
             }
         else:
+            data = json.loads(messages[1].content.split("\nINPUT DATA:\n", 1)[1])
             payload = {
-                "route_id": "whole", "route_reason": "Apply the shared conceptual rubric.",
+                "route_id": data["rubric_plan"]["routes"][0]["id"],
+                "route_reason": "Apply the shared conceptual rubric.",
                 "score": 4, "confidence": 0.95,
                 "claims": [{"id": "s1", "quote": "Synthetic explanation",
                             "verdict": "supported", "reason": "Covers the principal concept."}],
@@ -423,9 +431,9 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(e
     task_id = created["task_id"]
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
     assignment_repository.add_question(
-        assignment_id=task_id, teacher_id=owner_id, q_id="q1", order_index=0,
-        type="short", stem="Explain a synthetic concept.", max_score=5,
-        criterion="Award up to 5 points for a correct explanation of the concept.",
+        assignment_id=task_id, teacher_id=owner_id, q_id="q1", order_index=0, number="1",
+        type="concept", stem="Explain a synthetic concept.", max_score=5,
+        criterion=criterion,
     )
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     # Seed only the recognition output boundary. Everything from setup through
@@ -436,7 +444,7 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(e
         expected_workflow_revision=workflow.workflow_revision,
         students=[{"stu_id": "DEMO-001", "stu_name": "Synthetic Student",
                    "identity_status": "matched", "identity_match_method": "filename",
-                   "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "Synthetic explanation", "flag": []}]}],
+                   "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept", "content": "Synthetic explanation", "flag": []}]}],
     )
     setup = enabled.get(f"/tasks/{task_id}/grading-setup", headers=headers(demo["token"])).json()
     saved = enabled.put(f"/tasks/{task_id}/grading-setup", headers=headers(demo["token"]), json={
@@ -461,7 +469,7 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(e
         assert grading_repository.get_run(run_id=run_id).status == "failed"
     else:
         asyncio.run(grading_runs.process_run(run_id=run_id, worker_id="demo-current-main-worker"))
-        assert dispatched == [owner_id, owner_id]
+        assert dispatched == [owner_id] * expected_calls
         result = enabled.get(f"/tasks/{task_id}/result", headers=headers(demo["token"]))
         assert result.status_code == 200, result.text
         assert result.json()["status"] == "completed"
@@ -469,4 +477,4 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(e
         assert correction["score"] == 4
         assert correction["max_score"] == 5
         with session_scope() as db:
-            assert db.scalar(select(FrontierDemoDailyUsageRecord)).requests == 2
+            assert db.scalar(select(FrontierDemoDailyUsageRecord)).requests == expected_calls

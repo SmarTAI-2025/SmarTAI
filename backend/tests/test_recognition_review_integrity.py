@@ -310,3 +310,38 @@ def test_explicit_partial_evidence_survives_reference_answer_projection():
         assert projected["severity"] == ("warning" if field == "answer" else "blocking")
         resolved = _effective_question_issues({"preparation_issues": [{**projected, "status": "resolved"}]})[0]
         assert resolved["status"] == "resolved"
+
+
+@pytest.mark.parametrize("missing", [[], ["criterion"], ["type", "criterion"]])
+def test_required_material_repairs_allow_confirmation_without_reference_answer(missing):
+    _seeded, args = _case(flags=[])
+    with session_scope() as session:
+        question = session.scalar(select(AssignmentQuestionRecord))
+        question.reference_answer = ""
+        for field in missing:
+            setattr(question, field, "")
+        issues = [{"issue_id": "answer", "field": "answer", "code": "generation_failed", "status": "open", "severity": "warning"}]
+        if "criterion" in missing:
+            issues.append({"issue_id": "rubric", "field": "rubric", "code": "generation_failed", "status": "open", "severity": "blocking"})
+        question.source = {**(question.source or {}), "presentation": {
+            **((question.source or {}).get("presentation") or {}),
+            "review_status": "needs_review", "preparation_issues": issues}}
+    current = task_facade.get_task(**args, full=True)
+    if missing:
+        with pytest.raises(ValidationError, match="required material"):
+            task_facade.update_problem(**args, q_id="q1", patch={"review_status": "confirmed"},
+                expected_revision=current["workflow_revision"])
+        repaired = task_facade.update_problem(**args, q_id="q1",
+            patch={field: "概念题" if field == "type" else "Full credit for a correct explanation." for field in missing},
+            expected_revision=current["workflow_revision"])
+        current = task_facade.get_task(**args, full=True)
+        assert repaired["problem"]["reference_answer"] == ""
+        assert not any(i["field"] == "rubric" and i["status"] == "open" for i in repaired["problem"]["preparation_issues"])
+    confirmed = task_facade.update_problem(**args, q_id="q1", patch={"review_status": "confirmed"},
+        expected_revision=current["workflow_revision"])
+    assert confirmed["problem"]["review_status"] == "confirmed"
+    assert confirmed["problem"]["reference_answer"] == ""
+    readiness = task_facade.grading_readiness(**args)
+    # Editing question content invalidates the fixture's prior submissions.
+    # No question/answer-material gate may remain after confirmation.
+    assert readiness["blocking_issues"] == (["submissions_required"] if missing else [])

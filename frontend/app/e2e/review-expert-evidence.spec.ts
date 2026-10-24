@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 const taskId = "asg_review_evidence";
-const problem_data = Object.fromEntries([1, 2].map(n => [`q${n}`, { q_id: `q${n}`, number: String(n), stem: `Explain synthetic result ${n}.`, criterion: "Credit valid reasoning.", max_score: 10, type: "proof" }]));
+const problem_data = Object.fromEntries([1, 2].map(n => [`q${n}`, { q_id: `q${n}`, number: String(n), stem: `Explain synthetic result ${n}.`, criterion: "Credit valid reasoning.", max_score: 10, type: "reasoning" }]));
 const student_data = { S1: { stu_id: "S1", stu_name: "Example teacher data", identity_status: "matched", stu_ans: [1, 2].map(n => ({ q_id: `q${n}`, content: "Synthetic reasoning.", review_status: "confirmed", flag: [] })) } };
 const experts = [7, 10].map((score, index) => ({ provider: `model-${index}`, score, max_score: 10, confidence: index ? .99 : .95,
   comment: `Original expert explanation ${index}.`, steps: [{ step_no: 1, desc: `Expert ${index} reasoning`, score, is_correct: true }] }));

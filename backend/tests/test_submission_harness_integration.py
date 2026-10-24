@@ -21,7 +21,7 @@ def provider_fixture(answer="x = -2^3; wrong on purpose", flags=None):
     provider = SimpleNamespace(provider_id="test:parser", config=None, supports_vision=False,
         ainvoke=AsyncMock(return_value=SimpleNamespace(content=json.dumps({
             "stu_id": "model-cannot-change-owner", "stu_name": "Untrusted",
-            "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": answer, "flag": flags or []}],
+            "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept", "content": answer, "flag": flags or []}],
         }))))
     registry = SimpleNamespace(list_configs=lambda: [dict(provider_id=provider.provider_id, enabled=True)])
     return provider, registry
@@ -155,7 +155,7 @@ async def test_batch_retry_reuses_saved_parse_but_full_restart_reprocesses(monke
     async def invoke(messages):
         student = "S001" if "first.txt" in messages[-1].content else "S002"
         return SimpleNamespace(content=json.dumps({"stu_id": student, "stu_name": student,
-            "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "wrong -2", "flag": []}]}))
+            "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept", "content": "wrong -2", "flag": []}]}))
     provider = SimpleNamespace(provider_id="test-provider", supports_vision=False, ainvoke=AsyncMock(side_effect=invoke))
     registry.provider = provider
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)

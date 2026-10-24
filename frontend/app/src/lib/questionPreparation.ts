@@ -1,4 +1,5 @@
 import type { ProblemInfo } from "@/types";
+import { normalizeFilterType } from "./taskFilterIntent";
 
 export type QuestionPreparationSort = "number" | "missing" | "type";
 export type QuestionPreparationRule =
@@ -6,7 +7,7 @@ export type QuestionPreparationRule =
   | "missing_rubric"
   | "missing_code"
   | "programming"
-  | "proof"
+  | "reasoning"
   | "keyword"
   | "missing_first";
 
@@ -52,8 +53,8 @@ const QUERY_RULES: Array<{
     pattern: /编程题?|程序题?|代码题?|programming|coding/giu,
   },
   {
-    kind: "proof",
-    pattern: /证明题?|proof/giu,
+    kind: "reasoning",
+    pattern: /推理题?|证明题?|reasoning|proof/giu,
   },
   {
     kind: "missing_first",
@@ -131,7 +132,7 @@ export function selectQuestionPreparationRows(
     if (rules.includes("missing_rubric") && row.hasRubric) return false;
     if (rules.includes("missing_code") && (!row.isProgramming || row.hasCode)) return false;
     if (rules.includes("programming") && !row.isProgramming) return false;
-    if (rules.includes("proof") && !isProofProblem(row.problem)) return false;
+    if (rules.includes("reasoning") && !isReasoningProblem(row.problem)) return false;
     if (!keyword) return true;
 
     const haystack = [
@@ -187,9 +188,8 @@ export function isProgrammingProblem(problem: ProblemInfo): boolean {
   return /(?:编写|实现)(?:程序|代码)|write\s+(?:a\s+)?(?:program|function)|implement\s+(?:an?\s+)?(?:algorithm|function)/iu.test(problem.stem ?? "");
 }
 
-function isProofProblem(problem: ProblemInfo): boolean {
-  const text = `${problem.type ?? ""} ${problem.stem ?? ""}`.toLocaleLowerCase();
-  return /证明|proof|prove/u.test(text);
+function isReasoningProblem(problem: ProblemInfo): boolean {
+  return normalizeFilterType(problem.type ?? "") === "reasoning";
 }
 
 function hasText(value?: string | null): boolean {

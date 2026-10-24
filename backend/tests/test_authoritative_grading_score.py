@@ -106,7 +106,7 @@ async def test_proof_skill_uses_authoritative_question_max(monkeypatch):
                 SimpleNamespace(content="{}", duration_ms=1))
     monkeypatch.setattr("backend.skills.math_grading.kb_tool.retrieve_for_grading", retrieve)
     monkeypatch.setattr("backend.skills.math_grading.structured_llm_call", structured_call)
-    result = await ProofSkill(_provider()).grade(_problem(type_="证明题"), _answer(type_="证明题"))
+    result = await ProofSkill(_provider()).grade(_problem(type_="推理题"), _answer(type_="推理题"))
     assert result.score == 4 and result.max_score == 5
     assert sum(step.score for step in result.steps) == 4
     assert "authoritative maximum score for this question is 5" in captured["system_prompt"]

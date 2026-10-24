@@ -25,7 +25,7 @@ def _reset_rate_limit():
     ("question_preparation", {"low_confidence": True, "preparation_status": "source_conflict", "sort": None}),
     ("question_preparation", {"min_max_score": 0, "material_field": "answer", "material_status": "missing", "sort": None}),
     ("submission_review", {"sort": "coverage_desc", "submission_status": "reviewed"}),
-    ("submission_review", {"sort": "id_desc", "question_types": ["proof"]}),
+    ("submission_review", {"sort": "id_desc", "question_types": ["reasoning"]}),
     ("student_answer_review", {"sort": "question_desc", "submission_status": "missing"}),
     ("question_analysis", {"sort": "confidence_desc", "max_average_confidence": 0.8}),
     ("student_analysis", {"sort": "id_desc"}),

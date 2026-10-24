@@ -1,8 +1,7 @@
 """
 Problem classification tool.
 
-Uses an LLM to decide the type of a problem (概念题/计算题/编程题/证明题/推理题/
-选择题/多选题/填空题/其他).
+Uses an LLM to choose one grading meaning: 计算题/概念题/推理题/编程题/其他.
 Classification is a TOOL, not a skill — skills consume a type that's already
 been decided.
 
@@ -23,16 +22,14 @@ from backend.tools.structured_llm import structured_llm_call
 logger = logging.getLogger(__name__)
 
 
-PROBLEM_TYPES = (
-    "概念题", "计算题", "编程题", "证明题", "推理题",
-    "选择题", "多选题", "填空题", "其他",
-)
+from backend.domain.question_types import QUESTION_TYPES
+
+PROBLEM_TYPES = QUESTION_TYPES
 
 
 class ClassificationResult(BaseModel):
     type: Literal[
-        "概念题", "计算题", "编程题", "证明题", "推理题",
-        "选择题", "多选题", "填空题", "其他",
+        "计算题", "概念题", "推理题", "编程题", "其他",
     ] = Field(description="The problem type. Choose exactly one.")
     confidence: float = Field(
         ge=0.0, le=1.0,
@@ -47,12 +44,12 @@ Classify the given problem into exactly ONE of these Chinese types:
 - 概念题: Answer is determined or close-meaning; tests understanding of definitions/concepts.
 - 计算题: Requires numerical or symbolic calculation to verify.
 - 编程题: Contains code snippets or asks student to write code.
-- 证明题: Asks student to prove a stated conclusion by logical derivation.
-- 推理题: Asks student to derive a conclusion NOT given in the stem.
-- 选择题: Single-answer multiple choice (lettered options A/B/C/D, exactly one correct).
-- 多选题: Multiple-answer multiple choice (stem states several options are correct).
-- 填空题: Fill-in-the-blank with one short unique answer and no options.
-- 其他: None of the above.
+- 推理题: Premises, inference, cases and conclusions, including proofs and general logic puzzles.
+- 其他: None of the above; uses the concept-grading strategy.
+
+Classify by grading meaning, never by response form. Options, blanks and short answers are
+not types: integral choices and eigenvalue blanks are 计算题; potential-concept multiple
+choices are 概念题; truth-teller puzzles and matrix proofs are 推理题.
 
 Return a JSON object with fields: type, confidence (0-1), rationale (1-2 sentences).
 """

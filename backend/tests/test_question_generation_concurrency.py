@@ -32,7 +32,7 @@ def _problems(count: int = 7) -> dict[str, dict]:
         rows[q_id] = {
             "q_id": q_id,
             "number": f"1.1.{index}",
-            "type": "proof",
+            "type": "reasoning",
             "stem": stem,
             "max_score": 10,
             "question_structure": build_major_question_structure(

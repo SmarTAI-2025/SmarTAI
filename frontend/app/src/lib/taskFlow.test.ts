@@ -83,7 +83,7 @@ describe("task workflow rewinds", () => {
         q1: {
           q_id: "q1",
           number: "1",
-          type: "short",
+          type: "concept",
           stem: "Question",
           criterion: "Rubric",
           max_score: 10,

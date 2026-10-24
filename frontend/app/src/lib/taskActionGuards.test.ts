@@ -40,6 +40,22 @@ describe("task contract compatibility", () => {
     expect(info.description).toContain("题号");
     expect(info.description).toContain("已上传资料仍保留");
   });
+  it.each(["zh-CN", "en-US"] as const)("explains failed question extraction while preserving retry and hiding raw text (%s)", (locale) => {
+    for (const error of ["problem_extraction_failed", new APIError(422, "private extraction diagnostic", {
+      detail: { code: "problem_extraction_failed" },
+    })]) {
+      const info = classifyRecoverableError(error, { locale, taskId: "task" });
+      expect(info.title).toBe(locale === "zh-CN" ? "题目识别未完成" : "Question recognition did not complete");
+      expect(info.description).toBe(locale === "zh-CN"
+        ? "请检查原文件和识别描述后重试，也可以人工继续补充题目。"
+        : "Check the source file and recognition instructions, then retry, or continue manually to add questions.");
+      expect(info.actionKind).toBe("retry");
+      expect(info.actionLabel).toBe(locale === "zh-CN" ? "重新尝试" : "Try again");
+      expect(info.actionHref).toBeUndefined();
+      expect(info.tone).toBe("danger");
+      expect(info.description).not.toContain("private extraction diagnostic");
+    }
+  });
   it("explains recitation with the failed page instead of blaming image support", () => {
     const info = classifyRecoverableError(new APIError(422, "provider_recitation_blocked", {
       detail: { code: "provider_recitation_blocked", failed_pages: [8], processed_pages: [1, 2, 3] },
