@@ -308,3 +308,92 @@ async def test_metadata_allowance_cannot_hide_content_or_source_failure(monkeypa
             patch={"content": answer["content"], "flag": ["recognition_metadata_review"], "review_status": "confirmed"},
             expected_revision=state["workflow_revision"])
     assert registry.provider.ainvoke.await_count == calls
+
+
+@pytest.mark.parametrize('repaired_field', ['number', 'content'])
+def test_model_review_can_clear_when_matching_data_is_actually_repaired(repaired_field):
+    from backend.agents.ingest_agent import SubmissionSourceParseResult
+    from backend.services.submission_incremental import merge_parse_repair
+    source = SimpleNamespace(text='', filename='S1.txt')
+    problems = {'q1': {'number': '1', 'stem': 'Question one'}}
+    def parsed(answer):
+        payload, _ = _independent_submission_payload(_IndependentStudentSubmission.model_validate(
+            dict(stu_id='S1', stu_name='Name', stu_ans=[answer])), source, problems, set(problems))
+        payload['identity_status'] = 'matched'
+        return SubmissionSourceParseResult('source', 'file', 'S1.txt', 'parse_failed', payload,
+            'S1', 1, (), 'submission_parse_invalid', 'structured_parse', True)
+    broken = _answer('q1', 'The student work.')
+    broken.update(flag=['recognition_manual_pending'])
+    broken[repaired_field] = {'invalid': True}
+    before = parsed(broken)
+    repaired = parsed(_answer('q1', 'The student work.'))
+    merged = merge_parse_repair(before, repaired, set(problems), problems=problems)
+    assert merged.student['stu_ans'][0] == repaired.student['stu_ans'][0]
+    assert merged.student['recognition']['model_review_question_ids'] == []
+    assert merged.student['recognition']['repair_question_ids'] == []
+    assert merged.status == 'parsed' and not merged.retryable
+
+
+def test_model_review_of_discarded_rewrite_does_not_contaminate_saved_answer():
+    from backend.agents.ingest_agent import SubmissionSourceParseResult
+    from backend.services.submission_incremental import merge_parse_repair
+    source = SimpleNamespace(text='', filename='S1.txt')
+    problems = {'q1': {'number': '1', 'stem': 'Question one'}}
+    def parsed(answer):
+        payload, _ = _independent_submission_payload(_IndependentStudentSubmission.model_validate(
+            dict(stu_id='S1', stu_name='Name', stu_ans=[answer])), source, problems, set(problems))
+        payload['identity_status'] = 'matched'
+        return SubmissionSourceParseResult('source', 'file', 'S1.txt', 'parse_failed', payload,
+            'S1', 1, (), 'submission_parse_invalid', 'structured_parse', True)
+    before = _answer('q1', 'The preserved answer.')
+    before['type'] = {'invalid': True}
+    incoming = _answer('q1', 'An uncertain rewrite that is not adopted.')
+    incoming['flag'] = ['recognition_manual_pending']
+    merged = merge_parse_repair(parsed(before), parsed(incoming), set(problems), problems=problems)
+    answer = merged.student['stu_ans'][0]
+    assert answer['content'] == 'The preserved answer.' and answer['type'] == 'short'
+    assert answer['flag'] == []
+    assert merged.student['recognition']['model_review_question_ids'] == []
+    assert merged.status == 'parsed' and not merged.retryable
+
+
+@pytest.mark.asyncio
+async def test_model_review_survives_unit_aggregation_and_explicit_format_retry(monkeypatch):
+    owner, task = _setup()
+    retry = False
+    calls = []
+    async def invoke(messages):
+        requested = [q['q_id'] for q in _questions(messages)]
+        calls.append(requested)
+        answers = [_answer(q_id, 'Preserved work for ' + q_id) for q_id in requested]
+        if not retry:
+            for answer in answers:
+                if answer['q_id'] == 'q2':
+                    answer.update(type={'invalid': 'format'}, flag=['recognition_manual_pending'])
+        return _response(answers)
+    registry = _registry(monkeypatch, invoke)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename='S1.txt', content=b'Question 1: First work.\nQuestion 2: Second work.',
+        content_type='text/plain', registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued['job_id']))
+    before = task_facade.get_task(task_id=task, owner_id=owner)
+    assert before['status'] == 'error'
+    assert calls.count(['q1']) == 1 and calls.count(['q2']) == 3
+    retry = True
+    queued_retry = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=queued['job_id'],
+        request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=before['workflow_revision']),
+        background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued_retry['job_id']))
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    # Explicit retry still reports the unresolved source for manual handling.
+    assert after['status'] == 'error'
+    await continue_manually(task_id=task, owner_id=owner, job_id=queued_retry['job_id'],
+                            expected_revision=after['workflow_revision'])
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    answers = {answer['q_id']: answer for answer in after['student_data']['S1']['stu_ans']}
+    assert calls.count(['q1']) == 1 and calls.count(['q2']) == 4
+    assert answers['q1']['content'] == 'Preserved work for q1' and not answers['q1']['flag']
+    assert answers['q2']['content'] == 'Preserved work for q2' and answers['q2']['type'] == 'short'
+    assert 'recognition_manual_pending' in answers['q2']['flag']
+    assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q2']['flag'])
+    assert 'submission_recognition_blocked' in task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']

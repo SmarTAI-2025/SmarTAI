@@ -673,6 +673,7 @@ def _independent_submission_payload(parsed, source, problems_data, known_questio
             invalid_identity.append(field)
 
     answers, invalid_ids, unknown = {}, set(), []
+    model_review_ids = set()
     total = len(payload["stu_id"]) + len(payload["stu_name"])
     # Reserve space for bounded metadata/markers on every requested answer.
     content_budget = max(0, 1_000_000 - total - 1024 * len(known_question_ids))
@@ -700,6 +701,9 @@ def _independent_submission_payload(parsed, source, problems_data, known_questio
                 candidate[field] = getattr(checked, field)
             except (ValueError, TypeError):
                 invalid_fields.append(field)
+        # Preserve model review separately before adding format-error markers.
+        if "recognition_manual_pending" in candidate["flag"]:
+            model_review_ids.add(q_id)
         # Bound the aggregate as well as each item, without discarding siblings.
         size = len(candidate["content"]) + sum(len(flag) for flag in candidate["flag"])
         if size > content_budget:
@@ -730,7 +734,8 @@ def _independent_submission_payload(parsed, source, problems_data, known_questio
     # The same public schema remains the final safety gate for accepted data.
     payload = StudentSubmission.model_validate(payload).model_dump()
     payload["recognition"] = dict(missing_question_ids=sorted(missing),
-        repair_question_ids=sorted(missing | invalid_ids), identity_invalid_fields=invalid_identity)
+        repair_question_ids=sorted(missing | invalid_ids), identity_invalid_fields=invalid_identity,
+        model_review_question_ids=sorted(model_review_ids))
     return payload, tuple(dict.fromkeys(unknown))[:100]
 
 

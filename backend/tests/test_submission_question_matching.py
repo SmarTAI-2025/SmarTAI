@@ -325,3 +325,55 @@ def test_ambiguous_running_number_cannot_close_previous_answer():
     groups = source_page_groups({1: 'Question 1.2.1: First half.', 2: 'Question 1: Possible continuation.'},
                                 numbered=False, number_key=aliases.get)
     assert not any(group.complete for group in groups)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('first_review, repair_review', [(True, True), (True, False), (False, True), (False, False)])
+async def test_model_matching_uncertainty_survives_type_repair_and_saved_grading_gate(monkeypatch, first_review, repair_review):
+    from backend.db import assignment_repository, file_repository
+    from backend.services import task_facade
+    from backend.tests.test_submission_incremental import _claim, _questions, _registry
+    from backend.tests.test_task_background_workflows import _seed_task
+    owner, task = _seed_task()
+    known = problems(('1.2.1', '1.3.1'))
+    for index, (q_id, row) in enumerate(known.items()):
+        assignment_repository.add_question(task, teacher_id=owner, q_id=q_id, order_index=index,
+            number=row['number'], type=row['type'], stem=row['stem'], criterion='Teacher rubric.', max_score=10)
+    calls = []
+    async def invoke(messages):
+        requested = _questions(messages)
+        calls.append([q['q_id'] for q in requested])
+        if len(calls) == 2:
+            artifacts = [file for file in file_repository.list_files(owner_id=owner, assignment_id=task)
+                         if file.kind == 'submission_source_parse_v1']
+            assert len(artifacts) == 1
+            saved = task_facade._load_submission_results(artifacts[0])[0]
+            assert saved.student['recognition']['model_review_question_ids'] == (['q1'] if first_review else [])
+        answers = []
+        for q in requested:
+            answer = dict(q_id=q['q_id'], number=q['number'], type=q['type'], content='Verified sibling.', flag=[])
+            if q['q_id'] == 'q1':
+                answer.update(number='1', content='The student work has no distinguishing copied question.')
+                if (first_review if len(calls) == 1 else repair_review):
+                    answer['flag'] = ['recognition_manual_pending']
+                if len(calls) == 1:
+                    answer['type'] = {'invalid': 'format'}
+            answers.append(answer)
+        return SimpleNamespace(content=json.dumps(dict(stu_id='S1', stu_name='Alice', stu_ans=answers)))
+    registry = _registry(monkeypatch, invoke)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename='S1_Alice.txt', content=b'Question 1: The student work has no distinguishing copied question.',
+        content_type='text/plain', registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued['job_id']))
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    answers = {a['q_id']: a for a in after['student_data']['S1']['stu_ans']}
+    assert calls == [['q1', 'q2'], ['q1']]
+    assert answers['q1']['type'] == known['q1']['type']
+    assert answers['q1']['number'] == '1'
+    assert answers['q1']['content'] == 'The student work has no distinguishing copied question.'
+    assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q1']['flag'])
+    review = first_review or repair_review
+    assert ('recognition_manual_pending' in answers['q1']['flag']) is review
+    blocked = task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
+    assert ('submission_recognition_blocked' in blocked) is review
+    assert answers['q2']['content'] == 'Verified sibling.' and not answers['q2']['flag']
