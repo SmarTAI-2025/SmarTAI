@@ -20,7 +20,7 @@ from backend.tests.test_task_background_workflows import _seed_task
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role,purpose", [("rubric", "rubric"), ("programming_tests", "test_cases"), ("reference_answer", "reference")])
-async def test_material_image_shares_harness_but_keeps_purpose_and_opt_in(tmp_path, monkeypatch, role, purpose):
+async def test_material_image_keeps_allowed_role_ocr_but_cannot_opt_in_restricted_roles(tmp_path, monkeypatch, role, purpose):
     _agent, request, data, results = setup(tmp_path)
     provider, _ = llm(text="Literal -2, including the stated source error.")
     registry = SimpleNamespace(list_configs=lambda: [dict(provider_id=provider.provider_id, enabled=True)],
@@ -31,9 +31,12 @@ async def test_material_image_shares_harness_but_keeps_purpose_and_opt_in(tmp_pa
                   filename="source.png", route=route, registry=registry, stored_file_id=request.source.stored_file_id,
                   purpose=purpose)
     if role != "reference_answer":
-        with pytest.raises(RecognitionError, match="material_ocr_confirmation_required"):
-            await question_sources.read_question_source(**kwargs, allow_vision=False)
+        for allow_vision in (False, True):
+            with pytest.raises(RecognitionError, match="source_type_not_allowed"):
+                await question_sources.read_question_source(**kwargs, allow_vision=allow_vision)
         provider.ainvoke_vision.assert_not_awaited()
+        assert api._source_role_ocr_purpose(role) == purpose
+        return
     result = await question_sources.read_question_source(**kwargs, allow_vision=True)
     assert "-2" in result.text and result.recognition["requires_review"]
     assert ("expected output" if purpose == "test_cases" else purpose) in provider.ainvoke_vision.call_args.args[0]

@@ -56,6 +56,51 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     title: tx(locale, "已手动暂停，尚未完成识别", "Manually paused before recognition completed"),
     description: tx(locale, "原文件和已完成识别已保留。可以继续识别未完成部分，也可以人工继续处理。", "Originals and completed recognition are preserved. Resume the unfinished work or continue manually."),
   }),
+  invalid_source_role: (locale) => ({
+    title: tx(locale, "资料角色无法识别", "The source role is not recognized"),
+    description: tx(locale, "无法确定这份资料的用途，系统没有按更宽的文件权限读取。", "The source purpose is unknown; broader file permissions were not used."),
+    nextStep: tx(locale, "选择正确的资料用途后重新上传；若仍出现，请联系管理员核对上传入口。", "Choose the correct source purpose and upload again. If this persists, ask an administrator to check the upload entry point."),
+  }),
+  material_ocr_not_allowed_for_role: (locale) => ({
+    title: tx(locale, "此类资料不允许 OCR", "OCR is not allowed for this material role"),
+    description: tx(locale, "评分标准与编程测试资料只允许非视觉读取；本次没有进行 OCR。", "Rubrics and programming tests only allow non-visual reading; no OCR was performed for this attempt."),
+    nextStep: tx(locale, "请上传可复制文字的原生 PDF、TXT 或 MD；编程测试也可使用合法 JSON。", "Upload a native text-based PDF, TXT or MD file. Programming tests may also use valid JSON."),
+  }),
+  programming_tests_json_invalid: (locale) => ({
+    title: tx(locale, "编程测试 JSON 无效", "Programming-test JSON is invalid"),
+    description: tx(locale, "测试资料未通过严格 JSON 数据校验，不会被当作代码执行。", "The test material failed strict JSON data validation and is not treated as executable code."),
+    nextStep: tx(locale, "保存为合法 UTF-8 JSON，修正语法并移除 NaN、Infinity 等非有限数字后重新上传。", "Save valid UTF-8 JSON, fix syntax errors and remove non-finite numbers such as NaN or Infinity, then upload again."),
+  }),
+  source_docx_invalid: (locale) => ({
+    title: tx(locale, "DOCX 文件结构无效", "The DOCX structure is invalid"),
+    description: tx(locale, "文件未通过 Office 容器结构检查；普通 ZIP 改名不能成为 DOCX。", "The file failed Office container checks; renaming an ordinary ZIP does not make it a DOCX."),
+    nextStep: tx(locale, "从原应用重新导出完整、未损坏的文件；也可改用当前用途支持的文字 PDF 或 TXT。", "Export an intact file again from its source application, or use a text-based PDF or TXT supported for this purpose."),
+  }),
+  source_empty: (locale) => ({
+    title: tx(locale, "文件为空", "The file is empty"),
+    description: tx(locale, "上传原件没有内容，无法开始读取。", "The uploaded original has no content, so reading cannot start."),
+    nextStep: tx(locale, "检查原文件大小，重新保存有内容的文件后上传。", "Check the original file size, save a file with content and upload again."),
+  }),
+  source_filename_too_long: (locale) => ({
+    title: tx(locale, "文件名过长", "The filename is too long"),
+    description: tx(locale, "文件名超过当前上传入口的长度限制。", "The filename exceeds the length limit for this upload entry point."),
+    nextStep: tx(locale, "缩短文件名并保留正确扩展名，再重新上传。", "Shorten the filename while keeping the correct extension, then upload again."),
+  }),
+  source_too_large: (locale) => ({
+    title: tx(locale, "文件超过上传上限", "The file exceeds the upload limit"),
+    description: tx(locale, "原件大小超过当前资料用途或入口的生效上限。", "The original exceeds the effective size limit for this source purpose or entry point."),
+    nextStep: tx(locale, "按当前入口显示的限制缩小或拆分文件，再重新上传。", "Reduce or split the file to fit the limit shown for this entry point, then upload again."),
+  }),
+  source_type_not_allowed: (locale) => ({
+    title: tx(locale, "此角色不允许该文件类型", "This file type is not allowed for this role"),
+    description: tx(locale, "文件扩展名不在所选资料用途的允许范围内。", "The extension is not allowed for the selected source purpose."),
+    nextStep: tx(locale, "按当前用途的允许格式重新导出；不要仅修改后缀或更换资料分类来绕过限制。", "Export to a format allowed for this purpose; do not merely rename the extension or change its category to bypass the restriction."),
+  }),
+  submission_source_type_not_allowed: (locale) => ({
+    title: tx(locale, "学生作答不允许该文件类型", "This file type is not allowed for student submissions"),
+    description: tx(locale, "这份学生源文件未通过格式检查，不是学生答错或得到零分。", "This student source failed the format check; it is not an incorrect answer or a zero grade."),
+    nextStep: tx(locale, "按学生作答入口的允许格式重新导出；ZIP 内的每份作答也须符合该限制。名单请使用独立名单入口。", "Export to a format allowed by the student-submission entry point. Each answer inside a ZIP must also comply. Use the separate roster entry point for rosters."),
+  }),
   image_format_mismatch: recognitionFileCopy,
   image_input_too_large: recognitionLimitCopy,
   image_invalid: recognitionFileCopy,

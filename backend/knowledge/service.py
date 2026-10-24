@@ -8,9 +8,9 @@ from backend.db.knowledge_repository import KnowledgeDocument, get_document, req
 from backend.rag.chunker import MAX_FILE_BYTES
 from backend.services.knowledge_storage import persist_knowledge_upload
 from backend.storage import get_storage
-from backend.tools.file_processing import inspect_upload_content
+from backend.services.upload_contract import ROLE_EXTENSIONS, UploadContractError, validate_upload
 
-KNOWLEDGE_UPLOAD_EXTENSIONS = {".pdf", ".txt", ".md", ".markdown"}
+KNOWLEDGE_UPLOAD_EXTENSIONS = frozenset("." + ext for ext in ROLE_EXTENSIONS["course_knowledge"])
 
 
 async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
@@ -21,16 +21,17 @@ async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
     from backend.db.knowledge_ingestion_repository import queue_document
     from backend.knowledge.ingestion import frozen_configuration, KnowledgeIngestionWorker
 
-    if not content or len(content) > MAX_FILE_BYTES:
-        raise ValueError("Knowledge files must contain 1 byte to 64 MiB.")
     safe_name = Path(original_name).name or "knowledge.txt"
-    if Path(safe_name).suffix.lower() not in KNOWLEDGE_UPLOAD_EXTENSIONS:
-        raise ValueError("Knowledge uploads support PDF, TXT and Markdown; convert other formats to PDF.")
-    media_type = inspect_upload_content(content, safe_name, content_type).content_type
+    try:
+        media_type = validate_upload("course_knowledge", safe_name, content).media_type
+    except UploadContractError as exc:
+        # Keep existing public ValueError wording without a second type policy.
+        message = {
+            "source_type_not_allowed": "Knowledge uploads support PDF, TXT and Markdown; convert other formats to PDF.",
+            "submission_source_content_type_mismatch": "Knowledge file content does not match its format; re-export as PDF, TXT or Markdown.",
+        }.get(exc.code)
+        raise UploadContractError(exc.code, message=message, **exc.details) from None
     visual = media_type == "application/pdf"
-    expected_pdf = Path(safe_name).suffix.lower() == ".pdf"
-    if expected_pdf != visual or (not visual and not media_type.startswith("text/")):
-        raise ValueError("Knowledge file content does not match its format; re-export as PDF, TXT or Markdown.")
     if registry is None and not native_only:
         from backend.services.task_facade import _registry_for_owner
         registry = await run_in_threadpool(_registry_for_owner, owner_id)

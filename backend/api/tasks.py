@@ -438,7 +438,11 @@ async def extract_problems_endpoint(
         )
     if file is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "source_required"})
-    content = await file.read()
+    from backend.services.upload_contract import upload_limit
+    max_bytes = upload_limit("question_source_max_bytes")
+    content = await file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": max_bytes})
     try:
         queued = task_facade.queue_task_problem_extraction(
             task_id=task_id, owner_id=current.id,
@@ -474,10 +478,12 @@ async def parse_submissions_endpoint(
     acknowledge_possible_duplicate_call = acknowledge_possible_duplicate_call is True
     restart_origin = None
     from backend.services.workflow_inputs import load_submission_input, load_saved_roster
+    from backend.services.upload_contract import upload_limit
+    maximum = upload_limit("submission_upload_max_bytes", SUBMISSION_UPLOAD_MAX_BYTES)
     # Bound a new upload before looking up or publishing any workflow state.
     if file is not None and stored_file_id is None:
-        body = await file.read(SUBMISSION_UPLOAD_MAX_BYTES + 1)
-        if len(body) > SUBMISSION_UPLOAD_MAX_BYTES:
+        body = await file.read(maximum + 1)
+        if len(body) > maximum:
             raise HTTPException(
                 status.HTTP_413_CONTENT_TOO_LARGE,
                 detail={"code": "submission_source_too_large"},
@@ -508,7 +514,7 @@ async def parse_submissions_endpoint(
                 restart_origin = f"{failed.id}:{failed.attempt}"
     except DomainError as exc:
         return domain_error_response(exc)
-    if len(body) > SUBMISSION_UPLOAD_MAX_BYTES:
+    if len(body) > maximum:
         raise HTTPException(
             status.HTTP_413_CONTENT_TOO_LARGE,
             detail={"code": "submission_source_too_large"},
@@ -1122,8 +1128,8 @@ async def upload_task_knowledge(
             effective_material_id = material.material_id
             saved_material_created = False
         elif file is not None:
-            from backend.rag.chunker import MAX_FILE_BYTES
-            body = await file.read(MAX_FILE_BYTES + 1)
+            from backend.services.upload_contract import upload_limit
+            body = await file.read(upload_limit("knowledge_max_bytes") + 1)
             document = await ingest_document(
                 owner_id=current.id, original_name=file.filename or "knowledge.txt",
                 content=body, content_type=file.content_type,

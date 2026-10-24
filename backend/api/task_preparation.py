@@ -95,6 +95,7 @@ from backend.services.question_preparation_identity import (
 )
 from backend.services.question_sources import read_question_source, question_recognition_options, attach_recognition_review, recognition_has_failure, recognition_requires_confirmation
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_requires_review
+from backend.services.upload_contract import ROLE_EXTENSIONS, QUESTION_SOURCE_MAX_BYTES, UploadContractError, upload_limit, upload_role_for_purpose, validate_upload
 from backend.tools.file_processing import (
     IMAGE_MEDIA_TYPES,
     extract_text_from_upload,
@@ -105,19 +106,11 @@ from backend.tools.file_processing import (
 router = APIRouter(prefix="/tasks", tags=["task-preparation"])
 logger = logging.getLogger(__name__)
 
-MAX_SOURCE_BYTES = 5 * 1024 * 1024
+MAX_SOURCE_BYTES = QUESTION_SOURCE_MAX_BYTES
 MAX_SOURCE_CHARACTERS = 400_000
 SOURCE_TTL_SECONDS = 2 * 60 * 60
 
-_DOCUMENT_SOURCE_EXTENSIONS = (".pdf", ".txt", ".md", ".markdown")
 _IMAGE_SOURCE_EXTENSIONS = tuple(IMAGE_MEDIA_TYPES)
-_VISION_SOURCE_ROLES = frozenset({"problem", "reference_answer", "rubric", "programming_tests"})
-_SOURCE_ROLE_EXTENSIONS = {
-    "problem": _DOCUMENT_SOURCE_EXTENSIONS,
-    "reference_answer": _DOCUMENT_SOURCE_EXTENSIONS,
-    "rubric": _DOCUMENT_SOURCE_EXTENSIONS,
-    "programming_tests": (*_DOCUMENT_SOURCE_EXTENSIONS, ".json"),
-}
 _SOURCE_ROLE_OCR_PURPOSE = {
     "problem": "problems",
     "reference_answer": "reference",
@@ -175,6 +168,7 @@ def _provider_http_status_for_code(code: str) -> int:
     }:
         return status.HTTP_503_SERVICE_UNAVAILABLE
     if code in {
+        "material_ocr_not_allowed_for_role",
         "provider_vision_not_supported",
         "provider_model_not_found",
         "provider_request_rejected",
@@ -197,6 +191,7 @@ _SOURCE_MIME_TYPES = {
     ".md": frozenset({"text/markdown", "text/plain"}),
     ".markdown": frozenset({"text/markdown", "text/plain"}),
     ".json": frozenset({"application/json", "text/json", "text/plain"}),
+    ".docx": frozenset({"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}),
     ".jpg": frozenset({"image/jpeg"}),
     ".jpeg": frozenset({"image/jpeg"}),
     ".png": frozenset({"image/png"}),
@@ -208,18 +203,9 @@ _SOURCE_MIME_TYPES = {
 
 
 def _accepted_source_extensions(role: str, *, has_vision: bool) -> list[str]:
-    base = _SOURCE_ROLE_EXTENSIONS.get(role)
-    if base is None:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "invalid_source_role", "role": role},
-        )
-    accepted = list(base)
-    # Image inputs stay selectable even when the current model is text-only so
-    # the backend can return the precise, recoverable model-capability error.
-    if role in _VISION_SOURCE_ROLES:
-        accepted.extend(_IMAGE_SOURCE_EXTENSIONS)
-    return accepted
+    canonical_role = upload_role_for_purpose(_source_role_ocr_purpose(role))
+    # Selectability describes the upload contract, not reader availability.
+    return ["." + extension for extension in sorted(ROLE_EXTENSIONS[canonical_role])]
 
 
 def _material_import_source_role(targets: list[str]) -> str:
@@ -413,24 +399,28 @@ def question_preparation_capabilities(
         "source_roles": {
             "problem": {
                 **common,
+                "allow_vision": True,
                 "accepted_extensions": _accepted_source_extensions(
                     "problem", has_vision=has_vision
                 ),
             },
             "reference_answer": {
                 **common,
+                "allow_vision": True,
                 "accepted_extensions": _accepted_source_extensions(
                     "reference_answer", has_vision=has_vision
                 ),
             },
             "rubric": {
                 **common,
+                "allow_vision": False,
                 "accepted_extensions": _accepted_source_extensions(
                     "rubric", has_vision=has_vision
                 ),
             },
             "programming_tests": {
                 **common,
+                "allow_vision": False,
                 "accepted_extensions": _accepted_source_extensions(
                     "programming_tests", has_vision=has_vision
                 ),
@@ -443,13 +433,14 @@ def question_preparation_capabilities(
             "json_programming_tests": True,
             "ocr": has_vision,
             "material_ocr_default_enabled": False,
+            "material_ocr_opt_in_supported": False,
             "vision": has_vision,
             "scanned_pdf": has_vision,
             "images": has_vision,
             "docx": False,
         },
         "limits": {
-            "max_file_bytes": MAX_SOURCE_BYTES,
+            "max_file_bytes": upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES),
             "max_text_characters": MAX_SOURCE_CHARACTERS,
             "max_inline_rubric_characters": 12_000,
         },
@@ -882,7 +873,7 @@ async def preflight_problem_source(
                         route=route, registry=registry, stored_file_id=stored.id if stored else None,
                         extraction_hint=extraction_hint, options=parsed_recognition_options.model_dump(),
                         purpose=_source_role_ocr_purpose(role),
-                        allow_vision=role not in {"rubric", "programming_tests"} or enable_material_ocr,
+                        allow_vision=role not in {"rubric", "programming_tests"},
                         reporter=get_or_create_reporter(operation.id),
                     )
                 except RecognitionError as exc:
@@ -1094,6 +1085,7 @@ async def _select_source(
     if selected != 1:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "exactly_one_source_required"})
     if file is not None or stored_file_id:
+        max_bytes = upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES)
         if provider is None and not document_ocr_available:
             provider = registry.pick_default()
         vision = registry.pick_vision(provider) if provider is not None else None
@@ -1143,7 +1135,7 @@ async def _select_source(
 
             def _read_stored_source() -> bytes:
                 with storage.open(stored.storage_key) as stream:
-                    return stream.read(MAX_SOURCE_BYTES + 1)
+                    return stream.read(max_bytes + 1)
 
             try:
                 body = await run_in_threadpool(_read_stored_source)
@@ -1159,17 +1151,23 @@ async def _select_source(
                 ) from None
         else:
             assert file is not None
-            body = await file.read(MAX_SOURCE_BYTES + 1)
+            body = await file.read(max_bytes + 1)
         if not body:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"code": "source_empty"})
-        if len(body) > MAX_SOURCE_BYTES:
+        if len(body) > max_bytes:
             raise HTTPException(
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail={"code": "source_too_large", "max_bytes": MAX_SOURCE_BYTES},
+                detail={"code": "source_too_large", "max_bytes": max_bytes},
             )
         filename = source_file_service.safe_display_name(
             source_upload.filename or "source"
         )
+        try:
+            validate_upload(upload_role_for_purpose(_source_role_ocr_purpose(role)), filename, body)
+        except UploadContractError as exc:
+            code = "source_content_type_not_allowed" if exc.code == "submission_source_content_type_mismatch" else exc.code
+            raise HTTPException(413 if exc.code.endswith("too_large") else 422 if exc.code == "programming_tests_json_invalid" else 415,
+                                detail={"code": code, **exc.details}) from None
         extension = Path(filename.lower()).suffix
         detected = (
             source_file_service.detected_preview_mime(body[:4096], filename)
@@ -1207,6 +1205,30 @@ async def _select_source(
         )
         if material is None:
             raise NotFound("course_material")
+        class _LibraryUpload:
+            filename = material.filename
+            content_type = material.content_type
+
+        _validate_source_upload(_LibraryUpload(), role=role, has_vision=True, enforce_vision=False)
+        original = file_repository.get_file(file_id=material.stored_file_id, owner_id=owner_id)
+        if original is None or original.knowledge_document_id != material.document_id:
+            raise NotFound("stored_file")
+        maximum = upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES)
+        if original.size_bytes > maximum:
+            raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": maximum})
+        def read_original():
+            with get_storage().open(original.storage_key) as stream:
+                return stream.read(maximum + 1)
+        body = await run_in_threadpool(read_original)
+        if (len(body) != original.size_bytes or hashlib.sha256(body).hexdigest() != material.sha256
+                or original.sha256 != material.sha256):
+            raise HTTPException(422, detail={"code": "recognition_source_mismatch"})
+        try:
+            validate_upload(upload_role_for_purpose(_source_role_ocr_purpose(role)), original.original_name, body)
+        except UploadContractError as exc:
+            code = "source_content_type_not_allowed" if exc.code == "submission_source_content_type_mismatch" else exc.code
+            raise HTTPException(413 if exc.code.endswith("too_large") else 422 if exc.code == "programming_tests_json_invalid" else 415,
+                                detail={"code": code, **exc.details}) from None
         descriptor = {
             "kind": "library", "filename": material.filename,
             "size_bytes": material.size_bytes,
@@ -1217,18 +1239,6 @@ async def _select_source(
             "stored_file_id": material.stored_file_id,
         }
         if material.content_type in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}:
-            original = file_repository.get_file(file_id=material.stored_file_id, owner_id=owner_id)
-            if original is None or original.knowledge_document_id != material.document_id:
-                raise NotFound("stored_file")
-            maximum = 64 * 1024 * 1024
-            if original.size_bytes > maximum:
-                raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": maximum})
-            def read_original():
-                with get_storage().open(original.storage_key) as stream:
-                    return stream.read(maximum + 1)
-            body = await run_in_threadpool(read_original)
-            if len(body) > maximum or hashlib.sha256(body).hexdigest() != material.sha256:
-                raise HTTPException(422, detail={"code": "recognition_source_mismatch"})
             descriptor.update(_body=body, _recognition_original=True)
     else:
         text = (inline_text or "").strip()
@@ -1281,12 +1291,19 @@ async def _read_source(
         provider=route.provider, document_ocr_available=route.is_baidu_ocr, task_id=task_id,
     )
     if descriptor["kind"] == "upload" or descriptor.get("_recognition_original"):
+        if descriptor["kind"] == "upload" and descriptor.get("stored_file_id") is None:
+            stored, _ = await run_in_threadpool(
+                source_file_service.persist_problem_source, storage=get_storage(),
+                owner_id=owner_id, task_id=task_id, original_name=descriptor["filename"],
+                content=descriptor["_body"], content_type=descriptor["content_type"],
+            )
+            descriptor["stored_file_id"] = stored.id
         result = await read_question_source(
             owner_id=owner_id, task_id=task_id, content=descriptor["_body"], filename=descriptor["filename"],
             content_type=descriptor.get("content_type"), route=route, registry=registry,
             stored_file_id=descriptor.get("stored_file_id") if descriptor["kind"] == "upload" else None,
             purpose=_source_role_ocr_purpose(role), extraction_hint=extraction_hint, reporter=reporter,
-            allow_vision=role not in {"rubric", "programming_tests"} or enable_material_ocr,
+            allow_vision=role not in {"rubric", "programming_tests"},
         )
         text = result.text
         descriptor.update(recognition=result.recognition, recognition_stored_file_id=result.stored_file_id)
@@ -1442,6 +1459,20 @@ def _validated_question_source_ref(
                 raise NotFound("problem_source")
     else:
         ref.update(source_id=None, stored_file_id=None)
+    if ref.get("stored_file_id"):
+        original = file_repository.get_file(file_id=ref["stored_file_id"], owner_id=owner_id)
+        maximum = upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES)
+        if original is None or original.size_bytes > maximum:
+            raise ValidationError("The saved source exceeds the supported limit.", code="source_too_large")
+        with get_storage().open(original.storage_key) as stream:
+            body = stream.read(maximum + 1)
+        if len(body) != original.size_bytes or hashlib.sha256(body).hexdigest() != original.sha256:
+            raise ValidationError("The saved original changed.", code="recognition_source_mismatch")
+        try:
+            validate_upload(upload_role_for_purpose(_source_role_ocr_purpose(ref["role"])),
+                            original.original_name, body)
+        except UploadContractError as exc:
+            raise ValidationError("The saved source is not allowed for this role.", code=exc.code, details=exc.details) from None
     return ref
 
 
@@ -2325,7 +2356,9 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
                  if (operation.payload or {}).get("retry_origin_id") or operation.attempt > 1 else None)
     resolved = []
     for index, (draft, text, payload) in enumerate(sources):
-        if not payload.get("recognition_pending"):
+        pending = bool(payload.get("recognition_pending"))
+        revalidate_native = draft.role in {"rubric", "programming_tests"} and draft.content_type == "application/pdf"
+        if not pending and not revalidate_native:
             resolved.append((draft, text, payload))
             continue
         await reporter.set_current_step(
@@ -2337,9 +2370,12 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
         if (stored is None or stored.assignment_id != operation.assignment_id
                 or stored.kind != "problem_source" or stored.sha256 != draft.content_sha256):
             raise RecognitionError("recognition_source_unavailable")
+        maximum = upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES)
+        if stored.size_bytes > maximum:
+            raise RecognitionError("source_too_large")
         def read_original():
             with get_storage().open(stored.storage_key) as stream:
-                return stream.read(stored.size_bytes + 1)
+                return stream.read(maximum + 1)
         body = await run_in_threadpool(read_original)
         if len(body) != stored.size_bytes or hashlib.sha256(body).hexdigest() != draft.content_sha256:
             raise RecognitionError("recognition_source_mismatch")
@@ -2349,7 +2385,7 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
             route=route, registry=registry, stored_file_id=stored.id,
             extraction_hint=draft.extraction_hint, options=payload.get("recognition_options"),
             purpose=_source_role_ocr_purpose(draft.role), reporter=reporter,
-            allow_vision=draft.role not in {"rubric", "programming_tests"} or payload.get("enable_material_ocr") is True,
+            allow_vision=draft.role not in {"rubric", "programming_tests"},
             retry_key=retry_key,
             acknowledge_pending_retry=bool((operation.payload or {}).get("acknowledged_restart_from")),
             timeout_profile=(operation.payload or {}).get("recognition_timeout_profile"),
@@ -2358,6 +2394,11 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
         )
         if not result.text.strip():
             raise RecognitionError("ocr_empty_result")
+        if not pending:
+            # Eligibility is rechecked without rewriting previously frozen
+            # transcripts or claiming the historical OCR result is native.
+            resolved.append((draft, text, payload))
+            continue
         if len(result.text) > MAX_SOURCE_CHARACTERS:
             raise ValidationError("The extracted source is too large.", code="source_text_too_large")
         saved = await _save_source_to_library(
@@ -2763,6 +2804,8 @@ async def preflight_material_import(
         )
         payload = {
             "text_artifact_id": text_artifact.id, "filename": descriptor["filename"],
+            "original_stored_file_id": descriptor.get("recognition_stored_file_id") or descriptor.get("stored_file_id"),
+            "original_sha256": descriptor["sha256"],
             "source_kind": descriptor["kind"], "size_bytes": descriptor["size_bytes"],
             "sha256": text_sha256,
             "library_material_id": effective_material_id,
@@ -3046,20 +3089,73 @@ async def _run_material_import(
         remove_reporter(job_id)
 
 
+async def _revalidate_material_original(payload, *, owner_id: str, task_id: str) -> None:
+    """A decoded/parser artifact cannot grant permissions to an old original."""
+    targets = payload.get("targets")
+    if (not isinstance(targets, list) or not targets
+            or any(not isinstance(target, str) or target not in {"criterion", "reference_answer", "test_cases"} for target in targets)):
+        raise RecognitionError("invalid_source_role")
+    role = _material_import_source_role(targets)
+    file_id = payload.get("original_stored_file_id") or payload.get("recognition_stored_file_id")
+    stored = file_repository.get_file(file_id=str(file_id or ""), owner_id=owner_id)
+    if stored is None or stored.availability_status != "available":
+        # Old text-only artifacts cannot establish original bytes/hash. Keep
+        # them for review, but require re-upload instead of pretending otherwise.
+        raise RecognitionError("recognition_source_unavailable")
+    if stored.assignment_id != task_id or stored.kind != "problem_source":
+        from backend.db import course_library_repository
+        material = course_library_repository.get_material(str(payload.get("library_material_id") or ""), owner_id)
+        if (payload.get("source_kind") != "library" or material is None
+                or material.stored_file_id != stored.id or material.document_id != stored.knowledge_document_id
+                or material.sha256 != stored.sha256):
+            raise RecognitionError("recognition_source_unavailable")
+    maximum = upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES)
+    if stored.size_bytes > maximum:
+        raise RecognitionError("source_too_large")
+    def read_original():
+        with get_storage().open(stored.storage_key) as stream:
+            return stream.read(maximum + 1)
+    body = await run_in_threadpool(read_original)
+    if (len(body) != stored.size_bytes or hashlib.sha256(body).hexdigest() != stored.sha256
+            or payload.get("original_sha256", stored.sha256) != stored.sha256):
+        raise RecognitionError("recognition_source_mismatch")
+    try:
+        validated = validate_upload(upload_role_for_purpose(_source_role_ocr_purpose(role)), stored.original_name, body)
+    except UploadContractError as exc:
+        raise RecognitionError(exc.code) from None
+    if role in {"rubric", "programming_tests"} and validated.extension == "pdf":
+        await read_question_source(owner_id=owner_id, task_id=task_id, content=body,
+            filename=stored.original_name, content_type=validated.media_type, stored_file_id=stored.id,
+            purpose=_source_role_ocr_purpose(role), allow_vision=False, route=None, registry=None)
+
+
 async def run_durable_material_import(operation) -> None:
     source_id = str((operation.payload or {}).get("source_token") or "")
     source = workflow_repository.get_operation(source_id, owner_id=operation.owner_id)
     if source.assignment_id != operation.assignment_id or source.operation_type != "material_source":
         raise NotFound("material_source")
     source_payload = dict(source.payload or {})
+    await _revalidate_material_original(source_payload, owner_id=operation.owner_id, task_id=operation.assignment_id)
     artifact = file_repository.get_file(
         file_id=str(source_payload.get("text_artifact_id") or ""),
         owner_id=operation.owner_id,
     )
     if artifact is None or artifact.assignment_id != operation.assignment_id:
         raise NotFound("stored_file")
+    maximum = 4 * MAX_SOURCE_CHARACTERS
+    if artifact.size_bytes > maximum:
+        raise ValidationError("Material text exceeds the supported limit.", code="source_text_too_large")
     with get_storage().open(artifact.storage_key) as stream:
-        source_payload["text"] = stream.read().decode("utf-8")
+        body = stream.read(maximum + 1)
+    if len(body) != artifact.size_bytes or hashlib.sha256(body).hexdigest() != artifact.sha256:
+        raise RecognitionError("recognition_source_mismatch")
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        raise RecognitionError("recognition_artifact_invalid") from None
+    if len(text) > MAX_SOURCE_CHARACTERS:
+        raise ValidationError("Material text exceeds the supported limit.", code="source_text_too_large")
+    source_payload["text"] = text
     result_artifact = _find_auxiliary_result_artifact(
         operation=operation, kind="material_import_result",
         stage="material-candidates",

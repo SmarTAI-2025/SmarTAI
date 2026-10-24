@@ -26,6 +26,7 @@ from backend.services.background_errors import (
 )
 from backend.storage import get_storage
 from backend.services.question_sources import recognition_has_failure
+from backend.services.upload_contract import validate_submission_upload
 from backend.tools.file_processing import (
     ARCHIVE_EXTENSIONS,
     RawUploadSource,
@@ -561,6 +562,7 @@ async def prepare_submission_sources(
 
     archive_error: str | None = None
     try:
+        validate_submission_upload(filename, content)
         raw_sources = await run_in_threadpool(
             extract_raw_files_from_archive,
             content,
@@ -604,7 +606,7 @@ async def prepare_submission_sources(
             content_type=raw_sources[0].content_type,
             text=None,
             pre_error_code=code,
-            failure_phase="archive",
+            failure_phase="archive" if container_file is not None else failure_phase_for_code(code),
             retryable=is_retryable_background_error(code),
         )
         if on_source_ready is not None:

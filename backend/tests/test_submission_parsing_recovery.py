@@ -16,10 +16,10 @@ from backend.storage import get_storage
 from backend.tests.test_task_background_workflows import _BackgroundTasks, _Registry, _seed_task
 
 
-def _archive_bytes() -> bytes:
+def _archive_bytes(name: str = "student.txt", content: bytes = b"answer") -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("student.txt", "answer")
+        archive.writestr(name, content)
     return buffer.getvalue()
 
 
@@ -441,8 +441,9 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
 async def test_submission_queue_persists_archive_and_has_no_request_task():
     owner_id, task_id = _seed_task(with_question=True)
     background = _BackgroundTasks()
+    original = _archive_bytes()
     upload = UploadFile(
-        file=io.BytesIO(b"archive-bytes"), filename="answers.zip",
+        file=io.BytesIO(original), filename="answers.zip",
         headers=Headers({"content-type": "application/zip"}),
     )
 
@@ -475,7 +476,7 @@ async def test_submission_queue_persists_archive_and_has_no_request_task():
     assert stored is not None
     assert stored.id in operation.artifact_refs
     with get_storage().open(stored.storage_key) as stream:
-        assert stream.read() == b"archive-bytes"
+        assert stream.read() == original
 
 
 @pytest.mark.asyncio
@@ -759,7 +760,7 @@ async def test_submission_failure_records_fenced_source_outcome(monkeypatch):
     owner_id, task_id = _seed_task(with_question=True)
     queued = task_facade.queue_task_submission_parsing(
         task_id=task_id, owner_id=owner_id, filename="answers.zip",
-        content=b"archive-bytes", content_type="application/zip",
+        content=_archive_bytes("student.png", b"not image bytes"), content_type="application/zip",
         registry=_Registry(),
     )
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _Registry())

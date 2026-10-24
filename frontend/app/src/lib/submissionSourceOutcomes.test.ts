@@ -71,6 +71,37 @@ describe("submission source reason copy", () => {
   });
 
   it.each([
+    ["invalid_source_role", "资料角色无法识别", "The source role is not recognized"],
+    ["programming_tests_json_invalid", "编程测试 JSON 无效", "Programming-test JSON is invalid"],
+    ["source_docx_invalid", "DOCX 文件结构无效", "The DOCX structure is invalid"],
+    ["source_empty", "文件为空", "The file is empty"],
+    ["source_filename_too_long", "文件名过长", "The filename is too long"],
+    ["source_too_large", "文件超过上传上限", "The file exceeds the upload limit"],
+    ["source_type_not_allowed", "此角色不允许该文件类型", "This file type is not allowed for this role"],
+    ["submission_source_type_not_allowed", "学生作答不允许该文件类型", "This file type is not allowed for student submissions"],
+  ])("routes upload-contract reason %s to actionable bilingual guidance", (code, zhTitle, enTitle) => {
+    for (const [locale, title] of [["zh-CN", zhTitle], ["en-US", enTitle]] as const) {
+      const copy = getSubmissionSourceReasonCopy(source({ reason_code: code, failure_phase: "source_read" }), locale);
+      expect(copy.title).toBe(title);
+      expect(copy.description.trim().length).toBeGreaterThan(0);
+      expect(copy.nextStep?.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it.each(["zh-CN", "en-US"] as const)("explains the OCR role prohibition without granting an opt-in in %s", (locale) => {
+    const copy = getSubmissionSourceReasonCopy(source({
+      reason_code: "material_ocr_not_allowed_for_role", failure_phase: "source_read", retryable: false,
+    }), locale);
+    expect(copy.title).toBe(locale === "zh-CN" ? "此类资料不允许 OCR" : "OCR is not allowed for this material role");
+    expect(copy.description).toMatch(locale === "zh-CN" ? /评分标准.*编程测试/ : /rubrics.*programming tests/i);
+    expect(copy.nextStep).toContain("PDF");
+    expect(copy.nextStep).toContain("TXT");
+    expect(copy.nextStep).toContain("MD");
+    expect(copy.nextStep).toContain("JSON");
+    expect(copy.nextStep).not.toMatch(/启用|开启|enable|switch.*model/i);
+  });
+
+  it.each([
     ["shared_pool_daily_limit_reached", "recognition", "共享模型日额度已用完。", "Shared model daily allowance exhausted."],
     ["shared_pool_disabled", "recognition", "平台共享模型当前关闭。", "The shared model pool is disabled."],
     ["question_source_pages_out_of_range", "source_read", "请调整识别范围", "Adjust the recognition scope"],

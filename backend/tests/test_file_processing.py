@@ -372,7 +372,8 @@ async def test_unsupported_single_file_returns_clear_error():
         await extract_files_from_archive(b"binary", "answers.xlsx")
 
     assert exc.value.status_code == 415
-    assert exc.value.detail == {"code": "submission_source_content_type_mismatch"}
+    # The business role now rejects XLSX before trying to interpret its bytes.
+    assert exc.value.detail == {"code": "submission_source_type_not_allowed", "role": "student_submission"}
 
 
 @pytest.mark.asyncio
@@ -533,7 +534,7 @@ async def test_octet_stream_with_real_png_uses_detected_image_type():
 
     text = await extract_text_from_upload(
         _valid_png_1x1(),
-        "upload.bin",
+        "upload.png",
         content_type="application/octet-stream",
         ocr_skill=ocr,
     )
@@ -541,4 +542,4 @@ async def test_octet_stream_with_real_png_uses_detected_image_type():
     assert text == "OCR from content-sniffed image"
     assert len(ocr.calls) == 1
     assert ocr.calls[0]["images"][0].media_type == "image/png"
-    assert ocr.calls[0]["images"][0].label == "upload.bin"
+    assert ocr.calls[0]["images"][0].label == "upload.png"
