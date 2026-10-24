@@ -252,3 +252,29 @@ async def test_revised_question_progress_ignores_late_old_generation_results():
         await reporter.mark_question_generation_started('target:1', revision='new')
     with pytest.raises(ValueError, match='completed question'):
         await reporter.mark_question_generation_started('target:1')
+
+
+@pytest.mark.asyncio
+async def test_long_text_overlap_does_not_persist_the_same_question_twice(monkeypatch):
+    first = 'Explain why every subgroup of a cyclic group is cyclic and prove the required divisibility statement.'
+    second = 'Calculate the order of the permutation and justify the cycle decomposition.'
+    text = 'Background ' + 'x' * 23680 + '\nQuestion 1: ' + first + '\nQuestion 2: ' + second + 'y' * 600
+    chunks = inc._chunk_problem_text(text, 24000, 400)
+    assert len(chunks) == 2 and all(first in chunk for chunk in chunks)
+    owner, _, operation, pipeline = await setup(monkeypatch, text)
+    async def extract(text, *args, **kwargs):
+        return inc._rows([row(n, stem=stem, criterion='Teacher rubric', reference_answer='Teacher answer')
+                         for n, stem in [('1', first), ('2', second)] if stem in text])
+    monkeypatch.setattr(inc, '_extract_problems_call', extract)
+    result = await pipeline.run()
+    assert [r['number'] for r in result.values()] == ['1', '2']
+    assert [r['stem'] for r in persisted(owner, operation)[1].values()] == [first, second]
+
+
+@pytest.mark.parametrize('stems', [
+    ('Calculate the order of A.', 'Calculate the order of a.'),
+    ('Compute the determinant of diag(1,2,3).', 'Compute the determinant of diag(1,2,4).'),
+])
+def test_same_number_nearly_identical_complete_questions_remain_distinct(stems):
+    assert len(dedupe_extracted_problems(inc._rows([row('1', stem=s) for s in stems]),
+                                        preserve_repeated_numbers=True)) == 2

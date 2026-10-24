@@ -248,10 +248,13 @@ def dedupe_extracted_problems(
                 j = live[j_pos]
                 if (preserve_repeated_numbers and _explicit_major_number(items[i].get("number"))
                         and _explicit_major_number(items[i].get("number")) == _explicit_major_number(items[j].get("number"))
+                        and str(items[i].get("stem") or "").strip() != str(items[j].get("stem") or "").strip()
                         and not any(issue.get("code") == "recognition_partial"
                                     for item in (items[i], items[j]) for issue in item.get("preparation_issues", []))):
                     # Complete exercises from unknown chapters may be very
                     # similar. A repeated display label is not their identity.
+                    # Identical stems still collapse (e.g. chunk overlap); do
+                    # not casefold this comparison: A and a may differ in math.
                     continue
                 decision = _merge_decision(items[i], items[j], norms[i], norms[j])
                 if decision is not None:
