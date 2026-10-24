@@ -59,6 +59,7 @@ from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_requires_confirmation
+from backend.domain.question_types import normalize_question_type
 from backend.domain.errors import (
     DomainError,
     DuplicateActiveRun,
@@ -2502,7 +2503,7 @@ def _replace_draft_questions(
                 id=f"q_{uuid.uuid4().hex[:12]}", assignment_id=task_id,
                 q_id=str(raw.get("q_id") or q_id), order_index=index,
                 number=raw["number"] if isinstance(raw.get("number"), str) else str(index + 1),
-                type=raw["type"] if isinstance(raw.get("type"), str) else "其他",
+                type=normalize_question_type(raw.get("type")),
                 stem=str(raw.get("stem") or ""),
                 criterion=str(raw.get("criterion") or ""),
                 max_score=float(raw.get("max_score") or 10),
@@ -4863,7 +4864,7 @@ def _effective_question_issues(presentation):
             issue = {**issue, "severity": "blocking", "status": "open"}
         if issue.get("code") == "manual_completion_required":
             issue = {**issue, "details": {**(issue.get("details") or {}), "required_fields": [
-                field for field in (issue.get("details") or {}).get("required_fields", []) if field in {"stem", "criterion"}]}}
+                field for field in (issue.get("details") or {}).get("required_fields", []) if field in {"number", "type", "stem", "criterion"}]}}
         if issue.get("field") == "answer" or (issue.get("code") == "generation_failed" and issue.get("field") == "programming_tests") or (
             issue.get("code") in {"low_confidence", "recognition_needs_review"}
             and not (issue.get("details") or {}).get("error_code")
@@ -4888,7 +4889,8 @@ def _question_review_blockers(questions) -> list[str]:
                      or _manual_question_fields_missing(question, presentation))):
             issues.append("question_manual_completion_required")
         problem = _serialize_problem(question)
-        if (not str(question.stem or "").strip() or not str(question.criterion or "").strip()
+        if (not str(question.number or "").strip() or not normalize_question_type(question.type)
+                or not str(question.stem or "").strip() or not str(question.criterion or "").strip()
                 or not problem["rubric_point_summary"]["is_valid"]
                 or any(issue.get("severity") == "blocking"
                        and (issue.get("status") == "open"
@@ -4909,7 +4911,7 @@ def _manual_question_fields_missing(question, presentation, patch=None):
     patch = patch or {}
     fields = {field for issue in presentation.get("preparation_issues", [])
               if issue.get("code") == "manual_completion_required"
-              for field in (issue.get("details") or {}).get("required_fields", []) if field in {"stem", "criterion"}}
+              for field in (issue.get("details") or {}).get("required_fields", []) if field in {"number", "type", "stem", "criterion"}}
     for field in fields:
         value = patch.get(field, presentation.get(field) if field == "solution_code" else getattr(question, field, None))
         if not value or (isinstance(value, str) and not value.strip()):
@@ -5311,7 +5313,9 @@ def update_problem(
         presentation["preparation_issues"] = _effective_question_issues(presentation)
         original_problem = _serialize_problem(question)
         repaired_required_content = (
-            not str(question.stem or "").strip()
+            not str(question.number or "").strip()
+            or not normalize_question_type(question.type)
+            or not str(question.stem or "").strip()
             or not original_problem["rubric_point_summary"]["is_valid"]
         )
         manual_markers = [issue for issue in presentation.get("preparation_issues", [])
@@ -5353,7 +5357,7 @@ def update_problem(
         if patch.get("review_status") == "confirmed":
             fields = {"stem", "answer", "rubric", "programming_tests", "source", "max_score"}
             issues = presentation.get("preparation_issues", [])
-            if _manual_question_fields_missing(question, presentation, patch) or not str(patch.get("stem", question.stem) or "").strip() or not str(patch.get("criterion", question.criterion) or "").strip() or any(
+            if not str(patch.get("number", question.number) or "").strip() or not normalize_question_type(patch.get("type", question.type)) or _manual_question_fields_missing(question, presentation, patch) or not str(patch.get("stem", question.stem) or "").strip() or not str(patch.get("criterion", question.criterion) or "").strip() or any(
                 issue.get("status") == "open" and issue.get("severity") == "blocking"
                 for issue in issues
             ):
@@ -5389,9 +5393,9 @@ def update_problem(
                 raise ValidationError("Question number is required.", code="invalid_question_number")
             patch["number"] = number
         if "type" in patch:
-            question_type = str(patch["type"] or "").strip()
-            if not question_type or len(question_type) > 64:
-                raise ValidationError("Question type is required.", code="invalid_question_type")
+            question_type = normalize_question_type(patch["type"])
+            if not question_type:
+                raise ValidationError("Select a supported question type.", code="invalid_question_type")
             patch["type"] = question_type
         if "stem" in patch or "number" in patch:
             structure = build_major_question_structure(

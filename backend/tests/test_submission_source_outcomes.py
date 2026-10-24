@@ -66,7 +66,7 @@ def _seed_task() -> tuple[str, str]:
         task_id,
         teacher_id=owner_id,
         q_id="q1",
-        order_index=0,
+        order_index=0, number="1",
         type="short",
         stem="Question one",
         criterion="Award up to 10 points for the method and result.",

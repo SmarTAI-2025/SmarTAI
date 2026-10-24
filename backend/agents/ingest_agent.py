@@ -102,7 +102,7 @@ async def extract_problems_from_ocr_markdown(
         problem = ProblemInfo(
             q_id=f"q{index}",
             number=number,
-            type="其他",
+            type="",
             stem=stem,
             criterion="",
             max_score=10,

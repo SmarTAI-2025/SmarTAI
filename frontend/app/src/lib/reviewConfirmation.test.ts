@@ -1,11 +1,50 @@
 import { describe, expect, it } from "vitest";
 import { answerReviewBlocked, answerReviewNextBlocked, questionReviewBlocked, questionReviewNextBlocked, questionReviewIssues, questionReviewBlockers, questionReviewConfirmed, questionIssueNeedsReview, recognitionIssueLabel, submissionReviewBlockers, submissionConfirmationBlockers, studentIdentityReviewBlocked } from "./reviewConfirmation";
 import type { Task, ProblemInfo, StudentAnswerInfo, PreparationIssue, StudentSubmission } from "@/types";
+import { questionReviewNotes } from "./reviewConfirmation";
 
 const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id: "q1", number: "1", type: "short", stem: "Question text", criterion: "Scoring rubric", reference_answer: "Reference answer", max_score: 10, ...overrides });
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
+  it.each(["", " ", "unknown"])("requires a real question type without discarding the stem (%s)", type => {
+    const row = question({ type });
+    expect(questionReviewBlocked(row)).toBe(true);
+    expect(questionReviewNextBlocked(row)).toBe(true);
+    expect(questionReviewNotes(row, "zh-CN", code => code)).toContainEqual({ label: "请补齐缺失的题型并确认本题；完成前不能批改。", severity: "blocking" });
+    expect(questionReviewBlocked({ ...row, type: "other" })).toBe(false);
+  });
+
+  it("lists current missing fields and deduplicates failure labels at the strongest severity", () => {
+    const row = question({ type: "", criterion: "", reference_answer: "", preparation_issues: [
+      issue({ code: "generation_failed", field: "rubric", severity: "blocking" }),
+      issue({ issue_id: "answer", code: "generation_failed", field: "answer" }),
+      issue({ issue_id: "manual", code: "manual_completion_required", field: "source", details: { required_fields: ["criterion"] } }),
+    ] });
+    const notes = questionReviewNotes(row, "zh-CN", () => "生成失败");
+    expect(notes).toEqual([
+      { label: "生成失败", severity: "blocking" },
+      { label: "请补齐缺失的题型、评分标准、标答并确认本题；完成前不能批改。", severity: "blocking" },
+    ]);
+    expect(questionReviewNotes(row, "en-US", () => "Generation failed")[1].label).toContain("question type, rubric, reference answer");
+    expect(questionReviewNotes({ ...row, type: "proof" }, "zh-CN", () => "生成失败")[1].label).not.toContain("题型");
+  });
+
+  it("keeps independent advisory warnings and does not make a reference answer mandatory", () => {
+    const row = question({ reference_answer: "", preparation_issues: [issue({ code: "math_rubric_advisory", field: "rubric" })] });
+    expect(questionReviewNextBlocked(row)).toBe(false);
+    const notes = questionReviewNotes(row, "zh-CN", code => code);
+    expect(notes).toHaveLength(2);
+    expect(notes.every(note => note.severity === "advisory")).toBe(true);
+    expect(notes[1].label).toBe("缺少标答，建议补充或核对确认。");
+  });
+
+  it("retains required confirmation after repair even when the optional answer is missing", () => {
+    const row = question({ reference_answer: "", preparation_issues: [issue({ code: "manual_completion_required", field: "source", details: { required_fields: ["type", "criterion"] } })] });
+    expect(questionReviewNotes(row, "zh-CN", code => code)).toContainEqual({ label: "严重问题已修正，请确认本题后继续。", severity: "blocking" });
+    expect(questionReviewBlocked(row)).toBe(false);
+    expect(questionReviewNextBlocked(row)).toBe(true);
+  });
   it("explains conflicting test expectations and requires confirmation before proceeding", () => {
     const marker = issue({ code: "source_conflict", field: "programming_tests", details: { reason: "test_case_output_conflict" } });
     expect(recognitionIssueLabel(marker, "zh-CN")).toContain("同一输入对应了不同预期输出");
@@ -38,7 +77,7 @@ describe("review hard failures", () => {
     expect(answerReviewBlocked({...blank, flag:["recognition_failed"]})).toBe(true);
   });
   it("allows uncertain content and blocks an empty question", () => {
-    expect(questionReviewBlocked({stem:"content", criterion:"Scoring rubric", preparation_issues:[{status:"open", severity:"warning"}]} as ProblemInfo)).toBe(false);
+    expect(questionReviewBlocked({number:"1", type:"concept", stem:"content", criterion:"Scoring rubric", preparation_issues:[{status:"open", severity:"warning"}]} as ProblemInfo)).toBe(false);
     expect(questionReviewBlocked({stem:""} as ProblemInfo)).toBe(true);
   });
   it("routes a source with no student record to recovery and a failed answer to its exact question", () => {

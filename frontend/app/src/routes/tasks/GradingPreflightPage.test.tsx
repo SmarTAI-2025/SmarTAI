@@ -61,7 +61,7 @@ describe("GradingPreflightPage regrade mode", () => {
           q1: {
             q_id: "q1",
             number: "1",
-            type: "short answer",
+            type: "concept",
             stem: "What is six times seven?",
             max_score: 1,
             criterion: "Award one point for the correct answer.",
