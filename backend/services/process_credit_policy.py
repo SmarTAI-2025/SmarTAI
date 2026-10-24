@@ -29,7 +29,9 @@ class ProcessCreditPolicy:
 
     @property
     def uses_rubric_score(self) -> bool:
-        return self.mode == "allowed" or self.result_parts or (self.unresolved and self.mode != "forbidden")
+        # An incomplete parse is not a grant. Its source must be interpreted
+        # explicitly before either model-total or binary settlement is selected.
+        return not self.unresolved and (self.mode == "allowed" or self.result_parts)
 
 
 _WORK = (r"(?:(?:正确|有效|完整|简要)(?:的)?)?"
@@ -43,6 +45,10 @@ _ALLOCATION = re.compile(
     rf"|(?:working|process|reasoning|explanation|method|steps?|each step)"
     rf"\s*(?:is worth|worth|:)?\s*(?P<english_amount>\d+(?:\.\d+)?)\s*{_UNIT}",
     re.I,
+)
+_DISCRETIONARY_ALLOCATION = re.compile(
+    rf"(?:依据|根据){_WORK}(?:的)?(?:完整程度|正确程度|完整性|正确性)"
+    rf"(?:酌情)?(?:给|计|得)\s*{_AMOUNT}",
 )
 _PERMISSION = re.compile(
     rf"(?:按{_WORK}(?:给分|计分|评分)|(?:允许|可以|可)(?:给|计)?{_WORK}分)"
@@ -64,7 +70,8 @@ _WRONG_ZERO = re.compile(
     r"|(?:incorrect|wrong) (?:final )?answers? (?:receive|get|score) 0 (?:points?|marks?)", re.I,
 )
 _CONDITIONAL = re.compile(r"如果|若|除非|否则|仅当|只有|\bif\b|\bunless\b|only when\b", re.I)
-_CORRECT_CONDITION = re.compile(r"(?:如果|若|仅当|只有)(?:最终)?(?:答案|结论|结果)正确")
+_EXCEPTION = re.compile(r"除非|\bunless\b", re.I)
+_CORRECT_CONDITION = re.compile(r"(?:如果|若|仅当|只有)(?:最终)?(?:答案|结论|结果)正确(?:时)?")
 _RESULT_PART = re.compile(
     rf"(?:每(?:个)?空|[一二三四五六七八九十两\d]+(?:个)?空各|第[一二三四五六七八九十\d]+空"
     rf"|each blank|blank \d+)\s*(?:答对|正确)?\s*(?:得|给|计|占|各)?\s*[:：]?\s*"
@@ -86,14 +93,29 @@ _SCORING_LANGUAGE = re.compile(
 
 def _clauses(text: str):
     for sentence in re.split(r"[；;。\n]|(?<!\d)\.(?!\d)", text):
+        if _EXCEPTION.search(sentence):
+            # Unlike a later independent if-rule, an exception may qualify the
+            # preceding prohibition. Keep the entire scope for interpretation.
+            yield sentence.strip(), sentence.strip()
+            continue
         condition = None
         for clause in re.split(r"[，,、]", sentence):
             clause = clause.strip().rstrip(".!！")
             clause = re.sub(r"^(?:\d+[.)]\s+|[（(]\d+[）)]\s*|[①-⑳]\s*|[-*•]\s+)", "", clause)
             clause = re.sub(r"^(?:评分标准|评分规则|评分细则|rubric|scoring rubric)\s*[:：]\s*", "", clause, flags=re.I)
             clause = re.sub(r"^本题\s*", "", clause)
+            clause = re.sub(r"^评分时\s*[:：]?\s*", "", clause)
+            parenthetical = re.fullmatch(r"(.+?)[（(]([^（）()]+)[）)]", clause)
+            if parenthetical and all(_PROHIBITION.fullmatch(part.strip()) for part in parenthetical.groups()):
+                # Two equivalent prohibitions, not an arbitrary parenthetical
+                # qualifier: never strip a condition or a subpart's scope.
+                clause = parenthetical[1].strip()
             if _CONDITIONAL.search(clause):
                 condition = clause
+                if match := _CORRECT_CONDITION.match(clause):
+                    condition, clause = match[0], clause[match.end():].strip()
+            if condition:
+                clause = re.sub(r"^(?:才|则|就)", "", clause)
             # Conditions bind forward, never erase earlier independent rules.
             yield clause, condition
 
@@ -108,7 +130,11 @@ def process_credit_policy(criterion: str) -> ProcessCreditPolicy:
             # final-answer verdict can enforce an explicit correctness condition.
             if _CORRECT_CONDITION.fullmatch(condition) and _ALLOCATION.fullmatch(clause):
                 conditional_process = True
-            elif _WORK_MENTION.search(clause) and re.search(r"\d", clause):
+            elif (re.fullmatch(r"(?:如果|若)教师(?:明确)?要求", condition)
+                  and _PERMISSION.fullmatch(clause)):
+                # A hypothetical future instruction is not an actual allocation.
+                continue
+            elif _WORK_MENTION.search(clause) and _SCORING_LANGUAGE.search(clause):
                 unresolved = True
             continue
         if _WRONG_ZERO.fullmatch(clause):
@@ -119,7 +145,7 @@ def process_credit_policy(criterion: str) -> ProcessCreditPolicy:
             result_parts = True
             # A trailing qualification needs rubric judgment; it must not turn
             # an explicit per-result allocation into whole-question 0/full.
-        elif match := _ALLOCATION.fullmatch(clause):
+        elif match := (_ALLOCATION.fullmatch(clause) or _DISCRETIONARY_ALLOCATION.fullmatch(clause)):
             if float(match["amount"] or match["english_amount"]) > 0:
                 allowed = process_scoring = True
             else:

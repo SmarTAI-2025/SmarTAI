@@ -10,14 +10,16 @@ The default contract is result-based (题目识别与判卷问题记录 §1:
     rubric is silent, all-or-nothing. Any wrongly selected option → 0.
 
 The LLM judges final-answer equivalence for deterministic scoring below. Explicit
-working/result components and unresolved scoring rules retain the rubric's total;
-a ban on process credit does not remove per-blank result marks. ``steps`` is empty.
+working/result components retain the rubric's total; unresolved rules require an
+explicit source interpretation and score breakdown in the same response. A ban on
+process credit does not remove per-blank result marks. ``steps`` is empty.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
-from typing import Optional, TYPE_CHECKING
+from typing import Literal, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
@@ -31,7 +33,7 @@ from backend.skills.base import (
 from backend.models import GradingConfidence, ExpertResult, ProblemInfo, StudentAnswerInfo, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.services.process_credit_policy import ProcessCreditPolicy, process_credit_policy
-from backend.tools.structured_llm import structured_llm_call
+from backend.tools.structured_llm import StructuredOutputInvalidError, structured_llm_call
 from backend.tools import knowledge as kb_tool
 
 if TYPE_CHECKING:
@@ -47,7 +49,7 @@ _BINARY_OBJECTIVE_TYPES = ("选择题", "填空题")
 def _is_result_based_criterion(criterion: str) -> bool:
     """Whether the default answer-only settlement can replace the model score."""
     policy = process_credit_policy(criterion)
-    return not policy.uses_rubric_score and not policy.conditional_process
+    return not policy.unresolved and not policy.uses_rubric_score and not policy.conditional_process
 
 
 def _grading_contract(policy: ProcessCreditPolicy) -> str:
@@ -58,6 +60,20 @@ def _grading_contract(policy: ProcessCreditPolicy) -> str:
         "permission to award it points. Step scores are not reported. "
         '"correct" always means the FINAL answer is correct.\n'
     )
+    if policy.unresolved:
+        return common + (
+            "The source rule is not fully resolved; this is NOT permission for process credit "
+            "and NOT an all-or-nothing rule. In policy_resolution quote the COMPLETE original "
+            "criterion verbatim, including negation, parentheses, conditions and their scope. "
+            "Explicitly interpret process_credit as allowed/forbidden/unspecified; state whether "
+            "a correct final answer is required for ALL process credit and whether its other "
+            "conditions hold for this answer. Identify separate_result_parts only if the source "
+            "allocates independent result components. Explain the applicable rules in rationale. "
+            "Split score into result_score and process_score; their sum must equal score. "
+            "Award no process marks for forbidden/unspecified policy or unmet conditions. "
+            "An incorrect single final answer earns no result marks, but independent correct "
+            "result components may earn their stated marks. Never invent a policy from uncertainty."
+        )
     if policy.mode == "allowed":
         return common + (
             "The rubric explicitly awards working/step/explanation points. Apply its "
@@ -115,6 +131,42 @@ class ObjectiveGradingOutput(BaseModel):
     score: float = Field(ge=0, allow_inf_nan=False, description="Total under the selected grading contract; explicit process allocations and multiple-choice subset marks are distinct.")
     confidence: GradingConfidence = Field(default=0.0, ge=0, le=1, allow_inf_nan=False, description="Grading confidence")
     comment: str = Field(description="Brief feedback to the student")
+
+
+class ObjectivePolicyResolution(BaseModel):
+    """Required source interpretation for a rule the finite parser cannot settle."""
+    criterion_quote: str = Field(min_length=1, description="Complete original criterion, copied verbatim without dropping qualifiers.")
+    process_credit: Literal["allowed", "forbidden", "unspecified"] = Field(description="Teacher policy, not an inference from a nonzero proposed score.")
+    correct_answer_required: bool = Field(description="Whether ALL working credit requires the final answer to be correct.")
+    other_conditions_met: bool = Field(description="Whether the source's other process-credit conditions hold for this answer.")
+    separate_result_parts: bool = Field(description="Independent result/blank allocations in the source; working/explanation is not a result part.")
+    result_score: float = Field(ge=0, allow_inf_nan=False)
+    process_score: float = Field(ge=0, allow_inf_nan=False)
+    rationale: str = Field(min_length=1)
+
+
+class ResolvedObjectiveGradingOutput(ObjectiveGradingOutput):
+    policy_resolution: ObjectivePolicyResolution
+
+
+def _resolved_score(result: ResolvedObjectiveGradingOutput, policy: ProcessCreditPolicy,
+                    criterion: str, maximum: float) -> float:
+    resolution = result.policy_resolution
+    total = resolution.result_score + resolution.process_score
+    if (resolution.criterion_quote != criterion or not resolution.rationale.strip()
+            or total > maximum or abs(total - result.score) > 1e-6):
+        raise StructuredOutputInvalidError("Objective policy resolution lacks consistent source and score evidence.")
+    if policy.all_or_nothing and not result.correct:
+        return 0.0
+    result_score = resolution.result_score if (
+        result.correct or resolution.separate_result_parts or policy.result_parts
+    ) else 0.0
+    process_score = resolution.process_score if (
+        policy.mode != "forbidden" and resolution.process_credit == "allowed"
+        and resolution.other_conditions_met
+        and (result.correct or not (policy.conditional_process or resolution.correct_answer_required))
+    ) else 0.0
+    return result_score + process_score
 
 
 # ─── Prompt template ─────────────────────────────────────────────────────────
@@ -273,6 +325,12 @@ class ObjectiveSkill(GradingSkill):
             prompt = prompt.replace("{problem}", problem.stem)
             prompt = prompt.replace("{answer}", answer.content or "(No answer provided)")
             prompt = prompt.replace("{rubric}", problem.criterion)
+            if policy.unresolved:
+                prompt += (
+                    "\nFor this unresolved rule, the following complete output schema supersedes "
+                    "the example JSON shape above. Include the required policy_resolution:\n"
+                    + json.dumps(ResolvedObjectiveGradingOutput.model_json_schema(), ensure_ascii=False)
+                )
 
             # Step 3: Call LLM
             if self.reporter and active_unit:
@@ -292,11 +350,13 @@ class ObjectiveSkill(GradingSkill):
                     self.provider,
                     system_prompt=system_prompt,
                     user_prompt=prompt,
-                    output_model=ObjectiveGradingOutput,
+                    output_model=ResolvedObjectiveGradingOutput if policy.unresolved else ObjectiveGradingOutput,
                 )
 
                 # Deterministic score: the model judges equivalence, we award.
-                if not policy.uses_rubric_score and not (policy.conditional_process and result.correct):
+                if policy.unresolved:
+                    score = _resolved_score(result, policy, problem.criterion, float(problem.max_score))
+                elif not policy.uses_rubric_score and not (policy.conditional_process and result.correct):
                     score = _objective_score(
                         problem.type,
                         correct=bool(result.correct),
@@ -306,8 +366,8 @@ class ObjectiveSkill(GradingSkill):
                         max_score=problem.max_score,
                     )
                 else:
-                    # Retain component/conditional grading and unresolved source
-                    # rules. A process prohibition alone never forbids result parts.
+                    # Retain explicit component/conditional grading. A process
+                    # prohibition alone never forbids result parts.
                     # Step items are still never emitted.
                     score = max(0.0, min(float(result.score), float(problem.max_score)))
                 confidence = max(0.0, min(result.confidence, 1.0))
