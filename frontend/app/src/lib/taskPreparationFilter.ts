@@ -77,7 +77,7 @@ export function resolveSubmissionQuery(students: StudentSubmission[], questions:
 }
 
 function questionMatches(question: SubmissionQuestion, intent: FilterIntentResult) {
-  return (!intent.question_tokens.length || intent.question_tokens.some((token) => matchesQuestionToken(question.id, question.label, token)))
+  return (!intent.question_tokens.length || intent.question_tokens.some((token) => (token === question.id || matchesQuestionToken(question.qId ?? question.id, question.label, token))))
     && (!intent.question_types?.length || intent.question_types.some((type) => normalizeFilterType(type) === normalizeFilterType(question.type)));
 }
 function answerMatches(state: ReturnType<typeof getAnswerState>, status: FilterIntentResult["submission_status"]) {
@@ -87,7 +87,7 @@ function answerMatches(state: ReturnType<typeof getAnswerState>, status: FilterI
 }
 
 export function selectStudentAnswerQuestions(questions: SubmissionQuestion[], student: StudentSubmission | undefined, intent: FilterIntentResult | null): SubmissionQuestion[] {
-  if (intent?.execution) return groundedRows(questions, intent, "questions", q => q.id);
+  if (intent?.execution) return groundedRows(questions, intent, "questions", q => q.qId ?? q.id);
   if (!intent?.recognized) return questions;
   if (!student || (intent.submission_status === "identity" && student.identity_status !== "needs_review")) return [];
   const answers = answerMap(student);

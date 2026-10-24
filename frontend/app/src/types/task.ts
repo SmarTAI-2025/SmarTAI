@@ -128,6 +128,7 @@ export interface AICompletionProvenance {
 }
 
 export interface StudentAnswerInfo {
+  answer_id?: string;
   recognition_confidence?: number | null;
   q_id: string;
   number: string;

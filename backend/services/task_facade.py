@@ -16,7 +16,7 @@ import math
 import re
 import time
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any
@@ -1008,6 +1008,22 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     }
 
 
+def _serialize_review_answers(answers, statuses, questions=()):
+    duplicates = {q_id for q_id, count in Counter(answer.q_id for answer in answers).items() if count > 1}
+    return [{
+        "answer_id": answer.answer_key or answer.id,
+        "q_id": answer.q_id, "number": answer.number, "type": answer.type, "content": answer.content,
+        "flag": _public_answer_flags(answer.flag, content=answer.content, review_status=statuses.get(answer.id))
+                + (["answer_assignment_conflict"] if answer.q_id in duplicates else []),
+        "recognition_confidence": _answer_recognition_confidence(answer.flag),
+        "review_status": statuses.get(answer.id, "pending"),
+    } for answer in answers] + [{
+        "q_id": question.q_id, "number": question.number, "type": question.type,
+        "content": "", "flag": ["recognition_manual_pending", "recognition_failed"],
+        "recognition_confidence": None, "review_status": "pending",
+    } for question in questions if not duplicates and question.q_id not in {answer.q_id for answer in answers}]
+
+
 def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[str, dict]:
     questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
     presentations = workflow_repository.list_student_presentations(task_id)
@@ -1040,21 +1056,7 @@ def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[st
         output[display_id] = {
             "stu_id": display_id,
             "stu_name": presentation.display_name if presentation else submission.student_id,
-            "stu_ans": [
-                {
-                    "q_id": answer.q_id,
-                    "number": answer.number,
-                    "type": answer.type,
-                    "content": answer.content,
-                    "flag": _public_answer_flags(answer.flag, content=answer.content),
-                    "recognition_confidence": _answer_recognition_confidence(answer.flag),
-                    "review_status": review_statuses.get(answer.id, "pending"),
-                }
-                for answer in revision.answers
-            ] + [{"q_id": question.q_id, "number": question.number, "type": question.type,
-                  "content": "", "flag": ["recognition_manual_pending", "recognition_failed"],
-                  "recognition_confidence": None, "review_status": "pending"}
-                 for question in questions if question.q_id not in {answer.q_id for answer in revision.answers}],
+            "stu_ans": _serialize_review_answers(revision.answers, review_statuses, questions),
             "source_filename": (
                 presentation.source_filename if presentation else revision.file_name
             ),
@@ -4240,6 +4242,7 @@ def _commit_imported_submissions(
             )
 
         for student in students:
+            submission_repository.require_unique_questions(student.get("stu_ans", []))
             source_id = str(student.get("source_id") or "").strip() or None
             if source_id is not None:
                 if operation is None or expected_operation_attempt is None:
@@ -4765,12 +4768,18 @@ def grading_readiness(
             if revision is None or not revision.answers:
                 issues.append("answers_required")
             elif revision is not None:
+                if len({answer.q_id for answer in revision.answers}) != len(revision.answers):
+                    issues.append("submission_recognition_blocked")
+                answer_reviews = workflow_repository.answer_review_statuses([answer.id for answer in revision.answers])
                 if {question.q_id for question in questions} - {answer.q_id for answer in revision.answers}:
                     issues.append("submission_recognition_blocked")
                 recognition_review_ids.extend(answer.id for answer in revision.answers
                                               if confidence_needs_attention(_answer_recognition_confidence(answer.flag)))
                 for answer in revision.answers:
-                    if _answer_recognition_failures(answer.flag):
+                    if _answer_recognition_failures(answer.flag) and not (
+                        answer_reviews.get(answer.id) == "confirmed"
+                        and _answer_matching_confirmation_allowed(answer.flag, answer.content)
+                    ):
                         issues.append("submission_recognition_blocked")
                     if _REQUIRED_ANSWER_CONFIRMATION_FLAGS.intersection(answer.flag or []):
                         repaired_answer_ids.append(answer.id)
@@ -4828,6 +4837,16 @@ def _answer_recognition_confidence(flags):
     return None
 
 
+def _answer_matching_confirmation_allowed(flags, content):
+    """Only a complete transcription with a matching doubt can be confirmed as-is."""
+    flags = list(flags or [])
+    return bool(str(content or "").strip() and "recognition_manual_pending" in flags
+        and not any(flag in {"recognition_failed", "parse_failed", "no_matching_answer",
+                             "recognition_incomplete", "recognition_paused", "provider_submit_uncertain"}
+                    or flag.startswith(("recognition_failed_pages:", "recognition_unprocessed_pages:",
+                                        "recognition_invalid_fields:")) for flag in flags))
+
+
 def _metadata_only_recognition_fields(flags, content):
     """A teacher may confirm verified text when only bounded metadata failed."""
     flags = list(flags or [])
@@ -4843,15 +4862,20 @@ def _metadata_only_recognition_fields(flags, content):
     return fields
 
 
-def _public_answer_flags(flags, *, content=None):
+def _public_answer_flags(flags, *, content=None, review_status=None):
     # Existing clients understand recognition_failed. Preserve the precise
     # source evidence too; projecting it must not mutate the stored answer.
     result = [flag for flag in flags or []
               if not flag.startswith(("recognition_confidence:", "answer_recognition_confidence:"))
-              and flag not in {"recognition_metadata_review", "recognition_low_confidence", "recognition_very_low_confidence",
+              and flag not in {"recognition_matching_review", "answer_assignment_conflict", "recognition_metadata_review", "recognition_low_confidence", "recognition_very_low_confidence",
                                "low_confidence", "very_low_confidence", "recognition_needs_review"}]
     if _metadata_only_recognition_fields(flags, content):
         result.append("recognition_metadata_review")
+    if _answer_matching_confirmation_allowed(flags, content):
+        if review_status == "confirmed":
+            result = [flag for flag in result if flag != "recognition_manual_pending"]
+        else:
+            result.append("recognition_matching_review")
     if _answer_recognition_failures(result) and "recognition_failed" not in result:
         result.append("recognition_failed")
     return result
@@ -5497,6 +5521,8 @@ def update_student_answer(
     *, task_id: str, owner_id: str, display_student_id: str,
     q_id: str, patch: dict, expected_revision: int | None,
 ) -> dict:
+    if (patch.get("answer_id") or patch.get("target_q_id")) and expected_revision is None:
+        raise ValidationError("The saved workflow revision is required.", code="stale_revision")
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
     )
@@ -5551,19 +5577,28 @@ def update_student_answer(
             .where(SubmissionAnswerRecord.revision_id == current_revision.id)
             .order_by(SubmissionAnswerRecord.id)
         ).all()
-        target = next((answer for answer in answer_rows if answer.q_id == q_id), None)
+        candidates = [answer for answer in answer_rows if
+                      (answer.answer_key == patch["answer_id"] if patch.get("answer_id") else answer.q_id == q_id)]
+        if len(candidates) > 1:
+            raise ValidationError("Select the individual answer to edit.", code="answer_assignment_conflict")
+        target = candidates[0] if candidates else None
+        if patch.get("answer_id") and (target is None or target.q_id != q_id):
+            raise NotFound("answer")
+        target_q_id = patch.get("target_q_id") or q_id
         question = session.scalar(select(AssignmentQuestionRecord).where(
             assignment_repository.active_question_clause(),
             AssignmentQuestionRecord.assignment_id == task_id,
-            AssignmentQuestionRecord.q_id == q_id,
+            AssignmentQuestionRecord.q_id == target_q_id,
         ))
         if question is None:
             raise NotFound("answer")
         missing_target = target is None
         if missing_target:
+            if patch.get("target_q_id"):
+                raise NotFound("answer")
             # Historical imports may predate placeholders. Only the explicit
             # teacher edit below persists this missing known question.
-            target = SubmissionAnswerRecord(id=f"pending-{question.id}", question_id=question.id,
+            target = SubmissionAnswerRecord(id=f"pending-{question.id}", answer_key=f"answer_{uuid.uuid4().hex}", question_id=question.id,
                 q_id=q_id, number=question.number, type=question.type, content="",
                 flag=["recognition_manual_pending"])
             answer_rows.append(target)
@@ -5572,6 +5607,16 @@ def update_student_answer(
         # grading generation and analysis intact when the recognized text/flags
         # did not change (including an unchanged save from the editor).
         content_changed = patch.get("content") is not None and patch["content"] != target.content
+        assignment_changed = target_q_id != target.q_id
+        assignment_conflict = any(answer is not target and answer.q_id == target_q_id for answer in answer_rows)
+        if patch.get("review_status") == "confirmed" and assignment_conflict:
+            if patch.get("content") is None:
+                raise ValidationError("Resolve duplicate question assignments before confirming.", code="answer_assignment_conflict")
+            # Keep independent text edits, but a conflicting assignment remains
+            # unconfirmed and cannot enter grading.
+            patch = {**patch, "review_status": "pending"}
+        matching_confirmation = (patch.get("review_status") == "confirmed"
+                                 and _answer_matching_confirmation_allowed(target.flag, target.content))
         failed_flags = _FAILED_ANSWER_REVIEW_FLAGS | _answer_recognition_failures(target.flag)
         original_failures = _answer_recognition_failures(target.flag)
         metadata_fields = (_metadata_only_recognition_fields(target.flag, target.content)
@@ -5587,6 +5632,10 @@ def update_student_answer(
             # Confirm metadata without rewriting already verified student work.
             repaired_flags = failed_flags | {"recognition_metadata_review"}
             patch = {**patch, "flag": [flag for flag in target.flag or [] if flag not in repaired_flags]}
+        elif matching_confirmation and not content_changed:
+            # Confirmation acknowledges the saved evidence; projected browser
+            # flags must not become new raw failures on an unchanged save.
+            patch = {key: value for key, value in patch.items() if key != "flag"}
         elif manual_blank or (content_changed and str(patch.get("content") or "").strip()
                 and str(patch["content"]).strip() != str(target.content or "").strip()):
             # A teacher's replacement text repairs recognition failures while
@@ -5611,12 +5660,12 @@ def update_student_answer(
             patch = {**patch, "flag": [*_public_answer_flags(patch["flag"]),
                                        *[flag for flag in target.flag or [] if flag.startswith("answer_recognition_confidence:")]]}
         flags_changed = patch.get("flag") is not None and list(patch["flag"]) != list(target.flag or [])
-        if patch.get("review_status") == "confirmed" and any(
+        if patch.get("review_status") == "confirmed" and not matching_confirmation and any(
             flag in failed_flags
             for flag in (patch.get("flag", target.flag) or [])
         ):
             raise ValidationError("Retry or correct the failed recognition before confirming.", code="answer_review_blocked")
-        if not missing_target and not content_changed and not flags_changed and patch.get("review_status") is not None:
+        if not missing_target and not assignment_changed and not assignment_conflict and not content_changed and not flags_changed and patch.get("review_status") is not None:
             review = session.get(
                 workflow_repository.SubmissionAnswerPresentationRecord, target.id
             )
@@ -5631,8 +5680,9 @@ def update_student_answer(
             return {
                 "status": "ok", "stu_id": display_student_id, "q_id": q_id,
                 "answer": {
+                    "answer_id": target.answer_key,
                     "q_id": target.q_id, "number": target.number, "type": target.type,
-                    "content": target.content, "flag": _public_answer_flags(target.flag, content=target.content),
+                    "content": target.content, "flag": _public_answer_flags(target.flag, content=target.content, review_status=review.review_status),
                     "recognition_confidence": _answer_recognition_confidence(target.flag),
                     "review_status": review.review_status,
                 },
@@ -5675,9 +5725,10 @@ def update_student_answer(
                 )
             ).all()
         } if old_answer_ids else {}
-        target_answer_id: str | None = None
+        updated_answers = []
+        updated_statuses = {}
         for answer in answer_rows:
-            is_target = answer.q_id == q_id
+            is_target = answer is target
             content = (
                 patch["content"]
                 if is_target and patch.get("content") is not None
@@ -5688,41 +5739,36 @@ def update_student_answer(
                 if is_target and patch.get("flag") is not None
                 else answer.flag
             )
-            number = question.number if is_target and "number" in metadata_fields else answer.number
-            answer_type = question.type if is_target and "type" in metadata_fields else answer.type
+            if is_target and assignment_changed and _answer_matching_confirmation_allowed(flags, content):
+                flags = [flag for flag in flags if flag != "recognition_manual_pending"]
+            number = question.number if is_target and (assignment_changed or "number" in metadata_fields) else answer.number
+            answer_type = question.type if is_target and (assignment_changed or "type" in metadata_fields) else answer.type
             answer_id = f"ans_{uuid.uuid4().hex[:12]}"
-            session.add(SubmissionAnswerRecord(
+            updated_answer = SubmissionAnswerRecord(
                 id=answer_id,
+                answer_key=answer.answer_key,
                 revision_id=new_revision.id,
-                question_id=answer.question_id,
-                q_id=answer.q_id,
+                question_id=question.id if is_target else answer.question_id,
+                q_id=target_q_id if is_target else answer.q_id,
                 number=number,
                 type=answer_type,
                 content=content,
                 flag=list(flags or []),
                 created_at=now,
-            ))
+            )
+            session.add(updated_answer)
+            updated_answers.append(updated_answer)
             if is_target:
-                target_answer_id = answer_id
-                target_payload = {
-                    "q_id": answer.q_id,
-                    "number": number,
-                    "type": answer_type,
-                    "content": content,
-                    "flag": _public_answer_flags(flags, content=content),
-                    "recognition_confidence": _answer_recognition_confidence(flags),
-                    "review_status": patch.get("review_status") or "pending",
-                }
                 next_review_status = str(patch.get("review_status") or "pending")
             else:
                 next_review_status = carried_review_statuses.get(answer.id)
             if next_review_status is not None:
+                updated_statuses[answer_id] = next_review_status
                 session.add(workflow_repository.SubmissionAnswerPresentationRecord(
                     answer_id=answer_id,
                     review_status=next_review_status,
                     updated_at=now,
                 ))
-        assert target_answer_id is not None and target_payload is not None
         submission.current_revision_id = new_revision.id
         submission.updated_at = now
 
@@ -5740,9 +5786,14 @@ def update_student_answer(
         workflow_row.updated_at = now
         session.flush()
         workflow_revision = workflow_row.workflow_revision
+        questions = session.scalars(select(AssignmentQuestionRecord).where(
+            assignment_repository.active_question_clause(), AssignmentQuestionRecord.assignment_id == task_id)).all()
+        answer_payloads = _serialize_review_answers(updated_answers, updated_statuses, questions)
+        target_payload = next(answer for answer in answer_payloads if answer.get("answer_id") == target.answer_key)
     return {
         "status": "ok", "stu_id": display_student_id, "q_id": q_id,
         "answer": target_payload, "workflow_revision": workflow_revision,
+        "answers": answer_payloads,
     }
 
 
@@ -6010,17 +6061,7 @@ def _run_snapshot_payload(*, task_id: str, owner_id: str, run_id: str) -> dict:
                     if presentation else frozen.student_id
                 )
             ),
-            "stu_ans": [
-                {
-                    "q_id": answer.q_id,
-                    "number": answer.number,
-                    "type": answer.type,
-                    "content": answer.content,
-                    "flag": list(answer.flag or []),
-                    "review_status": answer_statuses.get(answer.id, "pending"),
-                }
-                for answer in revision.answers
-            ],
+            "stu_ans": _serialize_review_answers(revision.answers, answer_statuses),
             "source_filename": (
                 frozen_presentation.get("source_filename")
                 if frozen_presentation is not None

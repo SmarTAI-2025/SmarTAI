@@ -56,6 +56,7 @@ import { confirmSubmissionBatch } from "@/lib/submissionReviewBatch";
 import {
   answerMap,
   buildSubmissionQuestions,
+  buildStudentAnswerQuestions,
   getAnswerState,
   formatSubmissionFlag,
   type SubmissionAnswerState,
@@ -107,6 +108,7 @@ function StudentAnswerReviewForm() {
   const [editingQuestionIds, setEditingQuestionIds] = useState<Set<string>>(new Set());
   const [savingQuestionId, setSavingQuestionId] = useState<string | null>(null);
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
+  const [assignmentDirtyIds, setAssignmentDirtyIds] = useState<Set<string>>(new Set());
   const requestedQuestionId = searchParams.get("question") ?? "";
   const [activeQuestionId, setActiveQuestionId] = useState(requestedQuestionId);
   const identityHydrated = useRef(false);
@@ -130,9 +132,9 @@ function StudentAnswerReviewForm() {
     () => Object.values(taskQuery.data?.student_data ?? {}).sort(compareStudents),
     [taskQuery.data?.student_data],
   );
-  const questions = useMemo(
-    () => buildSubmissionQuestions(Object.values(taskQuery.data?.problem_data ?? {}), students),
-    [students, taskQuery.data?.problem_data],
+  const questionOptions = useMemo(
+    () => buildSubmissionQuestions(Object.values(taskQuery.data?.problem_data ?? {}), []),
+    [taskQuery.data?.problem_data],
   );
   const student = useMemo(
     // The mutation rekeys the cache before draft cleanup and URL replacement finish.
@@ -140,6 +142,7 @@ function StudentAnswerReviewForm() {
     () => identitySavingStudent ?? students.find((candidate) => candidate.stu_id === studentId),
     [identitySavingStudent, studentId, students],
   );
+  const questions = useMemo(() => buildStudentAnswerQuestions(questionOptions, student), [questionOptions, student]);
   const answers = useMemo(() => student ? answerMap(student) : new Map(), [student]);
   const smartFilter = useTaskFilterIntent({
     taskId, surface: "student_answer_review", queryParam: "questionFilter", contextKey: studentId,
@@ -235,7 +238,7 @@ function StudentAnswerReviewForm() {
 
   useEffect(() => {
     if (!filteredQuestions.length) return;
-    const requested = filteredQuestions.find((question) => question.id === requestedQuestionId) ?? filteredQuestions[0];
+    const requested = filteredQuestions.find((question) => (question.id === requestedQuestionId || question.qId === requestedQuestionId)) ?? filteredQuestions[0];
     // Repeat issue navigation must reposition even when its URL is unchanged.
     const routeKey = `${location.key}:${studentId ?? ""}:${requestedQuestionId}:${questionFilterParam}`;
     if (positionedRouteRef.current === routeKey) return;
@@ -247,7 +250,7 @@ function StudentAnswerReviewForm() {
         if (resetScrollForStudentRef.current === studentId) {
           resetScrollForStudentRef.current = null;
           window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-        } else if (requestedQuestionId && requested.id === requestedQuestionId) scrollQuestionIntoView(requested.id, "auto");
+        } else if (requestedQuestionId && (requested.id === requestedQuestionId || requested.qId === requestedQuestionId)) scrollQuestionIntoView(requested.id, "auto");
         else window.scrollTo({ top: 0, left: 0, behavior: "auto" });
       });
     });
@@ -332,10 +335,8 @@ function StudentAnswerReviewForm() {
   function confirmLeave() { return true; }
 
   function goToStudent(target: StudentSubmission | null) {
-    const selectedQuestionStillVisible = filteredQuestions.some((question) => question.id === selectedQuestionRef.current);
-    const anchorQuestionId = selectedQuestionStillVisible
-      ? selectedQuestionRef.current
-      : activeQuestion?.id || requestedQuestionId;
+    const selectedQuestion = filteredQuestions.find((question) => question.id === selectedQuestionRef.current) ?? activeQuestion;
+    const anchorQuestionId = selectedQuestion?.qId ?? selectedQuestion?.id ?? requestedQuestionId;
     if (!target || !taskId || !anchorQuestionId || !confirmLeave()) return;
     const nextSearch = new URLSearchParams(searchParams);
     nextSearch.delete("studentFilter");
@@ -369,6 +370,7 @@ function StudentAnswerReviewForm() {
 
   async function saveAnswer(question: SubmissionQuestion, moveNext: boolean) {
     if (!taskId || !student || !taskQuery.data || readOnly || mutationLock.current) return;
+    if (assignmentDirtyIds.has(question.id)) { setBatchMessage(tx(locale, "请先保存题号。", "Save the question number first.")); return; }
     const draft = drafts[question.id];
     if (!draft) return;
     const answer = answers.get(question.id);
@@ -382,13 +384,13 @@ function StudentAnswerReviewForm() {
       return next;
     });
     try {
-      await answerMutation.mutateAsync({
+      const result = await answerMutation.mutateAsync({
         taskId,
         studentId: student.stu_id,
-        qId: question.id,
+        qId: question.qId ?? question.id, answerId: answers.get(question.id)?.answer_id,
         expectedWorkflowRevision: taskQuery.data.workflow_revision,
         content: confirmBlank ? "" : draft.content,
-        ...(confirmBlank ? { flag: [...(student.stu_ans.find(answer => answer.q_id === question.id)?.flag ?? []), "manual_blank_confirmed"] } : {}),
+        ...(confirmBlank ? { flag: [...(answer?.flag ?? []), "manual_blank_confirmed"] } : {}),
         reviewStatus: "confirmed",
       });
       if (!mounted.current) return;
@@ -399,6 +401,7 @@ function StudentAnswerReviewForm() {
         return nextIds;
       });
       toast.success(t("answerReviewSaved"));
+      if (result.answer.flag?.includes("answer_assignment_conflict")) showAssignmentConflicts(result.answers ?? [], answer?.q_id ?? question.qId ?? question.id, answer?.answer_id);
       if (moveNext) {
         const index = filteredQuestions.findIndex((candidate) => candidate.id === question.id);
         const next = index >= 0 ? filteredQuestions[index + 1] : null;
@@ -412,14 +415,40 @@ function StudentAnswerReviewForm() {
     }
   }
 
+  async function saveAssignment(question: SubmissionQuestion, targetQId: string) {
+    if (!taskId || !student || !taskQuery.data || readOnly || mutationLock.current) throw new Error("busy");
+    const answer = answers.get(question.id);
+    if (!answer?.answer_id) throw new Error("answer_missing");
+    mutationLock.current = true;
+    setSavingQuestionId(question.id);
+    try {
+      const result = await answerMutation.mutateAsync({ taskId, studentId: student.stu_id,
+        qId: answer.q_id, answerId: answer.answer_id, targetQId,
+        expectedWorkflowRevision: taskQuery.data.workflow_revision });
+      if (!mounted.current) return;
+      showAssignmentConflicts(result.answers ?? [], targetQId, answer.answer_id);
+      toast.success(t("answerReviewSaved"));
+    } finally {
+      mutationLock.current = false;
+      setSavingQuestionId(null);
+    }
+  }
+
+  function showAssignmentConflicts(updatedAnswers: StudentAnswerInfo[], targetQId: string, answerId?: string) {
+    setBlocked(updatedAnswers.filter(other => other.q_id === targetQId && other.answer_id !== answerId).map(other => ({
+      label: `${other.number} · ${tx(locale, "同一题号有多份作答，请更正题号", "Multiple answers use this question; correct the question number")}`,
+      href: `${studentPath(taskId ?? "", student?.stu_id ?? "")}?question=${encodeURIComponent(other.answer_id ?? other.q_id)}`,
+    })));
+  }
+
   async function confirmAnswer(question: SubmissionQuestion) {
     const answer = answers.get(question.id);
-    const confirmBlank = answerReviewBlocked(answer) && !answer?.content?.trim();
+    const confirmBlank = answerReviewBlocked(answer) && !answer?.flag?.includes("answer_assignment_conflict") && !answer?.content?.trim();
     if (answerReviewBlocked(answer) && !confirmBlank) {
       setBlocked([{ label: tx(locale, "请先修正本题识别结果，再确认。", "Correct this transcription before confirming."), href: `${studentPath(taskId ?? "", student?.stu_id ?? "")}?question=${encodeURIComponent(question.id)}` }]);
       return;
     }
-    if (dirtyQuestionIds.has(question.id)) { setBatchMessage(tx(locale, "请先保存修改。", "Save your changes first.")); return; }
+    if (dirtyQuestionIds.has(question.id) || assignmentDirtyIds.has(question.id)) { setBatchMessage(tx(locale, "请先保存修改。", "Save your changes first.")); return; }
     if (!taskId || !student || !taskQuery.data || mutationLock.current) return;
     if (answerDrafts.current.get(question.id)?.conflict) return;
     mutationLock.current = true;
@@ -433,7 +462,7 @@ function StudentAnswerReviewForm() {
       await answerMutation.mutateAsync({
         taskId,
         studentId: student.stu_id,
-        qId: question.id,
+        qId: question.qId ?? question.id, answerId: answers.get(question.id)?.answer_id,
         expectedWorkflowRevision: taskQuery.data.workflow_revision,
         ...(confirmBlank ? { content: "", flag: [...(answer?.flag ?? []), "manual_blank_confirmed"] } : {}),
         reviewStatus: "confirmed",
@@ -457,9 +486,9 @@ function StudentAnswerReviewForm() {
       setBatchMessage(tx(locale, "请先保存正在修改的姓名与学号，再全部确认。", "Save the edited name and ID before confirming all."));
       return;
     }
-    if (dirtyQuestionIds.size) {
+    if (dirtyQuestionIds.size || assignmentDirtyIds.size) {
       setBatchMessage(tx(locale, "请先保存正在修改的作答，再确认全部复核。", "Save your edited answers before confirming all responses."));
-      scrollToQuestion([...dirtyQuestionIds][0]);
+      scrollToQuestion([...dirtyQuestionIds, ...assignmentDirtyIds][0]);
       return;
     }
     mutationLock.current = true;
@@ -469,7 +498,7 @@ function StudentAnswerReviewForm() {
     setBatchMessage(null);
     try {
       const result = await confirmSubmissionBatch(pendingReviews, taskQuery.data.workflow_revision, (question, revision) => question
-        ? answerMutation.mutateAsync({ taskId, studentId: student.stu_id, qId: question.id, expectedWorkflowRevision: revision, reviewStatus: "confirmed" })
+        ? answerMutation.mutateAsync({ taskId, studentId: student.stu_id, qId: question.qId ?? question.id, answerId: answers.get(question.id)?.answer_id, expectedWorkflowRevision: revision, reviewStatus: "confirmed" })
         : identityMutation.mutateAsync({ taskId, currentStudentId: student.stu_id, studentId: student.stu_id, studentName: student.stu_name, expectedWorkflowRevision: revision }),
       setBatchProgress);
       if (!mounted.current || !identityDraft.isCurrent()) return;
@@ -803,6 +832,15 @@ function StudentAnswerReviewForm() {
                 {filteredQuestions.map((question, index) => (
                   <AnswerReviewCard
                     key={question.id}
+                    assignmentControl={answers.get(question.id)?.answer_id ? <AnswerAssignmentField
+                      scope={`answer-question:${taskId}:${studentId}:${question.id}`}
+                      value={answers.get(question.id)!.q_id} options={questionOptions} locale={locale}
+                      readOnly={readOnly} saving={mutationBusy}
+                      onDirtyChange={dirty => setAssignmentDirtyIds(current => {
+                        if (current.has(question.id) === dirty) return current;
+                        const next = new Set(current); if (dirty) next.add(question.id); else next.delete(question.id); return next;
+                      })}
+                      onSave={value => saveAssignment(question, value)} /> : null}
                     question={question}
                     answer={answers.get(question.id)}
                     draft={drafts[question.id] ?? { content: "" }}
@@ -970,7 +1008,39 @@ function SmartPicker({ label, placeholder, query, matches, currentId, filter, ta
   );
 }
 
-function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, next, dirty, saving, saveError, editing, readOnly, onDraftChange, onSave, onEdit, onCancel, onConfirm, onNavigate, locale, t }: {
+function AnswerAssignmentField({ scope, value, options, locale, readOnly, saving, onDirtyChange, onSave }: {
+  scope: string; value: string; options: SubmissionQuestion[]; locale: Locale; readOnly: boolean; saving: boolean;
+  onDirtyChange: (dirty: boolean) => void; onSave: (value: string) => Promise<void>;
+}) {
+  const [selected, setSelected] = useState(value);
+  const [error, setError] = useState(false);
+  const draft = useDraftProtection({ scope, value: { selected }, baseline: { selected: value }, version: value,
+    enabled: !readOnly, busy: saving, onRestore: restored => setSelected(restored.selected) });
+  useEffect(() => { onDirtyChange(selected !== value); }, [selected, value]);
+  async function save() {
+    setError(false);
+    try { await draft.runFormal(() => onSave(selected), { selected }); }
+    catch { setError(true); }
+  }
+  return <section className="mb-5 space-y-3">
+    <h3 className="text-sm font-semibold text-foreground">{tx(locale, "题号", "Question number")}</h3>
+    <select value={selected} onChange={event => setSelected(event.target.value)} disabled={readOnly || saving}
+      aria-label={tx(locale, "题号", "Question number")}
+      className="h-[50px] w-full rounded-[8px] border bg-background px-4 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15">
+      {options.map(question => <option key={question.id} value={question.id}>{question.label}</option>)}
+    </select>
+    {!readOnly ? <div className="flex items-center justify-end gap-3">
+      {error ? <p role="alert" className="text-xs text-danger">{tx(locale, "保存失败，请重试。", "Save failed. Try again.")}</p> : null}
+      <button type="button" disabled={saving || draft.formalPending || Boolean(draft.conflict) || selected === value || !options.some(question => question.id === selected)} onClick={() => void save()}
+        className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-45">
+        {saving ? <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存", "Save")}
+      </button>
+    </div> : null}
+  </section>;
+}
+
+function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, next, dirty, saving, saveError, editing, readOnly, onDraftChange, onSave, onEdit, onCancel, onConfirm, onNavigate, locale, t, assignmentControl }: {
+  assignmentControl?: ReactNode;
   question: SubmissionQuestion;
   answer?: StudentAnswerInfo;
   draft: AnswerDraft;
@@ -1018,6 +1088,7 @@ function AnswerReviewCard({ question, answer, draft, sourceFilename, previous, n
       </header>
 
       <div className="p-5">
+        {assignmentControl}
         <section>
           <h3 className="text-sm font-semibold text-foreground">{t("answerReviewQuestionContextTitle")}</h3>
           <div className="mt-3 min-h-[72px] rounded-[8px] bg-slate-50 px-4 py-3 dark:bg-slate-900/45">

@@ -9,6 +9,7 @@ export type SubmissionReviewSort = "student_id" | "student_name" | "attention";
 
 export interface SubmissionQuestion {
   id: string;
+  qId?: string;
   label: string;
   type: string;
   stem: string;
@@ -50,6 +51,8 @@ export function formatSubmissionFlag(flag: string, locale: Locale): string {
       : `Review needed: ${names.join(", ") || "some recognition details"}`;
   }
   const labels: Record<string, [string, string]> = {
+    answer_assignment_conflict: ["同一题号有多份作答，请更正题号", "Multiple answers use this question; correct the assignment"],
+    recognition_matching_review: ["请对照原件核对作答归属与原文，正确后确认", "Check the question assignment and transcription against the original, then confirm"],
     recognition_needs_review: ["识别结果需对照原件核对", "Check transcription against the original"],
     external_annotation_present: ["原件含外部批注，不属于学生作答", "External annotations are not student answers"],
     authorship_uncertain: ["部分笔迹归属不明，需核对", "Some writing has uncertain authorship"],
@@ -219,7 +222,21 @@ export function selectSubmissionReview(
 }
 
 export function answerMap(student: StudentSubmission): Map<string, StudentAnswerInfo> {
-  return new Map((student.stu_ans ?? []).map((answer) => [answer.q_id, answer]));
+  const result = new Map<string, StudentAnswerInfo>();
+  for (const answer of student.stu_ans ?? []) {
+    if (!result.has(answer.q_id)) result.set(answer.q_id, answer);
+    if (answer.answer_id) result.set(answer.answer_id, answer);
+  }
+  return result;
+}
+
+export function buildStudentAnswerQuestions(questions: SubmissionQuestion[], student?: StudentSubmission): SubmissionQuestion[] {
+  if (!student) return questions;
+  const hasDuplicates = new Set(student.stu_ans.map(answer => answer.q_id)).size < student.stu_ans.length;
+  return questions.flatMap(question => {
+    const answers = student.stu_ans.filter(answer => answer.q_id === question.id);
+    return answers.length ? answers.map(answer => ({ ...question, id: answer.answer_id ?? question.id, qId: question.id })) : hasDuplicates ? [] : [question];
+  });
 }
 
 export function studentNeedsAttention(student: StudentSubmission, questions: SubmissionQuestion[]): boolean {
@@ -287,12 +304,13 @@ export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale:
   if (!answer || (answer.review_status === "confirmed" && !answerReviewBlocked(answer))) return [];
   const confidence = confidenceValue(answer.recognition_confidence);
   const metadataOnly = answerMetadataConfirmationAllowed(answer);
+  const matchingOnly = answer.flag?.includes("recognition_matching_review");
   const flags = (answer.flag ?? []).filter(flag => !["manual_blank_confirmed", "recognition_needs_review", "recognition_metadata_review", "ocr_only_structure_requires_teacher_review",
     "recognition_very_low_confidence", "very_low_confidence", "recognition_low_confidence", "low_confidence"].includes(flag)
     && !flag.startsWith("recognition_confidence:") && !flag.startsWith("answer_recognition_confidence:")
     && !flag.startsWith("recognition_failed_pages:") && !flag.startsWith("recognition_unprocessed_pages:")
-    && !(metadataOnly && ["recognition_failed", "recognition_manual_pending"].includes(flag)));
-  const required = new Set(["recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending", "recognition_paused", "recognition_incomplete", "recognition_repaired_needs_confirmation"]);
+    && !((metadataOnly || matchingOnly) && ["recognition_failed", "recognition_manual_pending"].includes(flag)));
+  const required = new Set(["answer_assignment_conflict", "recognition_matching_review", "recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending", "recognition_paused", "recognition_incomplete", "recognition_repaired_needs_confirmation"]);
   return [
     ...(confidenceNeedsAttention(confidence) ? [{ label: locale === "zh-CN" ? `置信度 ${confidence} 较低，建议核对确认。` : `Low confidence (${confidence}); review suggested.`, severity: "advisory" as const }] : []),
     ...[...new Set(flags)].map(flag => ({ label: formatSubmissionFlag(flag, locale), severity: required.has(flag) || flag.startsWith("recognition_invalid_fields:") ? "blocking" as const : "advisory" as const })),

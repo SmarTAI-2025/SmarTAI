@@ -377,3 +377,14 @@ async def test_model_matching_uncertainty_survives_type_repair_and_saved_grading
     blocked = task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
     assert ('submission_recognition_blocked' in blocked) is review
     assert answers['q2']['content'] == 'Verified sibling.' and not answers['q2']['flag']
+    if review:
+        # The real model/format-repair/save path must have an unchanged-text
+        # teacher exit, while retaining the source evidence in storage.
+        task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id='S1', q_id='q1',
+            patch={'answer_id': answers['q1']['answer_id'], 'content': answers['q1']['content'], 'review_status': 'confirmed'},
+            expected_revision=after['workflow_revision'])
+        reopened = task_facade.get_task(task_id=task, owner_id=owner)
+        confirmed = next(a for a in reopened['student_data']['S1']['stu_ans'] if a['q_id'] == 'q1')
+        assert confirmed['content'] == answers['q1']['content'] and confirmed['review_status'] == 'confirmed'
+        assert 'submission_recognition_blocked' not in task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
+        assert calls == [['q1', 'q2'], ['q1']]

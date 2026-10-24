@@ -314,8 +314,8 @@ export function updateStudentAnswer(
   taskId: string,
   studentId: string,
   qId: string,
-  patch: Pick<Partial<StudentAnswerInfo>, "content" | "flag" | "review_status"> & { expected_workflow_revision?: number },
-): Promise<{ status: "ok"; stu_id: string; q_id: string; answer: StudentAnswerInfo; workflow_revision: number }> {
+  patch: Pick<Partial<StudentAnswerInfo>, "content" | "flag" | "review_status" | "answer_id"> & { expected_workflow_revision?: number; target_q_id?: string },
+): Promise<{ status: "ok"; stu_id: string; q_id: string; answer: StudentAnswerInfo; answers?: StudentAnswerInfo[]; workflow_revision: number }> {
   return putJSON(`/tasks/${taskId}/students/${studentId}/answers/${qId}`, patch);
 }
 
