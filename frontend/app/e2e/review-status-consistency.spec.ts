@@ -22,7 +22,7 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
     }, locale);
     const sharedRule = zh ? "本轮统一按首次错误扣分，后续正确推导保留过程分。\n方法正确得 3 分；完成关键推导时至少得 2 分。" : "Deduct for the first error; credit correct subsequent reasoning.\nAward 3 points for the correct method; at least 2 points when the key derivation is complete.";
     const problem_data = Object.fromEntries([1, 2, 3, 4].map(n => [`q${n}`, {
-      q_id: `q${n}`, number: String(n), stem: `Synthetic question ${n}.`, criterion: "Reasoning rubric.", max_score: 10,
+      q_id: `q${n}`, number: String(n), type: "calculation", stem: `Synthetic question ${n}.`, criterion: "Reasoning rubric.", max_score: 10,
       review_status: "confirmed", max_score_review_status: "confirmed",
       preparation_issues: mode === "math-advisory" && n === 1 ? [{
         issue_id: "shared-plan", field: "rubric", code: "math_rubric_advisory", severity: "warning", status: "open",
@@ -91,7 +91,7 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
     if (mode === "math-advisory") {
       await page.goto(`${root}/questions`);
       const questionQueue = page.getByRole("region", { name: zh ? "待复核队列" : "Review queue" });
-      await expect(questionQueue).toContainText(zh ? "本题含 AI 补充评分说明，建议核对评分标准。" : "AI scoring guidance was added. Review the rubric.");
+      await expect(questionQueue).toContainText(zh ? "本题评分标准有待核对的内容。" : "Some rubric details need review.");
       await expect(questionQueue).not.toContainText(sharedRule);
       await expect(questionQueue.getByRole("link")).toHaveCount(1);
       await expect(questionQueue.getByRole("tab", { name: zh ? "建议处理 (1)" : "Suggested review (1)", exact: true })).toBeVisible();

@@ -180,10 +180,16 @@ test("upload guidance explains a missing supplemental material without starting 
 
 test("restored question inputs can start a new job only after manual continuation", async ({ page }) => {
   const { calls, errors } = await fixture(page, "problems", "provider_timeout", true);
+  // Form fields can restore before the saved-file availability check finishes.
+  await page.route((url) => url.pathname.endsWith("/draft-reference"), async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await route.fulfill({ json: { available: true, prepared: false, filename: "saved.pdf" } });
+  });
   await page.goto("/tasks/recovery-task/problems/progress");
   await page.getByRole("link", { name: "返回修改配置" }).click();
   await expect(page.getByLabel("页码（选填）")).toHaveValue("3, 4, 5");
   expect(calls).toHaveLength(0);
+  await expect(page.getByText("已上传文件可继续使用。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "重新识别全部资料" }).click();
   await expect(page).toHaveURL(/\/problems\/progress$/);
   await expect(page.getByRole("heading", { name: "题目资料准备进度" })).toBeVisible();
@@ -207,6 +213,7 @@ test("question failure → model change → restored original form → manual co
   await expect(page.getByLabel("目标题号（选填）")).toHaveValue("1.1.5");
   await expect(page.getByLabel("补充说明（选填）")).toHaveValue("保留图表");
   expect(calls).toHaveLength(0);
+  await expect(page.getByText("已上传文件可继续使用。", { exact: true })).toBeVisible();
   await page.screenshot({ path: "output/playwright/workflow-question-restored.png", fullPage: true });
   await page.getByRole("button", { name: "重新识别全部资料" }).click();
   await expect(page.getByRole("button", { name: "重新识别全部资料", exact: true })).toHaveCount(2);

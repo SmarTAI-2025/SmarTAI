@@ -16,7 +16,7 @@ import math
 import re
 import time
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any
@@ -59,6 +59,7 @@ from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_requires_confirmation
+from backend.domain.question_types import normalize_question_type
 from backend.domain.errors import (
     DomainError,
     DuplicateActiveRun,
@@ -887,75 +888,30 @@ def _math_plans_for_projection(run_id, questions, *, grading_setup=None) -> dict
 
 
 def _math_rubric_advisory(question, plan, language: str) -> list[dict]:
-    """Project readable shared rules, never the private scoring graph or source."""
+    """One question-level suggestion; the existing rubric holds the full rules."""
+    if plan is None:
+        if not ((question.source or {}).get("presentation") or {}).get("rubric_draft"):
+            return []
+        from backend.services.math_grading_context import problem_from_question
+        from backend.services.rubric_drafts import saved_draft
+        draft = saved_draft(problem_from_question(question))
+        plan = draft.plan if draft else None
     if plan is None or not any(text.strip() for text in plan.advisories):
         return []
-    from backend.services.math_rubric_plan import _FALLBACK_ADVISORY, _FOLLOW_THROUGH, _NUMERICAL_POLICY
+    from backend.services.math_rubric_plan import _FALLBACK_ADVISORY
 
     zh = language == "zh"
-    presentation = (question.source or {}).get("presentation") or {}
-    generated = "criterion" in (presentation.get("ai_completion_provenance") or {})
-    original_source = ("AI生成" if generated else "提供的材料") if zh else (
-        "AI-generated material" if generated else "provided material"
-    )
-    advice = [
-        ("未能可靠拆分评分项，本轮按原评分标准整体判断；所有学生使用同一解释，无需额外确认。"
-         if zh else text) if text == _FALLBACK_ADVISORY else text
+    advice = list(dict.fromkeys(
+        ("评分项未能完整拆分，本轮按原评分标准整体判断；建议核对本题评分标准。" if zh else
+         "Scoring items could not be fully separated. This run uses the original rubric as a whole; review the rubric.")
+        if text == _FALLBACK_ADVISORY else text.strip()
         for text in plan.advisories if text.strip()
-    ]
-    # The original rubric remains in its existing field. Remove only our own
-    # envelope, keeping the model's actual shared interpretation verbatim.
-    _, separator, explanation = plan.effective_criterion.partition("\n\nAI interpretation:\n")
-    explanation = explanation.partition("\n\nExplicit original rules take precedence")[0].strip() if separator else ""
-    fallback = _FALLBACK_ADVISORY in plan.advisories
-    if fallback and zh:
-        explanation = (
-            "保留原标准的明确分值、方法限制、扣分、上限及有条件保底；不按学生步骤数平均分配。"
-            "标准简略时按题目要求统一判断部分得分；分值冲突时在题目满分内保留原标准的相对重点。"
-        )
-    lines = [
-        *advice,
-        (f"本轮 AI 评分解释（原标准来自{original_source}；原有明确规则优先，并非教师已确认的新标准）："
-         if zh else f"AI scoring interpretation for this run (original rubric from {original_source}; "
-         "explicit original rules take precedence; AI additions are not teacher-confirmed):"),
-        explanation,
-    ]
-    if not fallback:
-        for route in plan.routes:
-            mode = ({"points": "得分制", "deductions": "扣分制", "holistic": "整体评分"} if zh else
-                    {"points": "Points awarded", "deductions": "Points deducted", "holistic": "Holistic"})[route.mode]
-            items = "; ".join(
-                f"{item.description}: {item.points:g} "
-                + (f"分（{'原文' if item.source == 'provided' else 'AI解释'}）" if zh else
-                   f"points ({'original rule' if item.source == 'provided' else 'AI interpretation'})")
-                for item in route.items
-            )
-            lines.append(f"{mode}: {route.description} — {route.applies_when}" + (f": {items}" if items else ""))
-            if route.minimum_score:
-                condition = ("非空作答" if route.minimum_condition == "nonblank" else "所有作答") if zh else (
-                    "nonblank answers" if route.minimum_condition == "nonblank" else "all answers"
-                )
-                lines.append(f"{condition}最低 {route.minimum_score:g} 分" if zh else
-                             f"Minimum {route.minimum_score:g} points for {condition}.")
-    follow_through = (
-        "按原标准区分首次错误、沿错误中间值继续正确推导和新的独立错误，不统一规定后续得满分或半分；明确要求正确结果的评分项仍须满足。"
-        if zh and plan.follow_through == _FOLLOW_THROUGH else plan.follow_through
-    )
-    numerical = (
-        "保留题目的定义域、变量假设、单位、精度及积分常数要求；允许等价方法，除非原标准指定方法。"
-        "π、e、i 可为数值常数；不自行添加容差，工具无法核验不等于答错。"
-        if zh and plan.numerical_policy == _NUMERICAL_POLICY else plan.numerical_policy
-    )
-    lines.extend([
-        follow_through, numerical,
-        "如需调整，请在本题原有评分标准中修改。" if zh else
-        "To change these rules, edit this question's existing rubric.",
-    ])
+    ))
     return [{
-        "issue_id": f"math-rubric:{question.q_id}:{plan.plan_id}",
+        "issue_id": f"math-rubric:{question.q_id}:{plan.input_fingerprint}",
         "q_id": question.q_id, "field": "rubric", "code": "math_rubric_advisory",
         "severity": "warning", "status": "open",
-        "details": {"message": "\n".join(line for line in lines if line)},
+        "details": {"message": "\n".join(advice)},
     }]
 
 
@@ -982,7 +938,7 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     return {
         "q_id": question.q_id,
         "number": question.number,
-        "type": question.type,
+        "type": normalize_question_type(question.type),
         "stem": question.stem,
         "criterion": question.criterion,
         "recognition_confidence": confidence_value(presentation.get("recognition_confidence")),
@@ -1006,6 +962,22 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
             *_math_rubric_advisory(question, math_plan, feedback_language),
         ],
     }
+
+
+def _serialize_review_answers(answers, statuses, questions=()):
+    duplicates = {q_id for q_id, count in Counter(answer.q_id for answer in answers).items() if count > 1}
+    return [{
+        "answer_id": answer.answer_key or answer.id,
+        "q_id": answer.q_id, "number": answer.number, "type": normalize_question_type(answer.type), "content": answer.content,
+        "flag": _public_answer_flags(answer.flag, content=answer.content, review_status=statuses.get(answer.id))
+                + (["answer_assignment_conflict"] if answer.q_id in duplicates else []),
+        "recognition_confidence": _answer_recognition_confidence(answer.flag),
+        "review_status": statuses.get(answer.id, "pending"),
+    } for answer in answers] + [{
+        "q_id": question.q_id, "number": question.number, "type": normalize_question_type(question.type),
+        "content": "", "flag": ["recognition_manual_pending", "recognition_failed"],
+        "recognition_confidence": None, "review_status": "pending",
+    } for question in questions if not duplicates and question.q_id not in {answer.q_id for answer in answers}]
 
 
 def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[str, dict]:
@@ -1040,21 +1012,7 @@ def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[st
         output[display_id] = {
             "stu_id": display_id,
             "stu_name": presentation.display_name if presentation else submission.student_id,
-            "stu_ans": [
-                {
-                    "q_id": answer.q_id,
-                    "number": answer.number,
-                    "type": answer.type,
-                    "content": answer.content,
-                    "flag": _public_answer_flags(answer.flag, content=answer.content),
-                    "recognition_confidence": _answer_recognition_confidence(answer.flag),
-                    "review_status": review_statuses.get(answer.id, "pending"),
-                }
-                for answer in revision.answers
-            ] + [{"q_id": question.q_id, "number": question.number, "type": question.type,
-                  "content": "", "flag": ["recognition_manual_pending", "recognition_failed"],
-                  "recognition_confidence": None, "review_status": "pending"}
-                 for question in questions if question.q_id not in {answer.q_id for answer in revision.answers}],
+            "stu_ans": _serialize_review_answers(revision.answers, review_statuses, questions),
             "source_filename": (
                 presentation.source_filename if presentation else revision.file_name
             ),
@@ -2495,6 +2453,7 @@ def _replace_draft_questions(
                     "recognition_confidence": raw.get("recognition_confidence"),
                     "material_provenance": raw.get("material_provenance", {}),
                     "ai_completion_provenance": raw.get("ai_completion_provenance", {}),
+                    "rubric_draft": raw.get("rubric_draft"),
                     "preparation_issues": raw.get("preparation_issues", []),
                 },
             }
@@ -2502,7 +2461,7 @@ def _replace_draft_questions(
                 id=f"q_{uuid.uuid4().hex[:12]}", assignment_id=task_id,
                 q_id=str(raw.get("q_id") or q_id), order_index=index,
                 number=raw["number"] if isinstance(raw.get("number"), str) else str(index + 1),
-                type=raw["type"] if isinstance(raw.get("type"), str) else "其他",
+                type=normalize_question_type(raw.get("type")),
                 stem=str(raw.get("stem") or ""),
                 criterion=str(raw.get("criterion") or ""),
                 max_score=float(raw.get("max_score") or 10),
@@ -2988,8 +2947,15 @@ def _reusable_submission_results(*, owner_id, task_id, payload, questions, inclu
             # Units may finish independently before the aggregate exists. Newest
             # evidence owns each question; older attempts only fill absent units.
             answers = {answer["q_id"]: answer for answer in result.student.get("stu_ans", [])}
-            answers.update({answer["q_id"]: answer for answer in newer.student.get("stu_ans", [])})
-            student = {**newer.student, "stu_ans": [answers[q.q_id] for q in questions if q.q_id in answers]}
+            newer_answers = {answer["q_id"]: answer for answer in newer.student.get("stu_ans", [])}
+            answers.update(newer_answers)
+            # Review provenance belongs to the selected answer version, not the
+            # first unit in the recovery scan or a union of superseded attempts.
+            reviews = set((result.student.get("recognition") or {}).get("model_review_question_ids", [])) - set(newer_answers)
+            reviews.update(set((newer.student.get("recognition") or {}).get("model_review_question_ids", [])) & set(newer_answers))
+            student = {**newer.student, "stu_ans": [answers[q.q_id] for q in questions if q.q_id in answers],
+                "recognition": {**(newer.student.get("recognition") or {}),
+                    "model_review_question_ids": sorted(q.q_id for q in questions if q.q_id in reviews)}}
             reusable[key] = replace(newer, student=student, matched_answer_count=len(answers))
     normalized = {}
     for key, result in reusable.items():
@@ -3415,7 +3381,7 @@ async def run_task_submission_parsing(
                             else:
                                 parsed = await parse_student_answer_sources([unit], problem_data, provider,
                                     single_attempt=True, independent_answers=True, **parser_kwargs)
-                            return merge_parse_repair(retained, parsed[0], target_ids)
+                            return merge_parse_repair(retained, parsed[0], target_ids, problems=problem_data)
                         retained = await durable_source_parse(unit, invoke, pending, repair_index=repair_index)
                         if route.is_baidu_ocr or retained.stable_error_code == "provider_submit_uncertain":
                             break
@@ -3428,10 +3394,10 @@ async def run_task_submission_parsing(
             async def schedule_pages(source_id, stored_file_id, source_filename, source_content_type,
                                      *, complete=False, end_page=None):
                 from backend.services.source_question_units import QUESTION_HEADING, source_question_units, source_page_groups
+                from backend.services.question_matching import question_number_aliases, resolve_question_match
                 saved_pages = page_texts.get(source_id, {})
-                by_number = {}
-                for q_id, problem in problem_data.items():
-                    by_number.setdefault(str(problem.get("number") or ""), []).append(q_id)
+                number_ids = {alias: q_id for q_id, aliases in question_number_aliases(problem_data).items()
+                              for alias in aliases}
                 targets = set(source_question_ids.get(source_id, problem_data))
                 dispatched = incremental_tasks.setdefault(source_id, {})
                 prefix_parts, number = [], 1
@@ -3447,9 +3413,8 @@ async def run_task_submission_parsing(
                     if not complete:
                         return
                 prefix = "\n\n".join(prefix_parts).strip()
-                page_units = source_question_units(saved_pages, known_numbers=set(by_number))
-                invalid = {q_id for unit in page_units if unit.closure == "repeated_heading"
-                           for q_id in by_number.get(unit.number, [])}
+                page_units = source_question_units(saved_pages, known_numbers=set(number_ids), number_key=number_ids.get)
+                invalid = {number_ids[unit.number] for unit in page_units if unit.closure == "repeated_heading"}
                 if invalid - boundary_invalidations.get(source_id, set()):
                     boundary_invalidations.setdefault(source_id, set()).update(invalid)
                     # A later repeated heading can revoke an earlier closed
@@ -3457,9 +3422,18 @@ async def run_task_submission_parsing(
                     await save_source_state(source_id, stored_file_id,
                         invalidated_question_ids=sorted(boundary_invalidations[source_id]))
                 for unit in source_page_groups(saved_pages, source_complete=complete,
-                                               source_end_page=end_page, numbered=False):
-                    ids = {ids[0] for match in QUESTION_HEADING.finditer(unit.text)
-                           if len(ids := by_number.get(match.group("number"), [])) == 1} & targets
+                                               source_end_page=end_page, numbered=False, number_key=number_ids.get):
+                    headings = list(QUESTION_HEADING.finditer(unit.text))
+                    if any(match.group("number") not in number_ids for match in headings):
+                        # Ambiguous or unknown labels cannot prove an independent
+                        # answer boundary. Retain the full source for matching.
+                        continue
+                    matched = [resolve_question_match(match.group("number"),
+                        unit.text[match.start():headings[index + 1].start() if index + 1 < len(headings) else len(unit.text)],
+                        problem_data) for index, match in enumerate(headings)]
+                    if not matched or any(q_id is None for q_id in matched):
+                        continue  # Keep all candidates for the existing semantic parse.
+                    ids = set(matched) & targets
                     # A repeated identity across a gap is not a complete
                     # independent answer. Leave it for the existing partial-source
                     # parse so every available segment remains visible for review.
@@ -3829,7 +3803,7 @@ def apply_question_patches_atomic(
     }
     allowed_presentation = {
         "review_status", "solution_code", "material_provenance", "recognition_confidence",
-        "ai_completion_provenance", "preparation_issues",
+        "ai_completion_provenance", "preparation_issues", "rubric_draft",
         "max_score_source", "max_score_review_status",
     }
     with session_scope() as session:
@@ -4225,6 +4199,7 @@ def _commit_imported_submissions(
             )
 
         for student in students:
+            submission_repository.require_unique_questions(student.get("stu_ans", []))
             source_id = str(student.get("source_id") or "").strip() or None
             if source_id is not None:
                 if operation is None or expected_operation_attempt is None:
@@ -4750,12 +4725,18 @@ def grading_readiness(
             if revision is None or not revision.answers:
                 issues.append("answers_required")
             elif revision is not None:
+                if len({answer.q_id for answer in revision.answers}) != len(revision.answers):
+                    issues.append("submission_recognition_blocked")
+                answer_reviews = workflow_repository.answer_review_statuses([answer.id for answer in revision.answers])
                 if {question.q_id for question in questions} - {answer.q_id for answer in revision.answers}:
                     issues.append("submission_recognition_blocked")
                 recognition_review_ids.extend(answer.id for answer in revision.answers
                                               if confidence_needs_attention(_answer_recognition_confidence(answer.flag)))
                 for answer in revision.answers:
-                    if _answer_recognition_failures(answer.flag):
+                    if _answer_recognition_failures(answer.flag) and not (
+                        answer_reviews.get(answer.id) == "confirmed"
+                        and _answer_matching_confirmation_allowed(answer.flag, answer.content)
+                    ):
                         issues.append("submission_recognition_blocked")
                     if _REQUIRED_ANSWER_CONFIRMATION_FLAGS.intersection(answer.flag or []):
                         repaired_answer_ids.append(answer.id)
@@ -4813,6 +4794,16 @@ def _answer_recognition_confidence(flags):
     return None
 
 
+def _answer_matching_confirmation_allowed(flags, content):
+    """Only a complete transcription with a matching doubt can be confirmed as-is."""
+    flags = list(flags or [])
+    return bool(str(content or "").strip() and "recognition_manual_pending" in flags
+        and not any(flag in {"recognition_failed", "parse_failed", "no_matching_answer",
+                             "recognition_incomplete", "recognition_paused", "provider_submit_uncertain"}
+                    or flag.startswith(("recognition_failed_pages:", "recognition_unprocessed_pages:",
+                                        "recognition_invalid_fields:")) for flag in flags))
+
+
 def _metadata_only_recognition_fields(flags, content):
     """A teacher may confirm verified text when only bounded metadata failed."""
     flags = list(flags or [])
@@ -4828,15 +4819,20 @@ def _metadata_only_recognition_fields(flags, content):
     return fields
 
 
-def _public_answer_flags(flags, *, content=None):
+def _public_answer_flags(flags, *, content=None, review_status=None):
     # Existing clients understand recognition_failed. Preserve the precise
     # source evidence too; projecting it must not mutate the stored answer.
     result = [flag for flag in flags or []
               if not flag.startswith(("recognition_confidence:", "answer_recognition_confidence:"))
-              and flag not in {"recognition_metadata_review", "recognition_low_confidence", "recognition_very_low_confidence",
+              and flag not in {"recognition_matching_review", "answer_assignment_conflict", "recognition_metadata_review", "recognition_low_confidence", "recognition_very_low_confidence",
                                "low_confidence", "very_low_confidence", "recognition_needs_review"}]
     if _metadata_only_recognition_fields(flags, content):
         result.append("recognition_metadata_review")
+    if _answer_matching_confirmation_allowed(flags, content):
+        if review_status == "confirmed":
+            result = [flag for flag in result if flag != "recognition_manual_pending"]
+        else:
+            result.append("recognition_matching_review")
     if _answer_recognition_failures(result) and "recognition_failed" not in result:
         result.append("recognition_failed")
     return result
@@ -4863,7 +4859,7 @@ def _effective_question_issues(presentation):
             issue = {**issue, "severity": "blocking", "status": "open"}
         if issue.get("code") == "manual_completion_required":
             issue = {**issue, "details": {**(issue.get("details") or {}), "required_fields": [
-                field for field in (issue.get("details") or {}).get("required_fields", []) if field in {"stem", "criterion"}]}}
+                field for field in (issue.get("details") or {}).get("required_fields", []) if field in {"number", "type", "stem", "criterion"}]}}
         if issue.get("field") == "answer" or (issue.get("code") == "generation_failed" and issue.get("field") == "programming_tests") or (
             issue.get("code") in {"low_confidence", "recognition_needs_review"}
             and not (issue.get("details") or {}).get("error_code")
@@ -4888,7 +4884,8 @@ def _question_review_blockers(questions) -> list[str]:
                      or _manual_question_fields_missing(question, presentation))):
             issues.append("question_manual_completion_required")
         problem = _serialize_problem(question)
-        if (not str(question.stem or "").strip() or not str(question.criterion or "").strip()
+        if (not str(question.number or "").strip() or not normalize_question_type(question.type)
+                or not str(question.stem or "").strip() or not str(question.criterion or "").strip()
                 or not problem["rubric_point_summary"]["is_valid"]
                 or any(issue.get("severity") == "blocking"
                        and (issue.get("status") == "open"
@@ -4909,7 +4906,7 @@ def _manual_question_fields_missing(question, presentation, patch=None):
     patch = patch or {}
     fields = {field for issue in presentation.get("preparation_issues", [])
               if issue.get("code") == "manual_completion_required"
-              for field in (issue.get("details") or {}).get("required_fields", []) if field in {"stem", "criterion"}}
+              for field in (issue.get("details") or {}).get("required_fields", []) if field in {"number", "type", "stem", "criterion"}}
     for field in fields:
         value = patch.get(field, presentation.get(field) if field == "solution_code" else getattr(question, field, None))
         if not value or (isinstance(value, str) and not value.strip()):
@@ -5077,9 +5074,17 @@ def start_task_grading(
             question.q_id: math_rubric_fingerprint(problem_from_question(question))
             for question in questions if question.q_id in math_qids
         }
+    fingerprint_manifest = deepcopy(input_manifest)
+    for row in fingerprint_manifest["questions"]:
+        # Semantic input already has its own fingerprint. Persisting an internal
+        # cache must not make unchanged completed grading look like new work.
+        presentation = (row.get("source") or {}).get("presentation") or {}
+        presentation.pop("rubric_draft", None)
+        if not presentation and isinstance(row.get("source"), dict):
+            row["source"].pop("presentation", None)
     run_fingerprint = _hash_json({
         "grading_setup": workflow.grading_setup,
-        "input_manifest": input_manifest,
+        "input_manifest": fingerprint_manifest,
     })
     latest = runs[-1] if runs else None
     if latest and latest.status == "completed" and not (explicit_request and retry_scope == "full_batch"):
@@ -5311,7 +5316,9 @@ def update_problem(
         presentation["preparation_issues"] = _effective_question_issues(presentation)
         original_problem = _serialize_problem(question)
         repaired_required_content = (
-            not str(question.stem or "").strip()
+            not str(question.number or "").strip()
+            or not normalize_question_type(question.type)
+            or not str(question.stem or "").strip()
             or not original_problem["rubric_point_summary"]["is_valid"]
         )
         manual_markers = [issue for issue in presentation.get("preparation_issues", [])
@@ -5353,7 +5360,7 @@ def update_problem(
         if patch.get("review_status") == "confirmed":
             fields = {"stem", "answer", "rubric", "programming_tests", "source", "max_score"}
             issues = presentation.get("preparation_issues", [])
-            if _manual_question_fields_missing(question, presentation, patch) or not str(patch.get("stem", question.stem) or "").strip() or not str(patch.get("criterion", question.criterion) or "").strip() or any(
+            if not str(patch.get("number", question.number) or "").strip() or not normalize_question_type(patch.get("type", question.type)) or _manual_question_fields_missing(question, presentation, patch) or not str(patch.get("stem", question.stem) or "").strip() or not str(patch.get("criterion", question.criterion) or "").strip() or any(
                 issue.get("status") == "open" and issue.get("severity") == "blocking"
                 for issue in issues
             ):
@@ -5389,9 +5396,9 @@ def update_problem(
                 raise ValidationError("Question number is required.", code="invalid_question_number")
             patch["number"] = number
         if "type" in patch:
-            question_type = str(patch["type"] or "").strip()
-            if not question_type or len(question_type) > 64:
-                raise ValidationError("Question type is required.", code="invalid_question_type")
+            question_type = normalize_question_type(patch["type"])
+            if not question_type:
+                raise ValidationError("Select a supported question type.", code="invalid_question_type")
             patch["type"] = question_type
         if "stem" in patch or "number" in patch:
             structure = build_major_question_structure(
@@ -5482,6 +5489,8 @@ def update_student_answer(
     *, task_id: str, owner_id: str, display_student_id: str,
     q_id: str, patch: dict, expected_revision: int | None,
 ) -> dict:
+    if (patch.get("answer_id") or patch.get("target_q_id")) and expected_revision is None:
+        raise ValidationError("The saved workflow revision is required.", code="stale_revision")
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
     )
@@ -5536,19 +5545,28 @@ def update_student_answer(
             .where(SubmissionAnswerRecord.revision_id == current_revision.id)
             .order_by(SubmissionAnswerRecord.id)
         ).all()
-        target = next((answer for answer in answer_rows if answer.q_id == q_id), None)
+        candidates = [answer for answer in answer_rows if
+                      (answer.answer_key == patch["answer_id"] if patch.get("answer_id") else answer.q_id == q_id)]
+        if len(candidates) > 1:
+            raise ValidationError("Select the individual answer to edit.", code="answer_assignment_conflict")
+        target = candidates[0] if candidates else None
+        if patch.get("answer_id") and (target is None or target.q_id != q_id):
+            raise NotFound("answer")
+        target_q_id = patch.get("target_q_id") or q_id
         question = session.scalar(select(AssignmentQuestionRecord).where(
             assignment_repository.active_question_clause(),
             AssignmentQuestionRecord.assignment_id == task_id,
-            AssignmentQuestionRecord.q_id == q_id,
+            AssignmentQuestionRecord.q_id == target_q_id,
         ))
         if question is None:
             raise NotFound("answer")
         missing_target = target is None
         if missing_target:
+            if patch.get("target_q_id"):
+                raise NotFound("answer")
             # Historical imports may predate placeholders. Only the explicit
             # teacher edit below persists this missing known question.
-            target = SubmissionAnswerRecord(id=f"pending-{question.id}", question_id=question.id,
+            target = SubmissionAnswerRecord(id=f"pending-{question.id}", answer_key=f"answer_{uuid.uuid4().hex}", question_id=question.id,
                 q_id=q_id, number=question.number, type=question.type, content="",
                 flag=["recognition_manual_pending"])
             answer_rows.append(target)
@@ -5557,6 +5575,16 @@ def update_student_answer(
         # grading generation and analysis intact when the recognized text/flags
         # did not change (including an unchanged save from the editor).
         content_changed = patch.get("content") is not None and patch["content"] != target.content
+        assignment_changed = target_q_id != target.q_id
+        assignment_conflict = any(answer is not target and answer.q_id == target_q_id for answer in answer_rows)
+        if patch.get("review_status") == "confirmed" and assignment_conflict:
+            if patch.get("content") is None:
+                raise ValidationError("Resolve duplicate question assignments before confirming.", code="answer_assignment_conflict")
+            # Keep independent text edits, but a conflicting assignment remains
+            # unconfirmed and cannot enter grading.
+            patch = {**patch, "review_status": "pending"}
+        matching_confirmation = (patch.get("review_status") == "confirmed"
+                                 and _answer_matching_confirmation_allowed(target.flag, target.content))
         failed_flags = _FAILED_ANSWER_REVIEW_FLAGS | _answer_recognition_failures(target.flag)
         original_failures = _answer_recognition_failures(target.flag)
         metadata_fields = (_metadata_only_recognition_fields(target.flag, target.content)
@@ -5572,6 +5600,10 @@ def update_student_answer(
             # Confirm metadata without rewriting already verified student work.
             repaired_flags = failed_flags | {"recognition_metadata_review"}
             patch = {**patch, "flag": [flag for flag in target.flag or [] if flag not in repaired_flags]}
+        elif matching_confirmation and not content_changed:
+            # Confirmation acknowledges the saved evidence; projected browser
+            # flags must not become new raw failures on an unchanged save.
+            patch = {key: value for key, value in patch.items() if key != "flag"}
         elif manual_blank or (content_changed and str(patch.get("content") or "").strip()
                 and str(patch["content"]).strip() != str(target.content or "").strip()):
             # A teacher's replacement text repairs recognition failures while
@@ -5596,12 +5628,12 @@ def update_student_answer(
             patch = {**patch, "flag": [*_public_answer_flags(patch["flag"]),
                                        *[flag for flag in target.flag or [] if flag.startswith("answer_recognition_confidence:")]]}
         flags_changed = patch.get("flag") is not None and list(patch["flag"]) != list(target.flag or [])
-        if patch.get("review_status") == "confirmed" and any(
+        if patch.get("review_status") == "confirmed" and not matching_confirmation and any(
             flag in failed_flags
             for flag in (patch.get("flag", target.flag) or [])
         ):
             raise ValidationError("Retry or correct the failed recognition before confirming.", code="answer_review_blocked")
-        if not missing_target and not content_changed and not flags_changed and patch.get("review_status") is not None:
+        if not missing_target and not assignment_changed and not assignment_conflict and not content_changed and not flags_changed and patch.get("review_status") is not None:
             review = session.get(
                 workflow_repository.SubmissionAnswerPresentationRecord, target.id
             )
@@ -5616,8 +5648,9 @@ def update_student_answer(
             return {
                 "status": "ok", "stu_id": display_student_id, "q_id": q_id,
                 "answer": {
-                    "q_id": target.q_id, "number": target.number, "type": target.type,
-                    "content": target.content, "flag": _public_answer_flags(target.flag, content=target.content),
+                    "answer_id": target.answer_key,
+                    "q_id": target.q_id, "number": target.number, "type": normalize_question_type(target.type),
+                    "content": target.content, "flag": _public_answer_flags(target.flag, content=target.content, review_status=review.review_status),
                     "recognition_confidence": _answer_recognition_confidence(target.flag),
                     "review_status": review.review_status,
                 },
@@ -5660,9 +5693,10 @@ def update_student_answer(
                 )
             ).all()
         } if old_answer_ids else {}
-        target_answer_id: str | None = None
+        updated_answers = []
+        updated_statuses = {}
         for answer in answer_rows:
-            is_target = answer.q_id == q_id
+            is_target = answer is target
             content = (
                 patch["content"]
                 if is_target and patch.get("content") is not None
@@ -5673,41 +5707,38 @@ def update_student_answer(
                 if is_target and patch.get("flag") is not None
                 else answer.flag
             )
-            number = question.number if is_target and "number" in metadata_fields else answer.number
-            answer_type = question.type if is_target and "type" in metadata_fields else answer.type
+            if is_target and assignment_changed and _answer_matching_confirmation_allowed(flags, content):
+                flags = [flag for flag in flags if flag != "recognition_manual_pending"]
+            number = question.number if is_target and (assignment_changed or "number" in metadata_fields) else answer.number
+            answer_type = normalize_question_type(
+                question.type if is_target and (assignment_changed or "type" in metadata_fields) else answer.type
+            )
             answer_id = f"ans_{uuid.uuid4().hex[:12]}"
-            session.add(SubmissionAnswerRecord(
+            updated_answer = SubmissionAnswerRecord(
                 id=answer_id,
+                answer_key=answer.answer_key,
                 revision_id=new_revision.id,
-                question_id=answer.question_id,
-                q_id=answer.q_id,
+                question_id=question.id if is_target else answer.question_id,
+                q_id=target_q_id if is_target else answer.q_id,
                 number=number,
                 type=answer_type,
                 content=content,
                 flag=list(flags or []),
                 created_at=now,
-            ))
+            )
+            session.add(updated_answer)
+            updated_answers.append(updated_answer)
             if is_target:
-                target_answer_id = answer_id
-                target_payload = {
-                    "q_id": answer.q_id,
-                    "number": number,
-                    "type": answer_type,
-                    "content": content,
-                    "flag": _public_answer_flags(flags, content=content),
-                    "recognition_confidence": _answer_recognition_confidence(flags),
-                    "review_status": patch.get("review_status") or "pending",
-                }
                 next_review_status = str(patch.get("review_status") or "pending")
             else:
                 next_review_status = carried_review_statuses.get(answer.id)
             if next_review_status is not None:
+                updated_statuses[answer_id] = next_review_status
                 session.add(workflow_repository.SubmissionAnswerPresentationRecord(
                     answer_id=answer_id,
                     review_status=next_review_status,
                     updated_at=now,
                 ))
-        assert target_answer_id is not None and target_payload is not None
         submission.current_revision_id = new_revision.id
         submission.updated_at = now
 
@@ -5725,9 +5756,14 @@ def update_student_answer(
         workflow_row.updated_at = now
         session.flush()
         workflow_revision = workflow_row.workflow_revision
+        questions = session.scalars(select(AssignmentQuestionRecord).where(
+            assignment_repository.active_question_clause(), AssignmentQuestionRecord.assignment_id == task_id)).all()
+        answer_payloads = _serialize_review_answers(updated_answers, updated_statuses, questions)
+        target_payload = next(answer for answer in answer_payloads if answer.get("answer_id") == target.answer_key)
     return {
         "status": "ok", "stu_id": display_student_id, "q_id": q_id,
         "answer": target_payload, "workflow_revision": workflow_revision,
+        "answers": answer_payloads,
     }
 
 
@@ -5995,17 +6031,7 @@ def _run_snapshot_payload(*, task_id: str, owner_id: str, run_id: str) -> dict:
                     if presentation else frozen.student_id
                 )
             ),
-            "stu_ans": [
-                {
-                    "q_id": answer.q_id,
-                    "number": answer.number,
-                    "type": answer.type,
-                    "content": answer.content,
-                    "flag": list(answer.flag or []),
-                    "review_status": answer_statuses.get(answer.id, "pending"),
-                }
-                for answer in revision.answers
-            ],
+            "stu_ans": _serialize_review_answers(revision.answers, answer_statuses),
             "source_filename": (
                 frozen_presentation.get("source_filename")
                 if frozen_presentation is not None

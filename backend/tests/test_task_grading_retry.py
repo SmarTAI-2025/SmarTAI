@@ -57,7 +57,7 @@ def finish(case, run_id, monkeypatch, failed=("q2",), *, score=8):
         assert current_execution().response_timeout_seconds == grading_runs.settings.grading_custom_provider_timeout_seconds
         calls.append(kwargs)
         return [{"student_id": sid, "corrections": [Correction(
-            q_id=qid, type="short", score=0 if qid in failed else score,
+            q_id=qid, type="concept", score=0 if qid in failed else score,
             max_score=10, confidence=0 if qid in failed else 1,
             synthesis_method="all_failed" if qid in failed else "single",
             comment="Transient timeout" if qid in failed else "Recovered", steps=[],

@@ -916,6 +916,8 @@ async def prepare_question_packages(
                 )
                 continue
             problem[candidate.target] = value
+            if candidate.rubric_draft:
+                problem["rubric_draft"] = candidate.rubric_draft
             provenance = dict(problem.get("ai_completion_provenance") or {})
             provenance[candidate.target] = {
                 "job_id": reporter.job_id,

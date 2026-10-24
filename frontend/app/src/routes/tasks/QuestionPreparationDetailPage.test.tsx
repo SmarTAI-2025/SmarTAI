@@ -37,7 +37,7 @@ const taskData = vi.hoisted(() => ({
     Q1: {
       q_id: "Q1",
       number: "1",
-      type: "Proof",
+      type: "reasoning",
       stem: "Proof question one. (a) Establish the base case. (b) Complete the proof.",
       max_score: 10,
       max_score_source: "default_10",
@@ -71,7 +71,7 @@ const taskData = vi.hoisted(() => ({
     Q2: {
       q_id: "Q2",
       number: "2",
-      type: "Proof",
+      type: "reasoning",
       stem: "Proof question two",
       max_score: 10,
       criterion: "Rubric two",
@@ -190,11 +190,12 @@ it("keeps exactly one review-confirm button per question", () => {
 
 beforeEach(() => {
   testState.locale = "zh-CN";
-  taskData.problem_data.Q1.type = "Proof";
+  taskData.problem_data.Q1.type = "reasoning";
   mutateAsync.mockReset();
   taskData.workflow_revision = 7;
   taskData.status = "problems_ready";
   taskData.problem_data.Q2.reference_answer = "Answer two";
+  taskData.problem_data.Q2.type = "reasoning";
   taskData.problem_data.Q2.criterion = "Rubric two";
   taskData.problem_data.Q2.preparation_issues = [];
   taskRefetch.mockReset().mockResolvedValue({ data: taskData });
@@ -245,14 +246,17 @@ it.each(["zh-CN", "en-US"])("explains an ambiguous source match and keeps confir
 });
 
 it("edits type beside number through the existing versioned field save, including Other", async () => {
-  taskData.problem_data.Q1.type = "short";
+  taskData.problem_data.Q1.type = "concept";
   mutateAsync.mockResolvedValue({ workflow_revision: 8 });
   renderPage();
+  // Drain the real draft hydration transactions before timing the save UI.
+  // Otherwise prior mounted editors can keep fake IndexedDB busy under the full suite.
+  await act(async () => { await listPageDrafts("question-draft-teacher"); });
   const card = within(document.querySelector('[data-question-id="Q1"]') as HTMLElement);
   expect(card.queryByText("short")).not.toBeInTheDocument();
-  expect(card.getAllByText("简答题")).toHaveLength(2);
+  expect(card.getAllByText("概念题")).toHaveLength(2);
   await userEvent.click(card.getByRole("button", { name: "题型 · 修改" }));
-  expect(card.getByRole("combobox", { name: "题型" })).toHaveValue("short_answer");
+  expect(card.getByRole("combobox", { name: "题型" })).toHaveValue("concept");
   await userEvent.selectOptions(card.getByRole("combobox", { name: "题型" }), "other");
   await userEvent.click(card.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({ taskId: "task-1", qId: "Q1", type: "other", expectedWorkflowRevision: 7 }));
@@ -265,6 +269,34 @@ it("edits type beside number through the existing versioned field save, includin
 });
 
 describe("QuestionPreparationDetailPage navigation", () => {
+  it("shows exact missing fields once and keeps an unknown type unselected", async () => {
+    taskData.problem_data.Q2.type = "";
+    taskData.problem_data.Q2.criterion = "";
+    taskData.problem_data.Q2.reference_answer = "";
+    taskData.problem_data.Q2.preparation_issues = [
+      { issue_id: "rubric", code: "generation_failed", field: "rubric", severity: "blocking", status: "open" },
+      { issue_id: "answer", code: "generation_failed", field: "answer", severity: "warning", status: "open" },
+    ];
+    renderPage("/tasks/task-1/questions/Q2/content");
+    const element = document.querySelector('[data-question-id="Q2"]') as HTMLElement;
+    const card = within(element);
+    expect(card.getAllByText("生成失败")).toHaveLength(1);
+    expect(card.getByText("请补齐缺失的题型、评分标准并确认本题；完成前不能批改。")).toBeVisible();
+    expect(element.querySelector('[data-review-issue-notes] .text-amber-700')).toHaveTextContent('缺少标答（可选），可按需补充。');
+    await userEvent.click(card.getByRole("button", { name: "题型 · 修改" }));
+    const select = card.getByRole("combobox", { name: "题型" });
+    expect(select).toHaveValue("");
+    expect(card.getByRole("option", { name: "请选择" })).toBeDisabled();
+    expect(card.queryByRole("option", { name: "简答题" })).not.toBeInTheDocument();
+    expect(card.getByRole("option", { name: "推理题" })).toBeInTheDocument();
+    expect(card.getByRole("button", { name: "保存" })).toBeDisabled();
+    fireEvent.click(card.getByRole("button", { name: /待确认/ }));
+    expect(mutateAsync).not.toHaveBeenCalled();
+    await userEvent.selectOptions(select, "reasoning");
+    mutateAsync.mockResolvedValue({ workflow_revision: 8 });
+    await userEvent.click(card.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({ taskId: "task-1", qId: "Q2", type: "reasoning", expectedWorkflowRevision: 7 }));
+  });
   it("opens only the failed question fields for manual completion and blocks early confirmation", async () => {
     taskData.problem_data.Q2.reference_answer = "";
     taskData.problem_data.Q2.criterion = "";
@@ -544,17 +576,17 @@ describe("QuestionPreparationDetailPage navigation", () => {
   it("uses reviewed English copy and returns to the question material overview", async () => {
     testState.locale = "en-US";
     const user = userEvent.setup();
-    const router = renderPage("/tasks/task-1/questions/Q1/content?q=proof");
+    const router = renderPage("/tasks/task-1/questions/Q1/content?q=reasoning");
 
     const backLink = await screen.findByRole("link", { name: "Back to Question Material Overview" });
-    expect(backLink).toHaveAttribute("href", "/tasks/task-1/questions?q=proof");
+    expect(backLink).toHaveAttribute("href", "/tasks/task-1/questions?q=reasoning");
     expect(screen.getAllByText("LaTeX and code are rendered while browsing; click Edit to edit the source.")).toHaveLength(2);
 
     await user.click(backLink);
 
     expect(await screen.findByText("Question overview destination")).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/tasks/task-1/questions");
-    expect(router.state.location.search).toBe("?q=proof");
+    expect(router.state.location.search).toBe("?q=reasoning");
   });
 
   it("switches questions with ArrowDown and ArrowUp but not while an input is focused", async () => {

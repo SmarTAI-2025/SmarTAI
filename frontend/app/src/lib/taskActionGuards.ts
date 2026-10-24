@@ -344,6 +344,15 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "problem_extraction_failed") {
+    return {
+      title: tx(locale, "题目识别未完成", "Question recognition did not complete"),
+      description: tx(locale, "请检查原文件和识别描述后重试，也可以人工继续补充题目。", "Check the source file and recognition instructions, then retry, or continue manually to add questions."),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry", tone: "danger", technicalDetails,
+    };
+  }
+
   if (code === "recognition_already_running") {
     return {
       title: tx(locale, "这份资料仍在识别", "This source is still being recognized"),

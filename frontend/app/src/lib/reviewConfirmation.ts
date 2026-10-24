@@ -1,5 +1,6 @@
 import type { PreparationIssue, ProblemInfo, StudentAnswerInfo, StudentSubmission, SubmissionSourceOutcome, Task } from "@/types";
 import { confidenceValue, confidenceNeedsAttention } from "./confidencePolicy";
+import { hasQuestionType } from "./reviewLabels";
 
 export type ReviewAttention = "none" | "advisory" | "blocking";
 export function questionConfidence(issue: PreparationIssue, problem?: ProblemInfo): number | null {
@@ -20,7 +21,7 @@ export function questionIssueSeverity(issue: PreparationIssue, problem?: Problem
   if (issue.field === "answer") return "advisory";
   if (issue.code === "manual_completion_required") {
     const fields = issue.details?.required_fields;
-    return Array.isArray(fields) && fields.some(field => field === "stem" || field === "criterion") ? "blocking" : "advisory";
+    return Array.isArray(fields) && fields.some(field => ["number", "type", "stem", "criterion"].includes(String(field))) ? "blocking" : "advisory";
   }
   if (issue.severity === "blocking" || ["manual_completion_required", "source_conflict", "ambiguous_question_match", "required_review_confirmation"].includes(issue.code)) return "blocking";
   return issue.severity === "warning" ? "advisory" : "none";
@@ -46,11 +47,15 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
 }
 
 export function recognitionIssueLabel(issue: PreparationIssue, locale: string): string | null {
+  if (issue.details?.review_display_reason === "missing_type") return locale === "zh-CN"
+    ? "请选择题型并确认本题；完成前不能批改。" : "Select the question type and confirm before grading.";
+  if (issue.details?.review_display_reason === "missing_number") return locale === "zh-CN"
+    ? "请补齐题号并确认本题；完成前不能批改。" : "Enter the question number and confirm before grading.";
   if (issue.code === "source_conflict" && issue.details?.reason === "test_case_output_conflict") return locale === "zh-CN"
     ? "测试用例中，同一输入对应了不同预期输出，请核对。"
     : "Test cases have different expected outputs for the same input. Please review.";
   if (issue.code === "math_rubric_advisory") return locale === "zh-CN"
-    ? "本题含 AI 补充评分说明，建议核对评分标准。" : "AI scoring guidance was added. Review the rubric.";
+    ? "本题评分标准有待核对的内容。" : "Some rubric details need review.";
   if (issue.details?.review_display_reason === "empty_stem") return locale === "zh-CN"
     ? "题干为空，请对照原件补齐并确认。" : "Question text is empty. Complete it against the source and confirm.";
   if (issue.details?.review_display_reason === "missing_rubric") return locale === "zh-CN"
@@ -108,7 +113,7 @@ export function questionReviewConfirmed(problem: ProblemInfo): boolean {
 }
 export interface ReviewBlocker { label: string; href: string }
 export function questionReviewBlocked(problem: ProblemInfo): boolean {
-  if (!problem.stem?.trim() || !problem.criterion?.trim() || problem.rubric_point_summary?.is_valid === false) return true;
+  if (!problem.number?.trim() || !hasQuestionType(problem.type) || !problem.stem?.trim() || !problem.criterion?.trim() || problem.rubric_point_summary?.is_valid === false) return true;
   return questionReviewIssues(problem).some(issue => {
     if (issue.severity !== "blocking" || issue.code === "required_review_confirmation") return false;
     if (questionHasMissingEvidence(issue)) return true;
@@ -124,7 +129,8 @@ export function questionReviewBlocked(problem: ProblemInfo): boolean {
 
 function manualQuestionFieldsMissing(issue: PreparationIssue, problem: ProblemInfo): boolean {
   const fields = issue.details?.required_fields;
-  return Array.isArray(fields) && fields.some((field: unknown) => (field === "stem" || field === "criterion") && !problem[field]?.trim());
+  return Array.isArray(fields) && fields.some((field: unknown) => field === "type" ? !hasQuestionType(problem.type)
+    : (field === "number" || field === "stem" || field === "criterion") && !problem[field]?.trim());
 }
 
 export function questionReviewNextBlocked(problem: ProblemInfo): boolean {
@@ -147,6 +153,8 @@ export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
     issues.push({ issue_id: `review:${problem.q_id}:${reason}`, q_id: problem.q_id, field, code,
       severity, status: "open", details: { review_display_reason: reason } });
   }
+  if (!problem.number?.trim()) add("source", "manual_completion_required", "missing_number");
+  if (!hasQuestionType(problem.type)) add("source", "manual_completion_required", "missing_type");
   if (!problem.stem?.trim()) add("stem", "parse_anomaly", "empty_stem");
   if (!problem.criterion?.trim()) add("rubric", "manual_completion_required", "missing_rubric");
   if (problem.rubric_point_summary?.is_valid === false) add("rubric", "rubric_step_reference_conflict", "rubric_conflict");
@@ -155,6 +163,38 @@ export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
     add("source", "required_review_confirmation", "confirmation_required");
   }
   return issues.sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
+}
+
+/** Detail copy derives missing fields from the current row, not stale failure markers. */
+export function questionReviewNotes(problem: ProblemInfo, locale: string, fallbackLabel: (code: string) => string) {
+  const issues = questionReviewIssues(problem);
+  const missing = [
+    [!problem.number?.trim(), "题号", "question number"],
+    [!hasQuestionType(problem.type), "题型", "question type"],
+    [!problem.stem?.trim(), "题干", "question text"],
+    [!problem.criterion?.trim(), "评分标准", "rubric"],
+  ] as const;
+  const names = missing.filter(([absent]) => absent).map(([, zh, en]) => locale === "zh-CN" ? zh : en);
+  const answerMissing = !problem.reference_answer?.trim();
+  const notes = issues.filter(issue => !((names.length || answerMissing) && ((issue.code === "manual_completion_required" && issue.details?.review_display_reason !== "confirmation_required")
+    || ["missing_number", "missing_type", "empty_stem", "missing_rubric", "missing_answer"].includes(String(issue.details?.review_display_reason)))))
+    .map(issue => ({ label: recognitionIssueLabel(issue, locale) ?? fallbackLabel(issue.code),
+      severity: issue.severity === "blocking" ? "blocking" as const : "advisory" as const }));
+  if (names.length) {
+    notes.push({ label: locale === "zh-CN"
+      ? `请补齐缺失的${names.join("、")}并确认本题；完成前不能批改。`
+      : `Complete the missing ${names.join(", ")} and confirm this question before grading.`,
+      severity: "blocking" });
+  }
+  if (answerMissing && problem.review_status !== "confirmed") {
+    notes.push({ label: locale === "zh-CN"
+      ? "缺少标答（可选），可按需补充。"
+      : "The reference answer is optional; add one if helpful.", severity: "advisory" });
+  }
+  // Identical failure labels are one message, with the strongest severity.
+  const unique = new Map<string, typeof notes[number]>();
+  for (const note of notes) if (!unique.has(note.label) || note.severity === "blocking") unique.set(note.label, note);
+  return [...unique.values()].sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
 }
 
 export function questionReviewBlockers(problems: ProblemInfo[], taskId: string, locale: string): ReviewBlocker[] {
@@ -174,13 +214,17 @@ export function answerMetadataConfirmationAllowed(answer?: StudentAnswerInfo): b
       || flag.startsWith("recognition_failed_pages:") || flag.startsWith("recognition_unprocessed_pages:"));
 }
 export function answerReviewBlocked(answer?: StudentAnswerInfo): boolean {
+  if (answer?.flag?.includes("answer_assignment_conflict")) return true;
+  if (answer?.content?.trim() && answer.flag?.includes("recognition_matching_review")
+    && !answer.flag.some(flag => ["parse_failed", "no_matching_answer", "recognition_incomplete", "recognition_paused", "provider_submit_uncertain"].includes(flag)
+      || flag.startsWith("recognition_failed_pages:") || flag.startsWith("recognition_unprocessed_pages:") || flag.startsWith("recognition_invalid_fields:"))) return false;
   if (answerMetadataConfirmationAllowed(answer)) return false;
   return Boolean(answer?.flag?.some(flag => ["recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending"].includes(flag)
     || flag.startsWith("recognition_invalid_fields:")));
 }
 export function answerReviewNextBlocked(answer?: StudentAnswerInfo): boolean {
   return answerReviewBlocked(answer) || Boolean(answer?.review_status !== "confirmed"
-    && answer?.flag?.some(flag => ["recognition_repaired_needs_confirmation", "recognition_metadata_review"].includes(flag)));
+    && answer?.flag?.some(flag => ["recognition_matching_review", "recognition_repaired_needs_confirmation", "recognition_metadata_review"].includes(flag)));
 }
 
 function answerHasLowConfidence(answer?: StudentAnswerInfo): boolean {
@@ -229,6 +273,6 @@ function collectSubmissionBlockers(task: Task | undefined, locale: string, stude
     label: `${item.stu_name || item.stu_id} · ${zh ? "请修正并确认学生姓名、学号" : "Correct and confirm the student name and ID"}`,
     href: `/tasks/${task.task_id}/students/${encodeURIComponent(item.stu_id)}?identity=edit`,
   }));
-  const answers = students.flatMap(item => item.stu_ans.filter(confirming ? answerReviewBlocked : answerReviewNextBlocked).map(answer => ({ label: `${item.stu_name || item.stu_id} · ${answer.number || answer.q_id} · ${answerReviewBlocked(answer) ? (zh ? "识别失败，请修正并确认" : "Recognition failed; correct and confirm") : answerHasLowConfidence(answer) ? (zh ? "识别置信度较低，请对照原件核对并确认" : "Low recognition confidence; check the original and confirm") : (zh ? "已修正，请确认作答" : "Corrected; confirm the answer")}`, href: `/tasks/${task.task_id}/students/${encodeURIComponent(item.stu_id)}?question=${encodeURIComponent(answer.q_id)}` })));
+  const answers = students.flatMap(item => item.stu_ans.filter(confirming ? answerReviewBlocked : answerReviewNextBlocked).map(answer => ({ label: `${item.stu_name || item.stu_id} · ${answer.number || answer.q_id} · ${answer.flag?.includes("answer_assignment_conflict") ? (zh ? "同一题号有多份作答，请更正题号" : "Multiple answers use this question; correct the assignment") : answerReviewBlocked(answer) ? (zh ? "识别失败，请修正并确认" : "Recognition failed; correct and confirm") : answerHasLowConfidence(answer) ? (zh ? "识别置信度较低，请对照原件核对并确认" : "Low recognition confidence; check the original and confirm") : (zh ? "已修正，请确认作答" : "Corrected; confirm the answer")}`, href: `/tasks/${task.task_id}/students/${encodeURIComponent(item.stu_id)}?question=${encodeURIComponent(answer.answer_id ?? answer.q_id)}` })));
   return [...sourceIssues, ...identities, ...answers];
 }

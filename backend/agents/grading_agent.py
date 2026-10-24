@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
 
 # Import all skills to trigger their @register_skill registrations
-from backend.skills import concept, calculation, objective, proof, programming  # noqa: F401
+from backend.skills import concept, calculation, proof, programming  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

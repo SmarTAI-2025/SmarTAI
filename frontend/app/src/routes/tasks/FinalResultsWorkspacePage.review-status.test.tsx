@@ -21,7 +21,7 @@ vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => n
 beforeEach(() => {
   vi.stubGlobal("scrollTo", vi.fn());
   state.correction = {
-    q_id: "q1", type: "proof", score: 6, provisional_score: 6, max_score: 10,
+    q_id: "q1", type: "reasoning", score: 6, provisional_score: 6, max_score: 10,
     confidence: .4, comment: "Original explanation", steps: [], expert_results: [],
     requires_human_review: true, review_reasons: ["low_confidence", "general"], review_status: "pending",
   };

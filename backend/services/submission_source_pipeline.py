@@ -613,14 +613,22 @@ async def prepare_submission_sources(
 
     prepared: list[PreparedSubmissionSource] = []
     positions = {}
+    lease_error: LeaseLost | None = None
+
+    def check_lease():
+        if lease_error is not None:
+            raise lease_error
+
     if reporter:
         await reporter.set_totals(students=len(raw_sources), questions=(await reporter.snapshot()).total_questions)
         await reporter.set_stage_metrics(files_total=len(raw_sources), files_processed=0)
     async def source_ready(source):
+        check_lease()
         prepared.append(source)
         if reporter:
             await reporter.increment_stage_metrics(files_processed=1)
         if on_source_ready is not None:
+            check_lease()
             await on_source_ready(source)
 
     async def prepare_one(order_index, raw):
@@ -635,6 +643,8 @@ async def prepare_submission_sources(
                 container_file=container_file,
                 operation_lease_token=operation_lease_token,
             )
+        except LeaseLost:
+            raise
         except Exception:
             if container_file is None or raw.content is None:
                 raise
@@ -657,6 +667,7 @@ async def prepare_submission_sources(
                 operation_lease_token=operation_lease_token,
             )
             raw = failed_raw
+        check_lease()
         positions[source_id] = order_index
         if raw.pre_error_code:
             await source_ready(PreparedSubmissionSource(
@@ -704,9 +715,11 @@ async def prepare_submission_sources(
                         raw.filename,
                         content_type=raw.content_type,
                     )
+                    check_lease()
                     if before_document_ocr is not None:
                         await before_document_ocr(source_id)
                         document_ocr_checkpointed = True
+                        check_lease()
                     result = await document_ocr_skill.recognize_document(
                         raw.content,
                         raw.filename,
@@ -786,8 +799,17 @@ async def prepare_submission_sources(
             ))
     gate = asyncio.Semaphore(max(1, min(50, source_concurrency)))
     async def read_source(index, raw):
-        async with gate:
-            await prepare_one(index, raw)
+        nonlocal lease_error
+        try:
+            async with gate:
+                check_lease()
+                await prepare_one(index, raw)
+        except LeaseLost as exc:
+            # Publish loss before gather wakes: a persisted sibling or queued
+            # source can resume before the parent cancels the remaining tasks.
+            if lease_error is None:
+                lease_error = exc
+            raise
     tasks = [asyncio.create_task(read_source(index, raw)) for index, raw in enumerate(raw_sources)]
     try:
         await asyncio.gather(*tasks)

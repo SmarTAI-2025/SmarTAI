@@ -31,6 +31,7 @@ from backend.db.models import (
     GradingRunEventRecord,
     GradingRunRecord,
     GradingRunSubmissionRecord,
+    SubmissionAnswerRecord,
     SubmissionRecord,
     SubmissionRevisionRecord,
     TeacherReviewRecord,
@@ -347,6 +348,11 @@ def create_run_bundle(
             submission = session.get(SubmissionRecord, revision.submission_id)
             if submission is None or submission.assignment_id != assignment_id:
                 raise ValidationError("frozen_submission_assignment_mismatch")
+            duplicate = session.scalar(select(SubmissionAnswerRecord.q_id).where(
+                SubmissionAnswerRecord.revision_id == revision_id
+            ).group_by(SubmissionAnswerRecord.q_id).having(func.count() > 1).limit(1))
+            if duplicate is not None:
+                raise ValidationError("Resolve duplicate answer assignments before grading.", code="answer_assignment_conflict")
             session.add(
                 GradingRunSubmissionRecord(
                     id=f"rs_{uuid.uuid4().hex[:12]}",

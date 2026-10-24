@@ -16,19 +16,34 @@ def deduction_explanation(rule):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("separator", ["；", "：", ":"])
 @pytest.mark.parametrize("context", [
     "满分10分", "本题总分10分", "每题满分10分", "指定七题每题满分10分，合计70分",
     "共12题每题满分10分，合计120分", "从10分起计", "空白0分", "空白2分", "得分范围0至10分",
     "得分范围0至100%",
 ])
-async def test_context_amounts_do_not_become_extra_deductions(context):
-    source = context + "；" + RULE_ZH
+async def test_context_amounts_do_not_become_extra_deductions(context, separator):
+    source = context + separator + RULE_ZH
     provider = ReplayProvider(deduction_explanation(RULE_ZH))
     plan = await rubric.prepare_math_rubric_plan(question(criterion=source), provider)
     assert plan.routes[0].mode == "deductions"
     assert [(i.points, i.max_occurrences) for i in plan.routes[0].items] == [(1, None)]
     assert source in plan.effective_criterion
     assert len(provider.messages) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("header", ["满分10分", "满分：10分", "total score: 10 points"])
+async def test_score_heading_colon_keeps_first_point_allocation(header):
+    source = header + "：列式4分；代入4分；结果2分。"
+    payload = explanation(routes=[route(items=[
+        item("method", "列式4分", 4), item("substitution", "代入4分", 4), item("result", "结果2分", 2),
+    ])])
+    provider = ReplayProvider(payload)
+    plan = await rubric.prepare_math_rubric_plan(question(criterion=source), provider)
+    assert plan.routes[0].mode == "points"
+    assert [i.points for i in plan.routes[0].items] == [4, 4, 2]
+    assert plan.original_criterion == source and len(provider.messages) == 1
 
 
 @pytest.mark.asyncio
@@ -73,13 +88,14 @@ async def test_english_context_keeps_the_same_teacher_deduction(stem):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("separator", ["；", "："])
 @pytest.mark.parametrize("context", [
     "每题满分8分", "合计70分", "从8分起计", "空白11分", "得分范围0至6分",
     "方法正确时最高6分", "方法正确时从8分起计", "未检查单位扣2分", "每错最多扣2分",
     "共7题每题满分10分，合计70分，本题总分8分", "得分范围0至10%",
 ])
-async def test_real_conflicts_caps_or_missing_item_amounts_still_fall_back(context):
-    source = context + "；" + RULE_ZH
+async def test_real_conflicts_caps_or_missing_item_amounts_still_fall_back(context, separator):
+    source = context + separator + RULE_ZH
     plan = await rubric.prepare_math_rubric_plan(question(criterion=source), ReplayProvider(deduction_explanation(RULE_ZH)))
     assert plan.routes[0].mode == "holistic"
     assert source in plan.effective_criterion

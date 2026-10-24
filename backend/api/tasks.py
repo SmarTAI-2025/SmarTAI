@@ -149,6 +149,8 @@ class UpdateProblemRequest(BaseModel):
 
 class UpdateStudentAnswerRequest(BaseModel):
     expected_workflow_revision: int | None = Field(default=None, ge=0)
+    answer_id: str | None = Field(default=None, min_length=1, max_length=64)
+    target_q_id: str | None = Field(default=None, min_length=1, max_length=64)
     content: str | None = None
     flag: list[str] | None = None
     review_status: Literal["pending", "confirmed"] | None = None
