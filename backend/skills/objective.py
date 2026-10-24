@@ -47,6 +47,14 @@ logger = logging.getLogger(__name__)
 _BINARY_OBJECTIVE_TYPES = ("选择题", "填空题")
 
 
+def _result_credit_applicable(problem_type: str, *, correct: bool,
+                              partial_credit_applicable: bool,
+                              separate_result_parts: bool = False) -> bool:
+    """Shared result-credit eligibility, independent of permission for working."""
+    return (correct or separate_result_parts
+            or (problem_type not in _BINARY_OBJECTIVE_TYPES and partial_credit_applicable))
+
+
 def _is_result_based_criterion(criterion: str) -> bool:
     """Whether the default answer-only settlement can replace the model score."""
     policy = process_credit_policy(criterion)
@@ -73,8 +81,10 @@ def _grading_contract(policy: ProcessCreditPolicy) -> str:
             "allocates independent result components. Explain the applicable rules in rationale. "
             "Split score into result_score and process_score; their sum must equal score. "
             "Award no process marks for forbidden/unspecified policy or unmet conditions. "
-            "An incorrect single final answer earns no result marks, but independent correct "
-            "result components may earn their stated marks. Never invent a policy from uncertainty."
+            "An incorrect final answer earns result marks only for independently allocated correct "
+            "components or permitted multiple-choice subsets. The existing partial_credit_applicable "
+            "rule governs multiple-choice subset RESULT marks independently of process credit. "
+            "Never invent a policy from uncertainty."
         )
     if policy.mode == "allowed":
         return common + (
@@ -156,7 +166,8 @@ def _criterion_fingerprint(criterion: str) -> str:
 
 
 def _resolved_score(result: ResolvedObjectiveGradingOutput, policy: ProcessCreditPolicy,
-                    criterion: str, maximum: float) -> float:
+                    problem: ProblemInfo) -> float:
+    criterion, maximum = problem.criterion, float(problem.max_score)
     resolution = result.policy_resolution
     total = resolution.result_score + resolution.process_score
     if (resolution.criterion_fingerprint != _criterion_fingerprint(criterion) or not resolution.rationale.strip()
@@ -164,8 +175,9 @@ def _resolved_score(result: ResolvedObjectiveGradingOutput, policy: ProcessCredi
         raise StructuredOutputInvalidError("Objective policy resolution lacks consistent source and score evidence.")
     if policy.all_or_nothing and not result.correct:
         return 0.0
-    result_score = resolution.result_score if (
-        result.correct or resolution.separate_result_parts or policy.result_parts
+    result_score = resolution.result_score if _result_credit_applicable(
+        problem.type, correct=result.correct, partial_credit_applicable=result.partial_credit_applicable,
+        separate_result_parts=resolution.separate_result_parts or policy.result_parts,
     ) else 0.0
     process_score = resolution.process_score if (
         policy.mode != "forbidden" and resolution.process_credit == "allowed"
@@ -245,7 +257,9 @@ def _objective_score(
     """
     if correct:
         return float(max_score)
-    if problem_type in _BINARY_OBJECTIVE_TYPES or not partial_credit_applicable:
+    if not _result_credit_applicable(
+        problem_type, correct=correct, partial_credit_applicable=partial_credit_applicable,
+    ):
         return 0.0
     return max(0.0, min(float(model_score), float(max_score)))
 
@@ -363,7 +377,7 @@ class ObjectiveSkill(GradingSkill):
 
                 # Deterministic score: the model judges equivalence, we award.
                 if policy.unresolved:
-                    score = _resolved_score(result, policy, problem.criterion, float(problem.max_score))
+                    score = _resolved_score(result, policy, problem)
                 elif not policy.uses_rubric_score and not (policy.conditional_process and result.correct):
                     score = _objective_score(
                         problem.type,
