@@ -23,7 +23,7 @@ from backend.services.math_strictness import Adjustment, strictness_policy
 
 
 SCHEMA_VERSION = "math_rubric_v2"
-INTERPRETATION_VERSION = "math_rubric_interpretation_v6"
+INTERPRETATION_VERSION = "math_rubric_interpretation_v7"
 Score = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Text = Annotated[str, Field(min_length=1, max_length=20000)]
 

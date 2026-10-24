@@ -62,13 +62,14 @@ async def test_valid_source_still_uses_one_bounded_repair_for_changed_model_poin
     assert len(provider.messages) == 2
 
 
-def test_previous_interpretation_plan_is_not_reused_after_policy_fix(monkeypatch):
+@pytest.mark.parametrize("old_version", ["math_rubric_interpretation_v4", "math_rubric_interpretation_v6"])
+def test_previous_interpretation_plan_is_not_reused_after_policy_fix(monkeypatch, old_version):
     from backend.models import ProblemInfo
     from backend.services.math_grading_context import get_math_plan, math_plans_context
 
     problem = ProblemInfo(**question())
     current_version = rubric.INTERPRETATION_VERSION
-    monkeypatch.setattr(rubric, "INTERPRETATION_VERSION", "math_rubric_interpretation_v4")
+    monkeypatch.setattr(rubric, "INTERPRETATION_VERSION", old_version)
     old = rubric.fallback_math_rubric_plan(problem)
     monkeypatch.setattr(rubric, "INTERPRETATION_VERSION", current_version)
     with math_plans_context({problem.q_id: old}):

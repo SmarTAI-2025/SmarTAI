@@ -3,7 +3,8 @@
 These are code-contract tests, not claims of LLM mathematical accuracy.
 """
 from copy import deepcopy
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
+from itertools import permutations
 
 import pytest
 from fastapi import FastAPI
@@ -15,7 +16,7 @@ from backend.tests.test_math_grading import expert_for
 from backend.tests.test_math_rubric_plan import ReplayProvider, explanation, question, route, item
 
 
-def plan(strictness, *, mode="points", eligible=True, partial=True):
+def plan(strictness, *, mode="points", eligible=True, partial=True, cap=None):
     data = rubric.fallback_math_rubric_plan(question(), grading_setup={
         "strictness": strictness, "allow_partial_credit": partial,
     }).model_dump(mode="json", exclude={"plan_id"})
@@ -26,7 +27,7 @@ def plan(strictness, *, mode="points", eligible=True, partial=True):
               dict(id="condition", description="Non-core condition", points=1, source="ai",
                    default_adjustments=["minor_omission"] if eligible else [])]
              if mode == "points" else
-             [dict(id="error", description="Deduction for an error", points=1, source="ai", max_occurrences=None,
+             [dict(id="error", description="Deduction for an error", points=1, source="ai", max_occurrences=cap,
                    default_adjustments=["minor_omission", "follow_through"] if eligible else [])])
     data["routes"] = [rubric.MathRubricRoute(id="main", description="Shared goals", applies_when="All",
         mode=mode, items=items).model_dump(mode="json")]
@@ -130,6 +131,72 @@ def test_zero_deduction_does_not_consume_cap_before_independent_error():
     draft.deductions = [draft.deductions[2], draft.deductions[0]]
     result, _ = score_assessment(draft, p, ANSWER, problem_text=STEM)
     assert result == 9
+
+
+@pytest.mark.parametrize("cap", [1, 2, 3])
+@pytest.mark.parametrize("strictness", range(0, 101, 5))
+def test_capped_deductions_are_order_independent_and_monotone(strictness, cap):
+    p = plan(strictness, mode="deductions", cap=cap)
+    expected = float((Decimal(9) - Decimal(cap - 1) * strictness / 100).quantize(
+        Decimal("0.1"), rounding=ROUND_HALF_UP))
+    for order in permutations(range(3)):
+        draft = assessment(mode="deductions")
+        draft.deductions = [draft.deductions[index] for index in order]
+        score, steps = score_assessment(draft, p, ANSWER, problem_text=STEM)
+        assert score == pytest.approx(expected)
+        assert sum(step.score for step in steps) == score
+
+
+def test_count_cap_is_not_reinterpreted_as_a_total_money_cap():
+    p = plan(50, mode="deductions", cap=1)
+    draft = assessment(mode="deductions")
+    draft.deductions = draft.deductions[1:]  # two half-loss occurrences
+    assert score_assessment(draft, p, ANSWER, problem_text=STEM)[0] == 9.5
+
+
+def test_multiple_occurrences_are_ranked_by_unit_loss_not_combined_loss():
+    p = plan(50, mode="deductions", cap=2)
+    draft = assessment(mode="deductions")
+    draft.deductions[2].occurrences = 3
+    draft.deductions = [draft.deductions[2], draft.deductions[0]]
+    assert score_assessment(draft, p, ANSWER, problem_text=STEM)[0] == 8.5
+
+
+def test_teacher_fixed_capped_deductions_stay_unchanged():
+    for strictness in [0, 50, 100]:
+        p = plan(strictness, mode="deductions", eligible=False, cap=1)
+        for order in permutations(range(3)):
+            draft = assessment(mode="deductions")
+            for deduction in draft.deductions:
+                deduction.adjustment = None
+            draft.deductions = [draft.deductions[index] for index in order]
+            assert score_assessment(draft, p, ANSWER, problem_text=STEM)[0] == 9
+
+
+def test_cap_does_not_hide_invalid_adjustment_evidence():
+    p = plan(50, mode="deductions", cap=1)
+    draft = assessment(mode="deductions")
+    draft.deductions[2].adjustment = "follow_through"  # omission is not a dependent computation
+    with pytest.raises(ValueError, match="follow_through_requires_error_ancestor"):
+        score_assessment(draft, p, ANSWER, problem_text=STEM)
+
+
+@pytest.mark.asyncio
+async def test_normal_plan_compiler_can_produce_mixed_capped_deductions():
+    provider = ReplayProvider(explanation(routes=[route(id="main", mode="deductions", items=[
+        item("error", "AI补充：计算或必要条件错误", 1, source="ai",
+             default_adjustments=["minor_omission", "follow_through"]),
+    ])]))
+    p = await rubric.prepare_math_rubric_plan(
+        question(stem=STEM, criterion="按解答正确程度酌情给分。"), provider,
+        grading_setup={"strictness": 50},
+    )
+    assert p.compilation_status == "compiled" and len(provider.messages) == 1
+    assert p.routes[0].items[0].max_occurrences == 1
+    for order in [(2, 0), (0, 2)]:
+        draft = assessment(mode="deductions")
+        draft.deductions = [draft.deductions[index] for index in order]
+        assert score_assessment(draft, p, ANSWER, problem_text=STEM)[0] == 9
 
 
 def test_holistic_prose_item_labels_do_not_discard_source_evidence():

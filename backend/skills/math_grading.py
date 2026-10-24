@@ -352,6 +352,7 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
         exemptions = {item.id: item for item in route.exemptions}
         total = _points(plan.max_score)
         reasons = []
+        charges = []
         for deduction in assessment.deductions:
             if not deduction.reason.strip():
                 raise ValueError("deduction_requires_scoring_evidence")
@@ -393,22 +394,29 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
                 raise ValueError("unknown_deduction_exemption")
             consequential = deduction.caused_by is not None and route.error_policy == "no_repeat_deduction"
             count = 0 if consequential or deduction.exemption_id else deduction.occurrences
+            unit_loss = _points(rule.points)
+            if deduction.adjustment is not None and count:
+                unit_loss *= _default_fraction(deduction.adjustment, rule, claims,
+                    [deduction.claim_id], deduction.caused_by, plan)
+            policy = (exemptions[deduction.exemption_id].description if deduction.exemption_id else
+                      route.error_policy_source_quote if consequential else "")
+            charges.append((unit_loss, deduction, rule, count, policy, len(reasons)))
+            reasons.append("")
+        # Apply count caps to the largest eligible per-occurrence losses, not
+        # whichever error the model lists first. Keep explanations in source
+        # order and validate every charge before allocating the allowance.
+        for unit_loss, deduction, rule, count, policy, index in sorted(
+            charges, key=lambda charge: (-charge[0], charge[1].error_id),
+        ):
             if rule.max_occurrences is not None:
                 count = min(count, max(0, rule.max_occurrences - used_rules.get(rule.id, 0)))
-            amount = _points(rule.points) * count
-            if deduction.adjustment is not None and count:
-                amount *= _default_fraction(deduction.adjustment, rule, claims,
-                    [deduction.claim_id], deduction.caused_by, plan)
-            # Like an explicit exemption, an uncharged minor omission must not
-            # consume the rule's allowance before a later independent error.
+            amount = unit_loss * count
             if amount:
                 used_rules[rule.id] = used_rules.get(rule.id, 0) + count
             total -= amount
-            policy = (exemptions[deduction.exemption_id].description if deduction.exemption_id else
-                      route.error_policy_source_quote if consequential else "")
-            reasons.append(f"{rule.description}: −{amount}; "
-                           f"{claims[deduction.claim_id].quote or claims[deduction.claim_id].source_quote}\n"
-                           f"{deduction.reason}" + (f"\n{policy}" if policy else ""))
+            reasons[index] = (f"{rule.description}: −{amount}; "
+                              f"{claims[deduction.claim_id].quote or claims[deduction.claim_id].source_quote}\n"
+                              f"{deduction.reason}" + (f"\n{policy}" if policy else ""))
         desc = "\n\n".join(reasons) or assessment.rationale or assessment.comment
         descriptions = [(desc, total, not assessment.deductions)]
     else:
