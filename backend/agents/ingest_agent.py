@@ -1252,7 +1252,8 @@ async def parse_student_answer_sources_from_ocr_markdown(
                 flag=["ocr_only_structure_requires_teacher_review"],
             ).model_dump())
 
-        if not matched_answers and unlabelled and len(problems_data) == 1 and source_problems and len(sections) == 1:
+        if (not matched_answers and len(problems_data) == 1 and source_problems and len(sections) == 1
+                and (unlabelled or not str(next(iter(problems_data.values())).get("number") or "").strip())):
             q_id, problem = next(iter(source_problems.items()))
             only_section_text = sections[0][1]
             if len(only_section_text) <= 500_000:

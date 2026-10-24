@@ -115,6 +115,19 @@ async def test_ocr_unlabelled_work_is_not_synthetic_question_one():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('catalog_number, accepted', [('', True), ('2', False)])
+async def test_ocr_single_question_without_teacher_number_retains_existing_review_fallback(catalog_number, accepted):
+    known = {'q1': dict(q_id='q1', number=catalog_number, type='short', stem='One exercise.')}
+    result = (await ingest_agent.parse_student_answer_sources_from_ocr_markdown(
+        [source('1. Student work.')], known))[0]
+    if accepted:
+        assert result.student['stu_ans'][0]['content'] == 'Student work.'
+        assert 'ocr_only_structure_requires_teacher_review' in result.student['stu_ans'][0]['flag']
+    else:
+        assert result.status == 'no_matching_answer' and result.student is None
+
+
+@pytest.mark.asyncio
 async def test_ocr_retry_subset_does_not_make_ambiguous_alias_unique():
     known = problems(('Section 1.1 / 1', 'Section 1.2 / 1'))
     result = (await ingest_agent.parse_student_answer_sources_from_ocr_markdown(
