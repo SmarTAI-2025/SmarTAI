@@ -619,7 +619,7 @@ async def prepare_submission_sources(
     async def source_ready(source):
         prepared.append(source)
         if reporter:
-            await reporter.set_stage_metrics(files_processed=len(prepared))
+            await reporter.increment_stage_metrics(files_processed=1)
         if on_source_ready is not None:
             await on_source_ready(source)
 

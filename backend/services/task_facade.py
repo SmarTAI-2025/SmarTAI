@@ -3271,14 +3271,18 @@ async def run_task_submission_parsing(
             parse_capacity = asyncio.Semaphore(_major_question_generation_concurrency(provider) if provider else 4)
             boundary_invalidations = {}
             progress_answers, progress_students = {}, {}
+            completed_sources = set()
 
-            async def report_saved_answers(result):
+            async def report_saved_answers(result, *, source_complete=False):
                 student = result.student
                 if student is not None:
                     progress_students[result.source_id] = student
                     progress_answers.setdefault(result.source_id, {}).update({
                         answer["q_id"]: answer for answer in student.get("stu_ans", [])})
-                await reporter.set_stage_metrics(
+                if source_complete:
+                    completed_sources.add(result.source_id)
+                    await reporter.set_completed_units(len(completed_sources))
+                await reporter.update_stage_metrics(
                     submissions_recognized=len(progress_students),
                     identities_matched=sum(value.get("identity_status") == "matched" for value in progress_students.values()),
                     identities_needing_review=sum(value.get("identity_status") != "matched" for value in progress_students.values()),
@@ -3505,7 +3509,11 @@ async def run_task_submission_parsing(
                 verified = (set(dispatched) | {answer["q_id"] for answer in
                     (previous.student.get("stu_ans", []) if previous else [])
                     if not _answer_recognition_failures(answer.get("flag"))}) - invalid
-                return attach_submission_recognition([result], [source], verified_question_ids=verified)[0]
+                result = attach_submission_recognition([result], [source], verified_question_ids=verified)[0]
+                # Count a source once after all of its units and repairs finish,
+                # including failed outcomes; a saved page alone is not a file.
+                await report_saved_answers(result, source_complete=True)
+                return result
 
             source_tasks = {}
             async def on_source_ready(source):
@@ -3513,6 +3521,8 @@ async def run_task_submission_parsing(
                     # Start structure extraction now, while the next independent
                     # file is still being read. Each complete unit saves itself.
                     source_tasks[source.source_id] = asyncio.create_task(parse_ready_source(source))
+                else:
+                    await report_saved_answers(reused[source.source_id], source_complete=True)
                 await reporter.set_current_step("recognizing_submissions",
                     message="Saving answers as each submission becomes available.")
 
@@ -3539,10 +3549,6 @@ async def run_task_submission_parsing(
             by_source = {**reused, **{result.source_id: result for result in values}}
             results = normalize_submission_source_identities([by_source[source.source_id] for source in all_sources])
             await reporter.set_current_step("consolidating_submission_results", message="Saving submission results.")
-            await reporter.set_stage_metrics(files_total=len(results), files_processed=len(results),
-                submissions_recognized=sum(result.student is not None for result in results),
-                answers_split=sum(result.matched_answer_count for result in results),
-                parse_failures=sum(result.status in {"parse_failed", "no_matching_answer"} for result in results))
             if leased_operation is not None:
                 current_failure_phase = "outcome_persistence"
                 aggregate = _serialize_submission_results(results)
@@ -3566,6 +3572,18 @@ async def run_task_submission_parsing(
                         *([parsed_artifact.id] if parsed_artifact else []),
                     ])),
                 )
+
+        # Reconcile both a fresh run and an aggregate restored after a worker
+        # restart. Use final normalized identities, not pre-merge candidates.
+        recognized = [result for result in results if result.student is not None]
+        await reporter.set_totals(students=len(results), questions=len(questions))
+        await reporter.set_completed_units(len(results))
+        await reporter.update_stage_metrics(files_total=len(results), files_processed=len(results),
+            submissions_recognized=len(recognized),
+            identities_matched=sum(result.student.get("identity_status") == "matched" for result in recognized),
+            identities_needing_review=sum(result.student.get("identity_status") != "matched" for result in recognized),
+            answers_split=sum(result.matched_answer_count for result in results),
+            parse_failures=sum(result.status in {"parse_failed", "no_matching_answer"} for result in results))
 
         current_failure_phase = "outcome_persistence"
         for result in results:

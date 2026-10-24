@@ -79,6 +79,7 @@ async def test_two_page_submission_batches_questions_and_manual_never_calls_ai(m
     queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="S1.pdf",
         content=pdf([page["text"] for page in pages]), content_type="application/pdf", registry=registry)
     operation = _claim(owner, queued["job_id"])
+    reporter = task_facade.get_or_create_reporter(queued["job_id"])
     if pause:
         with pytest.raises(asyncio.CancelledError):
             await task_facade.run_durable_submission_recognition(operation)
@@ -89,6 +90,9 @@ async def test_two_page_submission_batches_questions_and_manual_never_calls_ai(m
             expected_revision=before["workflow_revision"])
     else:
         await task_facade.run_durable_submission_recognition(operation)
+    progress = await reporter.snapshot()
+    assert progress.completed_units == (0 if pause else 1)
+    assert progress.total_students == 1
     after = task_facade.get_task(task_id=task, owner_id=owner)
     assert sorted(calls) == [["q1", "q2"], ["q3", "q4"]]
     answers = {answer["q_id"]: answer for answer in after["student_data"]["S1"]["stu_ans"]}
@@ -124,6 +128,110 @@ async def test_first_file_structure_is_saved_while_second_file_is_still_reading(
     assert sorted(answer["content"] for answer in answers) == ["", "Saved answer"]
     assert "recognition_manual_pending" in next(answer for answer in answers if not answer["content"])["flag"]
     assert registry.provider.ainvoke.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second_fails", [False, True])
+async def test_parallel_submission_progress_preserves_saved_counts_and_counts_finished_sources(monkeypatch, second_fails):
+    from backend.progress.tracker import get_or_create_reporter
+
+    owner, task = _seed_task(with_question=True)
+    first_finished = asyncio.get_running_loop().create_future()
+    original_attach = task_facade.attach_submission_recognition
+    snapshots = {}
+
+    def attach(results, sources, **kwargs):
+        result = original_attach(results, sources, **kwargs)
+        if sources[0].filename == "S1_Alice.txt" and "verified_question_ids" in kwargs:
+            first_finished.set_result(asyncio.current_task())
+        return result
+
+    monkeypatch.setattr(task_facade, "attach_submission_recognition", attach)
+
+    async def invoke(messages):
+        second = "second answer" in messages[-1].content
+        if second:
+            snapshots["second_read"] = await reporter.snapshot()
+        return SimpleNamespace(content=json.dumps(dict(
+            stu_id="S2" if second else "S1", stu_name="Bob" if second else "Alice",
+            stu_ans=[dict(q_id="q1", number="1", type="short", content="Saved answer", flag=[])])))
+
+    registry = _registry(monkeypatch, invoke)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("S1_Alice.txt", "first answer")
+        archive.writestr("S2_Bob.txt", "second answer")
+
+    async def read(**kwargs):
+        if kwargs["filename"] == "S2_Bob.txt":
+            first_task = await asyncio.wait_for(first_finished, 3)
+            await asyncio.wait_for(asyncio.shield(first_task), 3)
+            snapshots["first_finished"] = await reporter.snapshot()
+            if second_fails:
+                raise ValidationError("Unread second source", code="submission_source_empty")
+        return SimpleNamespace(text=kwargs["content"].decode(), recognition=None)
+
+    monkeypatch.setattr(task_facade, "read_question_source", read)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="answers.zip", content=buffer.getvalue(), content_type="application/zip", registry=registry)
+    reporter = get_or_create_reporter(queued["job_id"])
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+
+    assert {name: dict(completed_units=progress.completed_units, total_students=progress.total_students,
+                       **progress.stage_metrics) for name, progress in snapshots.items()} == {
+        name: dict(completed_units=1, total_students=2, files_total=2, files_processed=files,
+                   submissions_recognized=1, identities_matched=1, identities_needing_review=0, answers_split=1)
+        for name, files in [("first_finished", 1), *([] if second_fails else [("second_read", 2)])]
+    }
+    operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
+    assert operation.status == ("error" if second_fails else "done")
+    assert operation.progress["completed_units"] == operation.progress["total_students"] == 2
+    assert operation.progress["stage_metrics"] == dict(files_total=2, files_processed=2,
+        submissions_recognized=1 if second_fails else 2, identities_matched=1 if second_fails else 2,
+        identities_needing_review=0, answers_split=1 if second_fails else 2, parse_failures=int(second_fails))
+
+    if second_fails:
+        second_fails = False
+        before = task_facade.get_task(task_id=task, owner_id=owner)
+        retry = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=queued["job_id"],
+            request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=before["workflow_revision"]),
+            background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
+        reporter = get_or_create_reporter(retry["job_id"])
+        await task_facade.run_durable_submission_recognition(_claim(owner, retry["job_id"]))
+        recovered = await reporter.snapshot()
+        assert recovered.completed_units == recovered.total_students == 2
+        assert recovered.stage_metrics["submissions_recognized"] == 2
+        assert recovered.stage_metrics["identities_matched"] == 2
+        assert recovered.stage_metrics["answers_split"] == 2
+        assert registry.provider.ainvoke.await_count == 2  # The first file was reused.
+
+
+@pytest.mark.asyncio
+async def test_restored_submission_aggregate_restores_progress_without_model_calls(monkeypatch):
+    from backend.progress.tracker import get_or_create_reporter, remove_reporter
+
+    owner, task = _seed_task(with_question=True)
+    registry = _registry(monkeypatch, lambda _: _response())
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="S1_Student.txt", content=b"Saved answer", content_type="text/plain", registry=registry)
+    operation = _claim(owner, queued["job_id"])
+    original = task_facade.source_outcome_repository.record_outcome
+
+    def interrupted(**kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(task_facade.source_outcome_repository, "record_outcome", interrupted)
+    with pytest.raises(asyncio.CancelledError):
+        await task_facade.run_durable_submission_recognition(operation)
+    monkeypatch.setattr(task_facade.source_outcome_repository, "record_outcome", original)
+    remove_reporter(queued["job_id"])
+    reporter = get_or_create_reporter(queued["job_id"])
+    await task_facade.run_durable_submission_recognition(operation)
+    recovered = await reporter.snapshot()
+    assert registry.provider.ainvoke.await_count == 1
+    assert recovered.completed_units == recovered.total_students == 1
+    assert recovered.stage_metrics == dict(files_total=1, files_processed=1,
+        submissions_recognized=1, identities_matched=1, identities_needing_review=0, answers_split=1, parse_failures=0)
 
 
 @pytest.mark.asyncio

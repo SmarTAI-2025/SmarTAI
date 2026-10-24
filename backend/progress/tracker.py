@@ -125,6 +125,12 @@ class ProgressReporter:
             self._progress.completed_units += 1
         await self._emit(ProgressEvent(message="Completed one grading unit."))
 
+    async def set_completed_units(self, count: int) -> None:
+        """Publish a reconciled unit count, including restored submission sources."""
+        _validated_stage_metrics({"completed_units": count})
+        async with self._lock:
+            self._progress.completed_units = count
+
     async def set_stage_progress(
         self,
         current_step: str,
@@ -135,8 +141,8 @@ class ProgressReporter:
     ) -> None:
         """Atomically publish a workflow's factual stage progress.
 
-        ``completed_units`` remains dedicated to grading's student/question
-        pairs. Workflows such as problem recognition use these stage fields for
+        ``completed_units`` counts grading's student/question pairs or finished
+        submission sources. Problem recognition uses these stage fields for
         real milestones; callers must not substitute timers, page estimates, or
         other synthetic progress.
         """
@@ -197,6 +203,12 @@ class ProgressReporter:
                 self._progress.stage_metrics[key] = (
                     self._progress.stage_metrics.get(key, 0) + delta
                 )
+
+    async def update_stage_metrics(self, **metrics: int) -> None:
+        """Set owned counters without replacing other concurrent stages' metrics."""
+        normalized = _validated_stage_metrics(metrics)
+        async with self._lock:
+            self._progress.stage_metrics.update(normalized)
 
     async def configure_question_generation(
         self,
