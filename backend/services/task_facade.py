@@ -3456,7 +3456,10 @@ async def run_task_submission_parsing(
                                                source_end_page=end_page, numbered=False):
                     ids = {ids[0] for match in QUESTION_HEADING.finditer(unit.text)
                            if len(ids := by_number.get(match.group("number"), [])) == 1} & targets
-                    ids -= set(dispatched)
+                    # A repeated identity across a gap is not a complete
+                    # independent answer. Leave it for the existing partial-source
+                    # parse so every available segment remains visible for review.
+                    ids -= set(dispatched) | boundary_invalidations.get(source_id, set())
                     if not unit.complete or not ids:
                         continue
                     source = PreparedSubmissionSource(source_id, stored_file_id, source_filename, source_content_type,

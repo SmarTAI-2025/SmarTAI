@@ -46,8 +46,9 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
     """Identify bounded source text, without inferring content or inventing IDs.
 
     Only a next explicit heading in contiguous saved pages closes a question.
-    The final unit requires a confirmed complete source. Repeated headings,
-    gaps and unfinished tails stay incomplete. Callers may persist fragments,
+    The final unit requires a confirmed complete source. Adjacent same-number
+    headings across pages continue that unit; a number returning after another
+    question, gaps and unfinished tails stay incomplete. Callers may persist fragments,
     but must not generate/grade from an incomplete unit.
     """
     groups: list[list[int]] = []
@@ -64,7 +65,17 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
             offsets.append((page, offset, offset + len(text)))
             offset += len(text) + 2
         text = "\n\n".join(parts)
-        matches = question_headings(text, numbered=numbered)
+        matches, previous = [], None
+        for match in question_headings(text, numbered=numbered):
+            page = next(page for page, start, stop in offsets
+                        if start <= match.start("number") < stop)
+            # Repeating a running question label on its continuation page is
+            # not a new question. Keep the heading and body in the same span.
+            continuation = (previous is not None and previous[0] == match.group("number")
+                            and previous[1] != page)
+            if not continuation:
+                matches.append(match)
+            previous = (match.group("number"), page)
         for index, match in enumerate(matches):
             number = match.group("number")
             if known_numbers is not None and number not in known_numbers:
@@ -127,6 +138,15 @@ def source_page_groups(pages: dict[int, str], *, source_complete=False, source_e
 
     for unit in units:
         for left, right in zip(unit.pages, unit.pages[1:]):
+            parent[root(right)] = root(left)
+    for left, right in zip(numbers, numbers[1:]):
+        if right != left + 1:
+            continue
+        heading = next(iter(question_headings(pages[right], numbered=numbered)), None)
+        if heading is None or pages[right][:heading.start()].strip():
+            # Unnumbered rubrics, answers and test cases also cross pages.
+            # No new question boundary means the following text may continue
+            # the previous page, even when neither page has a heading.
             parent[root(right)] = root(left)
     groups = {}
     for number in numbers:

@@ -113,6 +113,15 @@ def _material_identity(row):
     )})
 
 
+def _join_literal_material(previous, incoming):
+    """Retain same-source pieces; repeated/subsumed extracts add no new text."""
+    if incoming in previous:
+        return previous
+    if previous in incoming:
+        return incoming
+    return previous + "\n\n" + incoming
+
+
 class IncrementalQuestionPreparation:
     def __init__(self, *, operation, sources, provider, provider_id, reporter,
                  score_policy, read_source, generation_language=None, ocr_only=False):
@@ -339,8 +348,12 @@ class IncrementalQuestionPreparation:
                                     **_issue("q1", "programming_tests", "source_conflict", "warning", [provenance["source_token"]]),
                                     "details": {"reason": "test_case_output_conflict"}})
                         elif previous and previous != value:
-                            row["preparation_issues"].append(_issue("q1", _issue_field(field), "source_conflict", "warning", [provenance["source_token"]]))
-                            continue
+                            previous_source = row.get("material_provenance", {}).get(field, {}).get("source_token")
+                            if previous_source == provenance["source_token"]:
+                                value = _join_literal_material(previous, value)
+                            else:
+                                row["preparation_issues"].append(_issue("q1", _issue_field(field), "source_conflict", "warning", [provenance["source_token"]]))
+                                continue
                         row[field] = deepcopy(value)
                         row.setdefault("material_provenance", {})[field] = deepcopy(provenance)
                         row["preparation_issues"].extend(deepcopy([
@@ -516,6 +529,7 @@ class IncrementalQuestionPreparation:
         from backend.services.source_question_units import source_page_groups, source_question_units, question_headings
         draft, _, _ = source
         pages, scheduled, tasks, planned = {}, set(), [], set()
+        numbered = draft.role == "problem"
         limit = max(1, int(settings.source_chunk_chars or 24000))
         selected_pages = question_recognition_options(source[2].get("recognition_options"),
             extraction_hint=draft.extraction_hint).pages
@@ -527,7 +541,7 @@ class IncrementalQuestionPreparation:
             prefix, number = [], first_page
             while number in pages:
                 text = pages[number]
-                heading = next(iter(question_headings(text, numbered=True)), None)
+                heading = next(iter(question_headings(text, numbered=numbered)), None)
                 if heading:
                     prefix.append(text[:heading.start()])
                     return "\n\n".join(prefix).strip()
@@ -547,7 +561,7 @@ class IncrementalQuestionPreparation:
             # Keep ordinary pages together. Oversized groups split between
             # candidate questions first; only an individually oversized question
             # needs partial fragments. Splitting a page is not itself a gap.
-            headings = question_headings(unit.text, numbered=True)
+            headings = question_headings(unit.text, numbered=numbered)
             boundaries = [0, *(heading.start() for heading in headings[1:]), len(unit.text)]
             chunks, pending = [], ""
             for start, end in zip(boundaries, boundaries[1:]):
@@ -586,7 +600,7 @@ class IncrementalQuestionPreparation:
                         **(self.operation.checkpoint_data.get("incremental_source_invalidations") or {}),
                         draft.source_token: repeated})
                 await self.finish("invalidation:" + draft.source_token)
-            for unit in source_page_groups(pages):
+            for unit in source_page_groups(pages, numbered=numbered):
                 if unit.complete:
                     enqueue(unit)
 
@@ -606,7 +620,7 @@ class IncrementalQuestionPreparation:
             requested_pages = coverage.get("requested_pages") or []
             source_end = max(requested_pages) if requested_pages else coverage.get("total_pages")
             units = source_page_groups(pages, source_complete=not incomplete,
-                                       source_end_page=source_end) if pages else []
+                                       source_end_page=source_end, numbered=numbered) if pages else []
             invalid_numbers = sorted({normalize_question_number(unit.number) for unit in source_question_units(
                 pages, allow_repeated_numbers=draft.role == "programming_tests") if unit.closure == "repeated_heading"})
             if invalid_numbers:
@@ -789,7 +803,8 @@ class IncrementalQuestionPreparation:
             value = [case.model_dump() for case in item.test_cases] if target == "test_cases" else item.text_value.strip()
             if target == "test_cases":
                 for case in value:
-                    case["source"] = "teacher" if _saved_test_case_supported(case, "", text) else "llm_generated"
+                    case["source"] = "teacher" if _saved_test_case_supported(case, "", text,
+                        question_number=item.number) else "llm_generated"
             elif value and value not in text:
                 # A paraphrase is not an extracted teacher instruction.
                 invalid = True
@@ -802,6 +817,41 @@ class IncrementalQuestionPreparation:
                     source_filename=draft.filename, source_kind=draft.source_kind,
                     authority="uploaded_reference" if target == "reference_answer" else "uploaded_material",
                     review_status="pending", scope="overall" if overall else "question")}))
+        if target != "test_cases":
+            from backend.services.source_question_units import question_headings
+            headings = question_headings(text)
+            grouped = {}
+            for index, row in enumerate(rows):
+                number = normalize_question_number(row["number"])
+                key = number or ("unassigned", index)
+                value = row[target]
+                regions = [(heading.start(), headings[i + 1].start() if i + 1 < len(headings) else len(text))
+                    for i, heading in enumerate(headings)
+                    if normalize_question_number(heading.group("number")) == number] or [(0, len(text))]
+                positions = {start + match.start() for start, end in regions
+                    for match in re.finditer(re.escape(value), text[start:end])}
+                span = (next(iter(positions)), next(iter(positions)) + len(value)) if len(positions) == 1 else None
+                entry = grouped.setdefault(key, (row, []))
+                entry[1].append((span, value))
+            rows = []
+            for row, pieces in grouped.values():
+                if any(span is None for span, _ in pieces):
+                    # A repeated literal has no unique source offset. Retain
+                    # the response order instead of borrowing another question's
+                    # first matching occurrence and inventing a new order.
+                    row[target] = ""
+                    for _, value in pieces:
+                        row[target] = _join_literal_material(row[target], value)
+                    rows.append(row)
+                    continue
+                merged = []
+                for start, end in sorted({span for span, _ in pieces}):
+                    if merged and start <= merged[-1][1]:
+                        merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+                    else:
+                        merged.append((start, end))
+                row[target] = "\n\n".join(text[start:end] for start, end in merged)
+                rows.append(row)
         error = ValidationError("Some teacher material could not be read faithfully.", code="provider_response_invalid") if invalid or (not rows and text.strip() and not allow_empty) else None
         return (_rows(rows) if rows else {}), error
 
