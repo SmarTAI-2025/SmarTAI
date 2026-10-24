@@ -28,23 +28,67 @@ def choice_definition():
         follow_through="只要求选项，无过程分。", numerical_policy="结果为4。", advisories=[])
 
 
-async def generate_choice():
+async def generate_choice(kind="计算题", definition=None):
     provider = ReplayProvider({"candidates": [
-        dict(target_id="q1:criterion", q_id="q1", target="criterion", rubric_definition=choice_definition()),
+        dict(target_id="q1:criterion", q_id="q1", target="criterion", rubric_definition=definition or choice_definition()),
         dict(target_id="q1:reference_answer", q_id="q1", target="reference_answer", text_value="B，结果为4。"),
     ]})
-    candidates = await generate_missing_question_materials({"q1": choice_question()}, [
+    raw = {**choice_question(), "type": kind}
+    candidates = await generate_missing_question_materials({"q1": raw}, [
         {"target_id": f"q1:{key}", "q_id": "q1", "target": key} for key in ("criterion", "reference_answer")
     ], 6, provider, generation_language="zh", allow_partial=True)
     assert len(provider.messages) == 1
     assert len(candidates) == 2
-    row = choice_question()
+    row = raw
     for candidate in candidates:
         row[candidate.target] = candidate.text_value
         row.setdefault("ai_completion_provenance", {})[candidate.target] = {"source_kind": "ai_generated"}
         if candidate.rubric_draft:
             row["rubric_draft"] = candidate.rubric_draft
     return row
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batched", [False, True])
+@pytest.mark.parametrize("order", [("criterion", "reference_answer"), ("reference_answer", "criterion")])
+async def test_incremental_completion_keeps_draft_matching_final_materials(monkeypatch, order, batched):
+    from backend.agents import incremental_question_preparation as inc
+    from backend.tests.test_incremental_question_preparation import setup, persisted
+
+    owner, _, operation, pipeline = await setup(monkeypatch)
+    raw = inc._rows([choice_question()])["q1"]
+    monkeypatch.setattr(pipeline, "_project_base", lambda: {"q1": deepcopy(raw)})
+    definition = choice_definition()
+    candidates = [dict(
+        target_id=f"q1:{target}", q_id="q1", target=target,
+        text_value="B，结果为4。" if target == "reference_answer" else "",
+        rubric_definition=definition,
+    ) for target in order]
+    responses = ([{"candidates": candidates}] if batched else [{"candidates": [candidate]} for candidate in candidates])
+    provider = ReplayProvider(*responses)
+    pipeline.provider = provider
+    targets = [dict(target_id=f"q1:{target}", q_id="q1", target=target) for target in order]
+    identity = inc._base_identity(raw)
+    await pipeline._generate("generation:" + identity, identity, raw, targets)
+    assert not pipeline.failures, pipeline.failures
+    assert len(provider.messages) == (1 if batched else 2)
+    _, rows = persisted(owner, operation)
+    assert rows["q1"]["reference_answer"] == "B，结果为4。"
+    assert "选择B" in rows["q1"]["criterion"]
+    registry = SimpleNamespace(pick_default=AsyncMock(side_effect=AssertionError("No repeated compilation")))
+    assert saved_draft(rows["q1"]) is not None
+    plans = await prepare_math_plans(rows, registry)
+    assert plans["q1"].original_criterion == rows["q1"]["criterion"]
+    registry.pick_default.assert_not_called()
+    # Rehydration/arrival order cannot select a different stale field snapshot.
+    pipeline.units = dict(reversed(list(pipeline.units.items())))
+    assert saved_draft(pipeline.project()["q1"]) == saved_draft(rows["q1"])
+    # Never make an obsolete plan current by merely updating its fingerprint.
+    old_stem = raw["stem"]
+    raw["stem"] += "请另外说明理由。"
+    pipeline._base_cache_key = None
+    assert saved_draft(pipeline.project()["q1"]) is None
+    raw["stem"] = old_stem
 
 
 @pytest.mark.asyncio
@@ -253,3 +297,37 @@ async def test_caching_a_draft_does_not_make_finished_inputs_new_billable_work(c
         expected_workflow_revision=flow.workflow_revision)
     assert result["status"] == "already_done"
     assert len(grades.list_runs_for_assignment(case[0], actor_id=case[1])) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["计算题", "概念题"])
+@pytest.mark.parametrize("correct", [False, True])
+@pytest.mark.parametrize("bare_rule", [False, True])
+async def test_generated_binary_rubric_enforces_zero_or_full(monkeypatch, kind, correct, bare_rule):
+    from backend.services.math_grading_context import math_plans_context
+    from backend.skills.base import get_skill_for_type
+    from backend.skills import math_grading
+    from backend.models import StudentAnswerInfo
+
+    monkeypatch.setattr(math_grading.kb_tool, "retrieve_for_grading", AsyncMock(return_value=[]))
+    definition = choice_definition()
+    if bare_rule:
+        definition["routes"][0]["items"][0]["description"] = "选B得4分，否则0分"
+    row = await generate_choice(kind, definition)
+    registry = SimpleNamespace(pick_default=AsyncMock(side_effect=AssertionError("No second compiler")))
+    plans = await prepare_math_plans({"q1": row}, registry)
+    problem = ProblemInfo.model_validate(row)
+    problem._math_rubric_source = {"presentation": {"ai_completion_provenance": row["ai_completion_provenance"]}}
+    selected = "B" if correct else "A"
+    provider = ReplayProvider(dict(route_id="answer", route_reason="按唯一选项计分", comment="按选项计分",
+        claims=[dict(id="s1", quote=selected, verdict="supported" if correct else "refuted",
+                     reason="选项正确" if correct else "选项错误", item_ids=["option"])],
+        awards=[dict(item_id="option", score=2, claim_ids=["s1"], reason="模型错误给出中间分")]))
+    with math_plans_context(plans):
+        result = await get_skill_for_type(kind)(provider).grade(problem,
+            StudentAnswerInfo(q_id="q1", number="1", type=kind, content=selected))
+    assert not result.error_kind
+    assert result.score == (4 if correct else 0)
+    assert sum(step.score for step in result.steps) == result.score
+    assert len(provider.messages) == 1
+    registry.pick_default.assert_not_called()

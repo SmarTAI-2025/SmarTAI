@@ -27,6 +27,7 @@ from backend.tools.structured_llm import StructuredOutputInvalidError
 from backend.services.math_source_evidence import SourceMatch, match_source_quote, source_catalog
 from backend.services.math_proof_audit import inspect_audit, read_appendix, REVIEW_INSTRUCTION, OUTPUT_INSTRUCTION
 from backend.services.math_strictness import Adjustment, LEDGER_INSTRUCTION
+from backend.services.binary_scoring import binary_rule
 
 TRACE_VERSION = "math_evidence_v2"
 VERIFICATION_BUDGET_SECONDS = 20.0
@@ -133,6 +134,10 @@ class MathAssessment(BaseModel):
     awards: list[Award] = Field(default_factory=list, max_length=80)
     deductions: list[Deduction] = Field(default_factory=list, max_length=80)
     score: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    binary_correct: bool | None = Field(default=None, strict=True, description=(
+        "For an explicit whole-question zero/full rule only: whether the entire final answer "
+        "satisfies that rule. Judge correctness independently of the proposed numerical score."
+    ))
     confidence: GradingConfidence = 0.0
     rationale: str = ""  # Detailed evidence for holistic scoring; comment stays concise.
     comment: str
@@ -143,6 +148,9 @@ class MathAssessment(BaseModel):
 class DirectMathGrade(BaseModel):
     """Last resort: a genuine model score with an explicit, usable rationale."""
     score: float = Field(ge=0, allow_inf_nan=False)
+    binary_correct: bool | None = Field(default=None, strict=True, description=(
+        "Required when binary_rule is supplied: whether the final answer satisfies that exact rule."
+    ))
     confidence: GradingConfidence = 0.0
     rationale: str = Field(min_length=1)
     comment: str
@@ -177,6 +185,26 @@ def _points(value) -> Decimal:
 def _rounded(value: Decimal, maximum: float) -> float:
     return float(min(_points(maximum), max(Decimal(0), value.quantize(
         Decimal("0.1"), rounding=ROUND_HALF_UP))))
+
+
+def _binary_score(correct, plan, answer, *, claims=None):
+    if not answer.strip():
+        return 0.0
+    # Reuse an unambiguous existing verdict only if it judges the WHOLE
+    # submitted answer. A correct intermediate statement cannot imply full marks.
+    whole = [claim for claim in (claims or {}).values()
+             if claim.kind == "statement" and claim.quote.strip() == answer.strip()]
+    verdicts = {claim.verdict for claim in whole}
+    if verdicts and (len(verdicts) != 1 or "unknown" in verdicts):
+        raise ValueError("binary_rule_requires_consistent_answer_verdict")
+    if len(verdicts) == 1 and "unknown" not in verdicts:
+        grounded = next(iter(verdicts)) == "supported"
+        if correct is not None and correct != grounded:
+            raise ValueError("binary_correct_conflicts_with_answer_verdict")
+        correct = grounded
+    if correct is None:
+        raise ValueError("binary_rule_requires_final_answer_judgment")
+    return float(plan.max_score) if correct else 0.0
 
 
 def _locate_claim(claim, answer, plan, problem_text, catalog):
@@ -431,6 +459,12 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
         raise ValueError("missing_scoring_evidence")
     floor = _points(route.minimum_score) if (route.minimum_condition == "always" or answer.strip()) else Decimal(0)
     total = max(total, floor, Decimal(0))
+    rule = binary_rule(plan.original_criterion, plan.max_score)
+    if rule:
+        score = _binary_score(assessment.binary_correct, plan, answer, claims=claims)
+        desc = "\n\n".join(d for d, _, _ in descriptions)
+        return score, [StepScore(step_no=1, desc=f"{desc}\n{rule}: {score:g}/{plan.max_score:g}",
+                                score=score, is_correct=score == plan.max_score)]
     score = _rounded(total, plan.max_score)
     # Keep the existing nonnegative step scores exactly additive. Apply floors
     # at question level, not by inventing credit for a particular deduction.
@@ -731,6 +765,7 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                 "Use applies only when the result covers this assertion and agrees with its verdict; "
                 "use partial with an explanation when it covers only part of the claim. "
                 "Explain concrete residual disagreement; produce no mandatory-review instructions."
+                " For explicit zero/full rules, include binary_correct judging the entire final answer."
                 + ("\n" + REVIEW_INSTRUCTION + " After the complete review JSON, append PROOF_AUDIT "
                    "followed by a separate JSON object mapping each revised proof expert's index "
                    "(string) to an audit object with the same steps/context_source_ids shape as its trace. "
@@ -831,6 +866,7 @@ class MathGradingSkill(GradingSkill):
         return template + "\n" + LEDGER_INSTRUCTION + "\nINPUT DATA:\n" + _json({
             "problem": problem.stem, "reference_answer": problem.reference_answer,
             "student_answer": answer.content, "rubric_plan": plan.model_dump(mode="json"),
+            "binary_rule": binary_rule(plan.original_criterion, plan.max_score),
             "source_catalog": {key: value[0] for key, value in
                 source_catalog(answer.content or "", problem.stem, plan.original_criterion).items()},
             "retrieved_material": context,
@@ -906,6 +942,8 @@ class MathGradingSkill(GradingSkill):
                 "for omissions, with quote/source_quote empty so the backend copies the exact source. "
                 "Each ID is one original line, not proof that a claim is true. If no suitable ID exists, "
                 "copy an exact excerpt; do not join noncontiguous lines or rewrite the mathematics."
+                " If binary_rule is supplied, judge the entire final answer in binary_correct; "
+                "do not infer correctness from your proposed score or a correct intermediate step."
                 + authoritative_score_instruction(problem.max_score)
                 + "\nJSON Schema:\n" + _json(MathAssessment.model_json_schema()), self.language, self.grading_setup,
                 **({"output_instruction": OUTPUT_INSTRUCTION} if self.template_name == "proof" else {}))
@@ -1026,6 +1064,13 @@ class MathGradingSkill(GradingSkill):
 
     async def _direct(self, problem, answer, plan, prompt, unit, chunks, *, fallback=None, started=None):
         await self._substep(unit, "llm_grade")
+        rule = binary_rule(plan.original_criterion, plan.max_score)
+        def validate(result):
+            if rule:
+                try:
+                    _binary_score(result.binary_correct, plan, answer.content or "")
+                except ValueError as exc:
+                    raise StructuredOutputInvalidError(str(exc)) from exc
         result, response = await structured_llm_call(
             self.provider,
             system_prompt=build_system_prompt(
@@ -1033,15 +1078,20 @@ class MathGradingSkill(GradingSkill):
                 "Return score, confidence, rationale (specific awarded/lost points), and a concise comment. "
                 "No tool verification was completed: do not claim otherwise. Preserve teacher rules, "
                 "alternative valid solutions and error follow-through; never impose a generic percentage cap."
+                " If binary_rule is supplied, include binary_correct judging the entire final answer "
+                "independently of your numerical score."
                 + authoritative_score_instruction(problem.max_score), self.language, self.grading_setup),
-            user_prompt=prompt, output_model=DirectMathGrade)
+            user_prompt=prompt, output_model=DirectMathGrade, validate_output=validate)
         if result.score > problem.max_score:
             raise ValueError("direct_score_out_of_bounds")
         score = _rounded(_points(result.score), problem.max_score)
+        if rule:
+            score = _binary_score(result.binary_correct, plan, answer.content or "")
+        rationale = result.rationale + (f"\n{rule}: {score:g}/{plan.max_score:g}" if rule else "")
         return ExpertResult(
             provider=self.provider.provider_id, score=score, max_score=problem.max_score,
             confidence=result.confidence, comment=result.comment,
-            steps=[StepScore(step_no=1, desc=result.rationale, score=score,
+            steps=[StepScore(step_no=1, desc=rationale, score=score,
                              is_correct=score == problem.max_score)],
             knowledge_citations=kb_tool.citations(chunks), duration_ms=max(response.duration_ms or 0,
                 (perf_counter() - started) * 1000 if started is not None else 0),
