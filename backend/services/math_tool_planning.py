@@ -252,8 +252,18 @@ def _shadowed_constants(source):
         r"(?:变量|参数|下标)\s*([iIeE])(?![A-Za-z0-9_])",
         r"(?<![A-Za-z0-9_\\])([iIeE])\s*(?:为|是)(?:整数|实数|变量|参数|下标|单位元|矩阵|向量)",
     )
-    for pattern in patterns:
-        names.update(match[1] for match in re.finditer(pattern, source, re.I))
+    for index, pattern in enumerate(patterns):
+        for match in re.finditer(pattern, source, re.I):
+            if index == 0:
+                # A complete compound operand (1 + E + I = ...) is not a
+                # declaration. Bare names in assignment chains, list items,
+                # and unsupported prose remain conservatively shadowed.
+                left = re.split(r"[;；。\n=]", source[:match.start(1)])[-1] + match[1]
+                if not re.match(r"^\s*[-+*]\s+", left):
+                    parsed = expression(next(_statements(left), left))
+                    if parsed is not None and isinstance(_tree(parsed).body, (ast.BinOp, ast.UnaryOp)):
+                        continue
+            names.add(match[1])
     return names
 
 

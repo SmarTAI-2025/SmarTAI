@@ -141,6 +141,45 @@ def test_constants_remain_available_when_not_explicitly_shadowed(text):
     assert len(checks) == 1 and checks[0]["origin"] == "explicit_reference"
 
 
+@pytest.mark.parametrize("text,status", [
+    ("因此 z = 1 + E + I = E - 1 + I。", "refuted"),
+    ("1+E=E+1", "supported"),
+    ("2*I=I+I", "supported"),
+    ("-I=I", "refuted"),
+])
+@pytest.mark.asyncio
+async def test_constant_operand_before_equals_does_not_shadow_itself(text, status):
+    problem, plan = inputs(stem="E is Euler's number; I is the imaginary unit.")
+    checks = automatic_checks([claim(text)], problem, plan, student_answer=text)
+    assert len(checks) == 1 and checks[0]["origin"] == "explicit_relation"
+    request = MathVerificationRequest.model_validate(checks[0]["request"])
+    assert binding_error(request, text, problem.stem, problem=problem, plan=plan) is None
+    assert (await verify_math(request)).status == status
+
+
+@pytest.mark.parametrize("declaration", ["I=2。", "Let I=2. ", "变量 I 为实数。"])
+def test_separate_real_assignment_still_blocks_constant_chain_verification(declaration):
+    text = declaration + "因此 z=1+E+I=E-1+I。"
+    problem, plan = inputs(stem="Inspect the submitted work.")
+    assert automatic_checks([claim(text)], problem, plan, student_answer=text) == []
+
+
+@pytest.mark.parametrize("stem", [
+    "Given:\n- I=2\nFind I+1.",
+    "Given:\n* I=2\nFind I+1.",
+    "Given:\n+ I=2\nFind I+1.",
+    "Let x=I=2. Find I+1.",
+    "Given x+\nI=2. Find I+1.",
+    "Given the variable I=2. Find I+1.",
+])
+def test_variable_declarations_in_lists_chains_and_prose_keep_constant_protection(stem):
+    problem, plan = inputs("3", stem)
+    text = "I+1=3"
+    assert automatic_checks([claim(text)], problem, plan, student_answer=text) == []
+    request = MathVerificationRequest(student_expression="I+1", reference_expression="3")
+    assert binding_error(request, text, stem, problem=problem, plan=plan) == "ambiguous_constant_symbol"
+
+
 def test_reference_comparison_requires_the_entire_answer_not_an_intermediate_quantity():
     problem, plan = inputs("6", "Calculate 2*3.")
     assert automatic_checks([claim("2")], problem, plan, student_answer="Take 2. Then 2*3=6.") == []

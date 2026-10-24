@@ -160,3 +160,26 @@ def test_catalog_is_bounded_and_offsets_address_unchanged_source():
     for key, (quote, start, end) in catalog.items():
         source = text if key.startswith("student:") else "Question." if key.startswith("question:") else "Rule."
         assert source[start:end] == quote
+
+
+@pytest.mark.asyncio
+async def test_source_id_constant_chain_receives_actual_tool_feedback_before_scoring():
+    p, a = problem(), answer("因此 z = 1 + E + I = E - 1 + I。")
+    p.stem, p.reference_answer = "E 为自然对数底，I 为虚数单位。", "E-1+I"
+    plan = plan_for(p, mode="holistic")
+    initial = draft(claim()); initial.score = 6
+    initial.claims[0].verdict = "supported"
+    revised = initial.model_copy(deep=True)
+    revised.score, revised.claims[0].verdict = 4, "refuted"
+    revised.claims[0].reason = "The two adjacent constant sums differ by 2."
+    revised.evidence_judgments = [g.EvidenceJudgment(evidence_id="v1", applicability="applies",
+        reason="This is the exact adjacent equality in the submitted line; no unknown variable is assumed.")]
+    provider, calls = raw_provider(initial, revised)
+    with math_plans_context({p.q_id: plan}):
+        result = await CalculationSkill(provider).grade(p, a)
+    trace = g.read_math_trace(result)
+    assert result.score == 4 and len(calls) == 2 and "direct" not in trace
+    assert trace["evidence"][0]["status"] == "refuted"
+    assert "APPLY SCOPED EVIDENCE" in calls[1][1].content
+    assert trace["assessment"]["claims"][0]["quote"] == a.content
+    assert trace["assessment"]["claims"][0]["source_id"] == "student:1"
