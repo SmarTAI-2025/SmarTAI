@@ -67,7 +67,7 @@ for (const stage of ["questions", "submissions", "grading"] as const) {
         const box = await opening.boundingBox();
         return box && box.y >= 70 && box.y + box.height <= 900;
       }).toBe(true);
-      expect(mutations).toHaveLength(1);
+      await expect.poll(() => mutations).toEqual([handoffPath]);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       await opening.scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath("pending-manual-handoff.png"), fullPage: false });

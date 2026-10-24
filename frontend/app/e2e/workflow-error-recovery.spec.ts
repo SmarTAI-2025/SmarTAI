@@ -170,6 +170,7 @@ test("upload guidance explains a missing supplemental material without starting 
   await page.goto("/tasks/recovery-task/questions/import");
   const start = page.getByRole("button", { name: "开始导入并匹配到题目" });
   await expect(start).toBeEnabled();
+  await expect(page.locator("#material-import-action-message")).toHaveText("请选择课程资料或上传新文件。");
   const dialog = page.waitForEvent("dialog");
   await start.click();
   expect((await dialog).message()).toBe("请选择课程资料或上传新文件。");
