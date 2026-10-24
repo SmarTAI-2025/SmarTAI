@@ -182,7 +182,7 @@ export function AssignmentEditorPage() {
             <Textarea
               value={bulkPayload}
               onChange={(event) => setBulkPayload(event.target.value)}
-              placeholder='[{"q_id":"q1","type":"short","stem":"题干","max_score":10}]'
+              placeholder='[{"q_id":"q1","type":"concept","stem":"题干","max_score":10}]'
               className="min-h-28 font-mono text-xs"
             />
           </label>

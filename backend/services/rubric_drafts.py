@@ -76,7 +76,6 @@ def render_rubric(definition: RubricDefinition, *, language="zh") -> str:
 def generated_rubric(problem: dict, definition: RubricDefinition, *, language="zh"):
     """Validate against original teacher rules BEFORE rendering AI additions."""
     original = str(problem.get("criterion") or "")
-    text = render_rubric(definition, language=language)
     explanation = _validated_explanation(_question_input(problem), _Explanation(
         **definition.model_dump(), effective_criterion=(
             "按以下结构化评分项执行；页面标准与此底稿一致。" if language == "zh" else
@@ -84,13 +83,17 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
         ),
     ))
     # Existing teacher material is adopted, never replaced with a generated view.
-    criterion = original or text
+    canonical_definition = RubricDefinition.model_validate(explanation.model_dump(exclude={"effective_criterion"}))
+    criterion = original or render_rubric(canonical_definition, language=language)
     completed = {**problem, "criterion": criterion}
     if not original:
         completed["ai_completion_provenance"] = {
             **(problem.get("ai_completion_provenance") or {}), "criterion": {"source_kind": "ai_generated"},
         }
-    plan = _build_plan(_question_input(completed), explanation)
+    holistic = all(route.mode == "holistic" for route in explanation.routes)
+    plan = _build_plan(_question_input(completed), explanation,
+        status="holistic" if holistic else "compiled",
+        reason="model_selected_holistic" if holistic else "")
     return criterion, RubricDraft(content_fingerprint=draft_fingerprint(completed), plan=plan)
 
 
@@ -106,6 +109,8 @@ def saved_draft(problem, *, grading_setup=None) -> RubricDraft | None:
     row = _mapping(problem)
     source = row.get("source") or getattr(problem, "_math_rubric_source", {}) or {}
     presentation = source.get("presentation") or {} if isinstance(source, Mapping) else {}
+    if not isinstance(presentation, Mapping):
+        return None
     value = row.get("rubric_draft") or presentation.get("rubric_draft")
     if not value:
         return None
@@ -126,6 +131,9 @@ def saved_draft(problem, *, grading_setup=None) -> RubricDraft | None:
 def bind_draft(draft: RubricDraft, problem, *, grading_setup=None) -> MathRubricPlan:
     if draft.content_fingerprint != draft_fingerprint(problem):
         raise ValueError("rubric_draft_content_changed")
+    setup = _mapping(grading_setup) if grading_setup is not None else {}
+    if draft.teacher_notes != str(setup.get("teacher_notes") or ""):
+        raise ValueError("rubric_draft_teacher_policy_changed")
     plan = retarget_draft(draft, problem).plan
     return _with_preferences(plan, grading_setup)
 
@@ -161,7 +169,7 @@ def remember_draft(problem, draft: RubricDraft, *, question_id=None, expected_ve
     value = draft.model_dump(mode="json")
     if question_id is not None and checkpoints is not None:
         import time
-        from sqlalchemy import select
+        from sqlalchemy import select, update
         from backend.db import grading_repository
         from backend.db.models import AssignmentQuestionRecord, GradingRunRecord
         from backend.db.session import session_scope
@@ -186,7 +194,11 @@ def remember_draft(problem, draft: RubricDraft, *, question_id=None, expected_ve
                 return
             source = deepcopy(record.source or {})
             source.setdefault("presentation", {})["rubric_draft"] = value
-            record.source = source
+            # ORM onupdate timestamps represent teacher content edits. Cache
+            # metadata must preserve that time as well as the content version.
+            session.execute(update(AssignmentQuestionRecord).where(
+                AssignmentQuestionRecord.id == record.id,
+            ).values(source=source, updated_at=record.updated_at))
     source = deepcopy(problem._math_rubric_source)
     source.setdefault("presentation", {})["rubric_draft"] = value
     problem._math_rubric_source = source

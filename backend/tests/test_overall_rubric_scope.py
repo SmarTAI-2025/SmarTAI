@@ -24,7 +24,7 @@ def questions():
     rows = {}
     for index, number in enumerate(NUMBERS, 1):
         q_id = f"q{index}"
-        row = dict(q_id=q_id, number=number, type="证明题", stem=f"Prove statement {number}.",
+        row = dict(q_id=q_id, number=number, type="推理题", stem=f"Prove statement {number}.",
                    criterion="", reference_answer="A complete valid proof.", max_score=10)
         row["question_structure"] = build_major_question_structure(row, major_order=index - 1).model_dump()
         rows[q_id] = row

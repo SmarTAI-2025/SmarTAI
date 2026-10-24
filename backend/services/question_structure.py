@@ -108,8 +108,8 @@ def validate_generated_math_rubric_percentages(
     into one arbitrary percentage total.
     """
     if has_subparts or question_type.strip().casefold() not in {
-        "计算题", "证明题", "推理题", "概念题",
-        "calculation", "proof", "reasoning", "concept",
+        "计算题", "推理题", "概念题",
+        "calculation", "reasoning", "concept",
     }:
         return
     text = unicodedata.normalize("NFKC", criterion)

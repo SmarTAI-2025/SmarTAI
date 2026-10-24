@@ -5,7 +5,7 @@ import unicodedata
 QUESTION_TYPES = ("计算题", "概念题", "推理题", "编程题", "其他")
 _ALIASES = {
     "calculation": "计算题", "programming": "编程题", "coding": "编程题",
-    "proof": "推理题", "证明题": "推理题", "证明": "推理题", "reasoning": "推理题",
+    "reasoning": "推理题",
     "concept": "概念题", "概念": "概念题", "推理": "推理题",
     "计算": "计算题", "编程": "编程题",
     "other": "其他", "其它": "其他",

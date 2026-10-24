@@ -12,7 +12,7 @@ from backend.models import ProblemInfo, StudentAnswerInfo, TaskGradingSetup
 from backend.services.math_grading_context import math_plans_context
 from backend.services.math_rubric_plan import prepare_math_rubric_plan
 from backend.skills import math_grading as engine
-from tools.evaluation.math_grading.candidate import evaluate_group, registry_for
+from tools.evaluation.math_grading.candidate import evaluate_group, registry_for, problem_data
 from tools.evaluation.math_grading.candidate_fixtures import assessment_reply, plan_reply
 from tools.evaluation.math_grading.corpus import CASES, corpus_hash
 from tools.evaluation.math_grading.metrics import summarize
@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[3]
 async def prepared(case):
     async def reply(_provider, *, output_model, **kwargs):
         return output_model.model_validate(plan_reply(case)), SimpleNamespace(duration_ms=0)
-    problem = ProblemInfo(**case["problem"])
+    problem = ProblemInfo(**problem_data(case))
     with patch("backend.services.math_rubric_plan.structured_llm_call", reply):
         plan = await prepare_math_rubric_plan(problem, SimpleNamespace(provider_id="fixture"))
     return problem, plan

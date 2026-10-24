@@ -43,7 +43,7 @@ def change_route(plan, **changes):
 
 @pytest.mark.asyncio
 async def test_bad_quote_is_repaired_locally_without_losing_valid_claims():
-    p, a = problem("证明题"), answer("Let n be odd. Thus n squared is odd.")
+    p, a = problem("推理题"), answer("Let n be odd. Thus n squared is odd.")
     plan = plan_for(p)
     bad = assessment(text="Let n be odd.")
     bad.claims.append(g.Claim(id="s2", quote="invented result", verdict="supported", reason="Conclusion."))
@@ -60,7 +60,7 @@ async def test_bad_quote_is_repaired_locally_without_losing_valid_claims():
 
 @pytest.mark.asyncio
 async def test_invalid_quote_is_not_silently_dropped_to_create_full_marks():
-    p, a = problem("证明题"), answer("An unsupported claim.")
+    p, a = problem("推理题"), answer("An unsupported claim.")
     plan = plan_for(p, mode="deductions")
     bad = g.MathAssessment(route_id="main", route_reason="Deduct errors", claims=[
         g.Claim(id="c", quote="invented error", item_ids=["error"], verdict="refuted", reason="Error")],
@@ -75,7 +75,7 @@ async def test_invalid_quote_is_not_silently_dropped_to_create_full_marks():
 
 
 def test_omission_is_grounded_in_requirement_not_fabricated_student_quote():
-    p = problem("证明题", criterion="Forward direction 8 points, reverse direction 2 points.")
+    p = problem("推理题", criterion="Forward direction 8 points, reverse direction 2 points.")
     p.stem = "Prove both directions."
     draft = assessment(text="Forward established.")
     draft.claims.append(g.Claim(id="missing", kind="omission", source_quote=p.stem,
@@ -90,7 +90,7 @@ def test_omission_is_grounded_in_requirement_not_fabricated_student_quote():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mistake", ["omission_verdict", "error_origin_namespace"])
 async def test_domain_repair_explains_field_semantics_without_changing_evidence(mistake):
-    p = problem("证明题")
+    p = problem("推理题")
     if mistake == "omission_verdict":
         p.stem = "Prove both directions."
         a, plan = answer("Forward established."), plan_for(p)
@@ -125,7 +125,7 @@ async def test_domain_repair_explains_field_semantics_without_changing_evidence(
 
 
 def test_feedback_cannot_retarget_omission_to_another_real_requirement():
-    p, a = problem("证明题"), answer("Forward direction shown.")
+    p, a = problem("推理题"), answer("Forward direction shown.")
     p.stem = "Prove the forward direction. Prove the reverse direction."
     draft = assessment(text=a.content)
     draft.claims.append(g.Claim(id="missing", kind="omission",
@@ -355,7 +355,7 @@ async def test_same_total_but_different_exemptions_are_reviewed():
 
 
 def test_local_quote_repair_must_retain_located_missing_obligation():
-    p, a = problem("证明题"), answer("Forward direction shown.")
+    p, a = problem("推理题"), answer("Forward direction shown.")
     p.stem = "Prove both directions."
     plan = plan_for(p, mode="deductions")
     draft = g.MathAssessment(route_id="main", route_reason="Teacher rule", comment="Missing reverse",

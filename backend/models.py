@@ -292,6 +292,11 @@ class StudentAnswerInfo(BaseModel):
     )
     recognition_confidence: RecognitionConfidence = Field(default=None, ge=0, le=1)
 
+    @field_validator("type", mode="before")
+    @classmethod
+    def canonical_question_type(cls, value):
+        return normalize_question_type(value)
+
     @model_serializer(mode="wrap")
     def retain_answer_confidence(self, handler):
         data = handler(self)

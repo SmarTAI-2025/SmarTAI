@@ -19,6 +19,10 @@ def registry_for(providers):
 
 def problem_data(case):
     data = deepcopy(case["problem"])
+    # The frozen historical corpus and report hashes stay immutable. Only this
+    # offline fixture adapter supplies the current category to production code.
+    if data["type"] == "证明题":
+        data["type"] = "推理题"
     # These are three different students answering exactly the same question.
     # Corpus case IDs remain separate observation IDs, not distinct q_ids.
     if case.get("shared_group"):
@@ -106,7 +110,7 @@ async def evaluate_group(cases, provider=None, *, student_names=None):
     students = {
         c["id"]: {"stu_id": c["id"], "stu_name": (student_names or {}).get(c["id"], "Synthetic"),
                   "stu_ans": [dict(q_id=problem_data(c)["q_id"], number=problem_data(c)["number"],
-                                   type=c["problem"]["type"], content=c["answer"])]}
+                                   type=problem_data(c)["type"], content=c["answer"])]}
         for c in cases}
     start = time.perf_counter()
     before_calls = getattr(provider, "calls", 0)

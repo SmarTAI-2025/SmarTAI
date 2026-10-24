@@ -59,6 +59,14 @@ async def test_generated_response_round_trip_binds_without_any_grading_preparati
         assert plans["q1"].strictness == strictness
         assert plans["q1"].routes[0].items[0].points == 4
         assert plans["q1"].effective_criterion.count("Authenticated teacher grading preferences:") == 1
+        from backend.services.math_grading_context import get_math_plan, math_plans_context, problem_from_question
+        persisted = SimpleNamespace(**{k: row.get(k) for k in (
+            "q_id", "number", "type", "stem", "criterion", "reference_answer", "test_cases", "max_score",
+        )}, order_index=0, source={"presentation": {
+            "rubric_draft": row["rubric_draft"], "ai_completion_provenance": row["ai_completion_provenance"],
+        }})
+        with math_plans_context(plans):
+            assert get_math_plan(problem_from_question(persisted)).plan_id == plans["q1"].plan_id
     registry.pick_default.assert_not_called()
 
 
@@ -128,7 +136,7 @@ async def test_concurrent_preparation_persists_once_and_reuses_after_configurati
     registry = SimpleNamespace(pick_default=lambda: SimpleNamespace(ainvoke=AsyncMock()))
     run_id = start(case, "draft-cache")["job_id"]
     checkpoints, questions, _, _ = prepare(case, run_id)
-    versions = {q.q_id: q.version for q in questions}
+    versions = {q.q_id: (q.version, q.updated_at) for q in questions}
     async def load():
         return await checkpoints.run(prepare_math_plans(
             grading_adapter.build_problem_store(questions), registry))
@@ -137,7 +145,7 @@ async def test_concurrent_preparation_persists_once_and_reuses_after_configurati
     assert first == concurrent
     persisted = assignment_repository.get_questions_by_assignment(case[0])
     assert all(q.source["presentation"]["rubric_draft"] for q in persisted)
-    assert {q.q_id: q.version for q in persisted} == versions
+    assert {q.q_id: (q.version, q.updated_at) for q in persisted} == versions
     stop(case, run_id)
     flow = workflow_repository.get_live_workflow(case[0], owner_id=case[1])
     workflow_repository.update_workflow(case[0], owner_id=case[1], grading_setup={
@@ -169,3 +177,79 @@ async def test_stop_during_compilation_cannot_write_a_draft(case, monkeypatch):
             SimpleNamespace(pick_default=lambda: SimpleNamespace(ainvoke=AsyncMock()))))
     assert all(not (q.source.get("presentation") or {}).get("rubric_draft")
                for q in assignment_repository.get_questions_by_assignment(case[0]))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("definition", [{"routes": "broken"}, {**choice_definition(), "routes": [{**choice_definition()["routes"][0], "items": [{**choice_definition()["routes"][0]["items"][0], "points": 3}]}]}])
+async def test_optional_broken_definition_preserves_valid_reference_answer(definition):
+    raw = choice_question()
+    raw["criterion"] = "正确选项得4分，其他0分。"
+    provider = ReplayProvider({"candidates": [dict(target_id="q1:reference_answer", q_id="q1",
+        target="reference_answer", text_value="B，4。", rubric_definition=definition)]})
+    result = await generate_missing_question_materials({"q1": raw}, [dict(
+        target_id="q1:reference_answer", q_id="q1", target="reference_answer")], 6, provider,
+        generation_language="zh", allow_partial=True)
+    assert len(result) == 1 and result[0].text_value == "B，4。"
+    if isinstance(definition["routes"], str):
+        assert result[0].rubric_draft is None
+    else:
+        draft = result[0].rubric_draft
+        assert draft["plan"]["original_criterion"] == raw["criterion"]
+        assert draft["plan"]["compilation_status"] == "holistic"
+        assert not draft["plan"]["routes"][0]["items"]
+        completed = {**raw, "reference_answer": result[0].text_value, "rubric_draft": draft,
+                     "ai_completion_provenance": {"reference_answer": {"source_kind": "ai_generated"}}}
+        plans = await prepare_math_plans({"q1": completed},
+            SimpleNamespace(pick_default=AsyncMock(side_effect=AssertionError("No repeated interpretation"))))
+        assert plans["q1"].original_criterion == raw["criterion"]
+    assert len(provider.messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_wrong_target_identity_cannot_drop_a_valid_sibling():
+    provider = ReplayProvider({"candidates": [
+        dict(target_id="q1:criterion", q_id="unrelated", target="criterion", rubric_definition=choice_definition()),
+        dict(target_id="q1:reference_answer", q_id="q1", target="reference_answer", text_value="B，4。"),
+    ]})
+    result = await generate_missing_question_materials({"q1": choice_question()}, [dict(
+        target_id=f"q1:{field}", q_id="q1", target=field) for field in ("criterion", "reference_answer")],
+        6, provider, generation_language="zh", allow_partial=True)
+    assert [candidate.target for candidate in result] == ["reference_answer"]
+    assert len(provider.messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_generation_receives_the_complete_teacher_policy_tail():
+    raw = choice_question()
+    raw["criterion"] = "教师背景说明。" * 1500 + "末尾政策：选错不得分，禁止追加过程分。"
+    provider = ReplayProvider({"candidates": [dict(target_id="q1:reference_answer", q_id="q1",
+        target="reference_answer", text_value="B，4。") ]})
+    await generate_missing_question_materials({"q1": raw}, [dict(target_id="q1:reference_answer", q_id="q1",
+        target="reference_answer")], 6, provider, generation_language="zh", allow_partial=True)
+    assert raw["criterion"] in provider.messages[0][1].content
+
+
+@pytest.mark.asyncio
+async def test_caching_a_draft_does_not_make_finished_inputs_new_billable_work(case, monkeypatch):
+    from backend.db import grading_repository as grades, workflow_repository as workflows
+    from backend.models import Correction
+    from backend.services import grading_adapter, math_rubric_plan, task_facade
+
+    async def compile_plan(problem, provider, **kwargs):
+        return math_rubric_plan.fallback_math_rubric_plan(
+            problem, reason="model_selected_holistic", bind_preferences=False)
+    monkeypatch.setattr(math_rubric_plan, "prepare_math_rubric_plan", compile_plan)
+    run_id = start(case, "metadata-idempotency")["job_id"]
+    checkpoints, questions, revisions, _ = prepare(case, run_id)
+    await checkpoints.run(prepare_math_plans(grading_adapter.build_problem_store(questions),
+        SimpleNamespace(pick_default=lambda: SimpleNamespace(ainvoke=AsyncMock()))))
+    for _, student in revisions:
+        for q in questions:
+            checkpoints.save_correction(student, Correction(q_id=q.q_id, type=q.type,
+                score=8, max_score=10, confidence=1, comment="Synthetic accepted answer", steps=[]))
+    grades.mark_completed(run_id, worker_id="checkpoint-test", completed=len(questions)*len(revisions), failed=0)
+    flow = workflows.get_live_workflow(case[0], owner_id=case[1])
+    result = task_facade.start_task_grading(task_id=case[0], owner_id=case[1],
+        expected_workflow_revision=flow.workflow_revision)
+    assert result["status"] == "already_done"
+    assert len(grades.list_runs_for_assignment(case[0], actor_id=case[1])) == 1

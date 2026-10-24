@@ -14,7 +14,7 @@ CONTRACT = json.loads((Path(__file__).resolve().parents[2] / "frontend/app/src/t
 def test_report_pending_count_matches_review_queue_contract(case):
     correction = {**CONTRACT["base"], **case["patch"]}
     snapshot = {"version": 1, "created_at": 1, "fingerprint": "contract", "payload": {
-        "problem_data": {"q1": {"q_id": "q1", "number": "1", "type": "proof"}},
+        "problem_data": {"q1": {"q_id": "q1", "number": "1", "type": "reasoning"}},
         "results": [{"student_id": "example", "student_name": "Example", "corrections": [correction]}],
     }}
     files = build_artifact_files(task_id="contract", task_name="Contract", snapshot=snapshot, generated_at=2)

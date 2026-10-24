@@ -37,7 +37,7 @@ const taskData = vi.hoisted(() => ({
     Q1: {
       q_id: "Q1",
       number: "1",
-      type: "Proof",
+      type: "reasoning",
       stem: "Proof question one. (a) Establish the base case. (b) Complete the proof.",
       max_score: 10,
       max_score_source: "default_10",
@@ -71,7 +71,7 @@ const taskData = vi.hoisted(() => ({
     Q2: {
       q_id: "Q2",
       number: "2",
-      type: "Proof",
+      type: "reasoning",
       stem: "Proof question two",
       max_score: 10,
       criterion: "Rubric two",
@@ -190,12 +190,12 @@ it("keeps exactly one review-confirm button per question", () => {
 
 beforeEach(() => {
   testState.locale = "zh-CN";
-  taskData.problem_data.Q1.type = "Proof";
+  taskData.problem_data.Q1.type = "reasoning";
   mutateAsync.mockReset();
   taskData.workflow_revision = 7;
   taskData.status = "problems_ready";
   taskData.problem_data.Q2.reference_answer = "Answer two";
-  taskData.problem_data.Q2.type = "Proof";
+  taskData.problem_data.Q2.type = "reasoning";
   taskData.problem_data.Q2.criterion = "Rubric two";
   taskData.problem_data.Q2.preparation_issues = [];
   taskRefetch.mockReset().mockResolvedValue({ data: taskData });
@@ -576,17 +576,17 @@ describe("QuestionPreparationDetailPage navigation", () => {
   it("uses reviewed English copy and returns to the question material overview", async () => {
     testState.locale = "en-US";
     const user = userEvent.setup();
-    const router = renderPage("/tasks/task-1/questions/Q1/content?q=proof");
+    const router = renderPage("/tasks/task-1/questions/Q1/content?q=reasoning");
 
     const backLink = await screen.findByRole("link", { name: "Back to Question Material Overview" });
-    expect(backLink).toHaveAttribute("href", "/tasks/task-1/questions?q=proof");
+    expect(backLink).toHaveAttribute("href", "/tasks/task-1/questions?q=reasoning");
     expect(screen.getAllByText("LaTeX and code are rendered while browsing; click Edit to edit the source.")).toHaveLength(2);
 
     await user.click(backLink);
 
     expect(await screen.findByText("Question overview destination")).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/tasks/task-1/questions");
-    expect(router.state.location.search).toBe("?q=proof");
+    expect(router.state.location.search).toBe("?q=reasoning");
   });
 
   it("switches questions with ArrowDown and ArrowUp but not while an input is focused", async () => {

@@ -2,7 +2,9 @@ import { expect, test } from "@playwright/test";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 
-test("missing type and materials stay visible without duplicate failure notes", async ({ page }, testInfo) => {
+for (const width of [1280, 390]) {
+test(`missing type and materials stay visible without duplicate failure notes (${width}px)`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width, height: 900 });
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(() => {
@@ -78,9 +80,36 @@ test("missing type and materials stay visible without duplicate failure notes", 
   await expect(card.locator('[data-review-issue-notes]')).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("confirmed-without-reference-answer.png"), fullPage: true });
   expect(problem.reference_answer).toBe("");
+  await expect(card.getByText("未提供标答（可选）。", { exact: true })).toBeVisible();
+  await expect(card.getByText(/SmarTAI 正在生成/)).toHaveCount(0);
   expect(mutations).toHaveLength(3);
   await page.goto("/tasks/type-review/questions");
   await expect(page.getByRole("tab", { name: "需要处理 (0)" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "建议处理 (0)" })).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+}
+
+test("retired editors reject direct URLs and are absent from current navigation", async ({ page }) => {
+  const requests: string[] = [];
+  await page.addInitScript(() => {
+    localStorage.setItem("smartai_token", "synthetic-retired-type-token");
+    localStorage.setItem("smartai_locale", "en-US");
+  });
+  await page.route(`${backend}/**`, async route => {
+    const path = new URL(route.request().url()).pathname;
+    requests.push(path);
+    if (path === "/auth/me") return route.fulfill({ json: { id: "teacher", username: "Teacher", role: "teacher", is_active: true } });
+    if (path === "/auth/activity") return route.fulfill({ json: { token: "synthetic-retired-type-token" } });
+    return route.fulfill({ json: [] });
+  });
+  for (const path of ["/teacher/assignments/new", "/teacher/assignments/old", "/teacher/assignments/old/edit", "/prob_preview", "/hw_preview", "/ai_grading"]) {
+    await page.goto(path);
+    await expect(page.getByText("Page not found", { exact: true })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`${path}$`));
+    await expect(page.locator('a[href^="/teacher/assignments"]')).toHaveCount(0);
+    await expect(page.getByRole("combobox", { name: /type|题型/i })).toHaveCount(0);
+  }
+  expect(requests.some(path => path.startsWith("/assignments/") && !path.includes("/knowledge"))).toBe(false);
 });

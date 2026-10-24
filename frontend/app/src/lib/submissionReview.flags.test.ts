@@ -35,21 +35,21 @@ describe("OCR review labels", () => {
   });
 
   it("retains source flags after review without keeping the cell pending", () => {
-    const answer = { q_id: "q1", number: "1", type: "proof", content: "0*x=0", flag: ["recognition_needs_review"] };
+    const answer = { q_id: "q1", number: "1", type: "reasoning", content: "0*x=0", flag: ["recognition_needs_review"] };
     expect(getAnswerState(answer)).toBe("recognized");
     expect(getAnswerState({ ...answer, review_status: "confirmed" })).toBe("reviewed");
     expect(answer.flag).toEqual(["recognition_needs_review"]);
   });
 
   it("does not turn document-wide warnings or ordinary pending answers into risks", () => {
-    const answers = Array.from({ length: 12 }, (_, index) => ({ q_id: `q${index}`, number: `${index}`, type: "proof", content: "Readable answer", flag: ["recognition_needs_review"] }));
+    const answers = Array.from({ length: 12 }, (_, index) => ({ q_id: `q${index}`, number: `${index}`, type: "reasoning", content: "Readable answer", flag: ["recognition_needs_review"] }));
     expect(answers.every(answer => answerReviewAttention(answer) === "none")).toBe(true);
     expect(answers.every(answer => getAnswerState(answer) === "recognized" && answerNeedsConfirmation(answer))).toBe(true);
     expect(studentNeedsAttention({ stu_id: "s1", stu_name: "Sample", stu_ans: answers }, answers.map(answer => ({ id: answer.q_id, label: answer.number, type: answer.type, stem: "" })))).toBe(false);
   });
 
   it.each(["very_low_confidence", "recognition_low_confidence", "low_confidence"])("retires uncalibrated %s from all review advice", (flag) => {
-    const answer = { q_id: "q1", number: "1", type: "proof", content: "Readable answer", flag: [flag] };
+    const answer = { q_id: "q1", number: "1", type: "reasoning", content: "Readable answer", flag: [flag] };
     expect(answerReviewAttention(answer)).toBe("none");
     expect(answerReviewNotes(answer, "zh-CN")).toEqual([]);
     expect(answerReviewAttention({ ...answer, flag: ["recognition_failed"] })).toBe("blocking");
@@ -58,7 +58,7 @@ describe("OCR review labels", () => {
   });
 
   it.each([0, .25, .5999, .6, .95])("uses real confidence instead of stale flags (%s)", recognition_confidence => {
-    const answer = { q_id: "q1", number: "1", type: "proof", content: "Partial text retained", recognition_confidence, flag: ["low_confidence"] };
+    const answer = { q_id: "q1", number: "1", type: "reasoning", content: "Partial text retained", recognition_confidence, flag: ["low_confidence"] };
     expect(answerReviewAttention(answer)).toBe(recognition_confidence < .6 ? "advisory" : "none");
     expect(answerReviewAttention({ ...answer, flag: ["authorship_uncertain"] })).toBe("advisory");
     const incomplete = { ...answer, flag: ["recognition_manual_pending", "recognition_unprocessed_pages:2"] };
@@ -70,7 +70,7 @@ describe("OCR review labels", () => {
   it("shows advice only on the low-confidence answer, across questions and students", () => {
     const scores = [[.96, .3], [.6, null]];
     const attention = scores.map(student => student.map((recognition_confidence, i) => {
-      const answer = { q_id: `q${i}`, number: `${i}`, type: "proof", content: "Literal work",
+      const answer = { q_id: `q${i}`, number: `${i}`, type: "reasoning", content: "Literal work",
         recognition_confidence, flag: ["recognition_low_confidence"] };
       const notes = answerReviewNotes(answer, "zh-CN");
       expect(notes).toHaveLength(recognition_confidence === .3 ? 1 : 0);
@@ -80,7 +80,7 @@ describe("OCR review labels", () => {
   });
 
   it.each(["recognition_failed_pages:2", "recognition_unprocessed_pages:2"])("keeps server-projected page failure %s blocked after confirmation", (flag) => {
-    const answer = { q_id: "q1", number: "1", type: "proof", content: "", flag: ["recognition_needs_review", flag, "recognition_failed"], review_status: "confirmed" as const };
+    const answer = { q_id: "q1", number: "1", type: "reasoning", content: "", flag: ["recognition_needs_review", flag, "recognition_failed"], review_status: "confirmed" as const };
     expect(answerReviewAttention(answer)).toBe("blocking");
     expect(getAnswerState(answer)).toBe("flagged");
   });

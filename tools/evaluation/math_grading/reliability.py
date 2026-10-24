@@ -127,6 +127,11 @@ async def evaluate(case):
     from backend.skills.math_grading import read_math_trace
     from backend.tools import math_verification
 
+    # Historical fixture metadata is translated at this offline harness only;
+    # the public product rejects the retired category instead of aliasing it.
+    case = deepcopy(case)
+    if case["problem"]["type"] == "证明题":
+        case["problem"]["type"] = "推理题"
     events, plans, tool_calls = [], [], []
     provider_count = len(case["wire"].get("experts", [None]))
     providers = [RawProvider(case["wire"], i, events) for i in range(provider_count)]

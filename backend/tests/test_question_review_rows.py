@@ -30,7 +30,7 @@ def test_add_edit_remove_questions_use_existing_editor_and_keep_empty_matrix():
     with pytest.raises(DomainError):
         task_facade.update_problem(task_id=task, owner_id=owner, q_id=q_id, patch={"review_status": "confirmed"})
     task_facade.update_problem(task_id=task, owner_id=owner, q_id=q_id,
-        patch={"number": "2.4", "type": "proof", "stem": "Teacher question", "criterion": "Award 10 points for a correct solution."})
+        patch={"number": "2.4", "type": "reasoning", "stem": "Teacher question", "criterion": "Award 10 points for a correct solution."})
     task_facade.update_problem(task_id=task, owner_id=owner, q_id=q_id, patch={"review_status": "confirmed"})
     after = task_facade.get_task(task_id=task, owner_id=owner)
     assert after["problem_data"][q_id]["number"] == "2.4"

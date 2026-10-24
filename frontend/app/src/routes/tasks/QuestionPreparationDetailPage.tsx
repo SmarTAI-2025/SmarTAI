@@ -663,7 +663,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
         <div className={cn("mt-3 min-h-[92px] rounded-[8px] bg-slate-50 px-4 py-3 text-sm leading-6 dark:bg-slate-950/20", compact && "min-h-[72px]", (field === "number" || field === "type") && "min-h-[50px]")}>
           {field === "type" ? questionTypeLabel(value, locale) : value.trim() ? (field === "solution_code"
             ? <SyntaxHighlightedCode code={value} languageHint={`${problem.type}\n${problem.stem}`} locale={locale} />
-            : <MarkdownMath>{value}</MarkdownMath>) : <p className="text-sm text-muted-foreground">{tx(locale, "SmarTAI 正在生成或本次处理未成功，请在风险总览查看。", "SmarTAI generation is pending or failed; check the risk overview.")}</p>}
+            : <MarkdownMath>{value}</MarkdownMath>) : <p className="text-sm text-muted-foreground">{field === "reference_answer" ? tx(locale, "未提供标答（可选）。", "No reference answer provided (optional).") : tx(locale, "尚未提供。", "Not provided.")}</p>}
         </div>
       )}
     </section>

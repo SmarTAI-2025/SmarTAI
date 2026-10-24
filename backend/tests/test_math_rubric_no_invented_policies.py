@@ -90,7 +90,7 @@ async def test_policy_quote_does_not_silently_enable_an_unselected_switch():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["计算题", "证明题", "概念题"])
+@pytest.mark.parametrize("kind", ["计算题", "推理题", "概念题"])
 @pytest.mark.parametrize("policy,expected", [("小错严禁免扣分", 9), ("小错不扣分", 10)])
 async def test_original_rule_reaches_all_three_skills_without_direct_fallback(monkeypatch, kind, policy, expected):
     from backend.models import ProblemInfo, StudentAnswerInfo
@@ -115,7 +115,7 @@ async def test_original_rule_reaches_all_three_skills_without_direct_fallback(mo
     # This test covers plan compilation, source transfer, real JSON validation
     # and accounting; mathematical verification has its own independent suite.
     monkeypatch.setattr(grading.MathGradingSkill, "_verify", AsyncMock(return_value=[]))
-    skill = {"计算题": CalculationSkill, "证明题": ProofSkill, "概念题": ConceptSkill}[kind]
+    skill = {"计算题": CalculationSkill, "推理题": ProofSkill, "概念题": ConceptSkill}[kind]
     with math_plans_context({problem.q_id: plan}):
         result = await skill(provider).grade(problem, answer)
     trace = grading.read_math_trace(result)

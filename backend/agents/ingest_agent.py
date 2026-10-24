@@ -1924,13 +1924,14 @@ Return exactly one JSON object:
   "q_id":"q1",
   "target":"criterion|reference_answer|solution_code|test_cases",
   "text_value":"text for reference_answer/solution_code, otherwise null",
-  "rubric_definition":"structured rubric for criterion only, matching the supplied schema",
+  "rubric_definition":"structured rubric on criterion, or on reference_answer when existing_criterion is present",
   "test_cases":[{"input":"","expected_output":"","description":"","source":"llm_generated","sandbox_feasible":true}]
 }]}
 
 Rules:
 - Attach rubric_definition once per question to the criterion candidate, or to its reference_answer
-  candidate when a teacher criterion already exists. Preserve that teacher criterion verbatim;
+  candidate when a teacher criterion already exists. This field is REQUIRED on that candidate,
+  including when the only requested target is reference_answer. Preserve that teacher criterion verbatim;
   the definition interprets it for shared use, without generating a replacement.
 - criterion: return rubric_definition, not a second independently written text_value. The program
   renders the existing rubric text from this single definition. Use absolute point allocations.
@@ -1949,7 +1950,23 @@ Rules:
   When explicitly asked to select AND explain, allocate option and explanation points separately.
   Adopt complete teacher answers/rules directly. Concretize general policies such as one point per
   error without changing their amount. Record scoring contradictions in advisories; do not silently
-  choose a version, and do not require a new confirmation step.
+  choose a version, and do not require a new confirmation step. Advisories must identify an
+  actionable uncertainty or contradiction; do not warn merely because a rubric is AI-generated
+  or the teacher supplied no detailed policy.
+- Numeric ledger contract: prefer ONE route with method-independent scoring goals. A points
+  route's item budgets must EACH sum exactly to max_score, including routes for partial answers.
+  Do not create separate zero-point/wrong-answer or partial-score routes. For single choice use
+  one max_score item whose description says correct option earns that budget, otherwise zero.
+  For generated multiple-choice policies use one max_score item with alternative awards stated
+  in its description. If existing teacher criteria contain conditional awarded scores (e.g. full
+  set=4, missing=2, wrong=0), use mode=holistic with empty items; retain all those conditions in
+  the route description and the unchanged original teacher criterion.
+  Each item needs source=ai|provided and source_quote. Use provided ONLY when source_quote is
+  an exact passage of existing_criterion containing its original allocation; never quote the
+  stem or reference answer as a provided rubric. If existing_criterion_source is ai, all items
+  must use source=ai. All inferred items use source=ai. AI additions
+  must still preserve every explicit teacher amount, limit and exception. If a teacher policy
+  cannot fit this ledger, use mode=holistic with empty items and keep its original rules intact.
 - teacher_subpart_points contains authoritative teacher allocations. Preserve each named label's
   points exactly in criterion; allocate only the unspecified remainder. Do not replace explicit
   allocations with an even split. A subpart remains inside its single major-question package.
@@ -2004,6 +2021,7 @@ Rules:
 
 
 from backend.services.rubric_drafts import RubricDefinition, RubricDraft, generated_rubric, retarget_draft
+from backend.services.math_rubric_plan import _question_input
 
 
 class AICompletionCandidateOutput(BaseModel):
@@ -2080,6 +2098,7 @@ async def generate_missing_question_materials(
             ),
             "teacher_subpart_points": dict(problem.get("teacher_subpart_points") or {}),
             "existing_criterion": str(problem.get("criterion") or ""),
+            "existing_criterion_source": _question_input(problem)["criterion_source"],
             "existing_reference_answer": str(
                 problem.get("reference_answer") or ""
             ),
@@ -2119,14 +2138,40 @@ async def generate_missing_question_materials(
         seen = set()
         for candidate in parsed.candidates:
             expected = expected_targets.get(candidate.target_id)
-            if expected and candidate.rubric_definition is not None:
-                criterion, draft = generated_rubric(
-                    {**problems_data[candidate.q_id], "q_id": candidate.q_id},
-                    candidate.rubric_definition, language=generation_language or "zh",
-                )
-                if candidate.target == "criterion":
-                    candidate.text_value = criterion
-                candidate.rubric_draft = draft.model_dump(mode="json")
+            if (not expected or candidate.q_id != expected["q_id"]
+                    or candidate.target != expected["target"]):
+                raise StructuredOutputInvalidError("Generated material target identity is invalid.")
+            if candidate.rubric_definition is not None:
+                try:
+                    criterion, draft = generated_rubric(
+                        {**problems_data[candidate.q_id], "q_id": candidate.q_id},
+                        candidate.rubric_definition, language=generation_language or "zh",
+                    )
+                except ValueError:
+                    if candidate.target != "reference_answer":
+                        raise
+                    # Optional semantic metadata cannot discard a usable answer.
+                    candidate.rubric_definition = None
+                    candidate.rubric_draft = None
+                    original = {**problems_data[candidate.q_id], "q_id": candidate.q_id}
+                    if str(original.get("criterion") or "").strip():
+                        # Discard the invalid interpretation, not the teacher's
+                        # policy. Its unchanged text can be shared holistically
+                        # without paying to interpret it a second time.
+                        from backend.services.math_rubric_plan import fallback_math_rubric_plan
+                        preserved = fallback_math_rubric_plan(original, bind_preferences=False)
+                        candidate.rubric_definition = RubricDefinition.model_validate(
+                            preserved.model_dump(include={
+                                "routes", "follow_through", "numerical_policy", "advisories",
+                            })
+                        )
+                        _, draft = generated_rubric(original, candidate.rubric_definition,
+                                                   language=generation_language or "zh")
+                        candidate.rubric_draft = draft.model_dump(mode="json")
+                else:
+                    if candidate.target == "criterion":
+                        candidate.text_value = criterion
+                    candidate.rubric_draft = draft.model_dump(mode="json")
             usable = (bool(candidate.test_cases) if candidate.target == "test_cases"
                       else bool((candidate.text_value or "").strip()))
             if (not expected or candidate.target_id in seen or not usable
@@ -2167,7 +2212,14 @@ async def generate_missing_question_materials(
             duplicates = set()
             for item in raw.candidates:
                 try:
-                    candidate = AICompletionCandidateOutput.model_validate(item)
+                    try:
+                        candidate = AICompletionCandidateOutput.model_validate(item)
+                    except ValueError:
+                        if not isinstance(item, dict) or item.get("target") != "reference_answer":
+                            raise
+                        candidate = AICompletionCandidateOutput.model_validate({
+                            **item, "rubric_definition": None, "rubric_draft": None,
+                        })
                     validate_targets(AICompletionOutput(candidates=[candidate]))
                 except ValueError:
                     continue

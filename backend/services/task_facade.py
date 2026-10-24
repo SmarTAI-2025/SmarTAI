@@ -938,7 +938,7 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     return {
         "q_id": question.q_id,
         "number": question.number,
-        "type": question.type,
+        "type": normalize_question_type(question.type),
         "stem": question.stem,
         "criterion": question.criterion,
         "recognition_confidence": confidence_value(presentation.get("recognition_confidence")),
@@ -1000,14 +1000,14 @@ def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[st
                 {
                     "q_id": answer.q_id,
                     "number": answer.number,
-                    "type": answer.type,
+                    "type": normalize_question_type(answer.type),
                     "content": answer.content,
                     "flag": _public_answer_flags(answer.flag, content=answer.content),
                     "recognition_confidence": _answer_recognition_confidence(answer.flag),
                     "review_status": review_statuses.get(answer.id, "pending"),
                 }
                 for answer in revision.answers
-            ] + [{"q_id": question.q_id, "number": question.number, "type": question.type,
+            ] + [{"q_id": question.q_id, "number": question.number, "type": normalize_question_type(question.type),
                   "content": "", "flag": ["recognition_manual_pending", "recognition_failed"],
                   "recognition_confidence": None, "review_status": "pending"}
                  for question in questions if question.q_id not in {answer.q_id for answer in revision.answers}],
@@ -5041,6 +5041,8 @@ def start_task_grading(
         # cache must not make unchanged completed grading look like new work.
         presentation = (row.get("source") or {}).get("presentation") or {}
         presentation.pop("rubric_draft", None)
+        if not presentation and isinstance(row.get("source"), dict):
+            row["source"].pop("presentation", None)
     run_fingerprint = _hash_json({
         "grading_setup": workflow.grading_setup,
         "input_manifest": fingerprint_manifest,
@@ -5965,7 +5967,7 @@ def _run_snapshot_payload(*, task_id: str, owner_id: str, run_id: str) -> dict:
                 {
                     "q_id": answer.q_id,
                     "number": answer.number,
-                    "type": answer.type,
+                    "type": normalize_question_type(answer.type),
                     "content": answer.content,
                     "flag": list(answer.flag or []),
                     "review_status": answer_statuses.get(answer.id, "pending"),

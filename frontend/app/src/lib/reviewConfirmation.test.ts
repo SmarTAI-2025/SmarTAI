@@ -45,7 +45,7 @@ describe("review hard failures", () => {
       { label: "缺少标答（可选），可按需补充。", severity: "advisory" },
     ]);
     expect(questionReviewNotes(row, "en-US", () => "Generation failed")[1].label).toContain("question type, rubric and confirm");
-    expect(questionReviewNotes({ ...row, type: "proof" }, "zh-CN", () => "生成失败")[1].label).not.toContain("题型");
+    expect(questionReviewNotes({ ...row, type: "reasoning" }, "zh-CN", () => "生成失败")[1].label).not.toContain("题型");
   });
 
   it("keeps independent advisory warnings and does not make a reference answer mandatory", () => {

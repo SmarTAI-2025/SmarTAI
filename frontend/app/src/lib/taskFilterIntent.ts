@@ -36,6 +36,7 @@ const capabilities: Record<FilterIntentSurface, { fields: string[]; sorts: strin
 export function supportsFilterIntent(intent: FilterIntentResult, surface: FilterIntentSurface): boolean {
   if (intent.execution) return intent.recognized && isGroundedExecution(intent.execution) && intent.execution.recognized;
   if (!intent.recognized || !Array.isArray(intent.question_tokens) || !Array.isArray(intent.text_terms)) return false;
+  if (intent.question_types?.some(type => !["calculation", "concept", "reasoning", "programming", "other"].includes(type))) return false;
   const allowed = capabilities[surface];
   if (intent.sort && !allowed.sorts.includes(intent.sort)) return false;
   return Object.entries(intent).every(([field, value]) =>
@@ -55,7 +56,7 @@ export function matchesQuestionToken(id: string, label: string, token: string): 
 export function normalizeFilterType(value: string): string {
   const aliases: Record<string, string> = {
     "计算题": "calculation", "计算": "calculation", "编程题": "programming", "编程": "programming", "coding": "programming",
-    "证明题": "reasoning", "证明": "reasoning", "proof": "reasoning", "推理题": "reasoning", "推理": "reasoning",
+    "推理题": "reasoning", "推理": "reasoning",
     "概念题": "concept", "概念": "concept", "其他": "other", "其它": "other",
   };
   const key = normalizeFilterText(value);

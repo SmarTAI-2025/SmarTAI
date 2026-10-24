@@ -35,7 +35,7 @@ def wire(draft, appendix=None):
 
 
 def case():
-    p = problem("证明题", criterion="证明过程8分；结论2分。")
+    p = problem("推理题", criterion="证明过程8分；结论2分。")
     p.stem = "检查下面证明的推理是否充分。"
     a = answer("f连续，所以f可导。")
     plan = plan_for(p)
@@ -203,7 +203,7 @@ def test_duplicate_notes_cannot_clear_a_previous_concrete_concern():
 
 @pytest.mark.asyncio
 async def test_tool_and_proof_concerns_share_one_feedback_request():
-    p, a = problem("证明题"), answer("41")
+    p, a = problem("推理题"), answer("41")
     plan = plan_for(p)
     draft = assessment(8, 2, text="41")
     reviewed = assessment(8, 1, text="41")

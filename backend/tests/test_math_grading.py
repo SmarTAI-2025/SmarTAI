@@ -343,7 +343,7 @@ async def test_original_formula_survives_real_json_parser_and_deduction_scoring(
     """Do not mock the parser whose formatting used to discard this graph."""
     from backend.llm.providers import LLMResponse
 
-    p = problem(kind="证明题")
+    p = problem(kind="推理题")
     a = answer(r"\(2+2=5\)")
     plan = plan_for(p, mode="deductions")
     payload = grading.MathAssessment(

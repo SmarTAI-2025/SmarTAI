@@ -7,7 +7,7 @@ export type QuestionPreparationRule =
   | "missing_rubric"
   | "missing_code"
   | "programming"
-  | "proof"
+  | "reasoning"
   | "keyword"
   | "missing_first";
 
@@ -53,7 +53,7 @@ const QUERY_RULES: Array<{
     pattern: /编程题?|程序题?|代码题?|programming|coding/giu,
   },
   {
-    kind: "proof",
+    kind: "reasoning",
     pattern: /推理题?|证明题?|reasoning|proof/giu,
   },
   {
@@ -132,7 +132,7 @@ export function selectQuestionPreparationRows(
     if (rules.includes("missing_rubric") && row.hasRubric) return false;
     if (rules.includes("missing_code") && (!row.isProgramming || row.hasCode)) return false;
     if (rules.includes("programming") && !row.isProgramming) return false;
-    if (rules.includes("proof") && !isProofProblem(row.problem)) return false;
+    if (rules.includes("reasoning") && !isReasoningProblem(row.problem)) return false;
     if (!keyword) return true;
 
     const haystack = [
@@ -188,7 +188,7 @@ export function isProgrammingProblem(problem: ProblemInfo): boolean {
   return /(?:编写|实现)(?:程序|代码)|write\s+(?:a\s+)?(?:program|function)|implement\s+(?:an?\s+)?(?:algorithm|function)/iu.test(problem.stem ?? "");
 }
 
-function isProofProblem(problem: ProblemInfo): boolean {
+function isReasoningProblem(problem: ProblemInfo): boolean {
   return normalizeFilterType(problem.type ?? "") === "reasoning";
 }
 

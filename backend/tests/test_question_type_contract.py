@@ -10,7 +10,7 @@ from backend.agents import ingest_agent
 from backend.db.models import AssignmentQuestionRecord
 from backend.db.session import session_scope
 from backend.domain.errors import DomainError
-from backend.models import ProblemInfo
+from backend.models import ProblemInfo, StudentAnswerInfo
 from backend.services import task_facade
 from backend.services.math_grading_context import uses_math_grading
 from backend.skills.base import get_skill_for_type
@@ -30,7 +30,7 @@ def test_preparation_uses_actual_selected_skill_without_another_type_rule(monkey
 
 @pytest.mark.parametrize("english,chinese,skill", [
     ("calculation", "计算题", CalculationSkill), ("programming", "编程题", ProgrammingSkill),
-    ("proof", "推理题", ProofSkill), ("reasoning", "推理题", ProofSkill),
+    ("reasoning", "推理题", ProofSkill),
     ("concept", "概念题", ConceptSkill), ("other", "其他", ConceptSkill),
 ])
 def test_teacher_type_edit_reaches_same_skill_as_recognition(english, chinese, skill):
@@ -43,7 +43,7 @@ def test_teacher_type_edit_reaches_same_skill_as_recognition(english, chinese, s
     assert uses_math_grading(english) == uses_math_grading(problem.type) == (skill not in {ProgrammingSkill})
 
 
-@pytest.mark.parametrize("value", ["", "  ", "unrecognized", "choice", "multiple_choice", "fill_blank", "short_answer"])
+@pytest.mark.parametrize("value", ["", "  ", "unrecognized", "choice", "multiple_choice", "fill_blank", "short_answer", "short", "简答题", "proof", "证明题", "单选题", "多选题", "填空题"])
 def test_missing_type_preserves_stem_and_blocks_confirm_and_grading(value):
     owner, task = _seed_task(with_question=True)
     with session_scope() as session:
@@ -82,3 +82,14 @@ async def test_ocr_only_stem_does_not_invent_other():
     rows = await ingest_agent.extract_problems_from_ocr_markdown("# 1.\nCalculate 2+2.", {})
     assert rows["q1"]["stem"]
     assert rows["q1"]["type"] == ""
+
+
+@pytest.mark.parametrize("retired", ["proof", "证明题", "short", "short_answer", "简答题", "choice", "single_choice", "multiple_choice", "fill_blank", "单选题", "多选题", "填空题"])
+def test_direct_manual_mutation_cannot_reintroduce_a_retired_type(retired):
+    owner, task = _seed_task(with_question=True)
+    with pytest.raises(DomainError) as error:
+        task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1", patch={"type": retired})
+    assert error.value.code == "invalid_question_type"
+    assert task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]["q1"]["type"] != retired
+    answer = StudentAnswerInfo(q_id="q1", number="1", type=retired, content="Original answer")
+    assert answer.type == "" and answer.content == "Original answer"

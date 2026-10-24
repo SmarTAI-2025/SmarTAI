@@ -302,6 +302,10 @@ Prefer one route with method-independent mathematical goals/obligations. Alterna
 proofs and equivalent expressions may satisfy the same goals; similarity to the reference route
 is not a scoring requirement. Only use multiple routes for genuinely different teacher policies,
 never compute all routes and take the highest/lowest score. A required method remains required.
+Correct/incorrect responses are not separate scoring routes: use a single full-budget item
+whose description states the answer condition and zero otherwise. If explicit teacher rules
+award alternative conditional amounts that cannot satisfy this ledger (e.g. full set=4,
+missing=2, wrong=0), keep those rules in a holistic route instead of additive or partial-budget routes.
 points: finite nonnegative absolute allocations summing EXACTLY to max_score, each counted once.
 Do not allocate by counting student steps or mechanically split equally among generic dimensions.
 deductions: positive loss per independent error; max_occurrences defaults to 1, use null only for
