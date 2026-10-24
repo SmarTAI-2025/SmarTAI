@@ -25,6 +25,7 @@ from backend.tools import knowledge as kb_tool
 from backend.tools.structured_llm import PermanentLLMError, TransientLLMError, structured_llm_call
 from backend.tools.structured_llm import StructuredOutputInvalidError
 from backend.services.math_source_evidence import SourceMatch, match_source_quote, source_catalog
+from backend.services.math_proof_audit import inspect_audit, read_appendix, REVIEW_INSTRUCTION, OUTPUT_INSTRUCTION
 
 TRACE_VERSION = "math_evidence_v2"
 VERIFICATION_BUDGET_SECONDS = 20.0
@@ -429,17 +430,25 @@ def _with_pending_advice(expert, language):
     trace = read_math_trace(expert)
     if not trace:
         return expert
-    unresolved = trace.get("review_pending")
-    if not unresolved:
+    proof_concerns = trace.get("proof_audit", {}).get("review_concerns", [])
+    if not trace.get("review_pending") and not proof_concerns:
         return expert
     label = ("工具核验与当前判断仍有待核对之处：" if language == "zh" else
              "Tool verification remains unresolved: ")
     reasons = [item.get("reason", "") for item in trace.get("evidence", [])
                if item.get("status") in {"supported", "refuted"}]
-    text = label + ("; ".join(reasons) or ("核验反馈未完成。" if language == "zh" else "Evidence feedback did not complete."))
+    advice = []
+    if trace.get("review_pending"):
+        advice.append((label, label + ("; ".join(reasons) or (
+            "核验反馈未完成。" if language == "zh" else "Evidence feedback did not complete."))))
+    if proof_concerns:
+        label = "证明依据核对建议：" if language == "zh" else "Proof evidence to check: "
+        advice.append((label, label + "; ".join(item["reason"] for item in proof_concerns)))
     steps = list(expert.steps)
-    if steps and label not in steps[0].desc:
-        steps[0] = steps[0].model_copy(update={"desc": steps[0].desc + "\n" + text})
+    if steps:
+        additions = [text for label, text in advice if label not in steps[0].desc]
+        if additions:
+            steps[0] = steps[0].model_copy(update={"desc": steps[0].desc + "\n" + "\n".join(additions)})
     trace["review_advisory"] = True
     return expert.model_copy(update={"steps": steps, "raw_output": _json(trace)})
 
@@ -589,7 +598,7 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                      len({expert.score for expert in experts}) > 1 or
                      len({_deduction_signature(a) for a in assessments if a is not None}) > 1)
     requested_review = any(a.needs_review for a in assessments if a is not None) or any(
-        trace.get("review_pending") for trace in traces)
+        trace.get("review_pending") or trace.get("proof_audit", {}).get("review_concerns") for trace in traces)
     if not (disputed or other_dispute or requested_review) or not take_review_budget():
         return experts
 
@@ -619,7 +628,7 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
             raise error from exc
 
     try:
-        review, _ = await structured_llm_call(
+        review, response = await structured_llm_call(
             provider, output_model=ExpertReview,
             system_prompt=build_system_prompt(
                 "Review only the disputed mathematical scoring points against original student text, "
@@ -640,8 +649,14 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                 "Use applies only when the result covers this assertion and agrees with its verdict; "
                 "use partial with an explanation when it covers only part of the claim. "
                 "Explain concrete residual disagreement; produce no mandatory-review instructions."
+                + ("\n" + REVIEW_INSTRUCTION + " After the complete review JSON, append PROOF_AUDIT "
+                   "followed by a separate JSON object mapping each revised proof expert's index "
+                   "(string) to an audit object with the same steps/context_source_ids shape as its trace. "
+                   "This optional appendix must never be placed inside a revision or assessment."
+                   if any("proof_audit" in trace for trace in traces) else "")
                 + authoritative_score_instruction(problem.max_score)
-                + "\nJSON Schema:\n" + _json(ExpertReview.model_json_schema()), language, grading_setup),
+                + "\nJSON Schema:\n" + _json(ExpertReview.model_json_schema()), language, grading_setup,
+                **({"output_instruction": OUTPUT_INSTRUCTION} if any("proof_audit" in trace for trace in traces) else {})),
             user_prompt=_json({"problem": problem.stem, "reference": problem.reference_answer,
                                "answer": answer.content, "plan": plan.model_dump(mode="json"),
                                "source_catalog": {key: value[0] for key, value in
@@ -664,6 +679,10 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                 trace["original_direct"] = trace.pop("direct")
             trace["assessment"] = candidate.model_dump(mode="json")
             trace["review_pending"] = _evidence_pending(candidate, trace.get("evidence", []))
+            if "proof_audit" in trace:
+                trace["proof_audit"] = inspect_audit(
+                    read_appendix(getattr(response, "content", None), expert_index=index), candidate,
+                    answer.content or "", problem.stem, plan, previous=trace["proof_audit"])
             trace.pop("review_advisory", None)
             trace["targeted_review"] = {"provider": provider.provider_id, "reason": revision.reason}
             if steps:
@@ -806,7 +825,8 @@ class MathGradingSkill(GradingSkill):
                 "Each ID is one original line, not proof that a claim is true. If no suitable ID exists, "
                 "copy an exact excerpt; do not join noncontiguous lines or rewrite the mathematics."
                 + authoritative_score_instruction(problem.max_score)
-                + "\nJSON Schema:\n" + _json(MathAssessment.model_json_schema()), self.language, self.grading_setup)
+                + "\nJSON Schema:\n" + _json(MathAssessment.model_json_schema()), self.language, self.grading_setup,
+                **({"output_instruction": OUTPUT_INSTRUCTION} if self.template_name == "proof" else {}))
             try:
                 await self._substep(unit, "llm_grade")
                 draft, response = await structured_llm_call(
@@ -827,6 +847,8 @@ class MathGradingSkill(GradingSkill):
                     started=started,
                     fallback={"reason": "invalid_detailed_assessment", "error_type": type(exc).__name__,
                               "draft": draft.model_dump(mode="json") if draft else diagnostic.get("draft")})
+            proof_audit = (inspect_audit(read_appendix(getattr(response, "content", None)), draft, answer.content or "", problem.stem, plan)
+                           if self.template_name == "proof" else None)
             scheduled, rejected_checks = _schedule_checks(draft, problem, answer, plan)
             draft.checks = scheduled
             tool_applicability = "applicable" if scheduled else "not_applicable"
@@ -853,13 +875,16 @@ class MathGradingSkill(GradingSkill):
                                   and item["claim_id"] in claims for item in evidence)
             review_failure = None
             review_pending = usable_evidence
-            if (usable_evidence or draft.needs_review) and take_review_budget(local=True):
+            proof_concerns = (proof_audit or {}).get("review_concerns", [])
+            if (usable_evidence or draft.needs_review or proof_concerns) and take_review_budget(local=True):
                 await self._substep(unit, "llm_grade")
                 try:
                     reviewed, response = await structured_llm_call(
                         self.provider, system_prompt=system,
                         user_prompt=prompt + "\nAPPLY SCOPED EVIDENCE (one pass):\n" + _json({
                             "draft": draft.model_dump(mode="json"), "evidence": evidence,
+                            **({"proof_concerns": proof_concerns, "proof_instruction": REVIEW_INSTRUCTION}
+                               if proof_audit is not None else {}),
                             "instruction": "Check affected scoring points against original text and rubric. "
                             "Check that the tool's assumed conditions really hold. Unknown is not incorrect. "
                             "Return a complete ledger with a concrete score; retain supported credit. "
@@ -879,6 +904,9 @@ class MathGradingSkill(GradingSkill):
                                              problem_text=problem.stem)
                     reviewed_score, reviewed_steps = score_assessment(reviewed, plan, answer.content or "", problem_text=problem.stem)
                     draft, score, steps = reviewed, reviewed_score, reviewed_steps
+                    if proof_audit is not None:
+                        proof_audit = inspect_audit(read_appendix(getattr(response, "content", None)), draft,
+                            answer.content or "", problem.stem, plan, previous=proof_audit)
                     review_pending = _evidence_pending(draft, evidence)
                     duration += response.duration_ms or 0
                 except Exception as exc:
@@ -899,6 +927,7 @@ class MathGradingSkill(GradingSkill):
                                   "rejected_checks": rejected_checks,
                                   "tool_applicability_reason": "explicit_relations_scheduled" if scheduled else "no_supported_relation_identified",
                                   "review_pending": review_pending,
+                                  **({"proof_audit": proof_audit} if proof_audit is not None else {}),
                                   **({"review_failure": review_failure} if review_failure else {})}),
             )
             return _with_pending_advice(result, self.language)
