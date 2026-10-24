@@ -13,7 +13,7 @@ def _label(value):
 def _parts(value):
     label = _label(value).casefold()
     label = re.sub(r"\b(?:section|sec|chapter|chap|ch|question|problem|number|no|q)\.?\s*(?=\d)", "", label)
-    label = re.sub(r"[第章节题目]", "", label)
+    label = re.sub(r"[第章节题目]", " ", label)
     numbers = re.findall(r"\d+(?:\.\d+)*", label)
     remainder = re.sub(r"\d+(?:\.\d+)*", "", label)
     if not numbers or re.search(r"[^\s/.:：、()]", remainder):

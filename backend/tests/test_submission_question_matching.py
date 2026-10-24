@@ -22,7 +22,7 @@ def problems(numbers=('Section 1.2 / 1', 'Section 1.2 / 2')):
 
 
 @pytest.mark.parametrize('label', ['Section 1.2 / 1', 'section 1.2 1', '1.2.1',
-                                   'Question 1.2.1', '１．２．１', '1', '1.'])
+                                   'Question 1.2.1', '１．２．１', '第1章第2节第1题', '1', '1.'])
 def test_unique_number_aliases(label):
     assert question_number_candidates(label, problems()) == ['q1']
     assert resolve_question_match(label, 'Wrong answer: eigenvalues are zero.', problems()) == 'q1'
