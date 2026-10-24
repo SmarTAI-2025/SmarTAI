@@ -1,17 +1,17 @@
 """
 ObjectiveSkill: grades objective questions — 选择题 / 多选题 / 填空题.
 
-These question types have a unique final answer, so grading is
-result-based only (题目识别与判卷问题记录 §1: "选择题、填空题不应有过程分"):
+The default contract is result-based (题目识别与判卷问题记录 §1:
+"选择题、填空题不应有过程分"); explicit teacher allocations take precedence:
 
   * 选择题 / 填空题: correct final answer → full marks, otherwise 0.
   * 多选题: the partial-credit rule stated in the rubric is applied
     (e.g. "全部选对的得6分, 部分选对的得部分分, 有选错的得0分"); when the
     rubric is silent, all-or-nothing. Any wrongly selected option → 0.
 
-Unless the rubric explicitly awards working/explanation points, the LLM judges
-final-answer equivalence and the score is derived deterministically below.
-Explicit allocations retain the rubric's total. ``steps`` is always empty.
+The LLM judges final-answer equivalence for deterministic scoring below. Explicit
+working/result components and unresolved scoring rules retain the rubric's total;
+a ban on process credit does not remove per-blank result marks. ``steps`` is empty.
 """
 from __future__ import annotations
 
@@ -40,21 +40,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Objective types whose score is strictly binary (full or 0).
+# Objective types whose default single-result score is binary (full or 0).
 _BINARY_OBJECTIVE_TYPES = ("选择题", "填空题")
 
 
 def _is_result_based_criterion(criterion: str) -> bool:
-    """Result-based (answer-only) contract: the default for objective
-    questions. An explicit process-credit rubric (e.g. "过程2分，答案3分")
-    is honored as written instead."""
-    return process_credit_policy(criterion).mode != "allowed"
+    """Whether the default answer-only settlement can replace the model score."""
+    policy = process_credit_policy(criterion)
+    return not policy.uses_rubric_score and not policy.conditional_process
 
 
 def _grading_contract(policy: ProcessCreditPolicy) -> str:
     """One question policy for both prompts and deterministic settlement."""
     common = (
-        f"Process credit policy: {policy.mode}. Preserve the original rubric verbatim; "
+        f"Process credit policy: {policy.interpretation}. Preserve the original rubric verbatim; "
         "a mention of working, a prohibition, or a request to show working is not "
         "permission to award it points. Step scores are not reported. "
         '"correct" always means the FINAL answer is correct.\n'
@@ -65,6 +64,20 @@ def _grading_contract(policy: ProcessCreditPolicy) -> str:
             "allocations and conditions to both working and final answer; put their sum "
             'in "score". A correct final answer alone need not earn full marks, and an '
             "incorrect final answer can retain the explicitly earned working marks."
+        )
+    if policy.uses_rubric_score or policy.conditional_process:
+        restriction = (
+            "Grade only the allocated results; do not award process credit or deduct "
+            "for missing working. " if policy.mode == "forbidden" else
+            "Apply every original allocation and condition. Unresolved wording is not "
+            "an absent rule and must not be replaced by an all-or-nothing default. "
+        )
+        return common + restriction + (
+            "Sum the earned rubric components in score. Each blank/result is separate "
+            "when allocated separately; correct refers to ALL final answers being correct, "
+            "not to whether any component earns marks. Do not force a partial total to "
+            "zero or full marks. A process allocation conditional on a correct final "
+            "answer applies only when that condition holds."
         )
     return common + (
         "Grade the final answer only; do not award process credit. "
@@ -167,7 +180,7 @@ def _objective_score(
 ) -> float:
     """Derive the deterministic objective-question score.
 
-    选择题 / 填空题 are strictly binary; 多选题 keeps the rubric-driven
+    Single-result 选择题 / 填空题 are binary; 多选题 keeps the rubric-driven
     partial credit proposed by the model ONLY when the model explicitly
     confirmed the rubric's partial-credit rule applies (fail-safe: a
     missing flag means no partial credit).
@@ -283,7 +296,7 @@ class ObjectiveSkill(GradingSkill):
                 )
 
                 # Deterministic score: the model judges equivalence, we award.
-                if policy.mode != "allowed":
+                if not policy.uses_rubric_score and not (policy.conditional_process and result.correct):
                     score = _objective_score(
                         problem.type,
                         correct=bool(result.correct),
@@ -293,9 +306,8 @@ class ObjectiveSkill(GradingSkill):
                         max_score=problem.max_score,
                     )
                 else:
-                    # The rubric explicitly awards process/steps points
-                    # (e.g. "过程2分，答案3分"): honor the model's
-                    # rubric-faithful score, clamped to the frozen scale.
+                    # Retain component/conditional grading and unresolved source
+                    # rules. A process prohibition alone never forbids result parts.
                     # Step items are still never emitted.
                     score = max(0.0, min(float(result.score), float(problem.max_score)))
                 confidence = max(0.0, min(result.confidence, 1.0))

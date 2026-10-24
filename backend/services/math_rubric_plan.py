@@ -17,11 +17,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from backend.tools.structured_llm import (
     StructuredOutputBoundsError, StructuredOutputInvalidError, structured_llm_call,
 )
-from backend.services.process_credit_policy import process_credit_policy
+from backend.services.process_credit_policy import conflicts_with_process_prohibition, process_credit_policy
 
 
 SCHEMA_VERSION = "math_rubric_v1"
-INTERPRETATION_VERSION = "math_rubric_interpretation_v3"
+INTERPRETATION_VERSION = "math_rubric_interpretation_v4"
 Score = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Text = Annotated[str, Field(min_length=1, max_length=20000)]
 
@@ -147,7 +147,7 @@ def _question_input(problem: Any) -> dict[str, Any]:
            ("q_id", "number", "type", "stem", "criterion", "reference_answer")},
         "max_score": maximum,
         "criterion_source": criterion_source,
-        "process_credit_policy": process_credit_policy(str(row.get("criterion") or "")).mode,
+        "process_credit_policy": process_credit_policy(str(row.get("criterion") or "")).interpretation,
         "question_structure": structure_input,
         "teacher_subpart_points": {
             str(label): str(points)
@@ -244,7 +244,9 @@ blank-answer policy, required methods and alternative-method policies. Do not su
 result-match/full-marks rule or a fixed percentage cap. Do not invent generous floors.
 Distinguish allowed, forbidden and unspecified process credit. A mention of working is not
 permission to award points. If process_credit_policy is forbidden, do not add working, method,
-step or explanation allocations, including AI items; preserve the original final-answer rule.
+step or explanation allocations or deductions for missing/incorrect working, including AI
+items; preserve the original final-answer rule and separately allocated result/blank marks.
+An unresolved policy is not an absent policy: keep its complete source and conditions.
 Interpret nonempty vague criteria as well as missing criteria. Fill only necessary gaps, label
 AI additions honestly, explain conflicts in advisories at QUESTION scope, and do not demand
 confirmation or withhold grading because the standard is brief.
@@ -381,19 +383,17 @@ def _validate_source_rules(context: dict, explanation: _Explanation) -> None:
     original = context["criterion"]
     structured = [route for route in explanation.routes if route.mode != "holistic"]
     if context["process_credit_policy"] == "forbidden":
-        if process_credit_policy(explanation.effective_criterion).mode == "allowed":
+        if any(conflicts_with_process_prohibition(text) for text in (
+            explanation.effective_criterion, explanation.follow_through, explanation.numerical_policy,
+        )):
             raise ValueError("process interpretation contradicts the original prohibition")
         for route in structured:
-            if route.mode != "points":
-                continue
             for item in route.items:
                 # A full scoring clause, or a bare item label with an explicit
                 # structured budget, can prove a contradiction. Merely mentioning
                 # working in an item (e.g. "不计过程分") cannot.
-                if item.points > 0 and any(
-                    process_credit_policy(text).mode == "allowed"
-                    for text in (item.description, f"{item.description}{item.points:g}分",
-                                 f"{item.description} {item.points:g} points")
+                if item.points > 0 and conflicts_with_process_prohibition(
+                    item.description, points=item.points, mode=route.mode,
                 ):
                     raise ValueError("process allocation contradicts the original prohibition")
     floor_rules: list[tuple[Decimal, str]] = []
