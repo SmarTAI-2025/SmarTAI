@@ -1,0 +1,342 @@
+[
+  {
+    "id": "SYN26_01",
+    "category": "numeric_definite_integral_tolerance",
+    "subject": "math",
+    "label_kind": "synthetic_explicit_rule_predeclared_not_teacher_gold",
+    "problem": {
+      "q_id": "SYN26_01",
+      "number": "1",
+      "type": "计算题",
+      "stem": "计算定积分 A = ∫[0, pi/2] sin(x)^2 dx，写出主要计算过程及数值近似。pi 表示圆周率；x 是积分的哑变量，积分结果是数值。允许最后近似值的绝对误差不超过 1e-6。",
+      "max_score": 10,
+      "reference_answer": "pi/4",
+      "criterion": "满分10分，按实际作答给分：正确使用降幂恒等式并给出有效原函数4分；正确代入上下限得到 pi/4 或等价精确值4分；最终数值近似满足绝对误差不超过 1e-6 得2分。接受其他完整正确的积分或数值方法，按相同的4分方法、4分有效求值、2分精度要求评价。只写最终值最多2分；最终值正确不能替代缺失或错误的过程。小数、pi 形式不改变本题数值计算属性。"
+    },
+    "answer": "sin(x)^2 = (1-cos(2*x))/2。\n原函数为 x/2 - sin(2*x)/4。\n代入上下限，A = pi/4。\npi/4 ≈ 0.7853982。",
+    "expected": {
+      "score_min": 9.5,
+      "score_max": 10,
+      "score_interval": [
+        9.5,
+        10
+      ],
+      "score_required": true,
+      "forced_review_allowed": false,
+      "required_observations": [
+        "主要积分过程完整正确；pi/4 是含常数 pi 的数值，不是含自由变量的符号答案。",
+        "近似误差约为 3.66e-8，小于 1e-6；不能因为精确符号比较不等而扣精度分。",
+        "按本题明确规则预期10分；不得只凭最后数值匹配就跳过过程检查。"
+      ],
+      "tool_opportunity": {
+        "applicable": true,
+        "purpose": "分别核查有界定积分值与科学计数形式的绝对容差。",
+        "requests": [
+          {
+            "request": {
+              "student_expression": "Integral(sin(x)^2,(x,0,pi/2))",
+              "reference_expression": "pi/4",
+              "comparison": "numeric"
+            },
+            "expected_status": "supported"
+          },
+          {
+            "request": {
+              "student_expression": "0.7853982",
+              "reference_expression": "pi/4",
+              "comparison": "numeric",
+              "allow_approximation": true,
+              "absolute_tolerance": 1e-06
+            },
+            "expected_status": "supported"
+          }
+        ],
+        "limits": "这些本地请求仅证明所列数学关系；主链是否真的调用仍须读实际 trace。"
+      }
+    },
+    "replay": {
+      "tool_fault": null,
+      "model_fault": null
+    }
+  },
+  {
+    "id": "SYN26_02",
+    "category": "numeric_complex_correct_result_wrong_process",
+    "subject": "math",
+    "label_kind": "synthetic_explicit_rule_predeclared_not_teacher_gold",
+    "problem": {
+      "q_id": "SYN26_02",
+      "number": "2",
+      "type": "计算题",
+      "stem": "计算 z = e^(i*pi) + e + i，写出计算过程并给出 a+b*i 形式的精确结果。e 为自然对数底，也记为 E；i 为虚数单位，也记为 I；pi 为圆周率，exp(t) 表示 e^t。本题所有待计算量都是常数，没有自由变量。",
+      "max_score": 10,
+      "reference_answer": "E-1+I",
+      "criterion": "满分10分：正确使用欧拉公式确定 exp(I*pi) 的值4分；将该值代入原式且通过合法加法化简2分；最终复数值正确并写成实部加虚部的形式4分。接受其他正确方法并按对应的指数求值、合法化简、最终值三个要求计分。过程错误的评分项不得由碰巧正确的最终值补回；只给正确最终值只能得到最后4分。"
+    },
+    "answer": "欧拉公式给出 exp(I*pi) = 1。\n因此 z = 1 + E + I = E - 1 + I。\n最终答案：E - 1 + I。",
+    "expected": {
+      "score_min": 3.5,
+      "score_max": 4.5,
+      "score_interval": [
+        3.5,
+        4.5
+      ],
+      "score_required": true,
+      "forced_review_allowed": false,
+      "required_observations": [
+        "exp(I*pi) 实际等于 -1，学生把它写成1；所援引的欧拉公式被错误使用。",
+        "1+E+I 与 E-1+I 不相等；第二步不是合法的加法化简，不能替学生补出正确计算。",
+        "最终 E-1+I 恰好正确，对应最后4分；按明确规则预期4分，不能因工具支持最终值就给满分。",
+        "e/E 与 i/I 在题目中已明确为常数；含 pi、E、I 仍是无自由变量的复数数值运算。"
+      ],
+      "tool_opportunity": {
+        "applicable": true,
+        "purpose": "同一作答中分别获得中间等式反证与最终表达式支持，验证二者不能混同。",
+        "requests": [
+          {
+            "request": {
+              "student_expression": "exp(I*pi)",
+              "reference_expression": "1",
+              "comparison": "numeric"
+            },
+            "expected_status": "refuted"
+          },
+          {
+            "request": {
+              "student_expression": "1+E+I",
+              "reference_expression": "E-1+I",
+              "comparison": "numeric"
+            },
+            "expected_status": "refuted"
+          },
+          {
+            "request": {
+              "student_expression": "E-1+I",
+              "reference_expression": "exp(I*pi)+E+I",
+              "comparison": "numeric"
+            },
+            "expected_status": "supported"
+          }
+        ],
+        "limits": "工具核查常数等式，不替教师决定4/2/4分的分配。"
+      }
+    },
+    "replay": {
+      "tool_fault": null,
+      "model_fault": null
+    }
+  },
+  {
+    "id": "SYN26_03",
+    "category": "symbolic_derivative_alternative_method",
+    "subject": "math",
+    "label_kind": "synthetic_explicit_rule_predeclared_not_teacher_gold",
+    "problem": {
+      "q_id": "SYN26_03",
+      "number": "3",
+      "type": "计算题",
+      "stem": "设 x 为实数，f(x)=(x+1)^3。求 f 的导函数，写出主要过程；不限定求导方法，结果无需整理为因式形式。",
+      "max_score": 10,
+      "reference_answer": "3*(x+1)^2",
+      "criterion": "满分10分：采用并说明有效求导方法4分；主要代数与求导步骤正确4分；得到与 3*(x+1)^2 等价的导函数2分。允许先展开再逐项求导或直接用链式法则等正确方法；不能因为步骤不同于参考解法、结果未因式分解而扣分。只写最终式最多2分；正确结果不能补回错误方法分。"
+    },
+    "answer": "先展开：f(x) = x^3 + 3*x^2 + 3*x + 1。\n逐项求导：f'(x) = 3*x^2 + 6*x + 3。",
+    "expected": {
+      "score_min": 9.5,
+      "score_max": 10,
+      "score_interval": [
+        9.5,
+        10
+      ],
+      "score_required": true,
+      "forced_review_allowed": false,
+      "required_observations": [
+        "学生采用先展开再逐项求导的完整有效替代方法，不能逐行对照参考解法而扣分。",
+        "3*x^2+6*x+3 与 3*(x+1)^2 恒等；本题 x 是自由变量，应按符号导数核查。",
+        "按明确规则预期10分，不能要求学生补写不必要的因式分解步骤。"
+      ],
+      "tool_opportunity": {
+        "applicable": true,
+        "purpose": "验证导数与不同形式的符号等价。",
+        "requests": [
+          {
+            "request": {
+              "student_expression": "Derivative((x+1)^3,x)",
+              "reference_expression": "3*x^2+6*x+3",
+              "assumptions": {
+                "x": {
+                  "real": true
+                }
+              }
+            },
+            "expected_status": "supported"
+          },
+          {
+            "request": {
+              "student_expression": "3*x^2+6*x+3",
+              "reference_expression": "3*(x+1)^2",
+              "assumptions": {
+                "x": {
+                  "real": true
+                }
+              }
+            },
+            "expected_status": "supported"
+          }
+        ],
+        "limits": "x 为实数的条件由题目提供；不能靠某几个代入点支持一般恒等。"
+      }
+    },
+    "replay": {
+      "tool_fault": null,
+      "model_fault": null
+    }
+  },
+  {
+    "id": "SYN26_04",
+    "category": "physics_follow_through_units",
+    "subject": "physics",
+    "label_kind": "synthetic_explicit_rule_predeclared_not_teacher_gold",
+    "problem": {
+      "q_id": "SYN26_04",
+      "number": "4",
+      "type": "计算题",
+      "stem": "一物体质量 m=2 kg，在恒定合力作用下加速度大小 a=3 m/s^2。物体沿合力方向位移 s=5 m。求合力大小 F 和该合力做的功 W，写出计算过程并标明单位。",
+      "max_score": 10,
+      "reference_answer": "F = 6 N；W = 30 J。由 F=ma，W=Fs。",
+      "criterion": "本题采用宽松扣分制：满分10分，非空且与题目有关的作答从10分起计，每处独立的重要理解、公式或数值计算错误扣1分，最低0分，空白0分。因同一首次错误导致后续数值改变，而后续公式、代入和运算对于该中间值均正确，不重复扣分；最终值因该首错受影响也不另扣。F 应使用 N、W 应使用 J 或等价单位；独立的物理量单位或量纲错误每处扣1分。漏写一个单位或不影响含义的符号笔误只指出不扣；题目已明确的方向条件无需额外证明。不得按错误行数重复扣同源错误。"
+    },
+    "answer": "F = ma = 2*3 = 5 N。\n合力与位移同向，所以 W = F*s = 5*5 = 25 J。",
+    "expected": {
+      "score_min": 8.5,
+      "score_max": 9.5,
+      "score_interval": [
+        8.5,
+        9.5
+      ],
+      "score_required": true,
+      "forced_review_allowed": false,
+      "required_observations": [
+        "2*3=5 是首次独立数值错误，正确的力应为6 N。",
+        "W=F*s 的公式及 5*5=25 的承接计算正确；25 J 与正确参考30 J的差异来自同一首错，不另扣1分。",
+        "N 与 J 分别绑定力和功，学生单位正确；不能混淆给定的位移符号 s 和秒的单位。",
+        "按本题明确扣分规则预期9分；评分依据应指出首错及承接关系，而不是只说两个答案都错。"
+      ],
+      "tool_opportunity": {
+        "applicable": true,
+        "purpose": "核查首错算式和正确承接算式；单位可检验但同源归因仍须语义判断。",
+        "requests": [
+          {
+            "request": {
+              "student_expression": "2*3",
+              "reference_expression": "5",
+              "comparison": "numeric",
+              "student_unit": "N",
+              "reference_unit": "N"
+            },
+            "expected_status": "refuted"
+          },
+          {
+            "request": {
+              "student_expression": "5*5",
+              "reference_expression": "25",
+              "comparison": "numeric",
+              "student_unit": "J",
+              "reference_unit": "J"
+            },
+            "expected_status": "supported"
+          }
+        ],
+        "limits": "原式的物理含义、F 到 W 的依赖及是否重复扣分，不能仅由两个数值比较决定。"
+      }
+    },
+    "replay": {
+      "tool_fault": null,
+      "model_fault": null
+    }
+  },
+  {
+    "id": "SYN26_05",
+    "category": "proof_rolle_missing_differentiability",
+    "subject": "math",
+    "label_kind": "synthetic_explicit_rule_predeclared_not_teacher_gold",
+    "problem": {
+      "q_id": "SYN26_05",
+      "number": "5",
+      "type": "证明题",
+      "stem": "判断命题并论证：若实函数 f 在闭区间 [0,1] 连续且 f(0)=f(1)，则必存在 c∈(0,1) 使 f'(c)=0。若命题不成立，请给出反例并说明缺少什么条件。",
+      "max_score": 10,
+      "reference_answer": "命题不成立。f(x)=|x-1/2| 在[0,1]连续且端点同值，在1/2处不可导；其余内点的导数为-1或1，不存在导数为0的内点。Rolle定理还要求在开区间(0,1)可导。",
+      "criterion": "本题采用宽松扣分制：满分10分，非空且与题目有关的作答从10分起计，每处独立的重要理解或推理错误扣1分，最低0分，空白0分。错误声称连续必可导、据此错误应用Rolle及得出错误结论，若属于同一条因果链，只计一个根源错误，不再按结论错误、未给反例重复扣分。其他独立的关键错误才另扣1分。只遗漏不影响主要结论的小型端点或特殊情形说明时指出但不扣分。接受任何正确反例或等价的有效论证，不强制模仿参考答案。"
+    },
+    "answer": "命题成立。f 在 [0,1] 连续，因此在 (0,1) 可导。\n又有 f(0)=f(1)，由 Rolle 定理可知存在 c∈(0,1)，使 f'(c)=0。",
+    "expected": {
+      "score_min": 8.5,
+      "score_max": 9.5,
+      "score_interval": [
+        8.5,
+        9.5
+      ],
+      "score_required": true,
+      "forced_review_allowed": false,
+      "required_observations": [
+        "连续不能推出可导；题设没有开区间可导条件，学生偷加了Rolle所需的关键前提。",
+        "错误应用Rolle与错误结论来自同一根源；按本题明确宽松规则合计扣1分，预期9分。",
+        "可用 |x-1/2| 指出反例，但应明确这是评阅依据，不是学生写出的内容或可给学生补回的证明。",
+        "不能因学生引用了真实定理就认定该次推理有效；必须核查定理条件在题设或前序有效步骤中是否成立。"
+      ],
+      "tool_opportunity": {
+        "applicable": false,
+        "purpose": "主要验证任务是定理条件和推理依赖的语义审核。",
+        "requests": [],
+        "limits": "不要求CAS自动判断任意证明、构造反例或验证Rolle引用来源；无工具调用在此题可以合理。"
+      }
+    },
+    "replay": {
+      "tool_fault": null,
+      "model_fault": null
+    }
+  },
+  {
+    "id": "SYN26_06",
+    "category": "concept_entropy_isolated_scope",
+    "subject": "physics",
+    "label_kind": "synthetic_explicit_rule_predeclared_not_teacher_gold",
+    "problem": {
+      "q_id": "SYN26_06",
+      "number": "6",
+      "type": "概念题",
+      "stem": "在通常的宏观热力学范围内，判断“熵不减适用于任意系统，因此一个向外界放热的系统，其熵也不可能减小”是否正确。请说明孤立系统和与外界交换热量的系统之间的区别。",
+      "max_score": 10,
+      "reference_answer": "该说法错误。孤立系统的熵不减；可逆过程可保持不变。非孤立系统可通过热交换向外输出熵，系统自身的熵可以减小。若把系统和有关环境合成孤立整体，其总熵仍不减。",
+      "criterion": "本题采用宽松扣分制：满分10分，非空且与题目有关的作答从10分起计，每处独立的重要概念错误扣1分，最低0分，空白0分。把孤立系统熵不减无条件推广到任意系统，以及由同一误解否定放热系统自身熵可减，只计一个根源错误，不重复扣分。其他独立的重要错误才另扣1分。漏写可逆时等号、没有给具体例子或轻微用语不严谨仅指出不扣。按学生表达的概念与条件判断，不按是否出现标准答案关键词评分；不得替学生补上缺失的孤立系统限制再给满分。"
+    },
+    "answer": "这个说法正确。第二定律要求任意系统的熵都不减。\n孤立系统与向外界放热的系统都必须满足这一点，所以系统自身的熵不可能减小。",
+    "expected": {
+      "score_min": 8.5,
+      "score_max": 9.5,
+      "score_interval": [
+        8.5,
+        9.5
+      ],
+      "score_required": true,
+      "forced_review_allowed": false,
+      "required_observations": [
+        "学生明确把孤立系统的熵不减推广到任意系统，并非只是未写关键词。",
+        "非孤立系统向外传递热量时，自身的熵可以减少；第二定律限制的孤立整体总熵不能与单个系统的熵混淆。",
+        "后一句是同一范围误解的延续，按明确规则只扣1分，预期9分；不因漏写可逆等号再扣分。",
+        "应给出概念适用条件这一证据，不要求学生照抄参考答案，也不虚称工具已经证明热力学命题。"
+      ],
+      "tool_opportunity": {
+        "applicable": false,
+        "purpose": "审核概念适用范围及明确矛盾，不能用关键词或数值工具代替。",
+        "requests": [],
+        "limits": "没有输入具体热量、温度或过程模型；不应编造数值或工具请求。"
+      }
+    },
+    "replay": {
+      "tool_fault": null,
+      "model_fault": null
+    }
+  }
+]

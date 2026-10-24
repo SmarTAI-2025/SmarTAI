@@ -227,7 +227,7 @@ def _seed_question_task(owner_id: str, task_id: str):
         assignment_id=task_id,
         teacher_id=owner_id,
         q_id="q1",
-        order_index=0,
+        order_index=0, number="1",
         type="概念题",
         stem="Question",
         criterion="Reasoning 100%",

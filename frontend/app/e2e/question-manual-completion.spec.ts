@@ -4,7 +4,7 @@ for (const paused of [false, true]) test(`${paused ? "paused" : "failed"} questi
   const errors: string[] = [], mutations: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   const provider = { provider_id: "test-provider", provider_type: "gemini", model: "synthetic", enabled: true, is_default: true };
-  const good = { q_id: "q1", number: "1", type: "short", stem: "What is 6 × 7?", max_score: 1,
+  const good = { q_id: "q1", number: "1", type: "concept", stem: "What is 6 × 7?", max_score: 1,
     reference_answer: "42", criterion: "One point for 42.", review_status: "needs_review", max_score_review_status: "confirmed", preparation_issues: [] };
   const failed = { ...good, q_id: "q2", number: "2", stem: "What is 2 + 2?", reference_answer: "", criterion: "",
     preparation_issues: [
@@ -89,7 +89,7 @@ for (const paused of [false, true]) test(`${paused ? "paused" : "failed"} questi
 for (const paused of [false, true]) test(`early ${paused ? "pause" : "failure"} enters the original matrix, creates rows, and edits existing details`, async ({ page }, testInfo) => {
   const errors: string[] = [], mutations: unknown[] = [];
   page.on("pageerror", error => errors.push(error.message));
-  const problem = { q_id: "manual-1", number: "1", type: "short", stem: "", reference_answer: "", criterion: "", max_score: 10,
+  const problem = { q_id: "manual-1", number: "1", type: "concept", stem: "", reference_answer: "", criterion: "", max_score: 10,
     review_status: "needs_review", max_score_review_status: "needs_review", preparation_issues: [
       { issue_id: "manual", field: "source", code: "manual_completion_required", status: "open", severity: "warning", details: { required_fields: ["stem", "criterion"] } },
     ] };

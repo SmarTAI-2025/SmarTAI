@@ -145,6 +145,63 @@ class _Registry:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sibling_finishes", [False, True])
+async def test_reader_lease_loss_stops_queued_work_and_discards_late_results(
+    monkeypatch, sibling_finishes,
+):
+    raws = [
+        RawUploadSource(filename=name, content=b"answer", content_type="text/plain")
+        for name in ("first.txt", "second.txt", "queued.txt")
+    ]
+    monkeypatch.setattr(
+        submission_source_pipeline, "extract_raw_files_from_archive",
+        lambda *_args, **_kwargs: raws,
+    )
+    persisted, reads, published = [], [], []
+    sibling_started, loss_reported, sibling_stopped = (
+        asyncio.Event(), asyncio.Event(), asyncio.Event()
+    )
+    lost = LeaseLost("replacement worker owns the operation")
+
+    async def persist(**kwargs):
+        name = kwargs["raw"].filename
+        persisted.append(name)
+        return name, name
+
+    async def read(raw, _stored_file_id):
+        reads.append(raw.filename)
+        if raw.filename == "first.txt":
+            await asyncio.wait_for(sibling_started.wait(), 3)
+            loss_reported.set()
+            raise lost
+        sibling_started.set()
+        try:
+            if sibling_finishes:
+                await asyncio.wait_for(loss_reported.wait(), 3)
+                return SimpleNamespace(text="late result", recognition=None)
+            await asyncio.Event().wait()
+        finally:
+            sibling_stopped.set()
+
+    async def publish(source):
+        published.append(source)
+
+    monkeypatch.setattr(submission_source_pipeline, "_persist_and_register", persist)
+    with pytest.raises(LeaseLost) as caught:
+        await submission_source_pipeline.prepare_submission_sources(
+            content=b"test", filename="test.txt", content_type="text/plain",
+            owner_id="owner", task_id="task", job_id="job", job_attempt=1,
+            ocr_skill=None, recognition_reader=read, on_source_ready=publish,
+            source_concurrency=2,
+        )
+    assert caught.value is lost
+    assert persisted == ["first.txt", "second.txt"]
+    assert reads == ["first.txt", "second.txt"]
+    assert sibling_stopped.is_set()
+    assert published == []
+
+
+@pytest.mark.asyncio
 async def test_register_failure_compensates_saved_file_metadata_and_object(monkeypatch):
     owner_id, task_id = _seed_task()
     operation = _create_operation(owner_id, task_id)
@@ -999,7 +1056,7 @@ async def test_oversized_model_field_fails_only_its_source(monkeypatch):
             "stu_ans": [{
                 "q_id": "q1",
                 "number": "1",
-                "type": "short",
+                "type": "concept",
                 "content": "answer",
                 "flag": [],
             }],
@@ -1028,7 +1085,7 @@ async def test_oversized_model_field_fails_only_its_source(monkeypatch):
                 text="answer",
             ),
         ],
-        {"q1": {"q_id": "q1", "number": "1", "type": "short", "stem": "Q1"}},
+        {"q1": {"q_id": "q1", "number": "1", "type": "concept", "stem": "Q1"}},
         SimpleNamespace(provider_id="test"),
     )
 
@@ -1097,8 +1154,8 @@ async def test_outcome_and_finalizer_failures_still_leave_terminal_failed_projec
         task_id,
         teacher_id=owner_id,
         q_id="q1",
-        order_index=0,
-        type="short",
+        order_index=0, number="1",
+        type="concept",
         stem="Question one",
         criterion="Award up to 10 points for the method and result.",
         max_score=10,
@@ -1120,7 +1177,7 @@ async def test_outcome_and_finalizer_failures_still_leave_terminal_failed_projec
             "stu_ans": [{
                 "q_id": "q1",
                 "number": "1",
-                "type": "short",
+                "type": "concept",
                 "content": "answer",
                 "flag": [],
             }],
@@ -1192,8 +1249,8 @@ async def test_archive_member_persistence_failure_is_terminal_and_does_not_skip_
         task_id,
         teacher_id=owner_id,
         q_id="q1",
-        order_index=0,
-        type="short",
+        order_index=0, number="1",
+        type="concept",
         stem="Question one",
         criterion="Award up to 10 points for the method and result.",
         max_score=10,
@@ -1232,7 +1289,7 @@ async def test_archive_member_persistence_failure_is_terminal_and_does_not_skip_
             "stu_ans": [{
                 "q_id": "q1",
                 "number": "1",
-                "type": "short",
+                "type": "concept",
                 "content": "answer",
                 "flag": [],
             }],
@@ -1306,8 +1363,8 @@ async def test_equal_size_zip_replacement_survives_old_delete_retry_and_keeps_pr
         task_id,
         teacher_id=owner_id,
         q_id="q1",
-        order_index=0,
-        type="short",
+        order_index=0, number="1",
+        type="concept",
         stem="Question one",
         criterion="Award up to 10 points for the method and result.",
         max_score=10,
@@ -1332,7 +1389,7 @@ async def test_equal_size_zip_replacement_survives_old_delete_retry_and_keeps_pr
             "stu_ans": [{
                 "q_id": "q1",
                 "number": "1",
-                "type": "short",
+                "type": "concept",
                 "content": "answer",
                 "flag": [],
             }],

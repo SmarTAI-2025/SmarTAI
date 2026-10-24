@@ -38,5 +38,5 @@ def question_issue_requires_confirmation(issue, presentation):
     return (issue.get("severity") == "blocking"
             or issue.get("code") in {"source_conflict", "ambiguous_question_match"}
             or (issue.get("code") == "manual_completion_required"
-                and set((issue.get("details") or {}).get("required_fields", [])) & {"stem", "criterion"})
+                and set((issue.get("details") or {}).get("required_fields", [])) & {"number", "type", "stem", "criterion"})
             or confidence_requires_review(question_issue_confidence(issue, presentation)))

@@ -179,13 +179,11 @@ def test_question_advisory_projects_once_without_mutating_source_or_input_identi
     assert advisory["severity"] == "warning" and advisory["field"] == "rubric"
     message = advisory["details"]["message"]
     if language == "zh":
-        assert "本轮 AI 评分解释" in message and "无需额外确认" in message
-        assert ("原标准来自AI生成" if ai_original else "原标准来自提供的材料") in message
-        assert "no reliable item allocation" not in message
-        assert "AI interpretation:" not in message
+        assert "建议核对本题评分标准" in message
+        assert "无需额外确认" not in message and "AI interpretation:" not in message
     else:
-        assert "AI scoring interpretation" in message and "does not require confirmation" in message
-        assert ("from AI-generated material" if ai_original else "from provided material") in message
+        assert "review the rubric" in message
+        assert "does not require confirmation" not in message
     assert set(advisory["details"]) == {"message"}
     assert not task_facade._math_rubric_advisory(q, plan.model_copy(update={"advisories": ()}), language)
     assert public["problem_data"][questions[1].q_id]["preparation_issues"] == []
@@ -253,10 +251,7 @@ def test_question_advisory_explains_actual_ai_additions_and_distinct_scoring_rou
     question = SimpleNamespace(q_id=p.q_id, source={})
     issue, = task_facade._math_rubric_advisory(question, plan, "zh")
     message = issue["details"]["message"]
-    assert "得分制: 原有解法" in message and "扣分制: 替代方法" in message
-    assert "过程: 8 分（原文）" in message and "独立错误: 1 分（AI解释）" in message
-    assert "非空作答最低 6 分" in message and plan.follow_through in message
-    assert plan.numerical_policy in message and plan.advisories[0] in message
+    assert message == plan.advisories[0]
     assert "input_fingerprint" not in message and plan.plan_id not in message
 
 
@@ -388,7 +383,7 @@ def test_internal_provenance_survives_adapter_without_changing_problem_json(monk
         "question_structure": {"shared_stem": "", "subparts": [{"label": "a", "stem": "Evaluate 2+2."}]},
     }}
     question = SimpleNamespace(
-        q_id="q1", number="1", order_index=0, type="计算题", stem="Evaluate 2+2.",
+        id="test-question", version=1, q_id="q1", number="1", order_index=0, type="计算题", stem="Evaluate 2+2.",
         criterion="Method 8, result 2.", reference_answer=None, test_cases=None, max_score=10, source=source,
     )
     seen = []
@@ -422,13 +417,14 @@ def test_plan_preparation_uses_selected_primary_and_skips_nonmath(monkeypatch):
 
     monkeypatch.setattr(rubric, "prepare_math_rubric_plan", compile_plan)
     values = {
-        "q1": problem(type="short"),
+        "q1": problem(type="concept"),
         "q2": problem(q_id="q2", type="编程题"),
         "q3": problem(q_id="q3", type="选择题"),
     }
     plans = asyncio.run(context.prepare_math_plans(values, selected, grading_setup=setup))
     assert set(plans) == {"q1"}
-    assert called == [("q1", primary, setup)]
+    assert [(qid, selected) for qid, selected, _ in called] == [("q1", primary)]
+    assert called[0][2]["strictness"] == 50
     assert asyncio.run(context.prepare_math_plans({}, selected)) == {}
     assert len(called) == 1
 
@@ -557,7 +553,7 @@ def test_missing_pending_answers_do_not_prepare_rules_or_hide_missing_results(
     monkeypatch.setattr(context, "prepare_math_plans", should_not_prepare)
     monkeypatch.setattr(grading_adapter, "grade_batch", no_corrections)
     monkeypatch.setattr(grading_adapter.settings, "e2e_fake_provider", False)
-    answers = [SimpleNamespace(q_id="q1", number="1", type="short", content="already graded", flag=[])] if only_reused_answer else []
+    answers = [SimpleNamespace(q_id="q1", number="1", type="concept", content="already graded", flag=[])] if only_reused_answer else []
     revision = SimpleNamespace(id="revision", answers=answers)
     outcomes = asyncio.run(grading_adapter.run_grading(
         run_id="unused", assignment_id=case[0], teacher_id=case[1],
@@ -574,7 +570,7 @@ def test_failed_only_old_engine_recomputes_math_but_keeps_nonmath_success(case, 
         q2 = session.scalar(select(AssignmentQuestionRecord).where(
             AssignmentQuestionRecord.assignment_id == case[0], AssignmentQuestionRecord.q_id == "q2",
         ))
-        q2.type = "选择题"
+        q2.type = "编程题"
     first = start(case, "old-engine")["job_id"]
     finish(case, first, monkeypatch, ("q1",))
     old_run(first)

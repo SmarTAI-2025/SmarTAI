@@ -14,7 +14,7 @@ for (const stage of ["questions", "submissions", "grading"] as const) {
       const matrixPath = `/tasks/manual-feedback/${stage === "grading" ? "review" : stage}`;
       const handoffPath = stage === "grading" ? "/tasks/manual-feedback/continue"
         : `/tasks/manual-feedback/${stage === "questions" ? "question-preparation" : "submission-recognition"}/failed-job/manual-review`;
-      const problem = { q_id: "q1", number: "1", type: "short_answer", stem: "Saved original question", criterion: "One point.", max_score: 1,
+      const problem = { q_id: "q1", number: "1", type: "concept", stem: "Saved original question", criterion: "One point.", max_score: 1,
         reference_answer: "Saved reference", preparation_issues: [], review_status: "needs_review" };
       const task = { task_id: "manual-feedback", name: "Manual recovery", status: zh ? `${pathStage}_paused` : "error",
         workflow_revision: 2, last_failed_job_id: "failed-job" as string | null, error: zh ? "operation_cancelled" as string | null : "provider_response_invalid",
@@ -22,7 +22,7 @@ for (const stage of ["questions", "submissions", "grading"] as const) {
         grading_job_id: stage === "grading" ? "failed-job" : null, grading_setup_configured: stage === "grading",
         question_recognition_provider_id: "provider", submission_recognition_provider_id: "provider",
         problem_count: 1, problem_data: { q1: problem }, student_count: stage === "questions" ? 0 : 1,
-        student_data: stage === "questions" ? {} : { S1: { stu_id: "S1", stu_name: "Saved Student", stu_ans: [{ q_id: "q1", number: "1", type: "short_answer", content: "Saved original answer", flag: [] }] } },
+        student_data: stage === "questions" ? {} : { S1: { stu_id: "S1", stu_name: "Saved Student", stu_ans: [{ q_id: "q1", number: "1", type: "concept", content: "Saved original answer", flag: [] }] } },
         submission_sources: [], active_job_id: null, active_operation_status: null, created_at: 1, updated_at: 1, kb_docs: {}, kb_doc_count: 0 };
       let release!: () => void;
       const slowRequest = new Promise<void>(resolve => { release = resolve; });

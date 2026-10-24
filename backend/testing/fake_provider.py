@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.models import Correction, ExpertResult, StepScore
+from backend.domain.question_types import normalize_question_type
 
 
 class FakeProvider:
@@ -30,12 +31,12 @@ class FakeProvider:
         self.calls.append(q_id)
         if q_id in self.fail_qids:
             return Correction(
-                q_id=q_id, type="short", score=0.0, max_score=max_score,
+                q_id=q_id, type="概念题", score=0.0, max_score=max_score,
                 confidence=0.0, comment="all_failed", steps=[],
                 synthesis_method="all_failed",
             )
         return Correction(
-            q_id=q_id, type="short", score=self.score, max_score=max_score,
+            q_id=q_id, type="概念题", score=self.score, max_score=max_score,
             confidence=self.confidence, comment="ok",
             steps=[StepScore(step_no=1, desc="s1", is_correct=True, score=self.score)],
             expert_results=[ExpertResult(
@@ -70,10 +71,13 @@ async def fake_grade_batch(*, student_store: dict, problem_store: dict,
                 if a.get("q_id") == q_id:
                     answer_text = a.get("content", "")
                     break
-            corrections.append(await provider.grade(
+            correction = await provider.grade(
                 q_id=q_id, stem=problem.get("stem", ""), answer=answer_text,
                 max_score=problem.get("max_score", 10.0),
-            ))
+            )
+            corrections.append(correction.model_copy(update={
+                "type": normalize_question_type(problem.get("type")),
+            }))
         out.append({
             "student_id": sid,
             "student_name": sd.get("stu_name", sid),

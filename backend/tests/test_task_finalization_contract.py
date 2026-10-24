@@ -44,7 +44,7 @@ def _prepared_task():
     questions = [
         assignment_repository.add_question(
             assignment_id=task_id, teacher_id=owner_id,
-            q_id=q_id, order_index=index, type="short", stem=q_id,
+            q_id=q_id, order_index=index, type="concept", stem=q_id,
             max_score=10,
         )
         for index, q_id in enumerate(("q-required", "q-optional"))

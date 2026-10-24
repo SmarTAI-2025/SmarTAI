@@ -209,6 +209,7 @@ class ArtifactProblemV1(ProblemInfo):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     q_id: str = Field(pattern=r"^q[1-9][0-9]{0,2}$", max_length=4)
+    rubric_draft: dict[str, Any] | None = None
     source_display_number: str | None = Field(default=None, max_length=128)
     max_score_source: str | None = Field(default=None, max_length=128)
     max_score_review_status: Literal[
@@ -278,6 +279,7 @@ class QuestionMaterialCandidateV1(_StrictModel):
     ]
     text_value: str | None = Field(default=None, max_length=1_000_000)
     test_cases: list[TestCase] | None = Field(default=None, max_length=100)
+    rubric_draft: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _validate_target_value(self):

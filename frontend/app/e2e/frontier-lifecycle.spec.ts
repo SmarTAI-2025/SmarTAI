@@ -7,7 +7,7 @@ const task = {
   status: "problems_ready", workflow_revision: 1, problem_count: 4, student_count: 0,
   kb_docs: {}, kb_doc_count: 0, created_at: 1, updated_at: 1,
   problem_data: Object.fromEntries([1, 2, 3, 4].map(n => [`q${n}`, {
-    q_id: `q${n}`, number: String(n), type: n === 4 ? "programming" : "short_answer", stem: `Question ${n}`,
+    q_id: `q${n}`, number: String(n), type: n === 4 ? "programming" : "concept", stem: `Question ${n}`,
     criterion: "One point for the answer", reference_answer: "42", max_score: 1,
     review_status: "needs_review",
     solution_code: n === 4 ? "def answer(): return 42" : null,

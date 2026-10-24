@@ -36,6 +36,7 @@ const capabilities: Record<FilterIntentSurface, { fields: string[]; sorts: strin
 export function supportsFilterIntent(intent: FilterIntentResult, surface: FilterIntentSurface): boolean {
   if (intent.execution) return intent.recognized && isGroundedExecution(intent.execution) && intent.execution.recognized;
   if (!intent.recognized || !Array.isArray(intent.question_tokens) || !Array.isArray(intent.text_terms)) return false;
+  if (intent.question_types?.some(type => !["calculation", "concept", "reasoning", "programming", "other"].includes(type))) return false;
   const allowed = capabilities[surface];
   if (intent.sort && !allowed.sorts.includes(intent.sort)) return false;
   return Object.entries(intent).every(([field, value]) =>
@@ -55,8 +56,8 @@ export function matchesQuestionToken(id: string, label: string, token: string): 
 export function normalizeFilterType(value: string): string {
   const aliases: Record<string, string> = {
     "计算题": "calculation", "计算": "calculation", "编程题": "programming", "编程": "programming", "coding": "programming",
-    "证明题": "proof", "证明": "proof", "概念题": "concept", "选择题": "choice", "填空题": "fill_blank", "简答题": "short_answer", "问答题": "short_answer",
-    "short": "short_answer", "其他": "other",
+    "推理题": "reasoning", "推理": "reasoning",
+    "概念题": "concept", "概念": "concept", "其他": "other", "其它": "other",
   };
   const key = normalizeFilterText(value);
   return aliases[key] ?? key;
@@ -78,7 +79,7 @@ export function parseLocalTaskFilter(raw: string, surface: FilterIntentSurface):
     result = { ...EMPTY_FILTER_INTENT, sort };
   } else if (/^(?:q\s*\d+(?:[._-]\d+)*|第\s*\d+(?:[._-]\d+)*\s*题)$/i.test(query)) {
     result = { ...EMPTY_FILTER_INTENT, question_tokens: [query] };
-  } else if (["calculation", "programming", "proof", "concept", "choice", "fill_blank", "short_answer"].includes(normalizeFilterType(query))) {
+  } else if (["calculation", "concept", "reasoning", "programming", "other"].includes(normalizeFilterType(query))) {
     result = { ...EMPTY_FILTER_INTENT, question_types: [normalizeFilterType(query)] };
   } else if (surface === "question_preparation") {
     const states: Record<string, NonNullable<FilterIntentResult["preparation_status"]>> = {

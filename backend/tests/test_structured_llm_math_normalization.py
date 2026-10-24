@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from pydantic import BaseModel
 
 from backend.tools.structured_llm import (
@@ -13,6 +15,27 @@ from backend.tools.structured_llm import (
 class _MathPayload(BaseModel):
     prose: str
     solution_code: str
+
+
+class _EvidencePayload(BaseModel):
+    quote: str
+    context_quote: str
+    source_quote: str
+    reason: str
+
+
+@pytest.mark.parametrize("source", [
+    r"\(x^2=1\)", r"\frac{a}{b}=1", '"x=1"',
+    "First line\n  second line", r"$x \neq y$",
+    "$a\bbar$", r"literal\ntext",
+])
+def test_json_evidence_preserves_original_text_while_explanation_renders(source):
+    parsed = extract_and_parse_json(json.dumps({
+        "quote": source, "context_quote": source, "source_quote": source,
+        "reason": r"Check \(x^2=1\).",
+    }), _EvidencePayload)
+    assert parsed.quote == parsed.context_quote == parsed.source_quote == source
+    assert parsed.reason == "Check $x^2=1$."
 
 
 def test_prose_linebreaks_preserve_code_and_tex_escapes():
