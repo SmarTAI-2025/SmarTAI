@@ -281,8 +281,8 @@ describe("QuestionPreparationDetailPage navigation", () => {
     const element = document.querySelector('[data-question-id="Q2"]') as HTMLElement;
     const card = within(element);
     expect(card.getAllByText("生成失败")).toHaveLength(1);
-    expect(card.getByText("请补齐缺失的题型、评分标准、标答并确认本题；完成前不能批改。")).toBeVisible();
-    expect(element.querySelector('[data-review-issue-notes] .text-amber-700')).toBeNull();
+    expect(card.getByText("请补齐缺失的题型、评分标准并确认本题；完成前不能批改。")).toBeVisible();
+    expect(element.querySelector('[data-review-issue-notes] .text-amber-700')).toHaveTextContent('缺少标答（可选），可按需补充。');
     await userEvent.click(card.getByRole("button", { name: "题型 · 修改" }));
     const select = card.getByRole("combobox", { name: "题型" });
     expect(select).toHaveValue("");

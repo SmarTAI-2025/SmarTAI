@@ -7,6 +7,23 @@ const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id:
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
+  it.each(["zh-CN", "en-US"])("keeps optional answers out of required prompts and clears repaired fields (%s)", locale => {
+    const required = issue({ code: "generation_failed", field: "rubric", severity: "blocking" });
+    const optional = issue({ issue_id: "answer", code: "generation_failed", field: "answer" });
+    const row = question({ criterion: "", reference_answer: "", review_status: "needs_review", preparation_issues: [required, optional] });
+    const notes = questionReviewNotes(row, locale, () => "Generation failed");
+    const answerName = locale === "zh-CN" ? "标答" : "reference answer";
+    expect(notes.filter(note => note.severity === "blocking").every(note => !note.label.includes(answerName))).toBe(true);
+    expect(notes.some(note => note.severity === "advisory" && note.label.includes(answerName))).toBe(true);
+    expect(questionReviewBlocked(row)).toBe(true);
+    const repaired = { ...row, criterion: "Full credit for a correct answer.", preparation_issues: [{ ...required, status: "resolved" as const }, optional] };
+    expect(questionReviewBlocked(repaired)).toBe(false);
+    expect(questionReviewNextBlocked(repaired)).toBe(false);
+    expect(questionReviewNotes(repaired, locale, () => "Generation failed").every(note => note.severity === "advisory")).toBe(true);
+    expect(questionReviewNotes(repaired, locale, () => "Generation failed").some(note => /评分标准|rubric/.test(note.label))).toBe(false);
+    expect(questionReviewNotes({ ...repaired, review_status: "confirmed", preparation_issues: [{ ...required, status: "resolved" }, { ...optional, status: "acknowledged" }] }, locale, () => "Generation failed")).toEqual([]);
+  });
+
   it.each(["", " ", "unknown"])("requires a real question type without discarding the stem (%s)", type => {
     const row = question({ type });
     expect(questionReviewBlocked(row)).toBe(true);
@@ -24,9 +41,10 @@ describe("review hard failures", () => {
     const notes = questionReviewNotes(row, "zh-CN", () => "生成失败");
     expect(notes).toEqual([
       { label: "生成失败", severity: "blocking" },
-      { label: "请补齐缺失的题型、评分标准、标答并确认本题；完成前不能批改。", severity: "blocking" },
+      { label: "请补齐缺失的题型、评分标准并确认本题；完成前不能批改。", severity: "blocking" },
+      { label: "缺少标答（可选），可按需补充。", severity: "advisory" },
     ]);
-    expect(questionReviewNotes(row, "en-US", () => "Generation failed")[1].label).toContain("question type, rubric, reference answer");
+    expect(questionReviewNotes(row, "en-US", () => "Generation failed")[1].label).toContain("question type, rubric and confirm");
     expect(questionReviewNotes({ ...row, type: "proof" }, "zh-CN", () => "生成失败")[1].label).not.toContain("题型");
   });
 
@@ -36,7 +54,7 @@ describe("review hard failures", () => {
     const notes = questionReviewNotes(row, "zh-CN", code => code);
     expect(notes).toHaveLength(2);
     expect(notes.every(note => note.severity === "advisory")).toBe(true);
-    expect(notes[1].label).toBe("缺少标答，建议补充或核对确认。");
+    expect(notes[1].label).toBe("缺少标答（可选），可按需补充。");
   });
 
   it("retains required confirmation after repair even when the optional answer is missing", () => {

@@ -173,19 +173,23 @@ export function questionReviewNotes(problem: ProblemInfo, locale: string, fallba
     [!hasQuestionType(problem.type), "题型", "question type"],
     [!problem.stem?.trim(), "题干", "question text"],
     [!problem.criterion?.trim(), "评分标准", "rubric"],
-    [!problem.reference_answer?.trim(), "标答", "reference answer"],
   ] as const;
   const names = missing.filter(([absent]) => absent).map(([, zh, en]) => locale === "zh-CN" ? zh : en);
-  const requiredMissing = missing.slice(0, 4).some(([absent]) => absent);
-  const notes = issues.filter(issue => !(names.length && ((issue.code === "manual_completion_required" && issue.details?.review_display_reason !== "confirmation_required")
+  const answerMissing = !problem.reference_answer?.trim();
+  const notes = issues.filter(issue => !((names.length || answerMissing) && ((issue.code === "manual_completion_required" && issue.details?.review_display_reason !== "confirmation_required")
     || ["missing_number", "missing_type", "empty_stem", "missing_rubric", "missing_answer"].includes(String(issue.details?.review_display_reason)))))
     .map(issue => ({ label: recognitionIssueLabel(issue, locale) ?? fallbackLabel(issue.code),
       severity: issue.severity === "blocking" ? "blocking" as const : "advisory" as const }));
-  if (names.length && (requiredMissing || problem.review_status !== "confirmed")) {
+  if (names.length) {
     notes.push({ label: locale === "zh-CN"
-      ? requiredMissing ? `请补齐缺失的${names.join("、")}并确认本题；完成前不能批改。` : `缺少${names.join("、")}，建议补充或核对确认。`
-      : requiredMissing ? `Complete the missing ${names.join(", ")} and confirm this question before grading.` : `Missing ${names.join(", ")}; review or completion suggested.`,
-      severity: requiredMissing ? "blocking" : "advisory" });
+      ? `请补齐缺失的${names.join("、")}并确认本题；完成前不能批改。`
+      : `Complete the missing ${names.join(", ")} and confirm this question before grading.`,
+      severity: "blocking" });
+  }
+  if (answerMissing && problem.review_status !== "confirmed") {
+    notes.push({ label: locale === "zh-CN"
+      ? "缺少标答（可选），可按需补充。"
+      : "The reference answer is optional; add one if helpful.", severity: "advisory" });
   }
   // Identical failure labels are one message, with the strongest severity.
   const unique = new Map<string, typeof notes[number]>();
