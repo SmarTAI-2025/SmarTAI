@@ -211,7 +211,13 @@ async def test_source_retry_repartitions_saved_units_and_clears_resolved_boundar
     with pytest.raises((RecognitionError, ValidationError)):
         await pipeline.run()
     before, partial = persisted(owner, operation)
-    assert any(issue["code"] == "recognition_partial" for issue in partial["q1"]["preparation_issues"])
+    if role == "problem" and boundary == "repeated":
+        # Missing question 99 still needs repair; repeated display number 1
+        # alone must not invalidate the already complete first exercise.
+        assert before.checkpoint["incremental_incomplete_units"]
+        assert not any(issue["code"] == "recognition_partial" for issue in partial["q1"]["preparation_issues"])
+    else:
+        assert any(issue["code"] == "recognition_partial" for issue in partial["q1"]["preparation_issues"])
     old_keys = {key for key in before.checkpoint["incremental_unit_artifacts"] if key.split(":")[1:2] == [token]}
     assert old_keys
     retry = True
@@ -482,7 +488,7 @@ async def test_unlabelled_material_matches_only_a_single_known_question(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_repeated_later_heading_invalidates_saved_question_before_reader_finishes(monkeypatch):
+async def test_repeated_later_heading_keeps_distinct_questions_without_invalidating_saved_work(monkeypatch):
     owner, _, operation, pipeline = await setup(monkeypatch)
     first_saved, repeated_seen, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
     source_token = pipeline.sources[0][0].source_token
@@ -516,15 +522,14 @@ async def test_repeated_later_heading_invalidates_saved_question_before_reader_f
     try:
         await asyncio.wait_for(repeated_seen.wait(), 3)
         saved, rows = persisted(owner, operation)
-        assert saved.checkpoint["incremental_source_invalidations"][source_token] == ["1"]
-        assert any(issue["code"] == "recognition_partial" for issue in rows["q1"]["preparation_issues"])
+        assert not saved.checkpoint["incremental_source_invalidations"].get(source_token)
+        assert not any(issue["code"] == "recognition_partial" for issue in rows["q1"]["preparation_issues"])
         release.set()
-        with pytest.raises(ValidationError) as failed:
-            await asyncio.wait_for(runner, 3)
-        assert failed.value.code == "question_targets_incomplete"
+        await asyncio.wait_for(runner, 3)
         _, final = persisted(owner, operation)
-        assert all(any(issue["code"] == "recognition_partial" for issue in value["preparation_issues"])
-                   for value in final.values() if value["number"] == "1")
+        assert [value["number"] for value in final.values()] == ["1", "2", "1"]
+        assert all(not any(issue["code"] == "recognition_partial" for issue in value["preparation_issues"])
+                   for value in final.values())
         forbidden.assert_not_awaited()
     finally:
         if not runner.done():
