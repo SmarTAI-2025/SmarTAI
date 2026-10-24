@@ -202,7 +202,7 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
                     "prepare_grading_criteria",
                 )
             if provider is None or not callable(getattr(provider, "ainvoke", None)):
-                plan = fallback_math_rubric_plan(problem)
+                plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
             else:
                 try:
                     async with observe_auxiliary_request(reporter, provider):
@@ -218,10 +218,10 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
                     ):
                         raise
                     # A failed interpretation retains the original rubric.
-                    plan = fallback_math_rubric_plan(problem)
+                    plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
             if (plan.input_fingerprint != math_rubric_fingerprint(problem)
                     or plan.max_score != problem.max_score):
-                plan = fallback_math_rubric_plan(problem)
+                plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
             if checkpoints is not None:
                 checkpoints.save_math_plan(problem, plan)
         plans[qid] = plan

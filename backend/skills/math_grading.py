@@ -26,6 +26,7 @@ from backend.tools.structured_llm import PermanentLLMError, TransientLLMError, s
 from backend.tools.structured_llm import StructuredOutputInvalidError
 from backend.services.math_source_evidence import SourceMatch, match_source_quote, source_catalog
 from backend.services.math_proof_audit import inspect_audit, read_appendix, REVIEW_INSTRUCTION, OUTPUT_INSTRUCTION
+from backend.services.math_strictness import Adjustment, LEDGER_INSTRUCTION
 
 TRACE_VERSION = "math_evidence_v2"
 VERIFICATION_BUDGET_SECONDS = 20.0
@@ -97,6 +98,11 @@ class Award(BaseModel):
     score: float = Field(ge=0, allow_inf_nan=False)
     claim_ids: list[str] = Field(default_factory=list)
     reason: str = Field(min_length=1)
+    adjustment: Adjustment | None = None
+    conditional_credit: float = Field(default=0, ge=0, allow_inf_nan=False)
+    caused_by: str | None = Field(default=None, description=(
+        "For adjustment=follow_through, the refuted ancestor claim.id of the original error."
+    ))
 
 
 class Deduction(BaseModel):
@@ -110,6 +116,7 @@ class Deduction(BaseModel):
     ))
     exemption_id: str | None = None
     reason: str = Field(min_length=1)
+    adjustment: Adjustment | None = None
 
 
 class EvidenceJudgment(BaseModel):
@@ -203,7 +210,13 @@ def _claim_map(assessment: MathAssessment, answer: str, plan, *, problem_text=""
     if len(claims) != len(assessment.claims) or "" in claims:
         raise ValueError("duplicate_or_empty_claim_id")
     item_ids = {item.id for route in plan.routes if route.id == assessment.route_id for item in (*route.items, *route.exemptions)}
+    holistic = any(route.id == assessment.route_id and route.mode == "holistic" for route in plan.routes)
     for claim in claims.values():
+        if holistic:
+            # Holistic routes have no executable item IDs. Models may label
+            # prose criteria here; those unused labels must not discard valid
+            # sourced evidence. Numeric ledgers retain strict item validation.
+            claim.item_ids = []
         if not claim.item_ids:
             # The ledger itself is an explicit many-to-many link. Materialize
             # omitted reverse links; never overwrite a contradictory mapping
@@ -251,6 +264,41 @@ def _claim_map(assessment: MathAssessment, answer: str, plan, *, problem_text=""
     return claims
 
 
+def _error_ancestors(claims, targets):
+    ancestors, pending = set(), [key for target in targets for key in claims[target].depends_on]
+    while pending:
+        key = pending.pop()
+        if key not in ancestors:
+            ancestors.add(key)
+            pending.extend(claims[key].depends_on)
+    return {key for key in ancestors if claims[key].verdict == "refuted"}
+
+
+def _complete_origin(kind, origin, claims, targets):
+    # Only complete redundant metadata when the model explicitly classified
+    # follow-through and its already validated graph names one unique error.
+    if kind == "follow_through" and origin is None:
+        candidates = _error_ancestors(claims, targets)
+        if len(candidates) == 1:
+            return next(iter(candidates))
+    return origin
+
+
+def _default_fraction(kind, item, claims, targets, origin, plan):
+    """Validate eligibility from the frozen plan, never from answer keywords."""
+    if kind not in item.default_adjustments or not targets:
+        raise ValueError("default_adjustment_not_in_plan")
+    if kind == "minor_omission":
+        if not any(claims[key].kind == "omission" and claims[key].verdict == "refuted" for key in targets):
+            raise ValueError("minor_adjustment_requires_omission")
+        if origin is not None:
+            raise ValueError("minor_adjustment_is_not_follow_through")
+    elif (not any(claims[key].kind == "statement" for key in targets)
+          or origin not in _error_ancestors(claims, targets)):
+        raise ValueError("follow_through_requires_error_ancestor")
+    return _points(plan.strictness) / 100 if plan.allow_partial_credit else Decimal(1)
+
+
 def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_text="") -> tuple[float, list[StepScore]]:
     """Validate and sum one selected rubric route; no CAS-result score rules."""
     claims = _claim_map(assessment, answer, plan, problem_text=problem_text)
@@ -275,9 +323,21 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
                 raise ValueError("award_claim_not_mapped_to_item")
             if award.score > 0 and all(claims[key].kind == "omission" for key in award.claim_ids):
                 raise ValueError("omission_is_not_evidence_of_credit")
+            amount = _points(award.score)
+            formula = ""
+            if award.adjustment is not None:
+                award.caused_by = _complete_origin(award.adjustment, award.caused_by, claims, award.claim_ids)
+                fraction = _default_fraction(award.adjustment, item, claims, award.claim_ids, award.caused_by, plan)
+                conditional = _points(award.conditional_credit)
+                if not answer.strip() or amount + conditional > _points(item.points):
+                    raise ValueError("conditional_credit_exceeds_item")
+                amount += conditional * (1 - fraction)
+                formula = f"\n{award.score:g} + {conditional} × {1 - fraction} = {amount}"
+            elif award.conditional_credit or award.caused_by is not None:
+                raise ValueError("conditional_credit_requires_policy")
             quotes = " / ".join(claims[key].quote or claims[key].source_quote for key in award.claim_ids)
-            desc = f"{item.description}\n{quotes}\n{award.reason}".strip()
-            descriptions.append((desc, _points(award.score), award.score == item.points))
+            desc = f"{item.description}\n{quotes}\n{award.reason}{formula}".strip()
+            descriptions.append((desc, amount, amount == _points(item.points)))
         total = sum((score for _, score, _ in descriptions), Decimal(0))
     elif route.mode == "deductions":
         if not answer.strip():
@@ -314,6 +374,8 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
             rule = items[deduction.rule_id]
             if rule.id not in claims[deduction.claim_id].item_ids:
                 raise ValueError("deduction_claim_not_mapped_to_item")
+            deduction.caused_by = _complete_origin(deduction.adjustment, deduction.caused_by,
+                                                   claims, [deduction.claim_id])
             if deduction.caused_by is not None and deduction.caused_by not in claims:
                 raise ValueError("missing_error_origin")
             if deduction.caused_by is not None:
@@ -333,8 +395,14 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
             count = 0 if consequential or deduction.exemption_id else deduction.occurrences
             if rule.max_occurrences is not None:
                 count = min(count, max(0, rule.max_occurrences - used_rules.get(rule.id, 0)))
-            used_rules[rule.id] = used_rules.get(rule.id, 0) + count
             amount = _points(rule.points) * count
+            if deduction.adjustment is not None and count:
+                amount *= _default_fraction(deduction.adjustment, rule, claims,
+                    [deduction.claim_id], deduction.caused_by, plan)
+            # Like an explicit exemption, an uncharged minor omission must not
+            # consume the rule's allowance before a later independent error.
+            if amount:
+                used_rules[rule.id] = used_rules.get(rule.id, 0) + count
             total -= amount
             policy = (exemptions[deduction.exemption_id].description if deduction.exemption_id else
                       route.error_policy_source_quote if consequential else "")
@@ -388,8 +456,14 @@ def _deduction_signature(assessment: MathAssessment) -> tuple:
     """Compare actual error locations/rules, not model-local IDs or wording."""
     quotes = {claim.id: claim.quote for claim in assessment.claims}
     return tuple(sorted((item.rule_id, item.exemption_id or "", quotes.get(item.claim_id, ""), item.occurrences,
-                         quotes.get(item.caused_by, ""))
+                         quotes.get(item.caused_by, ""), item.adjustment or "")
                         for item in assessment.deductions))
+
+
+def _award_signatures(assessment):
+    quotes = {claim.id: claim.quote for claim in assessment.claims}
+    return {award.item_id: (award.score, award.conditional_credit, award.adjustment,
+                           quotes.get(award.caused_by, "")) for award in assessment.awards}
 
 
 def math_scoring_disagreement(experts: list[ExpertResult]) -> bool:
@@ -401,7 +475,7 @@ def math_scoring_disagreement(experts: list[ExpertResult]) -> bool:
             continue
         assessment = MathAssessment.model_validate(trace["assessment"])
         signatures.add((trace.get("plan_id"), assessment.route_id, expert.score,
-                        tuple(sorted((award.item_id, award.score) for award in assessment.awards)),
+                        tuple(sorted(_award_signatures(assessment).items())),
                         _deduction_signature(assessment)))
     scores = {expert.score for expert in experts if not expert.error_kind and read_math_trace(expert)}
     return len(signatures) > 1 or len(scores) > 1
@@ -584,12 +658,12 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
     traces = [read_math_trace(expert) for expert in experts]
     if not all(trace and ("assessment" in trace or "direct" in trace) for trace in traces):
         return experts
-    plan = get_math_plan(problem) or fallback_math_rubric_plan(problem)
+    plan = get_math_plan(problem) or fallback_math_rubric_plan(problem, grading_setup=grading_setup)
     if any(trace["plan_id"] != plan.plan_id for trace in traces):
         return experts
     assessments = [MathAssessment.model_validate(trace["assessment"]) if "assessment" in trace else None for trace in traces]
     route_ids = {assessment.route_id for assessment in assessments if assessment is not None}
-    signatures = [{award.item_id: award.score for award in assessment.awards} if assessment is not None else {}
+    signatures = [_award_signatures(assessment) if assessment is not None else {}
                   for assessment in assessments]
     item_ids = set().union(*(signature.keys() for signature in signatures))
     disputed = {key for key in item_ids
@@ -613,7 +687,7 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                     raise ValueError("review_source_or_expert_not_found")
                 old, candidate = assessments[index], revision.assessment
                 if len(route_ids) == 1 and old is not None and old.awards and not requested_review:
-                    new_awards = {award.item_id: award.score for award in candidate.awards}
+                    new_awards = _award_signatures(candidate)
                     if any(new_awards.get(key) != value for key, value in signatures[index].items() if key not in disputed):
                         raise ValueError("review_changed_undisputed_award")
                 _assessment_validator(plan, answer, problem, original=old,
@@ -746,7 +820,7 @@ class MathGradingSkill(GradingSkill):
         # prompt or legacy scoring branch to become a silent fallback.
         template = (Path(__file__).resolve().parents[1] / "prompts" /
                     f"{self.template_name}.txt").read_text(encoding="utf-8")
-        return template + "\nINPUT DATA:\n" + _json({
+        return template + "\n" + LEDGER_INSTRUCTION + "\nINPUT DATA:\n" + _json({
             "problem": problem.stem, "reference_answer": problem.reference_answer,
             "student_answer": answer.content, "rubric_plan": plan.model_dump(mode="json"),
             "source_catalog": {key: value[0] for key, value in
@@ -791,7 +865,7 @@ class MathGradingSkill(GradingSkill):
         started = perf_counter()
         from backend.services.math_grading_context import get_math_plan
         from backend.services.math_rubric_plan import fallback_math_rubric_plan
-        plan = get_math_plan(problem) or fallback_math_rubric_plan(problem)
+        plan = get_math_plan(problem) or fallback_math_rubric_plan(problem, grading_setup=self.grading_setup)
         unit, cm = None, None
         if self.reporter:
             from backend.services.math_grading_context import report_math_progress

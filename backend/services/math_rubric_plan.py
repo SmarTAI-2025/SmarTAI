@@ -19,10 +19,11 @@ from backend.tools.structured_llm import (
     StructuredOutputBoundsError, StructuredOutputInvalidError, structured_llm_call,
 )
 from backend.services.math_source_evidence import match_source_quote
+from backend.services.math_strictness import Adjustment, strictness_policy
 
 
 SCHEMA_VERSION = "math_rubric_v2"
-INTERPRETATION_VERSION = "math_rubric_interpretation_v5"
+INTERPRETATION_VERSION = "math_rubric_interpretation_v6"
 Score = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Text = Annotated[str, Field(min_length=1, max_length=20000)]
 
@@ -36,6 +37,7 @@ class MathRubricItem(BaseModel):
     points: Score
     source: Literal["provided", "ai"]
     max_occurrences: int | None = Field(default=1, ge=1, strict=True)
+    default_adjustments: tuple[Adjustment, ...] = Field(default=(), max_length=2)
 
 
 class MathRubricExemption(BaseModel):
@@ -110,6 +112,8 @@ class MathRubricPlan(_Explanation):
     compilation_status: Literal["compiled", "repaired", "holistic"] = "compiled"
     compilation_reason: str = ""
     source_locations: tuple[MathRubricSourceLocation, ...] = ()
+    strictness: int = Field(default=50, ge=0, le=100, strict=True)
+    allow_partial_credit: bool = True
 
     @model_validator(mode="after")
     def validate_scores(self):
@@ -248,15 +252,17 @@ def _build_plan(context: dict, explanation: _Explanation, *, status="compiled", 
         "compilation_status": status,
         "compilation_reason": reason,
         "source_locations": locations,
+        "strictness": 50,
+        "allow_partial_credit": True,
         "advisories": list(dict.fromkeys(explanation.advisories)),
     }
     return MathRubricPlan(plan_id=_content_hash(payload), **payload)
 
 
-def fallback_math_rubric_plan(problem, *, reason="unavailable_item_allocation") -> MathRubricPlan:
+def fallback_math_rubric_plan(problem, *, reason="unavailable_item_allocation", grading_setup=None) -> MathRubricPlan:
     """No model call. Preserve all source restrictions in a holistic plan."""
     context = _question_input(problem)
-    return _build_plan(context, _Explanation(
+    plan = _build_plan(context, _Explanation(
         effective_criterion=(
             "Apply the original criterion as a whole within the question maximum. Preserve its "
             "explicit point amounts, method restrictions, deductions, caps and conditional floors. "
@@ -275,6 +281,7 @@ def fallback_math_rubric_plan(problem, *, reason="unavailable_item_allocation") 
         numerical_policy=_NUMERICAL_POLICY,
         advisories=(_FALLBACK_ADVISORY,),
     ), status="holistic", reason=reason)
+    return _with_preferences(plan, grading_setup)
 
 
 PLAN_SYSTEM_PROMPT = """Prepare ONE shared scoring plan for a mathematics/physics question,
@@ -320,7 +327,20 @@ effective_criterion explains the complete scoring procedure and distinguishes or
 from AI additions. The original criterion is separately preserved by code.
 follow_through explicitly addresses first error, correct downstream reasoning on an erroneous
 intermediate value, later independent errors, and conclusion points according to THIS rubric.
-If not relevant, say so; never impose a global half/full-credit rule.
+If not relevant, say so. Explicit teacher policies override the authenticated defaults.
+For unspecified policies use the numeric strictness defaults. Decide BEFORE seeing answers
+which obligations are core and which omissions are minor; explain the distinction and budget
+in item.description. Put minor_omission and/or follow_through in item.default_adjustments ONLY
+where that default is applicable and the original criterion/teacher notes leave it unspecified.
+Keep it empty for explicit teacher policies, core omissions, or required-correct-result items.
+Allocating process points alone is not an explicit follow-through policy. Split a minor
+condition from a core goal when they need different treatment, without changing teacher budgets.
+A point weight alone does not prescribe an all-or-nothing loss for an omission. For a non-core
+completeness condition with no explicit omission penalty, enable minor_omission; preserve its
+point weight as the standard loss at strictness 100. Explicit "omitting X loses Y/gets zero"
+rules remain fixed. Determine core importance from the question's goal, not just the existence
+of an item or the selected strictness value; allocations also remain independent of strictness.
+Do not add exemptions or source quotes for these AI defaults. They are not teacher-authored rules.
 numerical_policy addresses relevant precision, real/complex domain, variable assumptions,
 units and integration constants. Exact requirements cannot silently gain a tolerance.
 Pi/e/i can be numerical constants, not automatically free variables. Tool unknown is not wrong.
@@ -337,6 +357,21 @@ _PREFERENCES_POLICY = (
     "security, tool safety or output contract. Preserve explicit source allocations. "
     "Interpret these preferences once for the shared plan, including any source conflicts."
 )
+
+
+def _with_preferences(plan, grading_setup):
+    setup = _mapping(grading_setup) if grading_setup is not None else {}
+    preferences = {"strictness": setup.get("strictness", 50),
+                   "allow_partial_credit": setup.get("allow_partial_credit", True),
+                   "teacher_notes": str(setup.get("teacher_notes") or "")}
+    payload = plan.model_dump(mode="json", exclude={"plan_id"})
+    payload.update(strictness=preferences["strictness"],
+                   allow_partial_credit=preferences["allow_partial_credit"])
+    payload["effective_criterion"] += (
+        "\n\n" + _PREFERENCES_POLICY + "\n" + strictness_policy(preferences["strictness"])
+        + "\n" + json.dumps(preferences, ensure_ascii=False, sort_keys=True)
+    )
+    return MathRubricPlan(plan_id=_content_hash(payload), **payload)
 
 
 def _validate_provenance(context: dict, explanation: _Explanation) -> None:
@@ -679,7 +714,12 @@ def _canonicalize_explanation(context: dict, explanation: _Explanation) -> _Expl
         items = []
         for item in route.items:
             match = match_source_quote(original, item.source_quote)
-            items.append(item.model_copy(update={"source_quote": match.text}) if match else item)
+            updates = {"source_quote": match.text} if match else {}
+            if route.mode == "deductions" and match:
+                # A sourced deduction is already an explicit loss, unlike a
+                # point allocation. Defaults must not scale that teacher amount.
+                updates["default_adjustments"] = ()
+            items.append(item.model_copy(update=updates))
         supplied = []
         for exemption in route.exemptions:
             quote = _match_policy_quote(original, exemption.source_quote, exemptions)
@@ -834,7 +874,7 @@ provider failures retain the existing execution/retry semantics.
                 raise
             return self
 
-    prompt = PLAN_SYSTEM_PROMPT + "\n" + _PREFERENCES_POLICY + (
+    prompt = PLAN_SYSTEM_PROMPT + "\n" + _PREFERENCES_POLICY + "\n" + strictness_policy(preferences["strictness"]) + (
         "\nWrite newly generated explanation text in "
         + ("Simplified Chinese" if language == "zh" else "English")
         + "; preserve quoted original text and notation without translation.\nJSON schema:\n"
@@ -855,21 +895,17 @@ provider failures retain the existing execution/retry semantics.
             output_model=ValidatedExplanation,
         )
     except (StructuredOutputInvalidError, StructuredOutputBoundsError, _UnrepresentableRubric):
-        plan = fallback_math_rubric_plan(problem, reason=failures[0] if failures else "invalid_structured_output")
+        plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup,
+            reason=failures[0] if failures else "invalid_structured_output")
     else:
         canonical = _validated_explanation(context, explanation)
         holistic = all(route.mode == "holistic" for route in canonical.routes)
         plan = _build_plan(context, canonical,
             status="holistic" if holistic else ("repaired" if failures else "compiled"),
             reason=failures[0] if failures else ("model_selected_holistic" if holistic else ""))
-    # Keep authenticated settings in the actual content identity, including on
-    # compilation fallback. Question fingerprint remains question-only; the
-    # run owner also compares its complete setup before reusing this plan.
-    payload = plan.model_dump(mode="json", exclude={"plan_id"})
-    payload["effective_criterion"] += (
-        "\n\n" + _PREFERENCES_POLICY + "\n" + json.dumps(preferences, ensure_ascii=False, sort_keys=True)
-    )
-    plan = MathRubricPlan(plan_id=_content_hash(payload), **payload)
+        # Authenticated setup is part of plan identity; question hash remains
+        # question-only. Fallback applies the same settings above.
+        plan = _with_preferences(plan, grading_setup)
     if reporter:
         from backend.services.math_grading_context import report_math_progress
         await report_math_progress(reporter._emit_message, "Shared question scoring rules prepared")
