@@ -17,10 +17,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from backend.tools.structured_llm import (
     StructuredOutputBoundsError, StructuredOutputInvalidError, structured_llm_call,
 )
+from backend.services.process_credit_policy import process_credit_policy
 
 
 SCHEMA_VERSION = "math_rubric_v1"
-INTERPRETATION_VERSION = "math_rubric_interpretation_v2"
+INTERPRETATION_VERSION = "math_rubric_interpretation_v3"
 Score = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Text = Annotated[str, Field(min_length=1, max_length=20000)]
 
@@ -146,6 +147,7 @@ def _question_input(problem: Any) -> dict[str, Any]:
            ("q_id", "number", "type", "stem", "criterion", "reference_answer")},
         "max_score": maximum,
         "criterion_source": criterion_source,
+        "process_credit_policy": process_credit_policy(str(row.get("criterion") or "")).mode,
         "question_structure": structure_input,
         "teacher_subpart_points": {
             str(label): str(points)
@@ -240,6 +242,9 @@ tools or execute code. Return only a JSON object matching the supplied schema.
 Preserve every explicit teacher rule and value, including deductions, caps, conditional floors,
 blank-answer policy, required methods and alternative-method policies. Do not substitute a global
 result-match/full-marks rule or a fixed percentage cap. Do not invent generous floors.
+Distinguish allowed, forbidden and unspecified process credit. A mention of working is not
+permission to award points. If process_credit_policy is forbidden, do not add working, method,
+step or explanation allocations, including AI items; preserve the original final-answer rule.
 Interpret nonempty vague criteria as well as missing criteria. Fill only necessary gaps, label
 AI additions honestly, explain conflicts in advisories at QUESTION scope, and do not demand
 confirmation or withhold grading because the standard is brief.
@@ -375,6 +380,22 @@ def _validate_source_rules(context: dict, explanation: _Explanation) -> None:
     """
     original = context["criterion"]
     structured = [route for route in explanation.routes if route.mode != "holistic"]
+    if context["process_credit_policy"] == "forbidden":
+        if process_credit_policy(explanation.effective_criterion).mode == "allowed":
+            raise ValueError("process interpretation contradicts the original prohibition")
+        for route in structured:
+            if route.mode != "points":
+                continue
+            for item in route.items:
+                # A full scoring clause, or a bare item label with an explicit
+                # structured budget, can prove a contradiction. Merely mentioning
+                # working in an item (e.g. "不计过程分") cannot.
+                if item.points > 0 and any(
+                    process_credit_policy(text).mode == "allowed"
+                    for text in (item.description, f"{item.description}{item.points:g}分",
+                                 f"{item.description} {item.points:g} points")
+                ):
+                    raise ValueError("process allocation contradicts the original prohibition")
     floor_rules: list[tuple[Decimal, str]] = []
     clauses = [part.strip(" :：.") for part in re.split(
         r"[，,；;、\n。]|(?<!\d)\.(?!\d)", original,

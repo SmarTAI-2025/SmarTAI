@@ -9,9 +9,9 @@ result-based only (题目识别与判卷问题记录 §1: "选择题、填空题
     (e.g. "全部选对的得6分, 部分选对的得部分分, 有选错的得0分"); when the
     rubric is silent, all-or-nothing. Any wrongly selected option → 0.
 
-The LLM only judges final-answer equivalence; the awarded score is derived
-DETERMINISTICALLY from that judgment below, so the model cannot drift into
-process-style partial credit.  ``steps`` is always empty — no 过程分项.
+Unless the rubric explicitly awards working/explanation points, the LLM judges
+final-answer equivalence and the score is derived deterministically below.
+Explicit allocations retain the rubric's total. ``steps`` is always empty.
 """
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ from backend.skills.base import (
 )
 from backend.models import GradingConfidence, ExpertResult, ProblemInfo, StudentAnswerInfo, TaskGradingSetup
 from backend.llm.providers import BaseProvider
+from backend.services.process_credit_policy import ProcessCreditPolicy, process_credit_policy
 from backend.tools.structured_llm import structured_llm_call
 from backend.tools import knowledge as kb_tool
 
@@ -42,20 +43,44 @@ logger = logging.getLogger(__name__)
 # Objective types whose score is strictly binary (full or 0).
 _BINARY_OBJECTIVE_TYPES = ("选择题", "填空题")
 
-# Keywords marking an EXPLICIT process-credit rubric. Default objective
-# grading is result-based; process points only apply when the teacher (or
-# the source) has explicitly marked them in the criterion — 题目识别与判卷
-# 问题记录 §1: "若题干要求写出简要过程，则需在题目类型与评分规则中显式
-# 标注，默认不启用过程分".
-_PROCESS_CRITERION_KEYWORDS = ("过程", "步骤")
-
 
 def _is_result_based_criterion(criterion: str) -> bool:
     """Result-based (answer-only) contract: the default for objective
     questions. An explicit process-credit rubric (e.g. "过程2分，答案3分")
     is honored as written instead."""
-    text = (criterion or "").strip()
-    return not any(keyword in text for keyword in _PROCESS_CRITERION_KEYWORDS)
+    return process_credit_policy(criterion).mode != "allowed"
+
+
+def _grading_contract(policy: ProcessCreditPolicy) -> str:
+    """One question policy for both prompts and deterministic settlement."""
+    common = (
+        f"Process credit policy: {policy.mode}. Preserve the original rubric verbatim; "
+        "a mention of working, a prohibition, or a request to show working is not "
+        "permission to award it points. Step scores are not reported. "
+        '"correct" always means the FINAL answer is correct.\n'
+    )
+    if policy.mode == "allowed":
+        return common + (
+            "The rubric explicitly awards working/step/explanation points. Apply its "
+            "allocations and conditions to both working and final answer; put their sum "
+            'in "score". A correct final answer alone need not earn full marks, and an '
+            "incorrect final answer can retain the explicitly earned working marks."
+        )
+    return common + (
+        "Grade the final answer only; do not award process credit. "
+        "Single choice (选择题) and fill-in-the-blank (填空题): correct final answer "
+        "receives full marks, incorrect receives 0.\n"
+        + (
+            'The rubric explicitly gives an incorrect answer 0: set "partial_credit_applicable" '
+            "to false. Multiple choice also receives full marks only when all options "
+            "are correct, otherwise 0.\n"
+            if policy.all_or_nothing else
+            "Multiple choice (多选题): retain partial marks only when the rubric explicitly "
+            "awards them for a non-empty subset of correct options with no wrong option. "
+            'Only then set "partial_credit_applicable" to true. Otherwise use false: '
+            "all options correct receives full marks, any missing or wrong option receives 0.\n"
+        )
+    )
 
 
 # ─── Structured LLM output ───────────────────────────────────────────────────
@@ -74,7 +99,7 @@ class ObjectiveGradingOutput(BaseModel):
         default=False,
         description="Multiple choice only: True only when the rubric explicitly states a partial-credit rule (e.g. 部分选对的得部分分) AND the student's selection is a wrong-but-clean subset (nothing wrong selected).",
     )
-    score: float = Field(ge=0, allow_inf_nan=False, description="Score per the grading contract (multi-choice partial credit only when partial_credit_applicable is true)")
+    score: float = Field(ge=0, allow_inf_nan=False, description="Total under the selected grading contract; explicit process allocations and multiple-choice subset marks are distinct.")
     confidence: GradingConfidence = Field(default=0.0, ge=0, le=1, allow_inf_nan=False, description="Grading confidence")
     comment: str = Field(description="Brief feedback to the student")
 
@@ -99,11 +124,7 @@ def _load_template() -> str:
 _DEFAULT_TEMPLATE = """You are an expert examiner grading one objective question (single choice, multiple choice, or fill-in-the-blank).
 
 GRADING CONTRACT (mandatory):
-- The grade depends ONLY on the student's FINAL answer. Never award credit for reasoning, working, or process. Step scores are not reported.
-- Single choice (选择题) and fill-in-the-blank (填空题): the answer is unique. Correct final answer → full marks; incorrect → 0.
-- Multiple choice (多选题): apply the partial-credit rule stated in the rubric when present (e.g. "全部选对的得6分, 部分选对的得部分分, 有选错的得0分"). If the rubric states no partial-credit rule: all options correct → full marks, any missing or wrong option → 0. Any wrongly selected option → always 0.
-- Set "partial_credit_applicable" to true ONLY when (a) the rubric explicitly states a partial-credit rule for multiple choice, AND (b) the student selected a non-empty subset of the correct options with no wrong option. Otherwise it must be false.
-- Explicit process rubric (the only exception): if the grading rubric below explicitly allocates points to the working/process (e.g. "过程2分，答案3分"), award EXACTLY the points that rubric allocates — process portion plus final-answer portion — and put their sum in "score". "correct" still means the final answer is right. Step items are never reported either way.
+{grading_contract}
 
 PROCEDURE:
 1. Establish the correct final answer from the rubric / reference answer below. If neither states it, use your own expertise and note this in the comment.
@@ -232,6 +253,9 @@ class ObjectiveSkill(GradingSkill):
                 await self.reporter.substep(active_unit, "build_prompt")
 
             prompt = self._template
+            policy = process_credit_policy(problem.criterion)
+            contract = _grading_contract(policy)
+            prompt = prompt.replace("{grading_contract}", contract)
             prompt = prompt.replace("{context}", context_str)
             prompt = prompt.replace("{problem}", problem.stem)
             prompt = prompt.replace("{answer}", answer.content or "(No answer provided)")
@@ -243,10 +267,8 @@ class ObjectiveSkill(GradingSkill):
 
             system_prompt = build_system_prompt(
                 "You are an expert examiner grading an objective question "
-                "(single choice / multiple choice / fill-in-the-blank). Grade on "
-                "the student's final answer only, per the mandatory grading "
-                "contract in the user prompt; never award process credit and "
-                "never report step scores."
+                "(single choice / multiple choice / fill-in-the-blank).\n"
+                + contract
                 + authoritative_score_instruction(problem.max_score),
                 self.language,
                 self.grading_setup,
@@ -261,12 +283,13 @@ class ObjectiveSkill(GradingSkill):
                 )
 
                 # Deterministic score: the model judges equivalence, we award.
-                if _is_result_based_criterion(problem.criterion):
+                if policy.mode != "allowed":
                     score = _objective_score(
                         problem.type,
                         correct=bool(result.correct),
                         model_score=result.score,
-                        partial_credit_applicable=bool(result.partial_credit_applicable),
+                        partial_credit_applicable=(bool(result.partial_credit_applicable)
+                                                   and not policy.all_or_nothing),
                         max_score=problem.max_score,
                     )
                 else:

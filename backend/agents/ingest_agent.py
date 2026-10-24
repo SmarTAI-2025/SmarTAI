@@ -1795,7 +1795,11 @@ Rules:
   accepted alternative methods, scope and exceptions. Do not convert deductions into award
   percentages or invent a 100% allocation. Keep the source wording and restrictions; do not
   replace the teacher's policy with a stricter reference-solution checklist. For objective
-  questions (选择题/多选题/填空题), emit a result-based rule only when the source supports it,
+  questions (选择题/多选题/填空题), distinguish whether the source explicitly allows process
+  credit, explicitly forbids it, or leaves it unspecified. Preserve the exact policy and
+  allocations: "每步1分" and "选项2分、解释2分" allow those points; "不计过程分" and
+  "只看最终答案" do not. Mentioning process/steps alone is not permission. If unspecified,
+  do not invent process points; emit an answer-only rule only when supported by the source,
   otherwise omit. The known max_score is context, not permission to rewrite source rules.
 - For test_cases, only emit candidates for programming questions and use test_cases.
 - confidence is match confidence, not grading confidence.
@@ -1936,9 +1940,15 @@ Rules:
   question_structure.subparts is non-empty, name every subpart label exactly once and assign
   explicit absolute points whose sum equals that major question's max_score. The subparts remain
   inside this one major-question rubric. For a question without subparts, use percentages adding
-  up to 100% and never restate the maximum score; if that no-subpart question is objective
-  (选择题/多选题/填空题), use a result-based criterion such as
-  "答案唯一: 答对满分, 答错 0 分" instead (for 多选题 keep the stem's partial-credit rule when present).
+  up to 100% and never restate the maximum score; for objective questions
+  (选择题/多选题/填空题), distinguish whether the source explicitly allows process credit,
+  explicitly forbids it, or leaves it unspecified. Preserve the teacher's policy verbatim
+  and retain exact allocations such as "每步1分" or "选项2分、解释2分" instead of replacing
+  them with the default or percentages. "不计过程分" and "只看最终答案" prohibit process
+  points; mentioning process/steps alone is not permission. Only for a no-subpart objective
+  question whose process policy is unspecified, use a result-based criterion such as
+  "答案唯一: 答对满分, 答错 0 分" without adding process points (for 多选题 keep the stem's
+  partial-credit rule when present).
 - teacher_subpart_points contains authoritative teacher allocations. Preserve each named label's
   points exactly in criterion; allocate only the unspecified remainder. Do not replace explicit
   allocations with an even split. A subpart remains inside its single major-question package.
