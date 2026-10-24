@@ -1,4 +1,6 @@
 """Negation and conditional scope regressions at PR262 head 0685801d."""
+import hashlib
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -62,7 +64,8 @@ UNRESOLVED = "计算过程酌情计分，具体限制详见本题要求"
 
 def resolved_response(criterion=UNRESOLVED, *, correct=False, **changes):
     resolution = {
-        "criterion_quote": criterion, "process_credit": "allowed",
+        "criterion_fingerprint": hashlib.sha256(criterion.encode("utf-8")).hexdigest(),
+        "process_credit": "allowed",
         "correct_answer_required": False, "other_conditions_met": True,
         "separate_result_parts": False, "result_score": 0, "process_score": 2,
         "rationale": "按完整原文核对所列限制及其适用范围后计分。",
@@ -91,7 +94,7 @@ async def test_unresolved_requires_an_explicit_policy_before_settlement(correct,
     assert len(provider.messages) == 1
     assert "NOT permission" in provider.messages[0][0].content
     assert UNRESOLVED in provider.messages[0][1].content
-    assert '"criterion_quote"' in provider.messages[0][1].content
+    assert '"criterion_fingerprint"' in provider.messages[0][1].content
     assert '"other_conditions_met"' in provider.messages[0][1].content
 
 
@@ -211,13 +214,29 @@ async def test_fractional_components_at_the_maximum_do_not_fail_from_float_round
 
 
 @pytest.mark.asyncio
+async def test_long_source_is_preserved_without_requiring_a_second_copy_in_model_output():
+    criterion = UNRESOLVED + "；请结合题目要求核对完整性和适用范围。" * 1000
+    payload = resolved_response(criterion)
+    assert len(json.dumps(payload, ensure_ascii=False)) < 1500
+    p = question(criterion)
+    provider = RawReplayProvider(payload)
+    result = await ObjectiveSkill(provider).grade(
+        p, StudentAnswerInfo(q_id="q1", number="1", type="选择题", content="部分正确"))
+    assert not result.error_kind
+    assert result.score == 2 and p.criterion == criterion
+    assert criterion in provider.messages[0][1].content
+    assert payload["policy_resolution"]["criterion_fingerprint"] in provider.messages[0][1].content
+    assert len(provider.messages) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("defect", ["missing", "source", "sum", "rationale"])
 async def test_incomplete_interpretation_is_a_failed_grade_not_a_successful_score(defect):
     payload = resolved_response()
     if defect == "missing":
         del payload["policy_resolution"]
     elif defect == "source":
-        payload["policy_resolution"]["criterion_quote"] = "计算过程酌情计分"
+        payload["policy_resolution"]["criterion_fingerprint"] = hashlib.sha256("计算过程酌情计分".encode()).hexdigest()
     elif defect == "sum":
         payload["score"] = 4
     else:

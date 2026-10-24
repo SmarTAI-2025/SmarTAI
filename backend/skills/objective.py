@@ -16,6 +16,7 @@ process credit does not remove per-blank result marks. ``steps`` is empty.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -63,8 +64,9 @@ def _grading_contract(policy: ProcessCreditPolicy) -> str:
     if policy.unresolved:
         return common + (
             "The source rule is not fully resolved; this is NOT permission for process credit "
-            "and NOT an all-or-nothing rule. In policy_resolution quote the COMPLETE original "
-            "criterion verbatim, including negation, parentheses, conditions and their scope. "
+            "and NOT an all-or-nothing rule. Interpret the COMPLETE original criterion, including "
+            "negation, parentheses, conditions and their scope. The criterion_fingerprint binds "
+            "policy_resolution to that unchanged source; do not repeat or replace the original. "
             "Explicitly interpret process_credit as allowed/forbidden/unspecified; state whether "
             "a correct final answer is required for ALL process credit and whether its other "
             "conditions hold for this answer. Identify separate_result_parts only if the source "
@@ -135,7 +137,7 @@ class ObjectiveGradingOutput(BaseModel):
 
 class ObjectivePolicyResolution(BaseModel):
     """Required source interpretation for a rule the finite parser cannot settle."""
-    criterion_quote: str = Field(min_length=1, description="Complete original criterion, copied verbatim without dropping qualifiers.")
+    criterion_fingerprint: str = Field(min_length=1, description="Copy the supplied fingerprint of the complete, unchanged original criterion.")
     process_credit: Literal["allowed", "forbidden", "unspecified"] = Field(description="Teacher policy, not an inference from a nonzero proposed score.")
     correct_answer_required: bool = Field(description="Whether ALL working credit requires the final answer to be correct.")
     other_conditions_met: bool = Field(description="Whether the source's other process-credit conditions hold for this answer.")
@@ -149,11 +151,15 @@ class ResolvedObjectiveGradingOutput(ObjectiveGradingOutput):
     policy_resolution: ObjectivePolicyResolution
 
 
+def _criterion_fingerprint(criterion: str) -> str:
+    return hashlib.sha256(criterion.encode("utf-8")).hexdigest()
+
+
 def _resolved_score(result: ResolvedObjectiveGradingOutput, policy: ProcessCreditPolicy,
                     criterion: str, maximum: float) -> float:
     resolution = result.policy_resolution
     total = resolution.result_score + resolution.process_score
-    if (resolution.criterion_quote != criterion or not resolution.rationale.strip()
+    if (resolution.criterion_fingerprint != _criterion_fingerprint(criterion) or not resolution.rationale.strip()
             or total - maximum > 1e-6 or abs(total - result.score) > 1e-6):
         raise StructuredOutputInvalidError("Objective policy resolution lacks consistent source and score evidence.")
     if policy.all_or_nothing and not result.correct:
@@ -330,6 +336,8 @@ class ObjectiveSkill(GradingSkill):
                     "\nFor this unresolved rule, the following complete output schema supersedes "
                     "the example JSON shape above. Include the required policy_resolution:\n"
                     + json.dumps(ResolvedObjectiveGradingOutput.model_json_schema(), ensure_ascii=False)
+                    + "\ncriterion_fingerprint for the complete original criterion: "
+                    + _criterion_fingerprint(problem.criterion)
                 )
 
             # Step 3: Call LLM
