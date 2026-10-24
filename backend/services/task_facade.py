@@ -2988,8 +2988,15 @@ def _reusable_submission_results(*, owner_id, task_id, payload, questions, inclu
             # Units may finish independently before the aggregate exists. Newest
             # evidence owns each question; older attempts only fill absent units.
             answers = {answer["q_id"]: answer for answer in result.student.get("stu_ans", [])}
-            answers.update({answer["q_id"]: answer for answer in newer.student.get("stu_ans", [])})
-            student = {**newer.student, "stu_ans": [answers[q.q_id] for q in questions if q.q_id in answers]}
+            newer_answers = {answer["q_id"]: answer for answer in newer.student.get("stu_ans", [])}
+            answers.update(newer_answers)
+            # Review provenance belongs to the selected answer version, not the
+            # first unit in the recovery scan or a union of superseded attempts.
+            reviews = set((result.student.get("recognition") or {}).get("model_review_question_ids", [])) - set(newer_answers)
+            reviews.update(set((newer.student.get("recognition") or {}).get("model_review_question_ids", [])) & set(newer_answers))
+            student = {**newer.student, "stu_ans": [answers[q.q_id] for q in questions if q.q_id in answers],
+                "recognition": {**(newer.student.get("recognition") or {}),
+                    "model_review_question_ids": sorted(q.q_id for q in questions if q.q_id in reviews)}}
             reusable[key] = replace(newer, student=student, matched_answer_count=len(answers))
     normalized = {}
     for key, result in reusable.items():

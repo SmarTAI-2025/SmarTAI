@@ -397,3 +397,97 @@ async def test_model_review_survives_unit_aggregation_and_explicit_format_retry(
     assert 'recognition_manual_pending' in answers['q2']['flag']
     assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q2']['flag'])
     assert 'submission_recognition_blocked' in task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('paused', [False, True])
+@pytest.mark.parametrize('last_question', ['q1', 'q2'])
+@pytest.mark.parametrize('model_review', [False, True, 'resolved'])
+async def test_interrupted_units_keep_review_provenance_through_retry(monkeypatch, paused, last_question, model_review):
+    from backend.services import submission_incremental
+
+    owner, task = _setup()
+    retry, calls, saved_counts = False, [], {}
+    other_saved = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    save_file = file_repository.save_file
+    other_question = 'q2' if last_question == 'q1' else 'q1'
+
+    def save(**kwargs):
+        artifact = save_file(**kwargs)
+        if kwargs.get('kind') == 'submission_source_parse_v1' and not retry:
+            student = json.loads(kwargs['content'])[0]['student']
+            q_id = student['stu_ans'][0]['q_id']
+            saved_counts[q_id] = saved_counts.get(q_id, 0) + 1
+            if q_id == other_question and saved_counts[q_id] == (3 if q_id == 'q2' else 1):
+                loop.call_soon_threadsafe(other_saved.set)
+        return artifact
+    monkeypatch.setattr(file_repository, 'save_file', save)
+
+    async def invoke(messages):
+        requested = [q['q_id'] for q in _questions(messages)]
+        calls.append(requested)
+        if not retry and requested == [last_question]:
+            await asyncio.wait_for(other_saved.wait(), 5)
+        answers = [_answer(q_id, 'Preserved work for ' + q_id) for q_id in requested]
+        if not retry:
+            for answer in answers:
+                if answer['q_id'] == 'q2':
+                    first_repair = calls.count(['q2']) == 1
+                    answer.update(type={'invalid': 'format'}, flag=['recognition_manual_pending']
+                                  if model_review is True or (model_review == 'resolved' and first_repair) else [])
+                    if model_review == 'resolved' and first_repair:
+                        # Later adopted content resolves this old review; a union
+                        # of all historical markers must not resurrect it.
+                        answer['content'] = {'invalid': 'format'}
+        return _response(answers)
+
+    merge_units = submission_incremental.merge_source_answer_units
+    def interrupt(*args, **kwargs):
+        if not retry:
+            assert saved_counts == {'q1': 1, 'q2': 3}
+            if paused:
+                raise asyncio.CancelledError()
+            raise OSError('Synthetic interruption before aggregate persistence')
+        return merge_units(*args, **kwargs)
+    monkeypatch.setattr(submission_incremental, 'merge_source_answer_units', interrupt)
+    registry = _registry(monkeypatch, invoke)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename='S1.txt', content=b'Question 1: First work.\nQuestion 2: Second work.',
+        content_type='text/plain', registry=registry)
+    runner = task_facade.run_durable_submission_recognition(_claim(owner, queued['job_id']))
+    if paused:
+        with pytest.raises(asyncio.CancelledError):
+            await runner
+        stop_task_run(task_id=task, owner_id=owner, job_id=queued['job_id'],
+            expected_revision=workflow_repository.get_workflow(task, owner_id=owner).workflow_revision)
+    else:
+        await runner
+    assert not any(artifact.kind == 'submission_recognition_result' for artifact in
+                   file_repository.list_files(owner_id=owner, assignment_id=task))
+    operation = workflow_repository.get_operation(queued['job_id'], owner_id=owner)
+    recovered = task_facade._reusable_submission_results(owner_id=owner, task_id=task,
+        payload={'retry_from': {'operation_id': operation.id, 'attempt': operation.attempt}},
+        questions=assignment_repository.list_questions(task, teacher_id=owner), include_incomplete=True)
+    restored = next(iter(recovered.values())).student
+    retry = True
+    before = task_facade.get_task(task_id=task, owner_id=owner)
+    queued_retry = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=queued['job_id'],
+        request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=before['workflow_revision']),
+        background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued_retry['job_id']))
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    if after['status'] == 'error':
+        await continue_manually(task_id=task, owner_id=owner, job_id=queued_retry['job_id'],
+                                expected_revision=after['workflow_revision'])
+        after = task_facade.get_task(task_id=task, owner_id=owner)
+    answers = {answer['q_id']: answer for answer in after['student_data']['S1']['stu_ans']}
+    assert calls.count(['q1']) == 1 and calls.count(['q2']) == 4
+    assert answers['q1']['content'] == 'Preserved work for q1' and not answers['q1']['flag']
+    assert answers['q2']['content'] == 'Preserved work for q2' and answers['q2']['type'] == 'short'
+    assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q2']['flag'])
+    blocked = task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
+    expected_review = model_review is True
+    assert ('recognition_manual_pending' in answers['q2']['flag'],
+            'submission_recognition_blocked' in blocked) == (expected_review, expected_review)
+    assert restored['recognition']['model_review_question_ids'] == (['q2'] if expected_review else [])
