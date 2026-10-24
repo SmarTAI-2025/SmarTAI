@@ -57,7 +57,7 @@ def _seed_task(*, with_question: bool = False, criterion: str = "Award up to 10 
     )
     if with_question:
         assignment_repository.add_question(
-            task_id, teacher_id=owner_id, q_id="q1", order_index=0,
+            task_id, teacher_id=owner_id, q_id="q1", order_index=0, number="1",
             type="short", stem="Original", criterion=criterion, max_score=10,
         )
     return owner_id, task_id

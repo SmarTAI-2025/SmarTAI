@@ -306,7 +306,7 @@ def _merge_major_rows(target: dict[str, Any], row: Mapping[str, Any], label: str
         *list(row.get("preparation_issues") or []),
     ]
     if target.get("type") != row.get("type"):
-        target["type"] = "其他"
+        target["type"] = ""
 
 
 def collapse_explicit_subpart_rows(

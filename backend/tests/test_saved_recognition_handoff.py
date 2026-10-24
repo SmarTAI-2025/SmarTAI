@@ -151,11 +151,11 @@ async def test_structured_partial_questions_restore_known_missing_rows_into_exis
         assert row["question_structure"]["major_number"] == row["number"]
         assert row["number"] in set(numbers) - set(recognized)
         marker = next(issue for issue in row["preparation_issues"] if issue["code"] == "manual_completion_required")
-        assert marker["details"]["required_fields"] == ["stem", "criterion"]
+        assert marker["details"]["required_fields"] == ["type", "stem", "criterion"]
     with pytest.raises(ValidationError):
         task_facade.update_problem(task_id=task, owner_id=owner, q_id="q4", patch={"review_status": "confirmed"})
     task_facade.update_problem(task_id=task, owner_id=owner, q_id="q4",
-        patch={"stem": "Teacher-filled question 4", "criterion": "Award 10 points for the solution."})
+        patch={"type": "concept", "stem": "Teacher-filled question 4", "criterion": "Award 10 points for the solution."})
     task_facade.update_problem(task_id=task, owner_id=owner, q_id="q4", patch={"review_status": "confirmed"})
     assert task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]["q4"]["review_status"] == "confirmed"
     rejected = await task_preparation.retry_question_preparation(task_id=task, job_id=operation.operation_id,
@@ -175,7 +175,7 @@ async def test_submission_raw_text_handoff_opens_manual_rows_without_model_calls
     from backend.db import assignment_repository
     from backend.services.submission_manual_review import continue_manually
     owner, task = _seed_task(with_question=True)
-    assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1,
+    assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1, number="2",
         type="short", stem="Second", criterion="Award 10 points.", max_score=10)
     registry = _RecoveryRegistry()
     data, mime = source_file(pdf=True, pages=8)

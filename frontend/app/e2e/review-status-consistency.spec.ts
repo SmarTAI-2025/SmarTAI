@@ -22,7 +22,7 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
     }, locale);
     const sharedRule = zh ? "本轮统一按首次错误扣分，后续正确推导保留过程分。\n方法正确得 3 分；完成关键推导时至少得 2 分。" : "Deduct for the first error; credit correct subsequent reasoning.\nAward 3 points for the correct method; at least 2 points when the key derivation is complete.";
     const problem_data = Object.fromEntries([1, 2, 3, 4].map(n => [`q${n}`, {
-      q_id: `q${n}`, number: String(n), stem: `Synthetic question ${n}.`, criterion: "Reasoning rubric.", max_score: 10,
+      q_id: `q${n}`, number: String(n), type: "calculation", stem: `Synthetic question ${n}.`, criterion: "Reasoning rubric.", max_score: 10,
       review_status: "confirmed", max_score_review_status: "confirmed",
       preparation_issues: mode === "math-advisory" && n === 1 ? [{
         issue_id: "shared-plan", field: "rubric", code: "math_rubric_advisory", severity: "warning", status: "open",
