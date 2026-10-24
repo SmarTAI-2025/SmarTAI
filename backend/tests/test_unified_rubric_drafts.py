@@ -169,6 +169,80 @@ async def test_generated_response_round_trip_binds_without_any_grading_preparati
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("new_operation", [False, True])
+@pytest.mark.parametrize("first,missing", [("criterion", "reference_answer"), ("reference_answer", "criterion")])
+async def test_retry_recovers_saved_generation_context_and_provenance(monkeypatch, first, missing, new_operation):
+    import json
+    from backend.agents import incremental_question_preparation as inc
+    from backend.api import task_preparation as api
+    from backend.db import workflow_repository
+    from backend.llm.providers import ProviderRequestError
+    from backend.progress.tracker import ProgressReporter
+    from backend.services import task_facade
+    from backend.tools.structured_llm import PermanentLLMError
+    from backend.tests.test_incremental_question_preparation import setup, persisted
+    from backend.tests.test_question_preparation_recovery import _claim, _RecoveryRegistry
+
+    owner, task, operation, pipeline = await setup(monkeypatch)
+    # Use the task's real uniform 10-point policy, and actual durable units.
+    raw = {**choice_question(), "max_score": 10}
+    extract = AsyncMock(return_value=inc._rows([raw]))
+    monkeypatch.setattr(inc, "_extract_problems_call", extract)
+    definition = choice_definition()
+    definition["routes"][0]["items"][0].update(points=10, description="选择B得10分，否则0分")
+
+    def candidate(target):
+        return dict(target_id=f"q1:{target}", q_id="q1", target=target,
+            text_value="B，结果为4。" if target == "reference_answer" else "", rubric_definition=definition)
+
+    generator = ReplayProvider({"candidates": [candidate(first)]},
+        ProviderRequestError("provider_auth_failed", status_code=401))
+    pipeline.provider = generator
+    with pytest.raises(PermanentLLMError, match="provider_auth_failed"):
+        await pipeline.run()
+    assert len(generator.messages) == 2
+    _, partial = persisted(owner, operation)
+    completed = partial["q1"][first]
+    provenance = deepcopy(partial["q1"]["ai_completion_provenance"][first])
+    assert completed and not partial["q1"].get(missing)
+    task_facade._fail_operation(task, owner, operation.operation_id, operation.attempt,
+        "provider_auth_failed", expected_lease_token=operation.lease_token)
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    registry = _RecoveryRegistry("changed-model" if new_operation else "test-model")
+    retry = await api.retry_question_preparation(task_id=task, job_id=operation.operation_id,
+        request=api.RetryQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision,
+            use_current_configuration=new_operation), background_tasks=None,
+        current=SimpleNamespace(id=owner), registry=registry)
+    assert (retry["job_id"] != operation.operation_id) is new_operation
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
+    resumed = _claim(owner, retry["job_id"], "retry-with-saved-materials")
+    inputs = api._rehydrate_question_preparation_inputs(resumed)
+    provider = ReplayProvider({"candidates": [candidate(missing)]})
+    next_pipeline = inc.IncrementalQuestionPreparation(operation=resumed, sources=inputs["sources"],
+        provider=provider, provider_id=inputs["recognition_provider_id"],
+        reporter=ProgressReporter(resumed.operation_id), score_policy=inputs["score_policy"],
+        read_source=pipeline.read_source)
+    await next_pipeline.copy_retry_units()
+    await next_pipeline.run()
+    assert len(provider.messages) == 1
+    context = json.loads(provider.messages[0][-1].content.split("[Generation request]\n", 1)[1])
+    assert [target["target"] for target in context["requested_targets"]] == [missing]
+    assert context["known_problems"][0][f"existing_{first}"] == completed
+    if first == "criterion":
+        assert context["known_problems"][0]["existing_criterion_source"] == "ai"
+    _, final = persisted(owner, resumed)
+    assert final["q1"][first] == completed
+    assert final["q1"]["ai_completion_provenance"][first] == provenance
+    assert final["q1"]["ai_completion_provenance"][missing]["job_id"] == resumed.operation_id
+    assert saved_draft(final["q1"]) is not None
+    compiler = SimpleNamespace(pick_default=AsyncMock(side_effect=AssertionError("No repeated compilation")))
+    plans = await prepare_math_plans(final, compiler)
+    assert plans["q1"].original_criterion == final["q1"]["criterion"]
+    compiler.pick_default.assert_not_called()
+    extract.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_content_changes_invalidate_but_renumbering_and_display_settings_do_not():
     row = await generate_choice()
     def problem(value):

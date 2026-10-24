@@ -876,7 +876,11 @@ class IncrementalQuestionPreparation:
         if material_pending:
             return
         score_rows = []
-        for row in self.project(generated=False).values():
+        # Keep cache/dependency keys tied to the immutable extracted base, but
+        # generate against the accepted view, including restored fields and
+        # their provenance. A new retry worker has no previous call's locals.
+        accepted = self.project()
+        for q_id, row in self.project(generated=False).items():
             if not str(row.get("stem") or "").strip() or any(issue.get("code") == "recognition_partial" for issue in row.get("preparation_issues", [])):
                 continue
             if self.policy.mode == "per_question" and not row.get("max_score_source"):
@@ -890,7 +894,7 @@ class IncrementalQuestionPreparation:
                        and f"generated:{identity}:{target['target']}" not in self.units]
             key = "generation:" + identity
             if targets and key not in self.jobs:
-                self.jobs[key] = asyncio.create_task(self._generate(key, identity, row, targets))
+                self.jobs[key] = asyncio.create_task(self._generate(key, identity, accepted[q_id], targets))
 
         # A natural-language allocation can refer to "the last two questions".
         # Resolve it once against the complete known set, as before incremental
