@@ -111,7 +111,7 @@ def plans_from_snapshots(manifest: dict, events: list[dict]) -> dict[str, "MathR
             plan = MathRubricPlan.model_validate(raw)
         except (ValidationError, TypeError):
             continue
-        if isinstance(qid, str) and plan.schema_version == "math_rubric_v2":
+        if isinstance(qid, str) and plan.schema_version == "math_rubric_v3":
             plans[qid] = plan
     return plans
 

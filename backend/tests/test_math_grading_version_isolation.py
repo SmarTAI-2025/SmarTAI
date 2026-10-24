@@ -128,7 +128,7 @@ def test_v1_paused_vote_is_excluded_but_new_v2_plan_and_vote_resume(case, monkey
     plans = asyncio.run(current.run(context.prepare_math_plans(
         grading_adapter.build_problem_store(questions), registry(),
     )))
-    assert all(plan.schema_version == "math_rubric_v2" for plan in plans.values())
+    assert all(plan.schema_version == "math_rubric_v3" for plan in plans.values())
     assert all(plan.plan_id != old_plans[qid]["plan_id"] for qid, plan in plans.items())
     current.save_expert(student, "q1", provider, 0,
         ExpertResult(provider=provider, score=7, max_score=10, confidence=.9, comment="v2 vote"))

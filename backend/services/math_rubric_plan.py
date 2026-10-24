@@ -22,8 +22,8 @@ from backend.services.math_source_evidence import match_source_quote
 from backend.services.math_strictness import Adjustment, strictness_policy
 
 
-SCHEMA_VERSION = "math_rubric_v2"
-INTERPRETATION_VERSION = "math_rubric_interpretation_v7"
+SCHEMA_VERSION = "math_rubric_v3"
+INTERPRETATION_VERSION = "math_rubric_interpretation_v8"
 Score = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Text = Annotated[str, Field(min_length=1, max_length=20000)]
 
@@ -101,10 +101,21 @@ class MathRubricSourceLocation(BaseModel):
     end: int
 
 
+class FrozenBinaryPolicy(BaseModel):
+    """Program-validated constraint; never supplied by the model or renderer."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    scope: Literal["question"] = "question"
+    source: Literal["criterion", "generated_item"]
+    source_quote: Text
+    route_id: str | None = None
+    item_id: str | None = None
+
+
 class MathRubricPlan(_Explanation):
     """Immutable JSON-safe internal contract; route order is significant."""
 
-    schema_version: Literal["math_rubric_v2"] = SCHEMA_VERSION
+    schema_version: Literal["math_rubric_v3"] = SCHEMA_VERSION
     plan_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     max_score: float = Field(gt=0, allow_inf_nan=False)
@@ -112,6 +123,7 @@ class MathRubricPlan(_Explanation):
     compilation_status: Literal["compiled", "repaired", "holistic"] = "compiled"
     compilation_reason: str = ""
     source_locations: tuple[MathRubricSourceLocation, ...] = ()
+    binary_policy: FrozenBinaryPolicy | None = None
     strictness: int = Field(default=50, ge=0, le=100, strict=True)
     allow_partial_credit: bool = True
 
@@ -127,6 +139,12 @@ class MathRubricPlan(_Explanation):
                 (Decimal(str(item.points)) for item in route.items), Decimal(0)
             ) != maximum:
                 raise ValueError("point allocations must equal the question maximum")
+        if self.binary_policy is not None:
+            from backend.services.binary_scoring import freeze_binary_policy
+            expected = freeze_binary_policy(self.original_criterion, self.max_score, self.routes,
+                generated=self.binary_policy.source == "generated_item")
+            if self.binary_policy.model_dump() != expected:
+                raise ValueError("binary_policy_source_or_scope_changed")
         if self.plan_id != _content_hash(self.model_dump(mode="json", exclude={"plan_id"})):
             raise ValueError("rubric plan content hash mismatch")
         return self
@@ -215,7 +233,9 @@ _FALLBACK_ADVISORY = (
 )
 
 
-def _build_plan(context: dict, explanation: _Explanation, *, status="compiled", reason="") -> MathRubricPlan:
+def _build_plan(context: dict, explanation: _Explanation, *, status="compiled", reason="",
+                generated_definition=False) -> MathRubricPlan:
+    from backend.services.binary_scoring import freeze_binary_policy
     original = context["criterion"]
     locations = []
     for route in explanation.routes:
@@ -252,6 +272,8 @@ def _build_plan(context: dict, explanation: _Explanation, *, status="compiled", 
         "compilation_status": status,
         "compilation_reason": reason,
         "source_locations": locations,
+        "binary_policy": freeze_binary_policy(original, context["max_score"], explanation.routes,
+            generated=generated_definition),
         "strictness": 50,
         "allow_partial_credit": True,
         "advisories": list(dict.fromkeys(explanation.advisories)),
@@ -262,6 +284,11 @@ def _build_plan(context: dict, explanation: _Explanation, *, status="compiled", 
 def fallback_math_rubric_plan(problem, *, reason="unavailable_item_allocation", grading_setup=None,
                              bind_preferences=True) -> MathRubricPlan:
     """No model call. Preserve all source restrictions in a holistic plan."""
+    from backend.services.rubric_drafts import saved_draft, bind_draft, retarget_draft
+    prior = saved_draft(problem, grading_setup=grading_setup)
+    if prior is not None:
+        return (bind_draft(prior, problem, grading_setup=grading_setup) if bind_preferences
+                else retarget_draft(prior, problem).plan)
     context = _question_input(problem)
     plan = _build_plan(context, _Explanation(
         effective_criterion=(
@@ -372,6 +399,10 @@ def _with_preferences(plan, grading_setup):
     payload = plan.model_dump(mode="json", exclude={"plan_id"})
     payload.update(strictness=preferences["strictness"],
                    allow_partial_credit=preferences["allow_partial_credit"])
+    # Free-text teacher notes can contain new exceptions. They are interpreted
+    # with the complete rubric, never silently overridden by a prior constraint.
+    if preferences["teacher_notes"].strip():
+        payload["binary_policy"] = None
     payload["effective_criterion"] += (
         "\n\n" + _PREFERENCES_POLICY + "\n" + strictness_policy(preferences["strictness"])
         + "\n" + json.dumps(preferences, ensure_ascii=False, sort_keys=True)

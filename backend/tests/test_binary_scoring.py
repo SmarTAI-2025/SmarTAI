@@ -19,8 +19,6 @@ from backend.tests.test_math_rubric_plan import ReplayProvider
     "选B得4分，否则0分", "选择B（4）得4分，否则0分。", "答对满分，答错0分。",
     "本题选 B 得 4 分，否则 0 分。", "选项B得4分，否则0分。",
     "评分标准：答案正确得4分，否则不得分。", "答案唯一: 答对满分, 答错 0 分",
-    "正确选项及结果 — 所有作答\n- 选择B（4）得4分，否则0分；不要求过程：4分\n只要求选项，无过程分。\n结果为4。",
-    "正确选项及结果 — 所有作答\n- 选择B（4）得4分，否则0分：4分\n结果为4。",
     "- Correct answer receives 4 points; otherwise 0 points：4 points",
     "Correct answer receives 4 points; otherwise 0 points.", "Correct: full credit, wrong: no credit",
     "答案正确得满分，否则得零分。", "答案正确得四分，否则得零分。",
@@ -29,6 +27,16 @@ def test_only_explicit_binary_rule_is_detected(criterion):
     assert binary_rule(criterion, 4)
     if "满分" not in criterion and "full credit" not in criterion:
         assert not binary_rule(criterion, 6)
+
+
+@pytest.mark.parametrize("criterion", [
+    "正确选项及结果 — 所有作答\n- 选择B（4）得4分，否则0分；不要求过程：4分\n只要求选项，无过程分。\n结果为4。",
+    "正确选项及结果 — 所有作答\n- 选择B（4）得4分，否则0分：4分\n结果为4。",
+])
+def test_display_envelope_is_not_reinterpreted_as_policy_source(criterion):
+    # These generated rubrics still produce 0/full in the end-to-end tests.
+    # Their policy is persisted from verified items, never from this display.
+    assert whole_question_policy(criterion, 4) is None
 
 
 @pytest.mark.parametrize("criterion", [

@@ -29,21 +29,12 @@ _EN = (
     rf"(?:gets?|earns?|receives?|scores?|:)?\s*(?:0\s*(?:points?|marks?)|no credit))"
     rf"(?:[:：]\s*(?P<rendered_points>{_NUMBER})\s*(?:points?|marks?))?"
 )
-# Whole-document grammar, not a search followed by a list of forbidden words.
-# The optional renderer envelope must itself declare whole-question scope.
-# Every other line must be one of these complete non-allocating statements;
-# arbitrary route labels/notes are not trusted to be harmless metadata.
-_HEADER = (r"(?:(?:正确选项及结果|正确选项|最终答案|答案|结果)\s*—\s*"
-           r"(?:所有作答|全题|本题)\s*\n\s*)?")
-_NOTES = (rf"(?:\s*\n\s*(?:只要求选项，无过程分|不要求过程|"
-          rf"结果为\s*{_NUMBER})[。.]?)*")
+# Parse policy source only. Rendered titles, labels and notes are never inputs
+# to settlement. Generated constraints come from the semantic definition below.
 _DOCUMENTS = (
-    re.compile(r"\s*" + _HEADER + r"(?:[-*•]\s*)?"
-        r"(?:(?:评分标准|评分规则|答案唯一)[:：]\s*)?(?:本题)?" + _CN
-        + r"[。；;]?" + _NOTES + r"\s*", re.I),
+    re.compile(r"\s*(?:[-*•]\s*)?(?:(?:评分标准|评分规则|答案唯一)[:：]\s*)?(?:本题)?" + _CN + r"[。；;]?\s*", re.I),
     re.compile(r"\s*(?:[-*•]\s*)?(?:rubric:\s*)?" + _EN + r"[.;]?\s*", re.I),
 )
-
 
 @dataclass(frozen=True)
 class BinaryScoringPolicy:
@@ -76,3 +67,36 @@ def whole_question_policy(criterion: str, maximum: float) -> BinaryScoringPolicy
 def binary_rule(criterion: str, maximum: float) -> str | None:
     policy = whole_question_policy(criterion, maximum)
     return policy.source_quote if policy else None
+
+
+def freeze_binary_policy(criterion, maximum, routes, *, generated=False):
+    """Freeze a question constraint from its complete authoritative source.
+
+    For generated definitions the existing ledger supplies scope: exactly one
+    full-budget item, with no competing items, routes, floors or exemptions.
+    Its complete policy lives in item.description, independently of display
+    headings/language. Teacher prose is always checked as a whole instead.
+    """
+    if generated:
+        if len(routes) != 1:
+            return None
+        route = routes[0]
+        if (route.mode != "points" or len(route.items) != 1 or route.minimum_score
+                or route.exemptions or route.error_policy != "rubric"):
+            return None
+        item = route.items[0]
+        if item.points != maximum:
+            return None
+        # An explicit zero/full policy takes precedence over inferred default
+        # adjustments, just as explicit teacher rules take precedence over them.
+        policy = whole_question_policy(item.description, maximum)
+        return (dict(scope="question", source="generated_item", source_quote=policy.source_quote,
+                     route_id=route.id, item_id=item.id) if policy else None)
+    policy = whole_question_policy(criterion, maximum)
+    return (dict(scope="question", source="criterion", source_quote=policy.source_quote,
+                 route_id=None, item_id=None) if policy else None)
+
+
+def frozen_binary_rule(plan):
+    """All scoring paths consume the hashed policy, never rendered prose."""
+    return plan.binary_policy.source_quote if plan.binary_policy is not None else None

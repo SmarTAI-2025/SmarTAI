@@ -76,6 +76,11 @@ def render_rubric(definition: RubricDefinition, *, language="zh") -> str:
 def generated_rubric(problem: dict, definition: RubricDefinition, *, language="zh"):
     """Validate against original teacher rules BEFORE rendering AI additions."""
     original = str(problem.get("criterion") or "")
+    prior = saved_draft(problem) if original else None
+    if prior is not None:
+        # Completing a sibling field does not reinterpret an unchanged rubric.
+        # The caller seals this verified plan against the completed response.
+        return original, prior
     explanation = _validated_explanation(_question_input(problem), _Explanation(
         **definition.model_dump(), effective_criterion=(
             "按以下结构化评分项执行；页面标准与此底稿一致。" if language == "zh" else
@@ -84,6 +89,13 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
     ))
     # Existing teacher material is adopted, never replaced with a generated view.
     canonical_definition = RubricDefinition.model_validate(explanation.model_dump(exclude={"effective_criterion"}))
+    # Only a fresh generated definition (or its exact saved rendering) can
+    # supply generated policies. Existing teacher prose, including exceptions,
+    # remains authoritative even if a model proposes a simpler item ledger.
+    generated_definition = not original or (
+        _question_input(problem)["criterion_source"] == "ai"
+        and original in {render_rubric(canonical_definition, language=lang) for lang in ("zh", "en")}
+    )
     criterion = original or render_rubric(canonical_definition, language=language)
     completed = {**problem, "criterion": criterion}
     if not original:
@@ -93,7 +105,8 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
     holistic = all(route.mode == "holistic" for route in explanation.routes)
     plan = _build_plan(_question_input(completed), explanation,
         status="holistic" if holistic else "compiled",
-        reason="model_selected_holistic" if holistic else "")
+        reason="model_selected_holistic" if holistic else "",
+        generated_definition=generated_definition)
     return criterion, RubricDraft(content_fingerprint=draft_fingerprint(completed), plan=plan)
 
 

@@ -28,7 +28,7 @@ def choice_definition():
         follow_through="只要求选项，无过程分。", numerical_policy="结果为4。", advisories=[])
 
 
-async def generate_choice(kind="计算题", definition=None):
+async def generate_choice(kind="计算题", definition=None, language="zh"):
     provider = ReplayProvider({"candidates": [
         dict(target_id="q1:criterion", q_id="q1", target="criterion", rubric_definition=definition or choice_definition()),
         dict(target_id="q1:reference_answer", q_id="q1", target="reference_answer", text_value="B，结果为4。"),
@@ -36,7 +36,7 @@ async def generate_choice(kind="计算题", definition=None):
     raw = {**choice_question(), "type": kind}
     candidates = await generate_missing_question_materials({"q1": raw}, [
         {"target_id": f"q1:{key}", "q_id": "q1", "target": key} for key in ("criterion", "reference_answer")
-    ], 6, provider, generation_language="zh", allow_partial=True)
+    ], 6, provider, generation_language=language, allow_partial=True)
     assert len(provider.messages) == 1
     assert len(candidates) == 2
     row = raw

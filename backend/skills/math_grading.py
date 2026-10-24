@@ -27,7 +27,7 @@ from backend.tools.structured_llm import StructuredOutputInvalidError
 from backend.services.math_source_evidence import SourceMatch, match_source_quote, source_catalog
 from backend.services.math_proof_audit import inspect_audit, read_appendix, REVIEW_INSTRUCTION, OUTPUT_INSTRUCTION
 from backend.services.math_strictness import Adjustment, LEDGER_INSTRUCTION
-from backend.services.binary_scoring import binary_rule
+from backend.services.binary_scoring import frozen_binary_rule
 
 TRACE_VERSION = "math_evidence_v2"
 VERIFICATION_BUDGET_SECONDS = 20.0
@@ -459,7 +459,7 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
         raise ValueError("missing_scoring_evidence")
     floor = _points(route.minimum_score) if (route.minimum_condition == "always" or answer.strip()) else Decimal(0)
     total = max(total, floor, Decimal(0))
-    rule = binary_rule(plan.original_criterion, plan.max_score)
+    rule = frozen_binary_rule(plan)
     if rule:
         score = _binary_score(assessment.binary_correct, plan, answer, claims=claims)
         desc = "\n\n".join(d for d, _, _ in descriptions)
@@ -866,7 +866,7 @@ class MathGradingSkill(GradingSkill):
         return template + "\n" + LEDGER_INSTRUCTION + "\nINPUT DATA:\n" + _json({
             "problem": problem.stem, "reference_answer": problem.reference_answer,
             "student_answer": answer.content, "rubric_plan": plan.model_dump(mode="json"),
-            "binary_rule": binary_rule(plan.original_criterion, plan.max_score),
+            "binary_rule": frozen_binary_rule(plan),
             "source_catalog": {key: value[0] for key, value in
                 source_catalog(answer.content or "", problem.stem, plan.original_criterion).items()},
             "retrieved_material": context,
@@ -1064,7 +1064,7 @@ class MathGradingSkill(GradingSkill):
 
     async def _direct(self, problem, answer, plan, prompt, unit, chunks, *, fallback=None, started=None):
         await self._substep(unit, "llm_grade")
-        rule = binary_rule(plan.original_criterion, plan.max_score)
+        rule = frozen_binary_rule(plan)
         def validate(result):
             if rule:
                 try:
