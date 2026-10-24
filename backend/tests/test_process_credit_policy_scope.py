@@ -200,6 +200,17 @@ async def test_existing_format_repair_can_supply_missing_policy_evidence():
 
 
 @pytest.mark.asyncio
+async def test_fractional_components_at_the_maximum_do_not_fail_from_float_rounding():
+    p = question(UNRESOLVED)
+    p.max_score = .3
+    provider = RawReplayProvider(resolved_response(correct=True, result_score=.1, process_score=.2))
+    result = await ObjectiveSkill(provider).grade(
+        p, StudentAnswerInfo(q_id="q1", number="1", type="选择题", content="B"))
+    assert not result.error_kind
+    assert result.score == .3
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("defect", ["missing", "source", "sum", "rationale"])
 async def test_incomplete_interpretation_is_a_failed_grade_not_a_successful_score(defect):
     payload = resolved_response()

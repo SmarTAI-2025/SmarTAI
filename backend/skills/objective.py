@@ -154,7 +154,7 @@ def _resolved_score(result: ResolvedObjectiveGradingOutput, policy: ProcessCredi
     resolution = result.policy_resolution
     total = resolution.result_score + resolution.process_score
     if (resolution.criterion_quote != criterion or not resolution.rationale.strip()
-            or total > maximum or abs(total - result.score) > 1e-6):
+            or total - maximum > 1e-6 or abs(total - result.score) > 1e-6):
         raise StructuredOutputInvalidError("Objective policy resolution lacks consistent source and score evidence.")
     if policy.all_or_nothing and not result.correct:
         return 0.0
@@ -166,7 +166,7 @@ def _resolved_score(result: ResolvedObjectiveGradingOutput, policy: ProcessCredi
         and resolution.other_conditions_met
         and (result.correct or not (policy.conditional_process or resolution.correct_answer_required))
     ) else 0.0
-    return result_score + process_score
+    return min(maximum, result_score + process_score)
 
 
 # ─── Prompt template ─────────────────────────────────────────────────────────
