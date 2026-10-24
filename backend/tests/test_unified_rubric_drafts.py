@@ -92,6 +92,60 @@ async def test_incremental_completion_keeps_draft_matching_final_materials(monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("criterion,text,correct,expected", [
+    ("全部选对得4分，否则0分。例外：少选且无错选得两分。", "A", False, 2),
+    ("全部选对得4分，否则0分。例外：少选且无错选得2分。", "A", False, 2),
+    ("全部选对得四分，否则零分。少选但没有错误选项得两分。", "A", False, 2),
+    ("少选且无错选得两分。全部选对得4分，否则0分。", "A", False, 2),
+    ("全部选对得4分，否则0分。乙类作答按另一张表给分。", "A", False, 2),
+    ("每空答对得两分，否则零分。两空分别计分。", "4；5", False, 2),
+    ("第一空答案正确得2分，否则0分。第二空答案正确得2分，否则0分。", "4；5", False, 2),
+    ("选项正确得两分，否则零分。解释正确得两分。", "A；解释正确", False, 2),
+    ("答案正确得满分，否则得零分。", "AB", True, 4),
+    ("答案正确得满分，否则得零分。", "A", False, 0),
+    ("全部选对得四分，否则得零分。", "AB", True, 4),
+    ("全部选对得四分，否则得零分。", "A", False, 0),
+])
+async def test_teacher_policy_scope_survives_generation_persistence_reuse_and_grading(
+    monkeypatch, criterion, text, correct, expected,
+):
+    from backend.models import StudentAnswerInfo
+    from backend.services.math_grading_context import math_plans_context
+    from backend.skills import math_grading
+    from backend.skills.concept import ConceptSkill
+
+    monkeypatch.setattr(math_grading.kb_tool, "retrieve_for_grading", AsyncMock(return_value=[]))
+    monkeypatch.setattr(ConceptSkill, "_verify", AsyncMock(return_value=[]))
+    row = {**choice_question(), "type": "概念题", "criterion": criterion,
+           "material_provenance": {"criterion": {"source_kind": "teacher_provided"}}}
+    definition = dict(routes=[dict(id="teacher", description="教师完整政策", applies_when="所有作答",
+        mode="holistic")], follow_through="遵循教师原文及其例外。", numerical_policy="遵循教师原文。")
+    generator = ReplayProvider({"candidates": [dict(target_id="q1:reference_answer", q_id="q1",
+        target="reference_answer", text_value="AB", rubric_definition=definition)]})
+    candidates = await generate_missing_question_materials({"q1": row}, [dict(
+        target_id="q1:reference_answer", q_id="q1", target="reference_answer")], 6, generator,
+        generation_language="zh", allow_partial=True)
+    assert len(candidates) == 1 and candidates[0].rubric_draft
+    row.update(reference_answer="AB", rubric_draft=candidates[0].rubric_draft,
+               ai_completion_provenance={"reference_answer": {"source_kind": "ai_generated"}})
+    row = ArtifactProblemV1.model_validate_json(ArtifactProblemV1(**row).model_dump_json()).model_dump(mode="json")
+    assert row["criterion"] == criterion and saved_draft(row) is not None
+    registry = SimpleNamespace(pick_default=AsyncMock(side_effect=AssertionError("No second compiler")))
+    plans = await prepare_math_plans({"q1": row}, registry)
+    provider = ReplayProvider(dict(route_id="teacher", route_reason="应用完整教师政策", score=2,
+        comment="逐项核对", rationale="按教师规则计分", confidence=.9, claims=[dict(
+            id="s1", quote=text, verdict="supported" if correct else "refuted", reason="判断是否全部正确")]))
+    with math_plans_context(plans):
+        result = await ConceptSkill(provider).grade(ProblemInfo.model_validate(row),
+            StudentAnswerInfo(q_id="q1", number="1", type="概念题", content=text))
+    assert not result.error_kind
+    assert result.score == expected == sum(step.score for step in result.steps)
+    assert len(generator.messages) == len(provider.messages) == 1
+    registry.pick_default.assert_not_called()
+
+
+
+@pytest.mark.asyncio
 async def test_generated_response_round_trip_binds_without_any_grading_preparation_call():
     row = await generate_choice()
     row = ArtifactProblemV1.model_validate_json(ArtifactProblemV1(**row).model_dump_json()).model_dump(mode="json")

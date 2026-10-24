@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from backend.models import ProblemInfo, StudentAnswerInfo
-from backend.services.binary_scoring import binary_rule
+from backend.services.binary_scoring import binary_rule, whole_question_policy
 from backend.services.math_grading_context import math_plans_context
 from backend.services.math_rubric_plan import fallback_math_rubric_plan
 from backend.skills.calculation import CalculationSkill
@@ -23,6 +23,7 @@ from backend.tests.test_math_rubric_plan import ReplayProvider
     "正确选项及结果 — 所有作答\n- 选择B（4）得4分，否则0分：4分\n结果为4。",
     "- Correct answer receives 4 points; otherwise 0 points：4 points",
     "Correct answer receives 4 points; otherwise 0 points.", "Correct: full credit, wrong: no credit",
+    "答案正确得满分，否则得零分。", "答案正确得四分，否则得零分。",
 ])
 def test_only_explicit_binary_rule_is_detected(criterion):
     assert binary_rule(criterion, 4)
@@ -45,9 +46,22 @@ def test_only_explicit_binary_rule_is_detected(criterion):
     "Each blank: correct answer receives 4 points; otherwise 0 points.",
     "Correct answer receives 4 points; otherwise 0 points. Partial credit for a clean subset.",
     "Correct answer receives 4 points; otherwise 0 points. Explanation worth 2 points.",
+    "全部选对得4分，否则0分。例外：少选且无错选得两分。",
+    "全部选对得4分，否则0分。乙类作答按另一张表给分。",
+    "选择B（少选得两分）得4分，否则0分。",
+    "正确选项及结果 — 每个空\n- 选B得4分，否则0分：4分",
+    "少选得两分 — 所有作答\n- 选B得4分，否则0分：4分",
+    "正确选项及结果 — 所有作答\n- 选B得4分，否则0分：4分\n少选得两分。",
 ])
 def test_partial_scoped_or_ambiguous_rules_are_not_flattened(criterion):
     assert binary_rule(criterion, 4) is None
+
+
+def test_complete_policy_has_explicit_question_scope_and_numeric_bounds():
+    policy = whole_question_policy("答案正确得二点五分，否则得零分。", 2.5)
+    assert policy.scope == "question"
+    assert policy.correct_score == 2.5 and policy.incorrect_score == 0
+    assert policy.source_quote == "答案正确得二点五分，否则得零分"
 
 
 def inputs(criterion="选B得4分，否则0分。", text="B"):
