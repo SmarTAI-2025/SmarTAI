@@ -22,7 +22,7 @@ from backend.services.math_source_evidence import match_source_quote
 
 
 SCHEMA_VERSION = "math_rubric_v2"
-INTERPRETATION_VERSION = "math_rubric_interpretation_v4"
+INTERPRETATION_VERSION = "math_rubric_interpretation_v5"
 Score = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Text = Annotated[str, Field(min_length=1, max_length=20000)]
 
@@ -234,6 +234,8 @@ def _build_plan(context: dict, explanation: _Explanation, *, status="compiled", 
         "the question maximum, deduct independent errors subject to max_occurrences, then apply "
         "the stated minimum only when its condition holds. A nonblank minimum never applies to "
         "a blank answer. Follow any explicit original blank-answer rule. "
+        "Respect explicit original non-penalty and follow-through rules even without an "
+        "executable policy; retain related claims and explain why no deduction is charged. "
         "Return a final score within [0, max_score]."
     )
     payload = {
@@ -310,8 +312,10 @@ percentage). An ai label NEVER permits changing an explicit original amount or r
 If criterion_source is ai, all items must be ai.
 An interpreted or supplemented rule is ai even if inspired by teacher text.
 Explicit zero deductions belong in exemptions (id, description, source_quote), not positive-loss
-items. The compiler preserves explicit exemptions and same-cause no-repeat policies from source.
-Do not invent an exemption or error_policy. Unsupported/ambiguous policies remain holistic.
+items. Include applicable exemptions and same-cause no-repeat policies explicitly, with their
+complete source conditions. The compiler validates supplied rules; it never adds missing rules
+or enables a policy from keywords. Do not invent an exemption or error_policy. Preserve clear
+teacher rules without unnecessary supplements. Unsupported/ambiguous policies remain holistic.
 effective_criterion explains the complete scoring procedure and distinguishes original rules
 from AI additions. The original criterion is separately preserved by code.
 follow_through explicitly addresses first error, correct downstream reasoning on an erroneous
@@ -676,24 +680,26 @@ def _canonicalize_explanation(context: dict, explanation: _Explanation) -> _Expl
         for item in route.items:
             match = match_source_quote(original, item.source_quote)
             items.append(item.model_copy(update={"source_quote": match.text}) if match else item)
-        supplied = {}
+        supplied = []
         for exemption in route.exemptions:
             quote = _match_policy_quote(original, exemption.source_quote, exemptions)
             if quote is None:
                 raise ValueError("exemption_not_in_source")
-            supplied[quote] = exemption.model_copy(update={"source_quote": quote})
-        rules = tuple(supplied.get(quote) or MathRubricExemption(
-            id="exempt_" + _content_hash(quote)[:12], description=quote, source_quote=quote,
-        ) for quote in exemptions)
-        if route.error_policy == "no_repeat_deduction" and not no_repeat:
-            raise ValueError("error_policy_not_in_source")
-        if route.error_policy_source_quote:
-            if _match_policy_quote(original, route.error_policy_source_quote, [no_repeat]) is None:
+            supplied.append(exemption.model_copy(update={"source_quote": quote}))
+        # A source keyword candidate is not a semantic instruction. In
+        # particular, finding '免扣分' must not create a rule from '严禁免扣分'.
+        # Text policies remain in the original criterion even when the model
+        # does not encode a separate executable exemption or causal switch.
+        policy_quote = ""
+        if route.error_policy == "no_repeat_deduction":
+            policy_quote = _match_policy_quote(original, route.error_policy_source_quote, [no_repeat])
+            if policy_quote is None:
                 raise ValueError("error_policy_not_in_source")
+        elif route.error_policy_source_quote:
+            raise ValueError("error_policy_not_in_source")
         routes.append(MathRubricRoute(**{
-            **route.model_dump(), "items": tuple(items), "exemptions": rules,
-            "error_policy": "no_repeat_deduction" if no_repeat else "rubric",
-            "error_policy_source_quote": no_repeat,
+            **route.model_dump(), "items": tuple(items), "exemptions": tuple(supplied),
+            "error_policy_source_quote": policy_quote,
         }))
     return explanation.model_copy(update={"routes": tuple(routes)})
 

@@ -10,11 +10,15 @@ from backend.tests.test_math_rubric_plan import ReplayProvider, explanation, ite
 from backend.skills.math_grading import Claim, Deduction, MathAssessment, score_assessment
 
 
-def candidate(rule, points=1, occurrences=None, **changes):
+def candidate(rule, points=1, occurrences=None, *, exemptions=(), error_policy=None, **changes):
+    policies = {"exemptions": [dict(id=f"exemption_{n}", description=quote, source_quote=quote)
+                               for n, quote in enumerate(exemptions)]}
+    if error_policy is not None:
+        policies.update(error_policy="no_repeat_deduction", error_policy_source_quote=error_policy)
     return explanation(routes=[route(mode="deductions", items=[item(
         "major", "Independent major error", points, source_quote=rule,
         max_occurrences=occurrences, **changes,
-    )])])
+    )], **policies)])
 
 
 def raw_provider(*payloads):
@@ -55,8 +59,9 @@ async def test_explicit_amount_spellings_reach_ledger(amount, count):
 async def test_simple_context_and_exemptions_keep_ledger(prefix, suffix, occurrences):
     rule = "每个重要错误扣一分" + (suffix if occurrences else "")
     source = prefix + rule + (suffix if not occurrences else "")
+    result = candidate(rule, occurrences=occurrences, exemptions=[suffix[1:]] if "小错" in source else [])
     plan = await rubric.prepare_math_rubric_plan(question(criterion=source),
-        raw_provider(candidate(rule, occurrences=occurrences), candidate(rule, occurrences=occurrences)))
+        raw_provider(result))
     assert plan.routes[0].mode == "deductions"
     assert score_errors(plan, 3)[0] == 7
     if "小错" in source:
@@ -103,7 +108,7 @@ async def test_explicit_no_repeat_policy_compiles_for_mainchain():
     rule = "每个重要错误扣1分"
     policy = "同一根因造成的后续错误不重复扣分"
     plan = await rubric.prepare_math_rubric_plan(question(criterion=rule+"；"+policy),
-        raw_provider(candidate(rule), candidate(rule)))
+        raw_provider(candidate(rule, error_policy=policy)))
     assert plan.routes[0].mode == "deductions"
     assert plan.routes[0].error_policy == "no_repeat_deduction"
     assert plan.routes[0].error_policy_source_quote == policy
@@ -220,7 +225,8 @@ async def test_truly_conditional_policies_retain_source_without_another_call(suf
     "同一根因造成的后续错误不重复扣分", "do not deduct twice for the same error"])
 async def test_explicit_error_policy_separate_from_numeric_amount(policy):
     rule = "每错扣1分"
-    plan = await rubric.prepare_math_rubric_plan(question(criterion=rule+","+policy), raw_provider(candidate(rule)))
+    plan = await rubric.prepare_math_rubric_plan(question(criterion=rule+","+policy),
+                                               raw_provider(candidate(rule, error_policy=policy)))
     assert plan.routes[0].mode == "deductions"
     assert plan.routes[0].error_policy == "no_repeat_deduction"
     assert plan.routes[0].error_policy_source_quote == policy

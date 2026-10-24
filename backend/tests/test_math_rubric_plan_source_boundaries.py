@@ -58,8 +58,12 @@ async def test_zero_deduction_retains_the_entire_condition_without_interpreting_
     plan = await rubric.prepare_math_rubric_plan(question(criterion=source), provider)
     assert plan.compilation_status == "compiled"
     assert len(provider.messages) == 1
-    assert [e.source_quote for e in plan.routes[0].exemptions] == [policy]
-    assert condition in plan.routes[0].exemptions[0].description
+    assert source in plan.effective_criterion
+    if supplied:
+        assert [e.source_quote for e in plan.routes[0].exemptions] == [policy]
+        assert condition in plan.routes[0].exemptions[0].description
+    else:
+        assert plan.routes[0].exemptions == ()  # No compiler-authored executable rules.
 
 
 @pytest.mark.asyncio

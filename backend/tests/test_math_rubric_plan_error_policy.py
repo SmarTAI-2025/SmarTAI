@@ -53,7 +53,8 @@ async def test_original_b2_policy_keeps_causal_and_independent_errors_distinct(i
 ], ids=["C08", "C09"])
 async def test_original_t4_policies_separate_follow_through_from_conclusion_exemption(
         source, rule, occurrences, independent, expected):
-    provider = raw_provider(candidate(rule, occurrences=occurrences))
+    provider = raw_provider(candidate(rule, occurrences=occurrences,
+                                      error_policy=source.split("；")[2], exemptions=["结论不另扣"]))
     plan = await rubric.prepare_math_rubric_plan(question(criterion=source), provider)
     target = plan.routes[0]
     assert plan.compilation_status == "compiled"
@@ -79,7 +80,7 @@ async def test_original_t4_policies_separate_follow_through_from_conclusion_exem
 async def test_same_cause_and_correct_continuation_roles_are_not_blanket_exemptions(policy):
     rule = "每个错误扣1分"
     plan = await rubric.prepare_math_rubric_plan(question(criterion=rule+"；"+policy),
-                                                raw_provider(candidate(rule)))
+                                                raw_provider(candidate(rule, error_policy=policy)))
     assert plan.compilation_status == "compiled"
     assert plan.routes[0].error_policy == "no_repeat_deduction"
     assert plan.routes[0].error_policy_source_quote == policy
@@ -93,7 +94,7 @@ async def test_same_cause_and_correct_continuation_roles_are_not_blanket_exempti
 async def test_conclusion_exemption_does_not_enable_causal_no_repeat(policy):
     rule = "每个错误扣1分"
     plan = await rubric.prepare_math_rubric_plan(question(criterion=rule+"；"+policy),
-                                                raw_provider(candidate(rule)))
+                                                raw_provider(candidate(rule, exemptions=[policy])))
     assert plan.compilation_status == "compiled"
     assert plan.routes[0].error_policy == "rubric"
     assert plan.routes[0].error_policy_source_quote == ""
@@ -184,7 +185,8 @@ async def test_detached_exemption_exception_is_not_lost():
 async def test_complete_conditional_exemption_does_not_change_unrelated_followthrough():
     source = "每个错误扣1分；同源后续错误不重复扣分；除非影响结果，小错扣0分。"
     plan = await rubric.prepare_math_rubric_plan(question(criterion=source),
-                                               raw_provider(candidate("每个错误扣1分")))
+        raw_provider(candidate("每个错误扣1分", error_policy="同源后续错误不重复扣分",
+                               exemptions=["除非影响结果，小错扣0分"])))
     assert plan.routes[0].mode == "deductions"
     assert plan.routes[0].error_policy == "no_repeat_deduction"
     assert [e.source_quote for e in plan.routes[0].exemptions] == ["除非影响结果，小错扣0分"]
@@ -198,7 +200,7 @@ async def test_complete_conditional_exemption_does_not_change_unrelated_followth
 ])
 async def test_negation_in_retained_condition_does_not_deny_waiver(policy):
     source = "每个错误扣1分；" + policy
-    provider = raw_provider(candidate("每个错误扣1分"))
+    provider = raw_provider(candidate("每个错误扣1分", exemptions=[policy]))
     plan = await rubric.prepare_math_rubric_plan(question(criterion=source), provider)
     assert plan.routes[0].mode == "deductions"
     assert [exemption.source_quote for exemption in plan.routes[0].exemptions] == [policy]

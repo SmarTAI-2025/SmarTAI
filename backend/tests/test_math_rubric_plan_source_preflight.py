@@ -68,7 +68,7 @@ def test_previous_interpretation_plan_is_not_reused_after_policy_fix(monkeypatch
 
     problem = ProblemInfo(**question())
     current_version = rubric.INTERPRETATION_VERSION
-    monkeypatch.setattr(rubric, "INTERPRETATION_VERSION", "math_rubric_interpretation_v3")
+    monkeypatch.setattr(rubric, "INTERPRETATION_VERSION", "math_rubric_interpretation_v4")
     old = rubric.fallback_math_rubric_plan(problem)
     monkeypatch.setattr(rubric, "INTERPRETATION_VERSION", current_version)
     with math_plans_context({problem.q_id: old}):

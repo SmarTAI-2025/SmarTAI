@@ -48,12 +48,14 @@ def test_evidence_ids_do_not_author_new_scores_or_verdicts():
 
 @pytest.mark.parametrize("id,score", [("R13_follow_through", 9), ("R14_independent_second_error", 8)])
 def test_supported_policy_wording_control_keeps_independent_error_semantics(id, score):
-    # This separate positive control locates the observed failure in the source
-    # policy recognizer. R13/R14 in the acceptance corpus remain untouched/red.
+    # This separate wording control supplies the complete model policy; the
+    # compiler must not fill it from keywords. The frozen corpus is untouched.
     case = deepcopy(next(c for c in CASES if c["id"] == id))
     criterion = case["problem"]["criterion"].replace("同源后续错误", "同源错误")
     case["problem"]["criterion"] = criterion
     case["wire"]["plan"]["effective_criterion"] = criterion
+    case["wire"]["plan"]["routes"][0].update(
+        error_policy="no_repeat_deduction", error_policy_source_quote="同源错误不重复扣分")
     row = asyncio.run(evaluate(case))
     assert row["score"] == score and not row["contract_failures"], row["contract_failures"]
     assert row["plans"][0]["routes"][0]["error_policy"] == "no_repeat_deduction"
