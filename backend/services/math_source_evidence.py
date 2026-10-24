@@ -34,6 +34,24 @@ class SourceMatch:
     method: Literal["exact", "format"]
 
 
+def source_catalog(answer: str, problem: str, criterion: str) -> dict[str, tuple[str, int, int]]:
+    """Address original lines without asking a model to re-encode their TeX.
+
+    IDs are local to this immutable answer/question, never model-supplied text.
+    The full inputs remain available when this bounded index is incomplete.
+    """
+    result, remaining = {}, 40000
+    for prefix, source in (("student", answer), ("question", problem), ("rubric", criterion)):
+        offset = 0
+        for number, line in enumerate(source.splitlines(keepends=True), 1):
+            text = line.rstrip("\r\n")
+            if text.strip() and len(text) <= remaining and len(result) < 240:
+                result[f"{prefix}:{number}"] = (text, offset, offset + len(text))
+                remaining -= len(text)
+            offset += len(line)
+    return result
+
+
 def _tokens(text: str) -> list[tuple[str, int, int]]:
     # Replace only the delimiters of complete, paired spans. Their contents
     # and all source offsets remain intact, including escaped dollar signs.

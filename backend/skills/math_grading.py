@@ -24,7 +24,7 @@ from backend.skills.base import (
 from backend.tools import knowledge as kb_tool
 from backend.tools.structured_llm import PermanentLLMError, TransientLLMError, structured_llm_call
 from backend.tools.structured_llm import StructuredOutputInvalidError
-from backend.services.math_source_evidence import match_source_quote
+from backend.services.math_source_evidence import SourceMatch, match_source_quote, source_catalog
 
 TRACE_VERSION = "math_evidence_v2"
 VERIFICATION_BUDGET_SECONDS = 20.0
@@ -64,11 +64,22 @@ class Claim(BaseModel):
     # A missing obligation is grounded in the question/rubric, never fabricated
     # as text supposedly written by the student.
     source_quote: str = ""
+    source_id: str = Field(default="", description=(
+        "Prefer an ID from source_catalog over retyping LaTeX. For a statement use student:*, "
+        "leave quote empty and the backend copies that original line. For an omission use "
+        "question:* or rubric:*, leave source_quote and quote empty. "
+        "If also supplying an excerpt, it must match within that indexed line. "
+        "Never invent IDs or combine noncontiguous lines into a quotation."
+    ))
     source_span: tuple[int, int] | None = None  # computed locally, never trusted from model
     depends_on: list[str] = Field(default_factory=list)
     condition: str = ""
     item_ids: list[str] = Field(default_factory=list)
-    verdict: Literal["supported", "refuted", "unknown"]
+    verdict: Literal["supported", "refuted", "unknown"] = Field(description=(
+        "Whether the student's assertion or required obligation is satisfied. "
+        "For kind=omission use refuted when the obligation is missing, or unknown "
+        "when uncertain; never supported merely because you identified an omission."
+    ))
     reason: str
 
 
@@ -92,7 +103,10 @@ class Deduction(BaseModel):
     rule_id: str
     claim_id: str
     occurrences: int = Field(default=1, ge=1, le=100)
-    caused_by: str | None = None
+    caused_by: str | None = Field(default=None, description=(
+        "The originating claim.id, never a deduction.error_id. It must name a "
+        "refuted ancestor in this claim's depends_on chain. Null for an independent error."
+    ))
     exemption_id: str | None = None
     reason: str = Field(min_length=1)
 
@@ -157,8 +171,34 @@ def _rounded(value: Decimal, maximum: float) -> float:
         Decimal("0.1"), rounding=ROUND_HALF_UP))))
 
 
+def _locate_claim(claim, answer, plan, problem_text, catalog):
+    if claim.source_id:
+        entry = catalog.get(claim.source_id)
+        allowed = (claim.source_id.startswith("student:") if claim.kind == "statement" else
+                   claim.source_id.startswith(("question:", "rubric:")))
+        if entry is None or not allowed:
+            raise ValueError("invalid_claim_source_id")
+        text, start, end = entry
+        excerpt = claim.quote if claim.kind == "statement" else claim.source_quote
+        if excerpt:
+            found = match_source_quote(text, excerpt)
+            if found is None:
+                raise ValueError("claim_excerpt_conflicts_with_source_id")
+            return claim.source_id.split(":", 1)[0], SourceMatch(
+                found.text, start + found.start, start + found.end, found.method)
+        return claim.source_id.split(":", 1)[0], SourceMatch(text, start, end, "exact")
+    if claim.kind == "statement":
+        found = match_source_quote(answer, claim.quote)
+        return ("student", found) if found else None
+    return next(((document, found) for document, source in (
+        ("question", problem_text), ("rubric", plan.original_criterion),
+        ("effective_rubric", plan.effective_criterion))
+        if (found := match_source_quote(source, claim.source_quote))), None)
+
+
 def _claim_map(assessment: MathAssessment, answer: str, plan, *, problem_text="") -> dict[str, Claim]:
     claims = {claim.id: claim for claim in assessment.claims}
+    catalog = source_catalog(answer, problem_text, plan.original_criterion)
     if len(claims) != len(assessment.claims) or "" in claims:
         raise ValueError("duplicate_or_empty_claim_id")
     item_ids = {item.id for route in plan.routes if route.id == assessment.route_id for item in (*route.items, *route.exemptions)}
@@ -179,15 +219,15 @@ def _claim_map(assessment: MathAssessment, answer: str, plan, *, problem_text=""
             claim.source_span = None
             # The same obligation may appear in both the original and frozen
             # rubric. That is not ambiguous within either actual document.
-            located = next((found for source in (problem_text, plan.original_criterion, plan.effective_criterion)
-                            if (found := match_source_quote(source, claim.source_quote))), None)
-            if claim.quote or located is None or claim.verdict == "supported":
+            location = _locate_claim(claim, answer, plan, problem_text, catalog)
+            if claim.quote or location is None or claim.verdict == "supported":
                 raise ValueError("omission_requires_original_obligation")
-            claim.source_quote = located.text
+            claim.source_quote = location[1].text
         else:
-            located = match_source_quote(answer, claim.quote)
-            if located is None:
+            location = _locate_claim(claim, answer, plan, problem_text, catalog)
+            if location is None:
                 raise ValueError("claim_not_in_student_answer_or_rubric")
+            located = location[1]
             claim.quote = located.text
             claim.source_span = (located.start, located.end)
         if not set(claim.depends_on) <= claims.keys():
@@ -404,16 +444,24 @@ def _with_pending_advice(expert, language):
     return expert.model_copy(update={"steps": steps, "raw_output": _json(trace)})
 
 
-def _claim_identity(claim: Claim) -> tuple[str, str, str]:
-    # source_quote locates an omitted obligation only. Echoing or clearing this
-    # unused field on a written statement cannot change its original quote.
-    return claim.kind, claim.quote, claim.source_quote if claim.kind == "omission" else ""
+def _claim_identity(claim: Claim, location):
+    # Identity is the trusted source location, not the model's address syntax.
+    # Unique quote <-> line ID may change; another occurrence of the same text
+    # or a different source document may not. Never trust supplied source_span.
+    if location is None:
+        return None
+    document, found = location
+    return claim.kind, document, found.text, found.start, found.end
 
 
-def _validate_claim_identity(original: MathAssessment, revised: MathAssessment):
+def _validate_claim_identity(original: MathAssessment, revised: MathAssessment, *, answer, plan, problem_text):
     """A tool's claim reference must keep pointing to the same submitted text."""
-    quotes = {claim.id: _claim_identity(claim) for claim in revised.claims}
-    if any(quotes.get(claim.id) != _claim_identity(claim) for claim in original.claims):
+    catalog = source_catalog(answer, problem_text, plan.original_criterion)
+    def identity(claim):
+        return _claim_identity(claim, _locate_claim(claim, answer, plan, problem_text, catalog))
+    quotes = {claim.id: identity(claim) for claim in revised.claims}
+    original_quotes = {claim.id: identity(claim) for claim in original.claims}
+    if any(value is None or quotes.get(key) != value for key, value in original_quotes.items()):
         raise ValueError("review_changed_claim_identity")
 
 
@@ -424,27 +472,36 @@ def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=No
     bad excerpt is never simply dropped (which could erase a valid deduction).
     """
     preserved = {}
+    catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
 
     def validate(draft):
         if diagnostic is not None:
             diagnostic.setdefault("first_draft", draft.model_dump(mode="json"))
             diagnostic["draft"] = draft.model_dump(mode="json")
+        unresolved = []
+        current = {}
         try:
             for claim in draft.claims:
-                if claim.kind == "statement":
-                    found = match_source_quote(answer.content or "", claim.quote)
-                    if found:
+                try:
+                    location = _locate_claim(claim, answer.content or "", plan, problem.stem, catalog)
+                except ValueError as exc:
+                    unresolved.append({"claim_id": claim.id, "reason": str(exc)})
+                    continue
+                if location:
+                    found = location[1]
+                    if claim.kind == "statement":
                         claim.quote = found.text
-                else:
-                    found = next((found for source in (problem.stem, plan.original_criterion, plan.effective_criterion)
-                        if (found := match_source_quote(source, claim.source_quote))), None)
-                    if found:
+                    else:
                         claim.source_quote = found.text
-            current = {claim.id: _claim_identity(claim) for claim in draft.claims}
+                    if claim.kind == "statement" or not claim.quote:
+                        current[claim.id] = _claim_identity(claim, location)
+                else:
+                    unresolved.append({"claim_id": claim.id, "reason": "source_not_located"})
             if any(current.get(key) != identity for key, identity in preserved.items()):
                 raise ValueError("repair_changed_valid_source_claim")
             if original is not None:
-                _validate_claim_identity(original, draft)
+                _validate_claim_identity(original, draft, answer=answer.content or "", plan=plan,
+                                         problem_text=problem.stem)
             score_assessment(draft, plan, answer.content or "", problem_text=problem.stem)
             if evidence is not None:
                 required = {item["evidence_id"] for item in evidence if item.get("status") in {"supported", "refuted"}}
@@ -455,18 +512,23 @@ def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=No
             if diagnostic is not None:
                 diagnostic.setdefault("validation_failures", []).append(str(exc))
             if not preserved:
-                for claim in draft.claims:
-                    valid = (match_source_quote(answer.content or "", claim.quote) if claim.kind == "statement" else
-                        not claim.quote and any(match_source_quote(source, claim.source_quote)
-                            for source in (problem.stem, plan.original_criterion, plan.effective_criterion)))
-                    if valid:
-                        preserved[claim.id] = _claim_identity(claim)
+                preserved.update(current)
             error = StructuredOutputInvalidError("Invalid mathematical evidence or ledger.")
-            error.repair_context = _json({"validation_error": str(exc),
+            hint = {
+                "omission_requires_original_obligation": "For kind=omission, quote must be empty, "
+                    "source_quote must locate the required obligation, and verdict must be refuted or unknown, "
+                    "not supported. Do not replace a valid source quote merely to repair its verdict.",
+                "missing_error_origin": "caused_by must name the originating claim.id, not deduction.error_id; "
+                    "the claim must be a refuted ancestor. Preserve the actual dependency and error judgment.",
+            }.get(str(exc), "")
+            error.repair_context = _json({"validation_error": str(exc), "validation_hint": hint,
+                "unresolved_sources": unresolved,
                 "preserve_claim_quotes": preserved, "draft": draft.model_dump(mode="json"),
                 "repair_scope": "Fix invalid source citations or ledger links using the original input. "
                     "Preserve all located claim IDs and quotes. Do not invent omitted student work. "
-                    "Use omission evidence with a question/rubric source_quote for a missing obligation."})
+                    "Use source_catalog IDs and empty quote fields for unresolved citations instead of "
+                    "retyping or rewriting LaTeX. Do not drop claims merely to pass validation. "
+                    "Use omission evidence with a question/rubric source for a missing obligation."})
             raise error from exc
     return validate
 
@@ -578,9 +640,12 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                 "Use applies only when the result covers this assertion and agrees with its verdict; "
                 "use partial with an explanation when it covers only part of the claim. "
                 "Explain concrete residual disagreement; produce no mandatory-review instructions."
-                + authoritative_score_instruction(problem.max_score), language, grading_setup),
+                + authoritative_score_instruction(problem.max_score)
+                + "\nJSON Schema:\n" + _json(ExpertReview.model_json_schema()), language, grading_setup),
             user_prompt=_json({"problem": problem.stem, "reference": problem.reference_answer,
                                "answer": answer.content, "plan": plan.model_dump(mode="json"),
+                               "source_catalog": {key: value[0] for key, value in
+                                   source_catalog(answer.content or "", problem.stem, plan.original_criterion).items()},
                                "disputed_item_ids": sorted(disputed), "experts": traces}),
             validate_output=validate_review,
         )
@@ -665,6 +730,8 @@ class MathGradingSkill(GradingSkill):
         return template + "\nINPUT DATA:\n" + _json({
             "problem": problem.stem, "reference_answer": problem.reference_answer,
             "student_answer": answer.content, "rubric_plan": plan.model_dump(mode="json"),
+            "source_catalog": {key: value[0] for key, value in
+                source_catalog(answer.content or "", problem.stem, plan.original_criterion).items()},
             "retrieved_material": context,
         })
 
@@ -733,8 +800,13 @@ class MathGradingSkill(GradingSkill):
                 "Grade only the submitted work under the frozen rubric. "
                 "Do not reconstruct missing student steps. Give concise checkable scoring evidence. "
                 "The tool may verify only a limited mathematical relation, never a whole answer. "
-                "Return MathAssessment with the selected route, actual quoted claims and item ledger."
-                + authoritative_score_instruction(problem.max_score), self.language, self.grading_setup)
+                "Return MathAssessment with the selected route, actual source claims and item ledger. "
+                "Prefer source_catalog IDs for evidence: student:* for statements, question:* or rubric:* "
+                "for omissions, with quote/source_quote empty so the backend copies the exact source. "
+                "Each ID is one original line, not proof that a claim is true. If no suitable ID exists, "
+                "copy an exact excerpt; do not join noncontiguous lines or rewrite the mathematics."
+                + authoritative_score_instruction(problem.max_score)
+                + "\nJSON Schema:\n" + _json(MathAssessment.model_json_schema()), self.language, self.grading_setup)
             try:
                 await self._substep(unit, "llm_grade")
                 draft, response = await structured_llm_call(
@@ -803,7 +875,8 @@ class MathGradingSkill(GradingSkill):
                         }), output_model=MathAssessment,
                         validate_output=_assessment_validator(plan, answer, problem, original=draft, evidence=evidence))
                     _claim_map(reviewed, answer.content or "", plan, problem_text=problem.stem)
-                    _validate_claim_identity(draft, reviewed)
+                    _validate_claim_identity(draft, reviewed, answer=answer.content or "", plan=plan,
+                                             problem_text=problem.stem)
                     reviewed_score, reviewed_steps = score_assessment(reviewed, plan, answer.content or "", problem_text=problem.stem)
                     draft, score, steps = reviewed, reviewed_score, reviewed_steps
                     review_pending = _evidence_pending(draft, evidence)

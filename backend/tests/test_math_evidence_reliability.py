@@ -87,6 +87,43 @@ def test_omission_is_grounded_in_requirement_not_fabricated_student_quote():
         g.score_assessment(draft, plan_for(p), "Forward established.", problem_text=p.stem)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mistake", ["omission_verdict", "error_origin_namespace"])
+async def test_domain_repair_explains_field_semantics_without_changing_evidence(mistake):
+    p = problem("证明题")
+    if mistake == "omission_verdict":
+        p.stem = "Prove both directions."
+        a, plan = answer("Forward established."), plan_for(p)
+        bad = assessment(text=a.content)
+        bad.claims.append(g.Claim(id="missing", kind="omission", source_quote=p.stem,
+            item_ids=["result"], verdict="supported", reason="Reverse direction missing."))
+        bad.awards[1].claim_ids = ["missing"]
+        fixed = bad.model_copy(deep=True)
+        fixed.claims[-1].verdict = "refuted"
+        expected_score, hint = 8, "not supported"
+    else:
+        a = answer("First error. Consequence.")
+        plan = change_route(plan_for(p, mode="deductions"), error_policy="no_repeat_deduction",
+                            error_policy_source_quote="Do not deduct again for consequences.")
+        bad = g.MathAssessment(route_id="main", route_reason="Apply deductions", claims=[
+            g.Claim(id="c1", quote="First error.", verdict="refuted", reason="First error"),
+            g.Claim(id="c2", quote="Consequence.", depends_on=["c1"], verdict="refuted", reason="Consequence"),
+        ], deductions=[
+            g.Deduction(error_id="e1", rule_id="error", claim_id="c1", reason="First error"),
+            g.Deduction(error_id="e2", rule_id="error", claim_id="c2", caused_by="e1", reason="Consequence"),
+        ], comment="One independent error")
+        fixed = bad.model_copy(deep=True)
+        fixed.deductions[1].caused_by = "c1"
+        expected_score, hint = 9, "claim.id, not deduction.error_id"
+    provider, calls = raw_provider(bad, fixed)
+    with math_plans_context({p.q_id: plan}):
+        result = await ProofSkill(provider).grade(p, a)
+    trace = g.read_math_trace(result)
+    assert result.score == expected_score and "direct" not in trace and len(calls) == 2
+    assert hint in calls[1][-1].content and "preserve_claim_quotes" in calls[1][-1].content
+    assert [c["quote"] for c in trace["assessment"]["claims"]] == [c.quote for c in fixed.claims]
+
+
 def test_feedback_cannot_retarget_omission_to_another_real_requirement():
     p, a = problem("证明题"), answer("Forward direction shown.")
     p.stem = "Prove the forward direction. Prove the reverse direction."
