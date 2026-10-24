@@ -645,8 +645,11 @@ class IncrementalQuestionPreparation:
             coverage = (payload.get("recognition") or {}).get("coverage") or {}
             requested_pages = coverage.get("requested_pages") or []
             source_end = max(requested_pages) if requested_pages else coverage.get("total_pages")
+            # A failed page does not reopen an earlier question whose next
+            # heading is already visible. Reuse the proven page boundaries for
+            # partial selected sources; keep whole-source context on success.
             units = source_page_groups(pages, source_complete=not incomplete,
-                                       source_end_page=source_end, numbered=numbered) if pages and not targeted else []
+                                       source_end_page=source_end, numbered=numbered) if pages and (not targeted or incomplete) else []
             invalid_numbers = sorted({normalize_question_number(unit.number) for unit in source_question_units(
                 pages, allow_repeated_numbers=draft.role == "programming_tests") if unit.closure == "repeated_heading"})
             if numbered:

@@ -25,11 +25,11 @@ PAGES = {
 }
 
 
-async def targeted_setup(monkeypatch):
+async def targeted_setup(monkeypatch, targets=TARGETS):
     original = api.preflight_problem_source
     async def targeted(**kwargs):
-        kwargs.update(structure_mode='extract_from_source', extraction_hint='题号: ' + ', '.join(TARGETS),
-                      recognition_options=json.dumps({'targets': TARGETS}))
+        kwargs.update(structure_mode='extract_from_source', extraction_hint='题号: ' + ', '.join(targets),
+                      recognition_options=json.dumps({'targets': targets}))
         return await original(**kwargs)
     monkeypatch.setattr(api, 'preflight_problem_source', targeted)
     return await setup(monkeypatch, '\n\n'.join(PAGES.values()))
@@ -278,3 +278,71 @@ async def test_long_text_overlap_does_not_persist_the_same_question_twice(monkey
 def test_same_number_nearly_identical_complete_questions_remain_distinct(stems):
     assert len(dedupe_extracted_problems(inc._rows([row('1', stem=s) for s in stems]),
                                         preserve_repeated_numbers=True)) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('footer', ['', 'Sec 1.1'])
+@pytest.mark.parametrize('boundary', ['next_heading', 'continuation', 'gap'])
+async def test_selected_failed_page_only_blocks_questions_without_closed_boundaries(monkeypatch, footer, boundary):
+    from backend.domain.errors import RecognitionError
+    from backend.services.question_preparation_manual import recover_manual_question_packages
+    targets = ['1.1.1', '1.1.2'] if footer else ['1', '2']
+    owner, task, operation, pipeline = await targeted_setup(monkeypatch, targets)
+    first = 'Explain why every subgroup of a cyclic group is cyclic.'
+    second = 'Calculate the order of the given permutation.'
+    pages = {1: 'Question 1: ' + first + ('\n' + footer if footer else ''),
+             3 if boundary == 'gap' else 2: ('Question 2: ' if boundary != 'continuation' else 'Continuation: ') + second}
+    async def read(source, *, on_pages):
+        for n in reversed(pages):
+            await on_pages([dict(page_number=n, text=pages[n])])
+        payload = {**source[2], 'source_error': 'ocr_incomplete', 'recognition': {'coverage': {
+            'total_pages': 3, 'requested_pages': [1, 2, 3], 'processed_pages': list(pages),
+            'failed_pages': [2 if boundary == 'gap' else 3]}}}
+        return source[0], '\n\n'.join(pages.values()), payload
+    async def extract(text, *args, **kwargs):
+        if footer and second in text:
+            assert footer in text or footer in kwargs['source_context']
+        return inc._rows([row(number, stem=stem) for number, stem in zip(targets, [first, second]) if stem in text])
+    generated_numbers = []
+    async def generate(data, targets, *args, **kwargs):
+        generated_numbers.append(data['q1']['number'])
+        return [generated(t['target'], 'Verified material for this complete question.') for t in targets]
+    pipeline.read_source = read
+    monkeypatch.setattr(inc, '_extract_problems_call', extract)
+    monkeypatch.setattr(inc, 'generate_missing_question_materials', generate)
+    with pytest.raises(RecognitionError):
+        await pipeline.run()
+    saved, durable = persisted(owner, operation)
+    by_number = {r['number']: r for r in durable.values()}
+    complete = boundary == 'next_heading'
+    assert any(i['code'] == 'recognition_partial' for i in by_number[targets[0]]['preparation_issues']) != complete
+    assert (targets[0] in generated_numbers) == complete
+    assert any(i['code'] == 'recognition_partial' for i in by_number[targets[1]]['preparation_issues']) == (boundary != 'gap')
+    packages, _ = recover_manual_question_packages(saved)
+    recovered = {r['number']: r for r in packages.values()}
+    assert any(i['code'] == 'recognition_partial' for i in recovered[targets[0]]['preparation_issues']) != complete
+    if complete:
+        assert recovered[targets[0]]['reference_answer'] and recovered[targets[0]]['criterion']
+
+        # The normal retry replaces the partial page partition with a complete
+        # selected-source result and must reuse Q1's already generated fields.
+        task_facade._fail_operation(task, owner, operation.operation_id, operation.attempt,
+            'ocr_incomplete', expected_lease_token=operation.lease_token)
+        workflow = workflow_repository.get_workflow(task, owner_id=owner)
+        retry = await api.retry_question_preparation(task_id=task, job_id=operation.operation_id,
+            request=api.RetryQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision),
+            background_tasks=None, current=SimpleNamespace(id=owner), registry=_RecoveryRegistry())
+        next_op = _claim(owner, retry['job_id'], 'page-repair')
+        inputs = api._rehydrate_question_preparation_inputs(next_op)
+        repaired_second = second + ' Justify the result using its cycle decomposition.'
+        monkeypatch.setattr(inc, '_extract_problems_call', AsyncMock(return_value=inc._rows([
+            row(targets[0], stem=first), row(targets[1], stem=repaired_second)])))
+        generated_numbers.clear()
+        resumed = inc.IncrementalQuestionPreparation(operation=next_op, sources=inputs['sources'],
+            provider=inputs['route'].provider, provider_id=inputs['recognition_provider_id'],
+            reporter=ProgressReporter(next_op.operation_id), score_policy=inputs['score_policy'],
+            read_source=page_reader({**pages, 3: 'Justify the result using its cycle decomposition.'}))
+        result = await resumed.run()
+        assert len(result) == 2 and generated_numbers == [targets[1]]
+        assert all(not any(i['code'] == 'recognition_partial' for i in r['preparation_issues']) for r in result.values())
+        assert {r['number'] for r in persisted(owner, next_op)[1].values()} == set(targets)
