@@ -525,21 +525,32 @@ async def test_durable_guard_lease_loss_reaches_worker_without_a_terminal_overwr
 
 
 @pytest.mark.asyncio
-async def test_interrupted_guard_commit_remains_conservative_without_automatic_resubmit(tmp_path, monkeypatch):
-    from backend.recognition import runtime
-
+@pytest.mark.parametrize("preflight_delay", [0, 0.05], ids=["normal-db", "slow-db"])
+async def test_interrupted_guard_commit_remains_conservative_without_automatic_resubmit(
+    tmp_path, monkeypatch, preflight_delay,
+):
     service, request, data, engine = new_runner(tmp_path, initial=["literal 1 + 1 = 3"])
     original = recognition_runs._RunContext.write
+    original_active = recognition_runs._RunContext.active
     committed = asyncio.Event()
+
+    async def active(self):
+        # Slow pre-commit I/O must not consume a synthetic 20ms deadline
+        # intended to interrupt the later, already-committed guard write.
+        await asyncio.sleep(preflight_delay)
+        return await original_active(self)
 
     async def interrupted(self, checkpoint, **kwargs):
         await original(self, checkpoint, **kwargs)
         if checkpoint.calls and kwargs.get("status") is None and not committed.is_set():
             committed.set()
-            await asyncio.Event().wait()
+            # Arm the real cancellation/TimeoutError only after persistence.
+            # Do not shorten the product's entire authorization/DB deadline.
+            async with asyncio.timeout(0):
+                await asyncio.Event().wait()
 
+    monkeypatch.setattr(recognition_runs._RunContext, "active", active)
     monkeypatch.setattr(recognition_runs._RunContext, "write", interrupted)
-    monkeypatch.setattr(runtime, "LOCAL_STEP_SECONDS", 0.02)
     result = await run(service, request, data, engine)
     assert committed.is_set() and engine.sends == []
     assert result.status == "needs_review" and result.safe_error_code == "provider_submit_uncertain"

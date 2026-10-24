@@ -126,6 +126,7 @@ class GradingCheckpoints:
         self.revisions = {student: revision.id for revision, student in frozen_revisions}
         from backend.db import workflow_repository
         setup = workflow_repository.get_run_setup(run_id)
+        self.grading_setup = setup.setup if setup else None
         self.manifest = (setup.input_manifest if setup else {}) or {}
         self.math_plans = saved_math_plans(run_id, questions=questions)
         math_qids = {q.q_id for q in questions if uses_math_grading(q.type)}
@@ -222,7 +223,7 @@ class GradingCheckpoints:
                 from backend.services.math_grading_context import get_math_plan
                 from backend.services.math_rubric_plan import fallback_math_rubric_plan
                 problem = problem_from_question(self.questions[q_id])
-                plan = get_math_plan(problem) or fallback_math_rubric_plan(problem)
+                plan = get_math_plan(problem) or fallback_math_rubric_plan(problem, grading_setup=self.grading_setup)
                 self.save_math_plan(problem, plan)
             item.update(math_grading_engine_version=MATH_GRADING_ENGINE_VERSION, math_plan_id=plan.plan_id)
         try:

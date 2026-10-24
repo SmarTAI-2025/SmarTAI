@@ -248,6 +248,9 @@ it("edits type beside number through the existing versioned field save, includin
   taskData.problem_data.Q1.type = "short";
   mutateAsync.mockResolvedValue({ workflow_revision: 8 });
   renderPage();
+  // Drain the real draft hydration transactions before timing the save UI.
+  // Otherwise prior mounted editors can keep fake IndexedDB busy under the full suite.
+  await act(async () => { await listPageDrafts("question-draft-teacher"); });
   const card = within(document.querySelector('[data-question-id="Q1"]') as HTMLElement);
   expect(card.queryByText("short")).not.toBeInTheDocument();
   expect(card.getAllByText("简答题")).toHaveLength(2);

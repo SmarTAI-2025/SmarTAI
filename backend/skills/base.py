@@ -152,6 +152,8 @@ def build_system_prompt(
     role_description: str,
     language: str = "en",
     grading_setup: Optional[TaskGradingSetup] = None,
+    *,
+    output_instruction: str = "Return a single JSON object with scoring details.",
 ) -> str:
     """Compose the canonical system prompt: anti-jailbreak prefix + role description + language directive.
 
@@ -166,7 +168,7 @@ def build_system_prompt(
         + f"\n\nIMPORTANT: You MUST write your comment and step descriptions in {lang_instruction}. "
         "However, if the student's answer is in a different language, provide bilingual feedback "
         "(primary language + student's language). "
-        "Return a single JSON object with scoring details."
+        + output_instruction
     )
 
 

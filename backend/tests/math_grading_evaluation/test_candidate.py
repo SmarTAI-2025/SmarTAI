@@ -258,10 +258,14 @@ def test_feedback_cannot_rebind_existing_claim_id_to_a_different_quote():
     case = CASES[2]
     problem, plan = asyncio.run(prepared(case))
     calls = []
+    # Keep the actual answer unchanged, but cite the complete formula span for
+    # the proposed check. Mixed prose is deliberately not stripped by binding.
+    original_quote = "x=4/2\nx = 3"
 
     async def reply(provider, *, output_model, **kwargs):
         calls.append(output_model.__name__)
         draft = assessment_reply(case)
+        draft["claims"][0]["quote"] = original_quote
         if len(calls) == 2:
             draft["claims"][0]["quote"] = "x = 3"  # Present, but changes the existing identity.
             draft["awards"][2].update(score=2, claim_ids=["s1"])
@@ -278,5 +282,5 @@ def test_feedback_cannot_rebind_existing_claim_id_to_a_different_quote():
     assert calls == ["MathAssessment", "MathAssessment"]
     assert result.score == 8
     trace = engine.read_math_trace(result)
-    assert trace["assessment"]["claims"][0]["quote"] == case["answer"]
+    assert trace["assessment"]["claims"][0]["quote"] == original_quote
     assert trace["evidence"][0]["status"] == "refuted"

@@ -17,6 +17,7 @@ async def test_unresolved_holistic_scores_remain_advisory(monkeypatch, review_fa
     p, a, plan = problem(), answer(), plan_for(mode="holistic")
     experts = [expert_for(grading.MathAssessment(
         route_id="main", route_reason="Overall teacher criterion applies.", score=score,
+        claims=[grading.Claim(id="c", quote=a.content, verdict="refuted", reason="Final product is wrong.")],
         rationale="The method is valid but the final product is wrong.",
         confidence=.95, comment="Final arithmetic error."), plan, a.content)
         for score in (8, 9)]

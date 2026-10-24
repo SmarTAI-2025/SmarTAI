@@ -16,13 +16,26 @@ from backend.models import ProblemInfo
 if TYPE_CHECKING:
     from backend.services.math_rubric_plan import MathRubricPlan
 
-MATH_GRADING_ENGINE_VERSION = "math_evidence_v1"
+MATH_GRADING_ENGINE_VERSION = "math_evidence_v2"
 ENGINE_EVENT = "grading_math_engine"
 PLAN_EVENT = "grading_math_rubric_plan"
 _current_plans: ContextVar[dict[str, "MathRubricPlan"] | None] = ContextVar(
     "math_grading_plans", default=None,
 )
 _OTHER_SKILL_TYPES = frozenset({"选择题", "多选题", "填空题", "编程题"})
+
+
+async def report_math_progress(operation, *args, **kwargs):
+    """Keep a reporter/storage failure outside the model-fallback boundary."""
+    from backend.services.grading_checkpoints import CheckpointWriteError
+    from backend.domain.errors import DomainError
+    from sqlalchemy.exc import SQLAlchemyError
+    try:
+        return await operation(*args, **kwargs)
+    except (CheckpointWriteError, DomainError, SQLAlchemyError):
+        raise
+    except Exception as exc:
+        raise CheckpointWriteError("math_progress_write_failed") from exc
 
 
 def uses_math_grading(problem_type: str) -> bool:
@@ -93,7 +106,7 @@ def plans_from_snapshots(manifest: dict, events: list[dict]) -> dict[str, "MathR
             plan = MathRubricPlan.model_validate(raw)
         except (ValidationError, TypeError):
             continue
-        if isinstance(qid, str) and plan.schema_version == "math_rubric_v1":
+        if isinstance(qid, str) and plan.schema_version == "math_rubric_v2":
             plans[qid] = plan
     return plans
 
@@ -184,12 +197,12 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
                 provider_selected = True
             if reporter is not None:
                 from backend.models import ActiveUnit
-                await reporter.substep(
+                await report_math_progress(reporter.substep,
                     ActiveUnit(student_id="", q_id=qid, skill="MathRubricPlan", expert="", step="starting"),
                     "prepare_grading_criteria",
                 )
             if provider is None or not callable(getattr(provider, "ainvoke", None)):
-                plan = fallback_math_rubric_plan(problem)
+                plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
             else:
                 try:
                     async with observe_auxiliary_request(reporter, provider):
@@ -205,10 +218,10 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
                     ):
                         raise
                     # A failed interpretation retains the original rubric.
-                    plan = fallback_math_rubric_plan(problem)
+                    plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
             if (plan.input_fingerprint != math_rubric_fingerprint(problem)
                     or plan.max_score != problem.max_score):
-                plan = fallback_math_rubric_plan(problem)
+                plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
             if checkpoints is not None:
                 checkpoints.save_math_plan(problem, plan)
         plans[qid] = plan

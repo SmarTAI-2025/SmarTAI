@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import zipfile
 
@@ -683,6 +684,26 @@ async def test_submission_reader_lease_loss_stops_old_worker_without_failing_sou
     lost = LeaseLost("The recognition send guard lost its execution lease.")
     reads, replacement = [], []
 
+    # Both files may finish fenced persistence before ownership changes. Hold
+    # the second reader at that boundary until the first reports lease loss.
+    from backend.services import submission_source_pipeline as pipeline
+    persist = pipeline._persist_and_register
+    registered, lease_replaced = asyncio.Event(), asyncio.Event()
+    persisted = []
+
+    async def persist_before_read(**kwargs):
+        result = await persist(**kwargs)
+        persisted.append(kwargs["raw"].filename)
+        if len(persisted) == 2:
+            registered.set()
+        if kwargs["raw"].filename == "first.txt":
+            await asyncio.wait_for(registered.wait(), 3)
+        else:
+            await asyncio.wait_for(lease_replaced.wait(), 3)
+        return result
+
+    monkeypatch.setattr(pipeline, "_persist_and_register", persist_before_read)
+
     async def read(**kwargs):
         reads.append(kwargs["filename"])
         workflow_repository.release_operation(
@@ -691,6 +712,7 @@ async def test_submission_reader_lease_loss_stops_old_worker_without_failing_sou
         replacement.append(workflow_repository.claim_operation(
             old.id, owner_id=owner_id, worker_id="replacement", lease_seconds=60,
         ))
+        lease_replaced.set()
         raise lost
 
     monkeypatch.setattr(task_facade, "read_question_source", read)
