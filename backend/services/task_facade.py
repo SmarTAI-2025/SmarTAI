@@ -3428,6 +3428,7 @@ async def run_task_submission_parsing(
             async def schedule_pages(source_id, stored_file_id, source_filename, source_content_type,
                                      *, complete=False, end_page=None):
                 from backend.services.source_question_units import QUESTION_HEADING, source_question_units, source_page_groups
+                from backend.services.question_matching import resolve_question_match
                 saved_pages = page_texts.get(source_id, {})
                 by_number = {}
                 for q_id, problem in problem_data.items():
@@ -3458,8 +3459,17 @@ async def run_task_submission_parsing(
                         invalidated_question_ids=sorted(boundary_invalidations[source_id]))
                 for unit in source_page_groups(saved_pages, source_complete=complete,
                                                source_end_page=end_page, numbered=False):
-                    ids = {ids[0] for match in QUESTION_HEADING.finditer(unit.text)
-                           if len(ids := by_number.get(match.group("number"), [])) == 1} & targets
+                    headings = list(QUESTION_HEADING.finditer(unit.text))
+                    if any(len(by_number.get(match.group("number"), [])) != 1 for match in headings):
+                        # Different aliases can be running labels of one answer.
+                        # Keep the full source context until boundaries are known.
+                        continue
+                    matched = [resolve_question_match(match.group("number"),
+                        unit.text[match.start():headings[index + 1].start() if index + 1 < len(headings) else len(unit.text)],
+                        problem_data) for index, match in enumerate(headings)]
+                    if not matched or any(q_id is None for q_id in matched):
+                        continue  # Keep all candidates for the existing semantic parse.
+                    ids = set(matched) & targets
                     # A repeated identity across a gap is not a complete
                     # independent answer. Leave it for the existing partial-source
                     # parse so every available segment remains visible for review.

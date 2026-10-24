@@ -1,0 +1,216 @@
+"""Alias matching is global, order independent, and adds no matching model pass."""
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from backend.agents import ingest_agent
+from backend.services.question_matching import (
+    copied_question_candidates, question_number_aliases,
+    question_number_candidates, resolve_question_match,
+)
+from backend.services.submission_incremental import split_submission_question_units
+from backend.services.submission_source_pipeline import PreparedSubmissionSource
+
+
+def problems(numbers=('Section 1.2 / 1', 'Section 1.2 / 2')):
+    stems = ['Find the eigenvalues of the real matrix diag(1, 2, 3).',
+             'Find the eigenvalues of the real matrix diag(1, 2, 4).']
+    return {f'q{i}': dict(q_id=f'q{i}', number=number, type='计算题', stem=stems[i - 1])
+            for i, number in enumerate(numbers, 1)}
+
+
+@pytest.mark.parametrize('label', ['Section 1.2 / 1', 'section 1.2 1', '1.2.1',
+                                   'Question 1.2.1', '１．２．１', '1', '1.'])
+def test_unique_number_aliases(label):
+    assert question_number_candidates(label, problems()) == ['q1']
+    assert resolve_question_match(label, 'Wrong answer: eigenvalues are zero.', problems()) == 'q1'
+
+
+def test_short_alias_is_ambiguous_across_the_whole_assignment():
+    known = problems(('Section 1.1 / 1', 'Section 1.2 / 1'))
+    assert question_number_candidates('1', known) == ['q1', 'q2']
+    assert resolve_question_match('1', 'The answer is zero.', known) is None
+    assert all('1' not in aliases for aliases in question_number_aliases(known).values())
+    assert question_number_candidates('1.2.1', known) == ['q2']
+    assert resolve_question_match('1', known['q2']['stem'] + '\nMy calculation.', known) == 'q2'
+
+
+@pytest.mark.parametrize('labels', [('1', 'Section 1 / 1'), ('1.2.1', 'Section 1.2 / 1'),
+                                  ('1', '1'), ('Section 1 / 1', 'Chapter 1 / 1')])
+def test_canonical_collisions_never_overwrite_a_candidate(labels):
+    known = problems(labels)
+    query = '1.2.1' if labels[0] == '1.2.1' else '1'
+    assert question_number_candidates(query, known) == ['q1', 'q2']
+    assert resolve_question_match(query, 'An answer without matching context.', known) is None
+
+
+def test_copied_stem_matches_without_number_but_near_identical_math_does_not():
+    known = problems()
+    assert resolve_question_match('', known['q2']['stem'] + '\nAnswer: zero.', known) == 'q2'
+    assert resolve_question_match('', 'Find the eigenvalues of the real matrix diag(1, 2, 5).', known) is None
+    assert copied_question_candidates(known['q1']['stem'], known) == ['q1']
+    assert resolve_question_match('1', known['q2']['stem'], known) is None
+
+
+def source(text):
+    return PreparedSubmissionSource('source', 'file', 'S1_Alice.txt', 'text/plain', text)
+
+
+def test_reversed_explicit_aliases_split_by_identity_not_position():
+    known = problems()
+    original = source('Student ID: S1\nQuestion 1.2.2: Second answer.\nQuestion 1.2.1: First answer.')
+    units = split_submission_question_units(original, known)
+    assert [ids for _, ids in units] == [{'q2'}, {'q1'}]
+    assert 'Second answer' in units[0][0].text and 'First answer' not in units[0][0].text
+
+
+def test_ambiguous_short_number_and_conflicting_copied_stem_keep_all_candidates():
+    known = problems(('Section 1.1 / 1', 'Section 1.2 / 1'))
+    original = source('Question 1: An answer.\nQuestion 2: Another answer.')
+    assert split_submission_question_units(original, known, {'q2'}) == [(original, {'q2'})]
+    known = problems()
+    conflict = source('Question 1: ' + known['q2']['stem'] + '\nQuestion 2: Some work.')
+    assert split_submission_question_units(conflict, known) == [(conflict, set(known))]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('label', ['1.2.1', '1'])
+async def test_ocr_only_aliases_need_no_model(label):
+    result = (await ingest_agent.parse_student_answer_sources_from_ocr_markdown(
+        [source(f'Student ID: S1\nName: Alice\n{label}: My unchanged answer.')], problems()))[0]
+    assert result.student['stu_ans'][0]['q_id'] == 'q1'
+    assert result.student['stu_ans'][0]['content'] == 'My unchanged answer.'
+
+
+@pytest.mark.asyncio
+async def test_ocr_duplicate_numbers_do_not_silently_choose_last_question():
+    known = problems(('1', '1'))
+    result = (await ingest_agent.parse_student_answer_sources_from_ocr_markdown(
+        [source('1: An answer without distinguishing context.')], known))[0]
+    assert result.status == 'no_matching_answer' and result.student is None
+    assert result.unknown_question_ids == ('number:1',)
+
+
+@pytest.mark.asyncio
+async def test_ocr_partial_match_keeps_unresolved_identity_for_existing_review_gate():
+    known = problems(('Section 1.1 / 1', 'Section 1.2 / 1'))
+    known['q3'] = dict(q_id='q3', number='2', type='short', stem='A third distinct question.')
+    result = (await ingest_agent.parse_student_answer_sources_from_ocr_markdown(
+        [source('1: Ambiguous first answer.\n2: Clear second answer.')], known))[0]
+    assert [a['q_id'] for a in result.student['stu_ans']] == ['q3']
+    assert result.unknown_question_ids == ('number:1',)
+
+
+@pytest.mark.asyncio
+async def test_ocr_unlabelled_work_is_not_synthetic_question_one():
+    known = problems(('1', '2'))
+    result = (await ingest_agent.parse_student_answer_sources_from_ocr_markdown(
+        [source('An answer without any question label or copied question.')], known))[0]
+    assert result.status == 'no_matching_answer' and result.student is None
+    copied = (await ingest_agent.parse_student_answer_sources_from_ocr_markdown(
+        [source(known['q2']['stem'] + '\nMy answer.')], known))[0]
+    assert [a['q_id'] for a in copied.student['stu_ans']] == ['q2']
+
+
+@pytest.mark.asyncio
+async def test_ocr_retry_subset_does_not_make_ambiguous_alias_unique():
+    known = problems(('Section 1.1 / 1', 'Section 1.2 / 1'))
+    result = (await ingest_agent.parse_student_answer_sources_from_ocr_markdown(
+        [source('1: An answer.')], known, source_question_ids={'source': ['q2']}))[0]
+    assert result.status == 'no_matching_answer'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('conflict', ['number', 'copied_stem', None])
+async def test_existing_single_model_call_has_aliases_and_conflict_review(monkeypatch, conflict):
+    known = problems()
+    answer = dict(q_id='q2', number=known['q2']['number'], type='计算题', content='Wrong but readable answer.', flag=[])
+    if conflict == 'number':
+        answer['number'] = '1.2.1'
+    elif conflict == 'copied_stem':
+        answer['content'] = known['q1']['stem'] + '\nMy work.'
+    response = SimpleNamespace(content=json.dumps(dict(stu_id='S1', stu_name='Alice', stu_ans=[answer])))
+    invoke = AsyncMock(return_value=response)
+    monkeypatch.setattr(ingest_agent, 'ainvoke_with_retry', invoke)
+    result = (await ingest_agent.parse_student_answer_sources([source('Some work in reverse order.')], known,
+        SimpleNamespace(provider_id='fixture'), source_question_ids={'source': ['q2']}, independent_answers=True))[0]
+    invoke.assert_awaited_once()
+    messages = invoke.await_args.args[1]
+    assert 'sequence is only a search hint' in messages[0].content
+    assert '1.2.2' in messages[1].content and 'number_aliases' in messages[1].content
+    assert 'Question Data' in messages[1].content
+    saved = result.student['stu_ans'][0]
+    assert saved['content'] == answer['content']
+    assert ('recognition_manual_pending' in saved['flag']) is bool(conflict)
+
+
+@pytest.mark.asyncio
+async def test_real_saved_out_of_order_answers_keep_canonical_identity(monkeypatch):
+    from backend.db import assignment_repository
+    from backend.services import task_facade
+    from backend.tests.test_submission_incremental import _claim, _questions, _registry
+    from backend.tests.test_task_background_workflows import _seed_task
+    owner, task = _seed_task()
+    known = problems()
+    for index, (q_id, row) in enumerate(known.items()):
+        assignment_repository.add_question(task, teacher_id=owner, q_id=q_id, order_index=index,
+            number=row['number'], type=row['type'], stem=row['stem'], criterion='Teacher rubric.', max_score=10)
+    calls = []
+    async def invoke(messages):
+        requested = _questions(messages)
+        calls.append([q['q_id'] for q in requested])
+        return SimpleNamespace(content=json.dumps(dict(stu_id='S1', stu_name='Alice', stu_ans=[
+            dict(q_id=q['q_id'], number=q['number'], type=q['type'], content='Answer for ' + q['q_id'], flag=[])
+            for q in requested])))
+    registry = _registry(monkeypatch, invoke)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename='S1_Alice.txt', content=b'Question 1.2.2: Second answer.\nQuestion 1.2.1: First answer.',
+        content_type='text/plain', registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued['job_id']))
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    assert after['status'] == 'submissions_ready'
+    saved = {a['q_id']: a for a in after['student_data']['S1']['stu_ans']}
+    assert saved['q1']['content'] == 'Answer for q1' and saved['q2']['content'] == 'Answer for q2'
+    assert sorted(calls) == [['q1'], ['q2']]
+
+
+@pytest.mark.asyncio
+async def test_ocr_running_aliases_preserve_both_continuation_fragments():
+    result = (await ingest_agent.parse_student_answer_sources_from_ocr_markdown(
+        [source('1.2.1: First part.\n1: Continued part.')], problems()))[0]
+    assert len(result.student['stu_ans']) == 1
+    assert result.student['stu_ans'][0]['content'] == 'First part.\n\nContinued part.'
+
+
+@pytest.mark.asyncio
+async def test_pdf_running_labels_with_different_aliases_keep_full_answer(monkeypatch):
+    from backend.db import assignment_repository
+    from backend.services import task_facade
+    from backend.tests.test_recognition_agent import pdf
+    from backend.tests.test_submission_incremental import _claim, _registry
+    from backend.tests.test_task_background_workflows import _seed_task
+    owner, task = _seed_task()
+    assignment_repository.add_question(task, teacher_id=owner, q_id='q1', order_index=0,
+        number='Section 1.2 / 1', type='short', stem='A mathematical question.', criterion='Teacher rubric.', max_score=10)
+    pages = ['Question 1.2.1: First part.', 'Question 1: Continued part.']
+    calls = []
+    async def invoke(messages):
+        text = messages[-1].content.split('**[Student Submission Content]**:', 1)[1]
+        calls.append(text)
+        assert all(part in text for part in ('First part.', 'Continued part.'))
+        return SimpleNamespace(content=json.dumps(dict(stu_id='S1', stu_name='Alice', stu_ans=[
+            dict(q_id='q1', number='Section 1.2 / 1', type='short', content='First part. Continued part.', flag=[])])))
+    registry = _registry(monkeypatch, invoke)
+    async def read(**kwargs):
+        for number in (2, 1):
+            await kwargs['on_pages']([dict(page_number=number, text=pages[number - 1])])
+        return SimpleNamespace(text='\n\n'.join(pages), recognition=None)
+    monkeypatch.setattr(task_facade, 'read_question_source', read)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename='S1.pdf', content=pdf(pages), content_type='application/pdf', registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued['job_id']))
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    assert after['status'] == 'submissions_ready' and len(calls) == 1
+    assert after['student_data']['S1']['stu_ans'][0]['content'] == 'First part. Continued part.'
