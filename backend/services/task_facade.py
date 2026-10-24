@@ -5584,7 +5584,7 @@ def update_student_answer(
             return {
                 "status": "ok", "stu_id": display_student_id, "q_id": q_id,
                 "answer": {
-                    "q_id": target.q_id, "number": target.number, "type": target.type,
+                    "q_id": target.q_id, "number": target.number, "type": normalize_question_type(target.type),
                     "content": target.content, "flag": _public_answer_flags(target.flag, content=target.content),
                     "recognition_confidence": _answer_recognition_confidence(target.flag),
                     "review_status": review.review_status,
@@ -5642,7 +5642,9 @@ def update_student_answer(
                 else answer.flag
             )
             number = question.number if is_target and "number" in metadata_fields else answer.number
-            answer_type = question.type if is_target and "type" in metadata_fields else answer.type
+            answer_type = normalize_question_type(
+                question.type if is_target and "type" in metadata_fields else answer.type
+            )
             answer_id = f"ans_{uuid.uuid4().hex[:12]}"
             session.add(SubmissionAnswerRecord(
                 id=answer_id,

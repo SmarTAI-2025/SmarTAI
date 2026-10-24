@@ -131,7 +131,7 @@ def test_oversized_field_preserves_bounded_siblings_and_safe_fields():
         stu_ans=[_answer("q1", "Good answer"), _answer("q2", "x" * 500_001)]))
     payload, _ = _independent_submission_payload(parsed, source, problems, set(problems))
     assert payload["stu_ans"][0]["content"] == "Good answer"
-    assert payload["stu_ans"][1]["content"] == "" and payload["stu_ans"][1]["type"] == "concept"
+    assert payload["stu_ans"][1]["content"] == "" and payload["stu_ans"][1]["type"] == "概念题"
     assert payload["recognition"]["repair_question_ids"] == ["q2"]
 
 
@@ -261,7 +261,7 @@ async def test_metadata_only_failure_confirms_original_text_without_model_or_fak
     result = task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id="S1", q_id="q2",
         patch={"content": answer["content"], "review_status": "confirmed"}, expected_revision=state["workflow_revision"])
     assert result["answer"]["content"] == "The original answer is correct."
-    assert result["answer"]["number"] == "2" and result["answer"]["type"] == "concept"
+    assert result["answer"]["number"] == "2" and result["answer"]["type"] == "概念题"
     assert result["answer"]["review_status"] == "confirmed"
     assert not task_facade._answer_recognition_failures(result["answer"]["flag"])
     assert "recognition_metadata_review" not in result["answer"]["flag"]

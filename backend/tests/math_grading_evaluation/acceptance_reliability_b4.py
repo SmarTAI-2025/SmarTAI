@@ -141,7 +141,7 @@ class FixedJSON:
 
 
 def compile_policy(provider):
-    return asyncio.run(prepare_math_rubric_plan(dict(q_id='independent-b4', number='1', type='证明题',
+    return asyncio.run(prepare_math_rubric_plan(dict(q_id='independent-b4', number='1', type='推理题',
         stem='证明题独立合成样例。', reference_answer='完整证明。', max_score=10,
         criterion=RULE+'；'+''.join(POLICIES)), provider))
 
