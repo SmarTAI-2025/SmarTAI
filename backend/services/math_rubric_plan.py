@@ -259,7 +259,8 @@ def _build_plan(context: dict, explanation: _Explanation, *, status="compiled", 
     return MathRubricPlan(plan_id=_content_hash(payload), **payload)
 
 
-def fallback_math_rubric_plan(problem, *, reason="unavailable_item_allocation", grading_setup=None) -> MathRubricPlan:
+def fallback_math_rubric_plan(problem, *, reason="unavailable_item_allocation", grading_setup=None,
+                             bind_preferences=True) -> MathRubricPlan:
     """No model call. Preserve all source restrictions in a holistic plan."""
     context = _question_input(problem)
     plan = _build_plan(context, _Explanation(
@@ -281,7 +282,7 @@ def fallback_math_rubric_plan(problem, *, reason="unavailable_item_allocation", 
         numerical_policy=_NUMERICAL_POLICY,
         advisories=(_FALLBACK_ADVISORY,),
     ), status="holistic", reason=reason)
-    return _with_preferences(plan, grading_setup)
+    return _with_preferences(plan, grading_setup) if bind_preferences else plan
 
 
 PLAN_SYSTEM_PROMPT = """Prepare ONE shared scoring plan for a mathematics/physics question,
@@ -838,7 +839,8 @@ _UNREPRESENTABLE_RULES = frozenset({
 })
 
 
-async def prepare_math_rubric_plan(problem, provider, *, grading_setup=None, reporter=None) -> MathRubricPlan:
+async def prepare_math_rubric_plan(problem, provider, *, grading_setup=None, reporter=None,
+                                  bind_preferences=True) -> MathRubricPlan:
     """Compile once per caller-owned run/question; provider failures propagate.
 
 Malformed/unrepresentable explanations use a source-preserving holistic plan.
@@ -874,7 +876,10 @@ provider failures retain the existing execution/retry semantics.
                 raise
             return self
 
-    prompt = PLAN_SYSTEM_PROMPT + "\n" + _PREFERENCES_POLICY + "\n" + strictness_policy(preferences["strictness"]) + (
+    binding_policy = (strictness_policy(preferences["strictness"]) if bind_preferences else
+        "Strictness and partial credit are bound later by code. Do not write fixed numerical "
+        "defaults for omissions or follow-through; mark default_adjustments where applicable.")
+    prompt = PLAN_SYSTEM_PROMPT + "\n" + _PREFERENCES_POLICY + "\n" + binding_policy + (
         "\nWrite newly generated explanation text in "
         + ("Simplified Chinese" if language == "zh" else "English")
         + "; preserve quoted original text and notation without translation.\nJSON schema:\n"
@@ -891,12 +896,13 @@ provider failures retain the existing execution/retry semantics.
             # bounded compilation/repair path and source validation.
         explanation, _ = await structured_llm_call(
             provider, system_prompt=prompt,
-            user_prompt=json.dumps({"question": context, "grading_preferences": preferences}, ensure_ascii=False),
+            user_prompt=json.dumps({"question": context, "grading_preferences": preferences if bind_preferences
+                else {"teacher_notes": preferences["teacher_notes"]}}, ensure_ascii=False),
             output_model=ValidatedExplanation,
         )
     except (StructuredOutputInvalidError, StructuredOutputBoundsError, _UnrepresentableRubric):
         plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup,
-            reason=failures[0] if failures else "invalid_structured_output")
+            reason=failures[0] if failures else "invalid_structured_output", bind_preferences=bind_preferences)
     else:
         canonical = _validated_explanation(context, explanation)
         holistic = all(route.mode == "holistic" for route in canonical.routes)
@@ -905,7 +911,8 @@ provider failures retain the existing execution/retry semantics.
             reason=failures[0] if failures else ("model_selected_holistic" if holistic else ""))
         # Authenticated setup is part of plan identity; question hash remains
         # question-only. Fallback applies the same settings above.
-        plan = _with_preferences(plan, grading_setup)
+        if bind_preferences:
+            plan = _with_preferences(plan, grading_setup)
     if reporter:
         from backend.services.math_grading_context import report_math_progress
         await report_math_progress(reporter._emit_message, "Shared question scoring rules prepared")

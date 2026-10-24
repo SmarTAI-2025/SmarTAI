@@ -19,7 +19,7 @@ SECOND = "Derive the conclusion."
 def _numbered_task():
     owner, task = _seed_task()
     assignment_repository.add_question(task, teacher_id=owner, q_id="q1", order_index=0,
-        number="1", type="short", stem="A question", criterion="Award 10 points", max_score=10)
+        number="1", type="concept", stem="A question", criterion="Award 10 points", max_score=10)
     return owner, task
 
 
@@ -102,7 +102,7 @@ async def test_missing_middle_page_keeps_both_available_answer_parts_in_manual_r
 async def test_pause_after_cross_page_answer_preserves_all_parts_without_manual_ai(monkeypatch):
     owner, task = _numbered_task()
     assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1,
-        number="2", type="short", stem="Another question", criterion="Award 10 points", max_score=10)
+        number="2", type="concept", stem="Another question", criterion="Award 10 points", max_score=10)
     saved = _saved_signal(monkeypatch)
     pages = {1: "Question 1: " + FIRST, 2: "Question 1: " + SECOND, 3: "Question 2: Not yet parsed."}
 

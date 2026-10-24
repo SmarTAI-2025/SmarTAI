@@ -123,7 +123,7 @@ async def test_structured_partial_questions_restore_known_missing_rows_into_exis
     pipeline = IncrementalQuestionPreparation(operation=operation, sources=inputs["sources"],
         provider=registry.provider, provider_id="test-provider", reporter=ProgressReporter(operation.operation_id),
         score_policy=inputs["score_policy"], read_source=AsyncMock(side_effect=AssertionError("already structured")))
-    rows = _rows([dict(number=number, type="short", stem=f"Saved literal question {number}.",
+    rows = _rows([dict(number=number, type="concept", stem=f"Saved literal question {number}.",
         criterion="Teacher rubric: award 10 points." if index == 0 else "", max_score=10,
         reference_answer="Teacher answer" if index == 0 else "") for index, number in enumerate(recognized)])
     await pipeline.finish("extract:" + draft["source_token"] + ":0", rows)
@@ -176,7 +176,7 @@ async def test_submission_raw_text_handoff_opens_manual_rows_without_model_calls
     from backend.services.submission_manual_review import continue_manually
     owner, task = _seed_task(with_question=True)
     assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1, number="2",
-        type="short", stem="Second", criterion="Award 10 points.", max_score=10)
+        type="concept", stem="Second", criterion="Award 10 points.", max_score=10)
     registry = _RecoveryRegistry()
     data, mime = source_file(pdf=True, pages=8)
     queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="S1.pdf",

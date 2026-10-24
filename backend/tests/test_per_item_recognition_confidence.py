@@ -14,9 +14,9 @@ from backend.services.submission_source_pipeline import attach_submission_recogn
 
 @pytest.mark.parametrize("value", [None, "low", "0.5", True, -1, 2, float("nan"), float("inf")])
 def test_missing_or_invalid_item_confidence_stays_unknown(value):
-    question = ProblemInfo(q_id="q1", number="1", type="short", stem="literal", criterion="",
+    question = ProblemInfo(q_id="q1", number="1", type="concept", stem="literal", criterion="",
                            recognition_confidence=value)
-    answer = StudentAnswerInfo(q_id="q1", number="1", type="short", content="literal",
+    answer = StudentAnswerInfo(q_id="q1", number="1", type="concept", content="literal",
                                recognition_confidence=value)
     assert question.recognition_confidence is None
     assert answer.recognition_confidence is None
@@ -28,7 +28,7 @@ def test_missing_or_invalid_item_confidence_stays_unknown(value):
 @pytest.mark.asyncio
 async def test_question_parser_keeps_independent_scores_and_source_low_cannot_override(monkeypatch):
     rows = [
-        dict(q_id=f"q{i}", number=str(i), type="short", stem=f"Question {i}", criterion="",
+        dict(q_id=f"q{i}", number=str(i), type="concept", stem=f"Question {i}", criterion="",
              recognition_confidence=score)
         for i, score in enumerate([.98, .4, .6, None], 1)
     ]
@@ -58,7 +58,7 @@ async def test_answer_parser_scopes_confidence_to_student_and_question(monkeypat
         return SimpleNamespace(content=json.dumps({
             "stu_id": student, "stu_name": student,
             "stu_ans": [
-                dict(q_id=f"q{i}", number=str(i), type="short", content="1 + 1 = 3",
+                dict(q_id=f"q{i}", number=str(i), type="concept", content="1 + 1 = 3",
                      flag=["recognition_low_confidence"], recognition_confidence=score)
                 for i, score in enumerate(scores, 1)
             ],
@@ -71,7 +71,7 @@ async def test_answer_parser_scopes_confidence_to_student_and_question(monkeypat
             content_type="text/plain", text="Literal student answers",
         ) for s in ("S1", "S2")
     ]
-    questions = {f"q{i}": dict(q_id=f"q{i}", number=str(i), type="short", stem=f"Question {i}")
+    questions = {f"q{i}": dict(q_id=f"q{i}", number=str(i), type="concept", stem=f"Question {i}")
                  for i in (1, 2)}
     results = await ingest_agent.parse_student_answer_sources(sources, questions, SimpleNamespace())
     results = attach_submission_recognition(results, [
@@ -109,7 +109,7 @@ def test_question_scores_survive_persistence_refresh_and_teacher_edit():
 
     owner, task = _seed_task()
     packages = {
-        f"q{i}": dict(q_id=f"q{i}", number=str(i), type="short", stem=f"Question {i}",
+        f"q{i}": dict(q_id=f"q{i}", number=str(i), type="concept", stem=f"Question {i}",
                      criterion="Award up to 10 points.", reference_answer="Reference",
                      recognition_confidence=score)
         for i, score in enumerate([.95, .4, None], 1)

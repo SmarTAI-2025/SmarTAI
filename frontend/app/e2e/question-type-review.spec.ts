@@ -26,8 +26,8 @@ test("missing type and materials stay visible without duplicate failure notes", 
     if (request.method() !== "GET") {
       mutations.push(path);
       expect(path).toBe("/tasks/type-review/problems/q1");
-      expect(request.postDataJSON().type).toBe("multiple_choice");
-      problem.type = "多选题";
+      expect(request.postDataJSON().type).toBe("reasoning");
+      problem.type = "推理题";
       task.workflow_revision++;
       return json({ status: "ok", q_id: "q1", problem, workflow_revision: task.workflow_revision });
     }
@@ -48,9 +48,9 @@ test("missing type and materials stay visible without duplicate failure notes", 
   const select = card.getByRole("combobox", { name: "题型" });
   await expect(select).toHaveValue("");
   await expect(select.locator('option:checked')).toHaveText("请选择");
-  await expect(select.locator("option")).toHaveText(["请选择", "计算题", "编程题", "证明题", "概念题", "单选题", "多选题", "填空题", "其他"]);
+  await expect(select.locator("option")).toHaveText(["请选择", "计算题", "概念题", "推理题", "编程题", "其他"]);
   expect(mutations).toEqual([]);
-  await select.selectOption("multiple_choice");
+  await select.selectOption("reasoning");
   await card.getByRole("button", { name: "保存", exact: true }).click();
   await expect(card.getByText("请补齐缺失的评分标准、标答并确认本题；完成前不能批改。")).toBeVisible();
   expect(mutations).toEqual(["/tasks/type-review/problems/q1"]);

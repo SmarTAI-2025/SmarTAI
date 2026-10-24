@@ -32,7 +32,7 @@ def _questions(messages):
 
 def _response(q_id="q1", content="Saved answer"):
     return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One",
-        stu_ans=[dict(q_id=q_id, content=content, number=q_id[1:], type="short", flag=[])])))
+        stu_ans=[dict(q_id=q_id, content=content, number=q_id[1:], type="concept", flag=[])])))
 
 
 def _claim(owner, job):
@@ -59,7 +59,7 @@ async def test_two_page_submission_batches_questions_and_manual_never_calls_ai(m
     owner, task = _seed_task()
     for number in range(1, 5):
         assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
-            number=str(number), type="short", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
+            number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
     saved, calls = _saved_signal(monkeypatch), []
     async def invoke(messages):
         ids = [item["q_id"] for item in _questions(messages)]
@@ -68,7 +68,7 @@ async def test_two_page_submission_batches_questions_and_manual_never_calls_ai(m
             await asyncio.wait_for(saved.wait(), 3)
             raise asyncio.CancelledError()
         return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One",
-            stu_ans=[dict(q_id=q_id, number=q_id[1:], type="short", content="Saved " + q_id, flag=[]) for q_id in ids])))
+            stu_ans=[dict(q_id=q_id, number=q_id[1:], type="concept", content="Saved " + q_id, flag=[]) for q_id in ids])))
     registry = _registry(monkeypatch, invoke)
     pages = [dict(page_number=1, text="Question 1: First answer\nQuestion 2: Second answer"),
              dict(page_number=2, text="Question 3: Third answer\nQuestion 4: Fourth answer")]
@@ -154,7 +154,7 @@ async def test_parallel_submission_progress_preserves_saved_counts_and_counts_fi
             snapshots["second_read"] = await reporter.snapshot()
         return SimpleNamespace(content=json.dumps(dict(
             stu_id="S2" if second else "S1", stu_name="Bob" if second else "Alice",
-            stu_ans=[dict(q_id="q1", number="1", type="short", content="Saved answer", flag=[])])))
+            stu_ans=[dict(q_id="q1", number="1", type="concept", content="Saved answer", flag=[])])))
 
     registry = _registry(monkeypatch, invoke)
     buffer = io.BytesIO()
@@ -239,9 +239,9 @@ async def test_restored_submission_aggregate_restores_progress_without_model_cal
 async def test_one_question_is_durable_before_next_question_finishes(monkeypatch, manual):
     owner, task = _seed_task()
     assignment_repository.add_question(task, teacher_id=owner, q_id="q1", order_index=0,
-        number="1", type="short", stem="First", criterion="Award 10 points", max_score=10)
+        number="1", type="concept", stem="First", criterion="Award 10 points", max_score=10)
     assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1,
-        number="2", type="short", stem="Second", criterion="Award 10 points", max_score=10)
+        number="2", type="concept", stem="Second", criterion="Award 10 points", max_score=10)
     saved = _saved_signal(monkeypatch)
     calls, resumed = [], False
     async def invoke(messages):
@@ -385,7 +385,7 @@ async def test_closed_answer_is_saved_before_later_ocr_and_is_not_invalidated_by
     owner, task = _seed_task()
     for number in (1, 2):
         assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
-            number=str(number), type="short", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
+            number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
     saved, calls = _saved_signal(monkeypatch), []
     async def invoke(messages):
         q_ids = [question["q_id"] for question in _questions(messages)]
@@ -427,7 +427,7 @@ async def test_unknown_structure_request_keeps_retry_guard_and_independent_quest
     owner, task = _seed_task()
     for number in (1, 2):
         assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
-            number=str(number), type="short", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
+            number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
     calls = []
     async def invoke(messages):
         q_id = _questions(messages)[0]["q_id"]
@@ -464,7 +464,7 @@ async def test_later_repeated_heading_revokes_saved_answer_completeness_even_if_
     owner, task = _seed_task()
     for number in (1, 2):
         assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
-            number=str(number), type="short", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
+            number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
     saved, calls = _saved_signal(monkeypatch), []
     async def invoke(messages):
         q_id = _questions(messages)[0]["q_id"]
@@ -511,7 +511,7 @@ async def test_two_page_answer_is_saved_while_later_page_provider_is_waiting(mon
     owner, task = _seed_task()
     for number in (1, 2):
         assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
-            number=str(number), type="short", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
+            number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
     saved, page_calls, structure_calls = _saved_signal(monkeypatch), [], []
     async def invoke(messages):
         q_id = _questions(messages)[0]["q_id"]
@@ -559,7 +559,7 @@ async def test_many_saved_units_do_not_fill_parent_artifact_reference_budget(mon
     owner, task = _seed_task()
     for number in range(1, 7):
         assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
-            number=str(number), type="short", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
+            number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
     registry = _registry(monkeypatch, lambda messages: _response(_questions(messages)[0]["q_id"], "A" * 400))
     # The production boundary is 2,048 refs (500 students x 5 questions crosses
     # it). Lowering the same repository validator exercises the real workflow

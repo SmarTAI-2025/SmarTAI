@@ -163,73 +163,98 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
     The adapter and direct batch entry point may both call this helper: an
     already frozen context is reused without a model call or checkpoint write.
     """
+    from contextlib import nullcontext
     from backend.services.grading_checkpoints import current_checkpoints, CheckpointWriteError
     from backend.domain.errors import DomainError
     from sqlalchemy.exc import SQLAlchemyError
     from backend.services.math_rubric_plan import (
-        fallback_math_rubric_plan, math_rubric_fingerprint, prepare_math_rubric_plan,
+        fallback_math_rubric_plan, math_rubric_fingerprint,
     )
     from backend.progress.grading_activity import observe_auxiliary_request
+    from backend.services.rubric_drafts import saved_draft, bind_draft, compile_draft, remember_draft
 
     checkpoints = current_checkpoints()
     plans = {}
     provider = None
     provider_selected = False
     for qid, raw in problem_store.items():
-        try:
-            problem = raw if isinstance(raw, ProblemInfo) else ProblemInfo.model_validate(raw)
-            if isinstance(raw, dict):
-                problem._math_rubric_source = raw.get("_math_rubric_source") or {}
-        except ValidationError:
-            # Invalid question rows keep the existing grading input failure path.
-            continue
-        if not uses_math_grading(problem.type):
-            continue
-        plan = get_math_plan(problem)
-        if plan is None and checkpoints is not None:
-            plan = checkpoints.get_math_plan(problem)
-        if plan is None:
-            if not provider_selected:
-                getter = getattr(registry, "get", None)
-                picker = getattr(registry, "pick_default", None)
-                if grading_setup is not None and callable(getter):
-                    provider = getter(grading_setup.primary_provider_id)
-                elif callable(picker):
-                    provider = picker()
-                else:
-                    available = getattr(registry, "list_available", lambda: [])()
-                    provider = available[0] if available else None
-                provider_selected = True
-            if reporter is not None:
-                from backend.models import ActiveUnit
-                await report_math_progress(reporter.substep,
-                    ActiveUnit(student_id="", q_id=qid, skill="MathRubricPlan", expert="", step="starting"),
-                    "prepare_grading_criteria",
-                )
-            if provider is None or not callable(getattr(provider, "ainvoke", None)):
-                plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
-            else:
-                try:
-                    async with observe_auxiliary_request(reporter, provider):
-                        plan = await prepare_math_rubric_plan(
-                            problem, provider, grading_setup=grading_setup, reporter=reporter,
-                        )
-                except (CheckpointWriteError, DomainError, SQLAlchemyError):
-                    raise
-                except Exception as exc:
-                    # Cancellation derives from BaseException and is not caught.
-                    if _has_critical_plan_failure(
-                        exc, (CheckpointWriteError, DomainError, SQLAlchemyError),
-                    ):
-                        raise
-                    # A failed interpretation retains the original rubric.
+        async with checkpoints.math_plan_lock(qid) if checkpoints is not None else nullcontext():
+            try:
+                problem = raw if isinstance(raw, ProblemInfo) else ProblemInfo.model_validate(raw)
+                if isinstance(raw, dict):
+                    problem._math_rubric_source = raw.get("_math_rubric_source") or {}
+                    if raw.get("rubric_draft"):
+                        problem._math_rubric_source = {**problem._math_rubric_source, "presentation": {
+                            **(problem._math_rubric_source.get("presentation") or {}),
+                            "rubric_draft": raw["rubric_draft"],
+                            "ai_completion_provenance": raw.get("ai_completion_provenance") or {},
+                        }}
+            except ValidationError:
+                # Invalid question rows keep the existing grading input failure path.
+                continue
+            if not uses_math_grading(problem.type):
+                continue
+            plan = get_math_plan(problem)
+            if plan is None and checkpoints is not None:
+                plan = checkpoints.get_math_plan(problem)
+            if plan is None:
+                draft = saved_draft(problem, grading_setup=grading_setup)
+                if draft is not None:
+                    plan = bind_draft(draft, problem, grading_setup=grading_setup)
+                    if checkpoints is not None:
+                        checkpoints.save_math_plan(problem, plan)
+            if plan is None:
+                if not provider_selected:
+                    getter = getattr(registry, "get", None)
+                    picker = getattr(registry, "pick_default", None)
+                    if grading_setup is not None and callable(getter):
+                        provider = getter(grading_setup.primary_provider_id)
+                    elif callable(picker):
+                        provider = picker()
+                    else:
+                        available = getattr(registry, "list_available", lambda: [])()
+                        provider = available[0] if available else None
+                    provider_selected = True
+                if reporter is not None:
+                    from backend.models import ActiveUnit
+                    await report_math_progress(reporter.substep,
+                        ActiveUnit(student_id="", q_id=qid, skill="MathRubricPlan", expert="", step="starting"),
+                        "prepare_grading_criteria",
+                    )
+                if provider is None or not callable(getattr(provider, "ainvoke", None)):
                     plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
-            if (plan.input_fingerprint != math_rubric_fingerprint(problem)
-                    or plan.max_score != problem.max_score):
-                plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
-            if checkpoints is not None:
-                checkpoints.save_math_plan(problem, plan)
-        plans[qid] = plan
+                else:
+                    try:
+                        async with observe_auxiliary_request(reporter, provider):
+                            draft = await compile_draft(
+                                problem, provider, grading_setup=grading_setup, reporter=reporter,
+                            )
+                        if draft is not None:
+                            remember_draft(problem, draft,
+                                question_id=raw.get("_math_question_id") if isinstance(raw, dict) else None,
+                                expected_version=raw.get("_math_question_version") if isinstance(raw, dict) else None,
+                                checkpoints=checkpoints)
+                            if isinstance(raw, dict):
+                                raw["_math_rubric_source"] = problem._math_rubric_source
+                            plan = bind_draft(draft, problem, grading_setup=grading_setup)
+                        else:
+                            plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
+                    except (CheckpointWriteError, DomainError, SQLAlchemyError):
+                        raise
+                    except Exception as exc:
+                        # Cancellation derives from BaseException and is not caught.
+                        if _has_critical_plan_failure(
+                            exc, (CheckpointWriteError, DomainError, SQLAlchemyError),
+                        ):
+                            raise
+                        # A failed interpretation retains the original rubric.
+                        plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
+                if (plan.input_fingerprint != math_rubric_fingerprint(problem)
+                        or plan.max_score != problem.max_score):
+                    plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
+                if checkpoints is not None:
+                    checkpoints.save_math_plan(problem, plan)
+            plans[qid] = plan
     return plans
 
 

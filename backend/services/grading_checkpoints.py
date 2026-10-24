@@ -128,6 +128,7 @@ class GradingCheckpoints:
         setup = workflow_repository.get_run_setup(run_id)
         self.grading_setup = setup.setup if setup else None
         self.manifest = (setup.input_manifest if setup else {}) or {}
+        self.math_plan_locks = {}
         self.math_plans = saved_math_plans(run_id, questions=questions)
         math_qids = {q.q_id for q in questions if uses_math_grading(q.type)}
         self.saved = {checkpoint_key(item): item for item in saved_experts(run_id)
@@ -136,6 +137,12 @@ class GradingCheckpoints:
     def teacher_review_for(self, result):
         return matching_teacher_review(self.manifest, student_id=result.student_id,
             revision_id=result.submission_revision_id, question=self.questions[result.q_id])
+
+    def math_plan_lock(self, q_id):
+        # The leased worker freezes exactly one plan even if adapter entry
+        # points prepare the same question concurrently in this run.
+        import asyncio
+        return self.math_plan_locks.setdefault(q_id, asyncio.Lock())
 
     def get_math_plan(self, problem):
         from backend.services.math_rubric_plan import math_rubric_fingerprint

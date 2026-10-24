@@ -43,7 +43,7 @@ it.each(["zh-CN", "en-US"])("synchronizes cells, counts and queue after confirmi
 
 it("counts ordinary and flagged pending responses consistently, then clears both after confirmation", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  const flagged = { q_id: "Q1", number: "1", type: "short", content: "literal student answer", recognition_confidence: .4, flag: [], review_status: "pending" as const };
+  const flagged = { q_id: "Q1", number: "1", type: "concept", content: "literal student answer", recognition_confidence: .4, flag: [], review_status: "pending" as const };
   client.setQueryData(taskKeys.detail("T"), { task_id: "T", status: "submissions_ready", workflow_revision: 1,
     problem_data: { Q1: { q_id: "Q1", stem: "Question" } }, student_data: {
       S1: { stu_id: "S1", stu_name: "Normal", identity_status: "matched", stu_ans: [{ ...flagged, flag: ["external_annotation_present"] }] },
@@ -70,7 +70,7 @@ it("counts ordinary and flagged pending responses consistently, then clears both
 
 
 it("can explicitly confirm a saved rubric while its manual-completion marker still exists", async () => {
-  const problem = { q_id: "Q1", number: "1", type: "short_answer", stem: "Visible question", criterion: "Teacher completed rubric", reference_answer: "", max_score: 10,
+  const problem = { q_id: "Q1", number: "1", type: "concept", stem: "Visible question", criterion: "Teacher completed rubric", reference_answer: "", max_score: 10,
     preparation_issues: [{ issue_id: "manual", code: "manual_completion_required", field: "source", severity: "warning", status: "open", details: { required_fields: ["stem", "criterion"] } }],
   } as ProblemInfo;
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

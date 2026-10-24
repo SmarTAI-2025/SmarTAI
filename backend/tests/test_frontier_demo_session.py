@@ -432,7 +432,7 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
     assignment_repository.add_question(
         assignment_id=task_id, teacher_id=owner_id, q_id="q1", order_index=0, number="1",
-        type="short", stem="Explain a synthetic concept.", max_score=5,
+        type="concept", stem="Explain a synthetic concept.", max_score=5,
         criterion=criterion,
     )
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
@@ -444,7 +444,7 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(
         expected_workflow_revision=workflow.workflow_revision,
         students=[{"stu_id": "DEMO-001", "stu_name": "Synthetic Student",
                    "identity_status": "matched", "identity_match_method": "filename",
-                   "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "Synthetic explanation", "flag": []}]}],
+                   "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept", "content": "Synthetic explanation", "flag": []}]}],
     )
     setup = enabled.get(f"/tasks/{task_id}/grading-setup", headers=headers(demo["token"])).json()
     saved = enabled.put(f"/tasks/{task_id}/grading-setup", headers=headers(demo["token"]), json={

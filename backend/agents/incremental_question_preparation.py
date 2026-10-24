@@ -261,6 +261,8 @@ class IncrementalQuestionPreparation:
                     if saved:
                         row[target] = deepcopy(saved["q1"][target])
                         row.setdefault("ai_completion_provenance", {})[target] = deepcopy(saved["q1"]["ai_completion_provenance"][target])
+                        if saved["q1"].get("rubric_draft"):
+                            row["rubric_draft"] = deepcopy(saved["q1"]["rubric_draft"])
             row.setdefault("preparation_issues", [])
             for issue in row["preparation_issues"]:
                 issue["q_id"] = q_id
@@ -937,6 +939,8 @@ class IncrementalQuestionPreparation:
                             value = [case.model_dump() for case in candidate.test_cases] if candidate.target == "test_cases" else candidate.text_value
                             saved = _rows([row])
                             saved["q1"][candidate.target] = value
+                            if candidate.rubric_draft:
+                                saved["q1"]["rubric_draft"] = candidate.rubric_draft
                             saved["q1"].setdefault("ai_completion_provenance", {})[candidate.target] = dict(
                                 job_id=self.operation.operation_id, candidate_id=candidate.target_id,
                                 source_kind="ai_generated", provider_id=self.provider_id, review_status="pending",

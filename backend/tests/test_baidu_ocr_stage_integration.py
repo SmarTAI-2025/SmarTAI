@@ -286,7 +286,7 @@ async def test_question_ocr_success_reuses_artifact_and_freezes_three_stage_rout
                 "stu_ans": [{
                     "q_id": "q1",
                     "number": "1",
-                    "type": "short",
+                    "type": "concept",
                     "content": "answer",
                     "flag": [],
                 }],

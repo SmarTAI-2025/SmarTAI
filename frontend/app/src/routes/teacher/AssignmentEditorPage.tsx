@@ -12,6 +12,7 @@ import { Card, SectionHeader } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
 import { Input, Textarea } from "@/components/ui/Input";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { QUESTION_TYPES, hasQuestionType, questionTypeLabel } from "@/lib/reviewLabels";
 
 /**
  * Assignment editor: list questions (ordered), add a question to a draft/ready
@@ -30,7 +31,7 @@ export function AssignmentEditorPage() {
 
   const [qId, setQId] = useState("");
   const [stem, setStem] = useState("");
-  const [type, setType] = useState("short");
+  const [type, setType] = useState("");
   const [maxScore, setMaxScore] = useState(10);
   const [questionFile, setQuestionFile] = useState<File | null>(null);
   const [bulkPayload, setBulkPayload] = useState("");
@@ -40,7 +41,7 @@ export function AssignmentEditorPage() {
 
   function add(e: React.FormEvent) {
     e.preventDefault();
-    if (!qId.trim() || !assignmentId) return;
+    if (!qId.trim() || !assignmentId || !hasQuestionType(type)) return;
     addQuestion.mutate(
       {
         assignmentId,
@@ -71,7 +72,8 @@ export function AssignmentEditorPage() {
       if (!Array.isArray(items)) throw new Error("JSON 必须是数组");
       for (const [index, item] of items.entries()) {
         const qId = typeof item.q_id === "string" ? item.q_id.trim() : "";
-        const itemType = typeof item.type === "string" ? item.type : "short";
+        const itemType = typeof item.type === "string" ? item.type : "";
+        if (!hasQuestionType(itemType)) throw new Error("请选择计算、概念、推理、编程或其他题型。");
         const itemStem = typeof item.stem === "string" ? item.stem : "";
         const itemMaxScore = typeof item.max_score === "number" ? item.max_score : 10;
         if (!qId) throw new Error(`第 ${index + 1} 项缺少 q_id`);
@@ -119,10 +121,8 @@ export function AssignmentEditorPage() {
               </Field>
               <Field label="题型">
                 <select className="h-9 rounded-md border bg-background px-2 text-sm" value={type} onChange={(e) => setType(e.target.value)}>
-                  <option value="short">简答</option>
-                  <option value="calculation">计算</option>
-                  <option value="programming">编程</option>
-                  <option value="proof">证明</option>
+                  <option value="" disabled>请选择</option>
+                  {QUESTION_TYPES.map((value) => <option key={value} value={value}>{questionTypeLabel(value, "zh-CN")}</option>)}
                 </select>
               </Field>
             </div>
@@ -133,7 +133,7 @@ export function AssignmentEditorPage() {
               <Input type="number" value={maxScore} onChange={(e) => setMaxScore(Number(e.target.value))} />
             </Field>
             <div>
-              <Button type="submit" disabled={addQuestion.isPending || !qId.trim()}>添加题目</Button>
+              <Button type="submit" disabled={addQuestion.isPending || !qId.trim() || !hasQuestionType(type)}>添加题目</Button>
             </div>
           </form>
         </Card>
@@ -203,7 +203,7 @@ export function AssignmentEditorPage() {
             {questions.data.map((q, i) => (
               <li key={q.id} className="px-4 py-3 text-sm">
                 <div className="flex items-center justify-between">
-                  <span className="font-medium">{i + 1}. {q.q_id} · {q.type} · {q.max_score} 分</span>
+                  <span className="font-medium">{i + 1}. {q.q_id} · {questionTypeLabel(q.type, "zh-CN")} · {q.max_score} 分</span>
                 </div>
                 <p className="mt-1 text-muted-foreground">{q.stem || "（无题干）"}</p>
               </li>

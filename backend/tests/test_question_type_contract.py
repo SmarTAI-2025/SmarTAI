@@ -16,7 +16,6 @@ from backend.services.math_grading_context import uses_math_grading
 from backend.skills.base import get_skill_for_type
 from backend.skills.calculation import CalculationSkill
 from backend.skills.concept import ConceptSkill
-from backend.skills.objective import ObjectiveSkill
 from backend.skills.programming import ProgrammingSkill
 from backend.skills.proof import ProofSkill
 from backend.tests.test_task_background_workflows import _seed_task
@@ -24,17 +23,15 @@ from backend.tests.test_task_background_workflows import _seed_task
 
 def test_preparation_uses_actual_selected_skill_without_another_type_rule(monkeypatch):
     from backend.skills import base
-    monkeypatch.setitem(base._SKILL_REGISTRY, "计算题", ObjectiveSkill)
-    assert get_skill_for_type("calculation") is ObjectiveSkill
+    monkeypatch.setitem(base._SKILL_REGISTRY, "计算题", ProgrammingSkill)
+    assert get_skill_for_type("calculation") is ProgrammingSkill
     assert uses_math_grading("calculation") is False
 
 
 @pytest.mark.parametrize("english,chinese,skill", [
     ("calculation", "计算题", CalculationSkill), ("programming", "编程题", ProgrammingSkill),
-    ("proof", "证明题", ProofSkill), ("reasoning", "推理题", ProofSkill),
-    ("concept", "概念题", ConceptSkill), ("choice", "选择题", ObjectiveSkill),
-    ("multiple_choice", "多选题", ObjectiveSkill), ("fill_blank", "填空题", ObjectiveSkill),
-    ("short_answer", "概念题", ConceptSkill), ("other", "其他", ConceptSkill),
+    ("proof", "推理题", ProofSkill), ("reasoning", "推理题", ProofSkill),
+    ("concept", "概念题", ConceptSkill), ("other", "其他", ConceptSkill),
 ])
 def test_teacher_type_edit_reaches_same_skill_as_recognition(english, chinese, skill):
     owner, task = _seed_task(with_question=True)
@@ -43,10 +40,10 @@ def test_teacher_type_edit_reaches_same_skill_as_recognition(english, chinese, s
     assert row["type"] == chinese
     problem = ProblemInfo.model_validate(row)
     assert get_skill_for_type(problem.type) is get_skill_for_type(english) is skill
-    assert uses_math_grading(english) == uses_math_grading(problem.type) == (skill not in {ObjectiveSkill, ProgrammingSkill})
+    assert uses_math_grading(english) == uses_math_grading(problem.type) == (skill not in {ProgrammingSkill})
 
 
-@pytest.mark.parametrize("value", ["", "  ", "unrecognized"])
+@pytest.mark.parametrize("value", ["", "  ", "unrecognized", "choice", "multiple_choice", "fill_blank", "short_answer"])
 def test_missing_type_preserves_stem_and_blocks_confirm_and_grading(value):
     owner, task = _seed_task(with_question=True)
     with session_scope() as session:

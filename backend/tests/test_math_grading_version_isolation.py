@@ -71,7 +71,7 @@ def test_v1_completed_run_regrades_math_and_preserves_teacher_override(case, mon
     with session_scope() as session:
         session.scalar(select(AssignmentQuestionRecord).where(
             AssignmentQuestionRecord.assignment_id == case[0], AssignmentQuestionRecord.q_id == "q2",
-        )).type = "选择题"
+        )).type = "编程题"
     first = start(case, "v1-completed")["job_id"]
     finish(case, first, monkeypatch, (), score=8)
     original = next(row for row in grades.list_results_for_run(first) if row.q_id == "q1")

@@ -123,19 +123,20 @@ def no_network(*args, **kwargs):
 async def evaluate(case):
     from backend.agents.grading_agent import grade_batch
     from backend.domain.grading_review import score as effective_score
-    from backend.services import math_rubric_plan as rubric
+    from backend.services import math_rubric_plan as rubric, math_grading_context as plan_context
     from backend.skills.math_grading import read_math_trace
     from backend.tools import math_verification
 
     events, plans, tool_calls = [], [], []
     provider_count = len(case["wire"].get("experts", [None]))
     providers = [RawProvider(case["wire"], i, events) for i in range(provider_count)]
-    actual_prepare, actual_verify = rubric.prepare_math_rubric_plan, math_verification.verify_math
+    actual_prepare, actual_verify = plan_context.prepare_math_plans, math_verification.verify_math
 
     async def observe_plan(*args, **kwargs):
         result = await actual_prepare(*args, **kwargs)
-        plans.append(result.model_dump(mode="json"))
-        events.append(dict(stage="plan_ready", plan_id=result.plan_id, sequence=len(events)))
+        for plan in result.values():
+            plans.append(plan.model_dump(mode="json"))
+            events.append(dict(stage="plan_ready", plan_id=plan.plan_id, sequence=len(events)))
         return result
 
     async def observe_tool(request):
@@ -156,7 +157,7 @@ async def evaluate(case):
         stack.enter_context(patch("socket.socket.connect", no_network))
         stack.enter_context(patch("socket.create_connection", no_network))
         stack.enter_context(patch("backend.tools.knowledge.retrieve_for_grading", AsyncMock(return_value=[])))
-        stack.enter_context(patch.object(rubric, "prepare_math_rubric_plan", observe_plan))
+        stack.enter_context(patch.object(plan_context, "prepare_math_plans", observe_plan))
         stack.enter_context(patch.object(math_verification, "verify_math", observe_tool))
         try:
             batch = await grade_batch(problem_store={case["id"]: deepcopy(case["problem"])},

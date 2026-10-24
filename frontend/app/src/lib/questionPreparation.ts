@@ -1,4 +1,5 @@
 import type { ProblemInfo } from "@/types";
+import { normalizeFilterType } from "./taskFilterIntent";
 
 export type QuestionPreparationSort = "number" | "missing" | "type";
 export type QuestionPreparationRule =
@@ -53,7 +54,7 @@ const QUERY_RULES: Array<{
   },
   {
     kind: "proof",
-    pattern: /证明题?|proof/giu,
+    pattern: /推理题?|证明题?|reasoning|proof/giu,
   },
   {
     kind: "missing_first",
@@ -188,8 +189,7 @@ export function isProgrammingProblem(problem: ProblemInfo): boolean {
 }
 
 function isProofProblem(problem: ProblemInfo): boolean {
-  const text = `${problem.type ?? ""} ${problem.stem ?? ""}`.toLocaleLowerCase();
-  return /证明|proof|prove/u.test(text);
+  return normalizeFilterType(problem.type ?? "") === "reasoning";
 }
 
 function hasText(value?: string | null): boolean {

@@ -33,7 +33,7 @@ async def evaluate(case, provider=None):
 async def evaluate_group(cases, provider=None, *, student_names=None):
     from backend.agents.grading_agent import grade_batch
     from backend.domain.grading_review import score as effective_score, review_state
-    from backend.services import math_rubric_plan as rubric
+    from backend.services import math_rubric_plan as rubric, math_grading_context as plan_context
     from backend.skills import math_grading
     from backend.tools import math_verification
     from backend.tools.structured_llm import PermanentLLMError, StructuredOutputInvalidError
@@ -45,12 +45,13 @@ async def evaluate_group(cases, provider=None, *, student_names=None):
     calls, plans, prompts, events = [], {}, [], []
     by_answer = {case["answer"]: case for case in cases}
     by_qid = {problem_data(case)["q_id"]: case for case in cases}
-    actual_prepare = rubric.prepare_math_rubric_plan
+    actual_prepare = plan_context.prepare_math_plans
 
-    async def capture_plan(problem, *args, **kwargs):
-        result = await actual_prepare(problem, *args, **kwargs)
-        plans[problem.q_id] = result
-        events.append({"stage": "plan_ready", "qid": problem.q_id, "plan_id": result.plan_id})
+    async def capture_plan(*args, **kwargs):
+        result = await actual_prepare(*args, **kwargs)
+        plans.update(result)
+        for qid, plan in result.items():
+            events.append({"stage": "plan_ready", "qid": qid, "plan_id": plan.plan_id})
         return result
 
     async def fixed_plan(_provider, *, output_model, user_prompt, system_prompt, **kwargs):
@@ -110,7 +111,7 @@ async def evaluate_group(cases, provider=None, *, student_names=None):
     start = time.perf_counter()
     before_calls = getattr(provider, "calls", 0)
     with ExitStack() as stack:
-        stack.enter_context(patch.object(rubric, "prepare_math_rubric_plan", capture_plan))
+        stack.enter_context(patch.object(plan_context, "prepare_math_plans", capture_plan))
         stack.enter_context(patch("backend.tools.knowledge.retrieve_for_grading", AsyncMock(return_value=[])))
         if not live:
             def no_network(*args, **kwargs):

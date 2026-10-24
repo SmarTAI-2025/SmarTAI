@@ -8,7 +8,7 @@ const state = vi.hoisted(() => ({
   data: {
     task_id: "task-1", status: "submissions_ready", workflow_revision: 3,
     parse_job_id: "manual-job-1", manual_student_count_required: false,
-    problem_data: { Q1: { q_id: "Q1", number: "1", type: "short", stem: "Question" } },
+    problem_data: { Q1: { q_id: "Q1", number: "1", type: "concept", stem: "Question" } },
     student_data: Object.fromEntries(["S001", "S002", "S003"].map((id) => [id, {
       stu_id: id, stu_name: `Student ${id}`, source_id: `source-${id}`, identity_status: "needs_review",
       stu_ans: [{ q_id: "Q1", content: "Original answer", flag: [] as string[], review_status: "pending" }],

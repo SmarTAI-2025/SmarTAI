@@ -91,7 +91,7 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
     if (mode === "math-advisory") {
       await page.goto(`${root}/questions`);
       const questionQueue = page.getByRole("region", { name: zh ? "待复核队列" : "Review queue" });
-      await expect(questionQueue).toContainText(zh ? "本题含 AI 补充评分说明，建议核对评分标准。" : "AI scoring guidance was added. Review the rubric.");
+      await expect(questionQueue).toContainText(zh ? "本题评分标准有待核对的内容。" : "Some rubric details need review.");
       await expect(questionQueue).not.toContainText(sharedRule);
       await expect(questionQueue.getByRole("link")).toHaveCount(1);
       await expect(questionQueue.getByRole("tab", { name: zh ? "建议处理 (1)" : "Suggested review (1)", exact: true })).toBeVisible();

@@ -14,7 +14,7 @@ def _student(source_id: str, student_id: str, *, identity_status: str = "matched
         "stu_ans": [{
             "q_id": "q1",
             "number": "1",
-            "type": "short",
+            "type": "concept",
             "content": "answer",
             "flag": [],
         }],
@@ -60,7 +60,7 @@ def _seed_source_case(second_status: str | None):
         teacher_id=owner_id,
         q_id="q1",
         order_index=0, number="1",
-        type="short",
+        type="concept",
         stem="Question", criterion="Award up to 10 points for the method and result.",
         max_score=10,
     )
@@ -241,7 +241,7 @@ def _seed_legacy_structured_case(
         assignment_repository.add_question(
             assignment_id=assignment.id, teacher_id=owner_id,
             q_id=f"q{index + 1}", order_index=index, number=str(index + 1),
-            type="short", stem=f"Question {index + 1}", criterion="Award up to 10 points for the method and result.", max_score=10,
+            type="concept", stem=f"Question {index + 1}", criterion="Award up to 10 points for the method and result.", max_score=10,
         )
     workflow = workflow_repository.ensure_workflow(
         assignment_id=assignment.id,

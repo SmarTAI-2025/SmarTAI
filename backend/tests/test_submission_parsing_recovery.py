@@ -55,7 +55,7 @@ async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinishe
             await asyncio.wait_for(saved_parse.wait(), timeout=5)
             raise asyncio.CancelledError()
         return SimpleNamespace(content=json.dumps({"stu_id": "S1", "stu_name": "Synthetic one",
-            "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "saved wrong answer -2", "flag": []}]}))
+            "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept", "content": "saved wrong answer -2", "flag": []}]}))
     provider = SimpleNamespace(provider_id="test-provider", supports_vision=False, ainvoke=AsyncMock(side_effect=invoke))
     registry.provider = provider
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
@@ -214,7 +214,7 @@ async def test_acknowledged_restart_retries_only_failed_page_with_durable_worker
     provider.ainvoke_vision.side_effect = recognize
     provider.ainvoke = AsyncMock(return_value=SimpleNamespace(content=json.dumps({
         "stu_id": "S1", "stu_name": "Synthetic learner",
-        "stu_ans": [{"q_id": "q1", "number": "1", "type": "short",
+        "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept",
                      "content": "Literal answer, including a mistake.", "flag": []}],
     })))
     registry = _Registry()
@@ -817,7 +817,7 @@ async def test_manual_handoff_preserves_each_durable_answer_within_partial_sourc
     from backend.services.task_execution import stop_task_run
     owner, task = _seed_task(with_question=True)
     assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1, number="2",
-        type="short", stem="Second question", criterion="Correct method and result: 10 points", max_score=10)
+        type="concept", stem="Second question", criterion="Correct method and result: 10 points", max_score=10)
     queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
         filename="S1.txt", content=b"original saved answers", content_type="text/plain", registry=_Registry())
     operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
@@ -880,7 +880,7 @@ async def test_explicit_retry_only_parses_unfinished_questions_and_keeps_saved_i
     from backend.services.task_execution import stop_task_run
     owner, task = _seed_task(with_question=True)
     assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1, number="2",
-        type="short", stem="Second question", criterion="Correct method and result: 10 points", max_score=10)
+        type="concept", stem="Second question", criterion="Correct method and result: 10 points", max_score=10)
     prompts = []
     failed_attempts = 3 if failure_mode == "partial" else int(failure_mode is not None)
     attempts = failed_attempts + int(not manual)
@@ -897,8 +897,8 @@ async def test_explicit_retry_only_parses_unfinished_questions_and_keeps_saved_i
         if failed_answer and text and text not in fragments:
             fragments.append(text)
         return SimpleNamespace(content=json.dumps({"stu_id": "changed-id", "stu_name": "Changed identity",
-            "stu_ans": [{"q_id": "q1", "number": "1", "type": "short", "content": "Must not replace saved q1", "flag": []},
-                        {"q_id": "q2", "number": "2", "type": "short", "content": content, "flag": ["recognition_failed"] if failed_answer else []}]}))
+            "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept", "content": "Must not replace saved q1", "flag": []},
+                        {"q_id": "q2", "number": "2", "type": "concept", "content": content, "flag": ["recognition_failed"] if failed_answer else []}]}))
     registry = _Registry()
     registry.provider = SimpleNamespace(provider_id="test-provider", supports_vision=False, ainvoke=AsyncMock(side_effect=invoke))
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)

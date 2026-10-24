@@ -55,7 +55,7 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
     ? "测试用例中，同一输入对应了不同预期输出，请核对。"
     : "Test cases have different expected outputs for the same input. Please review.";
   if (issue.code === "math_rubric_advisory") return locale === "zh-CN"
-    ? "本题含 AI 补充评分说明，建议核对评分标准。" : "AI scoring guidance was added. Review the rubric.";
+    ? "本题评分标准有待核对的内容。" : "Some rubric details need review.";
   if (issue.details?.review_display_reason === "empty_stem") return locale === "zh-CN"
     ? "题干为空，请对照原件补齐并确认。" : "Question text is empty. Complete it against the source and confirm.";
   if (issue.details?.review_display_reason === "missing_rubric") return locale === "zh-CN"

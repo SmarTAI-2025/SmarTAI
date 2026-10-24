@@ -246,7 +246,7 @@ it.each(["zh-CN", "en-US"])("explains an ambiguous source match and keeps confir
 });
 
 it("edits type beside number through the existing versioned field save, including Other", async () => {
-  taskData.problem_data.Q1.type = "short";
+  taskData.problem_data.Q1.type = "concept";
   mutateAsync.mockResolvedValue({ workflow_revision: 8 });
   renderPage();
   // Drain the real draft hydration transactions before timing the save UI.
@@ -288,14 +288,14 @@ describe("QuestionPreparationDetailPage navigation", () => {
     expect(select).toHaveValue("");
     expect(card.getByRole("option", { name: "请选择" })).toBeDisabled();
     expect(card.queryByRole("option", { name: "简答题" })).not.toBeInTheDocument();
-    expect(card.getByRole("option", { name: "多选题" })).toBeInTheDocument();
+    expect(card.getByRole("option", { name: "推理题" })).toBeInTheDocument();
     expect(card.getByRole("button", { name: "保存" })).toBeDisabled();
     fireEvent.click(card.getByRole("button", { name: /待确认/ }));
     expect(mutateAsync).not.toHaveBeenCalled();
-    await userEvent.selectOptions(select, "multiple_choice");
+    await userEvent.selectOptions(select, "reasoning");
     mutateAsync.mockResolvedValue({ workflow_revision: 8 });
     await userEvent.click(card.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({ taskId: "task-1", qId: "Q2", type: "multiple_choice", expectedWorkflowRevision: 7 }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({ taskId: "task-1", qId: "Q2", type: "reasoning", expectedWorkflowRevision: 7 }));
   });
   it("opens only the failed question fields for manual completion and blocks early confirmation", async () => {
     taskData.problem_data.Q2.reference_answer = "";

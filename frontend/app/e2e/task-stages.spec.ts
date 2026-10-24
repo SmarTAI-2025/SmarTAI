@@ -14,7 +14,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) {
       localStorage.setItem("smartai_locale", locale);
       localStorage.setItem("smartai_token", "synthetic-teacher-token");
     }, locale);
-    const problem = { q_id: "q1", number: "1", type: "short", stem: "Six times seven?", reference_answer: "42",
+    const problem = { q_id: "q1", number: "1", type: "concept", stem: "Six times seven?", reference_answer: "42",
       criterion: "Correct answer", max_score: 10, review_status: "confirmed" };
     const student = { stu_id: "S1", stu_name: "Example", identity_status: "matched",
       stu_ans: [{ q_id: "q1", content: "42", review_status: "pending", flag: [] }] };

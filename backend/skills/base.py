@@ -279,7 +279,7 @@ def get_skill_for_type(problem_type: str) -> Type["GradingSkill"]:
     """
     from backend.domain.question_types import normalize_question_type
     # Preparation may select a strategy before GradingAgent has been imported.
-    from backend.skills import calculation, concept, objective, programming, proof  # noqa: F401
+    from backend.skills import calculation, concept, programming, proof  # noqa: F401
 
     problem_type = normalize_question_type(problem_type)
     if problem_type in _SKILL_REGISTRY:

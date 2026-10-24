@@ -173,7 +173,7 @@ class ProblemInfo(BaseModel):
     _math_rubric_source: dict[str, Any] = PrivateAttr(default_factory=dict)
     q_id: str = Field(description="Unique question ID, starting from 'q1'")
     number: str = Field(description="Display question number, e.g. '1', '2.3', 'III.'")
-    type: str = Field(default="", description="Question type: 概念题/计算题/编程题/证明题/推理题/选择题/多选题/填空题/其他; empty if unknown")
+    type: str = Field(default="", description="Grading meaning: 计算题/概念题/推理题/编程题/其他; reasoning includes proofs. Choice/blank/short answer are response forms, not types; empty if unknown")
     stem: str = Field(description="Complete question stem including all text, formulas, and code")
     criterion: str = Field(description="Grading rubric/criteria")
     recognition_confidence: RecognitionConfidence = Field(default=None, ge=0, le=1)

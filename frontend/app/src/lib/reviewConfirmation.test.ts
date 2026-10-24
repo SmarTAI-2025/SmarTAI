@@ -3,7 +3,7 @@ import { answerReviewBlocked, answerReviewNextBlocked, questionReviewBlocked, qu
 import type { Task, ProblemInfo, StudentAnswerInfo, PreparationIssue, StudentSubmission } from "@/types";
 import { questionReviewNotes } from "./reviewConfirmation";
 
-const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id: "q1", number: "1", type: "short", stem: "Question text", criterion: "Scoring rubric", reference_answer: "Reference answer", max_score: 10, ...overrides });
+const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id: "q1", number: "1", type: "concept", stem: "Question text", criterion: "Scoring rubric", reference_answer: "Reference answer", max_score: 10, ...overrides });
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
@@ -62,8 +62,8 @@ describe("review hard failures", () => {
       preparation_issues: [warning],
     });
     expect(questionReviewIssues(problem)).toEqual([warning]);
-    expect(recognitionIssueLabel(warning, "zh-CN")).toBe("本题含 AI 补充评分说明，建议核对评分标准。");
-    expect(recognitionIssueLabel(warning, "en-US")).toBe("AI scoring guidance was added. Review the rubric.");
+    expect(recognitionIssueLabel(warning, "zh-CN")).toBe("本题评分标准有待核对的内容。");
+    expect(recognitionIssueLabel(warning, "en-US")).toBe("Some rubric details need review.");
     expect(warning.details?.message).toContain("本轮 AI 评分解释");
     expect(questionReviewConfirmed(problem)).toBe(true);
     expect(questionReviewBlocked(problem)).toBe(false);
@@ -72,7 +72,7 @@ describe("review hard failures", () => {
   });
 
   it("allows a genuine blank response but blocks failed recognition", () => {
-    const blank = {q_id:"q1", number:"1", type:"short", content:"", flag:[]} as StudentAnswerInfo;
+    const blank = {q_id:"q1", number:"1", type:"concept", content:"", flag:[]} as StudentAnswerInfo;
     expect(answerReviewBlocked(blank)).toBe(false);
     expect(answerReviewBlocked({...blank, flag:["recognition_failed"]})).toBe(true);
   });
@@ -182,7 +182,7 @@ describe("review hard failures", () => {
   });
 
   it("requires confirmation of a repaired answer without rejecting that confirmation", () => {
-    const repaired = { q_id: "q1", number: "1", type: "short", content: "corrected", flag: ["recognition_repaired_needs_confirmation"] };
+    const repaired = { q_id: "q1", number: "1", type: "concept", content: "corrected", flag: ["recognition_repaired_needs_confirmation"] };
     expect(answerReviewBlocked(repaired)).toBe(false);
     expect(answerReviewNextBlocked(repaired)).toBe(true);
     const task = { task_id: "T1", student_data: { s1: { stu_id: "s1", stu_name: "Sample", stu_ans: [repaired] } } } as unknown as Task;
@@ -192,14 +192,14 @@ describe("review hard failures", () => {
   });
 
   it("keeps the legacy very-low-confidence marker optional", () => {
-    const answer = { q_id: "q1", number: "1", type: "short", content: "Visible work", flag: ["recognition_very_low_confidence"] };
+    const answer = { q_id: "q1", number: "1", type: "concept", content: "Visible work", flag: ["recognition_very_low_confidence"] };
     expect(answerReviewBlocked(answer)).toBe(false);
     expect(answerReviewNextBlocked(answer)).toBe(false);
     expect(answerReviewNextBlocked({ ...answer, review_status: "confirmed" })).toBe(false);
   });
 
   it.each(["very_low_confidence", "recognition_low_confidence", "low_confidence"])("does not turn uncalibrated %s into a mandatory review", (flag) => {
-    const answer = { q_id: "q1", number: "1", type: "short", content: "original text", flag: [flag] };
+    const answer = { q_id: "q1", number: "1", type: "concept", content: "original text", flag: [flag] };
     const task = { task_id: "T1", student_data: { s1: { stu_id: "s1", stu_name: "Sample", stu_ans: [answer] } } } as unknown as Task;
     expect(answerReviewBlocked(answer)).toBe(false);
     expect(answerReviewNextBlocked(answer)).toBe(false);

@@ -1056,7 +1056,7 @@ async def test_oversized_model_field_fails_only_its_source(monkeypatch):
             "stu_ans": [{
                 "q_id": "q1",
                 "number": "1",
-                "type": "short",
+                "type": "concept",
                 "content": "answer",
                 "flag": [],
             }],
@@ -1085,7 +1085,7 @@ async def test_oversized_model_field_fails_only_its_source(monkeypatch):
                 text="answer",
             ),
         ],
-        {"q1": {"q_id": "q1", "number": "1", "type": "short", "stem": "Q1"}},
+        {"q1": {"q_id": "q1", "number": "1", "type": "concept", "stem": "Q1"}},
         SimpleNamespace(provider_id="test"),
     )
 
@@ -1155,7 +1155,7 @@ async def test_outcome_and_finalizer_failures_still_leave_terminal_failed_projec
         teacher_id=owner_id,
         q_id="q1",
         order_index=0, number="1",
-        type="short",
+        type="concept",
         stem="Question one",
         criterion="Award up to 10 points for the method and result.",
         max_score=10,
@@ -1177,7 +1177,7 @@ async def test_outcome_and_finalizer_failures_still_leave_terminal_failed_projec
             "stu_ans": [{
                 "q_id": "q1",
                 "number": "1",
-                "type": "short",
+                "type": "concept",
                 "content": "answer",
                 "flag": [],
             }],
@@ -1250,7 +1250,7 @@ async def test_archive_member_persistence_failure_is_terminal_and_does_not_skip_
         teacher_id=owner_id,
         q_id="q1",
         order_index=0, number="1",
-        type="short",
+        type="concept",
         stem="Question one",
         criterion="Award up to 10 points for the method and result.",
         max_score=10,
@@ -1289,7 +1289,7 @@ async def test_archive_member_persistence_failure_is_terminal_and_does_not_skip_
             "stu_ans": [{
                 "q_id": "q1",
                 "number": "1",
-                "type": "short",
+                "type": "concept",
                 "content": "answer",
                 "flag": [],
             }],
@@ -1364,7 +1364,7 @@ async def test_equal_size_zip_replacement_survives_old_delete_retry_and_keeps_pr
         teacher_id=owner_id,
         q_id="q1",
         order_index=0, number="1",
-        type="short",
+        type="concept",
         stem="Question one",
         criterion="Award up to 10 points for the method and result.",
         max_score=10,
@@ -1389,7 +1389,7 @@ async def test_equal_size_zip_replacement_survives_old_delete_retry_and_keeps_pr
             "stu_ans": [{
                 "q_id": "q1",
                 "number": "1",
-                "type": "short",
+                "type": "concept",
                 "content": "answer",
                 "flag": [],
             }],

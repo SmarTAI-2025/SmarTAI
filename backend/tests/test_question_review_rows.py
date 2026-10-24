@@ -34,7 +34,7 @@ def test_add_edit_remove_questions_use_existing_editor_and_keep_empty_matrix():
     task_facade.update_problem(task_id=task, owner_id=owner, q_id=q_id, patch={"review_status": "confirmed"})
     after = task_facade.get_task(task_id=task, owner_id=owner)
     assert after["problem_data"][q_id]["number"] == "2.4"
-    assert after["problem_data"][q_id]["type"] == "证明题"
+    assert after["problem_data"][q_id]["type"] == "推理题"
     assert after["problem_data"][q_id]["review_status"] == "confirmed"
     for removed in ("q1", q_id):
         snapshot = task_facade.get_task(task_id=task, owner_id=owner)
