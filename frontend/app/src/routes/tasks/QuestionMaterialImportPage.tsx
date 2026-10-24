@@ -551,7 +551,7 @@ function UploadSourcePicker({ locale, file, inputRef, saveToLibrary, onChoose, o
         </button>
         <input ref={inputRef} type="file" className="sr-only" accept={ACCEPTED_EXTENSIONS.join(",")} onChange={onFileChange} />
       </div>
-      {file ? <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "文件已就绪，无需重新选择。" : "File ready; no need to reselect."}</p> : null}
+      {file ? <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "文件已就绪。" : "File ready."}</p> : null}
       <label className="mt-3 inline-flex items-center gap-2 text-[12px] text-muted-foreground">
         <input type="checkbox" checked={saveToLibrary} onChange={(event) => onSaveChange(event.target.checked)} className="h-4 w-4 rounded border-border accent-primary" />
         {materialImportText(locale, "saveToLibrary")}

@@ -9,6 +9,20 @@ import {
 } from "./taskActionGuards";
 
 describe("task contract compatibility", () => {
+  it.each(["zh-CN", "en-US"] as const)("retires implicit saved-text organization without offering a model retry (%s)", locale => {
+    const info = classifyRecoverableError("saved_text_recovery_retired", { locale });
+    expect(info.retryUnavailable).toBe(true);
+    expect(info.description).toContain(locale === "zh-CN" ? "新建任务" : "Create a new task");
+    expect(info.actionHref).toBe("/tasks/new");
+  });
+  it.each(["question_preparation_artifact_invalid", "question_preparation_artifact_conflict"])("explains retained recognition content for %s in both languages", code => {
+    for (const locale of ["zh-CN", "en-US"] as const) {
+      const info = classifyRecoverableError(code, { locale });
+      expect(info.title).toBe(locale === "zh-CN" ? "题目结果保存或恢复未完成" : "Question results could not be saved or restored");
+      expect(info.description).toContain(locale === "zh-CN" ? "已保存的识别内容仍保留" : "Saved recognition content is retained");
+      expect(info.actionKind).toBe("retry");
+    }
+  });
   it.each(["zh-CN", "en-US"] as const)("routes required transcription repairs to review (%s)", (locale) => {
     const result = classifyRecoverableError("submission_recognition_blocked", { locale, taskId: "task" });
     expect(result.actionHref).toBe("/tasks/task/submissions");
@@ -189,7 +203,7 @@ describe("question source recovery guidance", () => {
 
     expect(info.actionKind).toBe("byok");
     expect(info.actionHref).toContain("/settings/byok");
-    expect(info.description).toContain("没有可用的视觉模型");
+    expect(info.description).toContain("支持图片识别的模型");
   });
 
   it("routes role or MIME rejection back to file selection", () => {
@@ -234,7 +248,9 @@ describe("question source recovery guidance", () => {
     expect(info.title).toBe("原文件空间已满");
     expect(info.actionKind).toBe("reupload");
     expect(info.actionLabel).toBe("选择更小文件");
-    expect(info.description).toContain("无需手动重试清理");
+    expect(info.description).toContain("本次文件未保存");
+    expect(info.description).not.toContain("正在清理");
+    expect(info.description).toContain("稍后重试");
     expect(info.title).not.toContain("模型");
     expect(info.technicalDetails).toContainEqual({ label: "原文件额度", value: "512 MB" });
   });
@@ -425,7 +441,7 @@ describe("background task failure guidance", () => {
     });
 
     expect(info.title).toBe("模型密钥或授权无效");
-    expect(info.description).toContain("套餐");
+    expect(info.description).toContain("模型权限和可用额度");
     expect(info.actionKind).toBe("byok");
     expect(info.actionHref).toContain("/settings/byok");
     expect(info.actionHref).toContain("returnTo=");
@@ -493,7 +509,7 @@ describe("background task failure guidance", () => {
     const info = classifyRecoverableError("vision_provider_required", { locale: "zh-CN" });
 
     expect(info.title).toBe("尚未选择可用的视觉模型");
-    expect(info.description).toContain("OCR");
+    expect(info.description).toContain("支持图片识别的模型");
     expect(info.actionKind).toBe("byok");
   });
 

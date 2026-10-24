@@ -155,8 +155,8 @@
         "body": "<p>The progress page shows completion counts, percentages, and recognition activity. Waiting for capacity, waiting for a response, and retrying are shown separately. You can return to the workspace and check again later.</p><p>After a pause or failure, follow the prompts to retry or “Continue manually.” Manual takeover opens the original question matrix and retains recognized content and available originals. If the total number of questions is unknown, set the complete count first, then fill in each question.</p><p class=\"warning\">If there are failed pages, unread pages, or missing questions, read them again or check manually first. Unread content must not be treated as containing no questions. If warned that a previous request may already have been billed, check the warning before resubmitting.</p>",
         "details": [
           {
-            "title": "Usage when continuing manually",
-            "body": "<p class=\"secondary\">If only recognized text is available, the system may first use a model to organize it, consuming quota. The original review matrix opens once this step finishes.</p>"
+            "title": "What manual review retains",
+            "body": "<p class=\"secondary\">Saved results open directly without calling a model or using model quota. Existing fields are retained; complete missing fields in the original review matrix.</p>"
           }
         ]
       }
@@ -209,8 +209,8 @@
         "body": "<p>Check successful, failed, and unread pages for each file. After pausing, you can resume recognition or continue manually; existing answers, identities, and saved fragments are retained. When retrying with the original file and model, the system reuses successful pages where possible and rereads failed pages.</p><p>If only the filename remains and no reusable file is available, select it again. If “Checking” is shown, wait for the check to finish. If the check fails, retry the check first. Resolve red issues before proceeding to grading settings.</p>",
         "details": [
           {
-            "title": "Usage when continuing manually",
-            "body": "<p class=\"secondary\">If only recognized text is available, the system may first use a model to organize it, consuming quota. The original review matrix opens once this step finishes.</p>"
+            "title": "What manual review retains",
+            "body": "<p class=\"secondary\">Saved results open directly without calling a model or using model quota. Existing fields are retained; complete missing fields in the original review matrix.</p>"
           }
         ]
       }

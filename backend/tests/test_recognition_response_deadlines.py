@@ -338,8 +338,7 @@ def session_for(request, *, guard=None):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("layer", ["recognition", "provider"])
-async def test_real_reader_queues_do_not_authorize_or_start_a_model_request(scheduler, monkeypatch, layer):
+async def test_real_reader_provider_queue_does_not_authorize_or_start_a_model_request(scheduler, monkeypatch):
     post_calls = []
 
     async def handle(request):
@@ -360,18 +359,35 @@ async def test_real_reader_queues_do_not_authorize_or_start_a_model_request(sche
         session, service = session_for(request)
         capacity = RecognitionCapacity(global_limit=1)
         call = arguments(request, engine, budget, capacity)
-        if layer == "provider":
-            monkeypatch.setattr(providers, "get_scheduler", lambda: SimpleNamespace(lease=unavailable))
-            with pytest.raises(RecognitionError, match="provider_capacity_unavailable") as caught:
-                await run_initial_read(**call, call_session=session)
-        else:
-            async with capacity.lease("other-owner"):
-                with pytest.raises(RecognitionError, match="provider_capacity_unavailable") as caught:
-                    await run_initial_read(**call, call_session=session)
+        monkeypatch.setattr(providers, "get_scheduler", lambda: SimpleNamespace(lease=unavailable))
+        with pytest.raises(RecognitionError, match="provider_capacity_unavailable") as caught:
+            await run_initial_read(**call, call_session=session)
     assert not caught.value.submission_may_exist
     assert post_calls == [] and service.before_dispatch.await_count == 0
     assert budget.snapshot().pending_calls == budget.snapshot().total_calls == 0
     assert session._pending is None
+
+
+@pytest.mark.asyncio
+async def test_real_reader_uses_byok_admission_without_waiting_for_separate_ocr_gate(scheduler, monkeypatch):
+    posts = []
+
+    async def handle(request):
+        posts.append(request)
+        return relay_response()
+
+    monkeypatch.setattr(settings, "llm_timeout", 1)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle), timeout=120) as client:
+        engine = LLMRecognitionEngine(relay(client), route_id="test-route", fingerprint="frozen")
+        request = new_policy(read_request(), engine)
+        budget = RecognitionBudget(request.source, request.policy, engine.capabilities)
+        session, service = session_for(request)
+        capacity = RecognitionCapacity(global_limit=1)
+        async with capacity.lease("other-owner"):
+            result = await run_initial_read(**arguments(request, engine, budget, capacity), call_session=session)
+    assert result.candidate.status == "ok"
+    assert len(posts) == service.before_dispatch.await_count == 1
+    assert budget.snapshot().settled_calls == 1 and budget.snapshot().pending_calls == 0
 
 
 @pytest.mark.asyncio

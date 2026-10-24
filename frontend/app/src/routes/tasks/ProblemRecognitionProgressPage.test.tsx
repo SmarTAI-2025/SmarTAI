@@ -93,6 +93,18 @@ describe("ProblemRecognitionProgressPage recovery", () => {
     retryMutateAsync.mockResolvedValue({ status: "started", job_id: "retry-job" });
   });
 
+  it("opens finalized results from an old question-progress URL without restarting recognition", async () => {
+    snapshot = { ...failedTask, status: "finalized", error: "" };
+    render(<MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
+      <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
+      <Route path="/tasks/:taskId/results" element={<div>Saved final results</div>} />
+    </Routes></MemoryRouter>);
+    expect(await screen.findByText("Saved final results")).toBeVisible();
+    expect(screen.queryByText("problemProgressReading")).not.toBeInTheDocument();
+    expect(manualMutateAsync).not.toHaveBeenCalled();
+    expect(retryMutateAsync).not.toHaveBeenCalled();
+  });
+
   it.each([null, "q2"])("offers manual continuation for paused recognition (first question %s)", async firstQuestion => {
     snapshot = { ...failedTask, status: "problems_paused", error: "operation_cancelled" };
     manualMutateAsync.mockResolvedValue({ status: "ready_for_review", first_question_id: firstQuestion, workflow_revision: 9 });
@@ -103,6 +115,28 @@ describe("ProblemRecognitionProgressPage recovery", () => {
     </Routes></MemoryRouter>);
     fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
     expect(await screen.findByText("Source review queue")).toBeInTheDocument();
+    expect(retryMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it.each(["error", "problems_paused"])("shows an immediate handoff view during a slow %s request, then permits retry after failure", async status => {
+    snapshot = { ...failedTask, status };
+    let reject!: (error: unknown) => void;
+    manualMutateAsync.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    render(<MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
+      <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
+      <Route path="/tasks/:taskId/questions" element={<div>Persisted question matrix</div>} />
+    </Routes></MemoryRouter>);
+    fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    expect(screen.queryByText("正在打开人工复核")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "正在打开…" })).toBeDisabled();
+    if (status === "problems_paused") expect(screen.getByRole("button", { name: "正在打开…" })).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByText("Persisted question matrix")).not.toBeInTheDocument();
+    expect(manualMutateAsync).toHaveBeenCalledTimes(1);
+    reject(new APIError(422, "question_preparation_artifact_invalid", { detail: { code: "question_preparation_artifact_invalid" } }));
+    expect(await screen.findByRole("heading", { name: "题目结果保存或恢复未完成" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    expect(await screen.findByText("Persisted question matrix")).toBeVisible();
+    expect(manualMutateAsync).toHaveBeenCalledTimes(2);
     expect(retryMutateAsync).not.toHaveBeenCalled();
   });
 
@@ -125,22 +159,33 @@ describe("ProblemRecognitionProgressPage recovery", () => {
     await waitFor(() => expect(retryMutateAsync).toHaveBeenCalledTimes(1));
   });
 
-  it.each(["started", "already_running"])("waits for persisted questions after a %s handoff", async responseStatus => {
-    manualMutateAsync.mockImplementation(async () => {
-      snapshot = { ...failedTask, status: "extracting_problems" };
-      return { status: responseStatus };
-    });
+  it.each(["started", "already_running"])("rejects a retired %s handoff instead of entering an implicit AI loop", async responseStatus => {
+    manualMutateAsync.mockResolvedValue({ status: responseStatus });
     const view = () => <MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
       <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
       <Route path="/tasks/:taskId/questions" element={<div>Persisted question matrix</div>} />
     </Routes></MemoryRouter>;
-    const { rerender } = render(view());
+    render(view());
     fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
-    await waitFor(() => expect(screen.getByRole("progressbar")).toBeInTheDocument());
+    expect(await screen.findByRole("heading", { name: "此旧整理任务已停用" })).toBeVisible();
     expect(screen.queryByText("Persisted question matrix")).not.toBeInTheDocument();
-    snapshot = { ...snapshot, status: "problems_ready" };
-    rerender(view());
-    expect(await screen.findByText("Persisted question matrix")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
+    expect(retryMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("keeps direct visits to retired jobs out of both retry and retired manual recovery", async () => {
+    snapshot.error = "saved_text_recovery_retired";
+    render(<MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes>
+      <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
+      <Route path="/tasks/:taskId/questions" element={<div>Persisted question matrix</div>} />
+    </Routes></MemoryRouter>);
+    expect(screen.getByRole("heading", { name: "此旧整理任务已停用" })).toBeVisible();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
+    expect(manualMutateAsync).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "人工继续处理" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "新建任务" })).toHaveAttribute("href", "/tasks/new");
+    expect(retryMutateAsync).not.toHaveBeenCalled();
   });
 
   it("offers explicit manual completion beside retry and opens the question review queue", async () => {

@@ -278,11 +278,10 @@ it("keeps early manual recovery inside the existing matrix and creates only the 
   await waitFor(() => expect(createRows).toHaveBeenCalledWith({ taskId: "task-1", jobId: "early", expectedWorkflowRevision: 7, questionCount: 2 }));
 });
 
-it("can explicitly recover saved text from a previous empty manual handoff", async () => {
+it("does not offer retired saved-text organization from the original matrix", () => {
   Object.assign(manualTask, { problem_data: {}, extract_job_id: "early", manual_question_count_required: true });
-  createRows.mockResolvedValue({ status: "started", workflow_revision: 8 });
   renderPage("/tasks/task-1/questions");
-  await userEvent.click(screen.getByRole("button", { name: "整理已保存的识别文字" }));
-  await waitFor(() => expect(createRows).toHaveBeenCalledWith({ taskId: "task-1", jobId: "early", expectedWorkflowRevision: 7 }));
-  expect(await screen.findByText("Organizing saved text")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "整理已保存的识别文字" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "建立题目行" })).toBeVisible();
+  expect(createRows).not.toHaveBeenCalled();
 });

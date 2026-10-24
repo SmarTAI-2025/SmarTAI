@@ -80,6 +80,8 @@ class ProgressReporter:
         self,
         workflow: str,
         stage_sequence: Sequence[str],
+        *,
+        parallel: bool = False,
     ) -> None:
         """Publish the stable workflow contract before reporting stage progress.
 
@@ -93,7 +95,7 @@ class ProgressReporter:
         normalized_stages = [stage.strip() for stage in stage_sequence]
         if not normalized_workflow:
             raise ValueError("workflow must not be empty")
-        if not normalized_stages or any(not stage for stage in normalized_stages):
+        if (not normalized_stages and not parallel) or any(not stage for stage in normalized_stages):
             raise ValueError("stage_sequence requires named stages")
         if len(set(normalized_stages)) != len(normalized_stages):
             raise ValueError("stage_sequence must not contain duplicates")
@@ -114,10 +116,20 @@ class ProgressReporter:
             self._progress.workflow = normalized_workflow
             self._progress.stage_sequence = normalized_stages
 
+    async def set_preparation_counts(self, **counts: int) -> None:
+        async with self._lock:
+            self._progress.preparation_counts = dict(counts)
+
     async def increment_completed(self) -> None:
         async with self._lock:
             self._progress.completed_units += 1
         await self._emit(ProgressEvent(message="Completed one grading unit."))
+
+    async def set_completed_units(self, count: int) -> None:
+        """Publish a reconciled unit count, including restored submission sources."""
+        _validated_stage_metrics({"completed_units": count})
+        async with self._lock:
+            self._progress.completed_units = count
 
     async def set_stage_progress(
         self,
@@ -129,8 +141,8 @@ class ProgressReporter:
     ) -> None:
         """Atomically publish a workflow's factual stage progress.
 
-        ``completed_units`` remains dedicated to grading's student/question
-        pairs. Workflows such as problem recognition use these stage fields for
+        ``completed_units`` counts grading's student/question pairs or finished
+        submission sources. Problem recognition uses these stage fields for
         real milestones; callers must not substitute timers, page estimates, or
         other synthetic progress.
         """
@@ -192,6 +204,12 @@ class ProgressReporter:
                     self._progress.stage_metrics.get(key, 0) + delta
                 )
 
+    async def update_stage_metrics(self, **metrics: int) -> None:
+        """Set owned counters without replacing other concurrent stages' metrics."""
+        normalized = _validated_stage_metrics(metrics)
+        async with self._lock:
+            self._progress.stage_metrics.update(normalized)
+
     async def configure_question_generation(
         self,
         question_ids: Sequence[str],
@@ -236,6 +254,17 @@ class ProgressReporter:
         await self._emit(ProgressEvent(
             message=f"Preparing {len(normalized)} major-question generation units"
         ))
+
+    async def register_question_generation(self, q_id: str, label: str) -> None:
+        """Add a newly extracted question without resetting concurrent progress."""
+        async with self._lock:
+            if q_id in self._question_generation_ids:
+                return
+            self._question_generation_ids = (*self._question_generation_ids, q_id)
+            self._progress.total_questions = len(self._question_generation_ids)
+            self._progress.question_labels = _bounded_question_labels(self._question_generation_ids,
+                {**self._progress.question_labels, q_id: label})
+            self._progress.stage_metrics["solution_total_questions"] = len(self._question_generation_ids)
 
     async def mark_question_generation_started(self, q_id: str) -> None:
         normalized = str(q_id).strip()

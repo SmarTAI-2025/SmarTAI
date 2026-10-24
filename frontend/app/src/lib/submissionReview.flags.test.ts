@@ -2,6 +2,15 @@ import { describe, expect, it } from "vitest";
 import { answerNeedsConfirmation, answerReviewAttention, answerReviewNotes, formatSubmissionFlag, getAnswerState, getSubmissionReviewStats, selectSubmissionReview, studentNeedsAttention } from "./submissionReview";
 
 describe("OCR review labels", () => {
+  it("explains incomplete fields without exposing internal parser markers", () => {
+    const flag = "recognition_invalid_fields:type,content,untrusted_detail";
+    expect(formatSubmissionFlag(flag, "zh-CN")).toBe("待核对：题型、作答内容");
+    expect(formatSubmissionFlag(flag, "en-US")).toBe("Review needed: question type, answer content");
+    const notes = answerReviewNotes({ q_id: "q1", number: "1", type: "", content: "Saved text",
+      flag: ["recognition_manual_pending", flag] }, "en-US");
+    expect(notes.every(note => note.severity === "blocking")).toBe(true);
+    expect(notes.some(note => /recognition_invalid|untrusted_detail/.test(note.label))).toBe(false);
+  });
   it("counts every unconfirmed answer, including optional checks and genuine blanks", () => {
     const questions = ["q1", "q2", "q3", "q4"].map(id => ({ id, label: id, type: "", stem: "" }));
     const students = [{ stu_id: "s1", stu_name: "Sample", identity_status: "matched" as const, stu_ans: [

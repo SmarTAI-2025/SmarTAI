@@ -146,7 +146,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   visual_capability_unavailable: recognitionProviderCopy,
   workflow_failed: (locale) => ({
     title: tx(locale, "识别任务意外终止", "The recognition task stopped unexpectedly"),
-    description: tx(locale, "系统已停止本次任务并保留原文件；没有把未确认的结果继续显示为处理中或送入批改。", "The run stopped and the originals were preserved. Unconfirmed results were not left processing or sent to grading."),
+    description: tx(locale, "原文件和已完成的识别结果已保留。", "Your originals and completed recognition results are saved."),
     nextStep: tx(locale, "先重试一次；若再次出现，请携带任务编号让管理员查看服务端日志。", "Retry once. If it happens again, share the job ID with an administrator to inspect server logs."),
   }),
   no_provider_configured: (locale) => ({
@@ -156,12 +156,12 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   }),
   provider_not_enabled: (locale) => ({
     title: tx(locale, "所选模型已停用", "The selected model is disabled"),
-    description: tx(locale, "任务引用的模型配置仍然存在，但当前不可用；原文件没有因此被当成识别成功。", "The referenced model configuration still exists but is currently unavailable. The originals were not treated as successfully recognized."),
+    description: tx(locale, "识别未完成，原文件已保留。", "Recognition is incomplete. Your originals are saved."),
     nextStep: tx(locale, "重新启用该模型，或改选另一个已启用模型后重试。", "Re-enable this model or select another enabled model, then retry."),
   }),
   recognition_provider_not_enabled: (locale) => ({
     title: tx(locale, "作答识别模型已停用", "The submission-recognition model is disabled"),
-    description: tx(locale, "本任务指定的作答识别模型当前不可用，因此 OCR/结构识别没有继续执行。", "The recognition model selected for this task is unavailable, so OCR and structured recognition did not continue."),
+    description: tx(locale, "识别未完成，原文件已保留。", "Recognition is incomplete. Your originals are saved."),
     nextStep: tx(locale, "在任务设置中改选已启用且与文件类型匹配的模型后重试。", "Choose an enabled model that supports the file type in task settings, then retry."),
   }),
   vision_provider_required: (locale) => ({
@@ -175,7 +175,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   }),
   provider_vision_not_supported: (locale) => ({
     title: tx(locale, "所选模型不支持图片输入", "The selected model does not support image input"),
-    description: tx(locale, "这份文件需要读取图片或扫描页，但本阶段明确选择的模型拒绝了视觉输入。原文件已保存。", "This file requires image or scanned-page reading, but the model explicitly selected for this stage rejected visual input. The original is saved."),
+    description: tx(locale, "这份文件需要图片识别，原文件已保存。", "This file needs image recognition. The original is saved."),
     nextStep: tx(locale, "在作答上传页改选支持视觉的模型，直接复用原文件重试。", "Choose a vision-capable model on the submission upload page and retry using the preserved original."),
   }),
   image_recognition_unconfirmed: (locale) => ({
@@ -192,7 +192,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     ),
     nextStep: tx(locale, "检查清晰度和方向后重新拍摄；也可以换一个视觉模型重试。", "Check clarity and orientation, rescan the page, or retry with another vision model."),
   }),
-  provider_timeout: (locale, source) => providerCopy(locale, source, "模型响应超时", "The model timed out", "稍后重试；原文件已经保存，不需要重新整理整批文件。", "Retry later. The original is saved, so the whole batch does not need to be rebuilt."),
+  provider_timeout: (locale, source) => providerCopy(locale, source, "模型响应超时", "The model timed out", "请稍后重试。", "Please try again later."),
   provider_unreachable: (locale, source) => providerCopy(locale, source, "暂时无法连接模型服务", "The model service is unreachable", "检查网络或模型服务状态后重试。", "Check network and provider status, then retry."),
   provider_rate_limited: (locale, source) => providerCopy(locale, source, "模型服务仍返回限流", "The model service still reports a limit", "无法确定是分钟限制还是日额度；多次等待仍失败时请查看官网用量。使用上方“重试失败项”，也可先切换模型。", "The response does not identify a minute or daily limit. Check official usage if waiting repeatedly fails. Use Retry failed items above, or switch models first."),
   provider_daily_quota_exceeded: (locale, source) => providerCopy(locale, source, "模型日额度已用完", "The model's daily quota is exhausted", "本轮已停止。请查看服务商用量，恢复后返回配置重新启动，或更换模型。", "This run has stopped. Check provider usage, then restart from settings or change models."),
@@ -204,7 +204,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   provider_quota_exceeded: (locale, source) => providerCopy(locale, source, "服务商余额或额度已用完", "Provider credits or quota exhausted", "在对应服务商控制台检查余额与额度；恢复后重试，或切换模型。", "Check credits and quota in the provider console, then retry after recovery or switch models."),
   provider_unavailable: (locale, source) => providerCopy(locale, source, "OCR 服务暂时不可用", "The OCR service is temporarily unavailable", "请稍后重试。", "Please try again later."),
   provider_submit_uncertain: (locale, source) => providerCopy(locale, source, "识别未完成，重试需确认", "Recognition did not complete; confirm before retrying", "上次调用是否完成尚不确定，再次调用可能重复消耗额度。", "It is unclear whether the previous call completed. Calling again may use quota twice."),
-  provider_task_failed: (locale, source) => providerCopy(locale, source, "OCR 服务端任务失败", "The provider-side OCR task failed", "检查文件格式和百度服务状态后，再由教师明确重试。", "Check the file format and Baidu service status, then retry explicitly."),
+  provider_task_failed: (locale, source) => providerCopy(locale, source, "OCR 服务端任务失败", "The provider-side OCR task failed", "检查文件格式和百度服务状态后重试。", "Check the file format and Baidu service status, then retry."),
   provider_request_failed: (locale, source) => providerCopy(locale, source, "OCR 请求失败", "The OCR request failed", "检查 BYOK、网络与服务状态后重试；系统没有改用其他模型。", "Check BYOK, network, and provider status, then retry. No alternate model was used."),
   provider_download_url_rejected: (locale, source) => providerCopy(locale, source, "OCR 结果下载地址未通过安全校验", "The OCR result URL failed security validation", "暂时无法获取识别结果，请联系管理员。", "Unable to retrieve recognition results. Contact your administrator."),
   provider_result_unavailable: (locale, source) => providerCopy(locale, source, "OCR 结果暂时不可用", "The OCR result is unavailable", "暂时无法获取识别结果，请稍后查看。", "Recognition results are not available yet. Please check again later."),
@@ -398,7 +398,7 @@ function fileCopy(locale: Locale, zhTitle: string, enTitle: string, zhStep: stri
 function archiveCopy(locale: Locale, zhTitle: string, enTitle: string, zhStep: string, enStep: string): SubmissionSourceReasonCopy {
   return {
     title: tx(locale, zhTitle, enTitle),
-    description: tx(locale, "系统没有把压缩包中的文件当成成功结果，批次原文件仍然保留。", "No archive members were treated as successful results; the uploaded batch file is preserved."),
+    description: tx(locale, "压缩包未处理完成，原文件已保留。", "The archive could not be fully processed. The original is saved."),
     nextStep: tx(locale, zhStep, enStep),
   };
 }
@@ -420,7 +420,7 @@ function recognitionFileCopy(locale: Locale): SubmissionSourceReasonCopy {
 }
 
 function recognitionLimitCopy(locale: Locale): SubmissionSourceReasonCopy {
-  return { title: tx(locale, "达到本次识别资源上限", "Recognition resource limit reached"), description: tx(locale, "已达到处理上限，请缩小范围后重试。已识别内容已保留。", "The processing limit was reached. Reduce the scope and try again. Recognized content is retained."), nextStep: tx(locale, "缩小题目或页码范围，检查缺失部分；不要直接重复提交整批文件。", "Narrow the question or page range and inspect missing content. Do not blindly resubmit the entire batch.") };
+  return { title: tx(locale, "达到本次识别资源上限", "Recognition resource limit reached"), description: tx(locale, "已达到处理上限，请缩小范围后重试。已识别内容已保留。", "The processing limit was reached. Reduce the scope and try again. Recognized content is retained."), nextStep: tx(locale, "缩小题目或页码范围，重试未完成部分。", "Narrow the question or page range and retry the unfinished parts.") };
 }
 
 function recognitionProcessingCopy(locale: Locale): SubmissionSourceReasonCopy {
@@ -428,7 +428,7 @@ function recognitionProcessingCopy(locale: Locale): SubmissionSourceReasonCopy {
 }
 
 function recognitionOptInCopy(locale: Locale): SubmissionSourceReasonCopy {
-  return { title: tx(locale, "此资料尚未启用图像识别", "Image recognition is not enabled for this material"), description: tx(locale, "当前资料需要视觉读取，尚未提交模型调用。", "This material needs visual reading; no model request was submitted."), nextStep: tx(locale, "在资料上传设置中明确启用图像识别，或改用可复制文字版本。", "Explicitly enable image recognition in the upload settings or use a text-based version.") };
+  return { title: tx(locale, "此资料尚未启用图像识别", "Image recognition is not enabled for this material"), description: tx(locale, "当前资料需要视觉读取，尚未提交模型调用。", "This material needs visual reading; no model request was submitted."), nextStep: tx(locale, "在资料上传设置中启用图片识别，或改用可复制文字版本。", "Enable image recognition in the upload settings or use a text-based version.") };
 }
 
 function recognitionProviderCopy(locale: Locale): SubmissionSourceReasonCopy {
@@ -436,7 +436,7 @@ function recognitionProviderCopy(locale: Locale): SubmissionSourceReasonCopy {
 }
 
 function recognitionReviewCopy(locale: Locale): SubmissionSourceReasonCopy {
-  return { title: tx(locale, "识别结果需要核对", "Recognition needs review"), description: tx(locale, "内容仍有疑点或结构不完整，不表示学生答错。", "The content is uncertain or incomplete; this is not a student mistake."), nextStep: tx(locale, "对照原文件，在现有复核页面修正或确认可辨认内容。", "Compare with the original and correct or confirm readable content in the review page.") };
+  return { title: tx(locale, "识别结果需要核对", "Recognition needs review"), description: tx(locale, "内容仍有疑点或结构不完整，不表示学生答错。", "The content is uncertain or incomplete; this is not a student mistake."), nextStep: tx(locale, "请对照原文件核对作答，并修正或确认。", "Compare the answers with the original, then correct or confirm them.") };
 }
 
 function recognitionStateCopy(locale: Locale): SubmissionSourceReasonCopy {
@@ -444,7 +444,7 @@ function recognitionStateCopy(locale: Locale): SubmissionSourceReasonCopy {
 }
 
 function recognitionStorageCopy(locale: Locale): SubmissionSourceReasonCopy {
-  return { title: tx(locale, "识别证据暂不可用", "Recognition evidence unavailable"), description: tx(locale, "原件或缓存证据的可用性与版本校验未通过，没有使用不匹配内容。", "Source or cached-evidence availability/version validation failed; mismatched content was not used."), nextStep: tx(locale, "刷新后核对原件状态；携带任务编号排查存储，不要反复调用模型。", "Refresh and check the original's status. Diagnose storage using the job ID instead of repeating model calls.") };
+  return { title: tx(locale, "已保存的识别资料暂不可用", "Saved recognition data is unavailable"), description: tx(locale, "原件或缓存证据的可用性与版本校验未通过，没有使用不匹配内容。", "Source or cached-evidence availability/version validation failed; mismatched content was not used."), nextStep: tx(locale, "刷新后核对原件状态；携带任务编号排查存储，不要反复调用模型。", "Refresh and check the original's status. Diagnose storage using the job ID instead of repeating model calls.") };
 }
 
 function recognitionScopeCopy(locale: Locale): SubmissionSourceReasonCopy {

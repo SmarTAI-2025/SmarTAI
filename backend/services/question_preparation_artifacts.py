@@ -209,6 +209,7 @@ class ArtifactProblemV1(ProblemInfo):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     q_id: str = Field(pattern=r"^q[1-9][0-9]{0,2}$", max_length=4)
+    source_display_number: str | None = Field(default=None, max_length=128)
     max_score_source: str | None = Field(default=None, max_length=128)
     max_score_review_status: Literal[
         "needs_review", "edited", "confirmed"
@@ -229,7 +230,12 @@ def _normalize_problem_data(value: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(value, Mapping):
         raise ValueError("problem data must be an object")
     normalized: dict[str, dict[str, Any]] = {}
-    for q_id, problem in value.items():
+    # JSON object order is not semantic. Canonical storage sorts q10 before q2;
+    # restore numeric identities before validating their dense major order.
+    if any(not isinstance(key, str) or not re.fullmatch(r"q[1-9][0-9]{0,2}", key) for key in value):
+        raise ValueError("problem data question identity mismatch")
+    for q_id in sorted(value, key=lambda key: int(key[1:])):
+        problem = value[q_id]
         if not isinstance(q_id, str) or not isinstance(problem, Mapping):
             raise ValueError("problem data question identity mismatch")
         parsed = ArtifactProblemV1.model_validate(dict(problem))
@@ -573,6 +579,7 @@ def _read_artifact(
     model_type,
     expected_context: Mapping[str, Any],
     expected_fields: Mapping[str, Any] | None = None,
+    allow_snapshot: bool = False,
 ):
     if file_id is None:
         return None
@@ -583,7 +590,11 @@ def _read_artifact(
         artifact is None
         or artifact.assignment_id != task_id
         or artifact.kind != expected_kind
-        or artifact.original_name != expected_name
+        or (artifact.original_name != expected_name and not (
+            allow_snapshot and re.fullmatch(
+                re.escape(expected_name[:-5]) + r"-[0-9a-f]{64}\.json", artifact.original_name
+            )
+        ))
         or artifact.content_type != QUESTION_PREPARATION_ARTIFACT_CONTENT_TYPE
         or artifact.storage_backend != getattr(storage, "name", "unknown")
         or artifact.size_bytes <= 0
@@ -608,6 +619,10 @@ def _read_artifact(
     _assert_no_sensitive_fields(raw_payload)
     if raw_envelope.get("payload_sha256") != _payload_sha256(raw_payload):
         raise _artifact_error()
+    if artifact.original_name != expected_name and artifact.original_name != (
+        f"{expected_name[:-5]}-{raw_envelope['payload_sha256']}.json"
+    ):
+        raise _artifact_error()
     try:
         envelope = model_type.model_validate(raw_envelope)
     except Exception as exc:
@@ -628,6 +643,60 @@ def _read_artifact(
     return envelope
 
 
+def preparation_snapshot_digest(problem_data):
+    """Plan an immutable unit write before touching object storage."""
+    payload = BasePreparationPayloadV1.model_validate({"problem_data": dict(problem_data), "issues": {}})
+    return _payload_sha256(payload.model_dump(mode="json"))
+
+
+def find_base_preparation_snapshot(*, digest, stage=QUESTIONS_EXTRACTED_STAGE, **context):
+    if not isinstance(digest, str) or not _INPUT_HASH_RE.fullmatch(digest):
+        raise _artifact_error()
+    name = base_preparation_artifact_name(context["operation_id"], context["attempt"], stage)
+    storage = _storage(context.pop("storage", None))
+    return _find_artifact(owner_id=context["owner_id"], task_id=context["task_id"],
+        kind=BASE_PREPARATION_ARTIFACT_KINDS[stage],
+        original_name=f"{name[:-5]}-{digest}.json",
+        validate=lambda file_id: read_base_preparation_artifact(
+            file_id, stage=stage, storage=storage, **context))
+
+
+def read_incremental_preparation_units(*, checkpoint, artifact_refs, **context):
+    """Read the bounded manifest, including one interrupted planned object write."""
+    from concurrent.futures import ThreadPoolExecutor
+    refs = dict(checkpoint.get("incremental_unit_artifacts") or {})
+    attempts = dict(checkpoint.get("artifact_attempts") or {})
+    units = {}
+    def read_unit(item):
+        key, file_id = item
+        attempt = attempts.get(file_id, context["attempt"])
+        if file_id not in artifact_refs or type(attempt) is not int or not 1 <= attempt <= context["attempt"]:
+            raise _artifact_error()
+        saved = read_base_preparation_artifact(file_id, stage=QUESTIONS_EXTRACTED_STAGE,
+            **{**context, "attempt": attempt})
+        if saved is None:
+            raise _artifact_error()
+        return key, saved.payload.problem_data
+    # Bounded independent reads avoid serial object-store round trips during
+    # restart or recovery of an interrupted write. Identity checks remain local
+    # to each immutable unit, and any invalid unit still rejects the projection.
+    if refs:
+        with ThreadPoolExecutor(max_workers=min(8, len(refs))) as readers:
+            units.update(readers.map(read_unit, refs.items()))
+    for key, plan in (checkpoint.get("incremental_saving_units") or {}).items():
+        attempt = plan.get("attempt")
+        if type(attempt) is not int or not 1 <= attempt <= context["attempt"]:
+            raise _artifact_error()
+        bound = {**context, "attempt": attempt}
+        stored = find_base_preparation_snapshot(digest=plan.get("digest"), **bound)
+        if stored is not None:
+            saved = read_base_preparation_artifact(stored.id, stage=QUESTIONS_EXTRACTED_STAGE, **bound)
+            units[key], refs[key], attempts[stored.id] = saved.payload.problem_data, stored.id, attempt
+    for key in checkpoint.get("incremental_empty_units") or []:
+        units.setdefault(key, {})
+    return units, refs, attempts
+
+
 def save_base_preparation_artifact(
     *,
     owner_id: str,
@@ -641,6 +710,7 @@ def save_base_preparation_artifact(
     issues: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     storage: StorageBackend | None = None,
     operation_lease_token: str | None = None,
+    snapshot: bool = False,
 ) -> StoredFile:
     stage = _validate_base_stage(stage)
     context = _normalize_context(
@@ -670,7 +740,16 @@ def save_base_preparation_artifact(
         **context,
     )
     selected_storage = _storage(storage)
-    existing = find_base_preparation_artifact(
+    name = base_preparation_artifact_name(operation_id, attempt, stage)
+    if snapshot:
+        name = f"{name[:-5]}-{envelope.payload_sha256}.json"
+    existing = _find_artifact(
+        owner_id=owner_id, task_id=task_id,
+        kind=BASE_PREPARATION_ARTIFACT_KINDS[stage], original_name=name,
+        validate=lambda file_id: read_base_preparation_artifact(
+            file_id, stage=stage, storage=selected_storage, **context,
+        ),
+    ) if snapshot else find_base_preparation_artifact(
         stage=stage,
         storage=selected_storage,
         **context,
@@ -680,9 +759,7 @@ def save_base_preparation_artifact(
         owner_id=context["owner_id"],
         task_id=context["task_id"],
         kind=BASE_PREPARATION_ARTIFACT_KINDS[stage],
-        original_name=base_preparation_artifact_name(
-            operation_id, attempt, stage
-        ),
+        original_name=name,
         envelope=envelope,
         body=body,
         existing=existing,
@@ -731,6 +808,7 @@ def read_base_preparation_artifact(
         model_type=BasePreparationArtifactV1,
         expected_context=context,
         expected_fields={"stage": stage},
+        allow_snapshot=True,
     )
 
 

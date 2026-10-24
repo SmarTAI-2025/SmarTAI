@@ -317,7 +317,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       <div data-draft-width="900" className="mx-auto mt-[45px] w-full max-w-[900px]">
         {task?.submission_sources?.some(source => source.status === "failed" || source.status === "processing") ? <SubmissionSourceOutcomePanel sources={task.submission_sources} locale={locale} className="mb-6" /> : null}
         {!selectedFile && !hasStoredFile && draft.value.selectedFileName && !canRetryOriginal ? <p role="alert" className="mb-4 text-sm text-warning">{missingSubmissionMessage}</p> : null}
-        {hasStoredFile && !selectedFile ? <p role="status" className="mb-4 text-sm text-muted-foreground">{localText(locale, "已恢复原文件与设置，可直接重试，无需重新上传。", "Your file and settings are restored. Retry directly without uploading again.")}</p> : null}
+        {hasStoredFile && !selectedFile ? <p role="status" className="mb-4 text-sm text-muted-foreground">{localText(locale, "原文件与设置已恢复，可直接重试。", "Your file and settings are restored. You can retry.")}</p> : null}
         <div
           ref={submissionChooseRef}
           className={cn(
@@ -360,7 +360,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
           </p>
           <p className="mt-2 text-[13px] leading-5 text-muted-foreground">
             {selectedFile
-              ? `${formatFileSize(selectedFile.size)} · ${localText(locale, "文件已就绪，无需重新选择", "File ready; no need to reselect")} · ${t("submissionUploadOcrLimit")}`
+              ? `${formatFileSize(selectedFile.size)} · ${localText(locale, "文件已就绪", "File ready")} · ${t("submissionUploadOcrLimit")}`
               : canRetryOriginal || hasStoredFile
                 ? localText(locale, "原文件已保留，无需重新选择。", "The original file is saved. No need to select it again.")
               : t("submissionUploadFormats")}
@@ -462,7 +462,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
               </div>
             ) : null}
           </div>
-          {identityMode === "roster" && (rosterFile || hasSavedRoster) ? <p role="status" className="mt-2 text-xs text-muted-foreground">{localText(locale, "名单已就绪，无需重新选择。", "The roster is ready. No need to select it again.")}</p> : null}
+          {identityMode === "roster" && (rosterFile || hasSavedRoster) ? <p role="status" className="mt-2 text-xs text-muted-foreground">{localText(locale, "名单已就绪。", "The roster is ready.")}</p> : null}
           {showRosterError ? <p id="submission-roster-required" role="alert" className="mt-2 text-sm text-danger">{missingRosterMessage}</p> : null}
         </section>
 

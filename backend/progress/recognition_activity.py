@@ -70,7 +70,7 @@ def public_message(event):
         code = "activity_completed"
     elif lower.startswith(("reading source ", "reading pdf ", "reading problem source", "reading source evidence", "locating candidate source pages", "inspecting source evidence", "ocr recognizing ")):
         code = "activity_reading"
-    elif lower.startswith(("generating materials for major question ", "generating complete answers", "aligning answers", "matching uploaded answers", "normalizing programming")):
+    elif lower.startswith(("generating materials for major question ", "generating complete answers", "aligning answers", "matching uploaded answers", "normalizing programming", "preparing missing materials for question ")):
         code = "activity_materials"
     elif lower.startswith("major question ") and lower.endswith(" generation completed"):
         code = "activity_received"
@@ -78,7 +78,7 @@ def public_message(event):
         code = "activity_failed"
     elif lower in {"submission recognized.", "completed one grading unit."}:
         code = "activity_received"
-    elif lower.startswith(("saving recognition evidence", "committing prepared question", "consolidating recognized submissions")):
+    elif lower.startswith(("saving recognition evidence", "committing prepared question", "consolidating recognized submissions", "recognized submission answers saved.", "saved ", "saving answers as each submission")):
         code = "activity_saved"
     elif lower in {"phase: parsing", "phase: extracting", "recognizing question structure", "problem recognition started.", "submission recognition started.", "organizing recognized problem structure."}:
         code = "activity_recognizing"
@@ -111,6 +111,10 @@ def public_progress(progress, *, terminal=False):
     metrics = progress.get("stage_metrics")
     if isinstance(metrics, dict):
         result["stage_metrics"] = {k: int(v) for k, v in metrics.items() if k in METRICS and number(v)}
+    counts = mapping(progress.get("preparation_counts"))
+    count_keys = ("questions", "stems", "reference_answers", "rubrics")
+    if all(number(counts.get(key)) for key in count_keys):
+        result["preparation_counts"] = {key: int(counts[key]) for key in count_keys}
     for key in ("completed_question_ids", "active_question_ids", "failed_question_ids"):
         result[key] = [s for s in rows(progress.get(key)) if isinstance(s, str) and len(s) <= 120]
     ids = set(sum((result[k] for k in ("completed_question_ids", "active_question_ids", "failed_question_ids")), []))

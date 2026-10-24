@@ -172,7 +172,8 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
   }
 
   function addSource(role: PreparationSourceRole) {
-    setSources((current) => [...current, createSourceDraft(role)]);
+    setSources((current) => current.some(source => source.role === role)
+      ? current : [...current, createSourceDraft(role)]);
     setFormError(null);
     setPreparationFailure(null);
   }
@@ -193,6 +194,13 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
     if (submitting.current || isBusy) return;
     setFormError(null);
     setPreparationFailure(null);
+    const duplicateRole = SOURCE_ROLES.find(role => sources.filter(source => source.role === role).length > 1);
+    if (duplicateRole) {
+      setActiveRole(duplicateRole);
+      setFormError(tx(locale, `${roleMeta(duplicateRole, locale).shortTitle}最多保留一份来源，请删除多余资料。`,
+        `Keep one ${roleMeta(duplicateRole, locale).sourceLabel.toLowerCase()}. Remove the extra sources.`));
+      return;
+    }
     if (!taskId || !taskQuery.data) {
       const message = tx(locale, "任务信息不可用，请刷新后重试。", "Task details are unavailable. Refresh and retry.");
       setFormError(message);
@@ -294,6 +302,11 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
       if (!draft.protection.isCurrent()) return;
       navigate(`/tasks/${taskId}/problems/progress`);
     } catch (error) {
+      if (getAPIErrorCode(error) === "question_preparation_source_limit") {
+        setFormError(tx(locale, "每类资料最多保留一份来源，请删除多余资料。",
+          "Keep one source per material type. Remove the extra sources."));
+        return;
+      }
       const storedFileId = getAPIErrorDetail(error)?.stored_file_id;
       if (activeSource && typeof storedFileId === "string" && storedFileId) {
         updateSource(activeSource.id, { storedFileId });
@@ -455,7 +468,7 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
                 <p className="mt-1 text-xs text-muted-foreground">{tx(locale, "可以跳过，系统会在统一识别时生成需要的内容。", "You can skip it; required content will be generated during preparation.")}</p>
               </div>
             )}
-            <button
+            {activeSources.length === 0 ? <button
               type="button"
               disabled={isBusy}
               onClick={() => addSource(activeRole)}
@@ -463,7 +476,7 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
             >
               <Plus aria-hidden="true" className="h-4 w-4" />
               {roleMeta(activeRole, locale).addLabel}
-            </button>
+            </button> : null}
           </div>
         </section>
 
@@ -713,6 +726,10 @@ function SourceEditor({
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setDragging(false);
+    if (event.dataTransfer.files.length > 1) {
+      setFileError(tx(locale, "每次只能选择一个文件，请重新选择。", "Choose one file at a time. Please select again."));
+      return;
+    }
     selectFile(event.dataTransfer.files?.[0]);
   }
 
@@ -733,8 +750,8 @@ function SourceEditor({
         {referenceStatus === "missing" ? <p role="alert" className="mb-3 text-xs text-danger">{tx(locale, "原文件已过期、删除或不可用，请重新选择文件或资料库条目。填写的信息仍保留。", "The original file expired, was deleted, or is unavailable. Reselect a file or library item; your form is preserved.")}</p> : null}
         {referenceStatus === "unavailable" ? <p role="alert" className="mb-3 text-xs text-danger">{tx(locale, "暂时无法核对文件，请重试。", "Unable to check the file. Please try again.")} <button type="button" className="underline" onClick={onRetryReference}>{tx(locale, "重试检查", "Retry check")}</button></p> : null}
         {needsFileReselection ? <p role="alert" className="mb-3 text-xs text-warning">{tx(locale, `“${source.fileName}” 仅保留了文件名，请重新选择文件，或从课程资料库选择。`, `Only the filename “${source.fileName}” is retained. Reselect the file or choose it from the course library.`)}</p> : null}
-        {source.sourceMode === "upload" && source.storedFileId && referenceStatus === "ready" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "已上传文件可继续使用，无需重新选择。", "Uploaded file is available. No need to select it again.")}</p> : null}
-        {source.sourceMode === "library" && source.libraryMaterial && referenceStatus === "ready" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "资料库文件可直接使用，无需重新上传。", "The library file is available. No need to upload it again.")}</p> : null}
+        {source.sourceMode === "upload" && source.storedFileId && referenceStatus === "ready" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "已上传文件可继续使用。", "Uploaded file is ready to use.")}</p> : null}
+        {source.sourceMode === "library" && source.libraryMaterial && referenceStatus === "ready" ? <p role="status" className="mb-3 text-xs text-muted-foreground">{tx(locale, "资料库文件已就绪。", "Library file is ready to use.")}</p> : null}
         <div className={cn("grid gap-2 rounded-[8px] bg-muted/60 p-1", source.role === "rubric" ? "grid-cols-3" : "grid-cols-2")}>
           <ModeButton active={source.sourceMode === "upload"} disabled={disabled} onClick={() => onUpdate({ sourceMode: "upload", libraryMaterial: null })} icon={<UploadCloud className="h-4 w-4" />} label={tx(locale, "上传新文件", "Upload File")} />
           {source.role === "rubric" ? (
@@ -995,16 +1012,16 @@ function sourceFileValidationError(
 
 function roleMeta(role: PreparationSourceRole, locale: string) {
   const zh = {
-    problem: { title: "题目文件（必填）", shortTitle: "题目", sourceLabel: "题目来源", addLabel: "再添加一份题目", description: "上传题目正文，或从课程资料库选择题目来源。" },
-    reference_answer: { title: "标答 / 解答（可选）", shortTitle: "标答", sourceLabel: "标答来源", addLabel: "再添加一份标答", description: "可只提供最终答案；SmarTAI 会补全可审核的解题过程。" },
-    rubric: { title: "评分标准（可选）", shortTitle: "评分标准", sourceLabel: "评分标准来源", addLabel: "再添加一份评分标准", description: "可上传文件、从资料库选择或直接描述；评分步骤会与标答对应。" },
-    programming_tests: { title: "编程题测试资料（可选）", shortTitle: "测试样例", sourceLabel: "测试资料来源", addLabel: "再添加一份测试资料", description: "仅编程题使用，支持输入、期望输出、解释与隐藏测试。" },
+    problem: { title: "题目文件（必填）", shortTitle: "题目", sourceLabel: "题目来源", addLabel: "添加题目", description: "上传一份题目文件，或从课程资料库选择一份。" },
+    reference_answer: { title: "标答 / 解答（可选）", shortTitle: "标答", sourceLabel: "标答来源", addLabel: "添加标答", description: "上传一份标答文件，或从课程资料库选择一份。" },
+    rubric: { title: "评分标准（可选）", shortTitle: "评分标准", sourceLabel: "评分标准来源", addLabel: "添加评分标准", description: "上传一份文件、选择一份资料库文件，或直接描述评分标准。" },
+    programming_tests: { title: "编程题测试资料（可选）", shortTitle: "测试样例", sourceLabel: "测试资料来源", addLabel: "添加测试资料", description: "仅编程题使用，最多一个来源。一份资料可包含多道题、多组测试用例。" },
   } as const;
   const en = {
-    problem: { title: "Question Files (Required)", shortTitle: "Questions", sourceLabel: "Question source", addLabel: "Add Another Question Source", description: "Upload question text or choose a source from the course library." },
-    reference_answer: { title: "Reference Answers / Solutions (Optional)", shortTitle: "Reference Answers", sourceLabel: "Reference answer source", addLabel: "Add Another Reference Answer Source", description: "A final answer is enough; SmarTAI will expand it into a reviewable solution." },
-    rubric: { title: "Grading Rubrics (Optional)", shortTitle: "Rubrics", sourceLabel: "Rubric source", addLabel: "Add Another Rubric Source", description: "Upload a file, choose one from the library, or describe rules that align with the reference-answer steps." },
-    programming_tests: { title: "Programming Tests (Optional)", shortTitle: "Test Cases", sourceLabel: "Programming test source", addLabel: "Add Another Programming Test Source", description: "For programming questions only: inputs, expected outputs, explanations, and hidden tests." },
+    problem: { title: "Question File (Required)", shortTitle: "Questions", sourceLabel: "Question source", addLabel: "Add Question Source", description: "Upload one question file or choose one from the course library." },
+    reference_answer: { title: "Reference Answers / Solutions (Optional)", shortTitle: "Reference Answers", sourceLabel: "Reference answer source", addLabel: "Add Reference Answer Source", description: "Upload one reference-answer file or choose one from the course library." },
+    rubric: { title: "Grading Rubric (Optional)", shortTitle: "Rubrics", sourceLabel: "Rubric source", addLabel: "Add Rubric Source", description: "Upload one file, choose one library file, or describe the grading rubric." },
+    programming_tests: { title: "Programming Tests (Optional)", shortTitle: "Test Cases", sourceLabel: "Programming test source", addLabel: "Add Programming Tests", description: "For programming questions only. Choose one source containing cases for one or more questions." },
   } as const;
   return locale === "zh-CN" ? zh[role] : en[role];
 }

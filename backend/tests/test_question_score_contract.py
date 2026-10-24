@@ -69,6 +69,7 @@ async def test_failed_question_preparation_reuses_sources_with_frozen_model(
         error_code="provider_timeout",
         checkpoint={},
         payload={
+            "question_preparation_version": 2,
             "source_tokens": ["prepared-source-1"],
             "base_workflow_revision": 7,
             "requested_workflow_revision": 7,

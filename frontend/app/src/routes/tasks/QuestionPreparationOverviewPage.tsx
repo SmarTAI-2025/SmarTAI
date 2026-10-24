@@ -183,15 +183,6 @@ export function QuestionPreparationOverviewPage() {
             }}>
               <p className="mb-3 text-sm text-muted-foreground">{tx(locale, "尚未识别出题目数量。填写题数建立空白行，再进入详情填写题号和内容。", "The question count is unknown. Create blank rows, then enter question numbers and content in the existing details.")}</p>
               <div className="flex flex-wrap items-end gap-3">
-                <button type="button" disabled={createRows.isPending} className={cn(reviewActionClass, "h-9")} onClick={async () => {
-                  if (!taskId || !taskQuery.data?.extract_job_id) return;
-                  setCountError(false);
-                  try {
-                    const result = await createRows.mutateAsync({ taskId, jobId: taskQuery.data.extract_job_id,
-                      expectedWorkflowRevision: taskQuery.data.workflow_revision });
-                    if (result.status === "started" || result.status === "already_running") navigate(`/tasks/${taskId}/problems/progress`);
-                  } catch { setCountError(true); }
-                }}>{tx(locale, "整理已保存的识别文字", "Organize saved recognition text")}</button>
                 <label className="text-sm font-semibold">{tx(locale, "题数", "Question count")}<input id="question-count" aria-label={tx(locale, "题数", "Question count")} type="number" min={1} max={500} step={1} required value={questionCount} onChange={event => setQuestionCount(event.target.value)} className="ml-3 h-9 w-24 rounded-md border bg-background px-3" /></label>
                 <button type="submit" disabled={createRows.isPending || !Number.isInteger(Number(questionCount)) || Number(questionCount) < 1 || Number(questionCount) > 500} className="h-9 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-45">{tx(locale, "建立题目行", "Create question rows")}</button>
               </div>
@@ -428,7 +419,7 @@ function sortProblems(problems: ProblemInfo[], locale: string) {
 function issueCodeLabel(code: PreparationIssue["code"], locale: string) {
   const labels: Record<PreparationIssue["code"], [string, string]> = {
     low_confidence: ["匹配置信度较低，请与原文件核对", "Low-confidence match; compare with the source"],
-    source_conflict: ["多份教师资料内容不一致", "Teacher sources disagree"],
+    source_conflict: ["教师资料内容存在冲突，请核对", "Teacher material contains conflicting content; please review"],
     ai_source_conflict: ["SmarTAI 结果与原文件存在冲突", "SmarTAI output conflicts with the source"],
     ambiguous_question_match: ["无法唯一匹配到题号", "Question match is ambiguous"],
     unmapped_source_content: ["原文件中有内容尚未匹配", "Some source content is unmatched"],
@@ -437,7 +428,7 @@ function issueCodeLabel(code: PreparationIssue["code"], locale: string) {
     manual_completion_required: ["补齐缺失资料并确认后才能批改", "Complete and confirm the missing materials before grading"],
     required_review_confirmation: ["严重问题已修正，请确认本题后继续", "The blocking issue was corrected; confirm this question to continue"],
     rubric_step_reference_conflict: ["评分步骤与标答步骤未正确对应", "Rubric steps do not align with reference-answer steps"],
-    math_rubric_advisory: ["本题评分标准有统一解释，建议查看", "Review the shared scoring interpretation for this question"],
+    math_rubric_advisory: ["本题含 AI 补充评分说明，建议核对评分标准", "AI scoring guidance was added. Review the rubric"],
     invalid_test_case: ["测试样例结构无效", "Invalid test case structure"],
     reference_solution_failed_case: ["参考解未通过测试样例", "Reference solution failed a test"],
     default_max_score_requires_review: ["当前使用默认 10 分，请确认题目满分", "Default 10-point maximum; confirm the score"],

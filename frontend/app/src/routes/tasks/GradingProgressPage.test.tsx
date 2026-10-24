@@ -184,6 +184,24 @@ describe("GradingProgressPage completion routing", () => {
     expect(continueTaskRun).toHaveBeenCalledWith("task-1", "run-1", 5, true);
   });
 
+  it("shows immediate manual handoff feedback and restores the retry action after a slow failure", async () => {
+    taskStatus = "grading_paused";
+    vi.mocked(useTaskProgress).mockReturnValue({
+      data: { status: "grading_paused", workflow_revision: 5, problem_count: 1, student_count: 1 },
+      progress: { phase: "paused", total_students: 1, total_questions: 1, completed_units: 0, messages: [], active: [] },
+      percent: 0, refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useTaskProgress>);
+    let reject!: (error: unknown) => void;
+    vi.mocked(continueTaskRun).mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    renderProgress();
+    fireEvent.click(screen.getByRole("button", { name: "Continue manually" }));
+    expect(screen.queryByText("Opening manual review")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Opening…" })).toBeDisabled();
+    reject(new Error("Recovery failed"));
+    expect(await screen.findByText("Could not open review. Refresh and try again.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Continue manually" })).toBeEnabled();
+  });
+
   it("shows the persisted grading failure code instead of a stale done state", () => {
     taskStatus = "error";
     (useTaskProgress as unknown as ReturnType<typeof vi.fn>).mockReturnValue({

@@ -4,6 +4,9 @@ import type { Locale } from "@/i18n/messages";
 
 export function recognitionEventText(event: ProgressEvent | undefined, zh: boolean): string {
   const labels: Record<string, string> = {
+    saved_text_recovery_retired: zh ? "此旧整理任务已停用，请新建任务" : "This older organization task is retired. Create a new task",
+    question_preparation_artifact_invalid: zh ? "题目结果保存或恢复未完成，已保存的识别内容仍保留" : "Question results could not be saved or restored; saved recognition content is retained",
+    question_preparation_artifact_conflict: zh ? "题目结果保存校验未通过，已保存的识别内容仍保留" : "Question results did not pass save checks; saved recognition content is retained",
     activity_preparing: zh ? "正在准备文件" : "Preparing files",
     activity_reading: zh ? "正在读取文件内容" : "Reading file content",
     activity_recognizing: zh ? "正在识别并整理内容" : "Recognizing and organizing content",
@@ -89,7 +92,9 @@ export function RecognitionActivity({ progress, locale, incomplete = false, fill
     <p className={incomplete ? "mb-2 shrink-0" : "sr-only"} aria-live="polite">{latestText}</p>
     <div ref={list} className="min-h-0 flex-1 overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" role="region" aria-label={zh ? "识别动态历史" : "Recognition activity history"} tabIndex={0}
       onScroll={() => { if (list.current) stickToBottom.current = list.current.scrollHeight - list.current.scrollTop - list.current.clientHeight < 32; }}>
-      <p className="mb-2">{zh ? "显示当前保存的最近动态，最多 200 条" : "Showing the saved recent activity, up to 200 entries"}</p>
+      <p className="mb-2">{zh ? "显示当前保存的最近动态，最多 200 条" : "Showing the saved recent activity, up to 200 entries"}{progress?.preparation_counts ? (zh
+        ? ` · 已保存：题干 ${progress.preparation_counts.stems} · 标答 ${progress.preparation_counts.reference_answers} · 评分标准 ${progress.preparation_counts.rubrics}`
+        : ` · Saved: question text ${progress.preparation_counts.stems} · Reference answers ${progress.preparation_counts.reference_answers} · Rubrics ${progress.preparation_counts.rubrics}`) : ""}</p>
       <ol className="space-y-2">{events.map((event, index) => <li key={`${event.ts}:${index}`} className="flex gap-3 leading-5">
         <time className="shrink-0 tabular-nums">{Number.isFinite(event.ts) && event.ts > 0 ? new Date(event.ts * (event.ts > 1e12 ? 1 : 1000)).toLocaleTimeString(locale) : "—"}</time>
         <span className="min-w-0 break-words">{recognitionEventText(event, zh)}</span>

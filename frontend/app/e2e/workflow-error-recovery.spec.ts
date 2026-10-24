@@ -53,6 +53,37 @@ async function fixture(page: Page, stage: "problems" | "submissions" | "grading"
   return { calls, errors };
 }
 
+for (const locale of ["zh-CN", "en-US"]) {
+  test(`each preparation material has one replaceable source: ${locale}`, async ({ page }) => {
+    const { calls, errors } = await fixture(page, "problems", undefined, false, undefined, locale);
+    const zh = locale === "zh-CN";
+    await page.goto("/tasks/recovery-task/upload/problems");
+    await expect(page.getByRole("button", { name: zh ? "添加题目" : "Add Question Source", exact: true })).toHaveCount(0);
+    for (const [tab, add] of (zh ? [
+      [/2\. 标答/, "添加标答"], [/3\. 评分标准/, "添加评分标准"], [/4\. 测试样例/, "添加测试资料"],
+    ] : [
+      [/2\. Reference Answers/, "Add Reference Answer Source"], [/3\. Rubrics/, "Add Rubric Source"], [/4\. Test Cases/, "Add Programming Tests"],
+    ]) as Array<[RegExp, string]>) {
+      await page.getByRole("button", { name: tab }).click();
+      await page.getByRole("button", { name: add, exact: true }).click();
+      await expect(page.getByRole("button", { name: add, exact: true })).toHaveCount(0);
+      await expect(page.locator('input[type="file"]')).toHaveCount(1);
+      await page.getByRole("button", { name: zh ? "课程资料库" : "Course Library", exact: true }).click();
+      await expect(page.getByRole("button", { name: add, exact: true })).toHaveCount(0);
+      if (add === "添加评分标准" || add === "Add Rubric Source") {
+        await page.getByRole("button", { name: zh ? "自然语言描述" : "Describe", exact: true }).click();
+        await expect(page.getByRole("button", { name: add, exact: true })).toHaveCount(0);
+      }
+      await page.getByRole("button", { name: zh ? "删除这份资料" : "Remove this source", exact: true }).click();
+      await expect(page.getByRole("button", { name: add, exact: true })).toBeVisible();
+      await page.getByRole("button", { name: add, exact: true }).click();
+      await expect(page.locator('input[type="file"]')).toHaveCount(1);
+    }
+    expect(calls).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+}
+
 for (const stage of ["problems", "submissions"] as const) {
   for (const locale of ["zh-CN", "en-US"]) {
     for (const width of [390, 1440]) {
@@ -112,7 +143,7 @@ for (const width of [1280, 390]) {
       ],
     } } }));
     await page.goto("/tasks/recovery-task/upload/problems");
-    await expect(page.getByText("资料库文件可直接使用，无需重新上传。")).toBeVisible();
+    await expect(page.getByText("资料库文件已就绪。")).toBeVisible();
     await page.getByRole("button", { name: "上传新文件", exact: true }).click();
     await expect(page.getByText("待重新选择：saved.pdf")).toBeVisible();
     const start = page.getByRole("button", { name: "重新识别全部资料", exact: true });
@@ -139,6 +170,7 @@ test("upload guidance explains a missing supplemental material without starting 
   await page.goto("/tasks/recovery-task/questions/import");
   const start = page.getByRole("button", { name: "开始导入并匹配到题目" });
   await expect(start).toBeEnabled();
+  await expect(page.locator("#material-import-action-message")).toHaveText("请选择课程资料或上传新文件。");
   const dialog = page.waitForEvent("dialog");
   await start.click();
   expect((await dialog).message()).toBe("请选择课程资料或上传新文件。");
