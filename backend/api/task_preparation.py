@@ -38,6 +38,7 @@ from backend.agents.ingest_agent import (
     parse_material_import_to_candidates,
 )
 from backend.agents.question_preparation_agent import (
+    QUESTION_PREPARATION_STAGE_SEQUENCE,
     prepare_ocr_question_packages,
     prepare_question_packages,
 )
@@ -2537,7 +2538,7 @@ async def _run_question_preparation(
                 snapshot,
                 durable_operation.checkpoint_data,
             )
-        terminal_steps = 0 if durable_operation is not None and durable_operation.checkpoint_data.get("incremental_version") == 1 else 8
+        terminal_steps = len(QUESTION_PREPARATION_STAGE_SEQUENCE)
         terminal_snapshot = {
             **snapshot,
             "phase": "done",

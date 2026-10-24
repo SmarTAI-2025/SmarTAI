@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import time
 from typing import Any
 from collections import Counter
@@ -25,6 +26,7 @@ from backend.agents.question_preparation_agent import (
     _SubmissionSafeProvider, _is_overall_rubric, _issue, _issue_field,
     _major_question_generation_concurrency, _validate_major_question_candidates,
     provider_submission_is_uncertain, requested_major_question_materials,
+    QUESTION_PREPARATION_STAGE_SEQUENCE,
 )
 from backend.config import settings
 from backend.domain.errors import ValidationError, LeaseLost, RecognitionError
@@ -109,6 +111,15 @@ def _material_identity(row):
     return _digest({name: row.get(name) for name in (
         "number", "criterion", "reference_answer", "test_cases", "material_provenance",
     )})
+
+
+def _join_literal_material(previous, incoming):
+    """Retain same-source pieces; repeated/subsumed extracts add no new text."""
+    if incoming in previous:
+        return previous
+    if previous in incoming:
+        return incoming
+    return previous + "\n\n" + incoming
 
 
 class IncrementalQuestionPreparation:
@@ -232,7 +243,7 @@ class IncrementalQuestionPreparation:
         # deduplicating every question again for every generated field.
         cache_key = (
             tuple((key, id(value)) for key, value in self.units.items()
-                  if key.startswith(("extract:", "material:", "score:"))),
+                  if key.startswith(("extract:", "material:", "score:", "score_plan:"))),
             tuple(sorted(self.completed_sources)),
             _digest(self.operation.checkpoint_data.get("incremental_source_invalidations") or {}),
             _digest(self.operation.checkpoint_data.get("incremental_source_plans") or {}),
@@ -295,10 +306,7 @@ class IncrementalQuestionPreparation:
         items = list(base.values())
         # A single explicitly known question is an unambiguous match. Otherwise
         # keep unlabelled uploaded material as an editable, unassigned row.
-        ready_sources = dict(self._ready_source_plans())
-        problem_sources = [token for token, role in self.roles.items() if role == "problem"]
-        all_questions_read = bool(problem_sources) and all(
-            token in ready_sources and not invalidations.get(token) for token in problem_sources)
+        all_questions_read = self._questions_read_complete()
         known_numbers = {normalize_question_number(number) for number in [*self.wanted, *self.outline]}
         single_question = (len(items) == 1 and bool(normalize_question_number(items[0].get("number"))) and all_questions_read
             and known_numbers.issubset({normalize_question_number(items[0].get("number"))}))
@@ -340,8 +348,12 @@ class IncrementalQuestionPreparation:
                                     **_issue("q1", "programming_tests", "source_conflict", "warning", [provenance["source_token"]]),
                                     "details": {"reason": "test_case_output_conflict"}})
                         elif previous and previous != value:
-                            row["preparation_issues"].append(_issue("q1", _issue_field(field), "source_conflict", "warning", [provenance["source_token"]]))
-                            continue
+                            previous_source = row.get("material_provenance", {}).get(field, {}).get("source_token")
+                            if previous_source == provenance["source_token"]:
+                                value = _join_literal_material(previous, value)
+                            else:
+                                row["preparation_issues"].append(_issue("q1", _issue_field(field), "source_conflict", "warning", [provenance["source_token"]]))
+                                continue
                         row[field] = deepcopy(value)
                         row.setdefault("material_provenance", {})[field] = deepcopy(provenance)
                         row["preparation_issues"].extend(deepcopy([
@@ -355,11 +367,18 @@ class IncrementalQuestionPreparation:
                 allocation = self.outline.get(number)
                 if allocation and allocation.maximum is not None:
                     row.update(max_score=float(allocation.maximum), max_score_source="per_question_text", max_score_review_status="needs_review")
-                else:
-                    saved_score = self.units.get(self._score_key(row))
-                    if saved_score:
-                        row.update({name: saved_score["q1"][name] for name in ("max_score", "max_score_source", "max_score_review_status")})
             row["review_status"] = "needs_review"
+        # A retry may still be reading sources. Keep an already saved plan for
+        # this exact question set visible; only scheduling a new plan must wait.
+        if self.policy.mode == "per_question":
+            known = self._scorable_rows(items)
+            plan = self.units.get(self._score_plan_key(known))
+            if plan:
+                if len(plan) != len(known):
+                    raise ValidationError("Invalid score allocation plan.", code="question_preparation_contract_invalid")
+                for index, row in enumerate(known, 1):
+                    saved = plan[f"q{index}"]
+                    row.update({name: saved[name] for name in ("max_score", "max_score_source", "max_score_review_status")})
         result = _rows(items) if items else {}
         if unmatched:
             result = _rows([*result.values(), *unmatched])
@@ -403,6 +422,19 @@ class IncrementalQuestionPreparation:
 
     def _score_key(self, row):
         return "score:" + _digest([row.get("number"), row.get("stem"), self.policy.model_dump()])
+
+    def _score_plan_key(self, rows):
+        return "score_plan:" + _digest([self._score_key(row) for row in rows])
+
+    @staticmethod
+    def _scorable_rows(rows):
+        return [row for row in rows if str(row.get("stem") or "").strip()
+                and not any(issue.get("code") == "recognition_partial" for issue in row.get("preparation_issues", []))]
+
+    def _questions_read_complete(self):
+        ready, invalid = dict(self._ready_source_plans()), self._source_invalidations()
+        sources = [token for token, role in self.roles.items() if role == "problem"]
+        return bool(sources) and all(token in ready and not invalid.get(token) for token in sources)
 
     async def _checkpoint(self, **updates):
         view = updates.get("questions_extracted_artifact_id", self.operation.checkpoint_data.get("questions_extracted_artifact_id"))
@@ -480,42 +512,87 @@ class IncrementalQuestionPreparation:
                     attempts[snapshot.id] = self.operation.attempt
                     changes.update(questions_extracted_artifact_id=snapshot.id, incremental_view_from_units=False)
                 changes["question_ids"] = list(self.latest)
-            progress = (await self.reporter.snapshot()).model_dump(mode="json")
-            progress["preparation_counts"] = dict(questions=len(self.latest),
+            counts = dict(questions=len(self.latest),
                 stems=sum(bool(str(row.get("stem") or "").strip()) for row in self.latest.values()),
                 reference_answers=sum(bool(str(row.get("reference_answer") or "").strip()) for row in self.latest.values()),
                 rubrics=sum(bool(str(row.get("criterion") or "").strip()) for row in self.latest.values()))
-            changes["preparation_counts"] = progress["preparation_counts"]
+            changes["preparation_counts"] = counts
             await self._checkpoint(**changes)
             self._view_digest = view_digest
+            # Every later provider event snapshots this same reporter. Keeping
+            # counts only in a one-off dict let the next event erase them.
+            await self.reporter.set_preparation_counts(**counts)
+            progress = (await self.reporter.snapshot()).model_dump(mode="json")
             await self.operation.update_progress(progress)
 
     async def _source(self, source):
-        from backend.services.source_question_units import source_question_units, QUESTION_HEADING
+        from backend.services.source_question_units import source_page_groups, source_question_units, question_headings
         draft, _, _ = source
         pages, scheduled, tasks, planned = {}, set(), [], set()
+        numbered = draft.role == "problem"
         limit = max(1, int(settings.source_chunk_chars or 24000))
+        selected_pages = question_recognition_options(source[2].get("recognition_options"),
+            extraction_hint=draft.extraction_hint).pages
+        first_page = min(selected_pages) if selected_pages else 1
 
-        def enqueue(unit, index):
-            identity = _digest([unit.number, unit.text])
+        def source_context():
+            # A later OCR page may arrive first. Its heading cannot establish
+            # that the source has no shared definitions on earlier pages.
+            prefix, number = [], first_page
+            while number in pages:
+                text = pages[number]
+                heading = next(iter(question_headings(text, numbered=numbered)), None)
+                if heading:
+                    prefix.append(text[:heading.start()])
+                    return "\n\n".join(prefix).strip()
+                prefix.append(text)
+                number += 1
+            return None
+
+        def enqueue(unit, *, final=False):
+            context = source_context()
+            if context is None and not final:
+                return
+            context = context or ""
+            identity = _digest([unit.pages, unit.text])
             if identity in scheduled:
                 return
             scheduled.add(identity)
-            # Shared definitions before the first heading remain source context.
-            available = "\n\n".join(pages[number] for number in sorted(pages))
-            heading = QUESTION_HEADING.search(available)
-            context = available[:heading.start()].strip() if heading else ""
-            planned.add(self._chunk_key(draft, unit.text, index, context, unit.complete))
-            tasks.append(asyncio.create_task(self._chunk(draft, unit.text, index, 0,
-                complete=unit.complete, source_context=context,
-                expected_numbers=[unit.number] if unit.complete else ())))
+            # Keep ordinary pages together. Oversized groups split between
+            # candidate questions first; only an individually oversized question
+            # needs partial fragments. Splitting a page is not itself a gap.
+            headings = question_headings(unit.text, numbered=numbered)
+            boundaries = [0, *(heading.start() for heading in headings[1:]), len(unit.text)]
+            chunks, pending = [], ""
+            for start, end in zip(boundaries, boundaries[1:]):
+                part = unit.text[start:end]
+                if pending and len(pending) + len(part) > limit:
+                    chunks.append((pending, unit.complete))
+                    pending = ""
+                if len(part) > limit:
+                    chunks.extend((chunk, False) for chunk in _chunk_problem_text(
+                        part, limit, max(0, int(settings.source_chunk_overlap_chars or 0))))
+                else:
+                    pending += part
+            if pending:
+                chunks.append((pending, unit.complete))
+            for offset, (chunk, complete) in enumerate(chunks):
+                index = (unit.pages[0] - 1) * 1000 + offset
+                # Named question labels are completeness evidence; bare lists
+                # and chapter headings remain boundary candidates only.
+                expected = [match.group("number") for match in question_headings(chunk)
+                    if re.match(r"\s*(?:#{1,6}\s+)?(?:question|problem|q\b|第|题)", match.group(), re.I)]
+                planned.add(self._chunk_key(draft, chunk, index, context, complete))
+                tasks.append(asyncio.create_task(self._chunk(draft, chunk, index, 0,
+                    complete=complete, source_context=context, expected_numbers=expected,
+                    allow_empty_material=True)))
 
         async def on_pages(ready):
             await self.operation.heartbeat()
             for page in ready:
                 pages[page["page_number"]] = page["text"]
-            units = source_question_units(pages, allow_repeated_numbers=draft.role == "programming_tests")
-            repeated = sorted({normalize_question_number(unit.number) for unit in units if unit.closure == "repeated_heading"})
+            repeated = sorted({normalize_question_number(unit.number) for unit in source_question_units(
+                pages, allow_repeated_numbers=draft.role == "programming_tests") if unit.closure == "repeated_heading"})
             previous = self.operation.checkpoint_data.get("incremental_source_invalidations") or {}
             if repeated and previous.get(draft.source_token) != repeated:
                 async with self.lock:
@@ -523,9 +600,9 @@ class IncrementalQuestionPreparation:
                         **(self.operation.checkpoint_data.get("incremental_source_invalidations") or {}),
                         draft.source_token: repeated})
                 await self.finish("invalidation:" + draft.source_token)
-            for index, unit in enumerate(units):
-                if unit.complete and len(unit.text) <= limit:
-                    enqueue(unit, index)
+            for unit in source_page_groups(pages, numbered=numbered):
+                if unit.complete:
+                    enqueue(unit)
 
         try:
             resolved = await self.read_source(source, on_pages=on_pages)
@@ -539,29 +616,21 @@ class IncrementalQuestionPreparation:
                 self.failures["source:" + draft.source_token] = RecognitionError(payload["source_error"],
                     failed_pages=coverage.get("failed_pages"), processed_pages=coverage.get("processed_pages"),
                     page_diagnostics=recognition.get("page_diagnostics"))
-            units = source_question_units(pages, source_complete=not incomplete,
-                allow_repeated_numbers=draft.role == "programming_tests") if pages else []
-            invalid_numbers = sorted({normalize_question_number(unit.number)
-                for unit in units if unit.closure == "repeated_heading"})
+            coverage = (payload.get("recognition") or {}).get("coverage") or {}
+            requested_pages = coverage.get("requested_pages") or []
+            source_end = max(requested_pages) if requested_pages else coverage.get("total_pages")
+            units = source_page_groups(pages, source_complete=not incomplete,
+                                       source_end_page=source_end, numbered=numbered) if pages else []
+            invalid_numbers = sorted({normalize_question_number(unit.number) for unit in source_question_units(
+                pages, allow_repeated_numbers=draft.role == "programming_tests") if unit.closure == "repeated_heading"})
             if invalid_numbers:
-                # Ambiguous question boundaries make the supplied material's
-                # coverage uncertain even if every PDF page was readable.
-                # Do not generate substitutes for apparently missing items.
                 self.source_failures.add(draft.source_token)
                 self.failures["source:" + draft.source_token] = ValidationError(
                     "Some source question boundaries remain ambiguous.",
                     code="question_targets_incomplete" if draft.role == "problem" else "recognition_response_invalid")
             if units:
-                for index, unit in enumerate(units):
-                    if len(unit.text) <= limit:
-                        enqueue(unit, index)
-                    else:
-                        # Long unclosed boundaries are retained for review; they
-                        # must not unlock generation as complete question text.
-                        for offset, chunk in enumerate(_chunk_problem_text(unit.text, limit, max(0, int(settings.source_chunk_overlap_chars or 0)))):
-                            planned.add(self._chunk_key(draft, chunk, index * 1000 + offset, "", False))
-                            tasks.append(asyncio.create_task(self._chunk(draft, chunk,
-                                index * 1000 + offset, 0, complete=False)))
+                for unit in units:
+                    enqueue(unit, final=True)
             else:
                 chunks = _chunk_problem_text(text, limit, max(0, int(settings.source_chunk_overlap_chars or 0)))
                 if not chunks:
@@ -584,6 +653,9 @@ class IncrementalQuestionPreparation:
                     draft.source_token: dict(keys=sorted(planned), source_complete=not incomplete,
                         invalid_numbers=invalid_numbers)})
             await asyncio.gather(*tasks)
+            if draft.role != "problem" and pages and not any(self.units.get(key) for key in planned):
+                raise ValidationError("No teacher material was found in the supplied source.",
+                                      code="recognition_response_invalid")
             await self.finish("partition:" + draft.source_token)
         except (asyncio.CancelledError, LeaseLost):
             raise
@@ -605,7 +677,8 @@ class IncrementalQuestionPreparation:
         kind = "extract" if draft.role == "problem" else "material"
         return f"{kind}:{draft.source_token}:{index}:{_digest([text, draft.structure_mode, draft.extraction_hint, source_context, complete is False])}"
 
-    async def _chunk(self, draft, text, index, count, *, complete=None, source_context="", expected_numbers=()):
+    async def _chunk(self, draft, text, index, count, *, complete=None, source_context="", expected_numbers=(),
+                     allow_empty_material=False):
         kind = "extract" if draft.role == "problem" else "material"
         if kind == "extract" and self.wanted:
             # Page headings establish boundaries, not the teacher's selection.
@@ -672,7 +745,7 @@ class IncrementalQuestionPreparation:
                                 for row in self.units.get(key, {}).values()}
                     with llm_attempt_budget():
                         for attempt in range(3):
-                            data, error = await self._material(draft, text)
+                            data, error = await self._material(draft, text, allow_empty=allow_empty_material)
                             if complete is False:
                                 for row in data.values():
                                     for field in row.get("material_provenance", {}):
@@ -702,7 +775,7 @@ class IncrementalQuestionPreparation:
             await self.finish(key, error=exc)
         await self.schedule_ready()
 
-    async def _material(self, draft, text):
+    async def _material(self, draft, text, *, allow_empty=False):
         target = {"reference_answer": "reference_answer", "rubric": "criterion", "programming_tests": "test_cases"}[draft.role]
         overall = _is_overall_rubric(draft)
         if overall:
@@ -730,7 +803,8 @@ class IncrementalQuestionPreparation:
             value = [case.model_dump() for case in item.test_cases] if target == "test_cases" else item.text_value.strip()
             if target == "test_cases":
                 for case in value:
-                    case["source"] = "teacher" if _saved_test_case_supported(case, "", text) else "llm_generated"
+                    case["source"] = "teacher" if _saved_test_case_supported(case, "", text,
+                        question_number=item.number) else "llm_generated"
             elif value and value not in text:
                 # A paraphrase is not an extracted teacher instruction.
                 invalid = True
@@ -743,7 +817,42 @@ class IncrementalQuestionPreparation:
                     source_filename=draft.filename, source_kind=draft.source_kind,
                     authority="uploaded_reference" if target == "reference_answer" else "uploaded_material",
                     review_status="pending", scope="overall" if overall else "question")}))
-        error = ValidationError("Some teacher material could not be read faithfully.", code="provider_response_invalid") if invalid or (not rows and text.strip()) else None
+        if target != "test_cases":
+            from backend.services.source_question_units import question_headings
+            headings = question_headings(text)
+            grouped = {}
+            for index, row in enumerate(rows):
+                number = normalize_question_number(row["number"])
+                key = number or ("unassigned", index)
+                value = row[target]
+                regions = [(heading.start(), headings[i + 1].start() if i + 1 < len(headings) else len(text))
+                    for i, heading in enumerate(headings)
+                    if normalize_question_number(heading.group("number")) == number] or [(0, len(text))]
+                positions = {start + match.start() for start, end in regions
+                    for match in re.finditer(re.escape(value), text[start:end])}
+                span = (next(iter(positions)), next(iter(positions)) + len(value)) if len(positions) == 1 else None
+                entry = grouped.setdefault(key, (row, []))
+                entry[1].append((span, value))
+            rows = []
+            for row, pieces in grouped.values():
+                if any(span is None for span, _ in pieces):
+                    # A repeated literal has no unique source offset. Retain
+                    # the response order instead of borrowing another question's
+                    # first matching occurrence and inventing a new order.
+                    row[target] = ""
+                    for _, value in pieces:
+                        row[target] = _join_literal_material(row[target], value)
+                    rows.append(row)
+                    continue
+                merged = []
+                for start, end in sorted({span for span, _ in pieces}):
+                    if merged and start <= merged[-1][1]:
+                        merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+                    else:
+                        merged.append((start, end))
+                row[target] = "\n\n".join(text[start:end] for start, end in merged)
+                rows.append(row)
+        error = ValidationError("Some teacher material could not be read faithfully.", code="provider_response_invalid") if invalid or (not rows and text.strip() and not allow_empty) else None
         return (_rows(rows) if rows else {}), error
 
     async def schedule_ready(self):
@@ -754,13 +863,12 @@ class IncrementalQuestionPreparation:
         material_pending = any(self.roles[token] != "problem" for token in pending_sources)
         if material_pending:
             return
+        score_rows = []
         for row in self.project(generated=False).values():
             if not str(row.get("stem") or "").strip() or any(issue.get("code") == "recognition_partial" for issue in row.get("preparation_issues", [])):
                 continue
             if self.policy.mode == "per_question" and not row.get("max_score_source"):
-                key = self._score_key(row)
-                if key not in self.jobs:
-                    self.jobs[key] = asyncio.create_task(self._score(key, row))
+                score_rows.append(row)
                 continue
             identity = _base_identity(row)
             targets = _missing_targets(row)
@@ -772,14 +880,30 @@ class IncrementalQuestionPreparation:
             if targets and key not in self.jobs:
                 self.jobs[key] = asyncio.create_task(self._generate(key, identity, row, targets))
 
-    async def _score(self, key, row):
+        # A natural-language allocation can refer to "the last two questions".
+        # Resolve it once against the complete known set, as before incremental
+        # extraction; explicit per-question scores already resolve locally.
+        if (score_rows and not pending_sources and self._questions_read_complete()
+                and not any(key.startswith("score_plan:") for key in self.jobs)):
+            known = self._scorable_rows(self.project(generated=False).values())
+            key = self._score_plan_key(known)
+            if key not in self.jobs:
+                self.jobs[key] = asyncio.create_task(self._score(key, known))
+
+    async def _score(self, key, rows):
         try:
             async with self.gate:
                 await self.begin(key)
-                data = _rows([row])
-                resolved = (await resolve_question_score_policy(data, self.policy, self.provider, reporter=self.reporter))["q1"]
-                data["q1"].update(max_score=resolved.max_score, max_score_source=resolved.source, max_score_review_status=resolved.review_status)
-                await self.finish(key, data)
+                data = _rows(rows)
+                resolved = await resolve_question_score_policy(data, self.policy, self.provider, reporter=self.reporter)
+                # One response, one durable unit also makes a crash after the
+                # object write recoverable without another allocation request.
+                # The key binds the ordered question set; the unit only stores
+                # scores, so long question text cannot exceed its size limit.
+                scores = _rows([dict(number=row.get("number", ""), max_score=resolved[q_id].max_score,
+                    max_score_source=resolved[q_id].source, max_score_review_status=resolved[q_id].review_status)
+                    for q_id, row in data.items()])
+                await self.finish(key, scores)
         except (asyncio.CancelledError, LeaseLost):
             raise
         except Exception as exc:
@@ -787,9 +911,11 @@ class IncrementalQuestionPreparation:
         await self.schedule_ready()
 
     async def _generate(self, key, identity, row, targets):
+        await self.reporter.register_question_generation(identity, str(row.get("number") or ""))
         try:
             async with self.gate:
                 await self.begin(key)
+                await self.reporter.mark_question_generation_started(identity)
                 await self.reporter.set_current_step("generating_solutions", message=f"Preparing missing materials for question {row.get('number') or ''}")
                 data = _rows([row])
                 allocation = self.outline.get(normalize_question_number(row.get("number")))
@@ -822,10 +948,14 @@ class IncrementalQuestionPreparation:
                             break
                     if pending:
                         raise ValidationError("Some materials could not be completed.", code="provider_response_invalid")
+                await self.reporter.mark_question_generation_finished(identity, succeeded=True)
                 await self.finish(key)
         except (asyncio.CancelledError, LeaseLost):
+            await self.reporter.mark_question_generation_cancelled(identity)
             raise
         except Exception as exc:
+            await self.reporter.mark_question_generation_finished(identity, succeeded=False,
+                error_code=classify_background_error(exc, "question_preparation_failed"))
             await self.finish(key, error=exc)
 
     async def run(self):
@@ -833,13 +963,17 @@ class IncrementalQuestionPreparation:
         # Each read attempt establishes its own partition from current pages;
         # prior immutable units remain reusable until that partition is ready.
         await self._checkpoint(incremental_source_plans={})
-        await self.reporter.configure_workflow("question_preparation", (), parallel=True)
+        await self.reporter.configure_workflow("question_preparation", QUESTION_PREPARATION_STAGE_SEQUENCE, parallel=True)
         await self.reporter.set_phase("parsing")
+        await self.reporter.set_stage_progress("validating_sources", total_steps=8, completed_steps=1,
+            message="Validated question and optional material sources")
         await self.finish("initial")
         tasks = [asyncio.create_task(self._source(source)) for source in list(self.sources)]
         try:
             await asyncio.gather(*tasks)
             await self.finish("sources_complete")
+            if not self.source_failures and not self.failures:
+                await self.reporter.set_stage_progress("generating_solutions", total_steps=8, completed_steps=3)
             await self.schedule_ready()
             awaited = set()
             while True:
@@ -852,6 +986,7 @@ class IncrementalQuestionPreparation:
                 raise RuntimeError("provider_submit_uncertain")
             if self.failures:
                 raise next(iter(self.failures.values()))
+            await self.reporter.set_stage_progress("detecting_conflicts", total_steps=8, completed_steps=6)
             self.latest = self.project()
             if not self.latest:
                 raise ValidationError("No questions were extracted.", code="problem_extraction_failed")
@@ -859,6 +994,7 @@ class IncrementalQuestionPreparation:
                    or any(issue.get("code") == "recognition_partial" for issue in row.get("preparation_issues", []))
                    for row in self.latest.values()):
                 raise ValidationError("Some question text is incomplete.", code="question_targets_incomplete")
+            await self.reporter.set_stage_progress("committing_question_packages", total_steps=8, completed_steps=7)
             return self.latest
         finally:
             for task in [*tasks, *self.jobs.values()]:

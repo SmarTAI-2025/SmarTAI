@@ -113,6 +113,33 @@ async def test_worker_client_refuses_busy_shared_pool_without_launching(monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_pipeline_waits_for_local_worker_without_stealing_or_leaking_slot(monkeypatch, cancel):
+    _, launch = install_process(monkeypatch, json.dumps(index_payload()).encode())
+    slots = file_processing._PDF_EXTRACTION_SLOTS
+    slots.acquire()
+    waiting = asyncio.create_task(read_pdf_evidence(b"%PDF-synthetic", PdfIndexRequest(), wait_for_slot=True))
+    await asyncio.sleep(0)
+    launch.assert_not_awaited()
+    try:
+        if cancel:
+            waiting.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiting
+            assert not slots.acquire(blocking=False)
+        else:
+            slots.release()
+            await asyncio.wait_for(waiting, 1)
+            launch.assert_awaited_once()
+            assert slots.acquire(blocking=False)
+    finally:
+        slots.release()
+        if not waiting.done():
+            waiting.cancel()
+        await asyncio.gather(waiting, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("during_launch", [False, True])
 async def test_cancelled_client_reaps_before_releasing_shared_slot(monkeypatch, during_launch):
     process, _ = install_process(monkeypatch, None)

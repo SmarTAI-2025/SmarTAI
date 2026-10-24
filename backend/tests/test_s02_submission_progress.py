@@ -107,8 +107,21 @@ async def test_stage_metric_updates_are_atomic_and_reject_invalid_values():
         "files_processed": 1,
         "answers_split": 2,
     }
+    await reporter.update_stage_metrics(answers_split=3, identities_matched=1)
+    assert (await reporter.snapshot()).stage_metrics == {
+        "files_total": 3, "files_processed": 1, "answers_split": 3, "identities_matched": 1,
+    }
+    await reporter.set_completed_units(1)
+    await reporter.set_completed_units(1)
+    assert (await reporter.snapshot()).completed_units == 1
 
     with pytest.raises(ValueError):
         await reporter.increment_stage_metrics(files_processed=-1)
     with pytest.raises(ValueError):
         await reporter.set_stage_metrics(files_total=True)
+    with pytest.raises(ValueError):
+        await reporter.update_stage_metrics(answers_split=-1)
+    with pytest.raises(ValueError):
+        await reporter.set_completed_units(True)
+    await reporter.set_stage_metrics(files_total=1)
+    assert (await reporter.snapshot()).stage_metrics == {"files_total": 1}

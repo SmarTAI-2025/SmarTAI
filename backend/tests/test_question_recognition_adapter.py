@@ -32,11 +32,26 @@ async def test_submission_second_page_failure_cannot_return_first_page_as_comple
         content=data, content_type="application/pdf")
     request.source = request.source.model_copy(update=dict(stored_file_id=stored.id, input_sha256=hashlib.sha256(data).hexdigest()))
     provider, _engine = llm(text="1. Visible answer from page one.")
-    provider.ainvoke_vision.side_effect = [
-        provider.ainvoke_vision.return_value,
-        ProviderRequestError("provider_upstream_unavailable", status_code=503),
-        provider.ainvoke_vision.return_value,
-    ]
+    # Parallel page admission need not preserve file order. Inject the failure
+    # into page 2 itself, not whichever model request happens to start second.
+    from contextvars import ContextVar
+    from backend.skills.recognition_reader import LLMRecognitionEngine
+    current_page = ContextVar("fixture_page")
+    recognize = LLMRecognitionEngine.recognize
+    failed_images = []
+    async def with_page(engine, item):
+        token = current_page.set(item.page_number)
+        try:
+            return await recognize(engine, item)
+        finally:
+            current_page.reset(token)
+    async def respond(prompt, images, **kwargs):
+        if current_page.get() == 2 and not failed_images:
+            failed_images.append(images[0].data)
+            raise ProviderRequestError("provider_upstream_unavailable", status_code=503)
+        return provider.ainvoke_vision.return_value
+    monkeypatch.setattr(LLMRecognitionEngine, "recognize", with_page)
+    provider.ainvoke_vision.side_effect = respond
     registry = SimpleNamespace(list_configs=lambda: [dict(provider_id=provider.provider_id, enabled=True, model="fixture")])
     monkeypatch.setattr(question_sources, "get_storage", lambda: results.store.storage)
     on_pages = AsyncMock() if incremental else None
@@ -88,7 +103,7 @@ async def test_submission_second_page_failure_cannot_return_first_page_as_comple
     assert retried.recognition["coverage"]["failed_pages"] == []
     assert provider.ainvoke_vision.await_count == 3
     calls = provider.ainvoke_vision.await_args_list
-    assert calls[2].args[1][0].data == calls[1].args[1][0].data  # only page 2 redispatched
+    assert calls[2].args[1][0].data == failed_images[0]  # only page 2 redispatched
     await question_sources.read_question_source(**args, retry_key="explicit-parent-attempt-2")
     assert provider.ainvoke_vision.await_count == 3  # retry action remains idempotent
 

@@ -137,10 +137,10 @@ async def test_repeated_test_case_groups_are_complete_unless_pages_are_missing(m
         row(i, criterion="Teacher rubric.", reference_answer="Teacher answer.") for i in (1, 2)])))
     async def material(*args, **kwargs):
         prompt = kwargs["user_prompt"]
-        number, value, output = ("2", "9", "18") if '"input":"9"' in prompt else (
-            ("1", "2", "4") if '"input":"2"' in prompt else ("1", "1", "2"))
         return inc._MaterialItems(items=[inc._MaterialItem(number=number,
-            test_cases=[TestCase(input=value, expected_output=output)])]), None
+            test_cases=[TestCase(input=value, expected_output=output)])
+            for number, value, output in [("1", "1", "2"), ("1", "2", "4"), ("2", "9", "18")]
+            if f'"input":"{value}"' in prompt]), None
     monkeypatch.setattr(inc, "structured_llm_call", material)
     generation = AsyncMock(side_effect=AssertionError("Supplied material must not be generated"))
     monkeypatch.setattr(inc, "generate_missing_question_materials", generation)
@@ -182,7 +182,10 @@ async def test_source_retry_repartitions_saved_units_and_clears_resolved_boundar
             await on_pages(pages)
             return draft, "\n\n".join(page["text"] for page in pages), {**payload, "source_error": None}
         if boundary == "repeated":
-            pages = [dict(page_number=index, text="Question 1\n" + old) for index in (1, 2)]
+            # A different intervening question makes this a genuinely repeated
+            # identity, unlike a running label on a continuation page.
+            pages = [dict(page_number=1, text="Question 1\n" + old + "\nQuestion 99\nUnrelated item."),
+                     dict(page_number=2, text="Question 1\n" + old)]
             await on_pages(pages)
             return draft, "\n\n".join(page["text"] for page in pages), payload
         return draft, old, {**payload, "source_error": "recognition_response_invalid"}

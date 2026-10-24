@@ -47,11 +47,11 @@ async def test_completeness_checks_selected_questions_only(monkeypatch, targets,
         with pytest.raises(ValidationError) as error:
             await pipeline.run()
         assert error.value.code == "question_targets_incomplete"
-        assert extraction.await_count == (4 if paged else 3)
+        assert extraction.await_count == 3
     else:
         result = await pipeline.run()
         assert [item["number"] for item in result.values()] == ["2"]
-        assert extraction.await_count == (2 if paged else 1)
+        assert extraction.await_count == 1
     _, saved = persisted(owner, operation)
     if targets:
         assert [item["number"] for item in saved.values()] == ["2"]

@@ -489,14 +489,15 @@ async def _extract_problems_call(
                 # Only this incremental parser consumes model-authored cases. Do not
                 # change the teacher-upload default or any completed packages.
                 excerpt = case.pop("source_excerpt", "")
-                case["source"] = "teacher" if _saved_test_case_supported(case, excerpt, text) else "llm_generated"
+                case["source"] = "teacher" if _saved_test_case_supported(case, excerpt, text,
+                    question_number=problem.get("number")) else "llm_generated"
     logger.info(f"extract_problems: stored {len(prob_dict)} problems")
     if partial_source and dropped_items:
         raise PartialQuestionExtractionError(prob_dict)
     return prob_dict
 
 
-def _saved_test_case_supported(case, excerpt, text):
+def _saved_test_case_supported(case, excerpt, text, *, question_number=None):
     """Verify a complete original example; co-occurring values are not evidence."""
     def normalized(value):
         return re.sub(r"\s*([\[\],])\s*", r"\1", re.sub(r"\s+", " ", str(value)).strip())
@@ -504,6 +505,16 @@ def _saved_test_case_supported(case, excerpt, text):
     if excerpt and excerpt not in text:
         return False
     evidence = excerpt or text
+    if question_number:
+        from backend.services.source_question_units import question_headings
+        headings = question_headings(evidence)
+        if headings and all(heading.group("number") == str(question_number) for heading in headings):
+            # Standalone running labels can occur between a cross-page input
+            # and output. Never remove a different question's boundary.
+            evidence = re.sub(r"(?im)^[ \t]*(?:#{1,6}[ \t]+)?(?:question|problem|q|第)[ \t]*"
+                + re.escape(str(question_number)) + r"[ \t]*(?:题)?[ \t]*[:：.)]?[ \t]*$", "", evidence)
+    evidence = re.sub(r"(?im)^[ \t]*\d+[.)、][ \t]+(?=(?:input|(?:expected[_ ]*)?output|输入|预期输出|输出)[ \t]*[:：])",
+        "", evidence)
     # An excerpt may include several examples. Apply the same pair validation
     # with or without an excerpt, never an ordered search for independent values.
     decoder = json.JSONDecoder()

@@ -127,8 +127,9 @@ describe("ProblemRecognitionProgressPage recovery", () => {
       <Route path="/tasks/:taskId/questions" element={<div>Persisted question matrix</div>} />
     </Routes></MemoryRouter>);
     fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
-    expect(screen.getByText("正在打开人工复核")).toBeVisible();
+    expect(screen.queryByText("正在打开人工复核")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "正在打开…" })).toBeDisabled();
+    if (status === "problems_paused") expect(screen.getByRole("button", { name: "正在打开…" })).toHaveAttribute("aria-busy", "true");
     expect(screen.queryByText("Persisted question matrix")).not.toBeInTheDocument();
     expect(manualMutateAsync).toHaveBeenCalledTimes(1);
     reject(new APIError(422, "question_preparation_artifact_invalid", { detail: { code: "question_preparation_artifact_invalid" } }));

@@ -170,7 +170,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         return QuestionSourceRead(text, stored_file_id=stored_file_id)
     total_pages = None
     if media_type == "application/pdf":
-        index = await read_pdf_evidence(content, PdfIndexRequest(window_pages=1), progress=reporter)
+        index = await read_pdf_evidence(content, PdfIndexRequest(window_pages=1), progress=reporter, wait_for_slot=True)
         total_pages = index.total_pages
         if scope.pages and max(scope.pages) > index.total_pages:
             raise RecognitionError("question_source_pages_out_of_range")

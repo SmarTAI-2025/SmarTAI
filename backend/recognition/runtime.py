@@ -73,6 +73,16 @@ class RecognitionCallResultV1(EvidenceModel):
     submission_may_exist: bool = False
 
 
+def _recognition_admission(engine, source, capacity):
+    from backend.llm.providers import BaseProvider
+    # LLM OCR uses the same admission boundary as extraction and grading.
+    # A second fixed two-call gate hides available BYOK capacity. Non-LLM OCR
+    # and knowledge-background work retain their separate bounded admission.
+    if source.scope != "knowledge_document" and isinstance(getattr(engine, "provider", None), BaseProvider):
+        return nullcontext()
+    return capacity.lease(source.owner_id, background=True) if source.scope == "knowledge_document" else capacity.lease(source.owner_id)
+
+
 def region_budget_key(page_number: int, region: NormalizedRegionV1) -> str:
     coordinates = [float(value) + 0.0 for value in region.as_tuple()]
     digest = hashlib.sha256(json.dumps(coordinates, separators=(",", ":")).encode()).hexdigest()
@@ -183,7 +193,7 @@ async def _dispatch(
         if isinstance(request, EngineLocateInputV1) else request.document_pages or [request.page_number]
     ) if source.content_type == "application/pdf" else []
     try:
-        lease = capacity.lease(source.owner_id, background=True) if source.scope == "knowledge_document" else capacity.lease(source.owner_id)
+        lease = _recognition_admission(engine, source, capacity)
         async with asyncio.timeout(budget.remaining(phase)), lease:
             budget.assert_context(source, policy, engine.capabilities)
             seconds = min(policy.per_call_seconds, budget.remaining(phase))
@@ -313,7 +323,7 @@ async def _dispatch_response_only(
             policy.per_call_seconds, response_only=True, local_wait_seconds=settings.llm_timeout,
             before_send=authorize, on_send=reserve,
         ) as state:
-            async with state.local_admission(capacity.lease(source.owner_id)):
+            async with state.local_admission(_recognition_admission(engine, source, capacity)):
                 budget.assert_context(source, policy, engine.capabilities)
                 candidate = await dispatch(request)
             if ticket is None or not state.ever_started:

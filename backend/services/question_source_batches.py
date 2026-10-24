@@ -1,4 +1,5 @@
 """Read a complete question PDF with bounded, independently durable page batches."""
+import asyncio
 from backend.domain.errors import RecognitionError
 from backend.llm.image_capability import image_quality_failure
 from backend.recognition.local_limits import bounded_recognition_progress
@@ -21,33 +22,35 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
                                     allow_native_partial=False, retry_key=None, acknowledge_pending_retry=False,
                                     timeout_profile=None, allow_partial=False, on_pages=None):
     requested = request.pages or list(range(1, total_pages + 1))
-    # Incremental consumers need a durable callback before the next page waits
-    # on its provider. Page calls/cache/unknown-submit guards stay unchanged;
-    # only the enclosing run becomes page sized. Native-only reads stay batched.
-    batch_size = 1 if on_pages is not None and engine is not None else 12
-    batches = [requested[offset:offset + batch_size] for offset in range(0, len(requested), batch_size)]
+    incremental = on_pages is not None and engine is not None
+    batches = [requested[offset:offset + 12] for offset in range(0, len(requested), 12)]
     runs, documents, pages = [], [], {}
     failed_pages, unprocessed_pages, page_errors, failure_codes = set(), set(), [], []
-    while batches:
-        batch = batches.pop(0)
+
+    def scoped_request(batch):
         scoped = request.model_copy(update={"scope": "pages", "pages": batch})
-        scoped = apply_source_timeout_profile(scoped, engine=engine, timeout_profile=timeout_profile,
-                                              total_pages=total_pages)
+        return apply_source_timeout_profile(scoped, engine=engine, timeout_profile=timeout_profile,
+                                             total_pages=total_pages)
+
+    async def process(batch, repair_admission=None):
+        scoped = scoped_request(batch)
+        progress = reporter
         if scoped.policy.timeout_mode == "response_only":
-            reporter = bounded_recognition_progress(reporter)
-        await reporter.set_current_step("recognition_document_batch", message=(
+            progress = bounded_recognition_progress(reporter)
+        await progress.set_current_step("recognition_document_batch", message=(
             f"Reading PDF pages {batch[0]}–{batch[-1]}; {len(pages)}/{len(requested)} pages completed"))
         try:
             run = await service.run(scoped, content, engine=engine, prompt_version=PROMPT_VERSION,
                                     authorized_owner_id=request.source.owner_id, binding=binding, retry_key=retry_key,
-                                    acknowledge_pending_retry=acknowledge_pending_retry)
+                                    acknowledge_pending_retry=acknowledge_pending_retry,
+                                    **({"repair_admission": repair_admission} if repair_admission is not None else {}))
         except RecognitionError as exc:
             # A failed independent batch must not suppress later pages. These
             # pages are recorded as failed, never automatically resubmitted.
             failed_pages.update(batch)
             failure_codes.append(exc.code)
             page_errors.extend(dict(page=number, error_code=exc.code, status_code=None) for number in batch)
-            continue
+            return
         if run.status == "already_running":
             raise RecognitionError("recognition_already_running")
         runs.append(run)
@@ -57,7 +60,7 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
             failed_pages.update(batch)
             failure_codes.append(code)
             page_errors.extend(dict(page=number, error_code=code, status_code=None) for number in batch)
-            continue
+            return
         documents.append(document)
         # Successful page evidence may be reused, but incomplete input must not
         # progress to question/answer generation as though the whole file read.
@@ -86,7 +89,7 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
         pending = document.coverage.unprocessed_pages
         if native_partial:
             failed_pages.update(pending)
-            continue
+            return
         if pending:
             deferred = {decision.page_number for decision in read_batch.plan.decisions
                         if decision.action == "deferred"} if read_batch else set()
@@ -102,6 +105,42 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
                 unprocessed_pages.update(unresolved)
                 failure_codes.append(code)
             batches[0:0] = [[number] for number in sorted(safe_to_start)]
+
+    while batches:
+        window = batches.pop(0)
+        native = False
+        if incremental and hasattr(service, "native_page_window"):
+            native = await service.native_page_window(scoped_request(window), content, engine=engine,
+                authorized_owner_id=request.source.owner_id, binding=binding)
+        if not incremental or native:
+            await process(window)
+            continue
+        scoped = [scoped_request([page]) for page in window]
+        used = (await service.saved_page_extras(scoped, engine=engine, prompt_version=PROMPT_VERSION,
+            authorized_owner_id=request.source.owner_id, binding=binding, retry_key=retry_key)
+            if hasattr(service, "saved_page_extras") else {"patch": 0, "empty_recovery": 0})
+        limits = {"patch": request.policy.max_patches, "empty_recovery": request.policy.max_empty_recoveries}
+        allowance_lock = asyncio.Lock()
+
+        async def admit(kind):
+            async with allowance_lock:
+                if used[kind] >= limits[kind]:
+                    return False
+                # Reserve before dispatch; a cancelled or uncertain submission
+                # never refunds this window. The child also checkpoints it.
+                used[kind] += 1
+                return True
+
+        # Bound prepared page work by the existing window. Actual model starts
+        # share grading's credential/model RPM and adaptive resource scheduler.
+        tasks = [asyncio.create_task(process([page], admit)) for page in window]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
     failed_pages.difference_update(pages)
     unprocessed_pages.difference_update(pages)
     unprocessed_pages.update(set(requested) - set(pages) - failed_pages)
