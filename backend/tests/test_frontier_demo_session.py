@@ -431,7 +431,7 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(
     task_id = created["task_id"]
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
     assignment_repository.add_question(
-        assignment_id=task_id, teacher_id=owner_id, q_id="q1", order_index=0,
+        assignment_id=task_id, teacher_id=owner_id, q_id="q1", order_index=0, number="1",
         type="short", stem="Explain a synthetic concept.", max_score=5,
         criterion=criterion,
     )

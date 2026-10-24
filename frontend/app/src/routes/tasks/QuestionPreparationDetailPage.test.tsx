@@ -195,6 +195,7 @@ beforeEach(() => {
   taskData.workflow_revision = 7;
   taskData.status = "problems_ready";
   taskData.problem_data.Q2.reference_answer = "Answer two";
+  taskData.problem_data.Q2.type = "Proof";
   taskData.problem_data.Q2.criterion = "Rubric two";
   taskData.problem_data.Q2.preparation_issues = [];
   taskRefetch.mockReset().mockResolvedValue({ data: taskData });
@@ -253,9 +254,9 @@ it("edits type beside number through the existing versioned field save, includin
   await act(async () => { await listPageDrafts("question-draft-teacher"); });
   const card = within(document.querySelector('[data-question-id="Q1"]') as HTMLElement);
   expect(card.queryByText("short")).not.toBeInTheDocument();
-  expect(card.getAllByText("简答题")).toHaveLength(2);
+  expect(card.getAllByText("概念题")).toHaveLength(2);
   await userEvent.click(card.getByRole("button", { name: "题型 · 修改" }));
-  expect(card.getByRole("combobox", { name: "题型" })).toHaveValue("short_answer");
+  expect(card.getByRole("combobox", { name: "题型" })).toHaveValue("concept");
   await userEvent.selectOptions(card.getByRole("combobox", { name: "题型" }), "other");
   await userEvent.click(card.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({ taskId: "task-1", qId: "Q1", type: "other", expectedWorkflowRevision: 7 }));
@@ -268,6 +269,34 @@ it("edits type beside number through the existing versioned field save, includin
 });
 
 describe("QuestionPreparationDetailPage navigation", () => {
+  it("shows exact missing fields once and keeps an unknown type unselected", async () => {
+    taskData.problem_data.Q2.type = "";
+    taskData.problem_data.Q2.criterion = "";
+    taskData.problem_data.Q2.reference_answer = "";
+    taskData.problem_data.Q2.preparation_issues = [
+      { issue_id: "rubric", code: "generation_failed", field: "rubric", severity: "blocking", status: "open" },
+      { issue_id: "answer", code: "generation_failed", field: "answer", severity: "warning", status: "open" },
+    ];
+    renderPage("/tasks/task-1/questions/Q2/content");
+    const element = document.querySelector('[data-question-id="Q2"]') as HTMLElement;
+    const card = within(element);
+    expect(card.getAllByText("生成失败")).toHaveLength(1);
+    expect(card.getByText("请补齐缺失的题型、评分标准、标答并确认本题；完成前不能批改。")).toBeVisible();
+    expect(element.querySelector('[data-review-issue-notes] .text-amber-700')).toBeNull();
+    await userEvent.click(card.getByRole("button", { name: "题型 · 修改" }));
+    const select = card.getByRole("combobox", { name: "题型" });
+    expect(select).toHaveValue("");
+    expect(card.getByRole("option", { name: "请选择" })).toBeDisabled();
+    expect(card.queryByRole("option", { name: "简答题" })).not.toBeInTheDocument();
+    expect(card.getByRole("option", { name: "多选题" })).toBeInTheDocument();
+    expect(card.getByRole("button", { name: "保存" })).toBeDisabled();
+    fireEvent.click(card.getByRole("button", { name: /待确认/ }));
+    expect(mutateAsync).not.toHaveBeenCalled();
+    await userEvent.selectOptions(select, "multiple_choice");
+    mutateAsync.mockResolvedValue({ workflow_revision: 8 });
+    await userEvent.click(card.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({ taskId: "task-1", qId: "Q2", type: "multiple_choice", expectedWorkflowRevision: 7 }));
+  });
   it("opens only the failed question fields for manual completion and blocks early confirmation", async () => {
     taskData.problem_data.Q2.reference_answer = "";
     taskData.problem_data.Q2.criterion = "";

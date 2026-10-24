@@ -816,7 +816,7 @@ async def test_manual_handoff_preserves_each_durable_answer_within_partial_sourc
     from backend.services.submission_manual_review import continue_manually
     from backend.services.task_execution import stop_task_run
     owner, task = _seed_task(with_question=True)
-    assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1,
+    assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1, number="2",
         type="short", stem="Second question", criterion="Correct method and result: 10 points", max_score=10)
     queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
         filename="S1.txt", content=b"original saved answers", content_type="text/plain", registry=_Registry())
@@ -879,7 +879,7 @@ async def test_explicit_retry_only_parses_unfinished_questions_and_keeps_saved_i
     from backend.db import assignment_repository
     from backend.services.task_execution import stop_task_run
     owner, task = _seed_task(with_question=True)
-    assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1,
+    assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1, number="2",
         type="short", stem="Second question", criterion="Correct method and result: 10 points", max_score=10)
     prompts = []
     failed_attempts = 3 if failure_mode == "partial" else int(failure_mode is not None)

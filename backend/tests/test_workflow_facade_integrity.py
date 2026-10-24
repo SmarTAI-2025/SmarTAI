@@ -25,7 +25,7 @@ def _seed_assignment_and_run(*, owner_id: str, assignment_id: str):
         assignment_id=assignment_id,
         teacher_id=owner_id,
         q_id="q1",
-        order_index=0,
+        order_index=0, number="1",
         type="short",
         stem="Question",
         max_score=10,
@@ -117,7 +117,7 @@ def test_grading_uses_full_frozen_question_snapshot_after_later_edit():
         ))
     original = assignment_repository.add_question(
         assignment_id=assignment_id, teacher_id=owner_id,
-        q_id="q1", order_index=0, type="short", stem="original",
+        q_id="q1", order_index=0, number="1", type="short", stem="original",
         max_score=10,
     )
     frozen_setup = SimpleNamespace(input_manifest={
@@ -161,7 +161,7 @@ def test_legacy_minimal_question_manifest_fails_closed_after_edit():
         ))
     original = assignment_repository.add_question(
         assignment_id=assignment_id, teacher_id=owner_id,
-        q_id="q1", order_index=0, type="short", stem="original",
+        q_id="q1", order_index=0, number="1", type="short", stem="original",
         max_score=10,
     )
     legacy_setup = SimpleNamespace(input_manifest={
@@ -261,7 +261,7 @@ def _seed_figma_grading_task(owner_id: str):
     )
     question = assignment_repository.add_question(
         assignment_id=assignment.id, teacher_id=owner_id,
-        q_id="q1", order_index=0, type="short", stem="original stem",
+        q_id="q1", order_index=0, number="1", type="short", stem="original stem",
         criterion="rubric", reference_answer="answer", max_score=10,
     )
     assignment_repository.publish(

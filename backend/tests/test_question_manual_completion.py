@@ -104,7 +104,7 @@ async def test_paused_question_handoff_keeps_completed_questions_and_sources(mon
             task_facade.update_problem(task_id=task, owner_id=owner, q_id="manual-1", patch={"review_status": "confirmed"})
         for q in questions:
             task_facade.update_problem(task_id=task, owner_id=owner, q_id=q.q_id, patch={"number": f"A-{q.number}"})
-            task_facade.update_problem(task_id=task, owner_id=owner, q_id=q.q_id, patch={"stem": "Teacher-authored question"})
+            task_facade.update_problem(task_id=task, owner_id=owner, q_id=q.q_id, patch={"type": "concept", "stem": "Teacher-authored question"})
             task_facade.update_problem(task_id=task, owner_id=owner, q_id=q.q_id, patch={"criterion": "Award 10 points for the solution.", "max_score": 10})
             task_facade.update_problem(task_id=task, owner_id=owner, q_id=q.q_id, patch={"review_status": "confirmed"})
         projected = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]["manual-1"]
@@ -318,7 +318,7 @@ async def test_regular_recognized_question_number_uses_the_same_editor(monkeypat
         expected_revision=original["workflow_revision"], patch={"number": "1.1.5", "type": "other"})
     question = changed["problem"]
     assert question["number"] == "1.1.5" and question["q_id"] == "q1"
-    assert question["type"] == "other"
+    assert question["type"] == "其他"
     assert question["stem"] == original["problem_data"]["q1"]["stem"]
     assert question["reference_answer"] == original["problem_data"]["q1"]["reference_answer"]
     assert question["criterion"] == original["problem_data"]["q1"]["criterion"]

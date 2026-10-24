@@ -22,7 +22,6 @@ PLAN_EVENT = "grading_math_rubric_plan"
 _current_plans: ContextVar[dict[str, "MathRubricPlan"] | None] = ContextVar(
     "math_grading_plans", default=None,
 )
-_OTHER_SKILL_TYPES = frozenset({"选择题", "多选题", "填空题", "编程题"})
 
 
 async def report_math_progress(operation, *args, **kwargs):
@@ -39,8 +38,14 @@ async def report_math_progress(operation, *args, **kwargs):
 
 
 def uses_math_grading(problem_type: str) -> bool:
-    """Mirror skill dispatch, including its ConceptSkill fallback."""
-    return problem_type not in _OTHER_SKILL_TYPES
+    """Prepare only the resources needed by the saved type's grading strategy."""
+    from backend.skills.base import get_skill_for_type
+    from backend.skills.math_grading import MathGradingSkill
+
+    try:
+        return issubclass(get_skill_for_type(problem_type), MathGradingSkill)
+    except ValueError:
+        return False  # Missing/unsupported types are blocked by question review.
 
 
 def is_math_problem(problem_or_type) -> bool:

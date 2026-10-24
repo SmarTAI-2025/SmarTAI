@@ -16,7 +16,7 @@ beforeEach(() => { vi.clearAllMocks(); localStorage.setItem("smartai_locale", "z
 it.each(["zh-CN", "en-US"])("synchronizes cells, counts and queue after confirming a advisory package (%s)", async locale => {
   localStorage.setItem("smartai_locale", locale);
   const zh = locale === "zh-CN";
-  const problem = { q_id: "Q1", number: "1", stem: "x + 1 = 2", type: "math", max_score: 10,
+  const problem = { q_id: "Q1", number: "1", stem: "x + 1 = 2", type: "calculation", max_score: 10,
     reference_answer: "x = 1", criterion: "Solve", review_status: "needs_review", max_score_review_status: "confirmed",
     preparation_issues: [{ issue_id: "uncertain", code: "low_confidence", field: "stem", severity: "warning", status: "open", details: { confidence: .4 } }],
   } as ProblemInfo;
