@@ -1,4 +1,4 @@
-import { LoaderCircle, Pause } from "lucide-react";
+import { Pause } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -22,11 +22,9 @@ export function TaskPausedState({ status, onContinue, onManual, busy, manualBusy
       {children}
       <div className="flex flex-wrap items-center gap-2 max-sm:[&_button]:px-2 max-sm:[&_button]:text-xs!">
         <Button onClick={onContinue} disabled={busy || disabled} aria-busy={busy || undefined}>
-          {busy && !manualBusy ? <LoaderCircle aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" /> : null}
           {busy && !manualBusy ? (locale === "zh-CN" ? "正在处理…" : "Working…") : t(TASK_ACTION_KEYS[status])}
         </Button>
         {onManual ? <Button variant="secondary" onClick={onManual} disabled={busy} aria-busy={manualBusy || undefined}>
-          {manualBusy ? <LoaderCircle aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" /> : null}
           {manualBusy ? (locale === "zh-CN" ? "正在打开…" : "Opening…") : (locale === "zh-CN" ? "人工继续处理" : "Continue manually")}
         </Button> : null}
       </div>

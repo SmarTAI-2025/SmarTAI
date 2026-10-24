@@ -1,6 +1,7 @@
 """Persist and prepare every submission source independently."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from dataclasses import dataclass, replace
@@ -534,6 +535,7 @@ async def prepare_submission_sources(
     recognition_reader=None,
     reuse_source=None,
     on_source_ready: Callable[[PreparedSubmissionSource], Awaitable[None]] | None = None,
+    source_concurrency: int = 1,
 ) -> list[PreparedSubmissionSource]:
     """Persist originals, then OCR/read each source without batch-wide collapse."""
     container_file: StoredFile | None = None
@@ -610,12 +612,18 @@ async def prepare_submission_sources(
         return [source]
 
     prepared: list[PreparedSubmissionSource] = []
+    positions = {}
+    if reporter:
+        await reporter.set_totals(students=len(raw_sources), questions=(await reporter.snapshot()).total_questions)
+        await reporter.set_stage_metrics(files_total=len(raw_sources), files_processed=0)
     async def source_ready(source):
         prepared.append(source)
+        if reporter:
+            await reporter.set_stage_metrics(files_processed=len(prepared))
         if on_source_ready is not None:
             await on_source_ready(source)
 
-    for order_index, raw in enumerate(raw_sources):
+    async def prepare_one(order_index, raw):
         try:
             source_id, stored_file_id = await _persist_and_register(
                 raw=raw,
@@ -649,6 +657,7 @@ async def prepare_submission_sources(
                 operation_lease_token=operation_lease_token,
             )
             raw = failed_raw
+        positions[source_id] = order_index
         if raw.pre_error_code:
             await source_ready(PreparedSubmissionSource(
                 source_id=source_id,
@@ -662,7 +671,7 @@ async def prepare_submission_sources(
                 ),
                 retryable=raw.retryable,
             ))
-            continue
+            return
         if raw.content is None:
             raise RuntimeError("submission_source_persistence_failed")
         if reuse_source is not None and reuse_source(raw, source_id, stored_file_id):
@@ -670,7 +679,7 @@ async def prepare_submission_sources(
                 source_id=source_id, stored_file_id=stored_file_id,
                 filename=raw.filename, content_type=raw.content_type, text=None,
             ))
-            continue
+            return
         document_ocr_checkpointed = False
         recognition = None
         try:
@@ -775,4 +784,16 @@ async def prepare_submission_sources(
                 failure_phase=_source_read_failure_phase(code, raw.content_type),
                 retryable=retryable,
             ))
-    return prepared
+    gate = asyncio.Semaphore(max(1, min(50, source_concurrency)))
+    async def read_source(index, raw):
+        async with gate:
+            await prepare_one(index, raw)
+    tasks = [asyncio.create_task(read_source(index, raw)) for index, raw in enumerate(raw_sources)]
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    return sorted(prepared, key=lambda source: positions[source.source_id])

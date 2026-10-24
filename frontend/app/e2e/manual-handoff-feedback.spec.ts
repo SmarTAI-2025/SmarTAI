@@ -59,19 +59,17 @@ for (const stage of ["questions", "submissions", "grading"] as const) {
       await expect(page).toHaveURL(new RegExp(`${progressPath}$`));
       const manual = page.getByRole("button", { name: zh ? "人工继续处理" : "Continue manually", exact: true });
       await manual.click();
-      const feedback = page.getByText(zh ? "正在打开人工复核" : "Opening manual review", { exact: true });
-      await expect(feedback).toBeVisible();
       const opening = page.getByRole("button", { name: zh ? "正在打开…" : "Opening…", exact: true });
       await expect(opening).toBeDisabled();
-      // The inline status can shift the button below the fold. At least one
-      // explicit handoff label must remain visible without another scroll.
+      if (zh) await expect(opening).toHaveAttribute("aria-busy", "true");
+      await expect(page.getByText(zh ? "正在打开人工复核" : "Opening manual review", { exact: true })).toHaveCount(0);
       await expect.poll(async () => {
-        const boxes = await Promise.all([opening.boundingBox(), feedback.boundingBox()]);
-        return boxes.some(box => box && box.y >= 70 && box.y + box.height <= 900);
+        const box = await opening.boundingBox();
+        return box && box.y >= 70 && box.y + box.height <= 900;
       }).toBe(true);
       expect(mutations).toHaveLength(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-      await feedback.scrollIntoViewIfNeeded();
+      await opening.scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath("pending-manual-handoff.png"), fullPage: false });
       release();
       await expect(manual).toBeEnabled();

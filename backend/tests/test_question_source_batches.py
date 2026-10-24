@@ -14,6 +14,60 @@ from backend.tests.test_recognition_v2_artifacts import setup
 
 
 @pytest.mark.asyncio
+async def test_native_pdf_with_selected_model_keeps_one_window_and_indexes_pages_once(tmp_path, monkeypatch):
+    import hashlib
+    from backend.db import file_repository
+    from backend.recognition.models import RecognitionPolicyV1
+    from backend.services import recognition_local_evidence as local
+    from backend.services.recognition_runs import RecognitionRunService
+    from backend.tools.pdf_evidence import PdfIndexRequest
+
+    agent, original, _, results = setup(tmp_path)
+    data = pdf([f"Question {n}. Explain the independent statement in words." for n in range(1, 13)])
+    stored = file_repository.save_file(storage=results.store.storage, owner_id=original.source.owner_id,
+        assignment_id=original.source.business_id, kind="problem_source", original_name="native.pdf",
+        content=data, content_type="application/pdf")
+    req = original.model_copy(update={"source": original.source.model_copy(update={
+        "stored_file_id": stored.id, "content_type": "application/pdf", "input_sha256": hashlib.sha256(data).hexdigest()}),
+        "policy": RecognitionPolicyV1()})
+    service = RecognitionRunService(store=results.store, capacity=agent.capacity)
+    indexed = []
+    original_read = local.read_pdf_evidence
+    async def observed(content, command, **kwargs):
+        result = await original_read(content, command, **kwargs)
+        if isinstance(command, PdfIndexRequest):
+            indexed.extend(page.page_number for page in result.pages)
+        return result
+    monkeypatch.setattr(local, "read_pdf_evidence", observed)
+    saved = []
+    async def on_pages(pages):
+        saved.extend(pages)
+    _, summary = await read_question_pdf_batches(service=service, request=req, content=data,
+        engine=agent.engine, total_pages=12, reporter=ProgressReporter("native-window"), on_pages=on_pages)
+    assert indexed == list(range(1, 13))
+    assert len(summary["operation_ids"]) == 1
+    assert len(saved) == 12 and not agent.engine.reads
+
+
+@pytest.mark.asyncio
+async def test_real_saved_page_runs_cap_rechecks_and_reuse_without_new_calls(tmp_path):
+    from backend.services.recognition_runs import RecognitionRunService
+
+    agent, req, data, results = setup(tmp_path, pdf=True, pages=6, initial=["[unclear] + 1 = 3"] * 6)
+    service = RecognitionRunService(store=results.store, capacity=agent.capacity)
+    async def on_pages(pages):
+        pass
+    args = dict(service=service, request=req, content=data, engine=agent.engine,
+        total_pages=6, reporter=ProgressReporter("actual-window"), on_pages=on_pages, allow_partial=True)
+    _, first = await read_question_pdf_batches(**args)
+    assert len(agent.engine.reads) == 6 and len(agent.engine.repairs) == 4
+    _, second = await read_question_pdf_batches(**args)
+    assert len(agent.engine.reads) == 6 and len(agent.engine.repairs) == 4
+    assert sorted(second["operation_ids"]) == sorted(first["operation_ids"])
+    assert second["usage"]["initial_calls"] == 0 and second["usage"]["patch_calls"] == 0
+
+
+@pytest.mark.asyncio
 async def test_real_200_page_pdf_covers_every_page_and_reuses_saved_batches(tmp_path, monkeypatch):
     from backend.db import file_repository
 

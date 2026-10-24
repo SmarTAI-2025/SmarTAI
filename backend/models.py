@@ -442,6 +442,7 @@ class JobProgress(BaseModel):
     total_steps: Optional[int] = None
     completed_steps: Optional[int] = None
     stage_metrics: Dict[str, int] = Field(default_factory=dict)
+    preparation_counts: Dict[str, int] = Field(default_factory=dict)
     question_labels: Dict[str, str] = Field(default_factory=dict)
     question_error_codes: Dict[str, str] = Field(default_factory=dict)
     completed_question_ids: List[str] = Field(default_factory=list)

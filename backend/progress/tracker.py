@@ -116,6 +116,10 @@ class ProgressReporter:
             self._progress.workflow = normalized_workflow
             self._progress.stage_sequence = normalized_stages
 
+    async def set_preparation_counts(self, **counts: int) -> None:
+        async with self._lock:
+            self._progress.preparation_counts = dict(counts)
+
     async def increment_completed(self) -> None:
         async with self._lock:
             self._progress.completed_units += 1
@@ -238,6 +242,17 @@ class ProgressReporter:
         await self._emit(ProgressEvent(
             message=f"Preparing {len(normalized)} major-question generation units"
         ))
+
+    async def register_question_generation(self, q_id: str, label: str) -> None:
+        """Add a newly extracted question without resetting concurrent progress."""
+        async with self._lock:
+            if q_id in self._question_generation_ids:
+                return
+            self._question_generation_ids = (*self._question_generation_ids, q_id)
+            self._progress.total_questions = len(self._question_generation_ids)
+            self._progress.question_labels = _bounded_question_labels(self._question_generation_ids,
+                {**self._progress.question_labels, q_id: label})
+            self._progress.stage_metrics["solution_total_questions"] = len(self._question_generation_ids)
 
     async def mark_question_generation_started(self, q_id: str) -> None:
         normalized = str(q_id).strip()

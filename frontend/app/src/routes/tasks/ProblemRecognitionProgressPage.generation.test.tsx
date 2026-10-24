@@ -67,17 +67,24 @@ vi.mock("@/i18n/I18nProvider", () => ({
 }));
 
 describe("ProblemRecognitionProgressPage major-question generation", () => {
-  it.each(["zh-CN", "en-US"])("shows independently saved fields and honors an empty actual stage list (%s)", language => {
+  it.each(["zh-CN", "en-US"])("keeps the existing stages and two-column activity layout with an empty stage list (%s)", language => {
     locale = language;
-    progressOverride = { stage_sequence: [], current_step: "reading_source", stage_metrics: {}, active_question_ids: [],
+    progressOverride = { stage_sequence: [], current_step: "reading_source", completed_steps: 0, total_steps: 0, stage_metrics: {}, active_question_ids: [],
       preparation_counts: { questions: 3, stems: 3, reference_answers: 1, rubrics: 0 } };
     render(<MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}><Routes>
       <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
     </Routes></MemoryRouter>);
-    expect(screen.getByText(language === "zh-CN" ? "已保存：题干 3 · 标答 1 · 评分标准 0" : "Saved: question text 3 · Reference answers 1 · Rubrics 0")).toBeVisible();
-    expect(screen.queryByRole("list", { name: "problemProgressStepsLabel" })).not.toBeInTheDocument();
-    expect(screen.queryByText("problemProgressStepGenerateSolutions")).not.toBeInTheDocument();
+    const savedCounts = screen.getByText(language === "zh-CN" ? /已保存：题干 3 · 标答 1 · 评分标准 0/ : /Saved: question text 3 · Reference answers 1 · Rubrics 0/);
+    expect(savedCounts).toBeVisible();
+    expect(savedCounts).toHaveClass("mb-2");
+    const stages = screen.getByRole("list", { name: "problemProgressStepsLabel" });
+    expect(stages).toHaveClass("grid content-start gap-3");
+    expect(stages.parentElement).toHaveAttribute("class", "mt-8 grid min-h-0 flex-1 gap-6 md:grid-cols-[210px_minmax(0,1fr)] md:gap-16");
+    expect(stages.children).toHaveLength(8);
+    expect(screen.getByText("problemProgressStepGenerateSolutions")).toBeVisible();
     expect(screen.getByText("problemProgressStepReadSources")).toBeVisible();
+    expect(screen.getByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
+    expect(screen.queryByText("正在打开人工复核")).not.toBeInTheDocument();
   });
   it("shows factual completed and active major-question counts", () => {
     render(

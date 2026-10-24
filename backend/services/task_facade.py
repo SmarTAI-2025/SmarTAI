@@ -3131,6 +3131,8 @@ async def run_task_submission_parsing(
     parsed_artifact = None
     document_ocr_skill = None
     try:
+        await reporter.set_phase("parsing")
+        await reporter.set_current_step("preparing_submission_files", message="Preparing submission files.")
         frozen_input = (leased_operation.payload or {}) if leased_operation else workflow_repository.get_operation(job_id, owner_id=owner_id).payload or {}
         require_current_submission_pipeline(frozen_input)
         if leased_operation is None:
@@ -3147,6 +3149,7 @@ async def run_task_submission_parsing(
                 )
         assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
         questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
+        await reporter.set_totals(students=0, questions=len(questions))
         results = None
         if leased_operation is not None:
             parsed_artifact = _submission_result_artifact(
@@ -3264,8 +3267,23 @@ async def run_task_submission_parsing(
                 invalidate_answer_units, merge_parse_repair, merge_source_answer_units, split_submission_question_units,
             )
             problem_data = {q.q_id: _serialize_problem(q) for q in questions}
-            parse_capacity = asyncio.Semaphore(2)
+            from backend.agents.question_preparation_agent import _major_question_generation_concurrency
+            parse_capacity = asyncio.Semaphore(_major_question_generation_concurrency(provider) if provider else 4)
             boundary_invalidations = {}
+            progress_answers, progress_students = {}, {}
+
+            async def report_saved_answers(result):
+                student = result.student
+                if student is not None:
+                    progress_students[result.source_id] = student
+                    progress_answers.setdefault(result.source_id, {}).update({
+                        answer["q_id"]: answer for answer in student.get("stu_ans", [])})
+                await reporter.set_stage_metrics(
+                    submissions_recognized=len(progress_students),
+                    identities_matched=sum(value.get("identity_status") == "matched" for value in progress_students.values()),
+                    identities_needing_review=sum(value.get("identity_status") != "matched" for value in progress_students.values()),
+                    answers_split=sum(len(value) for value in progress_answers.values()))
+                await reporter.set_current_step("recognizing_submissions", message="Recognized submission answers saved.")
 
             async def durable_source_parse(source, invoke, target_ids, *, repair_index=0):
                 if leased_operation is None:
@@ -3295,7 +3313,9 @@ async def run_task_submission_parsing(
                             raise RuntimeError("recognition_artifact_invalid")
                         student = None if restored[0].student is None else {
                             **restored[0].student, "source_id": source.source_id, "stored_file_id": source.stored_file_id}
-                        return replace(restored[0], source_id=source.source_id, student=student)
+                        result = replace(restored[0], source_id=source.source_id, student=student)
+                        await report_saved_answers(result)
+                        return result
                     worker = "submission-parser-" + uuid.uuid4().hex
                     child = await run_in_threadpool(workflow_repository.claim_operation, child.id,
                         owner_id=owner_id, worker_id=worker, lease_seconds=960)
@@ -3353,7 +3373,7 @@ async def run_task_submission_parsing(
                             # parent with 500 students must not collect one ref
                             # per question and exceed the 2,048-ref limit.
                             artifact_refs=leased_operation.artifact_refs)
-                        await reporter._emit_message("Recognized submission answers saved.")
+                        await report_saved_answers(result)
                         return result
                     finally:
                         try:
@@ -3401,19 +3421,28 @@ async def run_task_submission_parsing(
                 return retained
 
             page_texts, incremental_tasks = {}, {}
-            async def on_saved_pages(raw, stored_file_id, pages):
-                from backend.services.source_question_units import QUESTION_HEADING, source_question_units
-                source_id = source_contexts[(stored_file_id, raw.filename)]
-                saved_pages = page_texts.setdefault(source_id, {})
-                saved_pages.update({page["page_number"]: page["text"] for page in pages})
+            async def schedule_pages(source_id, stored_file_id, source_filename, source_content_type,
+                                     *, complete=False, end_page=None):
+                from backend.services.source_question_units import QUESTION_HEADING, source_question_units, source_page_groups
+                saved_pages = page_texts.get(source_id, {})
                 by_number = {}
                 for q_id, problem in problem_data.items():
                     by_number.setdefault(str(problem.get("number") or ""), []).append(q_id)
                 targets = set(source_question_ids.get(source_id, problem_data))
                 dispatched = incremental_tasks.setdefault(source_id, {})
-                prefix_text = saved_pages.get(1, "")
-                first_heading = QUESTION_HEADING.search(prefix_text)
-                prefix = prefix_text[:first_heading.start()] if first_heading else ""
+                prefix_parts, number = [], 1
+                while number in saved_pages:
+                    first_heading = QUESTION_HEADING.search(saved_pages[number])
+                    if first_heading:
+                        prefix_parts.append(saved_pages[number][:first_heading.start()])
+                        break
+                    prefix_parts.append(saved_pages[number])
+                    number += 1
+                else:
+                    # Identity/header text may arrive later than an answer page.
+                    if not complete:
+                        return
+                prefix = "\n\n".join(prefix_parts).strip()
                 page_units = source_question_units(saved_pages, known_numbers=set(by_number))
                 invalid = {q_id for unit in page_units if unit.closure == "repeated_heading"
                            for q_id in by_number.get(unit.number, [])}
@@ -3423,22 +3452,39 @@ async def run_task_submission_parsing(
                     # unit even if that unit was already durably saved.
                     await save_source_state(source_id, stored_file_id,
                         invalidated_question_ids=sorted(boundary_invalidations[source_id]))
-                for unit in page_units:
-                    ids = by_number.get(unit.number, [])
-                    if not unit.complete or len(ids) != 1 or ids[0] not in targets or ids[0] in dispatched:
+                for unit in source_page_groups(saved_pages, source_complete=complete,
+                                               source_end_page=end_page, numbered=False):
+                    ids = {ids[0] for match in QUESTION_HEADING.finditer(unit.text)
+                           if len(ids := by_number.get(match.group("number"), [])) == 1} & targets
+                    ids -= set(dispatched)
+                    if not unit.complete or not ids:
                         continue
-                    q_id = ids[0]
-                    source = PreparedSubmissionSource(source_id, stored_file_id, raw.filename, raw.content_type,
+                    source = PreparedSubmissionSource(source_id, stored_file_id, source_filename, source_content_type,
                         "\n\n".join(part for part in (prefix, unit.text) if part),
-                        recognition={"complete_question_ids": [q_id], "source_pages": list(unit.pages)})
-                    dispatched[q_id] = asyncio.create_task(parse_unit(source, {q_id}))
+                        recognition={"complete_question_ids": sorted(ids), "source_pages": list(unit.pages)})
+                    task = asyncio.create_task(parse_unit(source, ids))
+                    dispatched.update({q_id: task for q_id in ids})
+
+            async def on_saved_pages(raw, stored_file_id, pages):
+                source_id = source_contexts[(stored_file_id, raw.filename)]
+                page_texts.setdefault(source_id, {}).update({page["page_number"]: page["text"] for page in pages})
+                await schedule_pages(source_id, stored_file_id, raw.filename, raw.content_type)
 
             async def parse_ready_source(source):
                 targets = set(source_question_ids.get(source.source_id, problem_data))
+                coverage = (source.recognition or {}).get("coverage") or {}
+                complete = not (source.pre_error_code or (source.recognition or {}).get("error_code") or
+                                coverage.get("failed_pages") or coverage.get("unprocessed_pages"))
+                requested = coverage.get("requested_pages") or []
+                await schedule_pages(source.source_id, source.stored_file_id, source.filename, source.content_type,
+                    complete=complete, end_page=max(requested) if requested else coverage.get("total_pages"))
                 dispatched = incremental_tasks.get(source.source_id, {})
                 remaining = targets - set(dispatched)
-                units = split_submission_question_units(source, problem_data, remaining) if remaining else []
-                unit_tasks = [*dispatched.values(), *[
+                # PDFs use saved page groups. Other input formats retain their
+                # existing conservative, explicitly labelled source handling.
+                units = ([(source, remaining)] if source.source_id in page_texts else
+                         split_submission_question_units(source, problem_data, remaining)) if remaining else []
+                unit_tasks = [*dict.fromkeys(dispatched.values()), *[
                     asyncio.create_task(parse_unit(unit, targets)) for unit, targets in units]]
                 try:
                     values = await asyncio.gather(*unit_tasks)
@@ -3476,6 +3522,7 @@ async def run_task_submission_parsing(
                     recovered_ocr_text_by_source=recovered_ocr_text, blocked_ocr_source_ids=blocked_source_ids,
                     vision_unavailable_code=None if route.is_baidu_ocr or vision is not None else "provider_vision_not_supported",
                     reporter=reporter, on_source_ready=on_source_ready,
+                    source_concurrency=_major_question_generation_concurrency(provider) if provider else 4,
                 )
                 current_failure_phase = "recognition"
                 values = await asyncio.gather(*source_tasks.values())
@@ -3488,6 +3535,7 @@ async def run_task_submission_parsing(
                 await asyncio.gather(*pending_tasks, return_exceptions=True)
             by_source = {**reused, **{result.source_id: result for result in values}}
             results = normalize_submission_source_identities([by_source[source.source_id] for source in all_sources])
+            await reporter.set_current_step("consolidating_submission_results", message="Saving submission results.")
             await reporter.set_stage_metrics(files_total=len(results), files_processed=len(results),
                 submissions_recognized=sum(result.student is not None for result in results),
                 answers_split=sum(result.matched_answer_count for result in results),

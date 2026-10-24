@@ -92,7 +92,9 @@ export function RecognitionActivity({ progress, locale, incomplete = false, fill
     <p className={incomplete ? "mb-2 shrink-0" : "sr-only"} aria-live="polite">{latestText}</p>
     <div ref={list} className="min-h-0 flex-1 overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" role="region" aria-label={zh ? "识别动态历史" : "Recognition activity history"} tabIndex={0}
       onScroll={() => { if (list.current) stickToBottom.current = list.current.scrollHeight - list.current.scrollTop - list.current.clientHeight < 32; }}>
-      <p className="mb-2">{zh ? "显示当前保存的最近动态，最多 200 条" : "Showing the saved recent activity, up to 200 entries"}</p>
+      <p className="mb-2">{zh ? "显示当前保存的最近动态，最多 200 条" : "Showing the saved recent activity, up to 200 entries"}{progress?.preparation_counts ? (zh
+        ? ` · 已保存：题干 ${progress.preparation_counts.stems} · 标答 ${progress.preparation_counts.reference_answers} · 评分标准 ${progress.preparation_counts.rubrics}`
+        : ` · Saved: question text ${progress.preparation_counts.stems} · Reference answers ${progress.preparation_counts.reference_answers} · Rubrics ${progress.preparation_counts.rubrics}`) : ""}</p>
       <ol className="space-y-2">{events.map((event, index) => <li key={`${event.ts}:${index}`} className="flex gap-3 leading-5">
         <time className="shrink-0 tabular-nums">{Number.isFinite(event.ts) && event.ts > 0 ? new Date(event.ts * (event.ts > 1e12 ? 1 : 1000)).toLocaleTimeString(locale) : "—"}</time>
         <span className="min-w-0 break-words">{recognitionEventText(event, zh)}</span>

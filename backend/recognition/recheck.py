@@ -256,7 +256,7 @@ async def recheck_recognition(
     engine: RecognitionEngine | None, budget: RecognitionBudget, capacity: RecognitionCapacity,
     progress: ProgressReporter | None = None,
     local_reader: RecognitionLocalEvidenceReader | None = None,
-    call_session=None,
+    call_session=None, repair_admission=None,
 ) -> RecognitionAssemblyV1:
     """Use the original live reservation authority, never a reconstituted ledger."""
     from backend.recognition.fusion import RecognitionAssemblyV1
@@ -302,6 +302,12 @@ async def recheck_recognition(
             try:
                 if engine is None or engine.capabilities != raw.engine_capabilities:
                     raise RecognitionError("recognition_route_changed")
+                if repair_admission is not None and not await repair_admission(target.kind):
+                    # Page operations share the original window's allowance.
+                    # Keep the selected-but-unsubmitted outcome as evidence;
+                    # neither it nor a restart is permission for an extra call.
+                    stops.append("repair_" + target.kind + "_limit")
+                    break
                 if progress:
                     await progress.set_current_step("recognition_recheck", message="Rechecking uncertain source evidence")
                 token_limit = budget.output_limit(2048)

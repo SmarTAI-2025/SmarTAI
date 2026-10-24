@@ -8,7 +8,6 @@ import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { TaskExecutionControls } from "@/components/tasks/TaskExecutionControls";
 import { TaskPausedState } from "@/components/tasks/TaskPausedState";
-import { ManualHandoffState } from "@/components/tasks/ManualHandoffState";
 import { GradingActivity, ModelProgressRows } from "@/components/tasks/GradingActivity";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
@@ -144,7 +143,6 @@ export function GradingProgressPage() {
         <PageState title={copy(locale, "reading")} busy />
       ) : (
         <div>
-          {manualBusy ? <ManualHandoffState stage="grading" locale={locale} /> : null}
               {manualError ? <p role="alert">{locale === "zh-CN" ? "暂时无法进入复核，请刷新状态后重试。" : "Could not open review. Refresh and try again."}</p> : null}
           {status === "error" ? <p className="mb-4 text-sm text-muted-foreground">{locale === "zh-CN" ? "仅重试缺少有效结果的题次，保留成功结果及教师修改。可先在模型配置中调整模型；返回批改设置再开始会重新批改整批。" : "Retry only items without a valid result; keep successful results and teacher edits. You can adjust models first. Starting from grading settings reruns the full batch."}</p> : null}
           {status === "grading_paused" && !retryGrading.error ? (

@@ -1290,6 +1290,21 @@ def get_operation(operation_id: str, *, owner_id: str) -> WorkflowOperationRecor
         return _detach_operation(row)
 
 
+def find_operations_by_hashes(*, assignment_id: str, owner_id: str,
+                              operation_type: str, input_hashes: list[str]):
+    """Read a bounded group of source operations without creating or claiming it."""
+    if len(input_hashes) > 24:
+        raise ValueError("operation lookup exceeds one source window")
+    with session_scope() as session:
+        rows = session.scalars(select(WorkflowOperationRecord).where(
+            WorkflowOperationRecord.assignment_id == assignment_id,
+            WorkflowOperationRecord.owner_id == owner_id,
+            WorkflowOperationRecord.operation_type == operation_type,
+            WorkflowOperationRecord.input_hash.in_(input_hashes),
+        ))
+        return {row.input_hash: _detach_operation(row) for row in rows}
+
+
 def update_operation(
     operation_id: str, *, owner_id: str, expected_attempt: int,
     expected_lease_token: str | None = None,

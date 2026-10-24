@@ -195,7 +195,7 @@ describe("GradingProgressPage completion routing", () => {
     vi.mocked(continueTaskRun).mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
     renderProgress();
     fireEvent.click(screen.getByRole("button", { name: "Continue manually" }));
-    expect(screen.getByText("Opening manual review")).toBeVisible();
+    expect(screen.queryByText("Opening manual review")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Opening…" })).toBeDisabled();
     reject(new Error("Recovery failed"));
     expect(await screen.findByText("Could not open review. Refresh and try again.")).toBeVisible();

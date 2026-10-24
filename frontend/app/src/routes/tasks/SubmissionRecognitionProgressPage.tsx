@@ -17,7 +17,6 @@ import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
 import { TaskExecutionControls } from "@/components/tasks/TaskExecutionControls";
 import { TaskPausedState } from "@/components/tasks/TaskPausedState";
-import { ManualHandoffState } from "@/components/tasks/ManualHandoffState";
 import { RecognitionActivity, RecognitionRequestStatus } from "@/components/tasks/RecognitionActivity";
 import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
@@ -152,7 +151,6 @@ export function SubmissionRecognitionProgressPage() {
             disabled={openingManual || retryRecognition.isPending || expertsQuery.isLoading}
             onChange={(id) => { if (failedJobId) setProviderChoice({ jobId: failedJobId, id }); setRetryError(null); }} className="mb-4" /> : null}
           {uncertain && failedJobId ? <label className="mb-4 flex items-center gap-2 text-sm"><input type="checkbox" checked={acknowledgedJobId === failedJobId} disabled={retryRecognition.isPending} onChange={(event) => setAcknowledgedJobId(event.target.checked ? failedJobId : null)} />{locale === "zh-CN" ? "我了解上次请求可能已计费，确认重试可能再次消耗额度" : "I understand the previous call may have been billed and retrying may incur additional charges"}</label> : null}
-          {openingManual ? <ManualHandoffState stage="submissions" locale={locale} /> : null}
           {paused && !retryError && !info.retryUnavailable ? <TaskPausedState status="submissions_paused" onContinue={() => void retry()}
             onManual={failedJobId ? () => void continueManually() : undefined}
             busy={retryRecognition.isPending || manualRecognition.isPending || openingManual || refreshing} manualBusy={openingManual} disabled={!failedJobId || !providerId} /> : <RecoverableActionState

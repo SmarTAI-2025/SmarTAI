@@ -50,8 +50,9 @@ describe("submission recognition completion", () => {
     manuallyComplete.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
     show();
     fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
-    expect(screen.getByText("正在打开人工复核")).toBeVisible();
+    expect(screen.queryByText("正在打开人工复核")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "正在打开…" })).toBeDisabled();
+    if (status === "submissions_paused") expect(screen.getByRole("button", { name: "正在打开…" })).toHaveAttribute("aria-busy", "true");
     expect(screen.queryByRole("heading", { name: "作答校对页面" })).not.toBeInTheDocument();
     reject(new Error("Recovery request failed"));
     expect(await screen.findByRole("button", { name: "人工继续处理" })).toBeEnabled();

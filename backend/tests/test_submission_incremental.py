@@ -53,6 +53,50 @@ def _saved_signal(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("pause", [False, True])
+async def test_two_page_submission_batches_questions_and_manual_never_calls_ai(monkeypatch, pause):
+    from backend.tests.test_recognition_agent import pdf
+    owner, task = _seed_task()
+    for number in range(1, 5):
+        assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
+            number=str(number), type="short", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
+    saved, calls = _saved_signal(monkeypatch), []
+    async def invoke(messages):
+        ids = [item["q_id"] for item in _questions(messages)]
+        calls.append(ids)
+        if pause and ids == ["q3", "q4"]:
+            await asyncio.wait_for(saved.wait(), 3)
+            raise asyncio.CancelledError()
+        return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One",
+            stu_ans=[dict(q_id=q_id, number=q_id[1:], type="short", content="Saved " + q_id, flag=[]) for q_id in ids])))
+    registry = _registry(monkeypatch, invoke)
+    pages = [dict(page_number=1, text="Question 1: First answer\nQuestion 2: Second answer"),
+             dict(page_number=2, text="Question 3: Third answer\nQuestion 4: Fourth answer")]
+    async def read(**kwargs):
+        await kwargs["on_pages"](pages)
+        return SimpleNamespace(text="\n\n".join(page["text"] for page in pages), recognition=None)
+    monkeypatch.setattr(task_facade, "read_question_source", read)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="S1.pdf",
+        content=pdf([page["text"] for page in pages]), content_type="application/pdf", registry=registry)
+    operation = _claim(owner, queued["job_id"])
+    if pause:
+        with pytest.raises(asyncio.CancelledError):
+            await task_facade.run_durable_submission_recognition(operation)
+        stop_task_run(task_id=task, owner_id=owner, job_id=operation.operation_id,
+            expected_revision=workflow_repository.get_workflow(task, owner_id=owner).workflow_revision)
+        before = task_facade.get_task(task_id=task, owner_id=owner)
+        await continue_manually(task_id=task, owner_id=owner, job_id=operation.operation_id,
+            expected_revision=before["workflow_revision"])
+    else:
+        await task_facade.run_durable_submission_recognition(operation)
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    assert sorted(calls) == [["q1", "q2"], ["q3", "q4"]]
+    answers = {answer["q_id"]: answer for answer in after["student_data"]["S1"]["stu_ans"]}
+    assert all(answers[key]["content"] == "Saved " + key for key in ("q1", "q2"))
+    assert all(bool(answers[key]["content"]) is not pause for key in ("q3", "q4"))
+
+
+@pytest.mark.asyncio
 async def test_first_file_structure_is_saved_while_second_file_is_still_reading(monkeypatch):
     owner, task = _seed_task(with_question=True)
     saved = _saved_signal(monkeypatch)
@@ -243,11 +287,12 @@ async def test_closed_answer_is_saved_before_later_ocr_and_is_not_invalidated_by
     registry = _registry(monkeypatch, invoke)
     async def read(**kwargs):
         assert kwargs["allow_partial"]
-        await kwargs["on_pages"]([dict(page_number=1, text="Question 1: Complete first answer\nQuestion 2: Next answer")])
+        await kwargs["on_pages"]([dict(page_number=1, text="Question 1: Complete first answer"),
+                                    dict(page_number=2, text="Question 2: Next answer")])
         await asyncio.wait_for(saved.wait(), timeout=3)
         if later_page_fails:
             return SimpleNamespace(text="Question 1: Complete first answer\nQuestion 2: Next answer",
-                recognition={"error_code": "provider_submit_uncertain", "coverage": {"processed_pages": [1], "failed_pages": [2]}})
+                recognition={"error_code": "provider_submit_uncertain", "coverage": {"processed_pages": [1, 2], "failed_pages": [3]}})
         return SimpleNamespace(text="Question 1: Complete first answer\nQuestion 2: Next answer\nFinal part", recognition=None)
     monkeypatch.setattr(task_facade, "read_question_source", read)
     queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
@@ -319,11 +364,11 @@ async def test_later_repeated_heading_revokes_saved_answer_completeness_even_if_
         return _response(q_id, "Saved " + q_id)
     registry = _registry(monkeypatch, invoke)
     async def read(**kwargs):
-        first = "Question 1: First part\nQuestion 2: Second"
+        first = "Question 1: First part"
         last = "Question 1: Continued elsewhere"
-        await kwargs["on_pages"]([dict(page_number=1, text=first)])
+        await kwargs["on_pages"]([dict(page_number=1, text=first), dict(page_number=2, text="Question 2: Second")])
         await asyncio.wait_for(saved.wait(), timeout=3)
-        await kwargs["on_pages"]([dict(page_number=2, text=last)])
+        await kwargs["on_pages"]([dict(page_number=3, text=last)])
         if paused:
             raise asyncio.CancelledError()
         return SimpleNamespace(text=first + "\n\n" + last, recognition=None)
@@ -348,7 +393,7 @@ async def test_later_repeated_heading_revokes_saved_answer_completeness_even_if_
 
 
 @pytest.mark.asyncio
-async def test_two_page_answer_is_saved_while_third_page_provider_is_waiting(monkeypatch):
+async def test_two_page_answer_is_saved_while_later_page_provider_is_waiting(monkeypatch):
     from backend.domain.errors import RecognitionError
     from backend.progress.tracker import ProgressReporter
     from backend.services.question_source_batches import read_question_pdf_batches
@@ -371,7 +416,7 @@ async def test_two_page_answer_is_saved_while_third_page_provider_is_waiting(mon
         page_calls.append(scoped.pages)
         assert len(scoped.pages) == 1
         page = scoped.pages[0]
-        if page == 3:
+        if page == 4:
             # The source reader is still inside the provider wait when q1's
             # complete cross-page structure reaches its durable checkpoint.
             await asyncio.wait_for(saved.wait(), timeout=3)
@@ -379,11 +424,11 @@ async def test_two_page_answer_is_saved_while_third_page_provider_is_waiting(mon
         result = fake_result(scoped.pages)
         result.assembly.document.pages[0].spans[0].final_text = (
             "Question 1: First page part" if page == 1 else
-            "Second page continuation\nQuestion 2: Open tail")
+            "Second page continuation" if page == 2 else "Question 2: Open tail")
         return result
     async def read(**kwargs):
         text, summary = await read_question_pdf_batches(service=SimpleNamespace(run=run),
-            request=request(b"fixture"), content=b"fixture", engine=SimpleNamespace(), total_pages=3,
+            request=request(b"fixture"), content=b"fixture", engine=SimpleNamespace(), total_pages=4,
             reporter=ProgressReporter("incremental-pages"), allow_partial=True, on_pages=kwargs["on_pages"])
         return SimpleNamespace(text=text, recognition=summary)
     monkeypatch.setattr(task_facade, "read_question_source", read)
@@ -395,7 +440,7 @@ async def test_two_page_answer_is_saved_while_third_page_provider_is_waiting(mon
                             expected_revision=before["workflow_revision"])
     answers = {answer["q_id"]: answer for answer in task_facade.get_task(task_id=task, owner_id=owner)
                ["student_data"]["S1"]["stu_ans"]}
-    assert page_calls == [[1], [2], [3]] and structure_calls.count("q1") == 1
+    assert page_calls == [[1], [2], [3], [4]] and structure_calls.count("q1") == 1
     assert answers["q1"]["content"] == "Saved q1" and not answers["q1"]["flag"]
     assert "recognition_manual_pending" in answers["q2"]["flag"]
 

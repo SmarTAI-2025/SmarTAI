@@ -15,7 +15,6 @@ import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { TaskExecutionControls } from "@/components/tasks/TaskExecutionControls";
 import { TaskPausedState } from "@/components/tasks/TaskPausedState";
-import { ManualHandoffState } from "@/components/tasks/ManualHandoffState";
 import { RecognitionActivity, RecognitionRequestStatus } from "@/components/tasks/RecognitionActivity";
 import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
@@ -183,7 +182,6 @@ export function ProblemRecognitionProgressPage() {
               onChange={(id) => { setProviderChoice({ jobId: failedJobId, id }); setRetryFailure(null); }}
             />
           ) : null}
-          <SavedPreparationCounts progress={progressQuery.progress} locale={locale} />
           <RecognitionActivity progress={progressQuery.progress} locale={locale} incomplete={!paused} />
           {!paused && <QuestionGenerationFailureSummary
             progress={progressQuery.progress}
@@ -197,7 +195,6 @@ export function ProblemRecognitionProgressPage() {
               {locale === "zh-CN" ? "我了解可能再次计费，确认重试未完成的题目" : "I understand possible additional charges and confirm retrying incomplete questions"}
             </label>
           ) : null}
-          {openingManual ? <ManualHandoffState stage="questions" locale={locale} /> : null}
           {paused && !retryFailure && !info.retryUnavailable ? <TaskPausedState status="problems_paused"
             onContinue={() => void retryPreparedSources()} onManual={failedJobId ? () => void openManualReview() : undefined}
             busy={isRefreshing || retryPreparation.isPending || manualPreparation.isPending || openingManual}
@@ -323,7 +320,6 @@ export function ProblemRecognitionProgressPage() {
           <SmarTAIMascot variant="thinking" size="md" className="hidden sm:inline-flex" />
         </div>
 
-        <SavedPreparationCounts progress={progress} locale={locale} />
         <div className="mt-6 flex items-center gap-3">
           <div
             className="relative h-2 flex-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"
@@ -372,8 +368,8 @@ export function ProblemRecognitionProgressPage() {
 
         {!queued && <RecognitionRequestStatus progress={progress} locale={locale} stale={progressQuery.isError} />}
 
-        <div className={cn("mt-8 grid min-h-0 flex-1 gap-6", steps.length > 0 && "md:grid-cols-[210px_minmax(0,1fr)] md:gap-16")}>
-          {steps.length > 0 ? <ol className="grid content-start gap-3" aria-label={t("problemProgressStepsLabel")}>
+        <div className="mt-8 grid min-h-0 flex-1 gap-6 md:grid-cols-[210px_minmax(0,1fr)] md:gap-16">
+          <ol className="grid content-start gap-3" aria-label={t("problemProgressStepsLabel")}>
             {steps.map((step) => (
               <RecognitionStepItem
                 key={step.code}
@@ -381,7 +377,7 @@ export function ProblemRecognitionProgressPage() {
                 label={getStageLabel(step, locale, t)}
               />
             ))}
-          </ol> : null}
+          </ol>
 
           <div className="relative min-h-64 min-w-0 md:min-h-0"><RecognitionActivity progress={progress} locale={locale} fill /></div>
         </div>
@@ -568,13 +564,23 @@ function RecoveryState({
   );
 }
 
-function SavedPreparationCounts({ progress, locale }: { progress: JobProgress | null; locale: Locale }) {
-  const counts = progress?.preparation_counts;
-  if (!counts) return null;
-  return <p role="status" className="mt-4 rounded-lg bg-muted/50 px-4 py-3 text-sm text-muted-foreground">{locale === "zh-CN"
-    ? `已保存：题干 ${counts.stems} · 标答 ${counts.reference_answers} · 评分标准 ${counts.rubrics}`
-    : `Saved: question text ${counts.stems} · Reference answers ${counts.reference_answers} · Rubrics ${counts.rubrics}`}</p>;
-}
+const UNIFIED_STAGE_SEQUENCE = [
+  "validating_sources",
+  "extracting_questions",
+  "aligning_uploaded_materials",
+  "generating_solutions",
+  "aligning_rubrics",
+  "preparing_programming_tests",
+  "detecting_conflicts",
+  "committing_question_packages",
+];
+
+const LEGACY_STAGE_SEQUENCE = [
+  "source_prepared",
+  "calling_recognition",
+  "organizing_structure",
+  "completed",
+];
 
 const STAGE_LABEL_KEYS: Record<string, MessageKey> = {
   validating_sources: "problemProgressStepValidateSources",
@@ -610,14 +616,16 @@ const STAGE_LABEL_KEYS: Record<string, MessageKey> = {
 };
 
 function getRecognitionSteps(progress: JobProgress | null): RecognitionStep[] {
-  const backendSequence = progress?.stage_sequence?.filter(Boolean);
+  const backendSequence = (progress?.stage_sequence ?? []).filter(Boolean);
   const currentStep = progress?.current_step ?? null;
-  // An empty sequence is intentional. Older snapshots can show their current
-  // recorded step, but must not invent planned work or mark unrelated steps done.
-  const sequence = backendSequence ?? (currentStep ? [currentStep] : []);
+  const sequence = backendSequence.length
+    ? backendSequence
+    : currentStep && LEGACY_STAGE_SEQUENCE.includes(currentStep)
+      ? LEGACY_STAGE_SEQUENCE
+      : UNIFIED_STAGE_SEQUENCE;
   const completed = Math.max(
     0,
-    Math.min(sequence.length, backendSequence ? progress?.completed_steps ?? 0 : 0),
+    Math.min(sequence.length, progress?.completed_steps ?? 0),
   );
   const currentIndex = currentStep ? sequence.indexOf(currentStep) : -1;
   const fallbackActiveIndex = Math.min(completed, sequence.length - 1);
