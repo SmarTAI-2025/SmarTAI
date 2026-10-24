@@ -145,6 +145,63 @@ class _Registry:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sibling_finishes", [False, True])
+async def test_reader_lease_loss_stops_queued_work_and_discards_late_results(
+    monkeypatch, sibling_finishes,
+):
+    raws = [
+        RawUploadSource(filename=name, content=b"answer", content_type="text/plain")
+        for name in ("first.txt", "second.txt", "queued.txt")
+    ]
+    monkeypatch.setattr(
+        submission_source_pipeline, "extract_raw_files_from_archive",
+        lambda *_args, **_kwargs: raws,
+    )
+    persisted, reads, published = [], [], []
+    sibling_started, loss_reported, sibling_stopped = (
+        asyncio.Event(), asyncio.Event(), asyncio.Event()
+    )
+    lost = LeaseLost("replacement worker owns the operation")
+
+    async def persist(**kwargs):
+        name = kwargs["raw"].filename
+        persisted.append(name)
+        return name, name
+
+    async def read(raw, _stored_file_id):
+        reads.append(raw.filename)
+        if raw.filename == "first.txt":
+            await asyncio.wait_for(sibling_started.wait(), 3)
+            loss_reported.set()
+            raise lost
+        sibling_started.set()
+        try:
+            if sibling_finishes:
+                await asyncio.wait_for(loss_reported.wait(), 3)
+                return SimpleNamespace(text="late result", recognition=None)
+            await asyncio.Event().wait()
+        finally:
+            sibling_stopped.set()
+
+    async def publish(source):
+        published.append(source)
+
+    monkeypatch.setattr(submission_source_pipeline, "_persist_and_register", persist)
+    with pytest.raises(LeaseLost) as caught:
+        await submission_source_pipeline.prepare_submission_sources(
+            content=b"test", filename="test.txt", content_type="text/plain",
+            owner_id="owner", task_id="task", job_id="job", job_attempt=1,
+            ocr_skill=None, recognition_reader=read, on_source_ready=publish,
+            source_concurrency=2,
+        )
+    assert caught.value is lost
+    assert persisted == ["first.txt", "second.txt"]
+    assert reads == ["first.txt", "second.txt"]
+    assert sibling_stopped.is_set()
+    assert published == []
+
+
+@pytest.mark.asyncio
 async def test_register_failure_compensates_saved_file_metadata_and_object(monkeypatch):
     owner_id, task_id = _seed_task()
     operation = _create_operation(owner_id, task_id)
