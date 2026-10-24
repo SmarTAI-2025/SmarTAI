@@ -7,8 +7,8 @@ or audit can always address the exact snapshot a run graded.
 
 Both student-online and teacher-import ingestion flow through ``add_revision``:
 the only difference is the ``source`` enum. Answers are persisted as normalized
-``submission_answers`` rows (one per question per revision), and the
-(revision, question) uniqueness is enforced in SQL.
+``submission_answers`` rows. Imports require one answer per question; the
+teacher review editor can temporarily retain conflicting assignments by identity.
 
 Reads are student-scoped (the owner student) or teacher-scoped (the assignment's
 teacher); the predicate lives in SQL so a non-actor reads nothing.
@@ -29,7 +29,7 @@ from backend.db.models import (
 )
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.errors import AssignmentClosed, Forbidden, NotFound
+from backend.domain.errors import AssignmentClosed, Forbidden, NotFound, ValidationError
 
 
 def _new_submission_id() -> str:
@@ -42,6 +42,13 @@ def _new_revision_id() -> str:
 
 def _new_answer_id() -> str:
     return f"ans_{uuid.uuid4().hex[:12]}"
+
+
+def require_unique_questions(answers: list[dict]) -> None:
+    for key in ("q_id", "question_id"):
+        ids = [answer[key] for answer in answers if key in answer]
+        if len(ids) != len(set(ids)):
+            raise ValidationError("Duplicate question assignments require manual review.", code="answer_assignment_conflict")
 
 
 def _submission_to_dto(record: SubmissionRecord, revision: SubmissionRevisionRecord | None) -> education.SubmissionDTO:
@@ -133,6 +140,7 @@ def add_revision(submission_id: str, *, student_id: str, source: str,
     ``answers`` is a list of dicts with keys ``question_id``, ``q_id``,
     ``type``, ``number``, ``content``, ``flag``.
     """
+    require_unique_questions(answers or [])
     now = time.time()
     with session_scope() as session:
         assignment_id = session.scalar(
@@ -214,7 +222,7 @@ def add_revision(submission_id: str, *, student_id: str, source: str,
             created_at=revision.created_at,
             answers=[
                 education.SubmissionAnswerDTO(
-                    id=a.id, revision_id=a.revision_id, question_id=a.question_id, q_id=a.q_id,
+                    id=a.id, answer_key=a.answer_key, revision_id=a.revision_id, question_id=a.question_id, q_id=a.q_id,
                     number=a.number or "", type=a.type or "", content=a.content or "",
                     flag=list(a.flag or []),
                 )
@@ -301,6 +309,7 @@ def get_revision(revision_id: str, *, actor_id: str) -> education.SubmissionRevi
             answers=[
                 education.SubmissionAnswerDTO(
                     id=a.id,
+                    answer_key=a.answer_key,
                     revision_id=a.revision_id,
                     question_id=a.question_id,
                     q_id=a.q_id,
@@ -342,7 +351,7 @@ def get_current_revision_for_run(submission_id: str) -> education.SubmissionRevi
             created_at=revision.created_at,
             answers=[
                 education.SubmissionAnswerDTO(
-                    id=a.id, revision_id=a.revision_id, question_id=a.question_id, q_id=a.q_id,
+                    id=a.id, answer_key=a.answer_key, revision_id=a.revision_id, question_id=a.question_id, q_id=a.q_id,
                     number=a.number or "", type=a.type or "", content=a.content or "",
                     flag=list(a.flag or []),
                 )

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FilterIntentResult, PreparationIssue, ProblemInfo, StudentSubmission } from "@/types";
 import type { QuestionSummary, StudentSummary } from "@/components/tasks/resultsModel";
 import { scopeResultQuestions } from "@/components/tasks/ResultQuestionQuery";
-import { buildSubmissionQuestions } from "@/lib/submissionReview";
+import { buildStudentAnswerQuestions, buildSubmissionQuestions } from "@/lib/submissionReview";
 import { compareValues } from "./sortValues";
 import { EMPTY_FILTER_INTENT, parseLocalTaskFilter, supportsFilterIntent } from "./taskFilterIntent";
 import { selectPreparationQuestions, selectStudentAnswerQuestions, selectSubmissionQuestions } from "./taskPreparationFilter";
@@ -61,6 +61,36 @@ describe("shared Ask controls and local execution", () => {
     expect(selectStudentAnswerQuestions(questions, b, intent({ submission_status: "missing" })).map((q) => q.id)).toEqual(["Q2"]);
     expect(selectStudentAnswerQuestions(questions, a, intent({ sort: "question_desc" })).map((q) => q.id)).toEqual(["Q2", "Q1"]);
     expect(a.stu_id).toBe("S1");
+  });
+  it("keeps every answer to selected questions in Ask order and stable answer order", () => {
+    const current = student("S1", [false, false, false, false]);
+    current.stu_ans = current.stu_ans.map((answer, index) => ({ ...answer, answer_id: `answer-${index + 1}`,
+      q_id: ["Q1", "Q2", "Q1", "Q3"][index] }));
+    const questions = buildStudentAnswerQuestions(buildSubmissionQuestions([
+      problem("Q1", 5), problem("Q2", 10), { ...problem("Q3", 5), number: "Q1" },
+    ], [current]), current);
+    const before = [...questions];
+    const result = selectStudentAnswerQuestions(questions, current, intent({ execution: {
+      recognized: true, kind: "questions", explanation: "Selected questions", data: { columns: [], rows: [] },
+      selection: { kind: "questions", ids: ["Q2", "unknown", "Q1"] }, chart: null,
+    } }));
+    expect(result.map(question => question.id)).toEqual(["answer-2", "answer-1", "answer-3"]);
+    expect(result.every(question => questions.includes(question))).toBe(true);
+    expect(questions).toEqual(before);
+  });
+  it("preserves empty selections, non-question results and legacy question IDs", () => {
+    const current = student("S1", [false, false]);
+    const questions = buildSubmissionQuestions([problem("Q1", 5), problem("Q2", 10)], [current]);
+    const execution = { recognized: true, kind: "questions" as const, explanation: "", data: { columns: [], rows: [] }, selection: null, chart: null };
+    const selected = (ids: string[]) => intent({ execution: { ...execution, selection: { kind: "questions", ids } } });
+    expect(selectStudentAnswerQuestions(questions, current, selected(["Q2"]))).toEqual([questions[1]]);
+    expect(selectStudentAnswerQuestions(questions, current, selected([]))).toEqual([]);
+    expect(selectStudentAnswerQuestions(questions, current, selected(["unknown"]))).toEqual([]);
+    for (const result of [execution, { ...execution, recognized: false },
+      { ...execution, selection: { kind: "students" as const, ids: ["S1"] } }]) {
+      expect(selectStudentAnswerQuestions(questions, current, intent({ execution: result }))).toBe(questions);
+    }
+    expect(selectStudentAnswerQuestions(questions, current, null)).toBe(questions);
   });
   it("uses individual scores rather than class averages in student/review details", () => {
     const question = { id: "Q1", label: "Q1", count: 2, avgScore: 5, avgPercent: 50, maxScore: 10, minScore: 1, maxObservedScore: 9, lowConfidenceCount: 1, reviewCount: 1,

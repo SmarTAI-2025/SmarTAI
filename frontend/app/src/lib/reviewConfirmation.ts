@@ -174,13 +174,17 @@ export function answerMetadataConfirmationAllowed(answer?: StudentAnswerInfo): b
       || flag.startsWith("recognition_failed_pages:") || flag.startsWith("recognition_unprocessed_pages:"));
 }
 export function answerReviewBlocked(answer?: StudentAnswerInfo): boolean {
+  if (answer?.flag?.includes("answer_assignment_conflict")) return true;
+  if (answer?.content?.trim() && answer.flag?.includes("recognition_matching_review")
+    && !answer.flag.some(flag => ["parse_failed", "no_matching_answer", "recognition_incomplete", "recognition_paused", "provider_submit_uncertain"].includes(flag)
+      || flag.startsWith("recognition_failed_pages:") || flag.startsWith("recognition_unprocessed_pages:") || flag.startsWith("recognition_invalid_fields:"))) return false;
   if (answerMetadataConfirmationAllowed(answer)) return false;
   return Boolean(answer?.flag?.some(flag => ["recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending"].includes(flag)
     || flag.startsWith("recognition_invalid_fields:")));
 }
 export function answerReviewNextBlocked(answer?: StudentAnswerInfo): boolean {
   return answerReviewBlocked(answer) || Boolean(answer?.review_status !== "confirmed"
-    && answer?.flag?.some(flag => ["recognition_repaired_needs_confirmation", "recognition_metadata_review"].includes(flag)));
+    && answer?.flag?.some(flag => ["recognition_matching_review", "recognition_repaired_needs_confirmation", "recognition_metadata_review"].includes(flag)));
 }
 
 function answerHasLowConfidence(answer?: StudentAnswerInfo): boolean {
@@ -229,6 +233,6 @@ function collectSubmissionBlockers(task: Task | undefined, locale: string, stude
     label: `${item.stu_name || item.stu_id} · ${zh ? "请修正并确认学生姓名、学号" : "Correct and confirm the student name and ID"}`,
     href: `/tasks/${task.task_id}/students/${encodeURIComponent(item.stu_id)}?identity=edit`,
   }));
-  const answers = students.flatMap(item => item.stu_ans.filter(confirming ? answerReviewBlocked : answerReviewNextBlocked).map(answer => ({ label: `${item.stu_name || item.stu_id} · ${answer.number || answer.q_id} · ${answerReviewBlocked(answer) ? (zh ? "识别失败，请修正并确认" : "Recognition failed; correct and confirm") : answerHasLowConfidence(answer) ? (zh ? "识别置信度较低，请对照原件核对并确认" : "Low recognition confidence; check the original and confirm") : (zh ? "已修正，请确认作答" : "Corrected; confirm the answer")}`, href: `/tasks/${task.task_id}/students/${encodeURIComponent(item.stu_id)}?question=${encodeURIComponent(answer.q_id)}` })));
+  const answers = students.flatMap(item => item.stu_ans.filter(confirming ? answerReviewBlocked : answerReviewNextBlocked).map(answer => ({ label: `${item.stu_name || item.stu_id} · ${answer.number || answer.q_id} · ${answer.flag?.includes("answer_assignment_conflict") ? (zh ? "同一题号有多份作答，请更正题号" : "Multiple answers use this question; correct the assignment") : answerReviewBlocked(answer) ? (zh ? "识别失败，请修正并确认" : "Recognition failed; correct and confirm") : answerHasLowConfidence(answer) ? (zh ? "识别置信度较低，请对照原件核对并确认" : "Low recognition confidence; check the original and confirm") : (zh ? "已修正，请确认作答" : "Corrected; confirm the answer")}`, href: `/tasks/${task.task_id}/students/${encodeURIComponent(item.stu_id)}?question=${encodeURIComponent(answer.answer_id ?? answer.q_id)}` })));
   return [...sourceIssues, ...identities, ...answers];
 }
