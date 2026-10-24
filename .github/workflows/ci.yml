@@ -15,12 +15,12 @@ concurrency:
 
 jobs:
   backend-sqlite-tests:
-    name: Backend (SQLite shard ${{ matrix.shard }}/4)
+    name: Backend (SQLite shard ${{ matrix.shard }}/7)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     env:
       SMARTAI_RUNTIME_ENVIRONMENT: "test"
       SMARTAI_PROVIDER_ENCRYPTION_KEY: "ci-provider-master-key-0123456789abcdef"
@@ -49,7 +49,7 @@ jobs:
           SMARTAI_SEED_TEST_USERS: "false"
           SMARTAI_GRADING_ENGINE: v2
         run: >-
-          python -m pytest backend/tests -q --test-shard=${{ matrix.shard }}/4
+          python -m pytest backend/tests -q --test-shard=${{ matrix.shard }}/7
           --durations=30 --junitxml=test-results/sqlite-${{ matrix.shard }}.xml
       - name: Preserve SQLite test timings
         if: always()
@@ -178,9 +178,13 @@ jobs:
           VITE_SMARTAI_BACKEND_URL=/api npm run build:admin
           test -f dist-admin/admin.html
 
-  e2e:
-    name: E2E (Playwright)
+  e2e-tests:
+    name: E2E (Playwright shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     env:
       SMARTAI_RUNTIME_ENVIRONMENT: "test"
       SMARTAI_PROVIDER_ENCRYPTION_KEY: "e2e-provider-master-key-0123456789abcdef"
@@ -210,7 +214,10 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps --only-shell chromium
+        run: |
+          # The runner's preferred Azure mirror can stall dependency downloads.
+          sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+          npx playwright install --with-deps --only-shell chromium
       - name: Run E2E
         run: |
           # Start the backend on a fixed port with a throwaway SQLite DB, then
@@ -231,10 +238,11 @@ jobs:
               exit 1
             fi
           done
-          # Files use isolated browser contexts/API fixtures; keep each file
-          # sequential and run two files concurrently on the CI runner.
-          npm run e2e -- --workers=2
+          # Keep the suite's existing file isolation; explicitly independent
+          # cases may opt into parallel mode within the two-worker limit.
+          npm run e2e -- --workers=2 --shard=${{ matrix.shard }}/3
       - name: Run controlled grading retry E2E
+        if: matrix.shard == 1
         run: |
           # A separate SQLite/FakeProvider server supplies the opt-in fixture.
           (
@@ -261,10 +269,22 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: playwright-failure-${{ github.run_id }}
+          name: playwright-failure-${{ github.run_id }}-${{ matrix.shard }}
           path: |
             frontend/app/test-results/
             /tmp/backend.log
             /tmp/grading-retry.log
           retention-days: 7
           if-no-files-found: ignore
+
+  # Keep the required check stable and reject any incomplete browser shard.
+  e2e:
+    name: E2E (Playwright)
+    needs: e2e-tests
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every E2E shard to pass
+        env:
+          SHARD_RESULT: ${{ needs.e2e-tests.result }}
+        run: test "$SHARD_RESULT" = success
