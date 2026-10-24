@@ -351,7 +351,7 @@ def test_model_review_of_discarded_rewrite_does_not_contaminate_saved_answer():
     incoming['flag'] = ['recognition_manual_pending']
     merged = merge_parse_repair(parsed(before), parsed(incoming), set(problems), problems=problems)
     answer = merged.student['stu_ans'][0]
-    assert answer['content'] == 'The preserved answer.' and answer['type'] == 'short'
+    assert answer['content'] == 'The preserved answer.' and answer['type'] == '概念题'
     assert answer['flag'] == []
     assert merged.student['recognition']['model_review_question_ids'] == []
     assert merged.status == 'parsed' and not merged.retryable
@@ -393,7 +393,7 @@ async def test_model_review_survives_unit_aggregation_and_explicit_format_retry(
     answers = {answer['q_id']: answer for answer in after['student_data']['S1']['stu_ans']}
     assert calls.count(['q1']) == 1 and calls.count(['q2']) == 4
     assert answers['q1']['content'] == 'Preserved work for q1' and not answers['q1']['flag']
-    assert answers['q2']['content'] == 'Preserved work for q2' and answers['q2']['type'] == 'short'
+    assert answers['q2']['content'] == 'Preserved work for q2' and answers['q2']['type'] == '概念题'
     assert 'recognition_manual_pending' in answers['q2']['flag']
     assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q2']['flag'])
     assert 'submission_recognition_blocked' in task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
@@ -484,7 +484,7 @@ async def test_interrupted_units_keep_review_provenance_through_retry(monkeypatc
     answers = {answer['q_id']: answer for answer in after['student_data']['S1']['stu_ans']}
     assert calls.count(['q1']) == 1 and calls.count(['q2']) == 4
     assert answers['q1']['content'] == 'Preserved work for q1' and not answers['q1']['flag']
-    assert answers['q2']['content'] == 'Preserved work for q2' and answers['q2']['type'] == 'short'
+    assert answers['q2']['content'] == 'Preserved work for q2' and answers['q2']['type'] == '概念题'
     assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q2']['flag'])
     blocked = task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
     expected_review = model_review is True
