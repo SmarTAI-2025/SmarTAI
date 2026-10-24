@@ -26,8 +26,20 @@ test("missing type and materials stay visible without duplicate failure notes", 
     if (request.method() !== "GET") {
       mutations.push(path);
       expect(path).toBe("/tasks/type-review/problems/q1");
-      expect(request.postDataJSON().type).toBe("multiple_choice");
-      problem.type = "多选题";
+      const patch = request.postDataJSON();
+      expect(patch.reference_answer).toBeUndefined();
+      if (patch.type) {
+        expect(patch.type).toBe("multiple_choice");
+        problem.type = "多选题";
+      } else if (patch.criterion) {
+        problem.criterion = patch.criterion;
+        problem.preparation_issues.filter(issue => issue.field === "rubric").forEach(issue => { issue.status = "resolved"; });
+      } else {
+        expect(patch.review_status).toBe("confirmed");
+        expect(problem.type && problem.criterion).toBeTruthy();
+        problem.review_status = "confirmed";
+        problem.preparation_issues.filter(issue => issue.status === "open").forEach(issue => { issue.status = "acknowledged"; });
+      }
       task.workflow_revision++;
       return json({ status: "ok", q_id: "q1", problem, workflow_revision: task.workflow_revision });
     }
@@ -41,8 +53,8 @@ test("missing type and materials stay visible without duplicate failure notes", 
   await page.goto("/tasks/type-review/questions/q1/content");
   const card = page.locator('[data-question-id="q1"]');
   await expect(card.getByText("生成失败", { exact: true })).toHaveCount(1);
-  await expect(card.getByText("请补齐缺失的题型、评分标准、标答并确认本题；完成前不能批改。")).toBeVisible();
-  await expect(card.locator('[data-review-issue-notes] .text-amber-700')).toHaveCount(0);
+  await expect(card.getByText("请补齐缺失的题型、评分标准并确认本题；完成前不能批改。")).toBeVisible();
+  await expect(card.locator('[data-review-issue-notes] .text-amber-700')).toHaveText('缺少标答（可选），可按需补充。');
   await page.screenshot({ path: testInfo.outputPath("specific-missing-fields.png"), fullPage: true });
   await card.getByRole("button", { name: "题型 · 修改" }).click();
   const select = card.getByRole("combobox", { name: "题型" });
@@ -52,7 +64,23 @@ test("missing type and materials stay visible without duplicate failure notes", 
   expect(mutations).toEqual([]);
   await select.selectOption("multiple_choice");
   await card.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(card.getByText("请补齐缺失的评分标准、标答并确认本题；完成前不能批改。")).toBeVisible();
+  await expect(card.getByText("请补齐缺失的评分标准并确认本题；完成前不能批改。")).toBeVisible();
   expect(mutations).toEqual(["/tasks/type-review/problems/q1"]);
+  await card.getByRole("button", { name: "修改第 1 题满分与评分标准" }).click();
+  await card.getByRole("textbox", { name: "第 1 题评分标准" }).fill("Full credit for a correct explanation.");
+  await card.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(card.locator('[data-review-issue-notes] .text-red-700')).toHaveCount(0);
+  await expect(card.getByText("缺少标答（可选），可按需补充。", { exact: true })).toBeVisible();
+  const confirm = card.getByRole("button", { name: "第 1 题 · 待确认", exact: true });
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+  await expect(card.getByRole("button", { name: "第 1 题 · 已确认", exact: true })).toBeDisabled();
+  await expect(card.locator('[data-review-issue-notes]')).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("confirmed-without-reference-answer.png"), fullPage: true });
+  expect(problem.reference_answer).toBe("");
+  expect(mutations).toHaveLength(3);
+  await page.goto("/tasks/type-review/questions");
+  await expect(page.getByRole("tab", { name: "需要处理 (0)" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "建议处理 (0)" })).toBeVisible();
   expect(errors).toEqual([]);
 });
