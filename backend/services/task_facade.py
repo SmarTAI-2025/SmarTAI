@@ -3415,7 +3415,7 @@ async def run_task_submission_parsing(
                             else:
                                 parsed = await parse_student_answer_sources([unit], problem_data, provider,
                                     single_attempt=True, independent_answers=True, **parser_kwargs)
-                            return merge_parse_repair(retained, parsed[0], target_ids)
+                            return merge_parse_repair(retained, parsed[0], target_ids, problems=problem_data)
                         retained = await durable_source_parse(unit, invoke, pending, repair_index=repair_index)
                         if route.is_baidu_ocr or retained.stable_error_code == "provider_submit_uncertain":
                             break
@@ -3428,11 +3428,10 @@ async def run_task_submission_parsing(
             async def schedule_pages(source_id, stored_file_id, source_filename, source_content_type,
                                      *, complete=False, end_page=None):
                 from backend.services.source_question_units import QUESTION_HEADING, source_question_units, source_page_groups
-                from backend.services.question_matching import resolve_question_match
+                from backend.services.question_matching import question_number_aliases, resolve_question_match
                 saved_pages = page_texts.get(source_id, {})
-                by_number = {}
-                for q_id, problem in problem_data.items():
-                    by_number.setdefault(str(problem.get("number") or ""), []).append(q_id)
+                number_ids = {alias: q_id for q_id, aliases in question_number_aliases(problem_data).items()
+                              for alias in aliases}
                 targets = set(source_question_ids.get(source_id, problem_data))
                 dispatched = incremental_tasks.setdefault(source_id, {})
                 prefix_parts, number = [], 1
@@ -3448,9 +3447,8 @@ async def run_task_submission_parsing(
                     if not complete:
                         return
                 prefix = "\n\n".join(prefix_parts).strip()
-                page_units = source_question_units(saved_pages, known_numbers=set(by_number))
-                invalid = {q_id for unit in page_units if unit.closure == "repeated_heading"
-                           for q_id in by_number.get(unit.number, [])}
+                page_units = source_question_units(saved_pages, known_numbers=set(number_ids), number_key=number_ids.get)
+                invalid = {number_ids[unit.number] for unit in page_units if unit.closure == "repeated_heading"}
                 if invalid - boundary_invalidations.get(source_id, set()):
                     boundary_invalidations.setdefault(source_id, set()).update(invalid)
                     # A later repeated heading can revoke an earlier closed
@@ -3458,11 +3456,11 @@ async def run_task_submission_parsing(
                     await save_source_state(source_id, stored_file_id,
                         invalidated_question_ids=sorted(boundary_invalidations[source_id]))
                 for unit in source_page_groups(saved_pages, source_complete=complete,
-                                               source_end_page=end_page, numbered=False):
+                                               source_end_page=end_page, numbered=False, number_key=number_ids.get):
                     headings = list(QUESTION_HEADING.finditer(unit.text))
-                    if any(len(by_number.get(match.group("number"), [])) != 1 for match in headings):
-                        # Different aliases can be running labels of one answer.
-                        # Keep the full source context until boundaries are known.
+                    if any(match.group("number") not in number_ids for match in headings):
+                        # Ambiguous or unknown labels cannot prove an independent
+                        # answer boundary. Retain the full source for matching.
                         continue
                     matched = [resolve_question_match(match.group("number"),
                         unit.text[match.start():headings[index + 1].start() if index + 1 < len(headings) else len(unit.text)],

@@ -63,9 +63,14 @@ def question_number_aliases(problems):
 
 def copied_question_candidates(text, problems):
     """Only complete copied stems qualify; similar formulas are not equal."""
-    content = _label(text)
+    def stem_text(value):
+        # Unlike identifier aliases, mathematical text must retain compatibility
+        # distinctions such as superscripts/subscripts (x², x₂ and x2).
+        return re.sub(r"\s+", " ", unicodedata.normalize("NFC", str(value or ""))).strip()
+
+    content = stem_text(text)
     return [q_id for q_id, problem in problems.items()
-            if len(stem := _label(problem.get("stem"))) >= 24 and stem in content]
+            if len(stem := stem_text(problem.get("stem"))) >= 24 and stem in content]
 
 
 def resolve_question_match(number, content, problems):
@@ -73,7 +78,17 @@ def resolve_question_match(number, content, problems):
     numbered = question_number_candidates(number, problems)
     copied = copied_question_candidates(content, problems)
     if len(numbered) == 1:
-        return numbered[0] if not copied or copied == numbered else None
+        return numbered[0] if not copied or numbered[0] in copied else None
     if len(copied) == 1 and (not number or copied[0] in numbered):
         return copied[0]
     return None
+
+
+def mark_question_match_conflicts(student, problems):
+    """Check the actual retained fields, including after independent repairs."""
+    for answer in student.get("stu_ans", []):
+        numbered = question_number_candidates(answer.get("number"), problems)
+        copied = copied_question_candidates(answer.get("content"), problems)
+        if ((len(numbered) == 1 and answer.get("q_id") != numbered[0])
+                or (copied and answer.get("q_id") not in copied)):
+            answer["flag"] = list(dict.fromkeys([*answer.get("flag", [])[:99], "recognition_manual_pending"]))

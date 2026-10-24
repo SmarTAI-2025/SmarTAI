@@ -924,13 +924,8 @@ async def parse_student_answer_sources(
 
             payload, independent_unknown = (_independent_submission_payload(parsed, source, problems_data, known_question_ids)
                 if independent_answers else (parsed.model_dump(), ()))
-            from backend.services.question_matching import copied_question_candidates, question_number_candidates
-            for answer in payload.get("stu_ans", []):
-                numbered = question_number_candidates(answer.get("number"), problems_data)
-                copied = copied_question_candidates(answer.get("content"), problems_data)
-                if ((len(numbered) == 1 and answer.get("q_id") != numbered[0])
-                        or (copied and answer.get("q_id") not in copied)):
-                    answer["flag"] = list(dict.fromkeys([*answer.get("flag", [])[:99], "recognition_manual_pending"]))
+            from backend.services.question_matching import mark_question_match_conflicts
+            mark_question_match_conflicts(payload, problems_data)
             payload["source_filename"] = source.filename
             payload["source_id"] = source.source_id
             payload["stored_file_id"] = source.stored_file_id

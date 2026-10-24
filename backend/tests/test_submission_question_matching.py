@@ -198,7 +198,9 @@ async def test_ocr_running_aliases_preserve_both_continuation_fragments():
 
 
 @pytest.mark.asyncio
-async def test_pdf_running_labels_with_different_aliases_keep_full_answer(monkeypatch):
+@pytest.mark.parametrize("catalog_number", ["Section 1.2 / 1", "1.2.1"])
+@pytest.mark.parametrize("page_order", [(1, 2), (2, 1)])
+async def test_pdf_running_labels_with_different_aliases_keep_full_answer(monkeypatch, catalog_number, page_order):
     from backend.db import assignment_repository
     from backend.services import task_facade
     from backend.tests.test_recognition_agent import pdf
@@ -206,7 +208,7 @@ async def test_pdf_running_labels_with_different_aliases_keep_full_answer(monkey
     from backend.tests.test_task_background_workflows import _seed_task
     owner, task = _seed_task()
     assignment_repository.add_question(task, teacher_id=owner, q_id='q1', order_index=0,
-        number='Section 1.2 / 1', type='short', stem='A mathematical question.', criterion='Teacher rubric.', max_score=10)
+        number=catalog_number, type='short', stem='A mathematical question.', criterion='Teacher rubric.', max_score=10)
     pages = ['Question 1.2.1: First part.', 'Question 1: Continued part.']
     calls = []
     async def invoke(messages):
@@ -214,10 +216,10 @@ async def test_pdf_running_labels_with_different_aliases_keep_full_answer(monkey
         calls.append(text)
         assert all(part in text for part in ('First part.', 'Continued part.'))
         return SimpleNamespace(content=json.dumps(dict(stu_id='S1', stu_name='Alice', stu_ans=[
-            dict(q_id='q1', number='Section 1.2 / 1', type='short', content='First part. Continued part.', flag=[])])))
+            dict(q_id='q1', number=catalog_number, type='short', content='First part. Continued part.', flag=[])])))
     registry = _registry(monkeypatch, invoke)
     async def read(**kwargs):
-        for number in (2, 1):
+        for number in page_order:
             await kwargs['on_pages']([dict(page_number=number, text=pages[number - 1])])
         return SimpleNamespace(text='\n\n'.join(pages), recognition=None)
     monkeypatch.setattr(task_facade, 'read_question_source', read)
@@ -227,3 +229,99 @@ async def test_pdf_running_labels_with_different_aliases_keep_full_answer(monkey
     after = task_facade.get_task(task_id=task, owner_id=owner)
     assert after['status'] == 'submissions_ready' and len(calls) == 1
     assert after['student_data']['S1']['stu_ans'][0]['content'] == 'First part. Continued part.'
+
+
+@pytest.mark.parametrize('identical', [False, True])
+@pytest.mark.asyncio
+async def test_explicit_number_survives_shared_copied_stem(identical):
+    known = problems(('1', '2'))
+    known['q1']['stem'] = 'Compute the determinant of the given matrix A.'
+    known['q2']['stem'] = known['q1']['stem'] + ('' if identical else ' Also find its inverse.')
+    content = known['q2']['stem'] + '\nMy calculation is shown below.'
+    assert copied_question_candidates(content, known) == ['q1', 'q2']
+    assert resolve_question_match('2', content, known) == 'q2'
+    assert resolve_question_match('', content, known) is None
+    result = (await ingest_agent.parse_student_answer_sources_from_ocr_markdown(
+        [source('2: ' + content)], known))[0]
+    assert result.student['stu_ans'][0]['q_id'] == 'q2'
+    assert result.student['stu_ans'][0]['content'] == content
+
+
+@pytest.mark.parametrize('symbol', ['x₂', 'x2'])
+@pytest.mark.asyncio
+async def test_copied_math_does_not_fold_superscripts_into_subscripts_or_digits(symbol):
+    known = problems(('1', '2'))
+    known['q1']['stem'] = 'Find the value of x² under the stated conditions.'
+    content = known['q1']['stem'].replace('x²', symbol) + '\nMy work.'
+    assert copied_question_candidates(content, known) == []
+    assert resolve_question_match('', content, known) is None
+    assert resolve_question_match('２', content, known) == 'q2'
+    result = (await ingest_agent.parse_student_answer_sources_from_ocr_markdown(
+        [source('2: ' + content)], known))[0]
+    assert result.student['stu_ans'][0]['q_id'] == 'q2'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair_case", ["retained_conflict", "discarded_conflict", "repaired_number_conflict"])
+async def test_format_repair_rechecks_retained_answer_matching_before_real_save(monkeypatch, repair_case):
+    from backend.db import assignment_repository
+    from backend.services import task_facade
+    from backend.tests.test_submission_incremental import _claim, _questions, _registry
+    from backend.tests.test_task_background_workflows import _seed_task
+    owner, task = _seed_task()
+    known = problems(('1', '2'))
+    for index, (q_id, row) in enumerate(known.items()):
+        assignment_repository.add_question(task, teacher_id=owner, q_id=q_id, order_index=index,
+            number=row['number'], type=row['type'], stem=row['stem'], criterion='Teacher rubric.', max_score=10)
+    retained_content = known['q2' if repair_case == 'retained_conflict' else 'q1']['stem'] + '\nStudent work.'
+    calls = []
+    async def invoke(messages):
+        requested = _questions(messages)
+        calls.append([q['q_id'] for q in requested])
+        answers = [dict(q_id=q['q_id'], number=q['number'], type=q['type'],
+                        content='Verified answer for ' + q['q_id'], flag=[]) for q in requested]
+        if len(calls) == 1:
+            answers[0].update(content=retained_content)
+            answers[0]['number' if repair_case == 'repaired_number_conflict' else 'type'] = {'invalid': 'format'}
+        elif repair_case == 'discarded_conflict':
+            answers[0]['content'] = known['q2']['stem'] + '\nUnadopted rewritten content.'
+        elif repair_case == 'repaired_number_conflict':
+            answers[0]['number'] = '2'
+        return SimpleNamespace(content=json.dumps(dict(stu_id='S1', stu_name='Alice', stu_ans=answers)))
+    registry = _registry(monkeypatch, invoke)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename='S1_Alice.txt', content=b'Answers without explicit section boundaries.',
+        content_type='text/plain', registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued['job_id']))
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    answers = {a['q_id']: a for a in after['student_data']['S1']['stu_ans']}
+    assert calls == [['q1', 'q2'], ['q1']]
+    assert answers['q1']['type'] == known['q1']['type']
+    assert answers['q1']['content'] == retained_content
+    assert ('recognition_manual_pending' in answers['q1']['flag']) is (repair_case != 'discarded_conflict')
+    assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q1']['flag'])
+    assert answers['q2']['content'] == 'Verified answer for q2' and not answers['q2']['flag']
+    blocked = task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
+    assert ('submission_recognition_blocked' in blocked) is (repair_case != 'discarded_conflict')
+
+
+def test_page_boundaries_use_unique_identity_and_keep_original_alias_text():
+    from backend.services.source_question_units import source_page_groups, source_question_units
+    known = problems(('1.2.1', '1.2.2'))
+    aliases = {alias: q_id for q_id, labels in question_number_aliases(known).items() for alias in labels}
+    pages = {1: 'Question 1.2.1: First half.', 2: 'Question 1: Second half.', 3: 'Question 1.2.2: Next answer.'}
+    groups = source_page_groups(pages, numbered=False, number_key=aliases.get)
+    assert [(g.pages, g.complete) for g in groups] == [((1, 2), True), ((3,), False)]
+    assert groups[0].text == pages[1] + '\n\n' + pages[2]
+    pages[3] += '\nQuestion 1: Late continuation.'
+    repeated = source_question_units(pages, known_numbers=set(aliases), number_key=aliases.get)
+    assert all(not unit.complete for unit in repeated if aliases[unit.number] == 'q1')
+
+
+def test_ambiguous_running_number_cannot_close_previous_answer():
+    from backend.services.source_question_units import source_page_groups
+    known = problems(('1.2.1', '1.3.1'))
+    aliases = {alias: q_id for q_id, labels in question_number_aliases(known).items() for alias in labels}
+    groups = source_page_groups({1: 'Question 1.2.1: First half.', 2: 'Question 1: Possible continuation.'},
+                                numbered=False, number_key=aliases.get)
+    assert not any(group.complete for group in groups)

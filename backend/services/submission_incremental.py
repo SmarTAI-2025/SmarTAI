@@ -5,7 +5,7 @@ from dataclasses import replace
 from backend.services.source_question_units import QUESTION_HEADING
 
 
-def merge_parse_repair(previous, current, question_ids):
+def merge_parse_repair(previous, current, question_ids, *, problems):
     """Repair invalid fields while keeping every earlier verified field intact."""
     if previous is None or previous.student is None:
         return current
@@ -13,11 +13,11 @@ def merge_parse_repair(previous, current, question_ids):
         return replace(current, student=previous.student, student_candidate=previous.student_candidate,
                        matched_answer_count=previous.matched_answer_count)
 
-    def invalid_fields(answer):
+    def invalid_fields(answer, repair_ids):
         flags = answer.get("flag", [])
         fields = {field for flag in flags if flag.startswith("recognition_invalid_fields:")
                   for field in flag.split(":", 1)[1].split(",")}
-        if "recognition_manual_pending" in flags and not fields:
+        if "recognition_manual_pending" in flags and not fields and answer["q_id"] in repair_ids:
             return {"number", "type", "content", "flag", "recognition_confidence"}
         return fields
 
@@ -36,13 +36,17 @@ def merge_parse_repair(previous, current, question_ids):
     if not identity_invalid and current.student.get("identity_status") == "matched":
         student["identity_status"] = "matched"
     answers = {answer["q_id"]: dict(answer) for answer in student.get("stu_ans", [])}
+    old_repairs = set((student.get("recognition") or {}).get("repair_question_ids", []))
+    new_repairs = set((current.student.get("recognition") or {}).get("repair_question_ids", []))
+    repair_fields = {q_id: invalid_fields(answer, old_repairs) for q_id, answer in answers.items()}
     for incoming in current.student.get("stu_ans", []):
         q_id = incoming["q_id"]
         previous_answer = answers.get(q_id)
         if previous_answer is None:
             answers[q_id] = dict(incoming)
+            repair_fields[q_id] = invalid_fields(incoming, new_repairs)
             continue
-        bad_before, bad_after = invalid_fields(previous_answer), invalid_fields(incoming)
+        bad_before, bad_after = repair_fields[q_id], invalid_fields(incoming, new_repairs)
         for field in bad_before - bad_after:
             value = incoming.get(field)
             delta = field_size(value) - field_size(previous_answer.get(field))
@@ -52,6 +56,7 @@ def merge_parse_repair(previous, current, question_ids):
             remaining_budget -= delta
             previous_answer[field] = value
         remaining = bad_before & bad_after
+        repair_fields[q_id] = remaining
         flags = [flag for flag in previous_answer.get("flag", [])
                  if flag != "recognition_manual_pending" and not flag.startswith("recognition_invalid_fields:")]
         if "content" in bad_before and "content" not in remaining:
@@ -60,11 +65,16 @@ def merge_parse_repair(previous, current, question_ids):
             flags.extend(["recognition_manual_pending", "recognition_invalid_fields:" + ",".join(sorted(remaining))])
         previous_answer["flag"] = flags
     student["stu_ans"] = [answer for q_id, answer in answers.items() if q_id in question_ids]
-    pending = sorted(q_id for q_id in question_ids if q_id not in answers or invalid_fields(answers[q_id]))
+    pending = sorted(q_id for q_id in question_ids if q_id not in answers or repair_fields[q_id])
     student["recognition"] = {**student.get("recognition", {}),
         **current.student.get("recognition", {}), "repair_question_ids": pending,
         "missing_question_ids": [q_id for q_id in question_ids if q_id not in answers],
         "identity_invalid_fields": sorted(identity_invalid)}
+    # A repaired type does not validate the old answer content that we kept.
+    # Matching review is independent of format retries: do not send more model
+    # calls solely to clear this review marker.
+    from backend.services.question_matching import mark_question_match_conflicts
+    mark_question_match_conflicts(student, problems)
     uncertain = current.stable_error_code == "provider_submit_uncertain"
     identity_review = student.get("identity_status") != "matched"
     return replace(current, student=student, student_candidate=student.get("stu_id"),

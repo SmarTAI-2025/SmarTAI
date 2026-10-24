@@ -220,7 +220,7 @@ def test_repaired_fields_cannot_exceed_the_total_submission_bound():
             "S1", len(answers), (), "submission_parse_invalid", "structured_parse", True)
     before = parsed([_answer("q1", "a" * 500_000), _answer("q2", {})], set(problems))
     incoming = parsed([_answer("q2", "b" * 500_000)], {"q2"})
-    merged = merge_parse_repair(before, incoming, set(problems))
+    merged = merge_parse_repair(before, incoming, set(problems), problems=problems)
     StudentSubmission.model_validate(merged.student)
     assert merged.student["stu_ans"][0]["content"] == "a" * 500_000
     assert merged.student["stu_ans"][1]["content"] == ""
