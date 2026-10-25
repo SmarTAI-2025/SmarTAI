@@ -383,7 +383,7 @@ def persist_paused_results(session, run):
                 question=question)
             if review:
                 from backend.db.models import TeacherReviewRecord
-                repository._apply_teacher_review_state(record, confirmed=bool(review.get("confirmed")))
+                repository._apply_teacher_review_state(record)
                 session.add(TeacherReviewRecord(id=repository._new_review_id(), grade_result_id=record.id,
                     teacher_id=run.teacher_id, previous_score=result.ai_score, previous_comment=result.ai_comment,
                     new_score=review["new_score"], new_comment=review.get("new_comment", ""),

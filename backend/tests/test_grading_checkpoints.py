@@ -312,7 +312,7 @@ def test_failed_grading_manual_handoff_survives_task_reads_and_teacher_edit(case
     assert client.get(url).json()["status"] == "grading_paused"
 
 @pytest.mark.parametrize("replacement", [None, 0, 7])
-def test_old_release_api_cannot_bypass_missing_score_confirmation(replacement):
+def test_release_api_requires_valid_score_but_not_confirmation(replacement):
     from backend.api.grading_runs import release_run
     from backend.db.models import GradeResultRecord
     from backend.db.session import session_scope
@@ -326,13 +326,14 @@ def test_old_release_api_cannot_bypass_missing_score_confirmation(replacement):
     if replacement is not None:
         grades.add_teacher_review(seeded["required_result_id"], teacher_id=seeded["owner_id"],
             new_score=replacement, new_comment="Unconfirmed replacement", confirm=False)
-    assert task_facade.finalization(**args)["remaining_review_count"] == 1
+    assert task_facade.finalization(**args)["remaining_review_count"] == (1 if replacement is None else 0)
     assert task_facade.task_results(**args)["results"]  # Review data remains readable.
-    blocked = release_run(seeded["run_id"], current=SimpleNamespace(id=seeded["owner_id"]))
-    assert blocked.status_code == 409
-    assert grades.get_run(seeded["run_id"]).released_at is None
-    grades.add_teacher_review(seeded["required_result_id"], teacher_id=seeded["owner_id"],
-        new_score=7 if replacement is None else replacement, new_comment="Confirmed repair", confirm=True)
+    if replacement is None:
+        blocked = release_run(seeded["run_id"], current=SimpleNamespace(id=seeded["owner_id"]))
+        assert blocked.status_code == 409
+        assert grades.get_run(seeded["run_id"]).released_at is None
+        grades.add_teacher_review(seeded["required_result_id"], teacher_id=seeded["owner_id"],
+            new_score=7, new_comment="Saved repair", confirm=False)
     assert task_facade.finalization(**args)["remaining_review_count"] == 0
     released = release_run(seeded["run_id"], current=SimpleNamespace(id=seeded["owner_id"]))
     assert released["released_at"] is not None
@@ -357,16 +358,15 @@ def test_missing_frozen_grades_are_required_readable_and_teacher_repairable(miss
     assert len(grades.list_results_for_run(seeded["run_id"])) == 2 - len(missing_ids)  # GET has no write.
     with pytest.raises(ResultNotReleasable):
         grades.release(seeded["run_id"], teacher_id=seeded["owner_id"])
-    for missing in pending:
+    for index, missing in enumerate(pending):
         current = task_facade.finalization(**args)
-        saved = task_facade.update_correction_review(**args, display_student_id=seeded["student_id"],
+        task_facade.update_correction_review(**args, display_student_id=seeded["student_id"],
             q_id=missing["q_id"], teacher_score=0, teacher_comment="Teacher supplied score", confirm=False,
             expected_revision=current["workflow_revision"])
-        assert task_facade.finalization(**args)["remaining_review_count"] > 0
-        with pytest.raises(ResultNotReleasable):
-            grades.release(seeded["run_id"], teacher_id=seeded["owner_id"])
-        task_facade.update_correction_review(**args, display_student_id=seeded["student_id"],
-            q_id=missing["q_id"], teacher_score=0, teacher_comment="Teacher supplied score", confirm=True,
-            expected_revision=saved["workflow_revision"])
+        remaining = len(pending) - index - 1
+        assert task_facade.finalization(**args)["remaining_review_count"] == remaining
+        if remaining:
+            with pytest.raises(ResultNotReleasable):
+                grades.release(seeded["run_id"], teacher_id=seeded["owner_id"])
     assert task_facade.finalization(**args)["remaining_review_count"] == 0
     assert grades.release(seeded["run_id"], teacher_id=seeded["owner_id"]).released_at is not None

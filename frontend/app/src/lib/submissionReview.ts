@@ -1,6 +1,6 @@
 import { confidenceNeedsAttention, confidenceValue } from "./confidencePolicy";
 import type { ProblemInfo, StudentAnswerInfo, StudentSubmission } from "@/types";
-import { answerMetadataConfirmationAllowed, answerReviewBlocked, answerReviewNextBlocked, studentIdentityReviewBlocked, type ReviewAttention } from "./reviewConfirmation";
+import { answerReviewNotes, answerReviewBlocked, answerReviewNextBlocked, studentIdentityReviewBlocked, type ReviewAttention } from "./reviewConfirmation";
 import type { Locale } from "@/i18n/messages";
 
 export type SubmissionAnswerState = "recognized" | "reviewed" | "flagged" | "empty" | "missing";
@@ -38,38 +38,7 @@ const MISSING_TOKENS = ["缺失", "空白", "未作答", "没作答", "missing",
 const RECOGNIZED_TOKENS = ["已识别", "正常", "完整", "recognized", "ready"];
 const IDENTITY_TOKENS = ["身份异常", "身份待复核", "学号异常", "姓名异常", "identity"];
 
-export function formatSubmissionFlag(flag: string, locale: Locale): string {
-  if (flag.startsWith("recognition_invalid_fields:")) {
-    const fields: Record<string, [string, string]> = {
-      number: ["题号", "question number"], type: ["题型", "question type"],
-      content: ["作答内容", "answer content"], flag: ["识别提示", "recognition notes"],
-      recognition_confidence: ["识别置信度", "recognition confidence"],
-    };
-    const names = [...new Set(flag.slice("recognition_invalid_fields:".length).split(","))]
-      .flatMap(field => fields[field] ? [fields[field][locale === "zh-CN" ? 0 : 1]] : []);
-    return locale === "zh-CN" ? `待核对：${names.join("、") || "部分识别信息"}`
-      : `Review needed: ${names.join(", ") || "some recognition details"}`;
-  }
-  const labels: Record<string, [string, string]> = {
-    answer_assignment_conflict: ["同一题号有多份作答，请更正题号", "Multiple answers use this question; correct the assignment"],
-    recognition_matching_review: ["请对照原件核对作答归属与原文，正确后确认", "Check the question assignment and transcription against the original, then confirm"],
-    recognition_needs_review: ["识别结果需对照原件核对", "Check transcription against the original"],
-    external_annotation_present: ["原件含外部批注，不属于学生作答", "External annotations are not student answers"],
-    authorship_uncertain: ["部分笔迹归属不明，需核对", "Some writing has uncertain authorship"],
-    ocr_only_structure_requires_teacher_review: ["题号匹配需教师核对", "Question matching needs teacher review"],
-    recognition_failed: ["识别失败，请修正并确认", "Recognition failed; correct and confirm"],
-    recognition_manual_pending: ["等待人工补齐并确认", "Awaiting manual completion and confirmation"],
-    recognition_metadata_review: ["识别元信息待核对确认", "Confirm the recognition metadata"],
-    recognition_paused: ["已暂停，尚未完成识别", "Paused before recognition completed"],
-    recognition_incomplete: ["尚未完成识别", "Recognition incomplete"],
-    manual_blank_confirmed: ["教师已确认未作答", "Teacher confirmed no answer"],
-    parse_failed: ["作答解析失败，请修正并确认", "Answer parsing failed; correct and confirm"],
-    no_matching_answer: ["未识别到对应作答，请对照原件修正并确认", "No matching answer recognized; correct against the source and confirm"],
-    recognition_repaired_needs_confirmation: ["识别问题已修正，请确认作答", "Recognition issue corrected; confirm the answer"],
-  };
-  const label = labels[flag];
-  return label ? label[locale === "zh-CN" ? 0 : 1] : flag;
-}
+export { formatSubmissionFlag } from "./reviewLabels";
 
 export function buildSubmissionQuestions(
   problems: ProblemInfo[],
@@ -300,19 +269,4 @@ export function answerReviewLabels(answer: StudentAnswerInfo | undefined, locale
   return answerReviewNotes(answer, locale).map(issue => issue.label);
 }
 
-export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale: Locale): Array<{ label: string; severity: "blocking" | "advisory" }> {
-  if (!answer || (answer.review_status === "confirmed" && !answerReviewBlocked(answer))) return [];
-  const confidence = confidenceValue(answer.recognition_confidence);
-  const metadataOnly = answerMetadataConfirmationAllowed(answer);
-  const matchingOnly = answer.flag?.includes("recognition_matching_review");
-  const flags = (answer.flag ?? []).filter(flag => !["manual_blank_confirmed", "recognition_needs_review", "recognition_metadata_review", "ocr_only_structure_requires_teacher_review",
-    "recognition_very_low_confidence", "very_low_confidence", "recognition_low_confidence", "low_confidence"].includes(flag)
-    && !flag.startsWith("recognition_confidence:") && !flag.startsWith("answer_recognition_confidence:")
-    && !flag.startsWith("recognition_failed_pages:") && !flag.startsWith("recognition_unprocessed_pages:")
-    && !((metadataOnly || matchingOnly) && ["recognition_failed", "recognition_manual_pending"].includes(flag)));
-  const required = new Set(["answer_assignment_conflict", "recognition_matching_review", "recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending", "recognition_paused", "recognition_incomplete", "recognition_repaired_needs_confirmation"]);
-  return [
-    ...(confidenceNeedsAttention(confidence) ? [{ label: locale === "zh-CN" ? `置信度 ${confidence} 较低，建议核对确认。` : `Low confidence (${confidence}); review suggested.`, severity: "advisory" as const }] : []),
-    ...[...new Set(flags)].map(flag => ({ label: formatSubmissionFlag(flag, locale), severity: required.has(flag) || flag.startsWith("recognition_invalid_fields:") ? "blocking" as const : "advisory" as const })),
-  ];
-}
+export { answerReviewNotes } from "./reviewConfirmation";

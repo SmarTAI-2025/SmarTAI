@@ -385,15 +385,15 @@ describe("FrontierLiveDemoPage", () => {
     expect(updateStudentAnswer).not.toHaveBeenCalled();
   });
 
-  it.each(["empty stem", "missing rubric", "missing questions", "duplicate numbering", "identity", "confirmation"])("offers manual review immediately for %s without starting work", async kind => {
-    const submissions = kind === "identity" || kind === "confirmation";
+  it.each(["empty stem", "missing rubric", "missing questions", "duplicate numbering", "identity", "assignment conflict"])("offers manual review immediately for %s without starting work", async kind => {
+    const submissions = kind === "identity" || kind === "assignment conflict";
     const task = { ...taskWithQuestions(submissions ? "submissions_ready" : "problems_ready"), student_data: recognizedStudents() };
     if (kind === "empty stem") task.problem_data.q1.stem = "";
     if (kind === "missing rubric") task.problem_data.q1.criterion = "";
     if (kind === "missing questions") task.problem_data = {};
     if (kind === "duplicate numbering") task.problem_data.q2.number = "1";
     if (kind === "identity") task.student_data["demo-1"].stu_name = "[Unknown Student]";
-    if (kind === "confirmation") task.student_data["demo-1"].stu_ans[0].flag = ["recognition_repaired_needs_confirmation"];
+    if (kind === "assignment conflict") task.student_data["demo-1"].stu_ans[0].flag = ["answer_assignment_conflict"];
     vi.mocked(getTaskState).mockResolvedValue({ ...taskState(submissions ? "submissions_ready" : "problems_ready"), problem_count: Object.keys(task.problem_data).length });
     vi.mocked(getTask).mockResolvedValue(task);
     renderLive("asg_demo123");

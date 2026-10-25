@@ -58,7 +58,7 @@ from backend.db.models import (
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_requires_confirmation
+from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
 from backend.domain.errors import (
     DomainError,
@@ -569,7 +569,6 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
         for student in _serialize_student_data(workflow.assignment_id, owner_id, _active_submissions(workflow.assignment_id, owner_id)).values():
             if student.get("identity_status") == "matched" and not any(
                 _answer_recognition_failures(answer.get("flag"))
-                or (_REQUIRED_ANSWER_CONFIRMATION_FLAGS.intersection(answer.get("flag") or []) and answer.get("review_status") != "confirmed")
                 for answer in student["stu_ans"]
             ):
                 manually_resolved_sources.add(student.get("source_id"))
@@ -4696,7 +4695,6 @@ def grading_readiness(
         issues.append("workflow_busy")
 
     recognition_review_ids = []
-    repaired_answer_ids = []
     if submissions:
         # Older tasks can have complete normalized questions and answers without
         # the source-evidence rows introduced by the newer ingestion workflow.
@@ -4738,8 +4736,6 @@ def grading_readiness(
                         and _answer_matching_confirmation_allowed(answer.flag, answer.content)
                     ):
                         issues.append("submission_recognition_blocked")
-                    if _REQUIRED_ANSWER_CONFIRMATION_FLAGS.intersection(answer.flag or []):
-                        repaired_answer_ids.append(answer.id)
 
             presentation = presentations.get(submission.student_id)
             # ``source_id`` was added after legacy structured submissions were
@@ -4756,10 +4752,7 @@ def grading_readiness(
             ):
                 issues.append("submission_identities_unresolved")
 
-    review_ids = recognition_review_ids + repaired_answer_ids
-    reviewed = workflow_repository.answer_review_statuses(review_ids) if review_ids else {}
-    if any(reviewed.get(answer_id) != "confirmed" for answer_id in repaired_answer_ids):
-        issues.append("submission_recognition_blocked")
+    reviewed = workflow_repository.answer_review_statuses(recognition_review_ids) if recognition_review_ids else {}
     if any(reviewed.get(answer_id) != "confirmed" for answer_id in recognition_review_ids):
         warnings.append("submission_recognition_needs_review")
     if any(row.get("unknown_question_ids") for row in source_rows):
@@ -4773,9 +4766,6 @@ def grading_readiness(
 
 
 _FAILED_ANSWER_REVIEW_FLAGS = frozenset({"recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending"})
-_REQUIRED_ANSWER_CONFIRMATION_FLAGS = frozenset({
-    "recognition_repaired_needs_confirmation",
-})
 
 
 def _answer_recognition_failures(flags):
@@ -4875,22 +4865,15 @@ def _question_review_blockers(questions) -> list[str]:
     for question in questions:
         presentation = (question.source or {}).get("presentation") or {}
         review_issues = _effective_question_issues(presentation)
-        if presentation.get("review_status") != "confirmed" and any(
-            question_issue_requires_confirmation(issue, presentation) for issue in review_issues
-        ):
-            issues.append("question_review_blocked")
         if (any(issue.get("code") == "manual_completion_required" and (issue.get("details") or {}).get("required_fields") for issue in review_issues)
-                and (presentation.get("review_status") != "confirmed"
-                     or _manual_question_fields_missing(question, presentation))):
+                and _manual_question_fields_missing(question, presentation)):
             issues.append("question_manual_completion_required")
         problem = _serialize_problem(question)
         if (not str(question.number or "").strip() or not normalize_question_type(question.type)
                 or not str(question.stem or "").strip() or not str(question.criterion or "").strip()
                 or not problem["rubric_point_summary"]["is_valid"]
-                or any(issue.get("severity") == "blocking"
-                       and (issue.get("status") == "open"
-                            or presentation.get("review_status") != "confirmed")
-                       for issue in review_issues)):
+                or any(question_issue_blocks_progress(issue, presentation)
+                       for issue in review_issues if issue.get("code") != "manual_completion_required")):
             issues.append("question_review_blocked")
     return list(dict.fromkeys(issues))
 
@@ -5317,16 +5300,10 @@ def update_problem(
         presentation = dict(source.get("presentation") or {})
         presentation["preparation_issues"] = _effective_question_issues(presentation)
         original_problem = _serialize_problem(question)
-        repaired_required_content = (
-            not str(question.number or "").strip()
-            or not normalize_question_type(question.type)
-            or not str(question.stem or "").strip()
-            or not original_problem["rubric_point_summary"]["is_valid"]
-        )
         manual_markers = [issue for issue in presentation.get("preparation_issues", [])
                           if issue.get("code") == "manual_completion_required"]
         protected_markers = [issue for issue in presentation.get("preparation_issues", [])
-                            if question_issue_requires_confirmation(issue, presentation)]
+                            if question_issue_blocks_progress(issue, presentation)]
         for key in (
             "review_status", "solution_code", "material_provenance",
             "ai_completion_provenance", "preparation_issues",
@@ -5342,10 +5319,9 @@ def update_problem(
         if manual_markers:
             presentation["preparation_issues"] = [issue for issue in presentation.get("preparation_issues", [])
                 if issue.get("code") != "manual_completion_required"] + manual_markers
-            if substantive and patch.get("review_status") != "confirmed":
-                presentation["review_status"] = "needs_review"
+            if not _manual_question_fields_missing(question, presentation, patch):
                 presentation["preparation_issues"] = [
-                    {**issue, "status": "open"} if issue.get("code") == "manual_completion_required" else issue
+                    {**issue, "status": "resolved"} if issue.get("code") == "manual_completion_required" else issue
                     for issue in presentation["preparation_issues"]]
         fixed_fields = {field for key, field in {"stem": "stem", "reference_answer": "answer", "criterion": "rubric", "test_cases": "programming_tests", "solution_code": "programming_tests"}.items()
                         if patch.get(key) and (patch[key].strip() if isinstance(patch[key], str) else patch[key])
@@ -5356,7 +5332,7 @@ def update_problem(
                 and issue.get("field") in fixed_fields
                 and (not (issue.get("details") or {}).get("target")
                      or patch.get(issue["details"]["target"]))
-                and issue.get("code") in {"parse_anomaly", "generation_failed", "recognition_partial", "recognition_needs_review", "low_confidence"}
+                and issue.get("code") in {"parse_anomaly", "generation_failed", "recognition_partial", "recognition_needs_review", "low_confidence", "source_conflict", "ambiguous_question_match"}
                 else issue for issue in presentation.get("preparation_issues", [])
             ]
         if patch.get("review_status") == "confirmed":
@@ -5432,13 +5408,6 @@ def update_problem(
             ) from exc
         presentation["question_structure"] = structure.model_dump()
         presentation["rubric_point_summary"] = rubric_summary.model_dump()
-        if repaired_required_content and substantive and patch.get("review_status") != "confirmed":
-            presentation["review_status"] = "needs_review"
-            presentation.setdefault("preparation_issues", []).append({
-                "issue_id": f"required-repair-{question.q_id}-{question.version}",
-                "q_id": question.q_id, "field": "stem", "severity": "blocking",
-                "status": "resolved", "code": "required_review_confirmation",
-            })
         source["presentation"] = presentation
         for key in (
             "number", "type", "stem", "criterion", "max_score", "reference_answer", "test_cases"
@@ -5585,47 +5554,41 @@ def update_student_answer(
             # Keep independent text edits, but a conflicting assignment remains
             # unconfirmed and cannot enter grading.
             patch = {**patch, "review_status": "pending"}
-        matching_confirmation = (patch.get("review_status") == "confirmed"
+        verified_answer_save = patch.get("content") is not None or patch.get("target_q_id") is not None
+        matching_confirmation = ((verified_answer_save or patch.get("review_status") == "confirmed")
                                  and _answer_matching_confirmation_allowed(target.flag, target.content))
         failed_flags = _FAILED_ANSWER_REVIEW_FLAGS | _answer_recognition_failures(target.flag)
         original_failures = _answer_recognition_failures(target.flag)
         metadata_fields = (_metadata_only_recognition_fields(target.flag, target.content)
-                           if patch.get("review_status") == "confirmed" else set())
+                           if verified_answer_save or patch.get("review_status") == "confirmed" else set())
         manual_blank = (bool(original_failures)
                         and "manual_blank_confirmed" in (patch.get("flag") or [])
-                        and patch.get("content") is not None and not str(patch["content"]).strip()
-                        and patch.get("review_status") == "confirmed")
+                        and patch.get("content") is not None and not str(patch["content"]).strip())
         if manual_blank:
             patch = {**patch, "content": ""}
             content_changed = target.content != ""
         if metadata_fields and not content_changed:
-            # Confirm metadata without rewriting already verified student work.
+            # Saving verified content/assignment repairs bounded metadata failures.
             repaired_flags = failed_flags | {"recognition_metadata_review"}
             patch = {**patch, "flag": [flag for flag in target.flag or [] if flag not in repaired_flags]}
         elif matching_confirmation and not content_changed:
-            # Confirmation acknowledges the saved evidence; projected browser
-            # flags must not become new raw failures on an unchanged save.
-            patch = {key: value for key, value in patch.items() if key != "flag"}
+            # Preserve the metadata-only confirmation path. An explicit save
+            # also resolves the doubt without requiring that confirmation.
+            if patch.get("review_status") == "confirmed":
+                patch = {key: value for key, value in patch.items() if key != "flag"}
+            else:
+                patch = {**patch, "flag": [flag for flag in target.flag or [] if flag != "recognition_manual_pending"]}
         elif manual_blank or (content_changed and str(patch.get("content") or "").strip()
                 and str(patch["content"]).strip() != str(target.content or "").strip()):
             # A teacher's replacement text repairs recognition failures while
             # preserving unrelated source/authorship observations.
             repaired_flags = failed_flags | {"recognition_manual_pending", "recognition_paused", "recognition_incomplete"}
             patch = {**patch, "flag": [flag for flag in (patch.get("flag", target.flag) or []) if flag not in repaired_flags]}
-            if original_failures and patch.get("review_status") != "confirmed":
-                patch["flag"] = list(dict.fromkeys([
-                    *patch["flag"], "recognition_repaired_needs_confirmation",
-                ]))
         elif original_failures and patch.get("flag") is not None:
             # Flag edits/one-click confirmation cannot erase missing evidence.
             patch = {**patch, "flag": list(dict.fromkeys([
                 *patch["flag"], *sorted(original_failures),
             ]))}
-        if (_REQUIRED_ANSWER_CONFIRMATION_FLAGS.intersection(target.flag or [])
-                and patch.get("review_status") != "confirmed" and patch.get("flag") is not None):
-            patch["flag"] = list(dict.fromkeys([
-                *patch["flag"], *sorted(_REQUIRED_ANSWER_CONFIRMATION_FLAGS.intersection(target.flag or [])),
-            ]))
         if patch.get("flag") is not None:
             patch = {**patch, "flag": [*_public_answer_flags(patch["flag"]),
                                        *[flag for flag in target.flag or [] if flag.startswith("answer_recognition_confidence:")]]}
@@ -5891,7 +5854,7 @@ def update_correction_review(
 
 
 def _correction_review_blocks_finalization(result) -> bool:
-    """A replacement for an unusable AI score must be explicitly confirmed."""
+    """Only a missing or invalid effective score prevents finalization."""
     def valid_score(value):
         return (value is not None and math.isfinite(value)
                 and 0 <= value <= result.ai_max_score)
@@ -5899,8 +5862,6 @@ def _correction_review_blocks_finalization(result) -> bool:
     return (
         result.result_status in education.NON_SCOREABLE_RESULT_STATUSES
         or not valid_score(result.effective_score)
-        or (not valid_score(result.ai_score)
-            and (result.teacher_review or {}).get("confirmed") is not True)
     )
 
 

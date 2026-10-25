@@ -414,7 +414,7 @@ def test_identity_rejects_only_empty_fields_or_the_exact_default(student_id, nam
 
 
 @pytest.mark.parametrize("failure_flag", ["recognition_failed", "parse_failed", "no_matching_answer"])
-def test_answer_recognition_failure_requires_repair_and_confirmation(failure_flag):
+def test_saved_answer_repair_releases_grading_without_confirmation(failure_flag):
     from sqlalchemy import select
     from backend.db.models import SubmissionAnswerRecord
     from backend.db.session import session_scope
@@ -442,19 +442,12 @@ def test_answer_recognition_failure_requires_repair_and_confirmation(failure_fla
         expected_revision=before["workflow_revision"],
     )
     assert failure_flag not in repaired["answer"]["flag"]
-    assert "recognition_repaired_needs_confirmation" in repaired["answer"]["flag"]
-    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
-    still_pending = task_facade.update_student_answer(
-        **args, display_student_id="S001", q_id="q1", patch={"flag": []},
-        expected_revision=repaired["workflow_revision"],
-    )
-    assert "recognition_repaired_needs_confirmation" in still_pending["answer"]["flag"]
-    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
-    task_facade.update_student_answer(
-        **args, display_student_id="S001", q_id="q1", patch={"review_status": "confirmed"},
-        expected_revision=still_pending["workflow_revision"],
-    )
+    assert repaired["answer"]["flag"] == []
+    assert repaired["answer"]["review_status"] != "confirmed"
     assert task_facade.grading_readiness(**args)["blocking_issues"] == []
+    reloaded = task_facade.get_task(**args, full=True)
+    assert reloaded["student_data"]["S001"]["stu_ans"][0]["review_status"] != "confirmed"
+    assert task_facade.start_task_grading(**args, expected_workflow_revision=repaired["workflow_revision"])["status"] == "started"
 
 
 def test_true_blank_answer_without_failure_evidence_is_not_recognition_failure():
@@ -509,7 +502,9 @@ def test_unusable_question_inputs_cannot_start_grading(condition):
     assert upload_exc.value.code == "question_review_blocked"
 
 
-def test_missing_question_repair_requires_confirmation_after_save():
+@pytest.mark.parametrize("field,replacement", [("number", "1"), ("type", "concept"), ("stem", "Verified question text"), ("criterion", "Award 10 points")])
+@pytest.mark.parametrize("manual_marker", [False, True])
+def test_saved_question_repair_releases_next_stage_without_confirmation(field, replacement, manual_marker):
     from sqlalchemy import select
     from backend.db.models import AssignmentQuestionRecord
     from backend.db.session import session_scope
@@ -518,23 +513,30 @@ def test_missing_question_repair_requires_confirmation_after_save():
     seeded = _seed_legacy_structured_case()
     args = {"task_id": seeded["assignment_id"], "owner_id": seeded["owner_id"]}
     with session_scope() as session:
-        session.scalar(select(AssignmentQuestionRecord)).stem = ""
-    repaired = task_facade.update_problem(
-        **args, q_id="q1", patch={"stem": "Verified question text"},
-        expected_revision=seeded["workflow"].workflow_revision,
-    )
-    assert repaired["problem"]["review_status"] == "needs_review"
+        question = session.scalar(select(AssignmentQuestionRecord))
+        setattr(question, field, "")
+        if manual_marker:
+            question.source = {"presentation": {"preparation_issues": [{
+                "issue_id": "manual", "field": "source", "code": "manual_completion_required",
+                "severity": "blocking", "status": "open", "details": {"required_fields": [field]},
+            }]}}
     assert "question_review_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
-    still_pending = task_facade.update_problem(
-        **args, q_id="q1", patch={"preparation_issues": []},
-        expected_revision=repaired["workflow_revision"],
-    )
-    assert "question_review_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
-    task_facade.update_problem(
-        **args, q_id="q1", patch={"review_status": "confirmed"},
-        expected_revision=still_pending["workflow_revision"],
-    )
+    repaired = task_facade.update_problem(**args, q_id="q1", patch={field: replacement},
+        expected_revision=seeded["workflow"].workflow_revision)
+    assert repaired["problem"]["review_status"] != "confirmed"
     assert "question_review_blocked" not in task_facade.grading_readiness(**args)["blocking_issues"]
+    assert "question_manual_completion_required" not in task_facade.grading_readiness(**args)["blocking_issues"]
+    if manual_marker:
+        assert repaired["problem"]["preparation_issues"][0]["status"] == "resolved"
+    # The real upload endpoint's server guard must use the same saved facts.
+    from fastapi.testclient import TestClient
+    from backend.auth import create_token
+    from backend.main import app
+    response = TestClient(app).post(f"/tasks/{args['task_id']}/parse_submissions",
+        headers={"Authorization": f"Bearer {create_token(args['owner_id'], 'teacher')}"},
+        data={"expected_workflow_revision": repaired["workflow_revision"], "replace_confirmed": "true"},
+        files={"file": ("S002.txt", b"Question 1: answer", "text/plain")})
+    assert response.status_code < 300, response.text
 
 
 def test_grade_endpoint_accepts_uncertain_answers_and_preserves_pending_review():

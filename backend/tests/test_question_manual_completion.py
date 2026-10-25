@@ -129,7 +129,7 @@ async def test_paused_question_handoff_keeps_completed_questions_and_sources(mon
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fill_reference", [False, True])
-async def test_manual_completion_preserves_success_and_requires_filling_then_confirmation(monkeypatch, fill_reference):
+async def test_manual_completion_preserves_success_and_requires_saved_fields_only(monkeypatch, fill_reference):
     owner, task, job, revision, calls = await failed_preparation(monkeypatch)
     before_calls = list(calls)
     refused = await manual(owner, task, job, revision, question_count=2)
@@ -153,12 +153,12 @@ async def test_manual_completion_preserves_success_and_requires_filling_then_con
         task_facade.update_problem(task_id=task, owner_id=owner, q_id="q2", patch={"review_status": "confirmed"})
     task_facade.update_problem(task_id=task, owner_id=owner, q_id="q2",
         patch={"criterion": "Award 10 points for the solution.", **({"reference_answer": "Teacher solution"} if fill_reference else {})})
-    assert "question_manual_completion_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
-    task_facade.update_problem(task_id=task, owner_id=owner, q_id="q2", patch={"review_status": "confirmed"})
-    assert "question_manual_completion_required" not in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
-    # Later edits require a fresh confirmation, and removing a marker cannot bypass it.
+    blockers = task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+    assert "question_manual_completion_required" not in blockers
+    assert "question_review_blocked" not in blockers
+    # Clearing a required field blocks again even if its marker is removed.
     task_facade.update_problem(task_id=task, owner_id=owner, q_id="q2", patch={"criterion": " ", "preparation_issues": []})
-    assert "question_manual_completion_required" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+    assert "question_review_blocked" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
     with pytest.raises(ValidationError):
         task_facade.update_problem(task_id=task, owner_id=owner, q_id="q2", patch={"review_status": "confirmed"})
     duplicate = await manual(owner, task, job, revision)

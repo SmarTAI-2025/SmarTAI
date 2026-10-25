@@ -7,6 +7,70 @@ const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id:
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
+  it.each(["zh-CN", "en-US"])("lists invalid identity fields individually and omits valid fields (%s)", locale => {
+    const student = { stu_id: "[Unknown Student]", stu_name: "[Unknown Student]", stu_ans: [] };
+    const task = { task_id: "T1", student_data: { S1: student } } as unknown as Task;
+    const blockers = submissionReviewBlockers(task, locale);
+    expect(blockers).toHaveLength(2);
+    expect(blockers[0].label).toMatch(/学生姓名|student name/);
+    expect(blockers[1].label).toMatch(/学号|student ID/);
+    student.stu_id = "S1";
+    const remaining = submissionReviewBlockers(task, locale);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].label).not.toMatch(/学号|student ID/);
+  });
+
+  it.each(["zh-CN", "en-US"])("lists each invalid recognition field on its own line (%s)", locale => {
+    const answer = { q_id: "q1", number: "1", type: "", content: "Verified transcription",
+      flag: ["recognition_invalid_fields:number,type", "recognition_metadata_review", "recognition_failed", "recognition_manual_pending", "authorship_uncertain"] };
+    const task = { task_id: "T1", student_data: { S1: { stu_id: "S1", stu_name: "Sample", stu_ans: [answer] } } } as unknown as Task;
+    const blockers = submissionReviewBlockers(task, locale);
+    expect(blockers).toHaveLength(2);
+    expect(blockers[0].label).toMatch(/题号|question number/);
+    expect(blockers[0].label).not.toMatch(/题型|question type/);
+    expect(blockers[1].label).toMatch(/题型|question type/);
+    expect(blockers[1].label).not.toMatch(/题号|question number/);
+  });
+
+  it.each(["zh-CN", "en-US"])("lists each missing question field separately and excludes every optional note (%s)", locale => {
+    const row = question({ number: "", type: "", stem: "", criterion: "", reference_answer: "",
+      preparation_issues: [issue({ code: "low_confidence", details: { confidence: .2 } })] });
+    const blockers = questionReviewBlockers([row], "T1", locale);
+    expect(blockers).toHaveLength(4);
+    const fields = locale === "zh-CN" ? ["题号", "题型", "题干", "评分标准"] : ["question number", "question type", "question text", "rubric"];
+    blockers.forEach((blocker, index) => {
+      expect(blocker.label).toContain(fields[index]);
+      expect(blocker.label).not.toMatch(/标答|reference answer|置信度|confidence|确认|confirm/i);
+      expect(blocker.href).toContain("/questions/q1/content#question-q1");
+    });
+  });
+
+  it.each(["zh-CN", "en-US"])("lists only blocking answer notes as separate items (%s)", locale => {
+    const answer = { q_id: "q1", number: "1", type: "concept", content: "", recognition_confidence: .2,
+      flag: ["answer_assignment_conflict", "parse_failed", "authorship_uncertain"] };
+    const task = { task_id: "T1", student_data: { S1: { stu_id: "S1", stu_name: "Sample", stu_ans: [answer] } } } as unknown as Task;
+    const blockers = submissionReviewBlockers(task, locale);
+    expect(blockers).toHaveLength(2);
+    expect(blockers[0].label).toMatch(/同一题号|Multiple answers/);
+    expect(blockers[1].label).toMatch(/解析失败|parsing failed/);
+    for (const blocker of blockers) expect(blocker.label).not.toMatch(/置信度|confidence|笔迹|writing|确认|confirm/i);
+    answer.flag = ["authorship_uncertain"];
+    answer.content = "Saved transcription";
+    expect(submissionReviewBlockers(task, locale)).toEqual([]);
+  });
+  it.each(["zh-CN", "en-US"])("blocks only current missing fields, then releases saved repairs without confirmation (%s)", locale => {
+    const row = question({ type: "", reference_answer: "", review_status: "needs_review", preparation_issues: [
+      issue({ code: "manual_completion_required", field: "source", details: { required_fields: ["stem", "criterion"] } }),
+    ] });
+    const blockers = questionReviewBlockers([row], "T1", locale);
+    expect(blockers).toHaveLength(1);
+    expect(blockers[0].label).toContain(locale === "zh-CN" ? "题型" : "question type");
+    expect(blockers[0].label).not.toMatch(/标答|reference answer|已修正|confirm/i);
+    const saved = { ...row, type: "concept", review_status: "edited" as const };
+    expect(questionReviewBlockers([saved], "T1", locale)).toEqual([]);
+    expect(questionReviewIssues(saved).filter(issue => issue.severity === "blocking")).toEqual([]);
+  });
+
   it.each(["zh-CN", "en-US"])("keeps optional answers out of required prompts and clears repaired fields (%s)", locale => {
     const required = issue({ code: "generation_failed", field: "rubric", severity: "blocking" });
     const optional = issue({ issue_id: "answer", code: "generation_failed", field: "answer" });
@@ -28,7 +92,7 @@ describe("review hard failures", () => {
     const row = question({ type });
     expect(questionReviewBlocked(row)).toBe(true);
     expect(questionReviewNextBlocked(row)).toBe(true);
-    expect(questionReviewNotes(row, "zh-CN", code => code)).toContainEqual({ label: "请补齐缺失的题型并确认本题；完成前不能批改。", severity: "blocking" });
+    expect(questionReviewNotes(row, "zh-CN", code => code)).toContainEqual({ label: "请补齐缺失的题型；完成前不能批改。", severity: "blocking" });
     expect(questionReviewBlocked({ ...row, type: "other" })).toBe(false);
   });
 
@@ -41,10 +105,10 @@ describe("review hard failures", () => {
     const notes = questionReviewNotes(row, "zh-CN", () => "生成失败");
     expect(notes).toEqual([
       { label: "生成失败", severity: "blocking" },
-      { label: "请补齐缺失的题型、评分标准并确认本题；完成前不能批改。", severity: "blocking" },
+      { label: "请补齐缺失的题型、评分标准；完成前不能批改。", severity: "blocking" },
       { label: "缺少标答（可选），可按需补充。", severity: "advisory" },
     ]);
-    expect(questionReviewNotes(row, "en-US", () => "Generation failed")[1].label).toContain("question type, rubric and confirm");
+    expect(questionReviewNotes(row, "en-US", () => "Generation failed")[1].label).toContain("question type, rubric before grading");
     expect(questionReviewNotes({ ...row, type: "reasoning" }, "zh-CN", () => "生成失败")[1].label).not.toContain("题型");
   });
 
@@ -57,11 +121,11 @@ describe("review hard failures", () => {
     expect(notes[1].label).toBe("缺少标答（可选），可按需补充。");
   });
 
-  it("retains required confirmation after repair even when the optional answer is missing", () => {
+  it("releases repaired required fields even when the optional answer is missing", () => {
     const row = question({ reference_answer: "", preparation_issues: [issue({ code: "manual_completion_required", field: "source", details: { required_fields: ["type", "criterion"] } })] });
-    expect(questionReviewNotes(row, "zh-CN", code => code)).toContainEqual({ label: "严重问题已修正，请确认本题后继续。", severity: "blocking" });
+    expect(questionReviewNotes(row, "zh-CN", code => code)).toEqual([{ label: "缺少标答（可选），可按需补充。", severity: "advisory" }]);
     expect(questionReviewBlocked(row)).toBe(false);
-    expect(questionReviewNextBlocked(row)).toBe(true);
+    expect(questionReviewNextBlocked(row)).toBe(false);
   });
   it("explains conflicting test expectations and requires confirmation before proceeding", () => {
     const marker = issue({ code: "source_conflict", field: "programming_tests", details: { reason: "test_case_output_conflict" } });
@@ -182,29 +246,28 @@ describe("review hard failures", () => {
     expect(questionReviewIssues({ ...missingAnswer, review_status: "confirmed" })).toEqual([]);
   });
 
-  it("lets a repaired question be confirmed before allowing the next stage", () => {
-    const repaired = question({ review_status: "edited", preparation_issues: [issue({ code: "required_review_confirmation", severity: "blocking", status: "resolved" })] });
+  it("does not revive resolved failures when a repaired question has not been confirmed", () => {
+    const repaired = question({ review_status: "edited", preparation_issues: [issue({ code: "generation_failed", severity: "blocking", status: "resolved" })] });
     expect(questionReviewBlocked(repaired)).toBe(false);
-    expect(questionReviewNextBlocked(repaired)).toBe(true);
-    expect(questionReviewIssues(repaired)[0]).toMatchObject({ severity: "blocking", details: { review_display_reason: "confirmation_required" } });
-    expect(questionReviewNextBlocked({ ...repaired, review_status: "confirmed" })).toBe(false);
+    expect(questionReviewNextBlocked(repaired)).toBe(false);
+    expect(questionReviewIssues(repaired)).toEqual([]);
   });
 
   it.each(["manual_completion_required", "source_conflict", "ambiguous_question_match"] as const)("allows explicit confirmation of usable content with a %s marker", code => {
     const marker = issue({ code, severity: "warning", details: { required_fields: ["criterion"] } });
     const ready = question({ preparation_issues: [marker] });
     expect(questionReviewBlocked(ready)).toBe(false);
-    expect(questionReviewNextBlocked(ready)).toBe(true);
+    expect(questionReviewNextBlocked(ready)).toBe(code !== "manual_completion_required");
     expect(questionReviewBlocked({ ...ready, criterion: "" })).toBe(true);
     expect(questionReviewNextBlocked({ ...ready, review_status: "confirmed", preparation_issues: [{ ...marker, status: "acknowledged" }] })).toBe(false);
   });
 
-  it("requires confirmation of a repaired answer without rejecting that confirmation", () => {
-    const repaired = { q_id: "q1", number: "1", type: "concept", content: "corrected", flag: ["recognition_repaired_needs_confirmation"] };
+  it("allows a saved repaired answer to continue without confirmation", () => {
+    const repaired = { q_id: "q1", number: "1", type: "concept", content: "corrected", flag: [], review_status: "pending" as const };
     expect(answerReviewBlocked(repaired)).toBe(false);
-    expect(answerReviewNextBlocked(repaired)).toBe(true);
+    expect(answerReviewNextBlocked(repaired)).toBe(false);
     const task = { task_id: "T1", student_data: { s1: { stu_id: "s1", stu_name: "Sample", stu_ans: [repaired] } } } as unknown as Task;
-    expect(submissionReviewBlockers(task, "en-US")).toHaveLength(1);
+    expect(submissionReviewBlockers(task, "en-US")).toHaveLength(0);
     expect(submissionConfirmationBlockers(task, "en-US")).toHaveLength(0);
     expect(answerReviewNextBlocked({ ...repaired, review_status: "confirmed" })).toBe(false);
   });
@@ -265,7 +328,7 @@ describe("incremental review contract", () => {
     expect(questionReviewBlocked(question({ preparation_issues: [partial] }))).toBe(true);
   });
 
-  it("permits metadata confirmation but requires it before continuation", () => {
+  it("permits metadata confirmation while unresolved metadata blocks continuation", () => {
     const answer = { q_id: "q1", number: "1", type: "", content: "Verified answer", flag: [
       "recognition_invalid_fields:type", "recognition_manual_pending", "recognition_failed", "recognition_metadata_review"] };
     expect(answerReviewBlocked(answer)).toBe(false);

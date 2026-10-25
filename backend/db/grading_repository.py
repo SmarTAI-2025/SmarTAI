@@ -1205,12 +1205,11 @@ def persisted_result_counters(run_id: str) -> tuple[int, int]:
         return completed, failed
 
 
-def _apply_teacher_review_state(result, *, confirmed: bool) -> None:
+def _apply_teacher_review_state(result) -> None:
     """Apply the same current state for a fresh or inherited human judgment."""
-    result.result_status = (education.GradeResultStatus.GRADED.value if confirmed
-                            else education.GradeResultStatus.NEEDS_REVIEW.value)
-    result.requires_review = not confirmed
-    result.review_reasons = [] if confirmed else ["teacher_edit_pending_confirmation"]
+    result.result_status = education.GradeResultStatus.GRADED.value
+    result.requires_review = False
+    result.review_reasons = []
 
 
 def upsert_result(run_id: str, *, worker_id: str,
@@ -1334,7 +1333,7 @@ def upsert_result(run_id: str, *, worker_id: str,
             score = inherited_review["new_score"]
             if not math.isfinite(score) or not 0 <= score <= record.ai_max_score:
                 raise ValidationError("review_score_out_of_range")
-            _apply_teacher_review_state(record, confirmed=bool(inherited_review.get("confirmed")))
+            _apply_teacher_review_state(record)
             session.add(TeacherReviewRecord(
                 id=_new_review_id(), grade_result_id=record.id, teacher_id=run.teacher_id,
                 previous_score=record.ai_score, previous_comment=record.ai_comment,
@@ -1580,7 +1579,7 @@ def add_teacher_review(
             created_at=now,
         )
         session.add(review)
-        _apply_teacher_review_state(result, confirmed=confirm)
+        _apply_teacher_review_state(result)
         result.updated_at = now
         session.flush()
         return _review_to_dto(review)
@@ -1683,9 +1682,8 @@ def release(run_id: str, *, teacher_id: str) -> education.GradingRunDTO:
             def valid_score(value):
                 return value is not None and math.isfinite(value) and 0 <= value <= row.ai_max_score
             effective = review.new_score if review is not None else row.ai_score
-            if (not valid_score(effective) or (not valid_score(row.ai_score)
-                    and (review is None or not review.confirmed))):
-                raise ResultNotReleasable("unconfirmed_or_missing_score")
+            if not valid_score(effective):
+                raise ResultNotReleasable("missing_or_invalid_score")
         revision_ids, question_ids = _result_matrix_axes(session, run)
         actual_pairs = {
             (revision_id, question_id)

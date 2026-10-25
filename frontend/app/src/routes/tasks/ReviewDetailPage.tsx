@@ -476,8 +476,8 @@ function ReviewDetailForm() {
   const lockedResultsReason = blockingReviewItems.length
     ? tx(
         locale,
-        `结果分析尚未解锁：还有 ${blockingReviewItems.length} 个关键问题，必须先处理并确认。`,
-        `Results & Analysis is locked: ${blockingReviewItems.length} response${blockingReviewItems.length === 1 ? " has" : "s have"} a required issue and must be corrected and confirmed.`,
+        `结果分析尚未解锁：还有 ${blockingReviewItems.length} 个关键问题，必须先处理。`,
+        `Results & Analysis is locked: ${blockingReviewItems.length} response${blockingReviewItems.length === 1 ? " has" : "s have"} a required issue and must be corrected.`,
       )
     : tx(
         locale,
@@ -614,7 +614,7 @@ function ReviewDetailForm() {
             next={{ label: tx(locale, "查看结果分析", "View Results & Analysis"), disabled: savingReviews, onClick: () => {
               if (dirty) { toast.info(tx(locale, "请先确认正在修改的分数和评语。", "Confirm your edited scores and comments first.")); return; }
               if (blockingReviewItems.length || !finalizationQuery.data?.ready_for_confirmation) {
-                if (blockingReviewItems.length) setBlockedReviews(blockingReviewItems.map(item => ({ label: `${item.student.name} · ${item.question.label}`, href: buildHref(item.student.id, item.question.id, false) })));
+                if (blockingReviewItems.length) setBlockedReviews(blockingReviewItems.flatMap(item => correctionReviewNotes(item.correction, locale).filter(note => note.severity === "blocking").map(note => ({ label: `${item.student.name} · ${locale === "zh-CN" ? `第 ${item.question.label} 题` : `Question ${item.question.label}`} · ${note.label}`, href: buildHref(item.student.id, item.question.id, false) }))));
                 else { toast.info(lockedResultsReason); void finalizationQuery.refetch(); }
                 return;
               }

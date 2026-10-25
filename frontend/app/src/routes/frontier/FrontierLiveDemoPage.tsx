@@ -746,7 +746,7 @@ function SubmissionRecognitionReview({ task, locale, busy, blocked, canStart, on
         <div>
           <h3 id="demo-submission-review-title" className="text-lg font-bold">{tx(locale, "本次识别的学生作答", "Recognized submissions")}</h3>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
-            {tx(locale, "检查学生信息和作答，确认后开始批改。", "Check student details and answers before starting grading.")}
+            {tx(locale, "检查学生信息和作答，处理未解决的问题后开始批改。", "Check student details and answers, and resolve outstanding issues before starting grading.")}
           </p>
         </div>
         <Link className="shrink-0 text-xs font-semibold text-primary hover:underline" to={`/tasks/${task.task_id}/submissions`}>
