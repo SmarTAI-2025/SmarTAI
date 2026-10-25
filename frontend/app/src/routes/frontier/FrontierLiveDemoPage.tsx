@@ -56,6 +56,7 @@ import { getFrontierGeneration, isFrontierExitPending, isFrontierTaskPath, remem
 import { answerReviewNextBlocked, submissionReviewBlockers, questionReviewBlockers, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { formatSubmissionFlag } from "@/lib/submissionReview";
 import { gradingProgressText } from "@/lib/gradingProgressCopy";
+import { DemoContentTabs, type DemoContentStage } from "./DemoContentTabs";
 import "./frontier.css";
 import type { ProblemInfo, Task, TaskResultResponse, TaskStateSnapshot, TaskStatus } from "@/types";
 
@@ -106,11 +107,19 @@ export function FrontierLiveDemoPage() {
   const [teacherReviewTask, setTeacherReviewTask] = useState<Task | null>(null);
   const [submissionReviewTask, setSubmissionReviewTask] = useState<Task | null>(null);
   const [demoResult, setDemoResult] = useState<TaskResultResponse | null>(null);
+  const [contentTask, setContentTask] = useState<Task | null>(null);
   const [materialsConfirmed, setMaterialsConfirmed] = useState(false);
   const activeStepRef = useRef<RunStepId | null>(null);
   const runRef = useRef<DemoRun | null>(null);
   const localeRef = useRef(locale);
   localeRef.current = locale;
+  const contentData = demoResult ? {
+    task_id: demoResult.task_id,
+    problem_data: demoResult.problem_data ?? contentTask?.problem_data ?? {},
+    student_data: demoResult.student_data ?? contentTask?.student_data ?? {},
+  } : contentTask;
+  const contentStage: DemoContentStage = demoResult ? "results"
+    : contentTask && ["submissions_ready", "grading_setup", "grading", "grading_paused", "graded", "finalized"].includes(contentTask.status) ? "submissions" : "materials";
   // Only completed recognition can require manual review. Failed/paused jobs
   // retain their existing retry/resume action, even if partial data is present.
   const reviewTask = isTaskAwaitingGrading(snapshot?.status) ? submissionReviewTask
@@ -166,6 +175,7 @@ export function FrontierLiveDemoPage() {
     setTeacherReviewTask(null);
     setSubmissionReviewTask(null);
     setDemoResult(null);
+    setContentTask(null);
     setMaterialsConfirmed(false);
     setProviderLabel(null);
     setError(null);
@@ -189,7 +199,7 @@ export function FrontierLiveDemoPage() {
           setError({ message: liveDemoWorkflowFailureMessage(locale, detail), code: detail });
           return;
         }
-        if (state.problem_count > 0 || state.status === "problems_ready" || isTaskAwaitingGrading(state.status)) {
+        if (state.problem_count > 0 || state.status === "problems_ready" || isTaskAwaitingGrading(state.status) || state.status === "grading") {
           let task = await run.step(() => getTask(restoredTaskId));
           if (state.status === "problems_ready" || isTaskAwaitingGrading(state.status)) {
             const reviewed = await readCurrentReview(run, restoredTaskId, state.status === "problems_ready" ? "questions" : "submissions", { task, state });
@@ -199,6 +209,7 @@ export function FrontierLiveDemoPage() {
           const prepared = Object.values(task.problem_data);
           const confirmed = generatedMaterialsConfirmed(prepared);
           setTeacherReviewTask(task);
+          setContentTask(task);
           setMaterialsConfirmed(confirmed);
           if (state.status === "problems_ready" && !confirmed) {
             return;
@@ -295,6 +306,7 @@ export function FrontierLiveDemoPage() {
     setTeacherReviewTask(null);
     setSubmissionReviewTask(null);
     setDemoResult(null);
+    setContentTask(null);
     setMaterialsConfirmed(false);
     setStartedAt(Date.now());
     setSteps(initialSteps(locale));
@@ -393,7 +405,10 @@ export function FrontierLiveDemoPage() {
       const state = loaded && task.status === loaded.state.status && task.workflow_revision === loaded.state.workflow_revision
         ? loaded.state : await run.step(() => getTaskState(currentTaskId));
       if (!await reviewStageIsCurrent(run, currentTaskId, stage, state)) return null;
-      if (task.status === state.status && task.workflow_revision === state.workflow_revision) return { task, state };
+      if (task.status === state.status && task.workflow_revision === state.workflow_revision) {
+        setContentTask(task);
+        return { task, state };
+      }
       loaded = undefined;
     }
     throw new Error(tx(locale, "任务内容已更新，请重试读取最新状态。", "Task content changed. Retry to load the latest state."));
@@ -534,7 +549,13 @@ export function FrontierLiveDemoPage() {
         setSteps(stepsFromSnapshot(state, locale));
         setTeacherReviewTask(null);
         setSubmissionReviewTask(null);
+        setContentTask(null);
         setMaterialsConfirmed(false);
+        if (state.status === "grading") {
+          // Recognition may have completed in another tab. Load its saved
+          // content once before observing grading; never relaunch either stage.
+          setContentTask(await run.step(() => getTask(currentTaskId)));
+        }
         if (state.status !== "draft") await continueWorkflow(run, currentTaskId, state.status);
         return null;
       }
@@ -697,36 +718,24 @@ export function FrontierLiveDemoPage() {
         </aside>
       </div>
 
-      {demoResult ? (
-        <DemoResultInsights result={demoResult} taskId={taskId ?? demoResult.task_id} locale={locale} />
-      ) : submissionReviewTask && isTaskAwaitingGrading(snapshot?.status) ? (
-        <SubmissionRecognitionReview
-          task={submissionReviewTask}
-          locale={locale}
-          busy={busy}
-          blocked={Boolean(requiredReview)}
-          onContinue={() => void confirmSubmissionReview()}
-        />
-      ) : teacherReviewTask ? (
-        <TeacherMaterialConfirmation
-          task={teacherReviewTask}
-          locale={locale}
-          confirmed={materialsConfirmed}
-          reviewDescription={requiredReview?.description}
-        />
-      ) : null}
+      {contentData ? <DemoContentTabs key={`${contentData.task_id}:${contentStage}`} stage={contentStage} locale={locale}
+        taskId={contentData.task_id} result={demoResult}
+        materials={<TeacherMaterialConfirmation task={contentData} locale={locale} confirmed={materialsConfirmed} reviewDescription={requiredReview?.description} />}
+        submissions={<SubmissionRecognitionReview task={contentData} locale={locale} busy={busy} blocked={Boolean(requiredReview)}
+          canStart={Boolean(submissionReviewTask && isTaskAwaitingGrading(snapshot?.status))} onContinue={() => void confirmSubmissionReview()} />}
+        insights={demoResult ? <DemoResultInsights result={demoResult} taskId={contentData.task_id} locale={locale} /> : null}
+      /> : null}
     </div>
   );
 }
 
-function SubmissionRecognitionReview({ task, locale, busy, blocked, onContinue }: { task: Task; locale: Locale; busy: boolean; blocked: boolean; onContinue: () => void }) {
+function SubmissionRecognitionReview({ task, locale, busy, blocked, canStart, onContinue }: { task: Pick<Task, "task_id" | "student_data">; locale: Locale; busy: boolean; blocked: boolean; canStart: boolean; onContinue: () => void }) {
   const students = Object.values(task.student_data);
   return (
-    <section className="mt-5 rounded-[10px] border border-primary/25 bg-primary/[0.035] p-4 sm:p-5" aria-labelledby="demo-submission-review-title">
+    <section aria-labelledby="demo-submission-review-title">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "文字识别", "Text recognition")}</p>
-          <h3 id="demo-submission-review-title" className="mt-1 text-lg font-bold">{tx(locale, "本次识别的学生作答", "Recognized submissions")}</h3>
+          <h3 id="demo-submission-review-title" className="text-lg font-bold">{tx(locale, "本次识别的学生作答", "Recognized submissions")}</h3>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
             {tx(locale, "检查学生信息和作答，确认后开始批改。", "Check student details and answers before starting grading.")}
           </p>
@@ -764,7 +773,7 @@ function SubmissionRecognitionReview({ task, locale, busy, blocked, onContinue }
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        {!blocked ? <Button onClick={onContinue} disabled={busy} className="h-10 px-4">
+        {canStart && !blocked ? <Button onClick={onContinue} disabled={busy} className="h-10 px-4">
           {busy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           {tx(locale, "开始批改", "Start grading")}
         </Button> : null}
@@ -786,11 +795,10 @@ function DemoResultInsights({ result, taskId, locale }: { result: TaskResultResp
     { value: `${passRate}%`, label: tx(locale, "及格率", "Pass rate") },
   ];
   return (
-    <section className="frontier-live-results mt-5 overflow-hidden rounded-[12px] border border-primary/20 bg-card p-4 sm:p-6" aria-labelledby="demo-result-insights-title">
+    <section className="frontier-live-results" aria-labelledby="demo-result-insights-title">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "批改结果 · 学情分析", "Grading results · learning analysis")}</p>
-          <h3 id="demo-result-insights-title" className="mt-1 text-xl font-bold">{tx(locale, "从真实分数看到班级表现", "See class performance from live scores")}</h3>
+          <h3 id="demo-result-insights-title" className="text-xl font-bold">{tx(locale, "从真实分数看到班级表现", "See class performance from live scores")}</h3>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
             {tx(locale, "统计基于当前保存的批改结果。", "Statistics use the currently saved grading results.")}
           </p>
@@ -1012,7 +1020,7 @@ function TeacherMaterialConfirmation({
   confirmed,
   reviewDescription,
 }: {
-  task: Task;
+  task: Pick<Task, "task_id" | "problem_data">;
   locale: Locale;
   confirmed: boolean;
   reviewDescription?: string;
@@ -1020,11 +1028,10 @@ function TeacherMaterialConfirmation({
   let aligned = Object.values(task.problem_data);
   try { aligned = alignDemoProblems(aligned); } catch { /* Keep malformed results available for manual review. */ }
   return (
-    <section className="mt-5 rounded-[10px] border border-primary/25 bg-primary/[0.035] p-4 sm:p-5" aria-labelledby="demo-teacher-material-title">
+    <section aria-labelledby="demo-teacher-material-title">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">{tx(locale, "题目资料", "Question materials")}</p>
-          <h3 id="demo-teacher-material-title" className="mt-1 text-lg font-bold">{tx(locale, "本次生成的题目资料", "Generated question materials")}</h3>
+          <h3 id="demo-teacher-material-title" className="text-lg font-bold">{tx(locale, "本次生成的题目资料", "Generated question materials")}</h3>
           <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
             {reviewDescription ?? tx(locale, "题干、标答与评分依据已实时生成，可以继续识别作答。", "Questions, reference answers, and rubrics were generated live. You can continue to submissions.")}
           </p>
