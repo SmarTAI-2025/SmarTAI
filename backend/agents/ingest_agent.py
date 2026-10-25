@@ -1970,6 +1970,10 @@ Rules:
   the definition interprets it for shared use, without generating a replacement.
 - criterion: return rubric_definition, not a second independently written text_value. The program
   renders the existing rubric text from this single definition. Use absolute point allocations.
+  Descriptions, conditions and policy text are shown directly to teachers: write concise scoring
+  instructions in the requested language, without internal route/ledger/schema terminology or
+  commentary about the generation process. Use applies_when="always" only for an unconditional
+  route; otherwise state the actual condition. Preserve all substantive teacher rules verbatim.
   A concrete, usable scoring rubric must align with the reference answer. When
   question_structure.subparts is non-empty, name every subpart label exactly once and assign
   explicit absolute points whose sum equals that major question's max_score. The subparts remain

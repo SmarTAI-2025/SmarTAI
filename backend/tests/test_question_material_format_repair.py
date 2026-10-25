@@ -53,6 +53,19 @@ async def test_deterministically_repairable_json_uses_no_extra_model_call():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("text,expected", [
+    (r"$$x+y=z$", r"$x+y=z$"),
+    (r"Keep $\frac{1}{$ for editing.", r"Keep $\frac{1}{$ for editing."),
+    (r"Keep $\unknowncommand{x}$ for editing.", r"Keep $\unknowncommand{x}$ for editing."),
+])
+async def test_display_only_math_issues_do_not_retry_or_fail_generation(text, expected):
+    provider = Provider([json.dumps({"candidates": [{"target_id": "q1:reference_answer", "q_id": "q1",
+        "target": "reference_answer", "text_value": text}]})])
+    assert (await generate(provider))[0].text_value == expected
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_missing_subpart_is_repaired_within_the_same_question():
     from backend.agents.question_preparation_agent import generate_major_question_materials, requested_major_question_materials
     from backend.progress.tracker import ProgressReporter

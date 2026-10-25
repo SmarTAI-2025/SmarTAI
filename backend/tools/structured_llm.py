@@ -347,9 +347,6 @@ def format_math_and_quotes(text: str) -> str:
     if _SOURCE_CODE_START_RE.match(text):
         return text
     text = _normalize_overescaped_markdown(text)
-    # Normalize standard LaTeX delimiters for the Markdown math renderer.
-    text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text, flags=re.DOTALL)
-    text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text, flags=re.DOTALL)
     # Strip literal quotes hallucinated by LLM
     text = text.strip('"').strip("'")
     return _wrap_bare_latex(text)
@@ -378,7 +375,28 @@ def _normalize_prose_escapes(text: str) -> str:
     text = _DOUBLE_ESCAPED_LATEX_RE.sub(lambda _match: "\\", text)
     text = re.sub(r"\\\\(?=[\[\]()])", lambda _match: "\\", text)
     text = re.sub(r"(?<!\$)\${3,}(?!\$)", "$$", text)
-    return re.sub(r"\n{3,}", "\n\n", text)
+    return _normalize_math_delimiters(re.sub(r"\n{3,}", "\n\n", text))
+
+
+def _normalize_math_delimiters(text: str) -> str:
+    """Repair only unambiguous presentation fences, never mathematical content.
+
+    Called outside code spans. A same-line formula opened with $$ but closed
+    with $ can otherwise swallow the following proof as one display block.
+    Leave missing braces, environments and unknown commands to the renderer;
+    guessing their meaning or raising a workflow error would be unsafe.
+    """
+    text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text, flags=re.DOTALL)
+    text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text, flags=re.DOTALL)
+    return re.sub(
+        r'(?<![\\$])(\${1,2})(?!\$)([^$\n]+?)(?<!\\)(\${1,2})(?!\$)'
+        r'|(?<![\\$])\$\$(?!\$)[\s\S]*?(?<!\\)\$\$(?!\$)',
+        lambda match: ('$' + match[2] + '$') if (
+            match[1] is not None and match[1] != match[3]
+            and match[2].count('{') == match[2].count('}')
+            and re.search(r'[=^_]|\\[A-Za-z]+', match[2])
+        ) else match[0], text,
+    )
 
 
 def _wrap_bare_latex(text: str) -> str:

@@ -27,7 +27,7 @@ class _EvidencePayload(BaseModel):
 @pytest.mark.parametrize("source", [
     r"\(x^2=1\)", r"\frac{a}{b}=1", '"x=1"',
     "First line\n  second line", r"$x \neq y$",
-    "$a\bbar$", r"literal\ntext",
+    "$a\bbar$", r"literal\ntext", r"$$x=1$",
 ])
 def test_json_evidence_preserves_original_text_while_explanation_renders(source):
     parsed = extract_and_parse_json(json.dumps({
@@ -68,6 +68,20 @@ def test_preserves_existing_math_and_code_verbatim():
 
 def test_normalizes_standard_latex_delimiters_before_bare_fallback():
     assert format_math_and_quotes(r"Solve \(x^2=1\) now.") == "Solve $x^2=1$ now."
+
+
+@pytest.mark.parametrize("value,expected", [
+    (r"$$x+y=z$（说明 $x=y$）。", r"$x+y=z$（说明 $x=y$）。"),
+    (r"Proof: $x+y=z$$. Next $x=y$.", r"Proof: $x+y=z$. Next $x=y$."),
+    (r"\[x+y=z\]", r"$$x+y=z$$"),
+    (r"Cost: $5 and $$10", r"Cost: $5 and $$10"),
+    ("$$x=1\ny=2$$ where x = $1$.", "$$x=1\ny=2$$ where x = $1$."),
+    (r"$$\text{value $x$}$$", r"$$\text{value $x$}$$"),
+    (r"`\(x=1\)` and `$$x=1$`", r"`\(x=1\)` and `$$x=1$`"),
+    ("```tex\n\\[x=1\\]\n$$x=1$\n```", "```tex\n\\[x=1\\]\n$$x=1$\n```"),
+])
+def test_math_delimiter_repairs_are_local_and_leave_code_or_ambiguous_text(value, expected):
+    assert format_math_and_quotes(value) == expected
 
 
 def test_preserves_unfenced_source_code_and_code_fields():
