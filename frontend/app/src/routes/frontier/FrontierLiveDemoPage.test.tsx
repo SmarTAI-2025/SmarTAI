@@ -848,7 +848,7 @@ describe("FrontierLiveDemoPage", () => {
     vi.mocked(getTaskResult).mockResolvedValue(gradedResult(task));
     const user = userEvent.setup();
     renderLive("asg_demo123");
-    const answerTab = await screen.findByRole("tab", { name: zh ? "学生作答" : "Submissions" });
+    const answerTab = await screen.findByRole("tab", { name: zh ? "学生作答" : "Student answers" });
     expect(answerTab).toHaveAttribute("aria-selected", "true");
     expect(screen.getAllByRole("tab")).toHaveLength(2);
     await user.click(screen.getByRole("tab", { name: zh ? "题目资料" : "Materials" }));
@@ -886,7 +886,7 @@ describe("FrontierLiveDemoPage", () => {
     vi.mocked(getTaskState).mockResolvedValueOnce({ ...taskState("parsing_submissions"), problem_count: 0 })
       .mockResolvedValueOnce(taskState("grading")).mockReturnValue(waiting.promise);
     const current = renderLive("asg_demo123");
-    expect(await screen.findByRole("tab", { name: "Submissions" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("tab", { name: "Student answers" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("Recognized answer for q1 by demo-1")).toBeVisible();
     expect(getTask).toHaveBeenCalledTimes(1);
     expect(startGrading).not.toHaveBeenCalled();
@@ -902,7 +902,7 @@ describe("FrontierLiveDemoPage", () => {
     vi.mocked(getTaskState).mockResolvedValueOnce({ ...taskState("grading"), problem_count: 0 }).mockReturnValue(waiting.promise);
     const user = userEvent.setup();
     const current = renderLive("asg_demo123");
-    expect(await screen.findByRole("tab", { name: "Submissions" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("tab", { name: "Student answers" })).toHaveAttribute("aria-selected", "true");
     await user.click(screen.getByRole("tab", { name: "Materials" }));
     expect(screen.getByRole("heading", { name: "Generated question materials" })).toBeVisible();
     expect(startGrading).not.toHaveBeenCalled();

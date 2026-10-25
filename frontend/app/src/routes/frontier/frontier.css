@@ -50,7 +50,7 @@
   .demo-content-tabs[data-analysis] .demo-content-tabs__body { padding: 24px; }
 }
 @media (max-width: 639px) {
-  .demo-content-tabs__tab { flex: 1; padding: 10px 8px; overflow-wrap: anywhere; }
+  .demo-content-tabs__tab { flex: 1; padding: 10px 6px; overflow-wrap: normal; }
 }
 
 .frontier-site {

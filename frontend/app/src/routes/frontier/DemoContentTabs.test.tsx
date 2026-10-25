@@ -31,7 +31,7 @@ describe("DemoContentTabs", () => {
     current.unmount();
     const submissions = render(view("submissions", locale));
     expect(screen.getAllByRole("tab")).toHaveLength(2);
-    expect(screen.getByRole("tab", { name: zh ? "学生作答" : "Submissions" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: zh ? "学生作答" : "Student answers" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("heading", { name: "Saved submissions" })).toBeVisible();
     submissions.unmount();
     render(view("results", locale));

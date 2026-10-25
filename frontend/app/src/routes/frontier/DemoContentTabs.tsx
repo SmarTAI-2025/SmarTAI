@@ -24,7 +24,7 @@ export function DemoContentTabs({ stage, locale, materials, submissions, result,
   const [active, setActive] = useState<ContentTab>(stage === "results" ? "grading" : stage);
   const tabs: Array<{ key: ContentTab; label: string; content: ReactNode }> = [
     { key: "materials", label: zh ? "题目资料" : "Materials", content: materials },
-    ...(stage !== "materials" ? [{ key: "submissions" as const, label: zh ? "学生作答" : "Submissions", content: submissions }] : []),
+    ...(stage !== "materials" ? [{ key: "submissions" as const, label: zh ? "学生作答" : "Student answers", content: submissions }] : []),
     ...(result ? [
       { key: "grading" as const, label: zh ? "批改详情" : "Grading details", content: <DemoGradingDetails result={result} taskId={taskId} locale={locale} /> },
       { key: "analysis" as const, label: zh ? "学情分析" : "Learning analysis", content: insights },

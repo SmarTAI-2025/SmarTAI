@@ -154,7 +154,7 @@ async function guest(page: Page) {
   return errors;
 }
 
-for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) {
+for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390, 320]) {
   test(`Quick Demo content tabs preserve recognition and grading (${locale}, ${width}px)`, async ({ page }, testInfo) => {
     const errors = await guest(page), zh = locale === "zh-CN";
     await page.addInitScript(value => localStorage.setItem("smartai_locale", value), locale);
@@ -196,20 +196,20 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) {
     await expect(list.getByRole("tab")).toHaveCount(1);
     await page.getByRole("button", { name: zh ? "继续识别作答" : "Continue to submissions", exact: true }).click();
     await expect(list.getByRole("tab")).toHaveCount(2);
-    await expect(tab("学生作答", "Submissions")).toHaveAttribute("aria-selected", "true");
+    await expect(tab("学生作答", "Student answers")).toHaveAttribute("aria-selected", "true");
     await expect(tabs.getByText("Saved answer S1 q1", { exact: true })).toBeVisible();
     await tab("题目资料", "Materials").click();
     await page.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first().click();
     await expect(page.getByRole("button", { name: zh ? "正在运行…" : "Running…", exact: true })).toBeDisabled();
     await expect(tab("题目资料", "Materials")).toHaveAttribute("aria-selected", "true");
-    await tab("学生作答", "Submissions").click();
+    await tab("学生作答", "Student answers").click();
     await expect(tabs.getByText("Saved answer S1 q1", { exact: true })).toBeVisible();
     await expect(list.getByRole("tab")).toHaveCount(2);
     await page.reload();
     await expect(list.getByRole("tab")).toHaveCount(2);
     await tab("题目资料", "Materials").click();
     await expect(tabs.getByRole("heading", { name: zh ? "本次生成的题目资料" : "Generated question materials" })).toBeVisible();
-    await tab("学生作答", "Submissions").click();
+    await tab("学生作答", "Student answers").click();
     status = "graded";
     await expect(list.getByRole("tab")).toHaveCount(4);
     await expect(tab("批改详情", "Grading details")).toHaveAttribute("aria-selected", "true");
@@ -223,6 +223,17 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) {
     await detail.locator("summary").first().click();
     await expect(detail.getByText("Scoring basis S1 q1", { exact: true })).not.toBeVisible();
     expect(await list.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgba(0, 0, 0, 0)");
+    const splitWords = await list.evaluate(element => [...element.querySelectorAll("button")].flatMap(button => {
+      const node = button.firstChild;
+      if (!node || node.nodeType !== Node.TEXT_NODE) return [];
+      return [...(node.textContent ?? "").matchAll(/\S+/g)].flatMap(match => {
+        const range = document.createRange();
+        range.setStart(node, match.index!);
+        range.setEnd(node, match.index! + match[0].length);
+        return range.getClientRects().length > 1 ? [match[0]] : [];
+      });
+    }));
+    expect(splitWords).toEqual([]);
     expect(await tab("批改详情", "Grading details").evaluate(element => getComputedStyle(element).borderTopLeftRadius)).toBe("10px");
     await list.scrollIntoViewIfNeeded();
     await page.evaluate(() => window.scrollBy(0, -90));
