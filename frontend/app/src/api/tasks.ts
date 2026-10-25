@@ -19,7 +19,6 @@ import type {
   TaskMutationResponse,
   TaskResultResponse,
   TaskStateSnapshot,
-  TeacherCommentResponse,
   TeacherCommentsResponse,
 } from "@/types";
 import type { SourceStorageUsage } from "@/types/sourcePreview";
@@ -329,19 +328,6 @@ export function updateStudentIdentity(
   },
 ): Promise<StudentIdentityUpdateResponse> {
   return putJSON(`/tasks/${taskId}/students/${currentStudentId}/identity`, input);
-}
-
-export function setTeacherComment(
-  taskId: string,
-  studentId: string,
-  qId: string,
-  comment: string,
-): Promise<TeacherCommentResponse> {
-  return postJSON<TeacherCommentResponse>(`/tasks/${taskId}/teacher_comment`, {
-    student_id: studentId,
-    q_id: qId,
-    comment,
-  });
 }
 
 export function listTeacherComments(taskId: string): Promise<TeacherCommentsResponse> {

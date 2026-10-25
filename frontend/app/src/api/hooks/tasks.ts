@@ -464,29 +464,6 @@ export function useUpdateStudentIdentity() {
   });
 }
 
-export function useSetTeacherComment() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: ({
-      taskId,
-      studentId,
-      qId,
-      comment,
-    }: {
-      taskId: string;
-      studentId: string;
-      qId: string;
-      comment: string;
-    }) => tasksApi.setTeacherComment(taskId, studentId, qId, comment),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: taskKeys.comments(variables.taskId) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.finalization(variables.taskId) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.result(variables.taskId) });
-    },
-  });
-}
-
 export function useUpdateCorrectionReview() {
   const queryClient = useQueryClient();
 

@@ -1,0 +1,309 @@
+"""A rejected review must leave the whole published/draft result unchanged."""
+from concurrent.futures import ThreadPoolExecutor
+import threading
+
+import pytest
+from sqlalchemy import event, select
+from sqlalchemy.orm import Session
+
+from backend.db import grading_repository, workflow_repository
+from backend.db.models import (
+    GradeResultRecord, GradingRunEventRecord, GradingRunRecord,
+    GradingRunSubmissionRecord, TeacherReviewRecord,
+)
+from backend.db.session import session_scope
+from backend.services import task_facade
+from backend.tests.test_task_finalization_contract import _prepared_task
+
+
+def _snapshot():
+    records = (
+        workflow_repository.AssignmentWorkflowRecord,
+        workflow_repository.GradingRunSetupRecord,
+        workflow_repository.ResultArtifactManifestRecord,
+        GradingRunRecord, GradingRunSubmissionRecord, GradingRunEventRecord,
+        GradeResultRecord, TeacherReviewRecord,
+    )
+    with session_scope() as session:
+        return {
+            model.__tablename__: sorted(
+                [dict(row) for row in session.execute(select(model.__table__)).mappings()],
+                key=lambda row: repr(sorted(row.items())),
+            )
+            for model in records
+        }
+
+
+def _case(state="draft"):
+    from fastapi.testclient import TestClient
+    from backend.auth import create_token
+    from backend.main import app
+
+    seeded = _prepared_task()
+    revision = 0
+    if state == "released":
+        revision = task_facade.generate_artifacts(
+            task_id=seeded["task_id"], owner_id=seeded["owner_id"], expected_revision=0,
+        )["workflow_revision"]
+    if state == "missing":
+        with session_scope() as session:
+            session.delete(session.get(GradeResultRecord, seeded["optional_result_id"]))
+    client = TestClient(app)
+    client.headers["Authorization"] = "Bearer " + create_token(seeded["owner_id"], "teacher")
+    url = f"/tasks/{seeded['task_id']}/reviews/{seeded['student_id']}/q-optional"
+    payload = {"expected_workflow_revision": revision, "teacher_score": 8,
+               "teacher_comment": "Checked", "confirm": True}
+    return seeded, client, url, payload
+
+
+@pytest.mark.parametrize("state", ["draft", "released", "missing"])
+@pytest.mark.parametrize("score", [11, -1, "NaN", "Infinity", "-Infinity"])
+def test_invalid_score_has_no_persisted_side_effects(state, score):
+    _, client, url, payload = _case(state)
+    before = _snapshot()
+    response = client.put(url, json={**payload, "teacher_score": score})
+    assert response.status_code == 422, response.text
+    assert _snapshot() == before
+
+
+@pytest.mark.parametrize("state", ["draft", "released"])
+@pytest.mark.parametrize("bad_target", ["student", "question", "stale", "missing_version"])
+def test_rejected_review_target_and_version_preserve_state(state, bad_target):
+    seeded, client, url, payload = _case(state)
+    if bad_target == "student":
+        url = url.replace(seeded["student_id"], "unknown-student")
+    elif bad_target == "question":
+        url = url.replace("q-optional", "unknown-question")
+    elif bad_target == "stale":
+        payload["expected_workflow_revision"] += 10
+    else:
+        del payload["expected_workflow_revision"]
+    before = _snapshot()
+    response = client.put(url, json=payload)
+    expected = {"student": 404, "question": 404, "stale": 409, "missing_version": 422}[bad_target]
+    assert response.status_code == expected, response.text
+    assert _snapshot() == before
+
+
+@pytest.mark.parametrize("run_state", ["missing", "running", "failed", "cancelled"])
+def test_unavailable_run_does_not_consume_revision(run_state):
+    seeded, client, url, payload = _case()
+    with session_scope() as session:
+        workflow = session.get(workflow_repository.AssignmentWorkflowRecord, seeded["task_id"])
+        if run_state == "missing":
+            workflow.grading_job_id = "missing-run"
+        else:
+            session.get(GradingRunRecord, seeded["run_id"]).status = run_state
+    before = _snapshot()
+    response = client.put(url, json=payload)
+    assert response.status_code == (404 if run_state == "missing" else 409), response.text
+    assert _snapshot() == before
+
+
+def test_another_teacher_cannot_edit_result():
+    from backend.auth import create_token
+    from backend.db.models import UserRecord
+
+    _, client, url, payload = _case("released")
+    with session_scope() as session:
+        session.add(UserRecord(id="other-reviewer", username="other-reviewer", password_hash="hash",
+                               role="teacher", is_active=True))
+    client.headers["Authorization"] = "Bearer " + create_token("other-reviewer", "teacher")
+    before = _snapshot()
+    assert client.put(url, json=payload).status_code == 404
+    assert _snapshot() == before
+
+
+@pytest.mark.parametrize("state", ["draft", "released", "missing"])
+@pytest.mark.parametrize("score", [0, 10])
+def test_valid_boundary_review_commits_once_and_preserves_history(state, score):
+    seeded, client, url, payload = _case(state)
+    original = grading_repository.list_results_for_run(seeded["run_id"])
+    history = None
+    if state == "released":
+        history = task_facade.artifact_bytes(
+            task_id=seeded["task_id"], owner_id=seeded["owner_id"],
+            version=1, artifact_id="learning_report_md",
+        )[0]
+    response = client.put(url, json={**payload, "teacher_score": score})
+    assert response.status_code == 200, response.text
+    assert response.json()["workflow_revision"] == payload["expected_workflow_revision"] + 1
+    assert response.json()["correction"]["teacher_score"] == score
+    assert response.json()["correction"]["review_status"] == "confirmed"
+    runs = grading_repository.list_runs_for_assignment(seeded["task_id"], actor_id=seeded["owner_id"])
+    assert len(runs) == (2 if state == "released" else 1)
+    if state == "released":
+        assert grading_repository.list_results_for_run(seeded["run_id"]) == original
+        assert task_facade.artifact_bytes(
+            task_id=seeded["task_id"], owner_id=seeded["owner_id"],
+            version=1, artifact_id="learning_report_md",
+        )[0] == history
+        assert runs[-1].released_at is None
+    committed = _snapshot()
+    assert client.put(url, json={**payload, "teacher_score": score}).status_code == 409
+    assert _snapshot() == committed
+
+
+def test_unchanged_confirmation_still_records_teacher_review():
+    seeded, client, url, payload = _case()
+    response = client.put(url, json={**payload, "teacher_score": 9, "teacher_comment": ""})
+    assert response.status_code == 200, response.text
+    assert response.json()["unchanged"] is True
+    review = grading_repository.latest_teacher_review(seeded["optional_result_id"])
+    assert review.confirmed is True
+    assert review.new_score == 9
+
+
+@pytest.mark.parametrize("state", ["draft", "released", "missing"])
+def test_failure_after_review_flush_rolls_back_every_change(state):
+    _, client, url, payload = _case(state)
+    before = _snapshot()
+    flushed = []
+
+    def fail_after_review_flush(session, _context):
+        # Fire after the actual INSERT, not before validation or mutation.
+        if any(isinstance(row, TeacherReviewRecord) for row in session.new):
+            flushed.append(True)
+            raise RuntimeError("injected review persistence failure")
+
+    event.listen(Session, "after_flush", fail_after_review_flush)
+    try:
+        with pytest.raises(RuntimeError, match="injected review persistence failure"):
+            client.put(url, json=payload)
+    finally:
+        event.remove(Session, "after_flush", fail_after_review_flush)
+    assert flushed
+    assert _snapshot() == before
+    assert client.put(url, json=payload).status_code == 200
+
+
+@pytest.mark.parametrize("state", ["draft", "released"])
+def test_concurrent_reviews_have_one_revision_winner(state):
+    seeded, client, url, payload = _case(state)
+    barrier = threading.Barrier(2)
+
+    def save(score):
+        barrier.wait(timeout=10)
+        return client.put(url, json={**payload, "teacher_score": score})
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(save, [7, 8]))
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    winner = next(response.json() for response in responses if response.status_code == 200)
+    workflow = workflow_repository.get_live_workflow(seeded["task_id"], owner_id=seeded["owner_id"])
+    assert workflow.workflow_revision == payload["expected_workflow_revision"] + 1
+    runs = grading_repository.list_runs_for_assignment(seeded["task_id"], actor_id=seeded["owner_id"])
+    assert len(runs) == (2 if state == "released" else 1)
+    reviewed = next(row for row in grading_repository.list_results_for_run(runs[-1].id) if row.q_id == "q-optional")
+    assert reviewed.effective_score == winner["correction"]["teacher_score"]
+
+
+def test_retired_comment_writer_is_unreachable():
+    from backend.main import app
+
+    seeded, client, _, _ = _case("released")
+    before = _snapshot()
+    response = client.post(f"/tasks/{seeded['task_id']}/teacher_comment", json={
+        "student_id": seeded["student_id"], "q_id": "q-optional", "comment": "old client",
+    })
+    assert response.status_code == 404
+    assert "/tasks/{task_id}/teacher_comment" not in app.openapi()["paths"]
+    assert _snapshot() == before
+
+
+@pytest.mark.parametrize("state", ["draft", "missing"])
+def test_frozen_maximum_is_authoritative_after_question_change(state):
+    from backend.db.models import AssignmentQuestionRecord
+
+    seeded, client, url, payload = _case(state)
+    with session_scope() as session:
+        questions = session.scalars(select(AssignmentQuestionRecord).where(
+            AssignmentQuestionRecord.assignment_id == seeded["task_id"],
+        )).all()
+        session.add(workflow_repository.GradingRunSetupRecord(
+            grading_run_id=seeded["run_id"], assignment_id=seeded["task_id"],
+            owner_id=seeded["owner_id"], setup={}, fingerprint="frozen-review-test",
+            input_manifest={"questions": [{"id": row.id, "max_score": 10} for row in questions]},
+            created_at=0,
+        ))
+        for question in questions:
+            question.max_score = 20
+    before = _snapshot()
+    response = client.put(url, json={**payload, "teacher_score": 11})
+    assert response.status_code == 422, response.text
+    assert _snapshot() == before
+    assert client.put(url, json={**payload, "teacher_score": 10}).status_code == 200
+
+
+def test_rewind_between_candidate_read_and_lock_cannot_edit_hidden_history(monkeypatch):
+    seeded, client, url, payload = _case()
+    original_list = grading_repository.list_runs_for_assignment
+    rewound = []
+
+    def rewind_after_read(*args, **kwargs):
+        runs = original_list(*args, **kwargs)
+        workflow_repository.update_workflow(
+            seeded["task_id"], owner_id=seeded["owner_id"], bump_revision=False,
+            grading_job_id=None, presentation_status="problems_ready",
+        )
+        rewound.append(_snapshot())
+        return runs
+
+    monkeypatch.setattr(grading_repository, "list_runs_for_assignment", rewind_after_read)
+    response = client.put(url, json=payload)
+    assert response.status_code == 409, response.text
+    assert rewound and _snapshot() == rewound[-1]
+
+
+def test_busy_task_review_does_not_consume_revision():
+    seeded, client, url, payload = _case("released")
+    workflow_repository.update_workflow(
+        seeded["task_id"], owner_id=seeded["owner_id"], bump_revision=False,
+        active_job_id="active-recognition",
+    )
+    before = _snapshot()
+    assert client.put(url, json=payload).status_code == 409
+    assert _snapshot() == before
+
+
+def test_report_generation_and_review_share_one_revision_winner():
+    seeded, client, url, payload = _case()
+    barrier = threading.Barrier(2)
+
+    def save(action):
+        barrier.wait(timeout=10)
+        if action == "review":
+            return client.put(url, json=payload)
+        return client.post(f"/tasks/{seeded['task_id']}/artifacts/generate", json={
+            "expected_workflow_revision": payload["expected_workflow_revision"],
+        })
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(save, ["review", "report"]))
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    workflow = workflow_repository.get_live_workflow(seeded["task_id"], owner_id=seeded["owner_id"])
+    assert workflow.workflow_revision == 1
+    runs = grading_repository.list_runs_for_assignment(seeded["task_id"], actor_id=seeded["owner_id"])
+    assert len(runs) == 1
+    if responses[0].status_code == 200:
+        assert runs[0].released_at is None
+        assert workflow.final_result_version == 0
+    else:
+        assert runs[0].released_at is not None
+        assert grading_repository.latest_teacher_review(seeded["optional_result_id"]) is None
+
+
+@pytest.mark.parametrize("score", [float("nan"), float("inf"), float("-inf"), -1, 11])
+def test_internal_review_call_cannot_bypass_score_validation(score):
+    from backend.domain.errors import ValidationError
+
+    seeded, _, _, payload = _case("released")
+    before = _snapshot()
+    with pytest.raises(ValidationError, match="review_score_out_of_range"):
+        task_facade.update_correction_review(
+            task_id=seeded["task_id"], owner_id=seeded["owner_id"],
+            display_student_id=seeded["student_id"], q_id="q-optional",
+            teacher_score=score, teacher_comment="", confirm=True,
+            expected_revision=payload["expected_workflow_revision"],
+        )
+    assert _snapshot() == before

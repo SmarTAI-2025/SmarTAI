@@ -507,152 +507,129 @@ def bind_grading_request(*, assignment_id: str, teacher_id: str, request_id: str
     raise VersionConflict("workflow_revision_conflict", code="workflow_revision_conflict")
 
 
-def clone_released_run_for_review(
-    run_id: str, *, teacher_id: str
-) -> education.GradingRunDTO:
-    """Create an unreleased review revision without mutating published results.
-
-    The cloned run keeps immutable AI facts and frozen submission/question FKs.
-    Its latest effective teacher values are copied as confirmed review rows.
-    Subsequent draft edits affect only the clone; students continue reading the
-    previous released run until the teacher explicitly releases this revision.
-    """
+def _clone_released_run_for_review_in_session(session, source) -> GradingRunRecord:
+    """Copy published facts within the locked, validated review transaction."""
     from backend.db.workflow_repository import GradingRunSetupRecord
 
     now = time.time()
     new_run_id = _new_run_id()
-    with session_scope() as session:
-        source = session.scalar(
-            select(GradingRunRecord).where(
-                GradingRunRecord.id == run_id,
-                GradingRunRecord.teacher_id == teacher_id,
-                GradingRunRecord.released_at.is_not(None),
-            ).with_for_update()
+    run_id = source.id
+    teacher_id = source.teacher_id
+    clone = GradingRunRecord(
+        id=new_run_id,
+        assignment_id=source.assignment_id,
+        teacher_id=teacher_id,
+        status=education.GradingRunStatus.COMPLETED.value,
+        lease_owner=None,
+        lease_expiry=None,
+        last_heartbeat_at=None,
+        total_submissions=source.total_submissions,
+        completed_submissions=source.completed_submissions,
+        failed_submissions=0,
+        error_message=None,
+        created_at=now,
+        started_at=source.started_at,
+        completed_at=now,
+        released_at=None,
+    )
+    session.add(clone)
+    session.flush()
+
+    frozen_rows = session.scalars(
+        select(GradingRunSubmissionRecord).where(
+            GradingRunSubmissionRecord.grading_run_id == run_id
         )
-        if (
-            source is None
-            or _active_assignment_for_run(
-                session, run_id, actor_id=teacher_id, lock=True
-            )
-            is None
-        ):
-            raise InvalidTransition("released_run_required")
-
-        clone = GradingRunRecord(
-            id=new_run_id,
-            assignment_id=source.assignment_id,
-            teacher_id=teacher_id,
-            status=education.GradingRunStatus.COMPLETED.value,
-            lease_owner=None,
-            lease_expiry=None,
-            last_heartbeat_at=None,
-            total_submissions=source.total_submissions,
-            completed_submissions=source.completed_submissions,
-            failed_submissions=0,
-            error_message=None,
-            created_at=now,
-            started_at=source.started_at,
-            completed_at=now,
-            released_at=None,
-        )
-        session.add(clone)
-        session.flush()
-
-        frozen_rows = session.scalars(
-            select(GradingRunSubmissionRecord).where(
-                GradingRunSubmissionRecord.grading_run_id == run_id
-            )
-        ).all()
-        for frozen in frozen_rows:
-            session.add(
-                GradingRunSubmissionRecord(
-                    id=f"rs_{uuid.uuid4().hex[:12]}",
-                    grading_run_id=new_run_id,
-                    submission_revision_id=frozen.submission_revision_id,
-                    student_id=frozen.student_id,
-                    created_at=now,
-                )
-            )
-
-        source_results = session.scalars(
-            select(GradeResultRecord).where(
-                GradeResultRecord.grading_run_id == run_id
-            )
-        ).all()
-        source_reviews = _latest_reviews_by_result(
-            session, [result.id for result in source_results]
-        )
-        for source_result in source_results:
-            result_id = _new_result_id()
-            cloned_result = GradeResultRecord(
-                id=result_id,
-                grading_run_id=new_run_id,
-                submission_revision_id=source_result.submission_revision_id,
-                question_id=source_result.question_id,
-                student_id=source_result.student_id,
-                q_id=source_result.q_id,
-                ai_score=source_result.ai_score,
-                ai_max_score=source_result.ai_max_score,
-                ai_comment=source_result.ai_comment,
-                ai_steps=list(source_result.ai_steps or []),
-                ai_confidence=source_result.ai_confidence,
-                ai_expert_results=list(source_result.ai_expert_results or []),
-                ai_synthesis_method=source_result.ai_synthesis_method,
-                requires_review=False,
-                review_reasons=[],
-                initial_requires_review=source_result.initial_requires_review,
-                initial_review_reasons=list(
-                    source_result.initial_review_reasons or []
-                ),
-                result_status=education.GradeResultStatus.GRADED.value,
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(cloned_result)
-            review = source_reviews.get(source_result.id)
-            if review is not None:
-                session.add(
-                    TeacherReviewRecord(
-                        id=_new_review_id(),
-                        grade_result_id=result_id,
-                        teacher_id=teacher_id,
-                        previous_score=review.new_score,
-                        previous_comment=review.new_comment,
-                        new_score=review.new_score,
-                        new_comment=review.new_comment,
-                        comment=review.new_comment,
-                        confirmed=True,
-                        review_sequence=1,
-                        created_at=now,
-                    )
-                )
-
-        source_setup = session.get(GradingRunSetupRecord, run_id)
-        if source_setup is not None:
-            session.add(
-                GradingRunSetupRecord(
-                    grading_run_id=new_run_id,
-                    assignment_id=source_setup.assignment_id,
-                    owner_id=source_setup.owner_id,
-                    setup=dict(source_setup.setup or {}),
-                    input_manifest=dict(source_setup.input_manifest or {}),
-                    fingerprint=source_setup.fingerprint,
-                    created_at=now,
-                )
-            )
+    ).all()
+    for frozen in frozen_rows:
         session.add(
-            GradingRunEventRecord(
-                id=_new_event_id(),
+            GradingRunSubmissionRecord(
+                id=f"rs_{uuid.uuid4().hex[:12]}",
                 grading_run_id=new_run_id,
-                sequence=1,
-                level="info",
-                message="review_revision_created",
-                payload={"source_run_id": run_id},
+                submission_revision_id=frozen.submission_revision_id,
+                student_id=frozen.student_id,
                 created_at=now,
             )
         )
-        session.flush()
-        return _run_to_dto(clone)
+
+    source_results = session.scalars(
+        select(GradeResultRecord).where(
+            GradeResultRecord.grading_run_id == run_id
+        )
+    ).all()
+    source_reviews = _latest_reviews_by_result(
+        session, [result.id for result in source_results]
+    )
+    for source_result in source_results:
+        result_id = _new_result_id()
+        cloned_result = GradeResultRecord(
+            id=result_id,
+            grading_run_id=new_run_id,
+            submission_revision_id=source_result.submission_revision_id,
+            question_id=source_result.question_id,
+            student_id=source_result.student_id,
+            q_id=source_result.q_id,
+            ai_score=source_result.ai_score,
+            ai_max_score=source_result.ai_max_score,
+            ai_comment=source_result.ai_comment,
+            ai_steps=list(source_result.ai_steps or []),
+            ai_confidence=source_result.ai_confidence,
+            ai_expert_results=list(source_result.ai_expert_results or []),
+            ai_synthesis_method=source_result.ai_synthesis_method,
+            requires_review=False,
+            review_reasons=[],
+            initial_requires_review=source_result.initial_requires_review,
+            initial_review_reasons=list(
+                source_result.initial_review_reasons or []
+            ),
+            result_status=education.GradeResultStatus.GRADED.value,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(cloned_result)
+        review = source_reviews.get(source_result.id)
+        if review is not None:
+            session.add(
+                TeacherReviewRecord(
+                    id=_new_review_id(),
+                    grade_result_id=result_id,
+                    teacher_id=teacher_id,
+                    previous_score=review.new_score,
+                    previous_comment=review.new_comment,
+                    new_score=review.new_score,
+                    new_comment=review.new_comment,
+                    comment=review.new_comment,
+                    confirmed=True,
+                    review_sequence=1,
+                    created_at=now,
+                )
+            )
+
+    source_setup = session.get(GradingRunSetupRecord, run_id)
+    if source_setup is not None:
+        session.add(
+            GradingRunSetupRecord(
+                grading_run_id=new_run_id,
+                assignment_id=source_setup.assignment_id,
+                owner_id=source_setup.owner_id,
+                setup=dict(source_setup.setup or {}),
+                input_manifest=dict(source_setup.input_manifest or {}),
+                fingerprint=source_setup.fingerprint,
+                created_at=now,
+            )
+        )
+    session.add(
+        GradingRunEventRecord(
+            id=_new_event_id(),
+            grading_run_id=new_run_id,
+            sequence=1,
+            level="info",
+            message="review_revision_created",
+            payload={"source_run_id": run_id},
+            created_at=now,
+        )
+    )
+    session.flush()
+    return clone
 
 
 def get_run(run_id: str, *, actor_id: str | None = None) -> education.GradingRunDTO:
@@ -1380,29 +1357,6 @@ def _missing_result_records(session, run, records):
         for question in questions if (revision.submission_revision_id, question.id) not in present]
 
 
-def ensure_missing_result_for_review(run_id: str, *, teacher_id: str, student_id: str, q_id: str):
-    """Create a missing frozen result only after an explicit teacher edit."""
-    with session_scope() as session:
-        run = session.scalar(select(GradingRunRecord).where(GradingRunRecord.id == run_id).with_for_update())
-        if run is None or run.teacher_id != teacher_id or _active_assignment_for_run(
-                session, run_id, actor_id=teacher_id, lock=True) is None:
-            raise NotFound("grading_run")
-        if run.status not in {"completed", "partial_failed"} or run.released_at is not None:
-            raise InvalidTransition("run_not_reviewable")
-        records = session.scalars(select(GradeResultRecord).where(GradeResultRecord.grading_run_id == run_id)).all()
-        existing = next((row for row in records if row.student_id == student_id and row.q_id == q_id), None)
-        if existing is not None:
-            return _result_to_dto(existing)
-        missing = next((row for row in _missing_result_records(session, run, records)
-                        if row.student_id == student_id and row.q_id == q_id), None)
-        if missing is None:
-            raise NotFound("grade_result")
-        missing.id = _new_result_id()
-        session.add(missing)
-        session.flush()
-        return _result_to_dto(missing)
-
-
 def list_results_for_run(run_id: str, *, include_missing: bool = False) -> list[education.GradeResultDTO]:
     with session_scope() as session:
         if _active_assignment_for_run(session, run_id) is None:
@@ -1516,74 +1470,92 @@ def add_teacher_review(
     new_comment: str = "",
     confirm: bool = True,
 ) -> education.TeacherReviewDTO:
-    """Record a teacher adjustment. The latest review for a result supplies the
-    display score/comment; the AI original is preserved for audit."""
+    """Record a teacher adjustment without changing the immutable AI original."""
     with session_scope() as session:
-        result = session.get(GradeResultRecord, grade_result_id)
-        if result is None:
-            raise NotFound("grade_result")
-        run = session.scalar(
-            select(GradingRunRecord)
-            .where(GradingRunRecord.id == result.grading_run_id)
-            .with_for_update()
+        return _add_teacher_review_in_session(
+            session, grade_result_id, teacher_id=teacher_id,
+            new_score=new_score, new_comment=new_comment, confirm=confirm,
         )
-        if run is None or run.teacher_id != teacher_id:
-            raise NotFound("grade_result")
-        if (
-            _active_assignment_for_result(
-                session, grade_result_id, actor_id=teacher_id, lock=True
-            )
-            is None
-        ):
-            raise NotFound("grade_result")
-        if run.status not in (
-            education.GradingRunStatus.COMPLETED.value,
-            education.GradingRunStatus.PARTIAL_FAILED.value,
-        ):
-            raise InvalidTransition("run_not_reviewable")
-        if run.released_at is not None:
-            raise InvalidTransition("released_run_is_immutable")
-        if not math.isfinite(new_score) or new_score < 0 or new_score > result.ai_max_score:
-            raise ValidationError("review_score_out_of_range")
-        # The run-row lock serializes reviews for every result in this run and
-        # release. Capture wall-clock metadata only after acquiring that lock;
-        # the per-result sequence below, not the clock, determines recency.
-        now = time.time()
-        previous_review = session.scalar(
-            select(TeacherReviewRecord)
-            .where(TeacherReviewRecord.grade_result_id == grade_result_id)
-            .order_by(
-                TeacherReviewRecord.review_sequence.desc(),
-                TeacherReviewRecord.created_at.desc(),
-                TeacherReviewRecord.id.desc(),
-            )
-            .limit(1)
+
+
+def _validate_review_score(score: float, maximum: float) -> None:
+    if not math.isfinite(score) or not 0 <= score <= maximum:
+        raise ValidationError("review_score_out_of_range")
+
+
+def _add_teacher_review_in_session(
+    session,
+    grade_result_id: str,
+    *,
+    teacher_id: str,
+    new_score: float,
+    new_comment: str = "",
+    confirm: bool = True,
+) -> education.TeacherReviewDTO:
+    result = session.get(GradeResultRecord, grade_result_id)
+    if result is None:
+        raise NotFound("grade_result")
+    run = session.scalar(
+        select(GradingRunRecord)
+        .where(GradingRunRecord.id == result.grading_run_id)
+        .with_for_update()
+    )
+    if run is None or run.teacher_id != teacher_id:
+        raise NotFound("grade_result")
+    if (
+        _active_assignment_for_result(
+            session, grade_result_id, actor_id=teacher_id, lock=True
         )
-        review_sequence = session.scalar(
-            select(func.coalesce(func.max(TeacherReviewRecord.review_sequence), 0) + 1)
-            .where(TeacherReviewRecord.grade_result_id == grade_result_id)
+        is None
+    ):
+        raise NotFound("grade_result")
+    if run.status not in (
+        education.GradingRunStatus.COMPLETED.value,
+        education.GradingRunStatus.PARTIAL_FAILED.value,
+    ):
+        raise InvalidTransition("run_not_reviewable")
+    if run.released_at is not None:
+        raise InvalidTransition("released_run_is_immutable")
+    _validate_review_score(new_score, result.ai_max_score)
+    # The run-row lock serializes reviews for every result in this run and
+    # release. Capture wall-clock metadata only after acquiring that lock;
+    # the per-result sequence below, not the clock, determines recency.
+    now = time.time()
+    previous_review = session.scalar(
+        select(TeacherReviewRecord)
+        .where(TeacherReviewRecord.grade_result_id == grade_result_id)
+        .order_by(
+            TeacherReviewRecord.review_sequence.desc(),
+            TeacherReviewRecord.created_at.desc(),
+            TeacherReviewRecord.id.desc(),
         )
-        assert review_sequence is not None
-        previous_score = previous_review.new_score if previous_review else result.ai_score
-        previous_comment = previous_review.new_comment if previous_review else result.ai_comment
-        review = TeacherReviewRecord(
-            id=_new_review_id(),
-            grade_result_id=grade_result_id,
-            teacher_id=teacher_id,
-            previous_score=previous_score,
-            previous_comment=previous_comment,
-            new_score=new_score,
-            new_comment=new_comment,
-            comment=new_comment,
-            confirmed=confirm,
-            review_sequence=review_sequence,
-            created_at=now,
-        )
-        session.add(review)
-        _apply_teacher_review_state(result, confirmed=confirm)
-        result.updated_at = now
-        session.flush()
-        return _review_to_dto(review)
+        .limit(1)
+    )
+    review_sequence = session.scalar(
+        select(func.coalesce(func.max(TeacherReviewRecord.review_sequence), 0) + 1)
+        .where(TeacherReviewRecord.grade_result_id == grade_result_id)
+    )
+    assert review_sequence is not None
+    previous_score = previous_review.new_score if previous_review else result.ai_score
+    previous_comment = previous_review.new_comment if previous_review else result.ai_comment
+    review = TeacherReviewRecord(
+        id=_new_review_id(),
+        grade_result_id=grade_result_id,
+        teacher_id=teacher_id,
+        previous_score=previous_score,
+        previous_comment=previous_comment,
+        new_score=new_score,
+        new_comment=new_comment,
+        comment=new_comment,
+        confirmed=confirm,
+        review_sequence=review_sequence,
+        created_at=now,
+    )
+    session.add(review)
+    _apply_teacher_review_state(result, confirmed=confirm)
+    result.updated_at = now
+    session.flush()
+    return _review_to_dto(review)
 
 
 def latest_teacher_review(grade_result_id: str) -> education.TeacherReviewDTO | None:
