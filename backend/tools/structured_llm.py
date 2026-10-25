@@ -41,6 +41,14 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
+KATEX_GENERATION_GUIDANCE = (
+    "\nFor newly authored mathematical explanations, use KaTeX-compatible notation. "
+    "For array column formats prefer plain l/c/r alignment (e.g. {rrrrr}); "
+    "avoid optional inter-column spacing declarations such as @{\\quad}. "
+    "This is presentation guidance for new prose only: preserve copied source text, "
+    "verbatim evidence, code, mathematical symbols and relations."
+)
+
 MATH_MARKDOWN_SYSTEM_INSTRUCTION = (
     "\n\nMARKDOWN MATH CONTRACT: In every prose field, wrap inline mathematics in "
     "`$...$` and display mathematics in `$$...$$`. Never leave LaTeX commands "
@@ -52,6 +60,7 @@ MATH_MARKDOWN_SYSTEM_INSTRUCTION = (
     "escape a TeX backslash exactly once and encode each line break exactly once; "
     "the decoded field must contain one backslash per TeX command and real newlines, "
     "not the visible characters `\\n`. Never use triple-dollar delimiters."
+    + KATEX_GENERATION_GUIDANCE
 )
 
 class StructuredOutputBoundsError(ValueError):
