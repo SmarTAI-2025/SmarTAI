@@ -116,8 +116,10 @@ def test_another_teacher_cannot_edit_result():
 
 @pytest.mark.parametrize("state", ["draft", "released", "missing"])
 @pytest.mark.parametrize("score", [0, 10])
-def test_valid_boundary_review_commits_once_and_preserves_history(state, score):
+@pytest.mark.parametrize("confirm", [False, True])
+def test_valid_boundary_review_commits_once_and_preserves_history(state, score, confirm):
     seeded, client, url, payload = _case(state)
+    payload["confirm"] = confirm
     original = grading_repository.list_results_for_run(seeded["run_id"])
     history = None
     if state == "released":
@@ -129,7 +131,8 @@ def test_valid_boundary_review_commits_once_and_preserves_history(state, score):
     assert response.status_code == 200, response.text
     assert response.json()["workflow_revision"] == payload["expected_workflow_revision"] + 1
     assert response.json()["correction"]["teacher_score"] == score
-    assert response.json()["correction"]["review_status"] == "confirmed"
+    assert response.json()["correction"]["requires_human_review"] is False
+    assert response.json()["correction"]["review_status"] == ("confirmed" if confirm else "edited")
     runs = grading_repository.list_runs_for_assignment(seeded["task_id"], actor_id=seeded["owner_id"])
     assert len(runs) == (2 if state == "released" else 1)
     if state == "released":
@@ -307,3 +310,72 @@ def test_internal_review_call_cannot_bypass_score_validation(score):
             expected_revision=payload["expected_workflow_revision"],
         )
     assert _snapshot() == before
+
+
+@pytest.mark.parametrize("state", ["draft", "released", "missing"])
+@pytest.mark.parametrize("raw_score", ["1e999", "-1e999", "NaN", "Infinity", '{"nested":[1e999]}'])
+def test_raw_nonfinite_score_returns_json_422_without_writes(state, raw_score):
+    import json
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    _, authenticated, url, payload = _case(state)
+    client = TestClient(app, raise_server_exceptions=False)
+    body = json.dumps(payload).replace('"teacher_score": 8', '"teacher_score": ' + raw_score)
+    before = _snapshot()
+    response = client.put(url, content=body, headers={
+        "Authorization": authenticated.headers["Authorization"], "Content-Type": "application/json",
+    })
+    assert _snapshot() == before
+    assert response.status_code == 422, response.text
+    # The response itself must be strict JSON, with no NaN/Infinity extensions.
+    def reject_constant(value):
+        raise AssertionError(f"Invalid JSON response constant: {value}")
+    detail = json.loads(response.text, parse_constant=reject_constant)["detail"][0]
+    assert detail["loc"] == ["body", "teacher_score"]
+    assert detail["input"] == ({"nested": [None]} if raw_score.startswith("{") else None)
+
+
+def test_finite_validation_error_preserves_input_and_constraint():
+    _, client, url, payload = _case()
+    response = client.put(url, json={**payload, "teacher_score": -1})
+    assert response.status_code == 422
+    assert response.json()["detail"] == [{
+        "type": "greater_than_equal", "loc": ["body", "teacher_score"],
+        "msg": "Input should be greater than or equal to 0", "input": -1,
+        "ctx": {"ge": 0},
+    }]
+
+
+def test_overflow_score_returns_422_over_real_http():
+    import json
+    import socket
+    import time
+    import httpx
+    import uvicorn
+    from backend.main import app
+
+    _, authenticated, url, payload = _case("released")
+    before = _snapshot()
+    body = json.dumps(payload).replace('"teacher_score": 8', '"teacher_score": 1e999')
+    server = uvicorn.Server(uvicorn.Config(app, lifespan="off", access_log=False, log_level="critical"))
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 10
+            while not server.started and time.monotonic() < deadline and thread.is_alive():
+                time.sleep(.01)
+            assert server.started
+            response = httpx.put(f"http://127.0.0.1:{listener.getsockname()[1]}{url}",
+                content=body, headers={"Authorization": authenticated.headers["Authorization"],
+                                       "Content-Type": "application/json"}, trust_env=False)
+            assert _snapshot() == before
+            assert response.status_code == 422, response.text
+            assert response.json()["detail"][0]["type"] == "finite_number"
+            assert response.json()["detail"][0]["input"] is None
+        finally:
+            server.should_exit = True
+            thread.join(timeout=10)
+            assert not thread.is_alive()
