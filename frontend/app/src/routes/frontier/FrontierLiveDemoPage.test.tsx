@@ -341,6 +341,7 @@ describe("FrontierLiveDemoPage", () => {
 
   it.each(["graded", "finalized", "problems_paused", "submissions_paused", "grading_paused"] as const)("uses the terminal status when activity has been cleared (%s)", async (status) => {
     const stopped = status.endsWith("_paused");
+    vi.mocked(getTask).mockResolvedValue(taskWithQuestions(status));
     for (const locale of ["zh-CN", "en-US"]) {
       window.localStorage.setItem("smartai_locale", locale);
       vi.mocked(getTaskState).mockResolvedValue({ ...taskState(status), problem_count: 0, progress: {
@@ -527,9 +528,46 @@ describe("FrontierLiveDemoPage", () => {
     await user.click((await screen.findAllByRole("button", { name: "Start grading" }))[0]);
     expect(await screen.findByRole("button", { name: "Running…" })).toBeDisabled();
     await act(async () => grading.resolve(taskState("graded")));
-    expect(await screen.findByRole("heading", { name: "See class performance from live scores" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Detailed grading results" })).toBeVisible();
     expect(startGrading).not.toHaveBeenCalled();
     expect(saveGradingSetup).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["problems_ready", "grading", false],
+    ["submissions_ready", "grading", false],
+    ["problems_ready", "grading_paused", false],
+    ["submissions_ready", "grading_paused", false],
+    ["problems_ready", "grading", true],
+  ] as const)("syncs saved content when stale %s review observes %s (racing read: %s)", async (stage, status, racingRead) => {
+    const original = { ...taskWithQuestions(stage), student_data: stage === "submissions_ready" ? recognizedStudents() : {} };
+    const latest = { ...taskWithQuestions(status), workflow_revision: 2, student_data: recognizedStudents() };
+    latest.problem_data.q1.stem = "Updated question from second page";
+    latest.student_data["demo-1"].stu_ans[0].content = "Updated answer from second page";
+    const waiting = deferred<TaskStateSnapshot>();
+    const state = { ...taskState(status), workflow_revision: 2, grading_job_id: "existing-grade" };
+    vi.mocked(getTask).mockResolvedValueOnce(original);
+    if (racingRead) vi.mocked(getTask).mockResolvedValueOnce(original);
+    vi.mocked(getTask).mockResolvedValue(latest);
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState(stage)).mockResolvedValueOnce(state).mockReturnValue(waiting.promise);
+    const user = userEvent.setup();
+    const current = renderLive("asg_demo123");
+    await user.click((await screen.findAllByRole("button", { name: stage === "problems_ready" ? "Continue to submissions" : "Start grading" }))[0]);
+    if (status === "grading") await waitFor(() => expect(getTaskState).toHaveBeenCalledTimes(3));
+    else expect(await screen.findByRole("button", { name: "Continue grading" })).toBeEnabled();
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    await user.click(screen.getByRole("tab", { name: "Student answers" }));
+    expect(screen.getByText("Updated answer from second page")).toBeVisible();
+    expect(screen.queryByText("Recognized answer for q4 by demo-1")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Materials" }));
+    expect(screen.getByText("Updated question from second page")).toBeVisible();
+    expect(getTask).toHaveBeenCalledTimes(racingRead ? 3 : 2);
+    expect(startGrading).not.toHaveBeenCalled();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(saveGradingSetup).not.toHaveBeenCalled();
+    current.unmount();
+    await act(async () => waiting.resolve(taskState("graded")));
+    expect(getTaskResult).not.toHaveBeenCalled();
   });
 
   it.each(["problems_ready", "submissions_ready"] as const)("keeps a newly paused recognition resumable when continuing stale %s review", async stage => {
@@ -681,7 +719,7 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.getByRole("heading", { name: "Live grading run" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Running…" })).toBeDisabled();
     await act(async () => grading.resolve(taskState("graded")));
-    expect(await screen.findByRole("heading", { name: "See class performance from live scores" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Detailed grading results" })).toBeVisible();
     expect(updateProblem).not.toHaveBeenCalled();
     expect(updateStudentAnswer).not.toHaveBeenCalled();
     expect(updateStudentIdentity).not.toHaveBeenCalled();
@@ -696,7 +734,7 @@ describe("FrontierLiveDemoPage", () => {
     renderLive("asg_demo123");
     await user.click(await screen.findByRole("button", { name: status === "error" ? "Retry failed items" : "Continue grading" }));
     await waitFor(() => expect(startGrading).toHaveBeenCalledExactlyOnceWith("asg_demo123", { retryScope: "failed_only", expectedWorkflowRevision: failed.workflow_revision, requestId: expect.any(String) }));
-    expect(await screen.findByRole("heading", { name: "See class performance from live scores" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Detailed grading results" })).toBeVisible();
     expect(createTask).not.toHaveBeenCalled();
     expect(startQuestionPreparation).not.toHaveBeenCalled();
     expect(parseSubmissions).not.toHaveBeenCalled();
@@ -799,7 +837,7 @@ describe("FrontierLiveDemoPage", () => {
     expect(screen.getByRole("heading", { name: "Live grading run" })).toBeVisible();
     expect(startGrading).not.toHaveBeenCalled();
     await user.click(retry);
-    expect(await screen.findByRole("heading", { name: "See class performance from live scores" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Detailed grading results" })).toBeVisible();
     expect(startGrading).toHaveBeenCalledExactlyOnceWith("asg_demo123", { expectedWorkflowRevision: 4, requestId: expect.any(String) });
   });
 
@@ -834,6 +872,119 @@ describe("FrontierLiveDemoPage", () => {
     expect(startGrading).not.toHaveBeenCalled();
   });
 
+  it.each(["zh-CN", "en-US"])("keeps content tabs independent from grading and switches only when a stage completes (%s)", async locale => {
+    localStorage.setItem("smartai_locale", locale);
+    const zh = locale === "zh-CN";
+    const task = { ...taskWithQuestions("submissions_ready"), student_data: recognizedStudents() };
+    const waiting = deferred<TaskStateSnapshot>();
+    const setup = gradingSetup();
+    vi.mocked(getTask).mockResolvedValue(task);
+    vi.mocked(getTaskState).mockResolvedValueOnce(taskState("submissions_ready"))
+      .mockResolvedValueOnce(taskState("submissions_ready")).mockReturnValueOnce(waiting.promise).mockResolvedValue(taskState("graded"));
+    vi.mocked(getGradingSetup).mockResolvedValue({ ...setup, configured: true, grading_setup: setup.suggested_setup });
+    vi.mocked(startGrading).mockResolvedValue({ status: "started", job_id: "grade" });
+    vi.mocked(getTaskResult).mockResolvedValue(gradedResult(task));
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    const answerTab = await screen.findByRole("tab", { name: zh ? "学生作答" : "Student answers" });
+    expect(answerTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    await user.click(screen.getByRole("tab", { name: zh ? "题目资料" : "Materials" }));
+    await user.click(screen.getAllByRole("button", { name: zh ? "开始批改" : "Start grading" })[0]);
+    await waitFor(() => expect(getTaskState).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole("tab", { name: zh ? "题目资料" : "Materials" })).toHaveAttribute("aria-selected", "true");
+    await user.click(answerTab);
+    expect(screen.getByText("Recognized answer for q1 by demo-1")).toBeVisible();
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    await user.click(screen.getByRole("tab", { name: zh ? "题目资料" : "Materials" }));
+    expect(screen.getByRole("heading", { name: zh ? "本次生成的题目资料" : "Generated question materials" })).toBeVisible();
+    expect(startGrading).toHaveBeenCalledTimes(1);
+    await act(async () => waiting.resolve(taskState("graded")));
+    const gradingTab = await screen.findByRole("tab", { name: zh ? "批改详情" : "Grading details" });
+    expect(gradingTab).toHaveAttribute("aria-selected", "true");
+    expect(within(screen.getByRole("tablist", { name: zh ? "演示内容" : "Demo content" })).getAllByRole("tab")).toHaveLength(4);
+    await user.click(screen.getByRole("tab", { name: zh ? "学情分析" : "Learning analysis" }));
+    expect(screen.getByRole("heading", { name: zh ? "从真实分数看到班级表现" : "See class performance from live scores" })).toBeVisible();
+    const charts = screen.getByRole("tablist", { name: zh ? "选择分析图" : "Choose analysis chart" });
+    expect(within(charts).getAllByRole("tab")).toHaveLength(4);
+    await user.click(within(charts).getByRole("tab", { name: "04" }));
+    await user.click(gradingTab);
+    await user.click(screen.getByRole("tab", { name: zh ? "学情分析" : "Learning analysis" }));
+    expect(within(charts).getByRole("tab", { name: "04" })).toHaveAttribute("aria-selected", "true");
+    expect(getTaskResult).toHaveBeenCalledTimes(1);
+    expect(startGrading).toHaveBeenCalledTimes(1);
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(saveGradingSetup).not.toHaveBeenCalled();
+  });
+
+  it("loads saved answers when another tab advances recognition directly to grading", async () => {
+    const waiting = deferred<TaskStateSnapshot>();
+    const task = { ...taskWithQuestions("grading"), student_data: recognizedStudents() };
+    vi.mocked(getTask).mockResolvedValue(task);
+    vi.mocked(getTaskState).mockResolvedValueOnce({ ...taskState("parsing_submissions"), problem_count: 0 })
+      .mockResolvedValueOnce(taskState("grading")).mockReturnValue(waiting.promise);
+    const current = renderLive("asg_demo123");
+    expect(await screen.findByRole("tab", { name: "Student answers" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Recognized answer for q1 by demo-1")).toBeVisible();
+    expect(getTask).toHaveBeenCalledTimes(1);
+    expect(startGrading).not.toHaveBeenCalled();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    current.unmount();
+    await act(async () => waiting.resolve(taskState("graded")));
+  });
+
+  it("restores both recognized-content tabs while an existing grading job is still running", async () => {
+    const waiting = deferred<TaskStateSnapshot>();
+    const task = { ...taskWithQuestions("grading"), student_data: recognizedStudents() };
+    vi.mocked(getTask).mockResolvedValue(task);
+    vi.mocked(getTaskState).mockResolvedValueOnce({ ...taskState("grading"), problem_count: 0 }).mockReturnValue(waiting.promise);
+    const user = userEvent.setup();
+    const current = renderLive("asg_demo123");
+    expect(await screen.findByRole("tab", { name: "Student answers" })).toHaveAttribute("aria-selected", "true");
+    await user.click(screen.getByRole("tab", { name: "Materials" }));
+    expect(screen.getByRole("heading", { name: "Generated question materials" })).toBeVisible();
+    expect(startGrading).not.toHaveBeenCalled();
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    current.unmount();
+    await act(async () => waiting.resolve(taskState("graded")));
+    expect(getTaskResult).not.toHaveBeenCalled();
+  });
+
+  it.each(["zh-CN", "en-US"])("restores saved content while grading is paused and keeps it through explicit resume (%s)", async locale => {
+    localStorage.setItem("smartai_locale", locale);
+    const zh = locale === "zh-CN", waiting = deferred<TaskStateSnapshot>();
+    const task = { ...taskWithQuestions("grading_paused"), workflow_revision: 2, student_data: recognizedStudents() };
+    const paused = { ...taskState("grading_paused"), workflow_revision: 2, problem_count: 0, student_count: 0, grading_job_id: "paused-grade", error: null };
+    vi.mocked(getTask).mockResolvedValue(task);
+    vi.mocked(getTaskState).mockResolvedValueOnce(paused).mockResolvedValueOnce(paused)
+      .mockReturnValueOnce(waiting.promise).mockResolvedValue(taskState("graded"));
+    vi.mocked(startGrading).mockResolvedValue({ status: "started", job_id: "resumed-grade" });
+    vi.mocked(getTaskResult).mockResolvedValue(gradedResult(task));
+    const user = userEvent.setup();
+    renderLive("asg_demo123");
+    const answerTab = await screen.findByRole("tab", { name: zh ? "学生作答" : "Student answers" });
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(screen.getByText("Recognized answer for q1 by demo-1")).toBeVisible();
+    expect(screen.getByRole("button", { name: zh ? "继续批改" : "Continue grading" })).toBeEnabled();
+    expect(startGrading).not.toHaveBeenCalled();
+    expect(getTaskState).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("tab", { name: zh ? "题目资料" : "Materials" }));
+    expect(screen.getByRole("heading", { name: zh ? "本次生成的题目资料" : "Generated question materials" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: zh ? "继续批改" : "Continue grading" }));
+    await waitFor(() => expect(getTaskState).toHaveBeenCalledTimes(3));
+    expect(startGrading).toHaveBeenCalledExactlyOnceWith("asg_demo123", expect.objectContaining({ retryScope: "failed_only", expectedWorkflowRevision: 2 }));
+    expect(screen.getByRole("tab", { name: zh ? "题目资料" : "Materials" })).toHaveAttribute("aria-selected", "true");
+    await user.click(answerTab);
+    expect(screen.getByText("Recognized answer for q1 by demo-1")).toBeVisible();
+    await act(async () => waiting.resolve(taskState("graded")));
+    expect(await screen.findByRole("heading", { name: zh ? "本次批改的具体情况" : "Detailed grading results" })).toBeVisible();
+    expect(getTask).toHaveBeenCalledTimes(1);
+    expect(startGrading).toHaveBeenCalledTimes(1);
+    expect(parseSubmissions).not.toHaveBeenCalled();
+    expect(retrySubmissionRecognition).not.toHaveBeenCalled();
+    expect(retryQuestionPreparation).not.toHaveBeenCalled();
+  });
+
   it("labels demo samples without implementation commentary", () => {
     render(<I18nProvider><MemoryRouter><FrontierLiveDemoPage /></MemoryRouter></I18nProvider>);
     expect(document.querySelector('[data-smartai-app-mark="silver"]')).toBeInTheDocument();
@@ -847,6 +998,7 @@ describe("FrontierLiveDemoPage", () => {
   });
 
   it("translates paused-run steps without restarting or presenting an error", async () => {
+    vi.mocked(getTask).mockResolvedValue({ ...taskWithQuestions("grading_paused"), student_data: recognizedStudents() });
     vi.mocked(getTaskState).mockResolvedValue({ ...taskState("grading_paused"), error: null,
       grading_job_id: "stopped-run", last_failed_job_id: "stopped-run", problem_count: 4, student_count: 4 });
     const user = userEvent.setup();
@@ -1108,7 +1260,7 @@ describe("FrontierLiveDemoPage", () => {
     expect(within(alexCard!).getAllByText(/^Q[1-4]$/u).map((label) => label.textContent))
       .toEqual(["Q1", "Q2", "Q3", "Q4"]);
     await user.click(screen.getAllByRole("button", { name: "Start grading" })[0]);
-    expect(await screen.findByRole("heading", { name: "See class performance from live scores" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Detailed grading results" })).toBeVisible();
     expect(createTask).toHaveBeenCalledTimes(1);
     expect(preflightProblemSource).toHaveBeenCalledTimes(1);
     expect(startQuestionPreparation).toHaveBeenCalledTimes(1);

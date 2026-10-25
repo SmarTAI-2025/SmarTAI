@@ -22,8 +22,8 @@ export function Providers({ children }: { children: ReactNode }) {
       <I18nProvider>
         <ThemeProvider>
           {children}
-          {/* Keep notices below the 70px header so mobile navigation stays clickable. */}
-          <Toaster richColors position="top-right" mobileOffset={{ top: 86 }} />
+          {/* Notices stay below modal navigation (50) and leave confirmations (80). */}
+          <Toaster richColors position="top-right" mobileOffset={{ top: 86 }} style={{ zIndex: 40 }} />
         </ThemeProvider>
       </I18nProvider>
     </QueryClientProvider>

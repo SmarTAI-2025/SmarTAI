@@ -5206,6 +5206,7 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
             "error": _grading_failure_code(run),
         }
     results = grading_repository.list_results_for_run(run.id, include_missing=True)
+    frozen_setup = workflow_repository.get_run_setup(run.id)
     presentations = workflow_repository.list_student_presentations(task_id)
     grouped: dict[str, list] = defaultdict(list)
     for result in results:
@@ -5224,6 +5225,7 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
     return {
         "status": "completed", "task_id": task_id, "results": rendered,
         "grading_run_id": run.id, "grading_run_status": run.status,
+        "primary_provider_id": frozen_setup.setup.get("primary_provider_id") if frozen_setup else None,
         "retry_scope": "failed_only" if run.status == "partial_failed" else None,
         "problem_data": task["problem_data"],
         "student_data": task["student_data"], "timestamp": run.completed_at,

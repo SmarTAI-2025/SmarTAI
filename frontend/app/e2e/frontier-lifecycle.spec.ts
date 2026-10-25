@@ -77,6 +77,16 @@ for (const locale of ["zh-CN", "en-US"]) {
           await notice.hover();
         }
         await page.getByRole("button", { name: zh ? "打开导航" : "Open navigation", exact: true }).click({ timeout: 3000 });
+        if (hoverNotice) {
+          await expect(page.locator('[data-sonner-toast][data-type="success"]').first()).toBeVisible();
+          // Check the hit target immediately, while the notice is still present.
+          // A click that only succeeds after toast dismissal would hide the bug.
+          expect(await quick.evaluate(link => {
+            const rect = link.getBoundingClientRect();
+            return link.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+          })).toBe(true);
+          await page.screenshot({ path: testInfo.outputPath("mobile-navigation-with-notice.png") });
+        }
       }
       await quick.click();
       await expect(page).toHaveURL(new RegExp(`/frontier/live\\?taskId=${task.task_id}$`));
@@ -113,11 +123,13 @@ for (const locale of ["zh-CN", "en-US"]) {
     await page.getByRole("textbox", { name: zh ? "姓名" : "Name", exact: true }).fill("Saved student name");
     await page.getByRole("button", { name: zh ? "保存并确认身份" : "Save and confirm identity", exact: true }).click();
     await expect(page.getByRole("textbox", { name: zh ? "姓名" : "Name", exact: true })).toHaveCount(0);
-    await returnToDemo();
+    await returnToDemo(true);
     const grade = page.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first();
     await expect(grade).toBeEnabled();
     expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`, `/tasks/${task.task_id}/parse_submissions`, `/tasks/${task.task_id}/students/S1/identity`]);
     await grade.click();
+    await expect(page.getByRole("heading", { name: zh ? "本次批改的具体情况" : "Detailed grading results", exact: true })).toBeVisible();
+    await page.getByRole("tab", { name: zh ? "学情分析" : "Learning analysis", exact: true }).click();
     await expect(page.getByRole("heading", { name: zh ? "从真实分数看到班级表现" : "See class performance from live scores", exact: true })).toBeVisible();
     expect(writes.at(-1)).toBe(`/tasks/${task.task_id}/grade`);
     expect(writes).toHaveLength(4);
@@ -136,6 +148,185 @@ async function guest(page: Page) {
     sessionStorage.setItem("smartai_frontier_tasks", '["asg_browser_demo"]');
   });
   return errors;
+}
+
+for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390, 320]) {
+  test(`Quick Demo content tabs preserve recognition and grading (${locale}, ${width}px)`, async ({ page }, testInfo) => {
+    const errors = await guest(page), zh = locale === "zh-CN";
+    await page.addInitScript(value => localStorage.setItem("smartai_locale", value), locale);
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+    const students: Task["student_data"] = Object.fromEntries(["Alex Chen", "Maya Lin"].map((name, index) => {
+      const id = `S${index + 1}`;
+      return [id, { stu_id: id, stu_name: name, identity_status: "matched", source_filename: `${id}.pdf`,
+        stu_ans: Object.values(task.problem_data).map(problem => ({ q_id: problem.q_id, number: problem.number, type: problem.type,
+          content: `Saved answer ${id} ${problem.q_id}`, flag: [], review_status: "confirmed" })) }];
+    }));
+    let status: Task["status"] = "problems_ready";
+    const writes: string[] = [];
+    const current = () => ({ ...task, status, student_data: status === "problems_ready" ? {} : students, student_count: status === "problems_ready" ? 0 : 2 });
+    await page.route(`${backend}/**`, async route => {
+      const request = route.request(), path = new URL(request.url()).pathname, json = (value: unknown) => route.fulfill({ json: value });
+      if (path === "/auth/me") return json({ id: "guest-owner", username: "Guest", role: "teacher", is_active: true });
+      if (request.method() !== "GET") {
+        writes.push(path);
+        if (path.endsWith("/parse_submissions")) { status = "submissions_ready"; return json({ status: "started", job_id: "parse" }); }
+        if (path.endsWith("/grade")) { status = "grading"; return json({ status: "started", job_id: "grade" }); }
+        throw new Error(`Unexpected mutation ${path}`);
+      }
+      if (path === `/tasks/${task.task_id}` || path.endsWith("/state")) return json(current());
+      if (path.endsWith("/grading-setup")) return json({ task_id: task.task_id, workflow_revision: 1, configured: true,
+        grading_setup: { primary_provider_id: "demo:vision" }, available_experts: [{ provider_id: "demo:vision", enabled: true }] });
+      if (path.endsWith("/result")) return json({ ...current(), results: Object.values(students).map((student, index) => ({
+        student_id: student.stu_id, student_name: student.stu_name, student_answers: student.stu_ans,
+        corrections: Object.values(task.problem_data).map(problem => ({ q_id: problem.q_id, type: problem.type,
+          score: index === 0 ? 0 : 1, provisional_score: index === 0 ? 0 : 1, max_score: 1, confidence: 0.9,
+          comment: `Feedback ${student.stu_id} ${problem.q_id}`, steps: [{ step_no: 1, desc: `Scoring basis ${student.stu_id} ${problem.q_id}`, score: index === 0 ? 0 : 1, is_correct: index !== 0 }],
+          expert_results: [], requires_human_review: false, review_reasons: [],
+        })),
+      })) });
+      return json([]);
+    });
+    await page.goto(`/frontier/live?taskId=${task.task_id}`);
+    const tabs = page.locator(".demo-content-tabs"), list = tabs.getByRole("tablist", { name: zh ? "演示内容" : "Demo content" });
+    const tab = (name: string, en: string) => list.getByRole("tab", { name: zh ? name : en, exact: true });
+    await expect(list.getByRole("tab")).toHaveCount(1);
+    await page.getByRole("button", { name: zh ? "继续识别作答" : "Continue to submissions", exact: true }).click();
+    await expect(list.getByRole("tab")).toHaveCount(2);
+    await expect(tab("学生作答", "Student answers")).toHaveAttribute("aria-selected", "true");
+    await expect(tabs.getByText("Saved answer S1 q1", { exact: true })).toBeVisible();
+    await tab("题目资料", "Materials").click();
+    await page.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first().click();
+    await expect(page.getByRole("button", { name: zh ? "正在运行…" : "Running…", exact: true })).toBeDisabled();
+    await expect(tab("题目资料", "Materials")).toHaveAttribute("aria-selected", "true");
+    await tab("学生作答", "Student answers").click();
+    await expect(tabs.getByText("Saved answer S1 q1", { exact: true })).toBeVisible();
+    await expect(list.getByRole("tab")).toHaveCount(2);
+    await page.reload();
+    await expect(list.getByRole("tab")).toHaveCount(2);
+    await tab("题目资料", "Materials").click();
+    await expect(tabs.getByRole("heading", { name: zh ? "本次生成的题目资料" : "Generated question materials" })).toBeVisible();
+    await tab("学生作答", "Student answers").click();
+    status = "graded";
+    await expect(list.getByRole("tab")).toHaveCount(4);
+    await expect(tab("批改详情", "Grading details")).toHaveAttribute("aria-selected", "true");
+    const detail = tabs.getByRole("tabpanel", { name: zh ? "批改详情" : "Grading details" });
+    await expect(detail.getByText("Feedback S1 q1", { exact: true })).toBeVisible();
+    await expect(detail.getByText("Saved answer S1 q1", { exact: true })).toHaveCount(0);
+    await expect(detail.getByText("Question 1", { exact: true })).toHaveCount(0);
+    await expect(detail.getByText("Scoring basis S1 q1", { exact: true })).not.toBeVisible();
+    await detail.locator("summary").first().click();
+    await expect(detail.getByText("Scoring basis S1 q1", { exact: true })).toBeVisible();
+    await detail.locator("summary").first().click();
+    await expect(detail.getByText("Scoring basis S1 q1", { exact: true })).not.toBeVisible();
+    expect(await list.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgba(0, 0, 0, 0)");
+    const splitWords = await list.evaluate(element => [...element.querySelectorAll("button")].flatMap(button => {
+      const node = button.firstChild;
+      if (!node || node.nodeType !== Node.TEXT_NODE) return [];
+      return [...(node.textContent ?? "").matchAll(/\S+/g)].flatMap(match => {
+        const range = document.createRange();
+        range.setStart(node, match.index!);
+        range.setEnd(node, match.index! + match[0].length);
+        return range.getClientRects().length > 1 ? [match[0]] : [];
+      });
+    }));
+    expect(splitWords).toEqual([]);
+    expect(await tab("批改详情", "Grading details").evaluate(element => getComputedStyle(element).borderTopLeftRadius)).toBe("10px");
+    await list.scrollIntoViewIfNeeded();
+    await page.evaluate(() => window.scrollBy(0, -90));
+    await tabs.screenshot({ path: testInfo.outputPath(`demo-content-${locale}-${width}.png`) });
+    await tab("学情分析", "Learning analysis").click();
+    await expect(tabs.getByRole("heading", { name: zh ? "从真实分数看到班级表现" : "See class performance from live scores" })).toBeVisible();
+    const charts = tabs.getByRole("tablist", { name: zh ? "选择分析图" : "Choose analysis chart" });
+    for (const number of ["01", "02", "03", "04"]) await charts.getByRole("tab", { name: number, exact: true }).click();
+    await tab("批改详情", "Grading details").click();
+    await tab("学情分析", "Learning analysis").click();
+    await expect(charts.getByRole("tab", { name: "04" })).toHaveAttribute("aria-selected", "true");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    expect(writes).toEqual([`/tasks/${task.task_id}/parse_submissions`, `/tasks/${task.task_id}/grade`]);
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const stage of ["problems_ready", "submissions_ready"] as const) for (const locale of ["zh-CN", "en-US"]) {
+  test(`Quick Demo syncs two-page content and restores paused grading (${stage}, ${locale})`, async ({ page, context }, testInfo) => {
+    const second = await context.newPage(), zh = locale === "zh-CN";
+    const errors = await guest(page), secondErrors = await guest(second);
+    for (const currentPage of [page, second]) {
+      await currentPage.addInitScript(value => localStorage.setItem("smartai_locale", value), locale);
+      await currentPage.setViewportSize(zh ? { width: 1440, height: 1000 } : { width: 390, height: 844 });
+    }
+    let status: Task["status"] = stage, revision = 1, gradingJob: string | null = null;
+    const problems = structuredClone(task.problem_data);
+    const students: Task["student_data"] = { S1: { stu_id: "S1", stu_name: "Alex Chen", identity_status: "matched",
+      stu_ans: Object.values(problems).map(problem => ({ q_id: problem.q_id, number: problem.number, type: problem.type,
+        content: `Original answer ${problem.q_id}`, flag: [], review_status: "confirmed" })) } };
+    const writes: Array<{ page: string; path: string }> = [];
+    const current = () => ({ ...task, status, workflow_revision: revision, problem_data: problems,
+      student_data: status === "problems_ready" ? {} : students, student_count: status === "problems_ready" ? 0 : 1,
+      grading_job_id: gradingJob, active_job_id: status === "grading" ? gradingJob : null });
+    await context.route(`${backend}/**`, async route => {
+      const request = route.request(), path = new URL(request.url()).pathname, json = (value: unknown) => route.fulfill({ json: value });
+      if (path === "/auth/me") return json({ id: "guest-owner", username: "Guest", role: "teacher", is_active: true });
+      if (request.method() !== "GET") {
+        writes.push({ page: request.frame().page() === page ? "A" : "B", path });
+        if (path.endsWith("/grade")) {
+          expect(request.postDataJSON().expected_workflow_revision).toBe(revision);
+          if (status === "grading_paused") expect(request.postDataJSON().retry_scope).toBe("failed_only");
+          status = "grading"; gradingJob = `grade-${++revision}`;
+          return json({ status: "started", job_id: gradingJob });
+        }
+        throw new Error(`Unexpected mutation ${path}`);
+      }
+      if (path === `/tasks/${task.task_id}` || path.endsWith("/state")) return json(current());
+      if (path.endsWith("/grading-setup")) return json({ task_id: task.task_id, workflow_revision: revision, configured: true,
+        grading_setup: { primary_provider_id: "demo:vision" }, available_experts: [{ provider_id: "demo:vision", enabled: true }] });
+      if (path.endsWith("/result")) return json({ ...current(), results: [] });
+      return json([]);
+    });
+    const url = `/frontier/live?taskId=${task.task_id}`;
+    await page.goto(url);
+    const tabs = page.locator(".demo-content-tabs"), tab = (name: string, en: string) => tabs.getByRole("tab", { name: zh ? name : en, exact: true });
+    await expect(tabs.getByRole("tab")).toHaveCount(stage === "problems_ready" ? 1 : 2);
+    if (stage === "submissions_ready") await expect(tabs.getByText("Original answer q1", { exact: true })).toBeVisible();
+    // Persisted recognition/edits made in B while A retains its previous view.
+    status = "submissions_ready"; revision++;
+    students.S1.stu_ans[0].content = "Latest saved answer from page B";
+    problems.q1.stem = "Latest saved question from page B";
+    await second.goto(url);
+    await second.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first().click();
+    await expect(second.getByRole("button", { name: zh ? "正在运行…" : "Running…", exact: true })).toBeDisabled();
+    await page.getByRole("button", { name: stage === "problems_ready" ? (zh ? "继续识别作答" : "Continue to submissions") : (zh ? "开始批改" : "Start grading"), exact: true }).first().click();
+    await expect(tabs.getByRole("tab")).toHaveCount(2);
+    await tab("学生作答", "Student answers").click();
+    await expect(tabs.getByText("Latest saved answer from page B", { exact: true })).toBeVisible();
+    await expect(tabs.getByText("Original answer q1", { exact: true })).toHaveCount(0);
+    await tab("题目资料", "Materials").click();
+    await expect(tabs.getByText("Latest saved question from page B", { exact: true })).toBeVisible();
+    expect(writes).toEqual([{ page: "B", path: `/tasks/${task.task_id}/grade` }]);
+    // The server has persisted a pause; refresh must reload content without
+    // restarting recognition or grading. Only explicit Continue may resume it.
+    status = "grading_paused"; revision++;
+    await expect(page.getByRole("button", { name: zh ? "继续批改" : "Continue grading", exact: true })).toBeEnabled();
+    await page.reload();
+    await expect(tabs.getByRole("tab")).toHaveCount(2);
+    await expect(tabs.getByText("Latest saved answer from page B", { exact: true })).toBeVisible();
+    await tab("题目资料", "Materials").click();
+    await expect(tabs.getByText("Latest saved question from page B", { exact: true })).toBeVisible();
+    expect(writes).toHaveLength(1);
+    await tabs.scrollIntoViewIfNeeded();
+    await page.evaluate(() => window.scrollBy(0, -90));
+    await page.screenshot({ path: testInfo.outputPath("paused-restored-content.png") });
+    await page.getByRole("button", { name: zh ? "继续批改" : "Continue grading", exact: true }).click();
+    await expect(page.getByRole("button", { name: zh ? "正在运行…" : "Running…", exact: true })).toBeDisabled();
+    await expect(tab("题目资料", "Materials")).toHaveAttribute("aria-selected", "true");
+    await tab("学生作答", "Student answers").click();
+    await expect(tabs.getByText("Latest saved answer from page B", { exact: true })).toBeVisible();
+    status = "graded";
+    await expect(tabs.getByRole("tab")).toHaveCount(4);
+    expect(writes).toEqual([{ page: "B", path: `/tasks/${task.task_id}/grade` }, { page: "A", path: `/tasks/${task.task_id}/grade` }]);
+    expect(errors).toEqual([]);
+    expect(secondErrors).toEqual([]);
+  });
 }
 
 for (const stage of ["problems_ready", "submissions_ready"] as const) for (const locale of ["zh-CN", "en-US"]) {
@@ -354,6 +545,8 @@ for (const locale of ["zh-CN", "en-US"]) {
     await expect(retry).toBeEnabled();
     await expect(page).toHaveURL(new RegExp(`/frontier/live\\?taskId=${task.task_id}`));
     await retry.click();
+    await expect(page.getByRole("heading", { name: zh ? "本次批改的具体情况" : "Detailed grading results", exact: true })).toBeVisible();
+    await page.getByRole("tab", { name: zh ? "学情分析" : "Learning analysis", exact: true }).click();
     await expect(page.getByRole("heading", { name: zh ? "从真实分数看到班级表现" : "See class performance from live scores", exact: true })).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`/frontier/live\\?taskId=${task.task_id}`));
     expect(writes).toHaveLength(2);
@@ -418,6 +611,8 @@ for (const locale of ["zh-CN", "en-US"]) {
     await page.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first().click();
     await expect(page.getByRole("status").filter({ hasText: zh ? "请求已发出，等待模型响应" : "Request sent; awaiting model response" })).toBeVisible();
     await expect(page.getByRole("status").filter({ hasText: zh ? "已获得一份有效结果" : "Received a valid result" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: zh ? "本次批改的具体情况" : "Detailed grading results", exact: true })).toBeVisible();
+    await page.getByRole("tab", { name: zh ? "学情分析" : "Learning analysis", exact: true }).click();
     await expect(page.getByRole("heading", { name: zh ? "从真实分数看到班级表现" : "See class performance from live scores", exact: true })).toBeVisible();
     await expect(page.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
     await expect.poll(() => page.getByRole("progressbar").evaluate(el => Math.abs(el.getBoundingClientRect().width - el.firstElementChild!.getBoundingClientRect().width))).toBeLessThan(1);
