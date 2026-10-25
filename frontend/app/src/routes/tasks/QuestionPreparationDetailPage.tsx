@@ -65,7 +65,7 @@ function QuestionPreparationDetailPageForm() {
   const navigate = useNavigate();
   const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
-  const { updateProblem, latestRevision: latestWorkflowRevisionRef, confirming, confirm, failure, blocked, clearBlocked } = useQuestionReview(stableTaskId, taskQuery.data?.workflow_revision);
+  const { updateProblem, latestRevision: latestWorkflowRevisionRef, confirming, confirm, failure, blocked, clearBlocked } = useQuestionReview(stableTaskId, taskQuery.data?.workflow_revision, locale);
   const sourcePreview = useSourcePreview({
     taskId,
     workflowRevision: taskQuery.data?.workflow_revision,

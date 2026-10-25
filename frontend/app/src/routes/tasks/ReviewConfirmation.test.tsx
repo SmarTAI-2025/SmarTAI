@@ -385,6 +385,25 @@ describe("one-click grading review", () => {
     expect(state.update).not.toHaveBeenCalled();
   });
 
+  it.each(["zh-CN", "en-US"])("reuses every saved red note when bulk confirmation encounters missing scores (%s)", async locale => {
+    state.locale = locale;
+    state.result.results = [{ student_id: "S1", corrections: ["Q1", "Q2"].map(qId => correction(qId, {
+      score: null, provisional_score: null, review_status: "pending", review_reasons: ["parse_failed", "low_confidence"],
+    })) }];
+    show(true);
+    await userEvent.click(screen.getByRole("button", { name: locale === "zh-CN" ? "全部确认" : "Confirm all" }));
+    const dialog = screen.getByRole("alertdialog");
+    const rows = within(dialog).getAllByRole("listitem");
+    expect(rows).toHaveLength(4);
+    for (const [index, id] of ["Q1", "Q2"].entries()) {
+      const label = locale === "zh-CN" ? `第 ${id} 题` : `Question ${id}`;
+      expect(rows[index * 2]).toHaveTextContent(`${label} · ${locale === "zh-CN" ? "缺少有效分数，请填写" : "Enter a valid score"}`);
+      expect(rows[index * 2 + 1]).toHaveTextContent(`${label} · ${locale === "zh-CN" ? "解析失败" : "Could not parse result"}`);
+    }
+    expect(dialog).not.toHaveTextContent(/置信度|confidence|建议|suggested/);
+    expect(state.update).not.toHaveBeenCalled();
+  });
+
   it("explicitly confirms automatically scored results including zero, without finalizing", async () => {
     show();
     await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
@@ -451,12 +470,26 @@ describe("one-click grading review", () => {
   it("validates all drafts before saving and preserves the form on an invalid score", async () => {
     show(true);
     const inputs = screen.getAllByRole("textbox").filter((element) => element.tagName === "INPUT");
+    await userEvent.clear(inputs[0]);
+    await userEvent.type(inputs[0], "-1");
     await userEvent.clear(inputs[1]);
     await userEvent.type(inputs[1], "99");
     await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
     expect(state.update).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert")).toHaveTextContent("Correct the highlighted score first");
+    const dialog = screen.getByRole("alertdialog");
+    const rows = within(dialog).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("Q1 · Enter a score from 0 to 10.");
+    expect(rows[1]).toHaveTextContent("Q2 · Enter a score from 0 to 10.");
+    expect(dialog).not.toHaveTextContent(/confidence|suggested|Genuine blank/);
     expect(inputs[1]).toHaveValue("99");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+    await userEvent.clear(inputs[0]);
+    await userEvent.type(inputs[0], "7");
+    await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
+    expect(within(screen.getByRole("alertdialog")).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(screen.getByRole("alertdialog")).getByRole("listitem")).toHaveTextContent("Q2 · Enter a score from 0 to 10.");
+    expect(state.update).not.toHaveBeenCalled();
   });
   it("stops after a failed item and reports a truthful partial confirmation", async () => {
     state.update.mockResolvedValueOnce({ workflow_revision: 6, correction: correction("Q1", { teacher_score: 7 }) }).mockRejectedValueOnce(new Error("Unavailable"));

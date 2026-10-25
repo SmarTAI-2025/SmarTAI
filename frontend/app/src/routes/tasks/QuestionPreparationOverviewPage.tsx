@@ -57,7 +57,7 @@ export function QuestionPreparationOverviewPage() {
   // running status can send the completed task straight back to progress.
   const taskQuery = useTask(taskId, { refetchOnMount: "always" });
   const readingCompletion = taskQuery.isFetching && ["draft", "extracting_problems"].includes(taskQuery.data?.status ?? "");
-  const { confirm, confirming, updateProblem, failure, blocked, clearBlocked } = useQuestionReview(taskId ?? "", taskQuery.data?.workflow_revision);
+  const { confirm, confirming, updateProblem, failure, blocked, clearBlocked } = useQuestionReview(taskId ?? "", taskQuery.data?.workflow_revision, locale);
   const urlQuery = searchParams.get("q") ?? "";
   const query = urlQuery;
   const problems = useMemo(

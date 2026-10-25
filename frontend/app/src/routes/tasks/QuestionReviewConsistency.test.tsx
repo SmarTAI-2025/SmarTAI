@@ -13,6 +13,28 @@ vi.mock("@/api/tasks", () => ({ getTask: vi.fn(), addTaskQuestion: vi.fn(), dele
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
 const api = await import("@/api/tasks");
 beforeEach(() => { vi.clearAllMocks(); localStorage.setItem("smartai_locale", "zh-CN"); });
+it.each(["zh-CN", "en-US"])("lists current missing fields on confirmation and drops each saved repair (%s)", async locale => {
+  const problem = { q_id: "Q1", number: "1", type: "", stem: "", criterion: "", reference_answer: "", max_score: 10,
+    review_status: "needs_review", max_score_review_status: "confirmed", preparation_issues: [
+      { issue_id: "manual", code: "manual_completion_required", field: "source", severity: "blocking", status: "open", details: { required_fields: ["type", "stem", "criterion"] } },
+    ],
+  } as ProblemInfo;
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const { result } = renderHook(() => useQuestionReview("T", 1, locale), { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+  const fields = locale === "zh-CN" ? ["题型", "题干", "评分标准"] : ["question type", "question text", "rubric"];
+  for (const [index, field] of (["type", "stem", "criterion"] as const).entries()) {
+    await act(async () => { result.current.clearBlocked(); expect(await result.current.confirm([problem])).toBe(false); });
+    expect(result.current.blocked).toHaveLength(3 - index);
+    result.current.blocked.forEach((item, offset) => {
+      expect(item.label).toContain(fields[index + offset]);
+      expect(item.label).not.toMatch(/标答|reference answer|—/);
+      expect(item.href).toBe("/tasks/T/questions/Q1/content#question-Q1");
+    });
+    problem[field] = field === "type" ? "reasoning" : "Saved content";
+  }
+  expect(api.updateProblem).not.toHaveBeenCalled();
+  client.clear();
+});
 it.each(["zh-CN", "en-US"])("synchronizes cells, counts and queue after confirming a advisory package (%s)", async locale => {
   localStorage.setItem("smartai_locale", locale);
   const zh = locale === "zh-CN";
@@ -75,7 +97,7 @@ it("can explicitly confirm a saved rubric while its manual-completion marker sti
   } as ProblemInfo;
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.mocked(api.updateProblem).mockResolvedValue({ status: "ok", q_id: "Q1", workflow_revision: 2, problem: { ...problem, review_status: "confirmed" } });
-  const { result } = renderHook(() => useQuestionReview("T", 1), { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+  const { result } = renderHook(() => useQuestionReview("T", 1, "zh-CN"), { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
   await act(async () => { expect(await result.current.confirm([problem])).toBe(true); });
   expect(api.updateProblem).toHaveBeenCalledWith("T", "Q1", { review_status: "confirmed", expected_workflow_revision: 1 });
   expect(result.current.blocked).toEqual([]);
