@@ -252,6 +252,88 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390, 320]) {
 }
 
 for (const stage of ["problems_ready", "submissions_ready"] as const) for (const locale of ["zh-CN", "en-US"]) {
+  test(`Quick Demo syncs two-page content and restores paused grading (${stage}, ${locale})`, async ({ page, context }, testInfo) => {
+    const second = await context.newPage(), zh = locale === "zh-CN";
+    const errors = await guest(page), secondErrors = await guest(second);
+    for (const currentPage of [page, second]) {
+      await currentPage.addInitScript(value => localStorage.setItem("smartai_locale", value), locale);
+      await currentPage.setViewportSize(zh ? { width: 1440, height: 1000 } : { width: 390, height: 844 });
+    }
+    let status: Task["status"] = stage, revision = 1, gradingJob: string | null = null;
+    const problems = structuredClone(task.problem_data);
+    const students: Task["student_data"] = { S1: { stu_id: "S1", stu_name: "Alex Chen", identity_status: "matched",
+      stu_ans: Object.values(problems).map(problem => ({ q_id: problem.q_id, number: problem.number, type: problem.type,
+        content: `Original answer ${problem.q_id}`, flag: [], review_status: "confirmed" })) } };
+    const writes: Array<{ page: string; path: string }> = [];
+    const current = () => ({ ...task, status, workflow_revision: revision, problem_data: problems,
+      student_data: status === "problems_ready" ? {} : students, student_count: status === "problems_ready" ? 0 : 1,
+      grading_job_id: gradingJob, active_job_id: status === "grading" ? gradingJob : null });
+    await context.route(`${backend}/**`, async route => {
+      const request = route.request(), path = new URL(request.url()).pathname, json = (value: unknown) => route.fulfill({ json: value });
+      if (path === "/auth/me") return json({ id: "guest-owner", username: "Guest", role: "teacher", is_active: true });
+      if (request.method() !== "GET") {
+        writes.push({ page: request.frame().page() === page ? "A" : "B", path });
+        if (path.endsWith("/grade")) {
+          expect(request.postDataJSON().expected_workflow_revision).toBe(revision);
+          if (status === "grading_paused") expect(request.postDataJSON().retry_scope).toBe("failed_only");
+          status = "grading"; gradingJob = `grade-${++revision}`;
+          return json({ status: "started", job_id: gradingJob });
+        }
+        throw new Error(`Unexpected mutation ${path}`);
+      }
+      if (path === `/tasks/${task.task_id}` || path.endsWith("/state")) return json(current());
+      if (path.endsWith("/grading-setup")) return json({ task_id: task.task_id, workflow_revision: revision, configured: true,
+        grading_setup: { primary_provider_id: "demo:vision" }, available_experts: [{ provider_id: "demo:vision", enabled: true }] });
+      if (path.endsWith("/result")) return json({ ...current(), results: [] });
+      return json([]);
+    });
+    const url = `/frontier/live?taskId=${task.task_id}`;
+    await page.goto(url);
+    const tabs = page.locator(".demo-content-tabs"), tab = (name: string, en: string) => tabs.getByRole("tab", { name: zh ? name : en, exact: true });
+    await expect(tabs.getByRole("tab")).toHaveCount(stage === "problems_ready" ? 1 : 2);
+    if (stage === "submissions_ready") await expect(tabs.getByText("Original answer q1", { exact: true })).toBeVisible();
+    // Persisted recognition/edits made in B while A retains its previous view.
+    status = "submissions_ready"; revision++;
+    students.S1.stu_ans[0].content = "Latest saved answer from page B";
+    problems.q1.stem = "Latest saved question from page B";
+    await second.goto(url);
+    await second.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first().click();
+    await expect(second.getByRole("button", { name: zh ? "正在运行…" : "Running…", exact: true })).toBeDisabled();
+    await page.getByRole("button", { name: stage === "problems_ready" ? (zh ? "继续识别作答" : "Continue to submissions") : (zh ? "开始批改" : "Start grading"), exact: true }).first().click();
+    await expect(tabs.getByRole("tab")).toHaveCount(2);
+    await tab("学生作答", "Student answers").click();
+    await expect(tabs.getByText("Latest saved answer from page B", { exact: true })).toBeVisible();
+    await expect(tabs.getByText("Original answer q1", { exact: true })).toHaveCount(0);
+    await tab("题目资料", "Materials").click();
+    await expect(tabs.getByText("Latest saved question from page B", { exact: true })).toBeVisible();
+    expect(writes).toEqual([{ page: "B", path: `/tasks/${task.task_id}/grade` }]);
+    // The server has persisted a pause; refresh must reload content without
+    // restarting recognition or grading. Only explicit Continue may resume it.
+    status = "grading_paused"; revision++;
+    await expect(page.getByRole("button", { name: zh ? "继续批改" : "Continue grading", exact: true })).toBeEnabled();
+    await page.reload();
+    await expect(tabs.getByRole("tab")).toHaveCount(2);
+    await expect(tabs.getByText("Latest saved answer from page B", { exact: true })).toBeVisible();
+    await tab("题目资料", "Materials").click();
+    await expect(tabs.getByText("Latest saved question from page B", { exact: true })).toBeVisible();
+    expect(writes).toHaveLength(1);
+    await tabs.scrollIntoViewIfNeeded();
+    await page.evaluate(() => window.scrollBy(0, -90));
+    await page.screenshot({ path: testInfo.outputPath("paused-restored-content.png") });
+    await page.getByRole("button", { name: zh ? "继续批改" : "Continue grading", exact: true }).click();
+    await expect(page.getByRole("button", { name: zh ? "正在运行…" : "Running…", exact: true })).toBeDisabled();
+    await expect(tab("题目资料", "Materials")).toHaveAttribute("aria-selected", "true");
+    await tab("学生作答", "Student answers").click();
+    await expect(tabs.getByText("Latest saved answer from page B", { exact: true })).toBeVisible();
+    status = "graded";
+    await expect(tabs.getByRole("tab")).toHaveCount(4);
+    expect(writes).toEqual([{ page: "B", path: `/tasks/${task.task_id}/grade` }, { page: "A", path: `/tasks/${task.task_id}/grade` }]);
+    expect(errors).toEqual([]);
+    expect(secondErrors).toEqual([]);
+  });
+}
+
+for (const stage of ["problems_ready", "submissions_ready"] as const) for (const locale of ["zh-CN", "en-US"]) {
   test(`stale ${stage} review retries the latest recognition failure inline (${locale})`, async ({ page }) => {
     const errors = await guest(page), zh = locale === "zh-CN", submissions = stage === "submissions_ready";
     await page.setViewportSize(zh ? { width: 1440, height: 1000 } : { width: 390, height: 844 });

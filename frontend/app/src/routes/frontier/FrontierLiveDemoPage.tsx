@@ -193,7 +193,10 @@ export function FrontierLiveDemoPage() {
         setTaskId(restoredTaskId);
         setSnapshot(state);
         setSteps((current) => current.some((step) => step.state === "error") ? current : stepsFromSnapshot(state, locale));
-        if (isTaskPaused(state.status)) return;
+        if (isTaskPaused(state.status)) {
+          if (state.status === "grading_paused") setContentTask(await run.step(() => getTask(restoredTaskId)));
+          return;
+        }
         if (state.status === "error") {
           const detail = state.progress?.error_detail || state.error || "workflow_error";
           setError({ message: liveDemoWorkflowFailureMessage(locale, detail), code: detail });
@@ -404,7 +407,7 @@ export function FrontierLiveDemoPage() {
       const task = loaded?.task ?? await run.step(() => getTask(currentTaskId));
       const state = loaded && task.status === loaded.state.status && task.workflow_revision === loaded.state.workflow_revision
         ? loaded.state : await run.step(() => getTaskState(currentTaskId));
-      if (!await reviewStageIsCurrent(run, currentTaskId, stage, state)) return null;
+      if (!await reviewStageIsCurrent(run, currentTaskId, stage, state, task)) return null;
       if (task.status === state.status && task.workflow_revision === state.workflow_revision) {
         setContentTask(task);
         return { task, state };
@@ -414,7 +417,7 @@ export function FrontierLiveDemoPage() {
     throw new Error(tx(locale, "任务内容已更新，请重试读取最新状态。", "Task content changed. Retry to load the latest state."));
   }
 
-  async function reviewStageIsCurrent(run: DemoRun, currentTaskId: string, stage: "questions" | "submissions", state: TaskStateSnapshot) {
+  async function reviewStageIsCurrent(run: DemoRun, currentTaskId: string, stage: "questions" | "submissions", state: TaskStateSnapshot, task: Task) {
     // Another tab can restart recognition while this review remains open.
     // Reconcile persisted workflow state before classifying content as a human blocker.
     setSnapshot(state);
@@ -425,6 +428,12 @@ export function FrontierLiveDemoPage() {
     if (state.status === "error") {
       const detail = state.progress?.error_detail || state.error || "workflow_error";
       throw new Error(liveDemoWorkflowFailureMessage(locale, detail));
+    }
+    if (state.status === "grading" || state.status === "grading_paused") {
+      // Reuse the current read before observing another page's grading. If
+      // state advanced during the reads, reload its saved recognition content.
+      setContentTask(task.status === state.status && task.workflow_revision === state.workflow_revision
+        ? task : await run.step(() => getTask(currentTaskId)));
     }
     if (!isTaskPaused(state.status) && state.status !== "draft") {
       await continueWorkflow(run, currentTaskId, state.status);
