@@ -8,6 +8,7 @@ import type {
   TaskFinalizationResponse,
   GenerateResultArtifactsResponse,
   TaskStateSnapshot,
+  TaskResultResponse,
 } from "@/types";
 import { taskKeys } from "./keys";
 import {
@@ -30,6 +31,34 @@ const tasksApi = await import("@/api/tasks");
 
 describe("task report and review cache", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("keeps concise AI feedback when a review response carries the stored legacy text", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const steps = [{ step_no: 1, desc: "Missing the required condition.", score: 1, is_correct: false }];
+    const experts = [{ provider: "Model A", score: 1, max_score: 2, confidence: .9, comment: "Summary", steps }];
+    client.setQueryData(taskKeys.result("task-1"), { results: [{ student_id: "student-1", corrections: [
+      { q_id: "q1", score: 1, provisional_score: 1, steps, expert_results: experts },
+      { q_id: "q2", score: 2, steps: [] },
+    ] }] });
+    vi.mocked(tasksApi.updateCorrectionReview).mockResolvedValue({ status: "ok", unchanged: false,
+      student_id: "student-1", q_id: "q1", workflow_revision: 8,
+      correction: { result_id: "review-copy", q_id: "q1", score: 2, provisional_score: 1,
+        type: "reasoning", max_score: 2, confidence: .9, comment: "Summary", requires_human_review: false,
+        synthesis_method: "single", review_reasons: [],
+        teacher_score: 2, teacher_comment: "Condition is implicit.", review_status: "confirmed",
+        steps: [{ ...steps[0], desc: "Rubric\nRubric\nMissing the required condition." }],
+        expert_results: [{ ...experts[0], steps: [] }],
+      },
+    } as CorrectionReviewResponse);
+    const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    const { result } = renderHook(() => useUpdateCorrectionReview(), { wrapper });
+    await act(async () => { await result.current.mutateAsync({ taskId: "task-1", studentId: "student-1", qId: "q1",
+      expected_workflow_revision: 7, teacher_score: 2, teacher_comment: "Condition is implicit.", confirm: true }); });
+    const corrections = client.getQueryData<TaskResultResponse>(taskKeys.result("task-1"))!.results![0].corrections;
+    expect(corrections[0]).toMatchObject({ result_id: "review-copy", score: 2, provisional_score: 1,
+      teacher_score: 2, teacher_comment: "Condition is implicit.", review_status: "confirmed", steps, expert_results: experts });
+    expect(corrections[1]).toEqual({ q_id: "q2", score: 2, steps: [] });
+  });
 
   it("updates the report, task, and revision together after generation", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

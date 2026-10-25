@@ -516,7 +516,11 @@ export function useUpdateCorrectionReview() {
           results: current.results.map((student) => student.student_id === variables.studentId
             ? {
                 ...student,
-                corrections: student.corrections.map((correction) => correction.q_id === variables.qId ? data.correction : correction),
+                // Reviewing changes teacher fields, not the immutable AI vote.
+                // Keep the result endpoint's concise evidence presentation.
+                corrections: student.corrections.map((correction) => correction.q_id === variables.qId ? {
+                  ...data.correction, steps: correction.steps, expert_results: correction.expert_results,
+                } : correction),
               }
             : student),
         };

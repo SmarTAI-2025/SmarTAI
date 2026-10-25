@@ -94,11 +94,19 @@ class Verification(BaseModel):
     request: dict
 
 
+_ITEM_FEEDBACK_DESCRIPTION = (
+    "Concise, self-contained feedback for this scoring item: explain what the student's "
+    "work establishes or misses and why it earns this credit or deduction, in one or two sentences. "
+    "Do not restate the rubric, paste evidence quotations, or repeat the same point. "
+    "Keep exact source evidence in claims."
+)
+
+
 class Award(BaseModel):
     item_id: str
     score: float = Field(ge=0, allow_inf_nan=False)
     claim_ids: list[str] = Field(default_factory=list)
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=1, description=_ITEM_FEEDBACK_DESCRIPTION)
     adjustment: Adjustment | None = None
     conditional_credit: float = Field(default=0, ge=0, allow_inf_nan=False)
     caused_by: str | None = Field(default=None, description=(
@@ -116,7 +124,7 @@ class Deduction(BaseModel):
         "refuted ancestor in this claim's depends_on chain. Null for an independent error."
     ))
     exemption_id: str | None = None
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=1, description=_ITEM_FEEDBACK_DESCRIPTION)
     adjustment: Adjustment | None = None
 
 
@@ -140,7 +148,11 @@ class MathAssessment(BaseModel):
     ))
     confidence: GradingConfidence = 0.0
     rationale: str = ""  # Detailed evidence for holistic scoring; comment stays concise.
-    comment: str
+    comment: str = Field(description=(
+        "Overall conclusion and useful next-step guidance, following the configured feedback "
+        "tone and length. Do not enumerate the scoring items or repeat the detailed rationale, "
+        "item explanations, point totals, source quotations or rubric text."
+    ))
     needs_review: bool = False
     evidence_judgments: list[EvidenceJudgment] = Field(default_factory=list, max_length=8)
 
@@ -363,8 +375,9 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
                 formula = f"\n{award.score:g} + {conditional} × {1 - fraction} = {amount}"
             elif award.conditional_credit or award.caused_by is not None:
                 raise ValueError("conditional_credit_requires_policy")
-            quotes = " / ".join(claims[key].quote or claims[key].source_quote for key in award.claim_ids)
-            desc = f"{item.description}\n{quotes}\n{award.reason}{formula}".strip()
+            # The rubric and exact sources already live in the plan/claim graph.
+            # Display the assessment once, not rubric + source + its paraphrase.
+            desc = f"{award.reason}{formula}".strip()
             descriptions.append((desc, amount, amount == _points(item.points)))
         total = sum((score for _, score, _ in descriptions), Decimal(0))
     elif route.mode == "deductions":
@@ -397,8 +410,7 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
                 exemption = exemptions[deduction.rule_id]
                 if exemption.id not in claims[deduction.claim_id].item_ids:
                     raise ValueError("deduction_claim_not_mapped_to_item")
-                reasons.append(f"{exemption.description}: −0; "
-                    f"{claims[deduction.claim_id].quote or claims[deduction.claim_id].source_quote}\n{deduction.reason}")
+                reasons.append(f"−0: {deduction.reason}\n{exemption.description}")
                 continue
             rule = items[deduction.rule_id]
             if rule.id not in claims[deduction.claim_id].item_ids:
@@ -442,9 +454,7 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
             if amount:
                 used_rules[rule.id] = used_rules.get(rule.id, 0) + count
             total -= amount
-            reasons[index] = (f"{rule.description}: −{amount}; "
-                              f"{claims[deduction.claim_id].quote or claims[deduction.claim_id].source_quote}\n"
-                              f"{deduction.reason}" + (f"\n{policy}" if policy else ""))
+            reasons[index] = f"−{amount}: {deduction.reason}" + (f"\n{policy}" if policy else "")
         desc = "\n\n".join(reasons) or assessment.rationale or assessment.comment
         descriptions = [(desc, total, not assessment.deductions)]
     else:
@@ -824,6 +834,7 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
 
 def weighted_math_steps(experts, weights, maximum, score):
     """Project evidence without changing public StepScore or losing the sum."""
+    from backend.services.grading_feedback import join_expert_feedback
     traces = [read_math_trace(expert) for expert in experts]
     if not all(traces):
         return []
@@ -838,7 +849,7 @@ def weighted_math_steps(experts, weights, maximum, score):
                          for expert, weight in zip(experts, weights)) / sum(weights)
             subtotal += amount
             current = _points(_rounded(subtotal, maximum))
-            desc = "\n\n".join(f"{expert.provider}: {expert.steps[index].desc}" for expert in experts)
+            desc = join_expert_feedback((expert.provider, expert.steps[index].desc) for expert in experts)
             result.append(StepScore(step_no=index + 1, desc=desc, score=float(current - previous),
                                     is_correct=all(expert.steps[index].is_correct for expert in experts)))
             previous = current
