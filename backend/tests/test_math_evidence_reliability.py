@@ -316,7 +316,7 @@ async def test_feedback_does_not_confuse_scoped_evidence_with_resolved_scoring(s
     assert result.score == 10 and len(calls) == 2  # tools do not dictate points
     assert trace["review_pending"] is pending
     correction = _expert_to_correction(p.q_id, p.type, result, "single")
-    assert ("math_scoring_uncertainty" in correction.review_reasons) is pending
+    assert ("math_verification_conflict" in correction.review_reasons) is pending
     assert not result.error_kind
 
 

@@ -156,20 +156,34 @@ def _apply_math_review_advisory(correction: Correction) -> Correction:
     """Keep a residual evidence concern visible without changing score/confidence."""
     from backend.skills.math_grading import math_scoring_disagreement, read_math_trace
 
-    unresolved = math_scoring_disagreement(correction.expert_results)
+    reasons = []
+    if math_scoring_disagreement(correction.expert_results):
+        reasons.append("math_expert_disagreement")
+    model_requested = False
+    unclassified_advisory = False
     for expert in correction.expert_results:
         trace = read_math_trace(expert) if _is_successful_expert(expert) else None
         assessment = trace.get("assessment") if trace else None
         if trace and trace.get("review_advisory"):
-            unresolved = True
+            # Classify only an already-active advisory; do not add review triggers.
+            if trace.get("review_pending"):
+                reasons.append("math_verification_conflict")
+            proof_audit = trace.get("proof_audit") or {}
+            proof_concerns = isinstance(proof_audit, dict) and proof_audit.get("review_concerns")
+            if proof_concerns:
+                reasons.append("math_proof_concern")
+            if not trace.get("review_pending") and not proof_concerns:
+                unclassified_advisory = True
         if isinstance(assessment, dict) and assessment.get("needs_review") is True:
-            unresolved = True
-            break
-    if unresolved:
+            model_requested = True
+    if not reasons:
+        if model_requested:
+            reasons.append("math_model_review")
+        elif unclassified_advisory:
+            reasons.append("math_scoring_uncertainty")
+    if reasons:
         correction.requires_human_review = True
-        correction.review_reasons = list(dict.fromkeys([
-            *correction.review_reasons, "math_scoring_uncertainty",
-        ]))
+        correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, *reasons]))
     return correction
 
 

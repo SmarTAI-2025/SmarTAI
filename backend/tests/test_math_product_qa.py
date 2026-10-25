@@ -58,7 +58,7 @@ async def test_equal_total_residual_item_dispute_is_advisory(case, monkeypatch, 
     assert correction.score == sum(step.score for step in correction.steps) == 8
     assert correction.confidence == .95
     assert row.result_status == "needs_review"
-    assert public["review_reasons"] == ["math_scoring_uncertainty"]
+    assert public["review_reasons"] == ["math_expert_disagreement"]
     assert review_state(public) == (True, False)
     assert not task_facade._correction_review_blocks_finalization(row)
     grades.mark_completed(run_id, worker_id="checkpoint-test", completed=1, failed=1)

@@ -121,3 +121,32 @@ describe("grading review attention", () => {
     expect(summarizeReviewScoreSources(corrections).aiUntouched).toBe(2);
   });
 });
+
+describe("specific math review reasons", () => {
+  const reasonIds = ["math_expert_disagreement", "math_verification_conflict", "math_proof_concern"];
+  it.each(["zh-CN", "en-US"] as const)("shows all specific concerns once and suppresses generic fallbacks (%s)", locale => {
+    const value = correction({ confidence: .95, review_reasons: [...reasonIds, "math_model_review", "math_scoring_uncertainty", ...reasonIds],
+      expert_results: [10, 6].map(score => ({ provider: "expert", score, max_score: 10, confidence: .95, comment: "", steps: [] })) });
+    const labels = locale === "zh-CN" ? ["专家分歧，建议复核。", "核验结果与评分依据待核对。", "关键推理依据待核对。"]
+      : ["Expert disagreement; review suggested.", "Verification evidence still needs checking.", "Key reasoning evidence needs checking."];
+    expect(correctionReviewNotes(value, locale)).toEqual(labels.map(label => ({ label, severity: "advisory" })));
+    expect(correctionReviewNextBlocked(value)).toBe(false);
+  });
+  it.each([...reasonIds, "math_model_review"])("retains high-confidence attention and respects confirmation for %s", reason => {
+    const value = correction({ confidence: .95, initial_review_reasons: [reason] });
+    expect(correctionReviewAttention(value)).toBe("advisory");
+    expect(correctionReviewNotes(value, "zh-CN")).toHaveLength(1);
+    expect(correctionReviewAttention({ ...value, teacher_score: 8, review_status: "confirmed" })).toBe("none");
+  });
+  it("keeps low confidence separate without changing residual-dispute queue priority", () => {
+    const value = correction({ confidence: .4, review_reasons: ["math_expert_disagreement"] });
+    expect(correctionReviewNotes(value, "zh-CN").map(note => note.label)).toEqual([
+      "置信度 0.4 较低，建议核对确认。", "专家分歧，建议复核。",
+    ]);
+    const model = buildResultsModel(undefined, { task_id: "T1", status: "graded", timestamp: 0,
+      results: [{ student_id: "s1", corrections: [{ ...value, confidence: .95 }] }] } as Parameters<typeof buildResultsModel>[1]);
+    const [item] = collectResultReviewItems(model, model.students);
+    expect(item.category).toBe("review");
+    expect(item.priority).toBeCloseTo(.05);
+  });
+});
