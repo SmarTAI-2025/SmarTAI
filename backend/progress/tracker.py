@@ -50,6 +50,7 @@ class ProgressReporter:
         self._subscribers: list[asyncio.Queue[ProgressEvent]] = []
         self._event_sink: Optional[Callable[[ProgressEvent, dict[str, Any]], None]] = None
         self._question_generation_ids: tuple[str, ...] = ()
+        self._question_generation_revisions: dict[str, str] = {}
         self.grading_activity = None
         self.recognition_activity = None
 
@@ -239,6 +240,7 @@ class ProgressReporter:
         now = time.time()
         async with self._lock:
             self._question_generation_ids = normalized
+            self._question_generation_revisions.clear()
             self._progress.total_questions = len(normalized)
             self._progress.question_labels = labels
             self._progress.question_error_codes = {}
@@ -266,12 +268,23 @@ class ProgressReporter:
                 {**self._progress.question_labels, q_id: label})
             self._progress.stage_metrics["solution_total_questions"] = len(self._question_generation_ids)
 
-    async def mark_question_generation_started(self, q_id: str) -> None:
+    async def mark_question_generation_started(self, q_id: str, *, revision: str | None = None) -> None:
         normalized = str(q_id).strip()
         now = time.time()
         async with self._lock:
             if normalized not in self._question_generation_ids:
                 raise ValueError("question id is not part of this generation run")
+            # A revised question invalidates completion of its former content,
+            # without creating another question in the teacher's selected set.
+            if revision is not None and self._question_generation_revisions.get(normalized) != revision:
+                self._question_generation_revisions[normalized] = revision
+                self._progress.completed_question_ids = [item for item in self._progress.completed_question_ids if item != normalized]
+                self._progress.failed_question_ids = [item for item in self._progress.failed_question_ids if item != normalized]
+                self._progress.question_error_codes.pop(normalized, None)
+                self._progress.stage_metrics.update({
+                    "solution_completed_questions": len(self._progress.completed_question_ids),
+                    "solution_failed_questions": len(self._progress.failed_question_ids),
+                })
             if normalized in self._progress.completed_question_ids:
                 raise ValueError("completed question cannot start again")
             if normalized not in self._progress.active_question_ids:
@@ -290,12 +303,15 @@ class ProgressReporter:
         *,
         succeeded: bool,
         error_code: str | None = None,
+        revision: str | None = None,
     ) -> None:
         normalized = str(q_id).strip()
         now = time.time()
         async with self._lock:
             if normalized not in self._question_generation_ids:
                 raise ValueError("question id is not part of this generation run")
+            if revision is not None and self._question_generation_revisions.get(normalized) != revision:
+                return  # A late result must not finish or cancel newer content.
             self._progress.active_question_ids = [
                 item for item in self._progress.active_question_ids
                 if item != normalized
@@ -328,13 +344,15 @@ class ProgressReporter:
             message=f"Major question {normalized} generation {outcome}",
         ))
 
-    async def mark_question_generation_cancelled(self, q_id: str) -> None:
+    async def mark_question_generation_cancelled(self, q_id: str, *, revision: str | None = None) -> None:
         """Remove a cancelled unit without misreporting success or failure."""
 
         normalized = str(q_id).strip()
         async with self._lock:
             if normalized not in self._question_generation_ids:
                 raise ValueError("question id is not part of this generation run")
+            if revision is not None and self._question_generation_revisions.get(normalized) != revision:
+                return  # A late result must not finish or cancel newer content.
             self._progress.active_question_ids = [
                 item for item in self._progress.active_question_ids
                 if item != normalized

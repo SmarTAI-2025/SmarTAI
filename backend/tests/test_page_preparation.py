@@ -203,11 +203,15 @@ async def test_completed_page_is_saved_while_next_page_response_is_pending(monke
 async def test_selected_question_missing_still_fails_after_page_batching(monkeypatch):
     _, _, _, pipeline = await page_pipeline(monkeypatch, {1: "1. First.\n2. Second."})
     pipeline.wanted = ["2"]
+    calls = []
     async def extract(*args, **kwargs):
+        calls.append(args[0])
         return inc._rows([row(1)])
     monkeypatch.setattr(inc, "_extract_problems_call", extract)
-    with pytest.raises(ValidationError, match="incomplete"):
+    with pytest.raises(ValidationError) as error:
         await pipeline.run()
+    assert error.value.code == "question_targets_incomplete"
+    assert len(calls) == 3
 
 
 @pytest.mark.asyncio
