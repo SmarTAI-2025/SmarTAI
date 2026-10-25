@@ -159,8 +159,9 @@ export function AppShell() {
         </div>
       </header>
 
+      {/* Modal navigation must sit above Sonner's 999999999 toast layer. */}
       {mobileOpen ? (
-        <div className="fixed inset-0 z-50 lg:hidden">
+        <div className="fixed inset-0 z-[1000000000] lg:hidden">
           <button
             type="button"
             className="absolute inset-0 bg-slate-950/35"

@@ -83,6 +83,16 @@ for (const locale of ["zh-CN", "en-US"]) {
           await notice.hover();
         }
         await page.getByRole("button", { name: zh ? "打开导航" : "Open navigation", exact: true }).click({ timeout: 3000 });
+        if (hoverNotice) {
+          await expect(page.locator('[data-sonner-toast][data-type="success"]').first()).toBeVisible();
+          // Check the hit target immediately, while the notice is still present.
+          // A click that only succeeds after toast dismissal would hide the bug.
+          expect(await quick.evaluate(link => {
+            const rect = link.getBoundingClientRect();
+            return link.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+          })).toBe(true);
+          await page.screenshot({ path: testInfo.outputPath("mobile-navigation-with-notice.png") });
+        }
       }
       await quick.click();
       await expect(page).toHaveURL(new RegExp(`/frontier/live\\?taskId=${task.task_id}$`));
@@ -127,7 +137,7 @@ for (const locale of ["zh-CN", "en-US"]) {
     await page.getByRole("textbox", { name: zh ? "姓名" : "Name", exact: true }).fill("Saved student name");
     await page.getByRole("button", { name: zh ? "保存并确认身份" : "Save and confirm identity", exact: true }).click();
     await expect(page.getByRole("textbox", { name: zh ? "姓名" : "Name", exact: true })).toHaveCount(0);
-    await returnToDemo();
+    await returnToDemo(true);
     const grade = page.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first();
     await expect(grade).toBeEnabled();
     expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`, `/tasks/${task.task_id}/problems/q1`, `/tasks/${task.task_id}/parse_submissions`, `/tasks/${task.task_id}/students/S1/identity`]);
