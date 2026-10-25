@@ -18,7 +18,7 @@
     {"name": "missing score", "patch": {"score": null, "provisional_score": null}, "pending": true, "required": true},
     {"name": "failure placeholder", "patch": {"score": 0, "provisional_score": null, "synthesis_method": "all_failed"}, "pending": true, "required": true},
     {"name": "confirmed replacement", "patch": {"score": 7, "provisional_score": null, "teacher_score": 7, "review_status": "confirmed", "synthesis_method": "all_failed"}, "pending": false, "required": false},
-    {"name": "replacement awaiting confirmation", "patch": {"score": 7, "provisional_score": null, "teacher_score": 7, "review_status": "edited"}, "pending": true, "required": true},
+    {"name": "saved replacement without confirmation", "patch": {"score": 7, "provisional_score": null, "teacher_score": 7, "review_status": "edited"}, "pending": false, "required": false},
     {"name": "below required boundary", "patch": {"confidence": 0.2499}, "pending": true, "required": false},
     {"name": "required boundary is advisory", "patch": {"confidence": 0.25}, "pending": true, "required": false},
     {"name": "below advisory boundary", "patch": {"confidence": 0.5999}, "pending": true, "required": false},

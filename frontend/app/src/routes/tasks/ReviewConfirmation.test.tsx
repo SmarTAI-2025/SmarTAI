@@ -193,16 +193,17 @@ describe("one-click grading review", () => {
     expect(screen.getByText("2/2")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Confirm all" })).not.toBeInTheDocument();
   });
-  it("requires confirmation of a repaired missing score without suggesting another model retry", async () => {
+  it("releases a saved replacement score without suggesting another model retry", async () => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: 6, provisional_score: null, teacher_score: 6, review_status: "edited", confidence: 0.6 })] }];
-    state.finalization = { remaining_review_count: 1, ready_for_confirmation: false, workflow_revision: 5 };
+    state.finalization = { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 };
     show();
-    expect(screen.getByText("Check the corrected score and confirm")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Locked results" }));
-    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Retry failed items" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
+    expect(await screen.findByText("Current results page")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(state.retry).not.toHaveBeenCalled();
+    expect(state.update).not.toHaveBeenCalled();
   });
+
   it("keeps confirmation separate from the next stage when reopening completed results", async () => {
     state.task.status = "finalized";
     show();
@@ -212,6 +213,24 @@ describe("one-click grading review", () => {
     expect(state.bulk).toHaveBeenCalledTimes(1);
     expect(state.generate).not.toHaveBeenCalled();
   });
+  it.each([false, true])("lists each missing score separately without expert suggestions in detail=%s", async detail => {
+    state.result.results = [{ student_id: "S1", corrections: ["Q1", "Q2"].map(qId => correction(qId, {
+      score: null, provisional_score: null, review_status: "pending", expert_results: [
+        { provider: "low", score: 7, max_score: 10, confidence: .2, comment: "Advice", steps: [] },
+      ],
+    })) }];
+    state.finalization = { remaining_review_count: 2, ready_for_confirmation: false, workflow_revision: 5 };
+    show(detail);
+    await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
+    const dialog = screen.getByRole("alertdialog");
+    const items = within(dialog).getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("Question Q1 · Enter a valid score");
+    expect(items[1]).toHaveTextContent("Question Q2 · Enter a valid score");
+    expect(dialog).not.toHaveTextContent(/confidence|suggested|Advice/);
+    expect(state.update).not.toHaveBeenCalled();
+  });
+
   it("explicitly confirms automatically scored results including zero, without finalizing", async () => {
     show();
     await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
@@ -256,18 +275,16 @@ describe("one-click grading review", () => {
     expect(state.update).not.toHaveBeenCalled();
   });
 
-  it("keeps a corrected failed score blocked until explicit review confirmation", async () => {
-    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: null, provisional_score: null, teacher_score: 7, review_status: "edited" })] }];
-    state.finalization = { remaining_review_count: 1, ready_for_confirmation: false, workflow_revision: 5 };
-    show();
+  it.each([false, true])("allows a saved zero score without confirmation in detail=%s", async detail => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: null, provisional_score: null, teacher_score: 0, review_status: "edited" })] }];
+    state.finalization = { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 };
+    show(detail);
     await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
+    expect(await screen.findByText("Current results page")).toBeInTheDocument();
     expect(state.generate).not.toHaveBeenCalled();
-    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Stay here" }));
-    expect(screen.queryByRole("button", { name: "Confirm all" })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("link", { name: "View Grading Details" }));
-    await userEvent.click(screen.getByRole("button", { name: /Q1.*Confirm review/ }));
-    expect(state.update).toHaveBeenCalledWith(expect.objectContaining({ teacher_score: 7, confirm: true }));
+    expect(state.update).not.toHaveBeenCalled();
+    expect(state.bulk).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
   it("confirms every student result in one action while chaining workflow revisions", async () => {

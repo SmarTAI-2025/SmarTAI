@@ -579,8 +579,8 @@ export function classifyRecoverableError(
 
   if (code === "submission_recognition_blocked") {
     return {
-      title: tx(locale, "作答仍有关键问题待处理", "Some answers need correction and confirmation"),
-      description: tx(locale, "请补齐识别失败的作答，并确认已修正内容后继续。学生真实留白和普通低置信提醒不会阻止批改。", "Repair failed transcriptions and confirm the corrected answers before continuing. Genuine blank responses and ordinary confidence warnings do not block grading."),
+      title: tx(locale, "作答仍有关键问题待处理", "Some answers need correction"),
+      description: tx(locale, "请补齐识别失败的作答后继续。学生真实留白和普通低置信提醒不会阻止批改。", "Repair failed transcriptions before continuing. Genuine blank responses and ordinary confidence warnings do not block grading."),
       actionLabel: tx(locale, "校对作答", "Review submissions"),
       actionHref: taskHref("/submissions"),
       actionKind: "reselect", tone: "danger", technicalDetails,

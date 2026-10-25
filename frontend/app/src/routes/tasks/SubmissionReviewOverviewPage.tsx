@@ -240,7 +240,7 @@ export function SubmissionReviewOverviewPage() {
       </UnsavedChangesDialog> : null}
       {rowError && !deletingStudent ? <p role="alert" className="mt-3 text-sm text-danger">{rowError}</p> : null}
       <ReviewBlockDialog locale={locale} issues={blocked} onClose={() => setBlocked([])} />
-      <NewTaskStepper currentStep={4} blockedFromStep={submissionReviewBlockers(taskQuery.data, locale).length ? 5 : undefined} lockedStepReason={locale === "zh-CN" ? "请先处理并确认关键问题" : "Resolve and confirm required items first"} onLockedStepActivate={() => setBlocked(submissionReviewBlockers(taskQuery.data, locale))} />
+      <NewTaskStepper currentStep={4} blockedFromStep={submissionReviewBlockers(taskQuery.data, locale).length ? 5 : undefined} lockedStepReason={locale === "zh-CN" ? "请先处理关键问题" : "Resolve required items first"} onLockedStepActivate={() => setBlocked(submissionReviewBlockers(taskQuery.data, locale))} />
 
 
       <section className="mt-[22px] min-w-0" aria-labelledby="submission-review-matrix">

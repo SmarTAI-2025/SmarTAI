@@ -42,13 +42,7 @@ for (const locale of ["zh-CN", "en-US"]) {
         if (path.endsWith("/problems/q1")) {
           const patch = request.postDataJSON();
           expect(patch.expected_workflow_revision).toBe(revision);
-          const repairedEmptyStem = !problems.q1.stem.trim() && Boolean(patch.stem?.trim());
           Object.assign(problems.q1, patch);
-          if (repairedEmptyStem) {
-            problems.q1.review_status = "needs_review";
-            problems.q1.preparation_issues = [{ issue_id: "required-repair-q1", q_id: "q1", field: "stem",
-              severity: "blocking", status: "resolved", code: "required_review_confirmation" }];
-          }
           if (patch.review_status === "confirmed") {
             expect(problems.q1.stem).toBe("Saved question text");
             problems.q1.max_score_review_status = "confirmed";
@@ -106,17 +100,9 @@ for (const locale of ["zh-CN", "en-US"]) {
     await expect(firstQuestion.getByText("Saved question text", { exact: true })).toBeVisible();
     await returnToDemo();
     const continueButton = page.getByRole("button", { name: zh ? "继续识别作答" : "Continue to submissions", exact: true });
-    // Real repairs retain a required-confirmation marker until the teacher confirms.
-    await expect(questionReview).toBeVisible();
-    await expect(continueButton).toHaveCount(0);
-    expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`]);
-    await questionReview.click();
-    await page.locator(`a[href="/tasks/${task.task_id}/questions/q1/content#question-q1"]`).first().click();
-    await firstQuestion.getByRole("button", { name: zh ? "第 1 题 · 待确认" : "Question 1 · Confirm review", exact: true }).click();
-    await expect(firstQuestion.getByRole("button", { name: zh ? "第 1 题 · 已确认" : "Question 1 · Confirmed", exact: true })).toBeVisible();
-    await returnToDemo(true);
+    // Saving the repaired content releases the next stage without confirmation.
     await expect(continueButton).toBeEnabled();
-    expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`, `/tasks/${task.task_id}/problems/q1`]);
+    expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`]);
     await continueButton.click();
     const submissionReview = page.getByRole("alert").getByRole("link", { name: zh ? "校对作答" : "Review submissions", exact: true });
     await expect(submissionReview).toHaveAttribute("href", `/tasks/${task.task_id}/submissions`);
@@ -130,11 +116,11 @@ for (const locale of ["zh-CN", "en-US"]) {
     await returnToDemo();
     const grade = page.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first();
     await expect(grade).toBeEnabled();
-    expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`, `/tasks/${task.task_id}/problems/q1`, `/tasks/${task.task_id}/parse_submissions`, `/tasks/${task.task_id}/students/S1/identity`]);
+    expect(writes).toEqual([`/tasks/${task.task_id}/problems/q1`, `/tasks/${task.task_id}/parse_submissions`, `/tasks/${task.task_id}/students/S1/identity`]);
     await grade.click();
     await expect(page.getByRole("heading", { name: zh ? "从真实分数看到班级表现" : "See class performance from live scores", exact: true })).toBeVisible();
     expect(writes.at(-1)).toBe(`/tasks/${task.task_id}/grade`);
-    expect(writes).toHaveLength(5);
+    expect(writes).toHaveLength(4);
     expect(errors).toEqual([]);
   });
 }

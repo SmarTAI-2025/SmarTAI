@@ -23,10 +23,10 @@ describe("grading review attention", () => {
     }
   });
 
-  it("keeps missing or invalid scores red until corrected and explicitly confirmed", () => {
+  it("keeps missing or invalid scores red until a valid replacement is saved", () => {
     const missing = correction({ score: null, provisional_score: null, review_reasons: ["llm_failed"] });
     expect(correctionReviewAttention(missing)).toBe("blocking");
-    expect(correctionReviewAttention({ ...missing, score: 6, teacher_score: 6, review_status: "edited" })).toBe("blocking");
+    expect(correctionReviewAttention({ ...missing, score: 6, teacher_score: 6, review_status: "edited" })).toBe("none");
     const confirmed = { ...missing, score: 6, teacher_score: 6, review_status: "confirmed" as const };
     expect(correctionReviewAttention(confirmed)).toBe("none");
     expect(isCorrectionReviewConfirmed(confirmed)).toBe(true);
@@ -120,4 +120,10 @@ describe("grading review attention", () => {
     expect(model.lowConfidenceCount).toBe(2);
     expect(summarizeReviewScoreSources(corrections).aiUntouched).toBe(2);
   });
+});
+
+it.each([0, 7, 10])("releases a saved replacement score without a confirm click (%s)", teacher_score => {
+  const repaired = correction({ score: teacher_score, provisional_score: null, teacher_score, review_status: "edited", synthesis_method: "all_failed" });
+  expect(correctionReviewNextBlocked(repaired)).toBe(false);
+  expect(correctionReviewNotes(repaired, "zh-CN").filter(note => note.severity === "blocking")).toEqual([]);
 });

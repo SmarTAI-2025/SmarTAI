@@ -158,7 +158,7 @@ def test_soft_legacy_review_flags_do_not_count_as_required():
     ) == (0, 0, 0)
 
 
-def test_missing_ai_score_repair_still_requires_explicit_confirmation():
+def test_saved_missing_score_repair_releases_results_without_confirmation():
     from backend.db import grading_repository
     from backend.db.models import GradeResultRecord
     from backend.db.session import session_scope
@@ -177,20 +177,13 @@ def test_missing_ai_score_repair_still_requires_explicit_confirmation():
         seeded["required_result_id"], teacher_id=seeded["owner_id"],
         new_score=7, new_comment="Repaired score", confirm=False,
     )
-    pending = task_facade.finalization(**args)
-    assert pending["ready_for_confirmation"] is False
-    assert pending["remaining_review_count"] == 1
-    with pytest.raises(ResultNotReleasable):
-        task_facade.generate_artifacts(**args, expected_revision=pending["workflow_revision"])
-    assert grading_repository.get_run(seeded["run_id"], actor_id=seeded["owner_id"]).released_at is None
-    grading_repository.add_teacher_review(
-        seeded["required_result_id"], teacher_id=seeded["owner_id"],
-        new_score=7, new_comment="Repaired score", confirm=True,
-    )
-    confirmed = task_facade.finalization(**args)
-    assert confirmed["ready_for_confirmation"] is True
-    assert confirmed["remaining_review_count"] == 0
-    task_facade.generate_artifacts(**args, expected_revision=confirmed["workflow_revision"])
+    saved = task_facade.finalization(**args)
+    assert saved["ready_for_confirmation"] is True
+    assert saved["remaining_review_count"] == 0
+    result = next(row for row in grading_repository.list_results_for_run(seeded["run_id"]) if row.id == seeded["required_result_id"])
+    assert result.teacher_review["confirmed"] is False
+    assert result.requires_review is False
+    task_facade.generate_artifacts(**args, expected_revision=saved["workflow_revision"])
     assert grading_repository.get_run(seeded["run_id"], actor_id=seeded["owner_id"]).released_at is not None
 
 

@@ -53,7 +53,7 @@ describe("OCR review labels", () => {
     expect(answerReviewAttention(answer)).toBe("none");
     expect(answerReviewNotes(answer, "zh-CN")).toEqual([]);
     expect(answerReviewAttention({ ...answer, flag: ["recognition_failed"] })).toBe("blocking");
-    expect(answerReviewAttention({ ...answer, flag: ["recognition_repaired_needs_confirmation"] })).toBe("blocking");
+    expect(answerReviewAttention({ ...answer, flag: [], review_status: "pending" })).toBe("none");
     expect(answerReviewAttention({ ...answer, review_status: "confirmed" })).toBe("none");
   });
 

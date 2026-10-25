@@ -247,7 +247,7 @@ def test_old_blocking_low_confidence_and_missing_answer_are_advisory_but_empty_r
     assert task_facade.grading_readiness(**args)["ready"]
     confirmed = task_facade.update_problem(**args, q_id="q1", patch={"review_status": "confirmed", "review_fields": ["stem"]}, expected_revision=before["workflow_revision"])
     assert confirmed["problem"]["review_status"] == "confirmed"
-    assert all(issue["status"] == "acknowledged" for issue in confirmed["problem"]["preparation_issues"])
+    assert {issue["issue_id"]: issue["status"] for issue in confirmed["problem"]["preparation_issues"]} == {"low": "acknowledged", "answer": "acknowledged", "answer-partial": "acknowledged", "manual": "resolved"}
     with session_scope() as session:
         question = session.scalar(select(AssignmentQuestionRecord))
         question.criterion = ""

@@ -19,7 +19,7 @@ import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
 import { buildResultsModel, hasPartialExperts, effectiveCorrectionScore, formatConfidence, formatPercent, correctionReviewReasonIds, reviewReasonLabel, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
-import { collectResultReviewItems, type ReviewItem } from "@/components/tasks/resultsReviewModel";
+import { collectResultReviewItems, correctionReviewNotes, type ReviewItem } from "@/components/tasks/resultsReviewModel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -130,7 +130,7 @@ export function ReviewOverviewPage() {
     ? reviewDetailHref(taskId, unresolvedReview.student.id, unresolvedReview.question.id, overviewReturnTo)
     : null;
   const lockedResultsReason = remainingReviewCount > 0
-    ? (locale === "zh-CN" ? `还有 ${remainingReviewCount} 个关键问题需要处理并确认，暂不能查看结果分析。` : `${remainingReviewCount} required items need correction and confirmation before Results & Analysis.`)
+    ? (locale === "zh-CN" ? `还有 ${remainingReviewCount} 个关键问题需要处理，暂不能查看结果分析。` : `${remainingReviewCount} required items need correction before Results & Analysis.`)
     : copy(locale, "readyHint");
   function viewResults() {
     if (taskId && readyForConfirmation) navigate(`/tasks/${taskId}/results`);
@@ -255,7 +255,7 @@ export function ReviewOverviewPage() {
 
           <ReviewStageActions
             note={remainingReviewCount > 0
-              ? (locale === "zh-CN" ? `还有 ${remainingReviewCount} 个关键问题需要处理并确认。` : `${remainingReviewCount} required items need correction and confirmation.`)
+              ? (locale === "zh-CN" ? `还有 ${remainingReviewCount} 个关键问题需要处理。` : `${remainingReviewCount} required items need correction.`)
               : copy(locale, "readyHint")}
 
             back={{ href: targetHref ?? `/tasks/${taskId}/review`, label: locale === "zh-CN" ? "查看批改详情" : "View Grading Details" }}
@@ -268,7 +268,7 @@ export function ReviewOverviewPage() {
         </>
       )}
       {blockedDialog ? <UnsavedChangesDialog
-        title={locale === "en-US" ? "Some results need correction and confirmation" : "还有结果需要处理并确认"}
+        title={locale === "en-US" ? "Some results need correction" : "还有结果需要处理"}
         description={lockedResultsReason}
         stayLabel={locale === "en-US" ? "Stay here" : "留在此页"}
         leaveLabel={locale === "en-US" ? "Go to the missing score" : "直接前往填写分数"}
@@ -276,7 +276,7 @@ export function ReviewOverviewPage() {
         onLeave={() => { setBlockedDialog(false); if (unresolvedHref) navigate(unresolvedHref); else void finalizationQuery.refetch(); }}
       >
         {taskId && blockingReviewItems.some(item => effectiveCorrectionScore(item.correction) === null) ? <div className="mt-4"><RetryFailedGrading taskId={taskId} revision={task?.workflow_revision ?? 0} locale={locale} paused={pausedGrading} /></div> : null}
-        <ul className="mt-3 max-h-48 space-y-2 overflow-auto text-sm">{blockingReviewItems.map(item => <li key={reviewCellKey(item.student.id, item.question.id)}><Link className="text-primary underline" onClick={() => setBlockedDialog(false)} to={reviewDetailHref(taskId!, item.student.id, item.question.id, overviewReturnTo)}>{item.student.name} · {item.question.label} · {locale === "zh-CN" ? "请处理并确认" : "Correct and confirm"}</Link></li>)}</ul>
+        <ul className="mt-3 max-h-48 space-y-2 overflow-auto text-sm">{blockingReviewItems.flatMap(item => correctionReviewNotes(item.correction, locale).filter(note => note.severity === "blocking").map(note => <li key={`${reviewCellKey(item.student.id, item.question.id)}:${note.label}`}><Link className="text-primary underline" onClick={() => setBlockedDialog(false)} to={reviewDetailHref(taskId!, item.student.id, item.question.id, overviewReturnTo)}>{item.student.name} · {locale === "zh-CN" ? `第 ${item.question.label} 题` : `Question ${item.question.label}`} · {note.label}</Link></li>))}</ul>
       </UnsavedChangesDialog> : null}
     </div>
   );
@@ -436,7 +436,7 @@ function ReviewHeatmap({
 
 function ReviewCell({ locale, href, correction, item, annotated, confirmed, question }: { locale: Locale; href: string; correction: Correction; item?: ReviewItem; annotated: boolean; confirmed: boolean; question?: QuestionSummary }) {
   const state = correctionReviewNextBlocked(correction) ? "hard" : confirmed ? "confirmed" : item ? "review" : "ready";
-  const label = locale === "zh-CN" ? (state === "hard" ? "需处理并确认" : state === "confirmed" ? "已确认" : state === "review" ? "待复核" : "已批改") : (state === "hard" ? "Correction and confirmation required" : state === "confirmed" ? "Confirmed" : state === "review" ? "Needs review" : "Graded");
+  const label = locale === "zh-CN" ? (state === "hard" ? "需处理" : state === "confirmed" ? "已确认" : state === "review" ? "待复核" : "已批改") : (state === "hard" ? "Correction required" : state === "confirmed" ? "Confirmed" : state === "review" ? "Needs review" : "Graded");
   const displayScore = effectiveCorrectionScore(correction);
   const scoreDetail = displayScore !== null && correction.max_score > 0
     ? `${formatPercent((displayScore / correction.max_score) * 100)} · `
@@ -477,8 +477,7 @@ function queueReason(locale: Locale, item: ReviewItem): string {
       : (locale === "zh-CN" ? "部分专家完成 · 已保存有效评分和评语" : "Some experts completed · valid scores and feedback saved");
   }
   if (effectiveCorrectionScore(item.correction) === null) return locale === "zh-CN" ? "缺少有效分数 · 需处理" : "Missing valid score · action required";
-  if (correctionReviewBlocked(item.correction)) return locale === "zh-CN" ? "请核对补齐后的分数并确认" : "Check the corrected score and confirm";
-  if (item.severity === "blocking") return locale === "zh-CN" ? "请核对并确认" : "Check and confirm the result";
+  if (correctionReviewBlocked(item.correction)) return locale === "zh-CN" ? "分数无效 · 需修正" : "Invalid score · correction required";
   if (item.correction.review_status === "edited") return copy(locale, "savedPendingReason");
   if (hasPartialExperts(item.correction)) return locale === "zh-CN" ? "部分专家完成 · 建议核对" : "Some experts completed · review suggested";
   if (item.category === "low-confidence") return locale === "zh-CN" ? "置信度较低 · 建议核对" : "Low confidence · review suggested";
