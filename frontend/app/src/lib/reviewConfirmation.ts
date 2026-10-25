@@ -51,9 +51,9 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
 
 export function recognitionIssueLabel(issue: PreparationIssue, locale: string): string | null {
   if (issue.details?.review_display_reason === "missing_type") return locale === "zh-CN"
-    ? "请选择题型；完成前不能批改。" : "Select the question type before grading.";
+    ? "请选择题型。" : "Select the question type.";
   if (issue.details?.review_display_reason === "missing_number") return locale === "zh-CN"
-    ? "请补齐题号；完成前不能批改。" : "Enter the question number before grading.";
+    ? "请补齐题号。" : "Enter the question number.";
   if (issue.code === "source_conflict" && issue.details?.reason === "test_case_output_conflict") return locale === "zh-CN"
     ? "测试用例中，同一输入对应了不同预期输出，请核对。"
     : "Test cases have different expected outputs for the same input. Please review.";
@@ -71,8 +71,8 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
   if (issue.code === "manual_completion_required" && questionIssueSeverity(issue) === "advisory") return locale === "zh-CN"
     ? "部分补充资料未完成，建议核对。" : "Some supplementary materials are incomplete; review suggested.";
   if (issue.code === "manual_completion_required") return locale === "zh-CN"
-    ? "请补齐缺失资料；完成前不能批改。"
-    : "Complete the missing materials before grading.";
+    ? "请补齐缺失资料。"
+    : "Complete the missing materials.";
   if (issue.code === "ambiguous_question_match") return locale === "zh-CN"
     ? "资料无法唯一匹配到本题，请对照原件核对内容。"
     : "The source cannot be uniquely matched to this question. Check the content against the original.";
@@ -179,8 +179,8 @@ export function questionReviewNotes(problem: ProblemInfo, locale: string, fallba
       severity: issue.severity === "blocking" ? "blocking" as const : "advisory" as const }));
   for (const fields of splitMissingFields ? names.map(name => [name]) : names.length ? [names] : []) {
     notes.push({ label: locale === "zh-CN"
-      ? `请补齐缺失的${fields.join("、")}；完成前不能批改。`
-      : `Complete the missing ${fields.join(", ")} before grading.`,
+      ? `请补齐缺失的${fields.join("、")}。`
+      : `Complete the missing ${fields.join(", ")}.`,
       severity: "blocking" });
   }
   if (answerMissing && problem.review_status !== "confirmed") {

@@ -17,7 +17,7 @@ export function getSubmissionSourceReasonCopy(
   };
   if (source.status === "manual_review") return {
     title: tx(locale, "识别未完成，等待人工处理", "Recognition incomplete; awaiting manual review"),
-    description: tx(locale, "原文件和已完成识别已保留。请逐题补齐作答或确认未作答，处理完成前不能批改。", "Originals and completed recognition are preserved. Complete each answer or confirm it is blank before grading."),
+    description: tx(locale, "原文件和已完成识别已保留。请逐题补齐作答或确认未作答。", "Originals and completed recognition are preserved. Complete each answer or confirm it is blank."),
   };
   const copy = REASON_COPY[source.reason_code ?? source.internal_status];
   if (copy) return copy(locale, source);

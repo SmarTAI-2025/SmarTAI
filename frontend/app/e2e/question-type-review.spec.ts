@@ -77,13 +77,13 @@ test(`missing type and materials stay visible without duplicate failure notes ($
   await page.goto("/tasks/type-review/questions/q1/content");
   const card = page.locator('[data-question-id="q1"]');
   await expect(card.getByText("生成失败", { exact: true })).toHaveCount(1);
-  await expect(card.getByText("请补齐缺失的题型、题干、评分标准；完成前不能批改。")).toBeVisible();
+  await expect(card.getByText("请补齐缺失的题型、题干、评分标准。")).toBeVisible();
   await expect(card.locator('[data-review-issue-notes] .text-amber-700')).toHaveText('缺少标答（可选），可按需补充。');
   await page.screenshot({ path: testInfo.outputPath("specific-missing-fields.png"), fullPage: true });
   const dialog = page.getByRole("alertdialog");
   async function checkDialog(fields: string[]) {
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole("listitem")).toHaveText(fields.map(field => `第 1 题 · 请补齐缺失的${field}；完成前不能批改。`));
+    await expect(dialog.getByRole("listitem")).toHaveText(fields.map(field => `第 1 题 · 请补齐缺失的${field}。`));
     await expect(dialog).not.toContainText(/标答|请确认|学生实际留白|识别或批改失败/);
     await dialog.getByRole("button", { name: "前往问题位置", exact: true }).click();
     await expect(dialog).toHaveCount(0);
@@ -104,7 +104,7 @@ test(`missing type and materials stay visible without duplicate failure notes ($
   expect(mutations).toEqual([]);
   await select.selectOption("reasoning");
   await card.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(card.getByText("请补齐缺失的题干、评分标准；完成前不能批改。")).toBeVisible();
+  await expect(card.getByText("请补齐缺失的题干、评分标准。")).toBeVisible();
   expect(mutations).toEqual(["/tasks/type-review/problems/q1"]);
   await page.getByRole("button", { name: "全部确认", exact: true }).click();
   await checkDialog(["题干", "评分标准"]);
