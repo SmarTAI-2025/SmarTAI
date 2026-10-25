@@ -11,10 +11,14 @@ import { ReviewDetailPage } from "./ReviewDetailPage";
 
 const state = vi.hoisted(() => ({
   locale: "en-US",
+  primaryProviderId: undefined as string | undefined,
   task: { task_id: "T1", name: "Review", status: "graded", workflow_revision: 5, problem_data: {}, student_data: {}, grading_job_id: null as string | null, last_failed_job_id: null as string | null },
   result: { results: [] as unknown[] } as { results: unknown[]; grading_run_status?: string },
   finalization: { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 },
   retry: vi.fn(), bulk: vi.fn(), update: vi.fn(), generate: vi.fn(), refetch: vi.fn(),
+}));
+vi.mock("@/api/hooks/gradingSetup", () => ({
+  useGradingSetup: () => ({ data: { grading_setup: { primary_provider_id: state.primaryProviderId } } }),
 }));
 vi.mock("@/api/hooks/tasks", () => ({
   useStartGrading: () => ({ mutate: state.retry }),
@@ -37,7 +41,7 @@ vi.mock("@/components/tasks/ResultQuestionQuery", () => ({
   ResultQuestionQuery: () => null,
   useResultQuestionFilter: ({ questions }: { questions: unknown[] }) => ({ filter: {}, visibleQuestions: questions }),
 }));
-vi.mock("@/components/knowledge-base/KnowledgeCitationPreview", () => ({ KnowledgeCitationPreview: () => null }));
+vi.mock("@/components/knowledge-base/KnowledgeCitationPreview", () => ({ KnowledgeCitationPreview: ({ citation }: { citation: { citation_id: string } }) => <span>{citation.citation_id}</span> }));
 vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: state.locale, t: (key: string) => key }) }));
 function correction(qId: string, patch = {}) {
   return { q_id: qId, type: "calculation", score: 7, provisional_score: 7, max_score: 10, confidence: 0.4,
@@ -55,6 +59,7 @@ function show(detail = false, suffix = "") {
 }
 beforeEach(async () => {
   state.locale = "en-US";
+  state.primaryProviderId = undefined;
   await clearPageDrafts();
   state.task.status = "graded";
   state.task.grading_job_id = null;
@@ -127,14 +132,112 @@ describe("one-click grading review", () => {
       const result = card.getByRole("region", { name: locale === "zh-CN" ? "SmarTAI 批改结果" : "SmarTAI Grading Result" });
       expect(result).toHaveTextContent("8.5 / 10");
       expect(card.getByRole("textbox", { name: `${id} ${locale === "zh-CN" ? "最终得分" : "final score"}` })).toHaveValue("8.5");
-      expect(result).toHaveTextContent(id === "Q1" ? "Spread-only rationale" : "Flagged rationale");
+      expect(result).toHaveTextContent("Expert rationale 0");
+      expect(result).not.toHaveTextContent(id === "Q1" ? "Spread-only rationale" : "Flagged rationale");
       await userEvent.click(card.getByText(locale === "zh-CN" ? "查看各专家原始结果" : "View Original Model Results"));
-      expect(card.getByText("Expert rationale 0")).toBeVisible();
-      expect(card.getByText("Expert reasoning 1")).toBeVisible();
+      expect(within(card.getByRole("tabpanel")).getByText("Expert rationale 0")).toBeVisible();
+      expect(card.queryByText("Expert reasoning 1")).not.toBeInTheDocument();
+      await userEvent.click(card.getByRole("tab", { name: "expert-1" }));
+      expect(within(card.getByRole("tabpanel")).getByText("Expert reasoning 1")).toBeVisible();
     }
-    expect(screen.getByText("Combined reasoning")).toBeVisible();
+    expect(screen.queryByText("Combined reasoning")).not.toBeInTheDocument();
     expect(screen.queryByText(/已隐藏|details are hidden/)).not.toBeInTheDocument();
     expect(state.update).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured primary model rather than the first result and keeps compact scores outside the disclosure", async () => {
+    state.primaryProviderId = "second";
+    const experts = ["first", "second", "third", "fourth"].map((provider_id, index) => ({
+      provider_id, provider: `model-${index}`, score: index + 2, max_score: 10, confidence: 0.9,
+      comment: `Original ${provider_id} comment`, steps: [0, 0, 1, index + 1].map((score, step) => ({ step_no: step + 1, desc: `${provider_id} step ${step + 1}`, score, is_correct: score > 0 })),
+    }));
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { expert_results: experts, comment: "Repeated aggregate", steps: [{ step_no: 1, desc: "Repeated aggregate step", score: 7, is_correct: true }] })] }];
+    show(true);
+    const result = screen.getByRole("region", { name: "SmarTAI Grading Result" });
+    expect(within(result).getByText("model-1（3/10, [0,0,1,2], conf=0.90）")).toBeVisible();
+    expect(within(result).getByText("Original second comment")).toBeVisible();
+    expect(within(result).getByText("second step 4")).toBeVisible();
+    expect(within(result).queryByText("Repeated aggregate")).not.toBeInTheDocument();
+    expect(within(result).queryByText("Repeated aggregate step")).not.toBeInTheDocument();
+    const scores = result.querySelectorAll("dl")[1];
+    expect(scores.children).toHaveLength(4);
+    expect(scores.children[0]).toHaveTextContent("model-02/10[0,0,1,1]");
+    expect(scores.children[1]).toHaveTextContent("model-13/10[0,0,1,2]");
+    expect(within(result).queryByText("Original first comment")).not.toBeVisible();
+    expect(result).toHaveTextContent("7 / 10");
+    await userEvent.click(within(result).getByText("View Original Model Results"));
+    const tabs = within(result).getAllByRole("tab");
+    expect(tabs).toHaveLength(4);
+    await userEvent.click(tabs[0]);
+    await userEvent.keyboard("{ArrowRight}");
+    expect(tabs[1]).toHaveFocus();
+    expect(tabs[1]).toHaveAttribute("aria-selected", "true");
+    expect(within(within(result).getByRole("tabpanel")).getByText("Original second comment")).toBeVisible();
+    await userEvent.keyboard("{End}");
+    expect(tabs[3]).toHaveFocus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(tabs[0]).toHaveFocus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(tabs[3]).toHaveFocus();
+    await userEvent.keyboard("{Home}");
+    expect(tabs[0]).toHaveFocus();
+    expect(state.update).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a valid model when the primary failed and preserves its failure in the model tab", async () => {
+    state.primaryProviderId = "failed";
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { expert_results: [
+      { provider_id: "failed", provider: "failed", score: 0, max_score: 10, confidence: 0, error_kind: "transient_llm", comment: "Original failure", steps: [] },
+      { provider_id: "good", provider: "good", score: 0, max_score: 10, confidence: 0.9, comment: "Valid zero grade", steps: [] },
+    ] })] }];
+    show(true);
+    const result = screen.getByRole("region", { name: "SmarTAI Grading Result" });
+    expect(within(result).getByText("Valid zero grade")).toBeVisible();
+    expect(result.querySelectorAll("dl")[1].children[0]).toHaveTextContent("failed--/10");
+    expect(result.querySelectorAll("dl")[1].children[1]).toHaveTextContent("good0/10");
+    await userEvent.click(within(result).getByText("View Original Model Results"));
+    expect(within(result).getByRole("tabpanel")).toHaveTextContent("Network error or timeout · No valid score; excluded from synthesis");
+    expect(within(within(result).getByRole("tabpanel")).getByText("Original failure")).toBeVisible();
+  });
+
+  it.each([0, 1, 2])("omits the extra score cards for %s results from at most one model", count => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { expert_results: Array.from({ length: count }, (_, i) => ({
+      provider_id: "single", provider: `model#sample${i + 1}`, score: 7, max_score: 10, confidence: 1, comment: "Single model", steps: [],
+    })) })] }];
+    show(true);
+    const result = screen.getByRole("region", { name: "SmarTAI Grading Result" });
+    expect(result.querySelectorAll("dl")).toHaveLength(1);
+    if (!count) expect(within(result).getByText("AI note")).toBeVisible();
+  });
+
+  it("keeps retrieval references with their own model when switching tabs", async () => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { expert_results: ["first", "second"].map(provider => ({
+      provider, score: 7, max_score: 10, confidence: .9, comment: provider, steps: [], knowledge_citations: [{ citation_id: `${provider}-reference` }],
+    })) })] }];
+    show(true);
+    await userEvent.click(screen.getByText("View Original Model Results"));
+    expect(within(screen.getByRole("tabpanel")).getByText("first-reference")).toBeVisible();
+    await userEvent.click(screen.getByRole("tab", { name: "second" }));
+    expect(screen.queryByText("first-reference")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("tabpanel")).getByText("second-reference")).toBeVisible();
+    expect(screen.getByText("Retrieved references (not verified support)")).toBeVisible();
+  });
+
+  it.each([
+    ["operation_cancelled", "Manually stopped before completion"],
+    ["quota_exhausted", "Quota exhausted · No valid score; excluded from synthesis"],
+    ["general", "Model error · No valid score; excluded from synthesis"],
+  ])("preserves %s feedback without fabricating a grade", async (error_kind, feedback) => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: null, provisional_score: null, synthesis_method: "all_failed", expert_results: [
+      { provider: "failed-model", score: 0, max_score: 10, confidence: 0, error_kind, comment: "Original failure details", steps: [] },
+    ] })] }];
+    show(true);
+    const result = screen.getByRole("region", { name: "SmarTAI Grading Result" });
+    expect(result).toHaveTextContent("No valid score");
+    expect(within(result).getByText("AI note")).toBeVisible();
+    await userEvent.click(within(result).getByText("View Original Model Results"));
+    expect(within(result).getByRole("tabpanel")).toHaveTextContent(feedback);
+    expect(within(result).getByRole("tabpanel")).not.toHaveTextContent("0/10");
   });
 
   it("keeps original AI score after a teacher override and labels failed experts without a zero grade", () => {
@@ -145,7 +248,7 @@ describe("one-click grading review", () => {
     show(true);
     expect(screen.getByRole("region", { name: "SmarTAI Grading Result" })).toHaveTextContent("8.5 / 10");
     expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("9");
-    expect(screen.getByText(/failed-model/)).toHaveTextContent("No valid score; excluded from synthesis");
+    expect(screen.getByText(/failed-model ·/)).toHaveTextContent("No valid score; excluded from synthesis");
   });
 
   it("preserves a precise maximum in the default, fallback hint, and validation", () => {

@@ -17,11 +17,12 @@ import {
   Keyboard,
   LoaderCircle,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { normalizeAPIError } from "@/api/client";
 import { useTask, useTaskResult, useTaskFinalization, useUpdateCorrectionReview } from "@/api/hooks/tasks";
+import { useGradingSetup } from "@/api/hooks/gradingSetup";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import {
   buildResultsModel,
@@ -44,7 +45,7 @@ import { reviewCellKey } from "@/lib/reviewOverview";
 import { questionTypeLabel } from "@/lib/reviewLabels";
 import { getSafeTaskReturnTo, getTaskDestination } from "@/lib/taskFlow";
 import { ResultQuestionSidebar, type ResultQuestionState } from "@/routes/tasks/results/ResultQuestionSidebar";
-import type { Correction, StepScore } from "@/types";
+import type { Correction, ExpertResult, StepScore } from "@/types";
 
 type ReviewDraft = {
   score: string;
@@ -65,6 +66,7 @@ function ReviewDetailForm() {
   const updateReview = useUpdateCorrectionReview();
   const finalizationQuery = useTaskFinalization(taskId);
   const model = useMemo(() => buildResultsModel(taskQuery.data, resultQuery.data), [resultQuery.data, taskQuery.data]);
+  const gradingSetup = useGradingSetup(model.students.some(item => item.corrections.some(correction => correction.expert_results?.some(expert => expert.provider_id))) ? taskId : undefined);
   const student = model.students.find((item) => item.id === studentId) ?? null;
   const requestedQuestionId = questionId === "all" ? "" : questionId ?? "";
   const questionQuery = searchParams.get("question") ?? "";
@@ -586,6 +588,7 @@ function ReviewDetailForm() {
                       student={student}
                       question={question}
                       correction={correction}
+                      primaryProviderId={gradingSetup.data?.grading_setup?.primary_provider_id}
                       draft={draft}
                       previous={visibleQuestions[index - 1] ?? null}
                       next={visibleQuestions[index + 1] ?? null}
@@ -650,11 +653,12 @@ function StudentNavigation({ className, locale, current, previous, next, onSelec
   );
 }
 
-function ReviewQuestionCard({ locale, student, question, correction, draft, previous, next, dirty, saving, scoreError, saveError, hasNextReview, onDraftChange, onConfirm, onNavigate }: {
+function ReviewQuestionCard({ locale, student, question, correction, primaryProviderId, draft, previous, next, dirty, saving, scoreError, saveError, hasNextReview, onDraftChange, onConfirm, onNavigate }: {
   locale: Locale;
   student: StudentSummary;
   question: QuestionSummary;
   correction?: Correction;
+  primaryProviderId?: string;
   draft: ReviewDraft;
   previous: QuestionSummary | null;
   next: QuestionSummary | null;
@@ -668,6 +672,8 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, prev
   onNavigate: (id: string) => void;
 }) {
   const displayScore = correction ? aiCorrectionScore(correction) : null;
+  const validExperts = correction ? validExpertResults(correction) : [];
+  const primaryExpert = validExperts.find(expert => expert.provider_id === primaryProviderId) ?? validExperts[0];
   const scoreSource = correction ? correctionScoreSource(correction) : null;
   const answer = student.answerByQuestion.get(question.id);
   const alreadyConfirmed = (scoreSource === "teacher_confirmed_same" || scoreSource === "teacher_changed")
@@ -702,7 +708,7 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, prev
         </div>
 
         <div className="mt-4 grid items-stretch gap-4 xl:grid-cols-2">
-          <section className="rounded-[9px] border bg-background px-5 py-4" aria-labelledby={`smartai-result-${question.id}`}>
+          <section className="min-w-0 rounded-[9px] border bg-background px-5 py-4" aria-labelledby={`smartai-result-${question.id}`}>
             <div className="flex items-center justify-between gap-3">
               <h3 id={`smartai-result-${question.id}`} className="text-[16px] font-bold text-foreground">{tx(locale, "SmarTAI 批改结果", "SmarTAI Grading Result")}</h3>
               <span className="shrink-0 rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-primary dark:bg-blue-950/50">
@@ -715,29 +721,30 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, prev
             </div>
             {correction ? (
               <>
-                <MarkdownMath className="mt-3 text-[13px] leading-6 text-foreground">{correction.comment || tx(locale, "SmarTAI 未返回文字说明。", "SmarTAI returned no written rationale.")}</MarkdownMath>
-                <ScoringSteps locale={locale} steps={correction.steps} />
+                {primaryExpert ? <p className="mt-3 break-words text-xs font-semibold text-foreground">{primaryExpert.provider}（{expertScoreSummary(primaryExpert)}, conf={primaryExpert.confidence.toFixed(2)}）</p> : null}
+                <MarkdownMath className="mt-3 text-[13px] leading-6 text-foreground">{(primaryExpert ? primaryExpert.comment : correction.comment) || tx(locale, "SmarTAI 未返回文字说明。", "SmarTAI returned no written rationale.")}</MarkdownMath>
+                <ScoringSteps locale={locale} steps={primaryExpert ? primaryExpert.steps : correction.steps} />
                   <dl className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
                     <Signal label={tx(locale, "置信度", "Confidence")} value={formatConfidence(correction.confidence)} />
                     <Signal label={tx(locale, "专家数", "Models")} value={correction.expert_results?.length ? `${validExpertResults(correction).length} / ${correction.expert_results.length}${hasPartialExperts(correction) ? tx(locale, " · 部分专家完成", " · Some experts completed") : ""}` : hasPartialExperts(correction) ? tx(locale, "部分专家完成", "Some experts completed") : displayScore !== null ? "1" : "0"} />
                     <Signal label={tx(locale, "合成方式", "Synthesis")} value={formatSynthesis(correction.synthesis_method, locale)} />
                   </dl>
+                {new Set(correction.expert_results?.map(expert => expert.provider_id || expert.provider.split("#sample", 1)[0])).size > 1 ? (
+                  <dl className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(min(100%,160px),1fr))] gap-2 text-xs">
+                    {correction.expert_results.map((expert, index) => (
+                      <div key={`${expert.provider}-${index}`} className="min-w-0 rounded-[7px] bg-muted/60 px-3 py-2">
+                        <dt className="break-words text-muted-foreground">{expert.provider}</dt>
+                        <dd className="mt-1 font-semibold text-foreground">
+                          {expert.error_kind ? `--/${expert.max_score}` : <>{formatScore(expert.score, expert.max_score)}/{expert.max_score}{expert.steps?.length ? <span className="mt-1 block break-words text-muted-foreground">{expertStepScores(expert)}</span> : null}</>}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : null}
                 {correction.expert_results?.length ? (
                   <details className="mt-3 text-xs text-muted-foreground">
                     <summary className="cursor-pointer font-semibold text-foreground">{tx(locale, "查看各专家原始结果", "View Original Model Results")}</summary>
-                    <ul className="mt-2 space-y-2">
-                      {correction.expert_results.map((expert, index) => (
-                        <li key={`${expert.provider}-${index}`} className="rounded-md bg-muted/60 px-3 py-2">
-                          <p className="font-semibold text-foreground">{expert.provider} · {expert.error_kind === "operation_cancelled" ? tx(locale, "手动停止，尚未完成批改", "Manually stopped before completion") : expert.error_kind ? `${expert.error_kind === "quota_exhausted" ? tx(locale, "额度不足", "Quota exhausted") : expert.error_kind === "transient_llm" ? tx(locale, "网络或超时错误", "Network error or timeout") : tx(locale, "模型出错", "Model error")} · ${tx(locale, "无有效分数，不参与合成", "No valid score; excluded from synthesis")}` : `${formatScore(expert.score, expert.max_score)}/${String(expert.max_score)} · ${formatConfidence(expert.confidence)}`}</p>
-                          {expert.comment ? <MarkdownMath className="mt-1 text-[11px] leading-5">{expert.comment}</MarkdownMath> : null}
-                          {!expert.error_kind ? <ScoringSteps locale={locale} steps={expert.steps} /> : null}
-                          {expert.knowledge_citations?.length ? <div className="mt-2 border-t pt-2">
-                            <p>{tx(locale, "检索参考（不等于结论已核实）", "Retrieved references (not verified support)")}</p>
-                            {expert.knowledge_citations.map((citation) => <KnowledgeCitationPreview key={citation.citation_id} citation={citation} />)}
-                          </div> : null}
-                        </li>
-                      ))}
-                    </ul>
+                    <ExpertResults key={correction.expert_results.map(expert => `${expert.provider_id}:${expert.provider}`).join("|")} locale={locale} experts={correction.expert_results} />
                   </details>
                 ) : null}
               </>
@@ -791,6 +798,49 @@ function ReviewQuestionCard({ locale, student, question, correction, draft, prev
       </div>
     </article>
   );
+}
+
+function expertStepScores(expert: ExpertResult) {
+  return `[${expert.steps.map(step => formatScore(step.score)).join(",")}]`;
+}
+
+function expertScoreSummary(expert: ExpertResult) {
+  return `${formatScore(expert.score, expert.max_score)}/${expert.max_score}${expert.steps?.length ? `, ${expertStepScores(expert)}` : ""}`;
+}
+
+function ExpertScore({ locale, expert }: { locale: Locale; expert: ExpertResult }) {
+  if (expert.error_kind === "operation_cancelled") return <>{tx(locale, "手动停止，尚未完成批改", "Manually stopped before completion")}</>;
+  if (expert.error_kind) return <>{expert.error_kind === "quota_exhausted" ? tx(locale, "额度不足", "Quota exhausted") : expert.error_kind === "transient_llm" ? tx(locale, "网络或超时错误", "Network error or timeout") : tx(locale, "模型出错", "Model error")} · {tx(locale, "无有效分数，不参与合成", "No valid score; excluded from synthesis")}</>;
+  return <>{expertScoreSummary(expert)}, conf={expert.confidence.toFixed(2)}</>;
+}
+
+function ExpertResults({ locale, experts }: { locale: Locale; experts: ExpertResult[] }) {
+  const id = useId();
+  const [active, setActive] = useState(0);
+  const expert = experts[active];
+  return <div className="mt-2">
+    <div role="tablist" aria-label={tx(locale, "查看各专家原始结果", "View Original Model Results")} className="flex flex-wrap gap-2 border-b pb-2">
+      {experts.map((item, index) => <button key={`${item.provider}-${index}`} id={`${id}-${index}`} type="button" role="tab" aria-selected={active === index} aria-controls={`${id}-panel`} tabIndex={active === index ? 0 : -1}
+        onClick={() => setActive(index)} onKeyDown={event => {
+          const next = event.key === "ArrowRight" ? (index + 1) % experts.length : event.key === "ArrowLeft" ? (index + experts.length - 1) % experts.length : event.key === "Home" ? 0 : event.key === "End" ? experts.length - 1 : null;
+          if (next === null) return;
+          event.preventDefault();
+          setActive(next);
+          document.getElementById(`${id}-${next}`)?.focus({ preventScroll: true });
+        }} className={cn("min-h-9 min-w-0 max-w-full rounded-md px-3 py-1 text-left text-xs font-semibold break-words outline-none focus-visible:ring-2 focus-visible:ring-ring", active === index ? "bg-blue-50 text-primary dark:bg-blue-950/50" : "text-muted-foreground hover:bg-muted")}>
+        {item.provider}
+      </button>)}
+    </div>
+    <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-${active}`} tabIndex={0} className="mt-2 rounded-md bg-muted/60 px-3 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <p className="break-words font-semibold text-foreground">{expert.provider} · <ExpertScore locale={locale} expert={expert} /></p>
+      {expert.comment ? <MarkdownMath className="mt-1 text-[11px] leading-5">{expert.comment}</MarkdownMath> : null}
+      {!expert.error_kind ? <ScoringSteps locale={locale} steps={expert.steps} /> : null}
+      {expert.knowledge_citations?.length ? <div className="mt-2 border-t pt-2">
+        <p>{tx(locale, "检索参考（不等于结论已核实）", "Retrieved references (not verified support)")}</p>
+        {expert.knowledge_citations.map(citation => <KnowledgeCitationPreview key={citation.citation_id} citation={citation} />)}
+      </div> : null}
+    </div>
+  </div>;
 }
 
 function ScoringSteps({ locale, steps }: { locale: Locale; steps?: StepScore[] }) {
