@@ -53,6 +53,22 @@ async def test_deterministically_repairable_json_uses_no_extra_model_call():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("allow_partial", [False, True])
+@pytest.mark.parametrize("command", ["underbrace", "underline", "uparrow", "underset"])
+async def test_underescaped_u_tex_is_recovered_in_one_generation(allow_partial, command):
+    answer = "设 $\\" + command + r"{x} + \frac{1}{2}$。"
+    response = json.dumps({"candidates": [{"target_id": "q1:reference_answer", "q_id": "q1",
+        "target": "reference_answer", "text_value": answer}]}).replace("\\\\" + command, "\\" + command)
+    provider = Provider([response])
+    result = await generate_missing_question_materials(
+        {"q1": {"stem": "Explain the notation.", "max_score": 10}},
+        [{"target_id": "q1:reference_answer", "q_id": "q1", "target": "reference_answer"}],
+        6, provider, allow_partial=allow_partial)
+    assert result[0].text_value == answer
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("text,expected", [
     (r"$$x+y=z$", r"$x+y=z$"),
     (r"Keep $\frac{1}{$ for editing.", r"Keep $\frac{1}{$ for editing."),

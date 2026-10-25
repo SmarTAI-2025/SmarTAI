@@ -573,12 +573,51 @@ def _clean_strings(data: Any, field_name: Optional[str] = None) -> Any:
 
 _JSON_STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"', re.DOTALL)
 _JSON_KEY_SEPARATOR_RE = re.compile(r"\s*:")
-_RAW_MATH_SPAN_RE = re.compile(r"(```[\s\S]*?```|`[^`]*`|\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)[^$]*\$)")
+_RAW_MATH_SPAN_RE = re.compile(
+    r"(?<!`)(?P<code_ticks>`+)(?!`)[\s\S]*?(?<!`)(?P=code_ticks)`*|~~~[\s\S]*?~~~|"
+    r"\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)[^$]*\$|"
+    r"(?<!\\)(?P<inline_slashes>\\{1,2})\([\s\S]*?(?<!\\)(?P=inline_slashes)\)|"
+    r"(?<!\\)(?P<display_slashes>\\{1,2})\[[\s\S]*?(?<!\\)(?P=display_slashes)\]"
+)
 _JSON_TEX_COLLISION_RE = re.compile(
     r"\\(?:[\\\"/]|(?:n(?:eq?|u|abla|ot(?:in)?|subseteq)|"
     r"t(?:imes|heta|au|ext|frac|o)|r(?:angle|ight|ho|Vert)|"
-    r"f(?:rac|orall)|b(?:ar|eta|egin|inom))(?![A-Za-z]))"
+    r"f(?:rac|orall)|b(?:ar|eta|egin|inom)|"
+    r"u(?:nder(?:brace|bracket|line(?:segment)?|set|group|leftarrow|rightarrow|leftrightarrow)|"
+    r"p(?:arrow|downarrow|harpoonleft|harpoonright|uparrows|silon|lus)|tilde|n[lr]hd))(?![A-Za-z]))"
 )
+
+
+def _code_candidate_text_offsets(source: str) -> set[int]:
+    """Locate code candidate values before JSON decoding, regardless of key order.
+
+    Only string tokens and container boundaries are needed here. Leave syntax
+    validation to json.loads; braces inside strings never change the scope.
+    """
+    stack: list[dict | None] = []
+    offsets: set[int] = set()
+    for match in re.finditer(_JSON_STRING_RE.pattern + r"|[{}\[\]]", source, re.DOTALL):
+        token = match[0]
+        if token in {"{", "["}:
+            stack.append({"key": None, "is_code": False, "texts": []} if token == "{" else None)
+        elif token in {"}", "]"}:
+            scope = stack.pop() if stack else None
+            if scope is not None and scope["is_code"]:
+                offsets.update(scope["texts"])
+        elif stack and stack[-1] is not None:
+            scope = stack[-1]
+            try:
+                if _JSON_KEY_SEPARATOR_RE.match(source, match.end()):
+                    scope["key"] = json.loads(token)
+                elif scope["key"] == "target":
+                    scope["is_code"] = json.loads(token) == "solution_code"
+                elif scope["key"] == "text_value":
+                    scope["texts"].append(match.start())
+            except json.JSONDecodeError:
+                # This is only a context scan. The existing repair/validation
+                # loop must still decide whether malformed JSON is recoverable.
+                scope["key"] = None
+    return offsets
 
 
 def _protect_json_math_escapes(source: str) -> str:
@@ -586,28 +625,33 @@ def _protect_json_math_escapes(source: str) -> str:
 
     In a math span, raw ``\\neq`` otherwise silently becomes LF + ``eq``.
     Consume valid pairs as units and leave code/test fields and Markdown code
-    spans untouched. Unknown/ambiguous prose escapes keep normal JSON meaning.
+    spans untouched. Known u-prefixed TeX commands also need protection: they
+    are not Unicode escapes. Valid Unicode and unknown/incomplete escapes are
+    untouched, so malformed Unicode cannot be disguised as successful text.
     """
     field_name = ""
-    has_code_candidate = bool(re.search(r'"target"\s*:\s*"solution_code"', source))
+    code_text_offsets = _code_candidate_text_offsets(source)
 
     def repair_token(match: re.Match) -> str:
         nonlocal field_name
         token = match.group(0)
         if _JSON_KEY_SEPARATOR_RE.match(source, match.end()):
-            field_name = token[1:-1]
+            try:
+                field_name = json.loads(token)
+            except json.JSONDecodeError:
+                field_name = token[1:-1]
             return token
         if (
             field_name in _CODE_FIELD_NAMES
             or field_name in _VERBATIM_EVIDENCE_FIELD_NAMES
-            or (field_name == "text_value" and has_code_candidate)
+            or match.start() in code_text_offsets
             or _SOURCE_CODE_START_RE.match(token[1:-1])
         ):
             return token
 
         def repair_math(span: re.Match) -> str:
             value = span.group(0)
-            if value.startswith("`"):
+            if value.startswith(("`", "~~~")):
                 return value
             def preserve_command(escape: re.Match) -> str:
                 token = escape.group(0)
@@ -639,7 +683,9 @@ def _escape_latex_backslashes(s: str) -> str:
     grading feedback than literal backspace / form-feed control chars (which
     no LLM ever intentionally embeds in a comment). So we keep ``\\"``,
     ``\\\\``, ``\\/``, ``\\n``, ``\\r``, ``\\t``, ``\\u`` as legit JSON
-    escapes and double every other backslash.
+    escapes and double every other backslash. Known raw u-prefixed TeX is
+    handled in math spans by _protect_json_math_escapes; an unknown/malformed
+    Unicode escape must remain invalid rather than guessing the lost character.
 
     Naive ``s.replace("\\", "\\\\")`` would *double* already-correct escapes.
     Consume valid escape pairs together so the second slash is never repaired

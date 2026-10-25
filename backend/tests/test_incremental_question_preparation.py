@@ -150,6 +150,28 @@ async def test_manual_handoff_does_not_publish_malformed_generated_unicode(monke
 
 
 @pytest.mark.asyncio
+async def test_recovered_u_tex_is_saved_once_without_changing_teacher_material(monkeypatch):
+    from backend.tests.test_question_material_format_repair import Provider
+
+    owner, _, operation, pipeline = await setup(monkeypatch)
+    monkeypatch.setattr(inc, "_extract_problems_call", AsyncMock(return_value=inc._rows([
+        row(1, criterion="Teacher rubric."),
+        row(2, criterion="Second rubric.", reference_answer="Teacher answer."),
+    ])))
+    pipeline.provider = Provider([
+        r'{"candidates":[{"target_id":"q1:reference_answer","q_id":"q1",'
+        r'"target":"reference_answer","text_value":"\u8bbe $\underbrace{x}_{n} + \\frac{1}{2}$"}]}',
+    ])
+    await pipeline.run()
+    saved, rows = persisted(owner, operation)
+    assert len(pipeline.provider.calls) == 1
+    assert rows["q1"]["reference_answer"] == r"设 $\underbrace{x}_{n} + \frac{1}{2}$"
+    assert rows["q1"]["criterion"] == "Teacher rubric."
+    assert rows["q2"]["reference_answer"] == "Teacher answer."
+    assert saved.checkpoint["preparation_counts"] == dict(questions=2, stems=2, reference_answers=2, rubrics=2)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("count", [9, 10, 28])
 async def test_real_worker_roundtrip_multiple_snapshot_sizes(monkeypatch, count):
     owner, task, operation, _ = await setup(monkeypatch)
