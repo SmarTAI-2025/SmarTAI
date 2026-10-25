@@ -1108,8 +1108,8 @@ def test_disabled_selected_recognition_provider_has_figma_error_code():
 
     with pytest.raises(ValidationError) as disabled:
         task_facade.queue_task_submission_parsing(
-            task_id=task_id, owner_id=owner_id, filename="answers.zip",
-            content=b"archive", content_type="application/zip",
+            task_id=task_id, owner_id=owner_id, filename="answers.txt",
+            content=b"answer", content_type="text/plain",
             registry=DisabledRegistry(), recognition_provider_id="disabled",
         )
     assert disabled.value.code == "recognition_provider_not_enabled"
@@ -1242,12 +1242,12 @@ async def test_problem_extraction_timeout_persists_provider_timeout(monkeypatch)
 
     monkeypatch.setattr(task_facade, "extract_text_from_upload", _timeout)
     queued = task_facade.queue_task_problem_extraction(
-        task_id=task_id, owner_id=owner_id, filename="questions.pdf",
-        content=b"source", content_type="application/pdf", registry=registry,
+        task_id=task_id, owner_id=owner_id, filename="questions.txt",
+        content=b"source", content_type="text/plain", registry=registry,
     )
     await task_facade.run_task_problem_extraction(
         task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
-        filename="questions.pdf", content=b"source", registry=registry,
+        filename="questions.txt", content=b"source", registry=registry,
         job_attempt=queued["_job_attempt"],
         claimed_workflow_revision=queued["workflow_revision"],
         replace_confirmed=False,
@@ -1363,12 +1363,12 @@ async def test_problem_extraction_auth_error_persists_provider_auth_failed(monke
 
     monkeypatch.setattr(task_facade, "extract_text_from_upload", _auth_failed)
     queued = task_facade.queue_task_problem_extraction(
-        task_id=task_id, owner_id=owner_id, filename="questions.pdf",
-        content=b"source", content_type="application/pdf", registry=registry,
+        task_id=task_id, owner_id=owner_id, filename="questions.txt",
+        content=b"source", content_type="text/plain", registry=registry,
     )
     await task_facade.run_task_problem_extraction(
         task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
-        filename="questions.pdf", content=b"source", registry=registry,
+        filename="questions.txt", content=b"source", registry=registry,
         job_attempt=queued["_job_attempt"],
         claimed_workflow_revision=queued["workflow_revision"],
         replace_confirmed=False,

@@ -6,7 +6,8 @@ browser drafts remain separate and may contain newer, unsubmitted edits.
 import hashlib
 
 from backend.db import course_library_repository, file_repository, workflow_repository
-from backend.domain.errors import DomainError, InvalidTransition, NotFound
+from backend.domain.errors import DomainError, InvalidTransition, NotFound, ValidationError
+from backend.services.upload_contract import UploadContractError, upload_limit, validate_submission_upload
 from backend.services.source_files import safe_display_name
 from backend.storage import get_storage, StorageObjectNotFound
 from backend.tools.file_processing import SUBMISSION_UPLOAD_MAX_BYTES
@@ -102,15 +103,20 @@ def load_submission_input(*, task_id: str, owner_id: str, stored_file_id: str):
     stored = file_repository.get_file(file_id=stored_file_id, owner_id=owner_id)
     if not stored or stored.assignment_id != task_id or stored.kind not in {"submission_source", "submission_container"} or stored.availability_status != "available":
         raise NotFound("submission_source")
+    maximum = upload_limit("submission_upload_max_bytes", SUBMISSION_UPLOAD_MAX_BYTES)
     try:
         with get_storage().open(stored.storage_key) as stream:
-            content = stream.read(SUBMISSION_UPLOAD_MAX_BYTES + 1)
+            content = stream.read(maximum + 1)
     except StorageObjectNotFound:
         raise InvalidTransition("The saved upload is unavailable.", code="submission_retry_source_unavailable") from None
     except Exception:
         raise DomainError("Saved files could not be read. Please retry.", code="source_preview_storage_unavailable", status_code=503) from None
-    if not content or len(content) > SUBMISSION_UPLOAD_MAX_BYTES or hashlib.sha256(content).hexdigest() != stored.sha256:
+    if not content or len(content) > maximum or hashlib.sha256(content).hexdigest() != stored.sha256:
         raise InvalidTransition("The saved upload is unavailable.", code="submission_retry_source_unavailable")
+    try:
+        validate_submission_upload(stored.original_name, content)
+    except UploadContractError as exc:
+        raise ValidationError("The saved upload is not allowed.", code=exc.code, details=exc.details) from None
     return stored, content
 
 

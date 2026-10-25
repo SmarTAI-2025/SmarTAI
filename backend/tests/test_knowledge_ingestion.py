@@ -301,9 +301,15 @@ async def test_cancelled_paid_page_is_never_resubmitted_on_resume_or_retry(monke
         yield engine
     monkeypatch.setattr(ingestion, "recognition_engine", adapter)
     who = owner()
-    body, media = source_file()
-    upload = persist_knowledge_upload(storage=get_storage(), owner_id=who, original_name="scan.png", content=body,
-                                     content_type=media, retention_policy="retained")
+    image, _ = source_file()
+    # Exercise cancellation on an allowed scanned PDF, not a historical PNG
+    # bypass that the course_knowledge role now rejects on recovery.
+    with fitz.open() as book:
+        page = book.new_page()
+        page.insert_image(page.rect, stream=image)
+        body = book.tobytes()
+    upload = persist_knowledge_upload(storage=get_storage(), owner_id=who, original_name="scan.pdf", content=body,
+                                     content_type="application/pdf", retention_policy="retained")
     config = dict(policy_version=POLICY, prompt_version="faithful-reader-v1", route_id=None, route_fingerprint=None)
     job_id = repo.queue_document(upload.document_id, who, config)
     worker = KnowledgeIngestionWorker(registry_factory=lambda _: Registry())

@@ -1975,6 +1975,11 @@ def queue_task_problem_extraction(
 ) -> dict:
     """Persist and claim a problem-extraction job without doing OCR/LLM work."""
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
+    from backend.services.upload_contract import UploadContractError, validate_upload
+    try:
+        validate_upload("problem_reference", filename, content)
+    except UploadContractError as exc:
+        raise ValidationError("The source upload is not allowed.", code=exc.code, details=exc.details) from None
     if assignment.status not in education.EDITABLE_ASSIGNMENT_STATUSES:
         raise InvalidTransition("assignment_not_editable")
     has_draft_questions = _has_draft_questions(task_id)
@@ -2519,6 +2524,11 @@ def queue_task_submission_parsing(
     if manual_saved_sources is not None:
         raise InvalidTransition("Saved text AI recovery has been retired.", code="saved_text_recovery_retired")
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
+    from backend.services.upload_contract import UploadContractError, validate_submission_upload
+    try:
+        validate_submission_upload(filename, content)
+    except UploadContractError as exc:
+        raise ValidationError("The submission upload is not allowed.", code=exc.code, details=exc.details) from None
     questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
     if not questions:
         raise InvalidTransition("problems_required")
@@ -2796,21 +2806,28 @@ def load_submission_retry_upload(
                 and candidate.kind == "submission_source"
             ):
                 stored = candidate
-    if stored is None or stored.size_bytes > SUBMISSION_UPLOAD_MAX_BYTES:
+    from backend.services.upload_contract import UploadContractError, upload_limit, validate_submission_upload
+    maximum = upload_limit("submission_upload_max_bytes", SUBMISSION_UPLOAD_MAX_BYTES)
+    if stored is None or stored.size_bytes > maximum:
         raise InvalidTransition(
             "The original upload is not available for retry.",
             code="submission_retry_source_unavailable",
         )
     storage = get_storage()
     with storage.open(stored.storage_key) as stream:
-        content = stream.read(SUBMISSION_UPLOAD_MAX_BYTES + 1)
-    if not content or len(content) > SUBMISSION_UPLOAD_MAX_BYTES:
+        content = stream.read(maximum + 1)
+    if (not content or len(content) > maximum or len(content) != stored.size_bytes
+            or hashlib.sha256(content).hexdigest() != stored.sha256):
         raise InvalidTransition(
             "The original upload is not available for retry.",
             code="submission_retry_source_unavailable",
         )
+    try:
+        validate_submission_upload(stored.original_name, content)
+    except UploadContractError as exc:
+        raise ValidationError("The saved upload is not allowed.", code=exc.code, details=exc.details) from None
     return {
-        "filename": str(payload.get("filename") or stored.original_name),
+        "filename": stored.original_name,
         "content": content,
         "content_type": payload.get("content_type") or stored.content_type,
         "identity_mode": str(payload.get("identity_mode") or "filename"),
@@ -3725,8 +3742,16 @@ async def run_durable_submission_recognition(operation) -> None:
         )
         if input_file is None or input_file.assignment_id != operation.assignment_id:
             raise NotFound("stored_file")
+        from backend.services.upload_contract import upload_limit
+        maximum = upload_limit("submission_upload_max_bytes", SUBMISSION_UPLOAD_MAX_BYTES)
+        if input_file.size_bytes > maximum:
+            raise ValidationError("The saved upload exceeds the supported limit.", code="submission_source_too_large")
         with get_storage().open(input_file.storage_key) as stream:
-            content = stream.read()
+            content = stream.read(maximum + 1)
+        if len(content) > maximum:
+            raise ValidationError("The saved upload exceeds the supported limit.", code="submission_source_too_large")
+        if len(content) != input_file.size_bytes or hashlib.sha256(content).hexdigest() != input_file.sha256:
+            raise InvalidTransition("The saved upload changed.", code="submission_retry_source_unavailable")
         await run_task_submission_parsing(
             task_id=operation.assignment_id,
             owner_id=operation.owner_id,

@@ -19,6 +19,7 @@ from backend.llm.registry import ExpertRegistry, get_scoped_expert_registry
 from backend.models import User
 from backend.services import submissions as submission_service
 from backend.services.submission_uploads import MAX_UPLOAD_BYTES
+from backend.services.upload_contract import upload_limit
 
 router = APIRouter(prefix="/submissions", tags=["submissions"])
 
@@ -124,7 +125,10 @@ async def submit_upload(current: User = Depends(require_student),
         raise HTTPException(
             503, detail="No LLM provider configured. Add an API key first."
         )
-    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    maximum = upload_limit("individual_submission_max_bytes", MAX_UPLOAD_BYTES)
+    content = await file.read(maximum + 1)
+    if len(content) > maximum:
+        raise HTTPException(413, detail={"code": "submission_source_too_large", "max_bytes": maximum})
     try:
         rev = await submission_service.submit_student_file_with_ocr(
             student_id=current.id,
@@ -155,7 +159,10 @@ async def teacher_upload(
         raise HTTPException(
             503, detail="No LLM provider configured. Add an API key first."
         )
-    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    maximum = upload_limit("individual_submission_max_bytes", MAX_UPLOAD_BYTES)
+    content = await file.read(maximum + 1)
+    if len(content) > maximum:
+        raise HTTPException(413, detail={"code": "submission_source_too_large", "max_bytes": maximum})
     try:
         rev = await submission_service.teacher_import_file_with_ocr(
             teacher_id=current.id,

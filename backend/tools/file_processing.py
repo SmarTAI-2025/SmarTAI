@@ -592,6 +592,27 @@ async def extract_text_from_upload(
     ingest skill when one is available.
     """
     safe_name = filename or "upload"
+    from backend.services.upload_contract import (
+        UploadContractError, upload_role_for_purpose, validate_upload,
+    )
+    try:
+        role = upload_role_for_purpose(purpose)
+        validated = validate_upload(role, safe_name, file_bytes)
+    except UploadContractError as exc:
+        status_code = (
+            413 if exc.code.endswith("too_large")
+            else 400 if exc.code.endswith("empty")
+            else 422 if exc.code in {"programming_tests_json_invalid", "invalid_source_role"}
+            else 415
+        )
+        raise HTTPException(status_code, detail={"code": exc.code, **exc.details}) from None
+    if validated.extension == "json":
+        if _normalized_content_type(content_type) not in {
+            "application/octet-stream", "application/json", "text/json", "text/plain",
+        }:
+            raise HTTPException(415, detail={"code": "submission_source_content_type_mismatch"})
+        # Validated JSON is teacher data, not an OCR request or executable code.
+        return file_bytes.decode("utf-8-sig")
     inspection = inspect_upload_content(file_bytes, safe_name, content_type)
     if inspection.mismatch:
         raise HTTPException(
@@ -615,6 +636,10 @@ async def extract_text_from_upload(
 
         scanned = _is_likely_scanned_pdf(text, page_count)
         fragmented_math = _is_likely_fragmented_math_pdf(text, purpose)
+        if role in {"rubric", "programming_tests"}:
+            if scanned:
+                raise HTTPException(422, detail={"code": "material_ocr_not_allowed_for_role"})
+            return text
         if not scanned and not (fragmented_math and ocr_skill is not None):
             return text
 
@@ -774,15 +799,21 @@ def extract_raw_files_from_archive(
         if expanded_bytes > SUBMISSION_ARCHIVE_MAX_EXPANDED_BYTES:
             raise _ArchiveLimitExceeded("submission_archive_limit_exceeded")
         inspection = inspect_upload_content(data, clean)
+        from backend.services.upload_contract import UploadContractError, validate_upload
+        policy_error = None
+        try:
+            validate_upload("student_submission", clean, data)
+        except UploadContractError as exc:
+            policy_error = exc.code
+        error_code = policy_error or (
+            "submission_source_content_type_mismatch" if inspection.mismatch else None
+        )
         sources.append(RawUploadSource(
             filename=clean,
             content=data,
             content_type=inspection.content_type,
-            pre_error_code=(
-                "submission_source_content_type_mismatch"
-                if inspection.mismatch else None
-            ),
-            failure_phase="source_read" if inspection.mismatch else None,
+            pre_error_code=error_code,
+            failure_phase="source_read" if error_code else None,
         ))
 
     def add_failure(raw_name: str, index: int, code: str) -> None:
@@ -925,15 +956,21 @@ def extract_raw_files_from_archive(
                     add_failure(clean, index, "submission_archive_member_unreadable")
         return sources
 
+    from backend.services.upload_contract import UploadContractError, validate_upload
+    policy_error = None
+    try:
+        validate_upload("student_submission", filename, file_bytes)
+    except UploadContractError as exc:
+        policy_error = exc.code
+    error_code = policy_error or (
+        "submission_source_content_type_mismatch" if container_inspection.mismatch else None
+    )
     return [RawUploadSource(
         filename=_bounded_source_name(filename),
         content=file_bytes,
         content_type=container_inspection.content_type,
-        pre_error_code=(
-            "submission_source_content_type_mismatch"
-            if container_inspection.mismatch else None
-        ),
-        failure_phase="source_read" if container_inspection.mismatch else None,
+        pre_error_code=error_code,
+        failure_phase="source_read" if error_code else None,
     )]
 
 
