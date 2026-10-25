@@ -12,7 +12,7 @@ export function getSubmissionSourceReasonCopy(
   locale: Locale,
 ): SubmissionSourceReasonCopy {
   if (source.resolution_status === "manual_resolved") return {
-    title: tx(locale, "教师已补齐并确认", "Completed and confirmed by the teacher"),
+    title: tx(locale, "教师已完成处理", "Resolved by the teacher"),
     description: tx(locale, "原文件和识别记录已保留。", "Original files and recognition records are retained."),
   };
   if (source.status === "manual_review") return {

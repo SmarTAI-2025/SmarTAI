@@ -515,8 +515,8 @@ export function classifyRecoverableError(
 
   if (code === "question_manual_completion_required") {
     return {
-      title: tx(locale, "请先补全并确认题目", "Complete and confirm questions first"),
-      description: tx(locale, "手动补全的题目仍有必填内容或尚未确认，批改没有启动。", "Some manually completed questions have missing materials or await confirmation. Grading has not started."),
+      title: tx(locale, "请先补全题目必填资料", "Complete required question materials first"),
+      description: tx(locale, "手动补全的题目仍有必填内容缺失，批改没有启动。请补齐并保存后继续。", "Some manually completed questions still have missing required materials. Grading has not started. Complete and save them before continuing."),
       actionLabel: tx(locale, "补全题目资料", "Complete question materials"),
       actionHref: taskHref("/questions"), actionKind: "reselect", tone: "warning", technicalDetails,
     };
@@ -590,7 +590,7 @@ export function classifyRecoverableError(
   if (code === "submission_recognition_needs_review") {
     return {
       title: tx(locale, "仍有作答识别待核对", "Some transcriptions need review"),
-      description: tx(locale, "请对照原件核对标记的作答，确认后继续。", "Check the flagged answers against the originals and confirm before continuing."),
+      description: tx(locale, "请对照原件核对标记的作答；如需修正，请保存修改。未确认本身不阻止继续。", "Check the flagged answers against the originals and save any corrections. An unconfirmed review does not itself prevent continuing."),
       actionLabel: tx(locale, "核对作答", "Review submissions"),
       actionHref: taskHref("/submissions?filter=review"),
       actionKind: "reselect", tone: "warning", technicalDetails,
