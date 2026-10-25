@@ -70,6 +70,26 @@ beforeEach(async () => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 describe("one-click grading review", () => {
+  it.each(["zh-CN", "en-US"])("keeps partial completion, low confidence and every math concern visible (%s)", locale => {
+    state.locale = locale;
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", {
+      review_status: "pending", review_reasons: ["math_expert_disagreement", "math_verification_conflict", "math_proof_concern", "math_model_review"],
+      expert_results: [
+        { provider: "valid", score: 7, max_score: 10, confidence: .4, comment: "", steps: [] },
+        { provider: "failed", score: 0, max_score: 10, confidence: 0, comment: "", steps: [], error_kind: "parse_failed" },
+      ],
+    })] }];
+    show();
+    const queue = screen.getByRole("region", { name: locale === "en-US" ? "Review queue" : "待复核队列" });
+    const expected = locale === "en-US"
+      ? ["Some experts completed", "Low confidence", "Expert disagreement; review suggested.", "Verification evidence still needs checking.", "Key reasoning evidence needs checking."]
+      : ["部分专家完成", "置信度较低", "专家分歧，建议复核。", "核验结果与评分依据待核对。", "关键推理依据待核对。"];
+    for (const label of expected) expect(queue).toHaveTextContent(label);
+    expect(queue).not.toHaveTextContent(locale === "en-US" ? "The model suggests human review." : "模型建议人工复核。");
+    expect(state.update).not.toHaveBeenCalled();
+    expect(state.bulk).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])("shows a 10-versus-6 review signal without requiring confirmation (detail=%s)", async detail => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", {
       review_status: "pending", expert_results: [10, 6].map(score => ({ provider: "expert", score, max_score: 10, confidence: .95, comment: "", steps: [] })),
