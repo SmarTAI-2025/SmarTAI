@@ -22,7 +22,6 @@ import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } 
 import { toast } from "sonner";
 import { normalizeAPIError } from "@/api/client";
 import { useTask, useTaskResult, useTaskFinalization, useUpdateCorrectionReview } from "@/api/hooks/tasks";
-import { useGradingSetup } from "@/api/hooks/gradingSetup";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import {
   buildResultsModel,
@@ -66,7 +65,6 @@ function ReviewDetailForm() {
   const updateReview = useUpdateCorrectionReview();
   const finalizationQuery = useTaskFinalization(taskId);
   const model = useMemo(() => buildResultsModel(taskQuery.data, resultQuery.data), [resultQuery.data, taskQuery.data]);
-  const gradingSetup = useGradingSetup(model.students.some(item => item.corrections.some(correction => correction.expert_results?.some(expert => expert.provider_id))) ? taskId : undefined);
   const student = model.students.find((item) => item.id === studentId) ?? null;
   const requestedQuestionId = questionId === "all" ? "" : questionId ?? "";
   const questionQuery = searchParams.get("question") ?? "";
@@ -588,7 +586,7 @@ function ReviewDetailForm() {
                       student={student}
                       question={question}
                       correction={correction}
-                      primaryProviderId={gradingSetup.data?.grading_setup?.primary_provider_id}
+                      primaryProviderId={resultQuery.data?.primary_provider_id ?? undefined}
                       draft={draft}
                       previous={visibleQuestions[index - 1] ?? null}
                       next={visibleQuestions[index + 1] ?? null}

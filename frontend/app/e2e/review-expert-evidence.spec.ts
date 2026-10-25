@@ -17,6 +17,9 @@ for (const demo of [false, true]) for (const locale of ["zh-CN", "en-US"]) {
   test(`${demo ? "Demo" : "Teacher"} ${locale}: same evidence and score precision for both disagreement signals`, async ({ page }, testInfo) => {
     const errors: string[] = [];
     let singleModel = false;
+    let editablePrimary = "provider-1";
+    let resultPrimary = "provider-1";
+    let setupReads = 0;
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     if (demo) await page.setViewportSize({ width: 390, height: 844 });
@@ -38,8 +41,8 @@ for (const demo of [false, true]) for (const locale of ["zh-CN", "en-US"]) {
       if (path === "/auth/activity") return json({ token: "synthetic-teacher-token" });
       if (path.startsWith("/experts") || path === "/tags/") return json([]);
       if (path === `/tasks/${taskId}`) return json(task);
-      if (path.endsWith("/grading-setup")) return json({ grading_setup: { primary_provider_id: "provider-1" } });
-      if (path.endsWith("/result")) return json({ task_id: taskId, problem_data, student_data, results: singleModel ? results.map(student => ({ ...student, corrections: student.corrections.map(correction => ({ ...correction, expert_results: [experts[1]], synthesis_method: "single" })) })) : results, timestamp: 1 });
+      if (path.endsWith("/grading-setup")) { setupReads += 1; return json({ grading_setup: { primary_provider_id: editablePrimary } }); }
+      if (path.endsWith("/result")) return json({ task_id: taskId, grading_run_id: `run-${resultPrimary}`, primary_provider_id: resultPrimary, problem_data, student_data, results: singleModel ? results.map(student => ({ ...student, corrections: student.corrections.map(correction => ({ ...correction, expert_results: [experts[1]], synthesis_method: "single" })) })) : results, timestamp: 1 });
       if (path.endsWith("/finalization")) return json({ task_id: taskId, workflow_revision: 1, final_result_version: 0, final_result_dirty: false, analysis_status: "not_started", remaining_review_count: 0, ready_for_confirmation: true });
       throw new Error(`Unexpected request ${request.method()} ${path}`);
     });
@@ -86,7 +89,22 @@ for (const demo of [false, true]) for (const locale of ["zh-CN", "en-US"]) {
       const panel = page.locator('[data-question-id="q2"]').getByRole("tabpanel");
       await expect(panel.getByText("Original expert explanation 1.")).toBeVisible();
     }
+    // Editing setup without regrading must not change the completed result on reload.
+    editablePrimary = "provider-0";
+    await page.reload();
+    const oldResult = page.locator('[data-question-id="q1"]').getByRole("region", { name: zh ? "SmarTAI 批改结果" : "SmarTAI Grading Result" });
+    await expect(oldResult.getByText("model-1（10/10, [0,0,1,9], conf=0.99）")).toBeVisible();
+    await expect(oldResult.getByText("Original expert explanation 1.", { exact: true })).toBeVisible();
+    await expect(oldResult.getByText("Expert 1 reasoning", { exact: true })).toBeVisible();
+    await expect(oldResult).toContainText("8.5 / 10");
+    // Only a new result carrying its own frozen primary selects the other model.
+    resultPrimary = editablePrimary;
+    await page.reload();
+    await expect(oldResult.getByText("model-0（7/10, [0,0,1,6], conf=0.95）")).toBeVisible();
+    await expect(oldResult.getByText("Original expert explanation 0.", { exact: true }).first()).toBeVisible();
+    expect(setupReads).toBe(0);
     singleModel = true;
+    resultPrimary = "provider-1";
     await page.reload();
     const singleResult = page.locator('[data-question-id="q1"]').getByRole("region", { name: zh ? "SmarTAI 批改结果" : "SmarTAI Grading Result" });
     await expect(singleResult.getByText("model-1（10/10, [0,0,1,9], conf=0.99）")).toBeVisible();

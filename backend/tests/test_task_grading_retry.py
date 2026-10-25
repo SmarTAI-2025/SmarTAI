@@ -69,6 +69,61 @@ def finish(case, run_id, monkeypatch, failed=("q2",), *, score=8):
     return calls[0]
 
 
+@pytest.mark.parametrize("status", ["completed", "partial_failed", "cancelled"])
+def test_result_primary_stays_with_frozen_run_until_regrading(case, monkeypatch, status):
+    from backend.db.provider_repository import upsert_provider_config
+    from backend.models import ProviderConfig
+    from backend.services.task_execution import stop_task_run
+
+    task_id, owner = case
+    args = {"task_id": task_id, "owner_id": owner}
+    workflow = workflows.get_live_workflow(task_id, owner_id=owner)
+    primary_a = workflow.grading_setup["primary_provider_id"]
+    primary_b = upsert_provider_config(owner, ProviderConfig(
+        provider_type="openai", api_key="synthetic-key", model="second-model",
+        base_url="https://api.openai.com/v1",
+    ), master_key="test-suite-provider-master-key-0123456789abcdef").id
+    # The primary need not be first in the selected providers or result list.
+    setup_a = {**workflow.grading_setup, "selected_provider_ids": [primary_b, primary_a],
+               "aggregation_method": "weighted_average"}
+    workflows.update_workflow(task_id, owner_id=owner, grading_setup=setup_a)
+    first = start(case, "primary-a")["job_id"]
+    if status == "cancelled":
+        stop_task_run(**args, job_id=first, expected_revision=workflows.get_live_workflow(
+            task_id, owner_id=owner).workflow_revision)
+    else:
+        finish(case, first, monkeypatch, ("q2",) if status == "partial_failed" else (), score=7)
+    before = task_facade.task_results(**args)
+    assert before["grading_run_id"] == first
+    assert before["grading_run_status"] == status
+
+    setup_b = {**setup_a, "primary_provider_id": primary_b}
+    workflows.update_workflow(task_id, owner_id=owner, grading_setup=setup_b)
+    after = task_facade.task_results(**args)
+    assert after["primary_provider_id"] == primary_a
+    for key in ("results", "grading_run_id", "grading_run_status", "timestamp"):
+        assert after[key] == before[key]
+    assert len(grading.list_runs_for_assignment(task_id, actor_id=owner)) == 1
+    assert workflows.get_run_setup(first).setup == setup_a
+
+    second = start(case, "primary-b")["job_id"]
+    finish(case, second, monkeypatch, (), score=7)
+    current = task_facade.task_results(**args)
+    assert second != first
+    assert current["grading_run_id"] == second
+    assert current["primary_provider_id"] == primary_b
+    assert workflows.get_run_setup(first).setup == setup_a
+
+
+def test_result_without_frozen_setup_never_uses_editable_primary(case, monkeypatch):
+    first = start(case, "missing-frozen-setup")["job_id"]
+    finish(case, first, monkeypatch, ())
+    monkeypatch.setattr(workflows, "get_run_setup", lambda _run_id: None)
+    result = task_facade.task_results(task_id=case[0], owner_id=case[1])
+    assert result["primary_provider_id"] is None
+    assert result["results"]
+
+
 @pytest.mark.parametrize("failures", [("q2",), ("q1", "q2")])
 def test_same_inputs_retry_preserves_history_and_teacher_edits_and_can_publish(case, monkeypatch, failures):
     first = start(case, "first")

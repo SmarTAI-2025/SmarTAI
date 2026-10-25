@@ -13,7 +13,7 @@ const state = vi.hoisted(() => ({
   locale: "en-US",
   primaryProviderId: undefined as string | undefined,
   task: { task_id: "T1", name: "Review", status: "graded", workflow_revision: 5, problem_data: {}, student_data: {}, grading_job_id: null as string | null, last_failed_job_id: null as string | null },
-  result: { results: [] as unknown[] } as { results: unknown[]; grading_run_status?: string },
+  result: { results: [] as unknown[] } as { results: unknown[]; grading_run_status?: string; primary_provider_id?: string },
   finalization: { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 },
   retry: vi.fn(), bulk: vi.fn(), update: vi.fn(), generate: vi.fn(), refetch: vi.fn(),
 }));
@@ -66,6 +66,7 @@ beforeEach(async () => {
   state.task.last_failed_job_id = null;
   vi.clearAllMocks();
   state.result.grading_run_status = undefined;
+  state.result.primary_provider_id = undefined;
   state.result.results = [{ student_id: "S1", student_name: "Sample", corrections: [correction("Q1"), correction("Q2", { score: 0, provisional_score: 0, teacher_comment: "Keep this" })] }];
   state.finalization = { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 };
   state.bulk.mockResolvedValue(7);
@@ -145,8 +146,38 @@ describe("one-click grading review", () => {
     expect(state.update).not.toHaveBeenCalled();
   });
 
-  it("uses the configured primary model rather than the first result and keeps compact scores outside the disclosure", async () => {
-    state.primaryProviderId = "second";
+  it("keeps the completed run's primary model after setup changes and switches only with a new result", async () => {
+    state.primaryProviderId = "A";
+    state.result.primary_provider_id = "A";
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { expert_results: [
+      { provider_id: "B", provider: "Model B", score: 4, max_score: 10, confidence: 1, comment: "B comment", steps: [{ step_no: 1, desc: "B step", score: 4, is_correct: false }] },
+      { provider_id: "A", provider: "Model A", score: 10, max_score: 10, confidence: 1, comment: "A comment", steps: [{ step_no: 1, desc: "A step", score: 10, is_correct: true }] },
+    ] })] }];
+    const originalResults = JSON.stringify(state.result.results);
+    const router = show(true);
+    const expectPrimary = (name: string) => {
+      const result = screen.getByRole("region", { name: "SmarTAI Grading Result" });
+      expect(within(result).getAllByText(`${name} comment`)[0]).toBeVisible();
+      expect(within(result).getAllByText(`${name} step`)[0]).toBeVisible();
+      expect(result).toHaveTextContent("7 / 10");
+    };
+    expectPrimary("A");
+    await act(() => router.navigate("/tasks/T1/results"));
+    state.primaryProviderId = "B";
+    await act(() => router.navigate("/tasks/T1/review/S1/Q1"));
+    expectPrimary("A");
+    expect(JSON.stringify(state.result.results)).toBe(originalResults);
+    expect(state.retry).not.toHaveBeenCalled();
+    expect(state.update).not.toHaveBeenCalled();
+    await act(() => router.navigate("/tasks/T1/results"));
+    state.result = { ...state.result, primary_provider_id: "B" };
+    await act(() => router.navigate("/tasks/T1/review/S1/Q1"));
+    expectPrimary("B");
+  });
+
+  it("uses the frozen primary model rather than the first result and keeps compact scores outside the disclosure", async () => {
+    state.primaryProviderId = "first";
+    state.result.primary_provider_id = "second";
     const experts = ["first", "second", "third", "fourth"].map((provider_id, index) => ({
       provider_id, provider: `model-${index}`, score: index + 2, max_score: 10, confidence: 0.9,
       comment: `Original ${provider_id} comment`, steps: [0, 0, 1, index + 1].map((score, step) => ({ step_no: step + 1, desc: `${provider_id} step ${step + 1}`, score, is_correct: score > 0 })),
@@ -185,7 +216,7 @@ describe("one-click grading review", () => {
   });
 
   it("falls back to a valid model when the primary failed and preserves its failure in the model tab", async () => {
-    state.primaryProviderId = "failed";
+    state.result.primary_provider_id = "failed";
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { expert_results: [
       { provider_id: "failed", provider: "failed", score: 0, max_score: 10, confidence: 0, error_kind: "transient_llm", comment: "Original failure", steps: [] },
       { provider_id: "good", provider: "good", score: 0, max_score: 10, confidence: 0.9, comment: "Valid zero grade", steps: [] },
