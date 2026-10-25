@@ -28,6 +28,21 @@ def choice_definition():
         follow_through="只要求选项，无过程分。", numerical_policy="结果为4。", advisories=[])
 
 
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("condition", ["always", " Always ", "Only when the answer uses induction"])
+def test_rubric_display_omits_internal_unconditional_marker_only(language, condition):
+    from backend.services.rubric_drafts import render_rubric
+    payload = choice_definition()
+    payload["routes"][0]["applies_when"] = condition
+    definition = RubricDefinition.model_validate(payload)
+    rendered = render_rubric(definition, language=language)
+    first_line = rendered.splitlines()[0]
+    assert first_line == ("正确选项及结果" if condition.strip().lower() == "always"
+                          else f"正确选项及结果 — {condition}")
+    assert definition.routes[0].applies_when == condition
+    assert "4" in rendered
+
+
 async def generate_choice(kind="计算题", definition=None, language="zh"):
     provider = ReplayProvider({"candidates": [
         dict(target_id="q1:criterion", q_id="q1", target="criterion", rubric_definition=definition or choice_definition()),
@@ -46,6 +61,18 @@ async def generate_choice(kind="计算题", definition=None, language="zh"):
         if candidate.rubric_draft:
             row["rubric_draft"] = candidate.rubric_draft
     return row
+
+
+@pytest.mark.asyncio
+async def test_hiding_unconditional_marker_preserves_reusable_scoring_draft():
+    definition = choice_definition()
+    definition["routes"][0]["applies_when"] = "always"
+    row = await generate_choice(definition=definition)
+    assert "always" not in row["criterion"]
+    draft = saved_draft(row)
+    assert draft is not None
+    assert draft.plan.routes[0].applies_when == "always"
+    assert draft.plan.original_criterion == row["criterion"]
 
 
 @pytest.mark.asyncio

@@ -49,7 +49,8 @@ def render_rubric(definition: RubricDefinition, *, language="zh") -> str:
     zh = language == "zh"
     lines = []
     for route in definition.routes:
-        lines.append(f"{route.description} — {route.applies_when}")
+        condition = "" if route.applies_when.strip().lower() == "always" else f" — {route.applies_when}"
+        lines.append(f"{route.description}{condition}")
         for item in route.items:
             amount = f"{item.points:g}"
             points = (f"扣{amount}分" if route.mode == "deductions" else f"{amount}分") if zh else (

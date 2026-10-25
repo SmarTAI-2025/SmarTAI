@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { normalizeMarkdownMathInput } from "./MarkdownMath";
 
 describe("normalizeMarkdownMathInput", () => {
+  it("preserves valid display closers and dollars nested in text commands", () => {
+    expect(normalizeMarkdownMathInput("$$x=1\ny=2$$ where x = $1$."))
+      .toBe("\n$$\nx=1\ny=2\n$$\n where x = $1$.");
+    const nested = String.raw`$$\text{value $x$}$$`;
+    expect(normalizeMarkdownMathInput(nested)).toBe(nested);
+  });
   it("keeps literal display fences in fenced code unchanged", () => {
     const code = "```text\n$$example\nnext$$\n```";
     expect(normalizeMarkdownMathInput(code)).toBe(code);

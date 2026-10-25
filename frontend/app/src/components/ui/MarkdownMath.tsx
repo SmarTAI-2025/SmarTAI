@@ -34,7 +34,7 @@ export function MarkdownMath({ children, className }: { children?: string | null
           return <li className="whitespace-pre-wrap" value={marker ? Number(marker[1]) : undefined}>{children}</li>;
         } }}
         remarkPlugins={[remarkMath]}
-        rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false }]]}
+        rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false, errorColor: "inherit" }]]}
       >
         {content}
       </ReactMarkdown>
@@ -44,6 +44,17 @@ export function MarkdownMath({ children, className }: { children?: string | null
 
 const DOUBLE_ESCAPED_LATEX = /\\\\(?=(?:int|sum|prod|lim|frac|dfrac|tfrac|sqrt|ker|rank|sin|cos|tan|log|ln|exp|det|max|min|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|psi|omega|infty|partial|nabla|ell|lVert|rVert|Vert|text|mathrm|mathbf|mathit|operatorname|left|right|begin|end|times|cdot|div|pm|mp|leq?|geq?|neq|approx|equiv|in|notin|subseteq|supseteq|to|mapsto|circ|star|langle|rangle|dots|ldots|cdots|iota|mid|forall|exists)(?![A-Za-z]))/g;
 const OVERESCAPED_NEWLINE = /\\{1,2}n(?!(?:u|abla|eq|e|otin|i|exists|eg|ot|ewcommand|ewline|ewpage|olimits|onumber)\b)/g;
+
+function normalizeMathDelimiters(value: string): string {
+  // Keep in sync with the backend's conservative prose-only fence repair.
+  // A malformed $$...$ must not turn the remaining proof into display math.
+  return value.replace(/\\\[([\s\S]*?)\\\]/g, (_match, math: string) => `$$${math}$$`)
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_match, math: string) => `$${math}$`)
+    .replace(/(?<![\\$])(\${1,2})(?!\$)([^$\n]+?)(?<!\\)(\${1,2})(?!\$)|(?<![\\$])\$\$(?!\$)[\s\S]*?(?<!\\)\$\$(?!\$)/g,
+      (match, open: string | undefined, math: string, close: string) =>
+        open && open !== close && math.split("{").length === math.split("}").length
+          && /[=^_]|\\[A-Za-z]+/.test(math) ? `$${math}$` : match);
+}
 
 function normalizeDisplayMathFences(value: string): string {
   // remark-math treats text after an opening $$ line as metadata, not math.
@@ -61,9 +72,9 @@ function normalizeProseNewlines(value: string): string {
 
 export function normalizeMarkdownMathInput(value: string): string {
   const parts = value.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`|(?<![A-Za-z0-9_])[A-Za-z]:\\[^\s]*)/g);
-  return normalizeDisplayMathFences(parts.map((part, index) => index % 2 ? part : normalizeProseNewlines(part)
+  return normalizeDisplayMathFences(parts.map((part, index) => index % 2 ? part : normalizeMathDelimiters(normalizeProseNewlines(part)
     .replace(DOUBLE_ESCAPED_LATEX, "\\")
     .replace(/\\\\(?=[\[\]()])/g, "\\")
     .replace(/(?<!\$)\${3,}(?!\$)/g, () => "$$")
-    .replace(/\n{3,}/g, "\n\n")).join(""));
+    .replace(/\n{3,}/g, "\n\n"))).join(""));
 }
