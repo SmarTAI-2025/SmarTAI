@@ -109,6 +109,47 @@ async def test_failed_field_keeps_valid_answer_and_retries_only_rubric(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_manual_handoff_does_not_publish_malformed_generated_unicode(monkeypatch):
+    from backend.tests.test_question_material_format_repair import Provider
+    from backend.tools.structured_llm import StructuredOutputInvalidError
+    from backend.services.task_execution import stop_task_run
+
+    owner, task, operation, pipeline = await setup(monkeypatch)
+    monkeypatch.setattr(inc, "_extract_problems_call", AsyncMock(return_value=inc._rows([
+        row(1, criterion="Teacher rubric.", reference_answer="Teacher answer."),
+        row(2, criterion="Supplied rubric."),
+    ])))
+    broken = (r'{"candidates":[{"target_id":"q1:reference_answer","q_id":"q1",'
+              r'"target":"reference_answer","text_value":"\u8bbe $\\mathbb{Z}$ \uffa"}]}')
+    pipeline.provider = Provider([broken, broken])
+    with pytest.raises(StructuredOutputInvalidError):
+        await pipeline.run()
+    saved, rows = persisted(owner, operation)
+    assert len(pipeline.provider.calls) == 2
+    assert rows["q1"]["reference_answer"] == "Teacher answer."
+    assert rows["q2"]["reference_answer"] == ""
+    assert rows["q2"]["criterion"] == "Supplied rubric."
+    assert saved.checkpoint["preparation_counts"] == dict(questions=2, stems=2, reference_answers=1, rubrics=2)
+    assert not any(key.startswith("generated:") for key in saved.checkpoint["incremental_unit_artifacts"])
+
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    stop_task_run(task_id=task, owner_id=owner, job_id=operation.operation_id,
+                  expected_revision=workflow.workflow_revision)
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    forbidden = AsyncMock(side_effect=AssertionError("manual handoff must never invoke AI"))
+    monkeypatch.setattr(inc, "generate_missing_question_materials", forbidden)
+    result = await api.manually_complete_question_preparation(task, operation.operation_id,
+        api.ManualQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision),
+        current=SimpleNamespace(id=owner))
+    assert result["status"] == "ready_for_review", getattr(result, "body", result)
+    from backend.db import assignment_repository
+    questions = assignment_repository.list_questions(task, teacher_id=owner)
+    assert [question.reference_answer for question in questions] == ["Teacher answer.", ""]
+    assert [question.criterion for question in questions] == ["Teacher rubric.", "Supplied rubric."]
+    forbidden.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("count", [9, 10, 28])
 async def test_real_worker_roundtrip_multiple_snapshot_sizes(monkeypatch, count):
     owner, task, operation, _ = await setup(monkeypatch)

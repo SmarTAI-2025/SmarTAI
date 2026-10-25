@@ -811,6 +811,9 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
     # composes transforms — `latex+newlines` is the realistic LLM math case
     # (e.g. comment = "F = \overline{C}\n step 2: ..."); previous code only
     # tried double-everything which butchers already-valid escapes.
+    # Never double all backslashes to accept invalid Unicode escapes: that
+    # turns valid Chinese and TeX into literal escapes and falsely marks the
+    # response successful. Leave unrecoverable output to the bounded retry.
     bounds_error: ValidationError | None = None
     for attempt_desc, transform in [
         ("direct", lambda s: s),
@@ -819,7 +822,6 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
         ("latex+newlines", lambda s: _normalize_inline_newlines(_escape_latex_backslashes(s))),
         ("duplicate_separator", lambda s: _collapse_duplicate_json_colons(
             _normalize_inline_newlines(_escape_latex_backslashes(s)))),
-        ("escape_all_backslashes", lambda s: s.replace("\\", "\\\\")),
         ("remove_trailing_commas", lambda s: re.sub(r",(\s*[}\]])", r"\1", s)),
         ("fix_incomplete", _fix_incomplete_json),
     ]:

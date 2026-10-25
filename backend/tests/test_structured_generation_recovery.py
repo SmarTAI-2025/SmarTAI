@@ -3,10 +3,38 @@ import pytest
 
 from backend.agents.ingest_agent import AI_COMPLETION_SYSTEM_PROMPT, AICompletionOutput
 from backend.tools.structured_llm import (
+    StructuredOutputInvalidError,
     _collapse_duplicate_json_colons,
     _escape_latex_backslashes,
     extract_and_parse_json,
 )
+
+
+@pytest.mark.parametrize("invalid_escape", [r"\uffa", r"\u4f", r"\u鍚ng"])
+def test_invalid_unicode_cannot_turn_a_whole_response_into_literal_escapes(invalid_escape):
+    # The test1 incident mixed valid Chinese/TeX escapes with malformed Unicode.
+    # Doubling every slash makes this parse, but corrupts all otherwise valid text.
+    raw = (r'{"candidates":[{"target_id":"q1:reference_answer","q_id":"q1",'
+           r'"target":"reference_answer","text_value":"\u8bbe $\\mathbb{Z}$ '
+           + invalid_escape + r'"}]}')
+    with pytest.raises(StructuredOutputInvalidError):
+        extract_and_parse_json(raw, AICompletionOutput)
+
+
+def test_valid_unicode_and_algebra_commands_decode_once_during_tex_repair():
+    raw = (r'{"candidates":[{"target_id":"q1:reference_answer","q_id":"q1",'
+           r'"target":"reference_answer","text_value":"\u8bbe '
+           r'$\\bar{a} \\in \\mathbb{Z}/n\\mathbb{Z}$\n$\overline{ab}$"}]}')
+    parsed = extract_and_parse_json(raw, AICompletionOutput)
+    assert parsed.candidates[0].text_value == (
+        '设 $\\bar{a} \\in \\mathbb{Z}/n\\mathbb{Z}$\n$\\overline{ab}$')
+
+
+def test_literal_unicode_in_programming_candidates_is_not_decoded_again():
+    code = r'print(r"\u8bbe\uffa")'
+    raw = json.dumps({"candidates": [{"target_id": "q1:solution_code", "q_id": "q1",
+        "target": "solution_code", "text_value": code}]})
+    assert extract_and_parse_json(raw, AICompletionOutput).candidates[0].text_value == code
 
 
 def test_mixed_tex_escapes_and_literal_newlines_preserve_formulas():

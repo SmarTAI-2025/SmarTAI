@@ -78,6 +78,30 @@ async def test_invalid_repair_stops_without_a_third_generation():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("allow_partial", [False, True])
+@pytest.mark.parametrize("repair_succeeds", [False, True])
+async def test_malformed_unicode_retries_before_accepting_generated_materials(allow_partial, repair_succeeds):
+    broken = (r'{"candidates":[{"target_id":"q1:reference_answer","q_id":"q1",'
+              r'"target":"reference_answer","text_value":"\u8bbe $\\mathbb{Z}$ \uffa"}]}')
+    answer = '设 $\\bar{a} \\in \\mathbb{Z}/n\\mathbb{Z}$。'
+    corrected = json.dumps({"candidates": [{"target_id": "q1:reference_answer", "q_id": "q1",
+        "target": "reference_answer", "text_value": answer}]})
+    provider = Provider([broken, corrected if repair_succeeds else broken])
+    call = generate_missing_question_materials(
+        {"q1": {"stem": "Prove residue-class multiplication is associative.", "max_score": 10}},
+        [{"target_id": "q1:reference_answer", "q_id": "q1", "target": "reference_answer"}],
+        6, provider, allow_partial=allow_partial)
+    if repair_succeeds:
+        assert (await call)[0].text_value == answer
+    else:
+        with pytest.raises(StructuredOutputInvalidError):
+            await call
+    assert len(provider.calls) == 2
+    assert provider.calls[0][1] is provider.calls[1][1]
+    assert broken not in provider.calls[1][-1].content
+
+
+@pytest.mark.asyncio
 async def test_transient_and_format_attempts_share_three_call_limit(monkeypatch):
     async def no_sleep(_seconds):
         pass
