@@ -341,6 +341,73 @@ async def test_heartbeat_cleans_up_on_every_exit(tmp_path, monkeypatch, heartbea
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["heartbeat_shutdown", "lease_release"])
+@pytest.mark.parametrize("timeout_mode", ["legacy", "response_only"])
+async def test_repeated_stop_releases_pending_run_before_immediate_restart(
+    tmp_path, monkeypatch, heartbeats, claims, phase, timeout_mode,
+):
+    service, request, data, engine = extended(tmp_path)
+    request = request.model_copy(update={"policy": request.policy.model_copy(update={
+        "timeout_mode": timeout_mode,
+    })})
+    reading, cleaning, proceed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    original_stop = recognition_runs._RecognitionLeaseHeartbeat.stop
+    original_storage = recognition_runs.run_in_threadpool
+    calls = 0
+
+    async def send():
+        nonlocal calls
+        calls += 1
+        reading.set()
+        await asyncio.Event().wait()
+
+    async def blocked(_):
+        from backend.llm.request_timeouts import current_response_scope
+        scope = current_response_scope()
+        return await scope.run_response(send) if scope is not None else await send()
+
+    async def stop(self):
+        await original_stop(self)
+        if phase == "heartbeat_shutdown":
+            cleaning.set()
+            await proceed.wait()
+
+    async def storage(function, *args, **kwargs):
+        if phase == "lease_release" and function is workflow_repository.release_operation:
+            cleaning.set()
+            await proceed.wait()
+        return await original_storage(function, *args, **kwargs)
+
+    engine.recognize = blocked
+    monkeypatch.setattr(recognition_runs._RecognitionLeaseHeartbeat, "stop", stop)
+    monkeypatch.setattr(recognition_runs, "run_in_threadpool", storage)
+    task = asyncio.create_task(run(service, request, data, engine))
+    try:
+        await asyncio.wait_for(reading.wait(), 10)
+        task.cancel()
+        await asyncio.wait_for(cleaning.wait(), 10)
+        # Parent gather cleanup / the durable stop watcher can cancel again.
+        task.cancel()
+        await asyncio.sleep(0)
+        proceed.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 10)
+        assert task.cancelling() == 2  # Never swallow the teacher's stop.
+        row = workflow_repository.get_operation(claims[0][0].id, owner_id=request.source.owner_id)
+        assert row.lease_token is None
+        assert row.checkpoint["calls"][0]["state"] == "pending"
+        resumed = await run(service, request, data, engine)
+        assert resumed.status == "needs_review"
+        assert resumed.safe_error_code == "provider_submit_uncertain"
+        assert calls == 1  # Releasing a local lease does not authorize a paid replay.
+    finally:
+        proceed.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("retry", [False, True])
 async def test_terminal_commit_heartbeat_race_keeps_success_and_explicit_retry(
     tmp_path, monkeypatch, heartbeats, retry,
