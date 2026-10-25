@@ -128,7 +128,7 @@ async def test_actual_math_review_advisory_survives_projection_and_teacher_confi
         )
     assert len(calls) == samples + 1
     assert correction.score == 8 and correction.confidence == .95
-    assert correction.review_reasons == (["math_scoring_uncertainty"] if residual_concern else [])
+    assert correction.review_reasons == (["math_model_review"] if residual_concern else [])
     checkpoints.save_correction(student, correction)
     grades.mark_completed(run_id, worker_id="checkpoint-test", completed=1, failed=1)
     result, = grades.list_results_for_run(run_id)

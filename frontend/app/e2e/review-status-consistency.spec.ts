@@ -129,14 +129,15 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
       await expect(page).toHaveURL(`${root}/results`);
       for (const suffix of ["", "/questions/q1", "/students/S1", "/visualizations", "/reports"]) {
         await page.goto(`${root}/results${suffix}`);
-        const reminder = page.getByRole("link", { name: zh ? /专家分歧较大.*不影响查看/ : /high expert disagreement.*optional/ });
+        const reminder = page.getByRole("link", { name: zh ? /专家评分差异较大.*不影响查看/ : /large differences in expert scores.*optional/ });
         await expect(reminder).toBeVisible();
+        await expect(reminder).not.toContainText(/标准差|standard deviation|15%/);
         await expect(reminder).toHaveAttribute("href", `${root}/review`);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
       }
       await page.screenshot({ path: testInfo.outputPath("optional-review-results.png"), fullPage: true });
       expect(writes).toEqual([]);
-      await page.getByRole("link", { name: zh ? /专家分歧较大.*不影响查看/ : /high expert disagreement.*optional/ }).click();
+      await page.getByRole("link", { name: zh ? /专家评分差异较大.*不影响查看/ : /large differences in expert scores.*optional/ }).click();
       await expect(queue.getByRole("link")).toHaveCount(3);
     }
     await page.goto(`${root}/review${mode === "overview-all" ? "" : "/S1/q1"}`);

@@ -286,7 +286,7 @@ export function correctionReviewBlocked(correction: Correction): boolean {
 export function correctionReviewAttention(correction: Correction): ReviewAttention {
   if (correctionReviewNextBlocked(correction)) return "blocking";
   return !isCorrectionReviewConfirmed(correction) && (isLowConfidence(correction) || hasPartialExperts(correction) || hasExpertDisagreement(correction)
-    || correctionReviewReasonIds(correction).includes("math_scoring_uncertainty")) ? "advisory" : "none";
+    || correctionReviewReasonIds(correction).some(reason => MATH_REVIEW_REASONS.includes(reason))) ? "advisory" : "none";
 }
 
 /** Only an unusable saved score blocks the next stage. */
@@ -323,11 +323,30 @@ export function hasExpertDisagreement(correction: Correction): boolean {
   return Math.sqrt(variance) / correction.max_score > 0.15 + Number.EPSILON;
 }
 
+export const MATH_REVIEW_REASONS = [
+  "math_expert_disagreement", "math_verification_conflict", "math_proof_concern",
+  "math_model_review", "math_scoring_uncertainty",
+];
+
+/** Display categories only: keep numeric disagreement filters/priority unchanged. */
+export function mathReviewLabels(correction: Correction, locale: Locale): string[] {
+  const reasons = correctionReviewReasonIds(correction);
+  const specific = MATH_REVIEW_REASONS.slice(0, 3).filter(reason => reasons.includes(reason)
+    || (reason === "math_expert_disagreement" && hasExpertDisagreement(correction)));
+  const visible = specific.length ? specific : reasons.includes("math_model_review")
+    ? ["math_model_review"] : reasons.includes("math_scoring_uncertainty") ? ["math_scoring_uncertainty"] : [];
+  return visible.map(reason => reviewReasonLabel(reason, locale));
+}
+
 export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
   const english: Record<string, string> = {
     grading_paused: "Paused before grading finished", partial_experts: "Some experts completed",
     high_indecisiveness: "Experts disagree", low_confidence: "Low confidence", score_spread_high: "Large score difference",
     math_scoring_uncertainty: "Scoring evidence needs checking",
+    math_expert_disagreement: "Expert disagreement; review suggested.",
+    math_verification_conflict: "Verification evidence still needs checking.",
+    math_proof_concern: "Key reasoning evidence needs checking.",
+    math_model_review: "The model suggests human review.",
     minority_veto: "Outlying expert score", parse_failed: "Could not parse result", degraded_to_single: "Some experts completed",
     transient_llm: "Model network error or timeout", llm_failed: "Model could not grade", quota_exhausted: "Quota exhausted", general: "Teacher review required",
   };
@@ -339,6 +358,10 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     minority_veto: "个别模型评分偏离较大",
     low_confidence: "置信度偏低",
     math_scoring_uncertainty: "评分依据仍有疑点，建议核对",
+    math_expert_disagreement: "专家分歧，建议复核。",
+    math_verification_conflict: "核验结果与评分依据待核对。",
+    math_proof_concern: "关键推理依据待核对。",
+    math_model_review: "模型建议人工复核。",
     score_spread_high: "评分差异较大",
     parse_failed: "解析失败",
     degraded_to_single: "部分专家完成",

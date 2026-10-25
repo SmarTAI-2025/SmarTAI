@@ -76,6 +76,8 @@ def review_state(correction: dict) -> tuple[bool, bool]:
     pending = blocked or (not reviewed and (low_confidence or (not expert_scores and confidence_needs_attention(conf))
                                             or disagreement or partial or bool(reasons & {
                                                 "partial_experts", "degraded_to_single", "math_scoring_uncertainty",
+                                                "math_expert_disagreement", "math_verification_conflict",
+                                                "math_proof_concern", "math_model_review",
                                             })))
     return pending, reviewed
 

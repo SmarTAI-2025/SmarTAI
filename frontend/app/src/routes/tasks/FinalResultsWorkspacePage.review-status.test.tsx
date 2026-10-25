@@ -37,8 +37,9 @@ for (const locale of ["zh-CN", "en-US"]) {
       const { container } = render(<QueryClientProvider client={new QueryClient()}>
         <MemoryRouter initialEntries={[`/tasks/task/results${suffix}`]}><Routes><Route path={path} element={<FinalResultsWorkspacePage />} /></Routes></MemoryRouter>
       </QueryClientProvider>);
+      expect(container.textContent).not.toMatch(/标准差|standard deviation|15%/);
       expect(container.textContent).toMatch(/待确认|待复核|待处理|awaiting|Review pending|1 pending/);
-      expect(screen.getByRole("link", { name: locale === "zh-CN" ? /专家分歧较大.*不影响查看/ : /high expert disagreement.*optional/ })).toHaveAttribute("href", "/tasks/task/review");
+      expect(screen.getByRole("link", { name: locale === "zh-CN" ? /专家评分差异较大.*不影响查看/ : /large differences in expert scores.*optional/ })).toHaveAttribute("href", "/tasks/task/review");
     },
   );
   for (const confirmation of ["unchanged", "changed"] as const) {
@@ -57,7 +58,7 @@ for (const locale of ["zh-CN", "en-US"]) {
         expect(container.textContent).not.toMatch(/AI\s*(?:分|score)|未人工|教师未操作|Unreviewed|not reviewed|no teacher action/);
         expect(container.textContent).not.toMatch(/系统标记需人工复核|System requested human review|需要人工确认|Teacher review required/);
         expect(container.textContent).toContain(confirmation === "unchanged" ? "60%" : "80%");
-        expect(screen.queryByRole("link", { name: /专家分歧较大.*不影响查看|high expert disagreement.*optional/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole("link", { name: /专家评分差异较大.*不影响查看|large differences in expert scores.*optional/ })).not.toBeInTheDocument();
       },
     );
   }
@@ -76,9 +77,19 @@ for (const locale of ["zh-CN", "en-US"]) {
       </QueryClientProvider>);
       expect(container.textContent).not.toMatch(/AI\s*(?:分|score)|未人工|教师未操作|Unreviewed|not reviewed|no teacher action/);
       expect(container.textContent).not.toMatch(/[1-9]\d* 个专家分歧|[1-9]\d* expert-disagreement/);
-      expect(screen.queryByRole("link", { name: /专家分歧较大|high expert disagreement/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: /专家评分差异较大|large differences in expert scores/ })).not.toBeInTheDocument();
       expect(container.textContent).not.toMatch(/缺少有效分数|Missing valid score/);
       expect(container.textContent).toContain("60%");
     },
   );
 }
+
+it.each(["zh-CN", "en-US"])("keeps the score-variance banner count separate from item-level disagreement (%s)", locale => {
+  state.locale = locale;
+  state.correction = { ...state.correction, confidence: .95, review_reasons: ["math_expert_disagreement"],
+    expert_results: [1, 2].map(index => ({ provider: `expert-${index}`, score: 8, max_score: 10, confidence: .95, comment: "", steps: [] })) };
+  render(<QueryClientProvider client={new QueryClient()}>
+    <MemoryRouter initialEntries={["/tasks/task/results"]}><Routes><Route path="/tasks/:taskId/results" element={<FinalResultsWorkspacePage />} /></Routes></MemoryRouter>
+  </QueryClientProvider>);
+  expect(screen.queryByRole("link", { name: /专家评分差异较大|large differences in expert scores/ })).not.toBeInTheDocument();
+});

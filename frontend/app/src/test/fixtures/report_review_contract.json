@@ -1,6 +1,16 @@
 {
   "base": {"q_id": "q1", "type": "reasoning", "score": 8, "provisional_score": 8, "max_score": 10, "confidence": 0.95, "comment": "Evidence", "steps": [], "teacher_score": null, "review_status": "pending", "review_reasons": [], "initial_review_reasons": [], "expert_results": []},
   "cases": [
+    {"name": "math_expert_disagreement high confidence", "patch": {"initial_review_reasons": ["math_expert_disagreement"]}, "pending": true, "required": false},
+    {"name": "math_expert_disagreement confirmed", "patch": {"initial_review_reasons": ["math_expert_disagreement"], "teacher_score": 8, "review_status": "confirmed"}, "pending": false, "required": false},
+    {"name": "math_verification_conflict high confidence", "patch": {"initial_review_reasons": ["math_verification_conflict"]}, "pending": true, "required": false},
+    {"name": "math_verification_conflict confirmed", "patch": {"initial_review_reasons": ["math_verification_conflict"], "teacher_score": 8, "review_status": "confirmed"}, "pending": false, "required": false},
+    {"name": "math_proof_concern high confidence", "patch": {"initial_review_reasons": ["math_proof_concern"]}, "pending": true, "required": false},
+    {"name": "math_proof_concern confirmed", "patch": {"initial_review_reasons": ["math_proof_concern"], "teacher_score": 8, "review_status": "confirmed"}, "pending": false, "required": false},
+    {"name": "math_model_review high confidence", "patch": {"initial_review_reasons": ["math_model_review"]}, "pending": true, "required": false},
+    {"name": "math_model_review confirmed", "patch": {"initial_review_reasons": ["math_model_review"], "teacher_score": 8, "review_status": "confirmed"}, "pending": false, "required": false},
+    {"name": "math_scoring_uncertainty high confidence", "patch": {"initial_review_reasons": ["math_scoring_uncertainty"]}, "pending": true, "required": false},
+    {"name": "math_scoring_uncertainty confirmed", "patch": {"initial_review_reasons": ["math_scoring_uncertainty"], "teacher_score": 8, "review_status": "confirmed"}, "pending": false, "required": false},
     {"name": "normal unconfirmed", "patch": {}, "pending": false, "required": false},
     {"name": "expert disagreement", "patch": {"expert_results": [{"provider": "expert", "score": 10, "max_score": 10, "confidence": 0.95, "comment": "Evidence", "steps": [], "error_kind": null}, {"provider": "expert", "score": 6, "max_score": 10, "confidence": 0.95, "comment": "Evidence", "steps": [], "error_kind": null}]}, "pending": true, "required": false},
     {"name": "exact 15 percent boundary", "patch": {"expert_results": [{"provider": "expert", "score": 10, "max_score": 10, "confidence": 0.95, "comment": "Evidence", "steps": [], "error_kind": null}, {"provider": "expert", "score": 7, "max_score": 10, "confidence": 0.95, "comment": "Evidence", "steps": [], "error_kind": null}]}, "pending": false, "required": false},
