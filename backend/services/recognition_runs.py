@@ -494,29 +494,43 @@ class RecognitionRunService:
                                           usage, tuple(context.row.artifact_refs or []), code)
         finally:
             try:
-                if heartbeat is not None:
-                    await heartbeat.stop()
                 try:
-                    release = run_in_threadpool(self.repository.release_operation, row.id,
-                                                owner_id=authorized_owner_id, worker_id=worker,
-                                                lease_token=row.lease_token)
-                    if heartbeat is None:
-                        await asyncio.shield(release)
-                    else:
-                        release = asyncio.create_task(release)
-                        try:
-                            done, _ = await asyncio.wait({release}, timeout=_RENEWABLE_HEARTBEAT_SECONDS)
-                            if done:
-                                release.result()
-                        finally:
-                            heartbeat._discard(release)
-                except DomainError:
-                    pass
-                except Exception:
-                    # A cleanup DB outage must not replace the original fencing,
-                    # cancellation or saved result. The short lease still expires.
-                    if heartbeat is None:
-                        raise
+                    if heartbeat is not None:
+                        await heartbeat.stop()
+                finally:
+                    try:
+                        release = run_in_threadpool(self.repository.release_operation, row.id,
+                                                    owner_id=authorized_owner_id, worker_id=worker,
+                                                    lease_token=row.lease_token)
+                        if heartbeat is None:
+                            await asyncio.shield(release)
+                        else:
+                            release = asyncio.create_task(release)
+                            waiter = asyncio.create_task(asyncio.wait(
+                                {release}, timeout=_RENEWABLE_HEARTBEAT_SECONDS))
+                            cancelled = False
+                            try:
+                                # Parent cleanup and the stop watcher can cancel
+                                # us again. Finish bounded, token-fenced release
+                                # before returning; never cancel it with the run.
+                                while not waiter.done():
+                                    try:
+                                        await asyncio.shield(waiter)
+                                    except asyncio.CancelledError:
+                                        cancelled = True
+                                if waiter.result()[0]:
+                                    release.result()
+                            finally:
+                                heartbeat._discard(release)
+                                if cancelled:
+                                    raise asyncio.CancelledError
+                    except DomainError:
+                        pass
+                    except Exception:
+                        # A cleanup DB outage must not replace the original fencing,
+                        # cancellation or saved result. The short lease still expires.
+                        if heartbeat is None:
+                            raise
             finally:
                 # Include cancellation during error handling and cleanup, not
                 # only the main try body. Remove only our own cancellation.

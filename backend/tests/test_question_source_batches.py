@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,6 +12,80 @@ from backend.services.question_source_batches import read_question_pdf_batches
 from backend.services.stage_provider_routing import StageProviderRoute
 from backend.tests.test_recognition_agent import pdf, request
 from backend.tests.test_recognition_v2_artifacts import setup
+
+
+@pytest.mark.asyncio
+async def test_stopped_parallel_pages_restart_without_stale_lease_or_replaying_success(tmp_path, monkeypatch):
+    from backend.db import workflow_repository
+    from backend.llm.request_timeouts import current_response_scope
+    from backend.services import recognition_runs
+    from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE
+
+    agent, req, data, results = setup(tmp_path, pdf=True, pages=2, initial=["literal 1 + 1 = 3"])
+    service = recognition_runs.RecognitionRunService(store=results.store, capacity=agent.capacity)
+    saved, pending, stopping, proceed = (asyncio.Event() for _ in range(4))
+    original_read = agent.engine.recognize
+    original_stop = recognition_runs._RecognitionLeaseHeartbeat.stop
+    calls = []
+    block = True
+    stopped_rows = []
+
+    async def read(unit):
+        async def send():
+            calls.append(unit.page_number)
+            if unit.page_number == 2 and block:
+                pending.set()
+                await asyncio.Event().wait()
+            return await original_read(unit)
+        return await current_response_scope().run_response(send)
+
+    async def stop(self):
+        await original_stop(self)
+        if self.context.checkpoint.final_artifact_id is None:
+            stopped_rows.append(self.row)
+            stopping.set()
+            await proceed.wait()
+
+    async def on_pages(pages):
+        if any(page["page_number"] == 1 for page in pages):
+            saved.set()
+
+    agent.engine.recognize = read
+    monkeypatch.setattr(recognition_runs._RecognitionLeaseHeartbeat, "stop", stop)
+    args = dict(service=service, request=req, content=data, engine=agent.engine,
+        total_pages=2, reporter=ProgressReporter("stop-restart"), on_pages=on_pages,
+        allow_partial=True, timeout_profile=SOURCE_TIMEOUT_PROFILE)
+    task = asyncio.create_task(read_question_pdf_batches(**args))
+    try:
+        await asyncio.wait_for(asyncio.gather(saved.wait(), pending.wait()), 10)
+        task.cancel()
+        await asyncio.wait_for(stopping.wait(), 10)
+        task.cancel()  # Repeated cancellation propagates through the real page gather.
+        await asyncio.sleep(0)
+        proceed.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 10)
+        assert stopped_rows
+        for row in stopped_rows:
+            assert workflow_repository.get_operation(row.id, owner_id=req.source.owner_id).lease_token is None
+        _, uncertain = await read_question_pdf_batches(**args)
+        assert uncertain["error_code"] == "provider_submit_uncertain"
+        assert uncertain["coverage"]["processed_pages"] == [1]
+        assert sorted(calls) == [1, 2]
+
+        block = False
+        retry_args = dict(**args, retry_key="acknowledged-restart:1", acknowledge_pending_retry=True)
+        _, restarted = await read_question_pdf_batches(**retry_args)
+        assert restarted["status"] == "completed"
+        assert restarted["coverage"]["processed_pages"] == [1, 2]
+        assert calls.count(1) == 1 and calls.count(2) == 2
+        _, reused = await read_question_pdf_batches(**retry_args)
+        assert reused["status"] == "already_done" and len(calls) == 3
+    finally:
+        proceed.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
