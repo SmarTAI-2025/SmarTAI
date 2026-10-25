@@ -239,8 +239,8 @@ it.each(["zh-CN", "en-US"])("explains an ambiguous source match and keeps confir
   renderPage();
   const card = within(document.querySelector('[data-question-id="Q2"]') as HTMLElement);
   expect(card.getByText(locale === "zh-CN"
-    ? "资料无法唯一匹配到本题，请对照原件核对内容并确认。"
-    : "The source cannot be uniquely matched to this question. Check the content against the original and confirm.")).toBeVisible();
+    ? "资料无法唯一匹配到本题，请对照原件核对内容。"
+    : "The source cannot be uniquely matched to this question. Check the content against the original.")).toBeVisible();
   expect(card.queryByText("ambiguous_question_match")).not.toBeInTheDocument();
   expect(card.getByRole("button", { name: locale === "zh-CN" ? "第 2 题 · 待确认" : "Question 2 · Confirm review" })).toBeEnabled();
 });
@@ -281,7 +281,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
     const element = document.querySelector('[data-question-id="Q2"]') as HTMLElement;
     const card = within(element);
     expect(card.getAllByText("生成失败")).toHaveLength(1);
-    expect(card.getByText("请补齐缺失的题型、评分标准并确认本题；完成前不能批改。")).toBeVisible();
+    expect(card.getByText("请补齐缺失的题型、评分标准；完成前不能批改。")).toBeVisible();
     expect(element.querySelector('[data-review-issue-notes] .text-amber-700')).toHaveTextContent('缺少标答（可选），可按需补充。');
     await userEvent.click(card.getByRole("button", { name: "题型 · 修改" }));
     const select = card.getByRole("combobox", { name: "题型" });

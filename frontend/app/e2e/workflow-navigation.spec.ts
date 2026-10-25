@@ -135,7 +135,7 @@ test("empty question text blocks both countdown and manual grading without a mut
   const run = await fixture(page, "grading");
   run.task.problem_data.q1!.stem = "";
   await page.goto("/tasks/navigation-task/grading/preflight");
-  await expect(page.getByText("题目存在关键缺项或冲突。请修正并确认后再开始批改。", { exact: true })).toBeVisible();
+  await expect(page.getByText("题目存在关键缺项或冲突。请修正后再开始批改。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "立即开始批改", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await expect(page).toHaveURL(/\/grading\/preflight$/);

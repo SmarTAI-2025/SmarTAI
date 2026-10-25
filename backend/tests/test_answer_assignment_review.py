@@ -40,6 +40,23 @@ def seed(count=2, flags=()):
     return args
 
 
+@pytest.mark.parametrize("flags", [["recognition_manual_pending"], ["recognition_invalid_fields:number,type"]])
+@pytest.mark.parametrize("save_field", ["content", "target_q_id"])
+def test_saving_verified_answer_fields_resolves_doubts_without_confirmation(flags, save_field):
+    args = seed(flags=flags)
+    before = snapshot(args)
+    first = next(a for a in answers(before) if a["q_id"] == "q1")
+    assert not task_facade.grading_readiness(**args)["ready"]
+    patch = {save_field: first["content"] if save_field == "content" else first["q_id"]}
+    repaired = save(args, before, first, review_status="pending", **patch)
+    assert repaired["answer"]["review_status"] == "pending"
+    assert repaired["answer"]["flag"] == []
+    assert task_facade.grading_readiness(**args)["ready"]
+    reloaded = next(a for a in answers(snapshot(args)) if a["answer_id"] == first["answer_id"])
+    assert reloaded["review_status"] == "pending"
+    assert reloaded["flag"] == []
+
+
 @pytest.mark.parametrize("unchanged_save", [False, True])
 def test_matching_confirmation_without_rewriting_survives_reload_and_sibling_edit(unchanged_save):
     args = seed(flags=["recognition_manual_pending", "authorship_uncertain"])

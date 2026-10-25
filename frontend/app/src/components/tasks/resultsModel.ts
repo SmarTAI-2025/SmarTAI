@@ -279,9 +279,7 @@ function validReviewScore(value: number | null | undefined, maxScore: number): b
 }
 
 export function correctionReviewBlocked(correction: Correction): boolean {
-  if (!validReviewScore(effectiveCorrectionScore(correction), correction.max_score)) return true;
-  const originalScore = correction.provisional_score === undefined ? correction.score : correction.provisional_score;
-  return !validReviewScore(originalScore, correction.max_score) && correction.review_status !== "confirmed";
+  return !validReviewScore(effectiveCorrectionScore(correction), correction.max_score);
 }
 
 /** One pending-review rule for the review queue, analysis, filters and charts. */
@@ -291,7 +289,7 @@ export function correctionReviewAttention(correction: Correction): ReviewAttenti
     || correctionReviewReasonIds(correction).some(reason => MATH_REVIEW_REASONS.includes(reason))) ? "advisory" : "none";
 }
 
-/** A valid score can be confirmed even when continuing requires that confirmation. */
+/** Only an unusable saved score blocks the next stage. */
 export function correctionReviewNextBlocked(correction: Correction): boolean {
   return correctionReviewBlocked(correction);
 }

@@ -32,8 +32,8 @@ def question_issue_confidence(issue, presentation):
     return confidence_value(((presentation.get("material_provenance") or {}).get(field) or {}).get("confidence"))
 
 
-def question_issue_requires_confirmation(issue, presentation):
-    if issue.get("field") == "answer":
+def question_issue_blocks_progress(issue, presentation):
+    if issue.get("status") != "open" or issue.get("field") == "answer":
         return False
     return (issue.get("severity") == "blocking"
             or issue.get("code") in {"source_conflict", "ambiguous_question_match"}

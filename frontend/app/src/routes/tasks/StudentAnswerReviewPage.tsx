@@ -615,7 +615,7 @@ function StudentAnswerReviewForm() {
         </Link>
       </div>
       <ReviewBlockDialog locale={locale} issues={blocked} onClose={() => setBlocked([])} />
-      <NewTaskStepper currentStep={4} blockedFromStep={submissionReviewBlockers(taskQuery.data, locale).length ? 5 : undefined} lockedStepReason={locale === "zh-CN" ? "请先处理并确认关键问题" : "Resolve and confirm required items first"} onLockedStepActivate={() => setBlocked(submissionReviewBlockers(taskQuery.data, locale))} />
+      <NewTaskStepper currentStep={4} blockedFromStep={submissionReviewBlockers(taskQuery.data, locale).length ? 5 : undefined} lockedStepReason={locale === "zh-CN" ? "请先处理关键问题" : "Resolve required items first"} onLockedStepActivate={() => setBlocked(submissionReviewBlockers(taskQuery.data, locale))} />
 
       {readOnly ? (
         <div className="mt-4 rounded-[9px] border bg-card px-4 py-3 text-[12px] leading-5 text-muted-foreground">

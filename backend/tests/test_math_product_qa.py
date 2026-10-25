@@ -117,10 +117,9 @@ def test_manual_override_survives_retry_without_reusing_old_ai(case, monkeypatch
     assert current.ai_score == (None if save_path in {"pause", "batch_failed"} else 8)
     assert current.effective_score == 9
     assert current.teacher_review["confirmed"] is confirmed
-    assert current.result_status == ("graded" if confirmed else "needs_review")
-    assert current.review_reasons == ([] if confirmed else ["teacher_edit_pending_confirmation"])
-    assert task_facade._correction_review_blocks_finalization(current) is (
-        not confirmed and save_path in {"pause", "batch_failed"})
+    assert current.result_status == "graded"
+    assert current.review_reasons == []
+    assert task_facade._correction_review_blocks_finalization(current) is False
     assert current.effective_comment == "Teacher checked the actual work."
     original = next(row for row in grades.list_results_for_run(first) if row.q_id == "q1")
     assert original.ai_score is None and original.effective_score == 9

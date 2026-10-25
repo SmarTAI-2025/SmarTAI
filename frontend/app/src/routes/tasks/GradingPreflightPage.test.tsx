@@ -343,15 +343,15 @@ describe("GradingPreflightPage regrade mode", () => {
     expect(task.data.problem_data.q1.review_status).toBe("needs_review");
   });
 
-  it.each(["failed recognition", "missing stem", "missing rubric", "unconfirmed repair"])("does not auto-start or manually bypass %s", async (blocker) => {
+  it.each(["failed recognition", "missing stem", "missing rubric", "assignment conflict"])("does not auto-start or manually bypass %s", async (blocker) => {
     vi.useFakeTimers();
     const task = (useTask as unknown as () => any)();
     task.data.status = "submissions_ready";
     if (blocker === "failed recognition") task.data.student_data.student1.stu_ans[0].flag = ["recognition_failed"];
     if (blocker === "missing stem") task.data.problem_data.q1.stem = "";
     if (blocker === "missing rubric") task.data.problem_data.q1.criterion = "";
-    if (blocker === "unconfirmed repair") Object.assign(task.data.student_data.student1.stu_ans[0], {
-      flag: ["recognition_repaired_needs_confirmation"], review_status: "pending",
+    if (blocker === "assignment conflict") Object.assign(task.data.student_data.student1.stu_ans[0], {
+      flag: ["answer_assignment_conflict"], review_status: "pending",
     });
     render(<MemoryRouter initialEntries={["/tasks/task-1/grading/preflight"]}><Routes>
       <Route path="/tasks/:taskId/grading/preflight" element={<GradingPreflightPage />} />

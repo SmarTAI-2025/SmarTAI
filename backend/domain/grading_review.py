@@ -57,8 +57,7 @@ def review_state(correction: dict) -> tuple[bool, bool]:
         return value is not None and maximum is not None and maximum > 0 and 0 <= value <= maximum
 
     confirmed = correction.get("review_status") == "confirmed"
-    original = correction.get("provisional_score", correction.get("score"))
-    blocked = not valid(score(correction)) or (not valid(original) and not confirmed)
+    blocked = not valid(score(correction))
     reviewed = number(correction.get("teacher_score")) is not None and confirmed and not blocked
     conf = number(correction.get("confidence"))
     expert_scores = [

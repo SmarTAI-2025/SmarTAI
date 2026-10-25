@@ -212,7 +212,9 @@ async def test_fresh_ai_worker_applies_generated_patch_once(monkeypatch, unresol
     assert issues["manual"]["details"]["required_fields"] == (["stem"] if unresolved_stem else [])
     blockers = task_facade.grading_readiness(task_id=task_id, owner_id=owner_id)["blocking_issues"]
     assert ("question_review_blocked" in blockers) is unresolved_stem
-    assert ("question_manual_completion_required" in blockers) is unresolved_stem
+    # The saved stem is nonempty; its unresolved partial recognition remains
+    # the blocker, not a separate manual-confirmation requirement.
+    assert "question_manual_completion_required" not in blockers
     if unresolved_stem:
         assert issues["stem-page"]["details"]["coverage"]["failed_pages"] == [2]
         assert issues["stem-page"]["status"] == "open"

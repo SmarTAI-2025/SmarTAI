@@ -1,3 +1,4 @@
+import { questionIssueCodeLabel as issueCodeLabel } from "@/lib/reviewLabels";
 import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewQueue as ReviewQueuePanel } from "@/components/tasks/ReviewQueue";
 import { questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
@@ -129,7 +130,7 @@ export function QuestionPreparationOverviewPage() {
       </UnsavedChangesDialog> : null}
       {rowError && !deletingQuestion ? <p role="alert" className="mt-3 text-sm text-danger">{tx(locale, "修改失败，请刷新后重试。", "Could not update rows. Refresh and retry.")}</p> : null}
       <ReviewBlockDialog locale={locale} issues={nextBlockers.length ? nextBlockers : blocked} onClose={() => { clearBlocked(); setNextBlockers([]); }} />
-      <NewTaskStepper currentStep={2} blockedFromStep={questionReviewBlockers(problems, taskId ?? "", locale).length ? 3 : undefined} lockedStepReason={tx(locale, "请先处理并确认关键问题", "Resolve and confirm required items first")} onLockedStepActivate={() => setNextBlockers(questionReviewBlockers(problems, taskId ?? "", locale))} />
+      <NewTaskStepper currentStep={2} blockedFromStep={questionReviewBlockers(problems, taskId ?? "", locale).length ? 3 : undefined} lockedStepReason={tx(locale, "请先处理关键问题", "Resolve required items first")} onLockedStepActivate={() => setNextBlockers(questionReviewBlockers(problems, taskId ?? "", locale))} />
 
       <section className="mt-[22px]" aria-labelledby="risk-matrix-title">
         <h2 id="risk-matrix-title" className="sr-only">{tx(locale, "全部题目资料状态矩阵", "All question material status matrix")}</h2>
@@ -217,7 +218,7 @@ function QuestionReviewQueue({ risks, taskId, locale, confirmation }: { confirma
     return { key: problem.q_id, title: problem.number || "—",
       severity: blocking ? "blocking" : "advisory",
       reason: [...new Set(rows.map(({ issue }) => ["recognition_partial", "recognition_needs_review"].includes(issue.code) && issue.severity === "blocking"
-        ? tx(locale, "题目识别不完整，请补齐并确认", "Question recognition incomplete; complete and confirm")
+        ? tx(locale, "题目识别不完整，请补齐", "Question recognition incomplete; complete the missing content")
         : recognitionIssueLabel(issue, locale) ?? issueCodeLabel(issue.code, locale)))].join("；"),
       href: `/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}` };
   })} />;
@@ -414,31 +415,6 @@ function sortMatrixRows(rows: QuestionMatrixRow[], key: MatrixSortKey, direction
 
 function sortProblems(problems: ProblemInfo[], locale: string) {
   return [...problems].sort((a, b) => (a.number || a.q_id).localeCompare(b.number || b.q_id, locale, { numeric: true }));
-}
-
-function issueCodeLabel(code: PreparationIssue["code"], locale: string) {
-  const labels: Record<PreparationIssue["code"], [string, string]> = {
-    low_confidence: ["匹配置信度较低，请与原文件核对", "Low-confidence match; compare with the source"],
-    source_conflict: ["教师资料内容存在冲突，请核对", "Teacher material contains conflicting content; please review"],
-    ai_source_conflict: ["SmarTAI 结果与原文件存在冲突", "SmarTAI output conflicts with the source"],
-    ambiguous_question_match: ["无法唯一匹配到题号", "Question match is ambiguous"],
-    unmapped_source_content: ["原文件中有内容尚未匹配", "Some source content is unmatched"],
-    parse_anomaly: ["文件解析结果异常", "File parsing anomaly"],
-    generation_failed: ["所需内容生成失败", "Required content generation failed"],
-    manual_completion_required: ["补齐缺失资料并确认后才能批改", "Complete and confirm the missing materials before grading"],
-    required_review_confirmation: ["严重问题已修正，请确认本题后继续", "The blocking issue was corrected; confirm this question to continue"],
-    rubric_step_reference_conflict: ["评分步骤与标答步骤未正确对应", "Rubric steps do not align with reference-answer steps"],
-    math_rubric_advisory: ["本题含 AI 补充评分说明，建议核对评分标准", "AI scoring guidance was added. Review the rubric"],
-    invalid_test_case: ["测试样例结构无效", "Invalid test case structure"],
-    reference_solution_failed_case: ["参考解未通过测试样例", "Reference solution failed a test"],
-    default_max_score_requires_review: ["当前使用默认 10 分，请确认题目满分", "Default 10-point maximum; confirm the score"],
-    max_score_not_found: ["未从每题分值说明中匹配到本题，已暂按 10 分", "No score matched this question; temporarily set to 10"],
-    recognition_partial: ["识别覆盖或内容尚待核对，请对照原文", "Recognition coverage or content needs review against the source"],
-    recognition_needs_review: ["识别结果存在不确定内容，请对照原文", "Uncertain recognition content; compare with the source"],
-  };
-  const label = labels[code];
-  return label ? label[locale === "zh-CN" ? 0 : 1]
-    : tx(locale, "资料存在待核对项，请打开详情", "Material needs review; open the details");
 }
 
 function formatScore(value: number) {

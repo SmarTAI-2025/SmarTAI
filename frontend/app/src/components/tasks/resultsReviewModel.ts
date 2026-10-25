@@ -9,7 +9,6 @@ import {
   hasPartialExperts,
   validExpertResults,
   isLowConfidence,
-  effectiveCorrectionScore,
   reviewReasonLabel,
   mathReviewLabels,
   MATH_REVIEW_REASONS,
@@ -85,9 +84,7 @@ export function correctionReviewNotes(correction: Correction, locale: Locale) {
   const labels = new Map<string, "blocking" | "advisory">();
   const add = (label: string, severity: "blocking" | "advisory" = "advisory") => labels.set(label, severity);
   if (correctionReviewBlocked(correction)) {
-    const score = effectiveCorrectionScore(correction);
-    const valid = score !== null && Number.isFinite(correction.max_score) && correction.max_score > 0 && score >= 0 && score <= correction.max_score;
-    add(valid ? text("缺失分数已补齐，请确认", "Corrected score needs confirmation") : text("缺少有效分数，请填写并确认", "Enter and confirm a valid score"), "blocking");
+    add(text("缺少有效分数，请填写", "Enter a valid score"), "blocking");
   }
   const experts = validExpertResults(correction);
   const multi = new Set((correction.expert_results ?? []).map(expert => expert.provider_id || expert.provider)).size > 1 || hasPartialExperts(correction);
