@@ -151,6 +151,7 @@ class SubmissionRevisionDTO(BaseModel):
 
 class SubmissionAnswerDTO(BaseModel):
     id: str
+    answer_key: str | None = None
     revision_id: str
     question_id: str
     q_id: str
