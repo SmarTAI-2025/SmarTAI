@@ -461,7 +461,7 @@ async def test_stale_worker_cannot_delete_replacement_workers_unlinked_source():
         content_type=raw.content_type,
         storage_prefix=(
             f"assignments/{task_id}/submission-sources/"
-            f"{replacement.id}/{replacement.attempt}"
+            f"{replacement.id}/{replacement.attempt}/0"
         ),
         assignment_id=task_id,
         fence_operation_id=replacement.id,
@@ -717,6 +717,99 @@ async def test_same_attempt_replay_reuses_source_and_stored_file():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("second_name", ["second.txt", "first.txt"])
+@pytest.mark.parametrize("source_kind", ["plain", "archive_member", "archive_reference"])
+async def test_equal_source_bytes_at_distinct_positions_do_not_share_pending_file(
+    monkeypatch, second_name, source_kind,
+):
+    owner_id, task_id = _seed_task()
+    queued = _create_operation(owner_id, task_id)
+    operation = workflow_repository.claim_operation(
+        queued.id, owner_id=owner_id, worker_id="source-identity-race-worker",
+        lease_seconds=60,
+    )
+    assert operation.lease_token
+    container = None
+    if source_kind != "plain":
+        container = await submission_source_pipeline._persist_archive_container(
+            content=_zip_sources({"first.txt": b"same answer"}),
+            filename="answers.zip", content_type="application/zip",
+            owner_id=owner_id, task_id=task_id, job_id=operation.id,
+            job_attempt=operation.attempt, operation_lease_token=operation.lease_token,
+        )
+    first_saved = asyncio.Event()
+    second_lookup_done = asyncio.Event()
+    first_registered = asyncio.Event()
+    real_run = submission_source_pipeline.run_in_threadpool
+    lookup_count = 0
+
+    async def interleave_file_publication(func, *args, **kwargs):
+        nonlocal lookup_count
+        if func is submission_source_pipeline.find_unlinked_source_file:
+            lookup_count += 1
+            if lookup_count == 2:
+                await asyncio.wait_for(first_saved.wait(), 5)
+                result = await real_run(func, *args, **kwargs)
+                second_lookup_done.set()
+                return result
+        if func is source_outcome_repository.register_source:
+            if kwargs["order_index"] == 0:
+                await asyncio.wait_for(second_lookup_done.wait(), 5)
+                result = await real_run(func, *args, **kwargs)
+                first_registered.set()
+                return result
+            await asyncio.wait_for(first_registered.wait(), 5)
+        result = await real_run(func, *args, **kwargs)
+        if func in (submission_source_pipeline.save_file,
+                    submission_source_pipeline.create_archive_member_reference):
+            first_saved.set()
+        return result
+
+    monkeypatch.setattr(
+        submission_source_pipeline, "run_in_threadpool", interleave_file_publication,
+    )
+    results = await asyncio.gather(*(
+        submission_source_pipeline._persist_and_register(
+            raw=RawUploadSource(
+                filename=name,
+                content=None if source_kind == "archive_reference" else b"same answer",
+                content_type="text/plain",
+            ),
+            owner_id=owner_id, task_id=task_id, job_id=operation.id,
+            job_attempt=operation.attempt, order_index=index, container_file=container,
+            operation_lease_token=operation.lease_token,
+        )
+        for index, name in enumerate(("first.txt", second_name))
+    ))
+    assert len({source_id for source_id, _ in results}) == 2
+    assert len({file_id for _, file_id in results}) == 2
+    files = [get_file(file_id=file_id, owner_id=owner_id) for _, file_id in results]
+    expected_names = ["first.txt", second_name]
+    if source_kind == "archive_reference":
+        expected_names = [f"answers.zip :: {name}" for name in expected_names]
+    assert [file.original_name for file in files] == expected_names
+    assert all(get_storage().exists(file.storage_key) for file in files)
+    expected_bytes = (
+        container.size_bytes if container is not None else 2 * len(b"same answer")
+    )
+    assert source_storage_repository.source_quota_usage(owner_id).used_bytes == expected_bytes
+    monkeypatch.setattr(submission_source_pipeline, "run_in_threadpool", real_run)
+    for index, name in enumerate(("first.txt", second_name)):
+        replay = await submission_source_pipeline._persist_and_register(
+            raw=RawUploadSource(
+                filename=name,
+                content=None if source_kind == "archive_reference" else b"same answer",
+                content_type="text/plain",
+            ),
+            owner_id=owner_id, task_id=task_id, job_id=operation.id,
+            job_attempt=operation.attempt, order_index=index, container_file=container,
+            operation_lease_token=operation.lease_token,
+        )
+        assert replay == results[index]
+    assert source_storage_repository.source_quota_usage(owner_id).used_bytes == expected_bytes
+
+
+@pytest.mark.asyncio
 async def test_restart_recovers_source_published_before_registration():
     owner_id, task_id = _seed_task()
     queued = _create_operation(owner_id, task_id)
@@ -737,7 +830,7 @@ async def test_restart_recovers_source_published_before_registration():
         content_type=raw.content_type,
         storage_prefix=(
             f"assignments/{task_id}/submission-sources/"
-            f"{running.id}/{running.attempt}"
+            f"{running.id}/{running.attempt}/0"
         ),
         assignment_id=task_id,
         fence_operation_id=running.id,
@@ -859,6 +952,7 @@ async def test_restart_recovers_archive_reference_published_before_registration(
         owner_id=owner_id,
         assignment_id=task_id,
         member_name=raw.filename,
+        source_order_index=0,
         fence_operation_id=running.id,
         fence_operation_attempt=running.attempt,
         fence_lease_token=running.lease_token,

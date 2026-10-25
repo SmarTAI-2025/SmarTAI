@@ -371,23 +371,25 @@ async def _persist_and_register(
         )
         return existing.id, existing.stored_file_id
 
+    # Recovery is scoped to one logical source, not merely equal content in
+    # the batch: another concurrent member may be saved but not registered yet.
     recovered_kind: str | None = None
     recovered_prefix: str | None = None
     if container_file is not None and raw.content is not None:
         recovered_kind = "submission_archive_member"
         recovered_prefix = (
-            f"assignments/{task_id}/submission-sources/{job_id}/{job_attempt}"
+            f"assignments/{task_id}/submission-sources/{job_id}/{job_attempt}/{order_index}"
         )
     elif container_file is not None:
         recovered_kind = "submission_archive_member_reference"
         recovered_prefix = (
             f"assignments/{task_id}/submission-source-references/"
-            f"{job_id}/{job_attempt}"
+            f"{job_id}/{job_attempt}/{order_index}"
         )
     elif raw.content is not None:
         recovered_kind = "submission_source"
         recovered_prefix = (
-            f"assignments/{task_id}/submission-sources/{job_id}/{job_attempt}"
+            f"assignments/{task_id}/submission-sources/{job_id}/{job_attempt}/{order_index}"
         )
     stored: StoredFile | None = None
     retry_source_id = await run_in_threadpool(
@@ -421,6 +423,7 @@ async def _persist_and_register(
                 owner_id=owner_id,
                 assignment_id=task_id,
                 member_name=raw.filename,
+                source_order_index=order_index,
                 fence_operation_id=(
                     job_id if operation_lease_token is not None else None
                 ),
@@ -440,7 +443,7 @@ async def _persist_and_register(
                 original_name=raw.filename,
                 content=raw.content,
                 content_type=raw.content_type,
-                storage_prefix=f"assignments/{task_id}/submission-sources/{job_id}/{job_attempt}",
+                storage_prefix=f"assignments/{task_id}/submission-sources/{job_id}/{job_attempt}/{order_index}",
                 assignment_id=task_id,
                 fence_operation_id=(
                     job_id if operation_lease_token is not None else None
