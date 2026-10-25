@@ -37,7 +37,7 @@ def recover_manual_question_packages(operation):
 def _mark_manual_rows(problems, error_code):
     missing = []
     for q_id, row in problems.items():
-        fields = [name for name in ("stem", "criterion") if not str(row.get(name) or "").strip()]
+        fields = [name for name in ("number", "type", "stem", "criterion") if not str(row.get(name) or "").strip()]
         if fields or row.get("preparation_issues"):
             missing.append(q_id)
             marker = _issue(q_id, "source", "manual_completion_required", "warning", [])

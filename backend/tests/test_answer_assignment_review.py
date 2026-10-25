@@ -30,7 +30,7 @@ def seed(count=2, flags=()):
         session.get(AssignmentQuestionRecord, first.question_id).number = first.number
         for index in range(2, count + 1):
             question = AssignmentQuestionRecord(id=f"question-{index}", assignment_id=args["task_id"],
-                q_id=f"q{index}", number=f"Section {index} / 1", type="proof", stem=f"Question {index}",
+                q_id=f"q{index}", number=f"Section {index} / 1", type="推理题", stem=f"Question {index}",
                 criterion="Award 10 points", max_score=10, order_index=index, version=1)
             session.add(question)
             session.flush()
@@ -129,7 +129,7 @@ def test_two_answers_swap_via_saved_duplicate_without_overwrite_and_can_grade():
     swapped = {a["answer_id"]: a for a in answers(current)}
     assert swapped[first["answer_id"]]["q_id"] == "q2"
     assert swapped[first["answer_id"]]["number"] == "Section 2 / 1"
-    assert swapped[first["answer_id"]]["type"] == "proof"
+    assert swapped[first["answer_id"]]["type"] == "推理题"
     assert swapped[first["answer_id"]]["content"] == "Edited first answer"
     assert task_facade.grading_readiness(**args)["ready"]
 

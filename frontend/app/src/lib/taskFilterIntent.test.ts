@@ -12,7 +12,7 @@ const problem = (number: string, maxScore: number | undefined, codes: Preparatio
   q_id: number, number, type, stem: "Compute a derivative", criterion: "Check the derivative", max_score: maxScore,
   preparation_issues: codes.map((code, index) => ({ issue_id: `${number}-${index}`, code, severity: "warning", field: "stem", message: code, status: "open" })),
 } as ProblemInfo);
-const problems = [problem("Q1", 10, ["low_confidence"]), problem("Q2", 5, ["low_confidence", "source_conflict"]), problem("Q10", undefined, ["source_conflict"], "proof")];
+const problems = [problem("Q1", 10, ["low_confidence"]), problem("Q2", 5, ["low_confidence", "source_conflict"]), problem("Q10", undefined, ["source_conflict"], "reasoning")];
 const student = (id: string, reviewed: boolean[]): StudentSubmission => ({ stu_id: id, stu_name: id,
   stu_ans: reviewed.map((done, index) => ({ q_id: `Q${index+1}`, number: String(index+1), type: "calculation", content: "answer", flag: [], review_status: done ? "confirmed" : "pending" })),
 });
@@ -101,4 +101,9 @@ describe("shared Ask controls and local execution", () => {
     expect(scopeResultQuestions([question], "S2")[0]).toMatchObject({ avgScore: 1, avgPercent: 10, count: 1, lowConfidenceCount: 1 });
     expect(question.entries).toHaveLength(2);
   });
+});
+
+
+it.each(["proof", "证明题", "short", "short_answer", "choice", "multiple_choice", "fill_blank"])("rejects retired type %s in filter payloads", type => {
+  expect(supportsFilterIntent(intent({ question_types: [type] }), "question_preparation")).toBe(false);
 });

@@ -108,7 +108,7 @@ def test_manual_override_survives_retry_without_reusing_old_ai(case, monkeypatch
         finish(case, resumed, monkeypatch, failed=("q1",) if save_path == "batch_failed" else (), score=8)
     elif save_path == "checkpoint":
         checkpoints, _, revisions, _ = prepare(case, resumed)
-        checkpoints.save_correction(revisions[0][1], Correction(q_id="q1", type="short", score=8,
+        checkpoints.save_correction(revisions[0][1], Correction(q_id="q1", type="concept", score=8,
             max_score=10, confidence=1, comment="New AI judgment", steps=[], synthesis_method="single"))
         stop(case, resumed)
     else:

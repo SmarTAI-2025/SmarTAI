@@ -8,7 +8,7 @@ async function setup(page: Page, matching = false) {
     localStorage.setItem("smartai_token", "synthetic-review"); localStorage.setItem("smartai_locale", "zh-CN");
   });
   const problems = Object.fromEntries([1, 2].map(n => [`q${n}`, {
-    q_id: `q${n}`, number: `Section ${n} / 1`, type: n === 1 ? "short" : "proof", stem: `Question in section ${n}`,
+    q_id: `q${n}`, number: `Section ${n} / 1`, type: n === 1 ? "概念题" : "推理题", stem: `Question in section ${n}`,
     criterion: "Award 10 points", max_score: 10, review_status: "confirmed", max_score_review_status: "confirmed",
   }]));
   const answers = [1, 2].map(n => ({ answer_id: `a${n}`, q_id: `q${n}`, number: problems[`q${n}`].number,

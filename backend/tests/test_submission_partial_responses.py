@@ -17,7 +17,7 @@ from backend.tests.test_task_background_workflows import _BackgroundTasks, _seed
 
 
 def _answer(q_id, content, **overrides):
-    return dict(q_id=q_id, number=q_id[1:], type="short", content=content, flag=[], **overrides)
+    return dict(q_id=q_id, number=q_id[1:], type="concept", content=content, flag=[], **overrides)
 
 
 def _response(answers, **identity):
@@ -28,7 +28,7 @@ def _setup():
     owner, task = _seed_task()
     for index in (1, 2):
         assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{index}", order_index=index - 1,
-            number=str(index), type="short", stem=f"Question {index}", criterion="Award 10 points", max_score=10)
+            number=str(index), type="concept", stem=f"Question {index}", criterion="Award 10 points", max_score=10)
     return owner, task
 
 
@@ -131,7 +131,7 @@ def test_oversized_field_preserves_bounded_siblings_and_safe_fields():
         stu_ans=[_answer("q1", "Good answer"), _answer("q2", "x" * 500_001)]))
     payload, _ = _independent_submission_payload(parsed, source, problems, set(problems))
     assert payload["stu_ans"][0]["content"] == "Good answer"
-    assert payload["stu_ans"][1]["content"] == "" and payload["stu_ans"][1]["type"] == "short"
+    assert payload["stu_ans"][1]["content"] == "" and payload["stu_ans"][1]["type"] == "概念题"
     assert payload["recognition"]["repair_question_ids"] == ["q2"]
 
 
@@ -261,7 +261,7 @@ async def test_metadata_only_failure_confirms_original_text_without_model_or_fak
     result = task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id="S1", q_id="q2",
         patch={"content": answer["content"], "review_status": "confirmed"}, expected_revision=state["workflow_revision"])
     assert result["answer"]["content"] == "The original answer is correct."
-    assert result["answer"]["number"] == "2" and result["answer"]["type"] == "short"
+    assert result["answer"]["number"] == "2" and result["answer"]["type"] == "概念题"
     assert result["answer"]["review_status"] == "confirmed"
     assert not task_facade._answer_recognition_failures(result["answer"]["flag"])
     assert "recognition_metadata_review" not in result["answer"]["flag"]
@@ -351,7 +351,7 @@ def test_model_review_of_discarded_rewrite_does_not_contaminate_saved_answer():
     incoming['flag'] = ['recognition_manual_pending']
     merged = merge_parse_repair(parsed(before), parsed(incoming), set(problems), problems=problems)
     answer = merged.student['stu_ans'][0]
-    assert answer['content'] == 'The preserved answer.' and answer['type'] == 'short'
+    assert answer['content'] == 'The preserved answer.' and answer['type'] == '概念题'
     assert answer['flag'] == []
     assert merged.student['recognition']['model_review_question_ids'] == []
     assert merged.status == 'parsed' and not merged.retryable
@@ -393,7 +393,7 @@ async def test_model_review_survives_unit_aggregation_and_explicit_format_retry(
     answers = {answer['q_id']: answer for answer in after['student_data']['S1']['stu_ans']}
     assert calls.count(['q1']) == 1 and calls.count(['q2']) == 4
     assert answers['q1']['content'] == 'Preserved work for q1' and not answers['q1']['flag']
-    assert answers['q2']['content'] == 'Preserved work for q2' and answers['q2']['type'] == 'short'
+    assert answers['q2']['content'] == 'Preserved work for q2' and answers['q2']['type'] == '概念题'
     assert 'recognition_manual_pending' in answers['q2']['flag']
     assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q2']['flag'])
     assert 'submission_recognition_blocked' in task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
@@ -484,7 +484,7 @@ async def test_interrupted_units_keep_review_provenance_through_retry(monkeypatc
     answers = {answer['q_id']: answer for answer in after['student_data']['S1']['stu_ans']}
     assert calls.count(['q1']) == 1 and calls.count(['q2']) == 4
     assert answers['q1']['content'] == 'Preserved work for q1' and not answers['q1']['flag']
-    assert answers['q2']['content'] == 'Preserved work for q2' and answers['q2']['type'] == 'short'
+    assert answers['q2']['content'] == 'Preserved work for q2' and answers['q2']['type'] == '概念题'
     assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q2']['flag'])
     blocked = task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
     expected_review = model_review is True

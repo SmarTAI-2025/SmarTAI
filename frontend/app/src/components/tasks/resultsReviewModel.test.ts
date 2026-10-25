@@ -4,7 +4,7 @@ import { buildResultsModel, hasReviewSignal, summarizeReviewScoreSources } from 
 import { collectResultReviewItems, correctionReviewNotes, correctionReviewAttention, correctionReviewBlocked, correctionReviewNextBlocked, isCorrectionReviewConfirmed } from "./resultsReviewModel";
 
 const correction = (overrides: Partial<Correction> = {}): Correction => ({
-  q_id: "q1", type: "short", score: 8, max_score: 10, confidence: 0.9,
+  q_id: "q1", type: "concept", score: 8, max_score: 10, confidence: 0.9,
   comment: "", steps: [], expert_results: [], requires_human_review: false, review_reasons: [], ...overrides,
 });
 

@@ -271,7 +271,7 @@ async def test_question_ocr_success_reuses_artifact_and_freezes_three_stage_rout
             content=b"answer", content_type="text/plain", registry=registry,
             recognition_provider_id="llm-question")
     task_facade.update_problem(task_id=task_id, owner_id=owner_id, q_id=questions[0].q_id,
-        patch={"criterion": "Award 10 points for explaining constructor injection.", "review_status": "confirmed"})
+        patch={"type": "concept", "criterion": "Award 10 points for explaining constructor injection.", "review_status": "confirmed"})
 
     async def fake_submission_parse(sources, _problems, _provider, **_kwargs):
         source = sources[0]
@@ -286,7 +286,7 @@ async def test_question_ocr_success_reuses_artifact_and_freezes_three_stage_rout
                 "stu_ans": [{
                     "q_id": "q1",
                     "number": "1",
-                    "type": "short",
+                    "type": "concept",
                     "content": "answer",
                     "flag": [],
                 }],

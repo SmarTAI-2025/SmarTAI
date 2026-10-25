@@ -10,7 +10,7 @@ from backend.services.background_errors import classify_background_error
 
 
 def row(number):
-    return {"q_id":"q1", "number":number, "type":"证明题", "stem":"Prove the stated property.", "criterion":""}
+    return {"q_id":"q1", "number":number, "type":"推理题", "stem":"Prove the stated property.", "criterion":""}
 
 
 @pytest.mark.asyncio

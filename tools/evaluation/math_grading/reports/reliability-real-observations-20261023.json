@@ -1,0 +1,57 @@
+{
+  "kind": "anonymous_aggregate_of_prior_real_runs",
+  "recorded_date": "2026-10-23",
+  "new_model_calls_by_task_b": 0,
+  "source": {
+    "path": "data/local-product-qa-20261022/evidence/math-capability-audit-20261023.md",
+    "sha256": "09e51133933463c52694c206548d47070cd45bbcf4751bfd7255b0787e79eaca",
+    "json_path": "data/local-product-qa-20261022/evidence/math-capability-audit-20261023.json",
+    "json_sha256": "3072f7616244408893ee422b6c00ef314175ccc206f64876e627b49252954ebc",
+    "availability": "protected_local_source_not_included"
+  },
+  "rounds": [
+    {"label": "Gemini round 1", "total": 14, "scored": 14, "detailed": 3, "direct": 11},
+    {"label": "Gemini round 2", "total": 14, "scored": 14, "detailed": 3, "direct": 11},
+    {"label": "Flash", "total": 14, "scored": 14, "detailed": 6, "direct": 8},
+    {"label": "Pro", "total": 14, "scored": 14, "detailed": 7, "direct": 7}
+  ],
+  "all_results": {
+    "total": 56,
+    "scored": 56,
+    "detailed": 19,
+    "direct": 37,
+    "deduction_ledger": 5,
+    "holistic_detailed": 14,
+    "retained_claims": 74,
+    "retained_dependency_edges": 53,
+    "tool_evidence_records": 0
+  },
+  "observable_drafts": {
+    "total": 45,
+    "claims": 172,
+    "drafts_with_nonempty_checks": 0,
+    "missing_rejected_drafts": 11
+  },
+  "reviewed_rejected_drafts": {
+    "total": 26,
+    "claims": 98,
+    "literal_source_mismatches": 52,
+    "manual_categories": {
+      "whitespace": 15,
+      "math_display": 31,
+      "escape_damage": 1,
+      "compressed_derivation": 4,
+      "ellipsis": 1
+    }
+  },
+  "judgment_accuracy": null,
+  "teacher_gold_labels": false,
+  "limits": [
+    "Four rounds repeat the same 14 answers; not 56 independent samples.",
+    "Detailed and ledger retention are not reasoning accuracy.",
+    "Missing drafts are unknown, not empty checks.",
+    "Manual display/whitespace categories do not establish automatic safe matching rates.",
+    "Pre-cleaning plan replies were not retained, so all plan rejection cannot be attributed to the parser or model.",
+    "No student source text, identity, credentials or model raw replies are copied here."
+  ]
+}

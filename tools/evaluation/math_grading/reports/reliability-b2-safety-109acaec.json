@@ -1,0 +1,224 @@
+{
+  "kind": "B2_preparation_not_final_acceptance",
+  "recorded_at": "2026-10-23T11:42:36.926091+00:00",
+  "revision": "d8cf6c0ae1852bd00774da7060d06da1d1d182dc",
+  "production_baseline": "109acaec30db917b52c0ca827f15a4b5830647e8",
+  "b1_corpus_sha256": "c2a2655d7816a4e6a4b407646472980e4b9119e3e49174b87a5eb457fca84736",
+  "test_source_sha256": "b522f600234fcd2a301f96aacf7776ae4554ad0b175452afe45a3ac08857779b",
+  "exit_code": 1,
+  "selected_cases": 18,
+  "totals": {
+    "passed": 15,
+    "failed": 3
+  },
+  "results": [
+    {
+      "id": "test_durable_stop_two_retries_reuse_exact_plans_and_valid_zero_without_provider",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.764870749990223,
+      "properties": {
+        "synthetic_provider_entries": 4,
+        "retry_provider_entries": 0
+      },
+      "failure": null
+    },
+    {
+      "id": "test_changed_inputs_cannot_reuse_failed_only_checkpoint[criterion]",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.4570481669798028,
+      "properties": {},
+      "failure": null
+    },
+    {
+      "id": "test_changed_inputs_cannot_reuse_failed_only_checkpoint[setup]",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.44751029199687764,
+      "properties": {},
+      "failure": null
+    },
+    {
+      "id": "test_persisted_obsolete_engine_never_reuses_old_math_score_or_plan",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.49711300001945347,
+      "properties": {},
+      "failure": null
+    },
+    {
+      "id": "test_stopped_worker_cannot_append_checkpoints",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.45315733301686123,
+      "properties": {},
+      "failure": null
+    },
+    {
+      "id": "test_storage_fault_propagates_without_publishing_a_fallback[plan]",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.028206749993842095,
+      "properties": {
+        "fault_boundary": "plan",
+        "published_results": 0
+      },
+      "failure": null
+    },
+    {
+      "id": "test_storage_fault_propagates_without_publishing_a_fallback[expert]",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.4672693329921458,
+      "properties": {
+        "fault_boundary": "expert",
+        "published_results": 0
+      },
+      "failure": null
+    },
+    {
+      "id": "test_storage_fault_propagates_without_publishing_a_fallback[final]",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.465928666992113,
+      "properties": {
+        "fault_boundary": "final",
+        "published_results": 0
+      },
+      "failure": null
+    },
+    {
+      "id": "test_reporter_failure_is_not_a_holistic_plan[OSError-before_plan]",
+      "phase": "call",
+      "outcome": "failed",
+      "duration_seconds": 0.0037440000160131603,
+      "properties": {
+        "fault_boundary": "before_plan",
+        "failure_type": "OSError",
+        "returned_modes_instead_of_error": [
+          "holistic"
+        ],
+        "synthetic_provider_entries": 0
+      },
+      "failure": "E   Failed: DID NOT RAISE <class 'OSError'>"
+    },
+    {
+      "id": "test_reporter_failure_is_not_a_holistic_plan[OSError-after_plan]",
+      "phase": "call",
+      "outcome": "failed",
+      "duration_seconds": 0.002770500024780631,
+      "properties": {
+        "fault_boundary": "after_plan",
+        "failure_type": "OSError",
+        "returned_modes_instead_of_error": [
+          "holistic"
+        ],
+        "synthetic_provider_entries": 1
+      },
+      "failure": "E   Failed: DID NOT RAISE <class 'OSError'>"
+    },
+    {
+      "id": "test_reporter_failure_is_not_a_holistic_plan[OSError-before_substep]",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.0006226250261534005,
+      "properties": {
+        "fault_boundary": "before_substep",
+        "failure_type": "OSError"
+      },
+      "failure": null
+    },
+    {
+      "id": "test_reporter_failure_is_not_a_holistic_plan[CheckpointWriteError-before_plan]",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.0006344580033328384,
+      "properties": {
+        "fault_boundary": "before_plan",
+        "failure_type": "CheckpointWriteError"
+      },
+      "failure": null
+    },
+    {
+      "id": "test_reporter_failure_is_not_a_holistic_plan[CheckpointWriteError-after_plan]",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.002022541011683643,
+      "properties": {
+        "fault_boundary": "after_plan",
+        "failure_type": "CheckpointWriteError"
+      },
+      "failure": null
+    },
+    {
+      "id": "test_reporter_failure_is_not_a_holistic_plan[CheckpointWriteError-before_substep]",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.0005084159784018993,
+      "properties": {
+        "fault_boundary": "before_substep",
+        "failure_type": "CheckpointWriteError"
+      },
+      "failure": null
+    },
+    {
+      "id": "test_assessment_reporter_failure_propagates_through_batch[OSError]",
+      "phase": "call",
+      "outcome": "failed",
+      "duration_seconds": 0.03953020801418461,
+      "properties": {
+        "failure_type": "OSError",
+        "returned_synthesis_instead_of_error": [
+          "all_failed",
+          "all_failed"
+        ],
+        "persisted_scores": [
+          null,
+          null
+        ]
+      },
+      "failure": "E   Failed: DID NOT RAISE <class 'OSError'>"
+    },
+    {
+      "id": "test_assessment_reporter_failure_propagates_through_batch[CheckpointWriteError]",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.03153995898901485,
+      "properties": {
+        "failure_type": "CheckpointWriteError"
+      },
+      "failure": null
+    },
+    {
+      "id": "test_actual_math_worker_cancellation_reaps_process_and_releases_capacity",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.4126103340240661,
+      "properties": {
+        "worker_returncode": -9,
+        "worker_kind": "real production math subprocess"
+      },
+      "failure": null
+    },
+    {
+      "id": "test_public_activity_pagination_and_progress_omit_private_evidence",
+      "phase": "call",
+      "outcome": "passed",
+      "duration_seconds": 0.5239816250104923,
+      "properties": {
+        "private_events": 4,
+        "public_history_pages": 35
+      },
+      "failure": null
+    }
+  ],
+  "upstream_calls": 0,
+  "billed_cost": 0,
+  "limits": [
+    "Disposable SQLite only; no PostgreSQL or production storage.",
+    "Synthetic raw JSON provider; no model quality claim.",
+    "Reporter fault injection is distinct from intentionally best-effort progress sinks.",
+    "Final candidate acceptance requires CORE integration_ready plus exact commit/path."
+  ]
+}

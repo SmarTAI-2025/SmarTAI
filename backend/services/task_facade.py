@@ -59,6 +59,7 @@ from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_requires_confirmation
+from backend.domain.question_types import normalize_question_type
 from backend.domain.errors import (
     DomainError,
     DuplicateActiveRun,
@@ -887,75 +888,30 @@ def _math_plans_for_projection(run_id, questions, *, grading_setup=None) -> dict
 
 
 def _math_rubric_advisory(question, plan, language: str) -> list[dict]:
-    """Project readable shared rules, never the private scoring graph or source."""
+    """One question-level suggestion; the existing rubric holds the full rules."""
+    if plan is None:
+        if not ((question.source or {}).get("presentation") or {}).get("rubric_draft"):
+            return []
+        from backend.services.math_grading_context import problem_from_question
+        from backend.services.rubric_drafts import saved_draft
+        draft = saved_draft(problem_from_question(question))
+        plan = draft.plan if draft else None
     if plan is None or not any(text.strip() for text in plan.advisories):
         return []
-    from backend.services.math_rubric_plan import _FALLBACK_ADVISORY, _FOLLOW_THROUGH, _NUMERICAL_POLICY
+    from backend.services.math_rubric_plan import _FALLBACK_ADVISORY
 
     zh = language == "zh"
-    presentation = (question.source or {}).get("presentation") or {}
-    generated = "criterion" in (presentation.get("ai_completion_provenance") or {})
-    original_source = ("AI生成" if generated else "提供的材料") if zh else (
-        "AI-generated material" if generated else "provided material"
-    )
-    advice = [
-        ("未能可靠拆分评分项，本轮按原评分标准整体判断；所有学生使用同一解释，无需额外确认。"
-         if zh else text) if text == _FALLBACK_ADVISORY else text
+    advice = list(dict.fromkeys(
+        ("评分项未能完整拆分，本轮按原评分标准整体判断；建议核对本题评分标准。" if zh else
+         "Scoring items could not be fully separated. This run uses the original rubric as a whole; review the rubric.")
+        if text == _FALLBACK_ADVISORY else text.strip()
         for text in plan.advisories if text.strip()
-    ]
-    # The original rubric remains in its existing field. Remove only our own
-    # envelope, keeping the model's actual shared interpretation verbatim.
-    _, separator, explanation = plan.effective_criterion.partition("\n\nAI interpretation:\n")
-    explanation = explanation.partition("\n\nExplicit original rules take precedence")[0].strip() if separator else ""
-    fallback = _FALLBACK_ADVISORY in plan.advisories
-    if fallback and zh:
-        explanation = (
-            "保留原标准的明确分值、方法限制、扣分、上限及有条件保底；不按学生步骤数平均分配。"
-            "标准简略时按题目要求统一判断部分得分；分值冲突时在题目满分内保留原标准的相对重点。"
-        )
-    lines = [
-        *advice,
-        (f"本轮 AI 评分解释（原标准来自{original_source}；原有明确规则优先，并非教师已确认的新标准）："
-         if zh else f"AI scoring interpretation for this run (original rubric from {original_source}; "
-         "explicit original rules take precedence; AI additions are not teacher-confirmed):"),
-        explanation,
-    ]
-    if not fallback:
-        for route in plan.routes:
-            mode = ({"points": "得分制", "deductions": "扣分制", "holistic": "整体评分"} if zh else
-                    {"points": "Points awarded", "deductions": "Points deducted", "holistic": "Holistic"})[route.mode]
-            items = "; ".join(
-                f"{item.description}: {item.points:g} "
-                + (f"分（{'原文' if item.source == 'provided' else 'AI解释'}）" if zh else
-                   f"points ({'original rule' if item.source == 'provided' else 'AI interpretation'})")
-                for item in route.items
-            )
-            lines.append(f"{mode}: {route.description} — {route.applies_when}" + (f": {items}" if items else ""))
-            if route.minimum_score:
-                condition = ("非空作答" if route.minimum_condition == "nonblank" else "所有作答") if zh else (
-                    "nonblank answers" if route.minimum_condition == "nonblank" else "all answers"
-                )
-                lines.append(f"{condition}最低 {route.minimum_score:g} 分" if zh else
-                             f"Minimum {route.minimum_score:g} points for {condition}.")
-    follow_through = (
-        "按原标准区分首次错误、沿错误中间值继续正确推导和新的独立错误，不统一规定后续得满分或半分；明确要求正确结果的评分项仍须满足。"
-        if zh and plan.follow_through == _FOLLOW_THROUGH else plan.follow_through
-    )
-    numerical = (
-        "保留题目的定义域、变量假设、单位、精度及积分常数要求；允许等价方法，除非原标准指定方法。"
-        "π、e、i 可为数值常数；不自行添加容差，工具无法核验不等于答错。"
-        if zh and plan.numerical_policy == _NUMERICAL_POLICY else plan.numerical_policy
-    )
-    lines.extend([
-        follow_through, numerical,
-        "如需调整，请在本题原有评分标准中修改。" if zh else
-        "To change these rules, edit this question's existing rubric.",
-    ])
+    ))
     return [{
-        "issue_id": f"math-rubric:{question.q_id}:{plan.plan_id}",
+        "issue_id": f"math-rubric:{question.q_id}:{plan.input_fingerprint}",
         "q_id": question.q_id, "field": "rubric", "code": "math_rubric_advisory",
         "severity": "warning", "status": "open",
-        "details": {"message": "\n".join(line for line in lines if line)},
+        "details": {"message": "\n".join(advice)},
     }]
 
 
@@ -982,7 +938,7 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     return {
         "q_id": question.q_id,
         "number": question.number,
-        "type": question.type,
+        "type": normalize_question_type(question.type),
         "stem": question.stem,
         "criterion": question.criterion,
         "recognition_confidence": confidence_value(presentation.get("recognition_confidence")),
@@ -1012,13 +968,13 @@ def _serialize_review_answers(answers, statuses, questions=()):
     duplicates = {q_id for q_id, count in Counter(answer.q_id for answer in answers).items() if count > 1}
     return [{
         "answer_id": answer.answer_key or answer.id,
-        "q_id": answer.q_id, "number": answer.number, "type": answer.type, "content": answer.content,
+        "q_id": answer.q_id, "number": answer.number, "type": normalize_question_type(answer.type), "content": answer.content,
         "flag": _public_answer_flags(answer.flag, content=answer.content, review_status=statuses.get(answer.id))
                 + (["answer_assignment_conflict"] if answer.q_id in duplicates else []),
         "recognition_confidence": _answer_recognition_confidence(answer.flag),
         "review_status": statuses.get(answer.id, "pending"),
     } for answer in answers] + [{
-        "q_id": question.q_id, "number": question.number, "type": question.type,
+        "q_id": question.q_id, "number": question.number, "type": normalize_question_type(question.type),
         "content": "", "flag": ["recognition_manual_pending", "recognition_failed"],
         "recognition_confidence": None, "review_status": "pending",
     } for question in questions if not duplicates and question.q_id not in {answer.q_id for answer in answers}]
@@ -2497,6 +2453,7 @@ def _replace_draft_questions(
                     "recognition_confidence": raw.get("recognition_confidence"),
                     "material_provenance": raw.get("material_provenance", {}),
                     "ai_completion_provenance": raw.get("ai_completion_provenance", {}),
+                    "rubric_draft": raw.get("rubric_draft"),
                     "preparation_issues": raw.get("preparation_issues", []),
                 },
             }
@@ -2504,7 +2461,7 @@ def _replace_draft_questions(
                 id=f"q_{uuid.uuid4().hex[:12]}", assignment_id=task_id,
                 q_id=str(raw.get("q_id") or q_id), order_index=index,
                 number=raw["number"] if isinstance(raw.get("number"), str) else str(index + 1),
-                type=raw["type"] if isinstance(raw.get("type"), str) else "其他",
+                type=normalize_question_type(raw.get("type")),
                 stem=str(raw.get("stem") or ""),
                 criterion=str(raw.get("criterion") or ""),
                 max_score=float(raw.get("max_score") or 10),
@@ -3846,7 +3803,7 @@ def apply_question_patches_atomic(
     }
     allowed_presentation = {
         "review_status", "solution_code", "material_provenance", "recognition_confidence",
-        "ai_completion_provenance", "preparation_issues",
+        "ai_completion_provenance", "preparation_issues", "rubric_draft",
         "max_score_source", "max_score_review_status",
     }
     with session_scope() as session:
@@ -4902,7 +4859,7 @@ def _effective_question_issues(presentation):
             issue = {**issue, "severity": "blocking", "status": "open"}
         if issue.get("code") == "manual_completion_required":
             issue = {**issue, "details": {**(issue.get("details") or {}), "required_fields": [
-                field for field in (issue.get("details") or {}).get("required_fields", []) if field in {"stem", "criterion"}]}}
+                field for field in (issue.get("details") or {}).get("required_fields", []) if field in {"number", "type", "stem", "criterion"}]}}
         if issue.get("field") == "answer" or (issue.get("code") == "generation_failed" and issue.get("field") == "programming_tests") or (
             issue.get("code") in {"low_confidence", "recognition_needs_review"}
             and not (issue.get("details") or {}).get("error_code")
@@ -4927,7 +4884,8 @@ def _question_review_blockers(questions) -> list[str]:
                      or _manual_question_fields_missing(question, presentation))):
             issues.append("question_manual_completion_required")
         problem = _serialize_problem(question)
-        if (not str(question.stem or "").strip() or not str(question.criterion or "").strip()
+        if (not str(question.number or "").strip() or not normalize_question_type(question.type)
+                or not str(question.stem or "").strip() or not str(question.criterion or "").strip()
                 or not problem["rubric_point_summary"]["is_valid"]
                 or any(issue.get("severity") == "blocking"
                        and (issue.get("status") == "open"
@@ -4948,7 +4906,7 @@ def _manual_question_fields_missing(question, presentation, patch=None):
     patch = patch or {}
     fields = {field for issue in presentation.get("preparation_issues", [])
               if issue.get("code") == "manual_completion_required"
-              for field in (issue.get("details") or {}).get("required_fields", []) if field in {"stem", "criterion"}}
+              for field in (issue.get("details") or {}).get("required_fields", []) if field in {"number", "type", "stem", "criterion"}}
     for field in fields:
         value = patch.get(field, presentation.get(field) if field == "solution_code" else getattr(question, field, None))
         if not value or (isinstance(value, str) and not value.strip()):
@@ -5116,9 +5074,17 @@ def start_task_grading(
             question.q_id: math_rubric_fingerprint(problem_from_question(question))
             for question in questions if question.q_id in math_qids
         }
+    fingerprint_manifest = deepcopy(input_manifest)
+    for row in fingerprint_manifest["questions"]:
+        # Semantic input already has its own fingerprint. Persisting an internal
+        # cache must not make unchanged completed grading look like new work.
+        presentation = (row.get("source") or {}).get("presentation") or {}
+        presentation.pop("rubric_draft", None)
+        if not presentation and isinstance(row.get("source"), dict):
+            row["source"].pop("presentation", None)
     run_fingerprint = _hash_json({
         "grading_setup": workflow.grading_setup,
-        "input_manifest": input_manifest,
+        "input_manifest": fingerprint_manifest,
     })
     latest = runs[-1] if runs else None
     if latest and latest.status == "completed" and not (explicit_request and retry_scope == "full_batch"):
@@ -5350,7 +5316,9 @@ def update_problem(
         presentation["preparation_issues"] = _effective_question_issues(presentation)
         original_problem = _serialize_problem(question)
         repaired_required_content = (
-            not str(question.stem or "").strip()
+            not str(question.number or "").strip()
+            or not normalize_question_type(question.type)
+            or not str(question.stem or "").strip()
             or not original_problem["rubric_point_summary"]["is_valid"]
         )
         manual_markers = [issue for issue in presentation.get("preparation_issues", [])
@@ -5392,7 +5360,7 @@ def update_problem(
         if patch.get("review_status") == "confirmed":
             fields = {"stem", "answer", "rubric", "programming_tests", "source", "max_score"}
             issues = presentation.get("preparation_issues", [])
-            if _manual_question_fields_missing(question, presentation, patch) or not str(patch.get("stem", question.stem) or "").strip() or not str(patch.get("criterion", question.criterion) or "").strip() or any(
+            if not str(patch.get("number", question.number) or "").strip() or not normalize_question_type(patch.get("type", question.type)) or _manual_question_fields_missing(question, presentation, patch) or not str(patch.get("stem", question.stem) or "").strip() or not str(patch.get("criterion", question.criterion) or "").strip() or any(
                 issue.get("status") == "open" and issue.get("severity") == "blocking"
                 for issue in issues
             ):
@@ -5428,9 +5396,9 @@ def update_problem(
                 raise ValidationError("Question number is required.", code="invalid_question_number")
             patch["number"] = number
         if "type" in patch:
-            question_type = str(patch["type"] or "").strip()
-            if not question_type or len(question_type) > 64:
-                raise ValidationError("Question type is required.", code="invalid_question_type")
+            question_type = normalize_question_type(patch["type"])
+            if not question_type:
+                raise ValidationError("Select a supported question type.", code="invalid_question_type")
             patch["type"] = question_type
         if "stem" in patch or "number" in patch:
             structure = build_major_question_structure(
@@ -5681,7 +5649,7 @@ def update_student_answer(
                 "status": "ok", "stu_id": display_student_id, "q_id": q_id,
                 "answer": {
                     "answer_id": target.answer_key,
-                    "q_id": target.q_id, "number": target.number, "type": target.type,
+                    "q_id": target.q_id, "number": target.number, "type": normalize_question_type(target.type),
                     "content": target.content, "flag": _public_answer_flags(target.flag, content=target.content, review_status=review.review_status),
                     "recognition_confidence": _answer_recognition_confidence(target.flag),
                     "review_status": review.review_status,
@@ -5742,7 +5710,9 @@ def update_student_answer(
             if is_target and assignment_changed and _answer_matching_confirmation_allowed(flags, content):
                 flags = [flag for flag in flags if flag != "recognition_manual_pending"]
             number = question.number if is_target and (assignment_changed or "number" in metadata_fields) else answer.number
-            answer_type = question.type if is_target and (assignment_changed or "type" in metadata_fields) else answer.type
+            answer_type = normalize_question_type(
+                question.type if is_target and (assignment_changed or "type" in metadata_fields) else answer.type
+            )
             answer_id = f"ans_{uuid.uuid4().hex[:12]}"
             updated_answer = SubmissionAnswerRecord(
                 id=answer_id,

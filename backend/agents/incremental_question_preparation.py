@@ -37,6 +37,7 @@ from backend.services.question_preparation_artifacts import (
     preparation_snapshot_digest, read_incremental_preparation_units,
 )
 from backend.services.question_sources import question_recognition_options
+from backend.services.rubric_drafts import saved_draft
 from backend.services.question_preparation_identity import validate_preparation_source_roles
 from backend.services.question_structure import annotate_major_question_structures
 from backend.services.teacher_score_constraints import explicit_teacher_scores, normalize_question_number
@@ -268,11 +269,22 @@ class IncrementalQuestionPreparation:
         for q_id, row in result.items():
             if generated:
                 identity = _base_identity(row)
+                drafts = [row.get("rubric_draft")]
                 for target in ("reference_answer", "criterion", "solution_code", "test_cases"):
                     saved = self.units.get(f"generated:{identity}:{target}")
                     if saved:
                         row[target] = deepcopy(saved["q1"][target])
                         row.setdefault("ai_completion_provenance", {})[target] = deepcopy(saved["q1"]["ai_completion_provenance"][target])
+                        if saved["q1"].get("rubric_draft"):
+                            drafts.append(saved["q1"]["rubric_draft"])
+                # Field order is not semantic freshness. Validate only after
+                # all fields and their provenance have reached the final row;
+                # never re-seal a stale draft to make it appear current.
+                row.pop("rubric_draft", None)
+                for draft in reversed(drafts):
+                    if draft and saved_draft({**row, "rubric_draft": draft}) is not None:
+                        row["rubric_draft"] = deepcopy(draft)
+                        break
             row.setdefault("preparation_issues", [])
             for issue in row["preparation_issues"]:
                 issue["q_id"] = q_id
@@ -923,7 +935,11 @@ class IncrementalQuestionPreparation:
         if material_pending:
             return
         score_rows = []
-        for row in self.project(generated=False).values():
+        # Keep cache/dependency keys tied to the immutable extracted base, but
+        # generate against the accepted view, including restored fields and
+        # their provenance. A new retry worker has no previous call's locals.
+        accepted = self.project()
+        for q_id, row in self.project(generated=False).items():
             if not str(row.get("stem") or "").strip() or any(issue.get("code") == "recognition_partial" for issue in row.get("preparation_issues", [])):
                 continue
             if self.policy.mode == "per_question" and not row.get("max_score_source"):
@@ -937,7 +953,7 @@ class IncrementalQuestionPreparation:
                        and f"generated:{identity}:{target['target']}" not in self.units]
             key = "generation:" + identity
             if targets and key not in self.jobs:
-                self.jobs[key] = asyncio.create_task(self._generate(key, identity, row, targets))
+                self.jobs[key] = asyncio.create_task(self._generate(key, identity, accepted[q_id], targets))
 
         # A natural-language allocation can refer to "the last two questions".
         # Resolve it once against the complete known set, as before incremental
@@ -995,14 +1011,19 @@ class IncrementalQuestionPreparation:
                             except (ValueError, ValidationError):
                                 continue
                             value = [case.model_dump() for case in candidate.test_cases] if candidate.target == "test_cases" else candidate.text_value
-                            saved = _rows([row])
+                            saved = _rows([{name: value for name, value in data["q1"].items()
+                                            if name != "teacher_subpart_points"}])
                             saved["q1"][candidate.target] = value
+                            if candidate.rubric_draft:
+                                saved["q1"]["rubric_draft"] = candidate.rubric_draft
                             saved["q1"].setdefault("ai_completion_provenance", {})[candidate.target] = dict(
                                 job_id=self.operation.operation_id, candidate_id=candidate.target_id,
                                 source_kind="ai_generated", provider_id=self.provider_id, review_status="pending",
                                 generated_at=time.time(), updated_at=time.time())
                             await self.finish(f"generated:{identity}:{candidate.target}", saved)
-                            data["q1"][candidate.target] = value
+                            # A later missing-field request must see the same
+                            # accepted content AND source classification we saved.
+                            data["q1"].update(deepcopy(saved["q1"]))
                             pending.remove(target)
                         if not pending:
                             break

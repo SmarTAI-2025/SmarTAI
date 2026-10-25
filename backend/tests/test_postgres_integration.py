@@ -259,7 +259,7 @@ def test_postgres_single_active_run(pg_database):
     course_repository.enroll(course_id=course.id, student_id=student)
     asg = assignment_repository.create_assignment(teacher_id=teacher, course_id=course.id, name="A")
     assignment_repository.add_question(
-        assignment_id=asg.id, teacher_id=teacher, q_id="q1", order_index=0, type="short", stem="?",
+        assignment_id=asg.id, teacher_id=teacher, q_id="q1", order_index=0, type="concept", stem="?",
     )
     assignment_repository.publish(assignment_id=asg.id, teacher_id=teacher, expected_version=1)
 
@@ -291,7 +291,7 @@ def test_postgres_lease_claim_is_owner_scoped(pg_database):
     course_repository.enroll(course_id=course.id, student_id=student)
     asg = assignment_repository.create_assignment(teacher_id=teacher, course_id=course.id, name="A")
     assignment_repository.add_question(
-        assignment_id=asg.id, teacher_id=teacher, q_id="q1", order_index=0, type="short", stem="?",
+        assignment_id=asg.id, teacher_id=teacher, q_id="q1", order_index=0, type="concept", stem="?",
     )
     assignment_repository.publish(assignment_id=asg.id, teacher_id=teacher, expected_version=1)
 

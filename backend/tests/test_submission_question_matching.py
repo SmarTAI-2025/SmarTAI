@@ -96,7 +96,7 @@ async def test_ocr_duplicate_numbers_do_not_silently_choose_last_question():
 @pytest.mark.asyncio
 async def test_ocr_partial_match_keeps_unresolved_identity_for_existing_review_gate():
     known = problems(('Section 1.1 / 1', 'Section 1.2 / 1'))
-    known['q3'] = dict(q_id='q3', number='2', type='short', stem='A third distinct question.')
+    known['q3'] = dict(q_id='q3', number='2', type='概念题', stem='A third distinct question.')
     result = (await ingest_agent.parse_student_answer_sources_from_ocr_markdown(
         [source('1: Ambiguous first answer.\n2: Clear second answer.')], known))[0]
     assert [a['q_id'] for a in result.student['stu_ans']] == ['q3']
@@ -117,7 +117,7 @@ async def test_ocr_unlabelled_work_is_not_synthetic_question_one():
 @pytest.mark.asyncio
 @pytest.mark.parametrize('catalog_number, accepted', [('', True), ('2', False)])
 async def test_ocr_single_question_without_teacher_number_retains_existing_review_fallback(catalog_number, accepted):
-    known = {'q1': dict(q_id='q1', number=catalog_number, type='short', stem='One exercise.')}
+    known = {'q1': dict(q_id='q1', number=catalog_number, type='概念题', stem='One exercise.')}
     result = (await ingest_agent.parse_student_answer_sources_from_ocr_markdown(
         [source('1. Student work.')], known))[0]
     if accepted:
@@ -208,7 +208,7 @@ async def test_pdf_running_labels_with_different_aliases_keep_full_answer(monkey
     from backend.tests.test_task_background_workflows import _seed_task
     owner, task = _seed_task()
     assignment_repository.add_question(task, teacher_id=owner, q_id='q1', order_index=0,
-        number=catalog_number, type='short', stem='A mathematical question.', criterion='Teacher rubric.', max_score=10)
+        number=catalog_number, type='概念题', stem='A mathematical question.', criterion='Teacher rubric.', max_score=10)
     pages = ['Question 1.2.1: First part.', 'Question 1: Continued part.']
     calls = []
     async def invoke(messages):
@@ -216,7 +216,7 @@ async def test_pdf_running_labels_with_different_aliases_keep_full_answer(monkey
         calls.append(text)
         assert all(part in text for part in ('First part.', 'Continued part.'))
         return SimpleNamespace(content=json.dumps(dict(stu_id='S1', stu_name='Alice', stu_ans=[
-            dict(q_id='q1', number=catalog_number, type='short', content='First part. Continued part.', flag=[])])))
+            dict(q_id='q1', number=catalog_number, type='概念题', content='First part. Continued part.', flag=[])])))
     registry = _registry(monkeypatch, invoke)
     async def read(**kwargs):
         for number in page_order:

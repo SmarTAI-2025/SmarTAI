@@ -152,6 +152,8 @@ def build_system_prompt(
     role_description: str,
     language: str = "en",
     grading_setup: Optional[TaskGradingSetup] = None,
+    *,
+    output_instruction: str = "Return a single JSON object with scoring details.",
 ) -> str:
     """Compose the canonical system prompt: anti-jailbreak prefix + role description + language directive.
 
@@ -166,7 +168,7 @@ def build_system_prompt(
         + f"\n\nIMPORTANT: You MUST write your comment and step descriptions in {lang_instruction}. "
         "However, if the student's answer is in a different language, provide bilingual feedback "
         "(primary language + student's language). "
-        "Return a single JSON object with scoring details."
+        + output_instruction
     )
 
 
@@ -273,16 +275,16 @@ def register_skill(*problem_types: str):
 def get_skill_for_type(problem_type: str) -> Type["GradingSkill"]:
     """
     Look up the skill class for a problem type.
-    Falls back to ConceptSkill (for 其他) if exact type not registered.
+    English UI values and Chinese recognition values select the same skill.
     """
+    from backend.domain.question_types import normalize_question_type
+    # Preparation may select a strategy before GradingAgent has been imported.
+    from backend.skills import calculation, concept, programming, proof  # noqa: F401
+
+    problem_type = normalize_question_type(problem_type)
     if problem_type in _SKILL_REGISTRY:
         return _SKILL_REGISTRY[problem_type]
-    # Fallback chain
-    for fallback in ("其他", "概念题"):
-        if fallback in _SKILL_REGISTRY:
-            logger.warning(f"No skill registered for type {problem_type!r}, using {fallback!r}")
-            return _SKILL_REGISTRY[fallback]
-    raise ValueError(f"No skill registered for type {problem_type!r} and no fallback available")
+    raise ValueError("Select a supported question type before grading")
 
 
 def list_registered_skills() -> Dict[str, str]:

@@ -67,7 +67,9 @@ def add_question(*, assignment_id: str, teacher_id: str, q_id: str, order_index:
                  test_cases: list | None = None, source: dict | None = None) -> education.QuestionDTO:
     if not q_id.strip():
         raise ValidationError("Question id is required")
-    if not type.strip():
+    from backend.domain.question_types import normalize_question_type
+    type = normalize_question_type(type)
+    if not type:
         raise ValidationError("Question type is required")
     return assignment_repository.add_question(
         assignment_id=assignment_id, teacher_id=teacher_id, q_id=q_id.strip(),

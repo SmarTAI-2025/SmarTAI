@@ -30,7 +30,7 @@ def test_shared_boundaries(value, advice, required):
 
 @pytest.mark.parametrize("confidence,required", [(.2499, False), (.25, False), (.5999, False), (.60, False)])
 def test_grading_policy_does_not_make_advice_mandatory(confidence, required):
-    correction = Correction(q_id="q", type="proof", score=8, max_score=10, confidence=confidence,
+    correction = Correction(q_id="q", type="reasoning", score=8, max_score=10, confidence=confidence,
                             comment="Evidence", steps=[], requires_human_review=True, review_reasons=["low_confidence"])
     actual = _apply_low_confidence_policy(correction, None)
     assert actual.requires_human_review is required
@@ -54,7 +54,7 @@ def test_legacy_slider_uses_current_fixed_policy():
 def test_any_valid_expert_confidence_is_advisory_and_confirmation_clears_it(score, low_confidence):
     from backend.domain.grading_review import review_state
     from backend.models import ExpertResult
-    correction = Correction(q_id="q", type="proof", score=score, max_score=10, confidence=.95,
+    correction = Correction(q_id="q", type="reasoning", score=score, max_score=10, confidence=.95,
         comment="Saved", steps=[], expert_results=[
             ExpertResult(provider="strong", score=score, confidence=.95, comment="A"),
             ExpertResult(provider="uncertain", score=score, confidence=low_confidence, comment="B"),
@@ -71,7 +71,7 @@ def test_any_valid_expert_confidence_is_advisory_and_confirmation_clears_it(scor
 
 def test_failed_placeholder_confidence_never_creates_low_confidence_advice():
     from backend.models import ExpertResult
-    correction = Correction(q_id="q", type="proof", score=8, max_score=10, confidence=.6,
+    correction = Correction(q_id="q", type="reasoning", score=8, max_score=10, confidence=.6,
         comment="Saved", steps=[], expert_results=[
             ExpertResult(provider="ok", score=8, confidence=.6, comment="A"),
             ExpertResult(provider="failed", score=0, confidence=0, error_kind="transient_llm", comment="B")])

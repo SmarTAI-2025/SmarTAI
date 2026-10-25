@@ -123,7 +123,7 @@ def _questions(count: int = 2) -> dict[str, dict]:
         problem = {
             "q_id": q_id,
             "number": str(index),
-            "type": "short",
+            "type": "concept",
             "stem": stem,
             "criterion": "",
             "max_score": 10,
