@@ -427,6 +427,16 @@ class IncrementalQuestionPreparation:
                 invalidations.pop(token, None)
         return invalidations
 
+    def _reusable_problem_source_plans(self):
+        invalid = self._source_invalidations()
+        return {token: plan for token, plan in self._ready_source_plans()
+                if self.roles[token] == "problem" and token in self.completed_sources
+                and not invalid.get(token) and any(self.units[key] for key in plan["keys"])
+                and all(str(row.get("stem") or "").strip()
+                        and not any(issue.get("code") == "recognition_partial"
+                                    for issue in row.get("preparation_issues", []))
+                        for key in plan["keys"] for row in self.units[key].values())}
+
     def _current_source_units(self):
         """Select a verified partition, never combine completed source versions.
 
@@ -552,6 +562,13 @@ class IncrementalQuestionPreparation:
     async def _source(self, source):
         from backend.services.source_question_units import source_page_groups, source_question_units, question_headings
         draft, _, _ = source
+        if draft.source_token in self._reusable_problem_source_plans():
+            # restore() verified these immutable units against the frozen source
+            # contract. A material-generation failure does not invalidate them.
+            # Re-reading can change the chunk key and re-extract successful work.
+            self.processing_sources.discard(draft.source_token)
+            await self.schedule_ready()
+            return
         pages, scheduled, tasks, planned = {}, set(), [], set()
         numbered = draft.role == "problem"
         targeted = numbered and bool(self.wanted)
@@ -1047,9 +1064,9 @@ class IncrementalQuestionPreparation:
 
     async def run(self):
         await self.restore()
-        # Each read attempt establishes its own partition from current pages;
-        # prior immutable units remain reusable until that partition is ready.
-        await self._checkpoint(incremental_source_plans={})
+        # Preserve verified question partitions when only their generated
+        # materials failed. Unfinished sources still establish a new partition.
+        await self._checkpoint(incremental_source_plans=self._reusable_problem_source_plans())
         await self.reporter.configure_workflow("question_preparation", QUESTION_PREPARATION_STAGE_SEQUENCE, parallel=True)
         if self.wanted:
             labels = {"target:" + normalize_question_number(number): number for number in self.wanted}

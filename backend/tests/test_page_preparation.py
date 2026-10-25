@@ -298,17 +298,22 @@ async def test_stop_during_retry_keeps_saved_scores_in_manual_review(monkeypatch
         background_tasks=None, current=SimpleNamespace(id=owner), registry=_RecoveryRegistry())
     current = _claim(owner, retried["job_id"], "score-stop-retry")
     inputs = api._rehydrate_question_preparation_inputs(current)
-    reading = asyncio.Event()
-
-    async def delayed(source, **kwargs):
-        reading.set()
-        await asyncio.Event().wait()
-
+    checkpointed = asyncio.Event()
+    read = AsyncMock(side_effect=AssertionError("Completed questions must not be read again"))
     resumed = inc.IncrementalQuestionPreparation(operation=current, sources=inputs["sources"],
         provider=inputs["route"].provider, provider_id=inputs["recognition_provider_id"],
-        reporter=ProgressReporter(current.operation_id), score_policy=inputs["score_policy"], read_source=delayed)
+        reporter=ProgressReporter(current.operation_id), score_policy=inputs["score_policy"], read_source=read)
+    finish = resumed.finish
+
+    async def delayed_finish(key, *args, **kwargs):
+        await finish(key, *args, **kwargs)
+        if key == "initial":
+            checkpointed.set()
+            await asyncio.Event().wait()
+
+    resumed.finish = delayed_finish
     runner = asyncio.create_task(resumed.run())
-    await asyncio.wait_for(reading.wait(), 3)
+    await asyncio.wait_for(checkpointed.wait(), 3)
     runner.cancel()
     with pytest.raises(asyncio.CancelledError):
         await runner
@@ -323,3 +328,4 @@ async def test_stop_during_retry_keeps_saved_scores_in_manual_review(monkeypatch
     assert actual["max_score"] == 5 and actual["max_score_source"] == "per_question_text"
     extract.assert_awaited_once()
     resolve.assert_awaited_once()
+    read.assert_not_awaited()
