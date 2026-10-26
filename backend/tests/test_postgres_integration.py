@@ -373,6 +373,33 @@ def test_postgres_concurrent_report_generation_is_idempotent(pg_database, monkey
     test_concurrent_generation_and_replay_only_create_one_report(monkeypatch)
 
 
+@pytest.mark.parametrize("state", ["draft", "released", "missing"])
+def test_postgres_invalid_review_leaves_all_state_unchanged(pg_database, state):
+    from backend.tests.test_correction_review_atomic import test_invalid_score_has_no_persisted_side_effects
+
+    test_invalid_score_has_no_persisted_side_effects(state, 11)
+
+
+@pytest.mark.parametrize("state", ["draft", "released", "missing"])
+def test_postgres_review_failure_rolls_back_all_state(pg_database, state):
+    from backend.tests.test_correction_review_atomic import test_failure_after_review_flush_rolls_back_every_change
+
+    test_failure_after_review_flush_rolls_back_every_change(state)
+
+
+@pytest.mark.parametrize("state", ["draft", "released"])
+def test_postgres_concurrent_reviews_have_one_winner(pg_database, state):
+    from backend.tests.test_correction_review_atomic import test_concurrent_reviews_have_one_revision_winner
+
+    test_concurrent_reviews_have_one_revision_winner(state)
+
+
+def test_postgres_report_and_review_share_one_revision(pg_database):
+    from backend.tests.test_correction_review_atomic import test_report_generation_and_review_share_one_revision_winner
+
+    test_report_generation_and_review_share_one_revision_winner()
+
+
 def test_postgres_task_delete_finalizer_locks_children_before_workflow(pg_database):
     """Task CASCADE must wait on G before it owns W/A."""
     from sqlalchemy import select, text

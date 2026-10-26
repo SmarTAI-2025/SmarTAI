@@ -25,6 +25,7 @@ RETIRED_REQUESTS = [
     ("POST", "/grading-runs"),
     ("POST", "/grading-runs/old/release"),
     ("POST", "/grading-runs/results/old/review"),
+    ("POST", "/tasks/old/teacher_comment"),
     ("GET", "/results/assignment/old/me"),
     ("GET", "/results/assignment/old/summary"),
     ("POST", "/prob_preview/"),

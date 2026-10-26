@@ -164,15 +164,9 @@ class UpdateStudentIdentityRequest(BaseModel):
 
 class UpdateCorrectionReviewRequest(BaseModel):
     expected_workflow_revision: int = Field(ge=0)
-    teacher_score: float = Field(ge=0)
+    teacher_score: float = Field(ge=0, allow_inf_nan=False)
     teacher_comment: str = Field(default="", max_length=4000)
     confirm: bool = False
-
-
-class UpdateTeacherCommentRequest(BaseModel):
-    student_id: str
-    q_id: str
-    comment: str = Field(default="", max_length=4000)
 
 
 class GenerateResultArtifactsRequest(BaseModel):
@@ -801,33 +795,6 @@ def update_correction_review(
         teacher_comment=request.teacher_comment, confirm=request.confirm,
         expected_revision=request.expected_workflow_revision,
     ))
-
-
-@router.post("/{task_id}/teacher_comment")
-def set_teacher_comment(
-    task_id: str, request: UpdateTeacherCommentRequest,
-    current: User = Depends(require_teacher),
-):
-    try:
-        workflow = workflow_repository.get_live_workflow(
-            task_id, owner_id=current.id
-        )
-        results = task_facade.task_results(task_id=task_id, owner_id=current.id)
-        student = next((item for item in results.get("results", []) if item["student_id"] == request.student_id), None)
-        correction = next((item for item in (student or {}).get("corrections", []) if item["q_id"] == request.q_id), None)
-        if correction is None:
-            raise NotFound("grade_result")
-        task_facade.update_correction_review(
-            task_id=task_id, owner_id=current.id,
-            display_student_id=request.student_id, q_id=request.q_id,
-            teacher_score=correction.get("teacher_score") if correction.get("teacher_score") is not None else correction["score"],
-            teacher_comment=request.comment, confirm=False,
-            expected_revision=workflow.workflow_revision,
-        )
-        return {"status": "ok", "student_id": request.student_id,
-                "q_id": request.q_id, "teacher_comment": request.comment}
-    except DomainError as exc:
-        return domain_error_response(exc)
 
 
 @router.get("/{task_id}/teacher_comments")

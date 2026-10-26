@@ -48,6 +48,7 @@ from backend.db.models import (
     AssignmentRecord,
     AssignmentTagRecord,
     CourseRecord,
+    GradeResultRecord,
     GradingRunRecord,
     SubmissionAnswerRecord,
     SubmissionRecord,
@@ -5801,55 +5802,101 @@ def update_correction_review(
     teacher_score: float, teacher_comment: str, confirm: bool,
     expected_revision: int,
 ) -> dict:
-    claimed_workflow = workflow_repository.update_workflow(
-        task_id, owner_id=owner_id, expected_revision=expected_revision
-    )
-    presentations = workflow_repository.list_student_presentations(task_id)
-    presentation = next(
-        (item for item in presentations.values() if item.display_student_id == display_student_id),
-        None,
-    )
-    internal_id = presentation.student_id if presentation else display_student_id
-    workflow = workflow_repository.get_live_workflow(
-        task_id, owner_id=owner_id
-    )
+    workflow = workflow_repository.get_live_workflow(task_id, owner_id=owner_id)
     runs = grading_repository.list_runs_for_assignment(task_id, actor_id=owner_id)
-    target_run = _current_grading_run(workflow, runs)
-    if target_run is None:
+    candidate = _current_grading_run(workflow, runs)
+    if candidate is None:
         raise NotFound("grading_run")
-    if target_run.released_at is not None:
-        target_run = grading_repository.clone_released_run_for_review(
-            target_run.id, teacher_id=owner_id
+
+    with session_scope() as session:
+        # Match publication/deletion's G -> W -> A lock order. SQLite ignores
+        # FOR UPDATE, so take its writer gate before reading mutable state.
+        if session.bind.dialect.name == "sqlite":
+            session.execute(update(GradingRunRecord).where(
+                GradingRunRecord.id == candidate.id,
+                GradingRunRecord.assignment_id == task_id,
+                GradingRunRecord.teacher_id == owner_id,
+            ).values(created_at=GradingRunRecord.created_at))
+        target_run = session.scalar(select(GradingRunRecord).where(
+            GradingRunRecord.id == candidate.id,
+            GradingRunRecord.assignment_id == task_id,
+            GradingRunRecord.teacher_id == owner_id,
+        ).with_for_update())
+        if target_run is None:
+            raise NotFound("grading_run")
+        workflow_row = workflow_repository.lock_workflow_revision(
+            session, assignment_id=task_id, owner_id=owner_id, expected_revision=expected_revision,
         )
-        workflow_repository.update_workflow(
-            task_id, owner_id=owner_id, bump_revision=False,
-            presentation_status="graded", grading_job_id=target_run.id,
-            analysis_status="not_generated",
-            analysis_generated_at=None, analysis_error_code=None,
+        workflow_repository._lock_live_assignment(
+            session, assignment_id=task_id, owner_id=owner_id,
         )
-    rows = grading_repository.list_results_for_run(target_run.id)
-    row = next((item for item in rows if item.student_id == internal_id and item.q_id == q_id), None)
-    if row is None:
-        row = grading_repository.ensure_missing_result_for_review(
-            target_run.id, teacher_id=owner_id, student_id=internal_id, q_id=q_id)
-    previous_score = row.effective_score
-    previous_comment = row.effective_comment
-    unchanged = previous_score == teacher_score and previous_comment == teacher_comment
-    if not unchanged or confirm:
-        grading_runs.add_teacher_review(
-            grade_result_id=row.id, teacher_id=owner_id,
-            new_score=teacher_score, new_comment=teacher_comment,
-            confirm=confirm,
-        )
-    refreshed = next(
-        item for item in grading_repository.list_results_for_run(target_run.id)
-        if item.id == row.id
-    )
+        runs = session.scalars(select(GradingRunRecord).where(
+            GradingRunRecord.assignment_id == task_id,
+            GradingRunRecord.teacher_id == owner_id,
+        ).order_by(GradingRunRecord.created_at)).all()
+        current = _current_grading_run(workflow_row, runs)
+        if current is None or current.id != target_run.id:
+            raise VersionConflict("workflow_revision_conflict")
+        if workflow_row.active_job_id:
+            raise InvalidTransition("The task is busy.", code="workflow_busy")
+        if target_run.status not in {"completed", "partial_failed"}:
+            raise InvalidTransition("run_not_reviewable")
+        presentation = session.scalar(select(
+            workflow_repository.AssignmentStudentPresentationRecord
+        ).where(
+            workflow_repository.AssignmentStudentPresentationRecord.assignment_id == task_id,
+            workflow_repository.AssignmentStudentPresentationRecord.display_student_id == display_student_id,
+        ))
+        internal_id = presentation.student_id if presentation else display_student_id
+        rows = session.scalars(select(GradeResultRecord).where(
+            GradeResultRecord.grading_run_id == target_run.id,
+        )).all()
+        row = next((item for item in rows if item.student_id == internal_id and item.q_id == q_id), None)
+        if row is None:
+            row = next((item for item in grading_repository._missing_result_records(session, target_run, rows)
+                        if item.student_id == internal_id and item.q_id == q_id), None)
+        if row is None:
+            raise NotFound("grade_result")
+        # Validate against this run's frozen maximum before cloning or filling
+        # a missing result; every subsequent write shares this transaction.
+        grading_repository._validate_review_score(teacher_score, row.ai_max_score)
+        if target_run.released_at is not None:
+            target_run = grading_repository._clone_released_run_for_review_in_session(session, target_run)
+            row = session.scalar(select(GradeResultRecord).where(
+                GradeResultRecord.grading_run_id == target_run.id,
+                GradeResultRecord.student_id == internal_id,
+                GradeResultRecord.q_id == q_id,
+            ))
+            if row is None:
+                raise NotFound("grade_result")
+            workflow_row.presentation_status = "graded"
+            workflow_row.grading_job_id = target_run.id
+            workflow_row.analysis_status = "not_generated"
+            workflow_row.analysis_generated_at = None
+            workflow_row.analysis_error_code = None
+        if not row.id:
+            row.id = grading_repository._new_result_id()
+            session.add(row)
+            session.flush()
+        review = grading_repository._latest_reviews_by_result(session, [row.id]).get(row.id)
+        previous = grading_repository._result_to_dto(row, review)
+        unchanged = previous.effective_score == teacher_score and previous.effective_comment == teacher_comment
+        if not unchanged or confirm:
+            grading_repository._add_teacher_review_in_session(
+                session, row.id, teacher_id=owner_id,
+                new_score=teacher_score, new_comment=teacher_comment, confirm=confirm,
+            )
+        review = grading_repository._latest_reviews_by_result(session, [row.id]).get(row.id)
+        correction = _serialize_correction(grading_repository._result_to_dto(row, review))
+        workflow_row.workflow_revision += 1
+        workflow_row.updated_at = time.time()
+        session.flush()
+        revision = workflow_row.workflow_revision
     return {
         "status": "ok", "unchanged": unchanged,
         "student_id": display_student_id, "q_id": q_id,
-        "correction": _serialize_correction(refreshed),
-        "workflow_revision": claimed_workflow.workflow_revision,
+        "correction": correction,
+        "workflow_revision": revision,
     }
 
 

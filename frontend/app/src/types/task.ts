@@ -382,13 +382,6 @@ export interface TeacherCommentsResponse {
   comments: Record<string, string>;
 }
 
-export interface TeacherCommentResponse {
-  status: "ok";
-  student_id: string;
-  q_id: string;
-  teacher_comment: string;
-}
-
 export interface CorrectionReviewResponse {
   status: "ok";
   unchanged: boolean;
