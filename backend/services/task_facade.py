@@ -5191,6 +5191,7 @@ def _grading_request_response(task_id, run):
 
 
 def task_results(*, task_id: str, owner_id: str) -> dict:
+    from backend.services.grading_feedback import concise_result_feedback
     task = get_task(task_id=task_id, owner_id=owner_id, full=True)
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
@@ -5205,7 +5206,7 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
             "task_id": task_id,
             "error": _grading_failure_code(run),
         }
-    results = grading_repository.list_results_for_run(run.id, include_missing=True)
+    results = concise_result_feedback(grading_repository.list_results_for_run(run.id, include_missing=True))
     frozen_setup = workflow_repository.get_run_setup(run.id)
     presentations = workflow_repository.list_student_presentations(task_id)
     grouped: dict[str, list] = defaultdict(list)

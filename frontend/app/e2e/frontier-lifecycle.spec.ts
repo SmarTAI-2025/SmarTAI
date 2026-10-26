@@ -293,7 +293,12 @@ for (const stage of ["problems_ready", "submissions_ready"] as const) for (const
     students.S1.stu_ans[0].content = "Latest saved answer from page B";
     problems.q1.stem = "Latest saved question from page B";
     await second.goto(url);
-    await second.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first().click();
+    // Busy is optimistic; B must finish its grade request before A reads the
+    // newer server revision. Otherwise the fixture races two valid starts.
+    await Promise.all([
+      second.waitForResponse(response => response.url().endsWith(`/tasks/${task.task_id}/grade`) && response.request().method() === "POST"),
+      second.getByRole("button", { name: zh ? "开始批改" : "Start grading", exact: true }).first().click(),
+    ]);
     await expect(second.getByRole("button", { name: zh ? "正在运行…" : "Running…", exact: true })).toBeDisabled();
     await page.getByRole("button", { name: stage === "problems_ready" ? (zh ? "继续识别作答" : "Continue to submissions") : (zh ? "开始批改" : "Start grading"), exact: true }).first().click();
     await expect(tabs.getByRole("tab")).toHaveCount(2);
@@ -316,7 +321,10 @@ for (const stage of ["problems_ready", "submissions_ready"] as const) for (const
     await tabs.scrollIntoViewIfNeeded();
     await page.evaluate(() => window.scrollBy(0, -90));
     await page.screenshot({ path: testInfo.outputPath("paused-restored-content.png") });
-    await page.getByRole("button", { name: zh ? "继续批改" : "Continue grading", exact: true }).click();
+    await Promise.all([
+      page.waitForResponse(response => response.url().endsWith(`/tasks/${task.task_id}/grade`) && response.request().method() === "POST"),
+      page.getByRole("button", { name: zh ? "继续批改" : "Continue grading", exact: true }).click(),
+    ]);
     await expect(page.getByRole("button", { name: zh ? "正在运行…" : "Running…", exact: true })).toBeDisabled();
     await expect(tab("题目资料", "Materials")).toHaveAttribute("aria-selected", "true");
     await tab("学生作答", "Student answers").click();
