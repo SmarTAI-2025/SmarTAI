@@ -379,3 +379,114 @@ def test_overflow_score_returns_422_over_real_http():
             server.should_exit = True
             thread.join(timeout=10)
             assert not thread.is_alive()
+
+
+def _published_mixed_reviews(confirmed):
+    seeded, client, url, payload = _case()
+    # Give this result two reviews with opposite flags, so the copy must use
+    # the latest review's state rather than any earlier confirmation.
+    for target, score, flag in [
+        (url, 6, not confirmed), (url, 7, confirmed),
+        (url.replace("q-optional", "q-required"), 8, not confirmed),
+    ]:
+        response = client.put(target, json={**payload, "teacher_score": score,
+                                           "confirm": flag})
+        assert response.status_code == 200, response.text
+        payload["expected_workflow_revision"] = response.json()["workflow_revision"]
+    response = client.post(f"/tasks/{seeded['task_id']}/artifacts/generate", json={
+        "expected_workflow_revision": payload["expected_workflow_revision"],
+    })
+    assert response.status_code == 200, response.text
+    payload.update(expected_workflow_revision=response.json()["workflow_revision"],
+                   teacher_score=7, confirm=False)
+    return seeded, client, url, payload
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+@pytest.mark.parametrize("action", ["other_question", "same_content", "confirm"])
+def test_published_review_copy_preserves_confirmation(confirmed, action):
+    seeded, client, url, payload = _published_mixed_reviews(confirmed)
+    before = _snapshot()
+    history = task_facade.artifact_bytes(
+        task_id=seeded["task_id"], owner_id=seeded["owner_id"],
+        version=1, artifact_id="learning_report_md",
+    )[0]
+    if action == "other_question":
+        url = url.replace("q-optional", "q-required")
+        payload["teacher_score"] = 9
+    elif action == "confirm":
+        payload["confirm"] = True
+    response = client.put(url, json=payload)
+    assert response.status_code == 200, response.text
+    assert response.json()["unchanged"] is (action != "other_question")
+    assert response.json()["workflow_revision"] == payload["expected_workflow_revision"] + 1
+    expected = {"q-optional": confirmed, "q-required": not confirmed}
+    target = "q-required" if action == "other_question" else "q-optional"
+    if action != "same_content":
+        expected[target] = payload["confirm"]
+    assert response.json()["correction"]["review_status"] == (
+        "confirmed" if expected[target] else "edited")
+    refreshed = client.get(f"/tasks/{seeded['task_id']}/result")
+    assert refreshed.status_code == 200, refreshed.text
+    assert {row["q_id"]: row["review_status"]
+            for student in refreshed.json()["results"] for row in student["corrections"]} == {
+        q_id: "confirmed" if flag else "edited" for q_id, flag in expected.items()
+    }
+    runs = grading_repository.list_runs_for_assignment(seeded["task_id"], actor_id=seeded["owner_id"])
+    assert len(runs) == 2
+    clone = next(run for run in runs if run.id != seeded["run_id"])
+    assert clone.released_at is None
+    for row in grading_repository.list_results_for_run(clone.id):
+        assert row.teacher_review["confirmed"] is expected[row.q_id]
+        assert row.effective_score == {"q-optional": 7, "q-required": (
+            9 if action == "other_question" else 8)}[row.q_id]
+        assert row.effective_comment == "Checked"
+        with session_scope() as session:
+            reviews = session.scalars(select(TeacherReviewRecord).where(
+                TeacherReviewRecord.grade_result_id == row.id,
+            ).order_by(TeacherReviewRecord.review_sequence)).all()
+            assert reviews[0].confirmed is (
+                confirmed if row.q_id == "q-optional" else not confirmed)
+            assert len(reviews) == (2 if row.q_id == target and action != "same_content" else 1)
+    # Every published row and historical report stays byte-for-byte intact;
+    # only the workflow pointer/revision and new draft rows may change.
+    after = _snapshot()
+    for table, rows in before.items():
+        if table != workflow_repository.AssignmentWorkflowRecord.__tablename__:
+            assert all(row in after[table] for row in rows), table
+    assert task_facade.artifact_bytes(
+        task_id=seeded["task_id"], owner_id=seeded["owner_id"],
+        version=1, artifact_id="learning_report_md",
+    )[0] == history
+
+
+@pytest.mark.parametrize("failure_sequence", [1, 2], ids=["copied_reviews", "new_review"])
+def test_published_review_copy_failure_preserves_confirmation(failure_sequence):
+    seeded, client, url, payload = _published_mixed_reviews(False)
+    payload["teacher_score"] = 8
+    before = _snapshot()
+    flushed = []
+
+    def fail_after_review_flush(session, _context):
+        if any(isinstance(row, TeacherReviewRecord) and row.review_sequence == failure_sequence
+               for row in session.new):
+            flushed.append(True)
+            raise RuntimeError("injected copy review failure")
+
+    event.listen(Session, "after_flush", fail_after_review_flush)
+    try:
+        with pytest.raises(RuntimeError, match="injected copy review failure"):
+            client.put(url, json=payload)
+    finally:
+        event.remove(Session, "after_flush", fail_after_review_flush)
+    assert flushed
+    assert _snapshot() == before
+    # Retrying the same version after rollback must still preserve both flags.
+    assert client.put(url, json=payload).status_code == 200
+    runs = grading_repository.list_runs_for_assignment(seeded["task_id"], actor_id=seeded["owner_id"])
+    assert len(runs) == 2
+    clone = next(run for run in runs if run.id != seeded["run_id"])
+    assert {row.q_id: row.teacher_review["confirmed"]
+            for row in grading_repository.list_results_for_run(clone.id)} == {
+        "q-optional": False, "q-required": True,
+    }

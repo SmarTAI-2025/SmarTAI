@@ -598,7 +598,7 @@ def _clone_released_run_for_review_in_session(session, source) -> GradingRunReco
                     new_score=review.new_score,
                     new_comment=review.new_comment,
                     comment=review.new_comment,
-                    confirmed=True,
+                    confirmed=review.confirmed,
                     review_sequence=1,
                     created_at=now,
                 )
