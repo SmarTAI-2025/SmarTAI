@@ -3,6 +3,7 @@ import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import { cn } from "@/lib/cn";
+import { rehypeMathCompatibility } from "./mathCompatibility";
 
 const markdownMathComponents: Components = {
   p: ({ children }) => <p className="mb-2 whitespace-pre-wrap last:mb-0">{children}</p>,
@@ -34,7 +35,7 @@ export function MarkdownMath({ children, className }: { children?: string | null
           return <li className="whitespace-pre-wrap" value={marker ? Number(marker[1]) : undefined}>{children}</li>;
         } }}
         remarkPlugins={[remarkMath]}
-        rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false, errorColor: "inherit" }]]}
+        rehypePlugins={[rehypeMathCompatibility, [rehypeKatex, { strict: false, throwOnError: false, errorColor: "inherit" }]]}
       >
         {content}
       </ReactMarkdown>

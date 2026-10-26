@@ -40,6 +40,7 @@ from backend.services.question_structure import annotate_major_question_structur
 from backend.services.programming_test_contract import required_function_name
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
+    KATEX_GENERATION_GUIDANCE,
     StructuredOutputBoundsError,
     StructuredOutputInvalidError,
     ainvoke_with_retry,
@@ -2056,7 +2057,7 @@ Rules:
 - In the JSON source, encode line breaks once as `\n`, never double-escape them as `\\n`. Escape each TeX backslash exactly once for JSON so the decoded text contains one backslash per command. Never use `$$$` delimiters.
 - Omit a candidate rather than guess when the stem is insufficient.
 - Output JSON only, without markdown fences or commentary.
-"""
+""" + KATEX_GENERATION_GUIDANCE
 
 
 from backend.services.rubric_drafts import RubricDefinition, RubricDraft, generated_rubric, retarget_draft
