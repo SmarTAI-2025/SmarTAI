@@ -62,7 +62,7 @@ export function ReviewBlockDialog({ locale, issues, onClose }: { locale: string;
   if (!issues.length) return null;
   const zh = locale === "zh-CN";
   return <UnsavedChangesDialog title={zh ? "请先处理关键问题" : "Resolve required items first"}
-    description={zh ? "请在对应位置补全或修正关键问题后继续。识别或批改失败时可仅重试失败项；学生实际留白不受此限制。" : "Correct the required items at the linked locations, then continue. Retry only failed recognition or grading items when needed. Genuine blank responses do not block progress."}
+    description={zh ? "请在对应位置补全或修正关键问题后继续。" : "Correct the required items at the linked locations, then continue."}
     stayLabel={zh ? "返回" : "Back"} leaveLabel={zh ? "前往问题位置" : "Go to issue"} onStay={onClose} onLeave={() => { onClose(); navigate(issues[0].href); }}>
     <ul className="mt-3 max-h-64 space-y-2 overflow-auto text-sm">{issues.map((item, index) => <li key={`${item.href}-${index}`}><Link onClick={onClose} className="text-primary underline underline-offset-2" to={item.href}>{item.label}</Link></li>)}</ul>
   </UnsavedChangesDialog>;

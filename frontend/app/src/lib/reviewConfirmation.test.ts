@@ -92,7 +92,7 @@ describe("review hard failures", () => {
     const row = question({ type });
     expect(questionReviewBlocked(row)).toBe(true);
     expect(questionReviewNextBlocked(row)).toBe(true);
-    expect(questionReviewNotes(row, "zh-CN", code => code)).toContainEqual({ label: "请补齐缺失的题型；完成前不能批改。", severity: "blocking" });
+    expect(questionReviewNotes(row, "zh-CN", code => code)).toContainEqual({ label: "请补齐缺失的题型。", severity: "blocking" });
     expect(questionReviewBlocked({ ...row, type: "other" })).toBe(false);
   });
 
@@ -105,10 +105,10 @@ describe("review hard failures", () => {
     const notes = questionReviewNotes(row, "zh-CN", () => "生成失败");
     expect(notes).toEqual([
       { label: "生成失败", severity: "blocking" },
-      { label: "请补齐缺失的题型、评分标准；完成前不能批改。", severity: "blocking" },
+      { label: "请补齐缺失的题型、评分标准。", severity: "blocking" },
       { label: "缺少标答（可选），可按需补充。", severity: "advisory" },
     ]);
-    expect(questionReviewNotes(row, "en-US", () => "Generation failed")[1].label).toContain("question type, rubric before grading");
+    expect(questionReviewNotes(row, "en-US", () => "Generation failed")[1].label).toBe("Complete the missing question type, rubric.");
     expect(questionReviewNotes({ ...row, type: "reasoning" }, "zh-CN", () => "生成失败")[1].label).not.toContain("题型");
   });
 

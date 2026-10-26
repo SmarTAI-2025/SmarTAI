@@ -260,6 +260,24 @@ describe("StudentAnswerReviewPage review shortcuts", () => {
     expect(mutations.identity).toHaveBeenCalledTimes(1);
   });
 
+  it("uses the same concrete blocking notes for individual and next-step answer dialogs", async () => {
+    taskData.student_data.S001.stu_ans[0].flag = ["answer_assignment_conflict", "parse_failed", "authorship_uncertain"];
+    const user = userEvent.setup();
+    renderPage();
+    expect(screen.queryByRole("button", { name: "全部确认" })).not.toBeInTheDocument();
+    for (const name of [/1.*待确认/, /^进入批改设置$/]) {
+      await user.click(screen.getByRole("button", { name }));
+      const dialog = screen.getByRole("alertdialog");
+      const rows = within(dialog).getAllByRole("listitem");
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toHaveTextContent("同一题号");
+      expect(rows[1]).toHaveTextContent("解析失败");
+      expect(dialog).not.toHaveTextContent(/笔迹|建议|请先修正本题识别结果|学生实际留白/);
+      await user.click(within(dialog).getByRole("button", { name: "返回" }));
+    }
+    expect(mutations.answer).not.toHaveBeenCalled();
+  });
+
   it("allows confirming recognized unflagged answers without editing their text", async () => {
     const user = userEvent.setup();
     renderPage();

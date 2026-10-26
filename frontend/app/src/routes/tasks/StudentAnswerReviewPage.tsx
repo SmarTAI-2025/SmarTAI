@@ -445,7 +445,10 @@ function StudentAnswerReviewForm() {
     const answer = answers.get(question.id);
     const confirmBlank = answerReviewBlocked(answer) && !answer?.flag?.includes("answer_assignment_conflict") && !answer?.content?.trim();
     if (answerReviewBlocked(answer) && !confirmBlank) {
-      setBlocked([{ label: tx(locale, "请先修正本题识别结果，再确认。", "Correct this transcription before confirming."), href: `${studentPath(taskId ?? "", student?.stu_id ?? "")}?question=${encodeURIComponent(question.id)}` }]);
+      setBlocked(answerReviewNotes(answer, locale, true).filter(note => note.severity === "blocking").map(note => ({
+        label: `${tx(locale, `第 ${question.label} 题`, `Question ${question.label}`)} · ${note.label}`,
+        href: `${studentPath(taskId ?? "", student?.stu_id ?? "")}?question=${encodeURIComponent(question.id)}`,
+      })));
       return;
     }
     if (dirtyQuestionIds.has(question.id) || assignmentDirtyIds.has(question.id)) { setBatchMessage(tx(locale, "请先保存修改。", "Save your changes first.")); return; }

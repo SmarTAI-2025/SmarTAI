@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useUpdateProblem } from "@/api/hooks/tasks";
-import { questionReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { questionReviewBlocked, questionReviewBlockers, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import type { PreparationIssue, ProblemInfo } from "@/types";
 
 /** Share the revision between edits and sequential review confirmations. */
-export function useQuestionReview(taskId: string, workflowRevision?: number) {
+export function useQuestionReview(taskId: string, workflowRevision: number | undefined, locale: string) {
   const updateProblem = useUpdateProblem();
   const latestRevision = useRef(workflowRevision);
   const taskRef = useRef(taskId);
@@ -27,7 +27,7 @@ export function useQuestionReview(taskId: string, workflowRevision?: number) {
     if (inFlight.current || updateProblem.isPending) return false;
     const blockers = problems.filter(questionReviewBlocked);
     if (blockers.length) {
-      setBlocked(blockers.map(problem => ({ label: `${problem.number || problem.q_id} · ${problem.stem?.slice(0, 80) || "—"}`, href: `/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}` })));
+      setBlocked(questionReviewBlockers(blockers, taskId, locale));
       return false;
     }
     inFlight.current = true;

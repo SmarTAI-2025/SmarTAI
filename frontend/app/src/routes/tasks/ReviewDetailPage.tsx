@@ -326,18 +326,20 @@ function ReviewDetailForm() {
     const normalizedScore = draft.score.trim();
     const numericScore = reviewConfirmationScore(correction, draft.score);
     if (!normalizedScore && numericScore === null) {
+      const message = tx(locale, "SmarTAI 没有生成有效分数，请先手动输入最终分。", "SmarTAI did not produce a valid score. Enter a final score manually.");
       setScoreErrors((current) => ({
         ...current,
-        [question.id]: tx(locale, "SmarTAI 没有生成有效分数，请先手动输入最终分。", "SmarTAI did not produce a valid score. Enter a final score manually."),
+        [question.id]: message,
       }));
-      return { ok: false as const, message: tx(locale, "请先为无分结果填写最终分。", "Enter a final score for the unscored result first.") };
+      return { ok: false as const, message, notes: correctionReviewNotes(correction, locale).filter(note => note.severity === "blocking") };
     }
     if (numericScore === null || !Number.isFinite(numericScore) || numericScore < 0 || numericScore > correction.max_score) {
+      const message = tx(locale, `请输入 0–${String(correction.max_score)} 之间的分数。`, `Enter a score from 0 to ${String(correction.max_score)}.`);
       setScoreErrors((current) => ({
         ...current,
-        [question.id]: tx(locale, `请输入 0–${String(correction.max_score)} 之间的分数。`, `Enter a score from 0 to ${String(correction.max_score)}.`),
+        [question.id]: message,
       }));
-      return { ok: false as const, message: tx(locale, "请先修正标红的分数。", "Correct the highlighted score first.") };
+      return { ok: false as const, message };
     }
     return {
       ok: true as const,
@@ -439,13 +441,18 @@ function ReviewDetailForm() {
       return correction && (!Number.isFinite(correction.teacher_score) || correction.review_status !== "confirmed" || dirtyQuestionIds.has(question.id));
     });
     // Validate every draft before writing any of them; a blank score never becomes zero.
+    const blockers: ReviewBlocker[] = [];
     for (const question of pending) {
       const prepared = prepareConfirmedReview(question);
       if (!prepared.ok) {
-        setBatchError(prepared.message);
-        setBlockedReviews([{ label: `${student.name} · ${question.label} · ${prepared.message}`, href: buildHref(student.id, question.id, false) }]);
-        return;
+        if (!blockers.length) setBatchError(prepared.message);
+        const notes = prepared.notes?.length ? prepared.notes : [{ label: prepared.message }];
+        blockers.push(...notes.map(note => ({ label: `${student.name} · ${tx(locale, `第 ${question.label} 题`, `Question ${question.label}`)} · ${note.label}`, href: buildHref(student.id, question.id, false) })));
       }
+    }
+    if (blockers.length) {
+      setBlockedReviews(blockers);
+      return;
     }
     batchSavingRef.current = true;
     const savingStudentKey = activeStudentKeyRef.current;

@@ -63,7 +63,7 @@ export function questionIssueCodeLabel(code: string, locale: string) {
     unmapped_source_content: ["原文件中有内容尚未匹配", "Some source content is unmatched"],
     parse_anomaly: ["文件解析结果异常", "File parsing anomaly"],
     generation_failed: ["所需内容生成失败", "Required content generation failed"],
-    manual_completion_required: ["补齐缺失资料后才能批改", "Complete the missing materials before grading"],
+    manual_completion_required: ["请补齐缺失资料", "Complete the missing materials"],
     rubric_step_reference_conflict: ["评分步骤与标答步骤未正确对应", "Rubric steps do not align with reference-answer steps"],
     math_rubric_advisory: ["本题含 AI 补充评分说明，建议核对评分标准", "AI scoring guidance was added. Review the rubric"],
     invalid_test_case: ["测试样例结构无效", "Invalid test case structure"],
