@@ -133,8 +133,10 @@ def test_legacy_aggregate_preserves_other_explanations_and_does_not_mutate():
 
 def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
     from backend.db import grading_repository as grades
+    from backend.db import workflow_repository as workflows
     from backend.services import task_facade
     from backend.services.math_grading_context import problem_from_question
+    from backend.services.task_execution import continue_manual_grading
     from backend.domain.errors import NotFound
 
     run_id = start(case, "legacy-feedback")["job_id"]
@@ -152,6 +154,10 @@ def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
     correction = Correction(q_id=q.q_id, type=q.type, score=8, max_score=10, confidence=.9,
         comment="Preserved summary.", steps=expert.steps, expert_results=[expert], synthesis_method="single")
     checkpoints.save_correction(student, correction)
+    for other in questions[1:]:
+        checkpoints.save_correction(student, Correction(
+            q_id=other.q_id, type=other.type, score=8, max_score=10,
+            confidence=.9, comment="Other completed item.", steps=[], synthesis_method="single"))
     stop(case, run_id)
     before = [row.model_dump() for row in grades.list_results_for_run(run_id)]
     events_before = grades.list_events(run_id)
@@ -170,21 +176,35 @@ def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
 
     # Published-result review copies intentionally have no copied trace events.
     # Their immutable AI feedback must remain concise after a fresh GET too.
-    from backend.db.models import GradingRunRecord, GradingRunEventRecord
+    from backend.db.models import GradingRunEventRecord
     from backend.db.session import session_scope
     from sqlalchemy import select
-    for _ in range(2):
-        with session_scope() as session:
-            session.get(GradingRunRecord, run_id).released_at = 1
-        cloned = grades.clone_released_run_for_review(run_id, teacher_id=case[1])
-        stored = grades.list_results_for_run(cloned.id)
-        displayed = concise_result_feedback(stored)
-        shown = next(row for row in displayed if row.q_id == q.q_id)
-        assert shown.ai_steps[0]["desc"] == "Correct setup."
-        assert shown.ai_expert_results[0]["steps"][0]["desc"] == "Correct setup."
-        assert shown.ai_score == 8
-        assert [r.model_dump() for r in grades.list_results_for_run(cloned.id)] == [r.model_dump() for r in stored]
-        run_id = cloned.id
+    continue_manual_grading(task_id=case[0], owner_id=case[1], job_id=run_id,
+        expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
+    for index in range(2):
+        grades.release(run_id, teacher_id=case[1])
+        published = grades.list_results_for_run(run_id)
+        revision = workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision
+        saved = task_facade.update_correction_review(
+            task_id=case[0], owner_id=case[1], display_student_id=payload["results"][0]["student_id"],
+            q_id=q.q_id, teacher_score=9-index, teacher_comment=f"Review {index+1}",
+            confirm=True, expected_revision=revision)
+        assert saved["workflow_revision"] == revision + 1
+        current_run = workflows.get_live_workflow(case[0], owner_id=case[1]).grading_job_id
+        assert current_run != run_id
+        assert grades.get_run(current_run).released_at is None
+        assert grades.list_results_for_run(run_id) == published
+        stored = grades.list_results_for_run(current_run)
+        fresh = task_facade.task_results(task_id=case[0], owner_id=case[1])
+        assert fresh["grading_run_id"] == current_run
+        shown = next(c for s in fresh["results"] for c in s["corrections"] if c["q_id"] == q.q_id)
+        assert shown["steps"][0]["desc"] == "Correct setup."
+        assert shown["expert_results"][0]["steps"][0]["desc"] == "Correct setup."
+        assert shown["provisional_score"] == 8
+        assert shown["teacher_score"] == 9-index
+        assert shown["teacher_comment"] == f"Review {index+1}"
+        assert grades.list_results_for_run(current_run) == stored
+        run_id = current_run
     with session_scope() as session:
         event = session.scalar(select(GradingRunEventRecord).where(
             GradingRunEventRecord.grading_run_id == run_id,
