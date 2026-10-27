@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
-from backend.domain.errors import DomainError, RECOGNITION_ERROR_CODES
+from backend.domain.errors import DomainError, RecognitionError, RECOGNITION_ERROR_CODES
 from backend.domain.source_outcomes import SAFE_SOURCE_REASON_CODES
 from backend.tools.structured_llm import PermanentLLMError, RateLimitError, StructuredOutputInvalidError
 
@@ -172,7 +172,9 @@ def _exception_chain(exc: BaseException) -> list[BaseException]:
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         chain.append(current)
-        current = current.__cause__ or current.__context__
+        # Implicit context can belong to an earlier request, even after
+        # `raise ... from None`; only explicit causes explain this failure.
+        current = current.__cause__
     return chain
 
 
@@ -246,9 +248,14 @@ def provider_failure_diagnostic(exc: Exception):
         except ValidationError:
             continue
         for cause in reversed(chain):
-            if isinstance(cause, (DomainError, HTTPException)):
+            if isinstance(cause, RecognitionError):
+                # Recognition deliberately hides the raw SDK exception. Its
+                # explicit upstream field is evidence; its HTTP 422 is not.
+                status = cause.upstream_status_code
+            elif isinstance(cause, (DomainError, HTTPException)):
                 continue
-            status = _http_status(cause)
+            else:
+                status = _http_status(cause)
             if type(status) is int and (
                 (code == "provider_upstream_unavailable" and 500 <= status <= 599)
                 or (code == "provider_rate_limited" and status == 429)
@@ -324,8 +331,10 @@ def classify_background_error(
         if code := exhausted_quota_code(item):
             return code
 
-    if persistence_code and any(isinstance(item, SQLAlchemyError) for item in chain):
-        return safe_background_error_code(persistence_code, fallback)
+    if persistence_code:
+        from backend.services.grading_checkpoints import CheckpointWriteError
+        if any(isinstance(item, (SQLAlchemyError, CheckpointWriteError)) for item in chain):
+            return safe_background_error_code(persistence_code, fallback)
 
     timeout_types, connection_types = _provider_network_exception_types()
     if any(isinstance(item, timeout_types) for item in chain):

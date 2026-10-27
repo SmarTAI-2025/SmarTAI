@@ -267,3 +267,42 @@ async def test_structured_minute_limit_survives_retry_and_persisted_task_project
     row = SimpleNamespace(effective_score=None, ai_expert_results=[{"error_kind": kind}])
     monkeypatch.setattr(task_facade.grading_repository, "list_results_for_run", lambda _: [row])
     assert task_facade._grading_failure_code(SimpleNamespace(id="synthetic", status="partial_failed", error_message=None)) == "provider_rate_limited"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vision", [False, True])
+@pytest.mark.parametrize("old_quota", [0, 500])
+@pytest.mark.parametrize("suppress_context", [False, True])
+async def test_current_rate_limit_does_not_inherit_old_implicit_quota(monkeypatch, vision, old_quota, suppress_context):
+    """Constructed Python context boundary, not evidence of a production trigger."""
+    from google.genai.errors import ClientError
+    from backend.services.execution_control import current_execution
+    sleep = AsyncMock()
+    monkeypatch.setattr(llm._ainvoke_with_retry.retry, "sleep", sleep)
+    monkeypatch.setattr(llm._invoke_with_rate_retry.retry, "sleep", sleep)
+
+    async def fail(*args, **kwargs):
+        try:
+            raise ClientError(429, quota_body(old_quota))
+        except ClientError:
+            current = ProviderRequestError("provider_rate_limited", status_code=429)
+            if suppress_context:
+                raise current from None
+            raise current
+
+    invoke = AsyncMock(side_effect=fail)
+    provider = SimpleNamespace(ainvoke=invoke, ainvoke_vision=invoke)
+
+    async def run():
+        with pytest.raises(Exception) as raised:
+            if vision:
+                await llm.ainvoke_vision_with_rate_retry(provider, "read", [], max_output_tokens=100)
+            else:
+                await llm.ainvoke_with_retry(provider, [])
+        assert invoke.await_count == 3 and sleep.await_count == 2
+        assert classify_background_error(raised.value, "workflow_failed") == "provider_rate_limited"
+        # Exhausting the minute retry budget may stop this round, but cannot
+        # inherit a different quota reason from the earlier exception.
+        assert set(current_execution().blocked.values()) <= {"provider_rate_limited"}
+
+    await run_controlled("current-click", lambda: False, run())
