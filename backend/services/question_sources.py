@@ -157,7 +157,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                                route: StageProviderRoute, registry, stored_file_id=None,
                                extraction_hint="", options=None, purpose="problems", reporter=None, text_reader=None,
                                allow_vision=None, binding=None, retry_key=None, acknowledge_pending_retry=False,
-                               timeout_profile=None, allow_partial=False, on_pages=None):
+                               timeout_profile=None, execution_scope=None, allow_partial=False, on_pages=None):
     from backend.services.source_files import persist_problem_source
 
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
@@ -197,7 +197,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         targets=scope.targets if locate_targets else [], pages=[] if locate_targets else scope.pages,
         page_hints={target: scope.pages for target in scope.targets} if locate_targets and scope.pages else {},
         search_start_page=scope.search_start_page, search_window_pages=scope.search_window_pages,
-        policy=RecognitionPolicyV1(allow_native_fallback=allow_vision),
+        policy=RecognitionPolicyV1(allow_native_fallback=allow_vision, execution_scope=execution_scope),
     )
     async with recognition_engine(owner_id=owner_id, route=route if allow_vision else None, registry=registry) as engine:
         if media_type.startswith("image/") and engine is None:

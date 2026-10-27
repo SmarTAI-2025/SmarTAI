@@ -971,7 +971,7 @@ class MathGradingSkill(GradingSkill):
                 # gradeable answer. This is one new direct grading interaction.
                 kind, _ = classify_skill_error(exc)
                 if _critical_failure(exc) or isinstance(exc, (PermanentLLMError, TransientLLMError)) or kind in {
-                    "daily_quota_exhausted", "quota_exhausted", "transient_llm"
+                    "zero_quota", "daily_quota_exhausted", "quota_exhausted", "transient_llm"
                 }:
                     raise
                 return await self._direct(problem, answer, plan, prompt, unit, chunks,

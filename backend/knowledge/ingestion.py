@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 POLICY = "knowledge-economy-v1"
 PAUSE_PROVIDER_ERRORS = frozenset({
     "provider_overloaded",
-    "provider_auth_failed", "provider_permission_denied", "provider_region_unsupported", "provider_quota_exceeded",
+    "provider_auth_failed", "provider_permission_denied", "provider_region_unsupported", "provider_quota_exceeded", "provider_zero_quota",
     "provider_rate_limited", "provider_model_not_found", "provider_model_or_endpoint_not_found",
     "provider_vision_not_supported", "provider_unreachable", "provider_credentials_unavailable",
 })

@@ -1068,6 +1068,12 @@ export function classifyRecoverableError(
       description: tx(locale, "按原配置继续未完成部分，保留已保存结果，并按新的提交时间重新排队。未完成的模型请求可能再次计费。", "Continue unfinished work with saved settings and results, rejoining the queue with a new submission time. Unfinished model requests may be billed again."),
       actionLabel: tx(locale, "继续处理", "Continue processing"), actionKind: "retry", tone: "warning", technicalDetails };
   }
+  if (code === "provider_zero_quota") {
+    return { title: tx(locale, "该模型当前无可用配额", "No quota is currently available for this model"),
+      description: tx(locale, "服务商明确返回配额为0，本轮自动重试已停止。请检查服务商项目与模型权限，调整后主动重试或更换模型。", "The provider explicitly reported a zero quota limit. Automatic retries have stopped. Check the provider project and model access, then retry after updating them or choose another model."),
+      actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/models", actionKind: "byok",
+      tone: "warning", showUsageLinks: true, technicalDetails };
+  }
   if (code === "provider_quota_exceeded") {
     return { title: tx(locale, "模型余额或可用额度已耗尽", "Model credits or quota exhausted"),
       description: tx(locale, "本轮已停止，不会自动重试。请检查服务商余额与额度，恢复后主动重试，或切换模型。", "This run has stopped without automatic retries. Check provider credits and limits, then retry or switch models."),
@@ -1077,7 +1083,7 @@ export function classifyRecoverableError(
   if (code === "provider_daily_quota_exceeded" || code === "shared_pool_daily_limit_reached") {
     return {
       title: tx(locale, "模型日额度已用完", "The model's daily quota is exhausted"),
-      description: tx(locale, "模型日额度已用完，本轮已停止。额度恢复后重新启动，或更换模型。", "The model’s daily quota is exhausted and this run has stopped. Restart once quota is available, or choose another model."),
+      description: tx(locale, "本轮收到日额度限制，自动重试已停止。你可以主动重试以重新请求模型，或更换模型。", "This run received a daily quota limit and automatic retries stopped. Retry to make a new model request, or choose another model."),
       actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/models", actionKind: "byok", tone: "warning",
       dailyQuotaExhausted: true, showUsageLinks: true, technicalDetails,
     };

@@ -220,7 +220,7 @@ async def test_saved_question_and_reference_sources_use_the_parent_frozen_profil
 
 @pytest.mark.asyncio
 @TIMEOUT_PROFILES
-async def test_submission_exact_replay_preserves_profile_through_worker_reader(monkeypatch, profile):
+async def test_submission_configuration_restart_uses_new_profile_and_execution_scope(monkeypatch, profile):
     owner, task = _seed_task(with_question=True)
     registry = _Registry()
     kwargs = dict(task_id=task, owner_id=owner, filename="student.txt",
@@ -231,10 +231,11 @@ async def test_submission_exact_replay_preserves_profile_through_worker_reader(m
 
     replay = task_facade.queue_task_submission_parsing(**kwargs)
     resumed = workflow_repository.get_operation(replay["job_id"], owner_id=owner)
-    _assert_frozen_profile(resumed, profile)
-    assert resumed.id == failed.id
-    assert resumed.input_hash == failed.input_hash
-    assert resumed.attempt == failed.attempt + 1
+    _assert_frozen_profile(resumed, NEW_PROFILE)
+    assert resumed.id != failed.id
+    assert resumed.input_hash != failed.input_hash
+    assert resumed.attempt == 1
+    assert resumed.payload["recognition_execution_scope"] != failed.payload["recognition_execution_scope"]
     assert resumed.payload["input_file_id"] == failed.payload["input_file_id"]
 
     read = AsyncMock(side_effect=RecognitionError("provider_rate_limited"))
@@ -242,7 +243,7 @@ async def test_submission_exact_replay_preserves_profile_through_worker_reader(m
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
     await task_facade.run_durable_submission_recognition(_claim(owner, resumed.id, "replayed-reader"))
     read.assert_awaited_once()
-    assert read.await_args.kwargs["timeout_profile"] == profile
+    assert read.await_args.kwargs["timeout_profile"] == NEW_PROFILE
 
 
 @pytest.mark.asyncio

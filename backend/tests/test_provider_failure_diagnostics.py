@@ -300,3 +300,38 @@ async def test_refused_page_is_persisted_and_only_explicit_retry_reads_it_again(
     assert provider.ainvoke_vision.await_count == 3
     assert retry.assembly.raw.read_batch.provenance[0].origin == "cache_hit"
     assert (await service.progress.snapshot()).provider_failures[-1].pages == [2]
+
+
+@pytest.mark.parametrize("link", ["__cause__", "__context__"])
+def test_only_explicit_cause_supplies_provider_diagnostic(link):
+    from backend.llm.providers import ProviderRequestError
+    from backend.services.background_errors import classify_background_error
+    outer = RuntimeError("request failed")
+    setattr(outer, link, ProviderRequestError("provider_upstream_unavailable", status_code=503))
+    if link == "__cause__":
+        assert classify_background_error(outer, "workflow_failed") == "provider_upstream_unavailable"
+        assert provider_failure_diagnostic(outer).model_dump() == {
+            "code": "provider_upstream_unavailable", "http_status": 503,
+        }
+    else:
+        assert classify_background_error(outer, "workflow_failed") == "workflow_failed"
+        assert provider_failure_diagnostic(outer) is None
+
+
+@pytest.mark.asyncio
+async def test_reader_diagnostic_failure_does_not_replace_uncertain_recovery(monkeypatch):
+    from backend.skills import recognition_reader
+    from backend.tests.test_recognition_reader import llm, request
+    provider, engine = llm()
+    provider.ainvoke_vision.side_effect = gemini_unavailable()
+
+    def fail(_exc):
+        raise RuntimeError("diagnostic failed")
+
+    monkeypatch.setattr(recognition_reader, "provider_failure_diagnostic", fail)
+    with pytest.raises(RecognitionError) as raised:
+        await engine.recognize(request())
+    assert raised.value.code == "provider_upstream_unavailable"
+    assert raised.value.submission_may_exist
+    assert raised.value.upstream_status_code is None
+    provider.ainvoke_vision.assert_awaited_once()

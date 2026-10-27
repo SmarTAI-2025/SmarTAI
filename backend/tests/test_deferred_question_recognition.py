@@ -52,6 +52,24 @@ async def test_upload_saves_original_before_recognition_and_worker_reports_failu
     assert job.error_code == "provider_recitation_blocked"
     assert job.progress["recognition_failure"]["failed_pages"] == [1]
     assert job.payload["source_refs"][0]["stored_file_id"] == source["source"]["stored_file_id"]
+    # Returning to configuration and starting unchanged input is a new round.
+    saved = await api.preflight_problem_source(task_id=task, file=None,
+        stored_file_id=source["source"]["stored_file_id"], library_material_id=None, inline_text=None,
+        role="problem", structure_mode="organized", extraction_hint="", save_to_library=False,
+        recognition_provider_id="test-provider", defer_recognition=True,
+        current=SimpleNamespace(id=owner), registry=registry)
+    revision = workflow_repository.get_live_workflow(task, owner_id=owner).workflow_revision
+    restarted = await api.start_question_preparation(task_id=task,
+        request=api.StartQuestionPreparationRequest(source_tokens=[saved["source_token"]],
+            expected_workflow_revision=revision, recognition_provider_id="test-provider"),
+        background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
+    assert restarted["job_id"] != job.id
+    read.side_effect = RecognitionError("provider_daily_quota_exceeded")
+    await api.run_durable_question_preparation(_claim(owner, restarted["job_id"], "new-round"))
+    fresh = workflow_repository.get_operation(restarted["job_id"], owner_id=owner)
+    assert fresh.error_code == "provider_daily_quota_exceeded" and read.await_count == 2
+    scopes = [call.kwargs["execution_scope"] for call in read.await_args_list]
+    assert scopes[0] and scopes[1] and scopes[0] != scopes[1]
 
 
 @pytest.mark.asyncio

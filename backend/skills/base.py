@@ -385,8 +385,11 @@ def classify_skill_error(e: Exception) -> tuple[str, str]:
     no status digits, so they need their own keywords.
     """
     s = str(e).lower()
-    from backend.llm.provider_limits import is_daily_quota_error
-    if is_daily_quota_error(e):
+    from backend.llm.provider_limits import exhausted_quota_code
+    quota_code = exhausted_quota_code(e)
+    if quota_code == "provider_zero_quota":
+        return ("zero_quota", "该题未完成：服务商明确返回该模型配额为0，当前无可用配额。请检查服务商项目与模型权限或更换模型；调整后可主动重试。")
+    if quota_code == "provider_daily_quota_exceeded":
         return ("daily_quota_exhausted", "该题未完成：服务商明确返回日额度耗尽。本轮已停止，不会自动跨天等待；请查看服务商用量或更换模型。")
     if s in {"host_code_execution_disabled", "programming_execution_unavailable"}:
         return (

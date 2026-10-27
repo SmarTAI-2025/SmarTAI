@@ -1722,6 +1722,10 @@ async def _start_question_preparation(
                 timeout_contract.get("recognition_timeout_profile")
                 if timeout_contract is not None else SOURCE_TIMEOUT_PROFILE
             ),
+            "recognition_execution_scope": (
+                timeout_contract.get("recognition_execution_scope")
+                if timeout_contract is not None else f"{task_id}:{operation_hash}"
+            ),
             "provider_configuration_fingerprint": (
                 provider_configuration_fingerprint
             ),
@@ -2353,6 +2357,7 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
             retry_key=retry_key,
             acknowledge_pending_retry=bool((operation.payload or {}).get("acknowledged_restart_from")),
             timeout_profile=(operation.payload or {}).get("recognition_timeout_profile"),
+            execution_scope=(operation.payload or {}).get("recognition_execution_scope"),
             allow_partial=allow_partial,
             on_pages=on_pages,
         )
@@ -2367,6 +2372,7 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
             role=draft.role, existing_material_id=draft.library_material_id,
         )
         updated = {**payload, "recognition": result.recognition, "saved_material": saved}
+        updated.pop("source_error", None)
         from backend.services.question_sources import recognition_has_failure
         if recognition_has_failure(result.recognition):
             updated["source_error"] = result.recognition.get("error_code") or "ocr_incomplete"

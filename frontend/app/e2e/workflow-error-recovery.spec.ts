@@ -270,3 +270,53 @@ for (const code of ["provider_rate_limited", "provider_timeout", "source_empty",
     expect(errors).toEqual([]);
   });
 }
+
+for (const stage of ["problems", "submissions", "grading"] as const) {
+  for (const width of [390, 1440]) {
+    test(`daily quota allows a new manual retry every round: ${stage} ${width}`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      const { calls, errors } = await fixture(page, stage, "provider_daily_quota_exceeded");
+      await page.goto(`/tasks/recovery-task/${stage === "grading" ? "grading" : stage}/progress`);
+      const retry = page.getByRole("button", { name: "重试失败项", exact: true });
+      await expect(retry).toBeEnabled();
+      await expect(page.getByText(/自动重试已停止/)).toBeVisible();
+      await page.reload();
+      await expect(retry).toBeEnabled();
+      expect(calls).toHaveLength(0);
+      for (let round = 1; round <= 2; round++) {
+        await retry.click();
+        await expect.poll(() => calls.length).toBe(round);
+        await expect(retry).toBeEnabled();
+      }
+      if (stage === "grading") {
+        const bodies = calls.map(call => JSON.parse(call.body));
+        expect(bodies.every(body => body.retry_scope === "failed_only")).toBe(true);
+        expect(bodies[0].request_id).not.toBe(bodies[1].request_id);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath("daily-quota-retry.png"), fullPage: true });
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+
+for (const stage of ["problems", "submissions", "grading"] as const) {
+  test(`zero quota remains truthful and manually retryable: ${stage}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 900 });
+    const { calls, errors } = await fixture(page, stage, "provider_zero_quota");
+    await page.goto(`/tasks/recovery-task/${stage}/progress`);
+    await expect(page.getByRole("heading", { name: "该模型当前无可用配额" })).toBeVisible();
+    await expect(page.getByText(/服务商明确返回配额为0，本轮自动重试已停止/)).toBeVisible();
+    await expect(page.getByText("模型日额度已用完", { exact: true })).toHaveCount(0);
+    const retry = page.getByRole("button", { name: "重试失败项", exact: true });
+    for (let round = 1; round <= 2; round++) {
+      await retry.click();
+      await expect.poll(() => calls.length).toBe(round);
+      await expect(retry).toBeEnabled();
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("zero-quota-retry.png"), fullPage: true });
+    expect(errors).toEqual([]);
+  });
+}

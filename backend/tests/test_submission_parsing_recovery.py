@@ -155,7 +155,7 @@ async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinishe
 @pytest.mark.parametrize("failure_mode,edited_after_restart,from_retry", [
     ("503", False, False), ("503", True, False), ("stopped", False, False), ("stopped", False, True),
 ])
-async def test_acknowledged_restart_retries_only_failed_page_with_durable_worker(monkeypatch, failure_mode, edited_after_restart, from_retry):
+async def test_failed_only_keeps_successful_pages_but_configuration_restart_rereads_all(monkeypatch, failure_mode, edited_after_restart, from_retry):
     import asyncio
     import json
     from types import SimpleNamespace
@@ -296,10 +296,11 @@ async def test_acknowledged_restart_retries_only_failed_page_with_durable_worker
     else:
         assert after["status"] == "submissions_ready"
         assert after["submission_source_summary"]["failed"] == 0
-        assert provider.ainvoke_vision.await_count == 3
+        assert provider.ainvoke_vision.await_count == (3 if from_retry else 4)
         assert provider.ainvoke.await_count == parsed_before_retry + 1
         assert len(failed_page_images) == 2 and failed_page_images[0] == failed_page_images[1]
-        assert provider.ainvoke_vision.await_args_list[2].args[1][0].data == failed_page_images[0]
+        if from_retry:
+            assert provider.ainvoke_vision.await_args_list[2].args[1][0].data == failed_page_images[0]
     # Restarting never rewrites the old failure or its page evidence.
     if restarted["job_id"] != failed.id:
         original = workflow_repository.get_operation(failed.id, owner_id=owner)
@@ -460,7 +461,7 @@ async def test_submission_queue_persists_archive_and_has_no_request_task():
     assert operation.status == "pending"
     assert set(operation.payload) == {
         "input_file_id", "source_ids", "base_workflow_revision", "identity_mode",
-        "roster_entries", "roster_name", "recognition_provider_id", "recognition_timeout_profile",
+        "roster_entries", "roster_name", "recognition_provider_id", "recognition_timeout_profile", "recognition_execution_scope",
         "replace_confirmed",
         "provider_configuration_fingerprint", "question_snapshot",
         "submission_structure_version",
@@ -481,7 +482,8 @@ async def test_submission_queue_persists_archive_and_has_no_request_task():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stopped", [False, True])
-async def test_submission_retry_republishes_only_for_durable_worker(stopped):
+@pytest.mark.parametrize("retry_scope", ["failed_only", "full_batch"])
+async def test_submission_retry_republishes_only_for_durable_worker(stopped, retry_scope):
     owner_id, task_id = _seed_task(with_question=True)
     queued = task_facade.queue_task_submission_parsing(
         task_id=task_id,
@@ -507,26 +509,40 @@ async def test_submission_retry_republishes_only_for_durable_worker(stopped):
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     background = _BackgroundTasks()
 
-    retried = await tasks.retry_submission_recognition_endpoint(
-        task_id=task_id,
-        job_id=operation.id,
-        request=tasks.RetrySubmissionRecognitionRequest(
-            recognition_provider_id=None,
-            expected_workflow_revision=workflow.workflow_revision,
-        ),
-        background_tasks=background,
-        current=type("User", (), {"id": owner_id})(),
-        registry=_Registry(),
-    )
+    if retry_scope == "failed_only":
+        retried = await tasks.retry_submission_recognition_endpoint(
+            task_id=task_id, job_id=operation.id,
+            request=tasks.RetrySubmissionRecognitionRequest(
+                recognition_provider_id=None,
+                expected_workflow_revision=workflow.workflow_revision,
+            ),
+            background_tasks=background,
+            current=type("User", (), {"id": owner_id})(), registry=_Registry(),
+        )
+        assert retried["reused_original_upload"] is True
+    else:
+        retried = await tasks.parse_submissions_endpoint(
+            task_id=task_id, file=None, reuse_input_from_job_id=operation.id,
+            identity_mode="manual_review", roster_file=None, recognition_provider_id=None,
+            replace_confirmed=True, expected_workflow_revision=workflow.workflow_revision,
+            acknowledge_possible_duplicate_call=stopped,
+            background_tasks=background,
+            current=type("User", (), {"id": owner_id})(), registry=_Registry(),
+        )
 
     assert retried["status"] == "started"
-    assert retried["reused_original_upload"] is True
     assert background.calls == []
     retry_operation = workflow_repository.get_operation(
         retried["job_id"], owner_id=owner_id
     )
     assert retry_operation.status == "pending"
-    assert retry_operation.payload["retry_from"] == {"operation_id": operation.id, "attempt": operation.attempt}
+    if retry_scope == "failed_only":
+        assert retry_operation.payload["retry_from"] == {"operation_id": operation.id, "attempt": operation.attempt}
+        assert retry_operation.payload["recognition_execution_scope"] == operation.payload["recognition_execution_scope"]
+    else:
+        assert "retry_from" not in retry_operation.payload
+        assert retry_operation.payload["identity_mode"] == "manual_review"
+        assert retry_operation.payload["recognition_execution_scope"] != operation.payload["recognition_execution_scope"]
     assert workflow_repository.get_operation(operation.id, owner_id=owner_id).status == "error"
     assert retry_operation.payload["recognition_provider_id"] == "test-provider"
 

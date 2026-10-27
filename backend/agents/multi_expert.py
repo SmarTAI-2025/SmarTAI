@@ -87,7 +87,7 @@ class SynthesisOutput(BaseModel):
 
 
 # Explicit daily exhaustion must stop retries even alongside transient failures.
-_ERROR_KIND_PRIORITY = ("general", "parse_failed", "transient_llm", "quota_exhausted", "daily_quota_exhausted")
+_ERROR_KIND_PRIORITY = ("general", "parse_failed", "transient_llm", "quota_exhausted", "daily_quota_exhausted", "zero_quota")
 
 
 def dominant_error_kind(failures: List[ExpertResult]) -> str:

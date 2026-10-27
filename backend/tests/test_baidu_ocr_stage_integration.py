@@ -564,20 +564,29 @@ async def test_submission_inflight_without_artifact_never_resubmits(monkeypatch)
     assert outcome.failure_phase == "ocr"
     assert outcome.retryable is False
 
-    replay = task_facade.queue_task_submission_parsing(
-        task_id=task_id,
-        owner_id=owner_id,
-        filename="S003_Lost.png",
-        content=PNG_1X1,
-        content_type="image/png",
-        registry=registry,
+    # A new configuration-page action is no longer an idempotent lookup of the
+    # old failed parent. Unknown submission state still requires acknowledgement.
+    workflow = workflow_repository.get_live_workflow(task_id, owner_id=owner_id)
+    args = dict(
+        task_id=task_id, background_tasks=_BackgroundTasks(), file=None,
+        stored_file_id=operation.payload["input_file_id"], identity_mode="filename",
+        roster_file=None, replace_confirmed=False,
+        expected_workflow_revision=workflow.workflow_revision,
+        current=SimpleNamespace(id=owner_id), registry=registry,
         recognition_provider_id=route_id,
     )
-    persisted = workflow_repository.get_operation(operation.id, owner_id=owner_id)
-    assert replay["status"] == "already_done"
-    assert replay["job_id"] == operation.id
-    assert persisted.attempt == operation.attempt
+    refused = await tasks.parse_submissions_endpoint(**args)
+    assert refused.status_code == 409
+    assert b"provider_submit_uncertain" in refused.body
     assert skill.calls == []
+    restarted = await tasks.parse_submissions_endpoint(**args, acknowledge_possible_duplicate_call=True)
+    fresh = workflow_repository.get_operation(restarted["job_id"], owner_id=owner_id)
+    persisted = workflow_repository.get_operation(operation.id, owner_id=owner_id)
+    assert restarted["status"] == "started" and fresh.id != operation.id
+    assert fresh.payload["recognition_execution_scope"] != operation.payload["recognition_execution_scope"]
+    assert "retry_from" not in fresh.payload and fresh.error_code is None
+    assert persisted.attempt == operation.attempt and persisted.error_code == "provider_submit_uncertain"
+    assert skill.calls == []  # Queueing is not an in-request provider dispatch.
 
 
 def test_baidu_can_be_saved_for_grading_but_execution_fails_before_run():

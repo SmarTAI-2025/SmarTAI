@@ -205,9 +205,10 @@ class _GuardedCalls(RecognitionCallService):
 
     async def lookup(self, *args, **kwargs):
         found = await super().lookup(*args, **kwargs)
-        if found.status == "not_success" and (self.context.row.payload or {}).get("retry_origin_id"):
-            # An explicit retry may replace a failed model response. Corrupt or
-            # unavailable evidence remains an error; successful leaves stay hits.
+        if found.status in {"not_success", "corrupt", "unavailable"} and (self.context.row.payload or {}).get("retry_origin_id"):
+            # Only verified successful results survive a user retry. Missing or
+            # invalid derived evidence can be regenerated from the live source;
+            # source authorization/unavailability still fails closed.
             return RecognitionCallLookup("miss")
         return found
 
@@ -364,7 +365,11 @@ class RecognitionRunService:
             operation_type=OPERATION_TYPE, input_hash=identity.key, retry_existing=False,
             payload=dict(identity_key=identity.key, binding=binding.model_dump()),
         ), response_only=response_only)
-        if retry_key is not None and row.status not in {"pending", "running", "completed"}:
+        if retry_key is not None and row.status == "completed":
+            restored = await self._restored(row, request, identity, status="already_done")
+            if restored.safe_error_code is None and restored.assembly is not None:
+                return restored
+        if retry_key is not None and row.status not in {"pending", "running"}:
             # Preserve the failed checkpoint and its uncertain-call evidence.
             # A stable parent attempt gives one retry child; successful leaf
             # artifacts keep their original identity and can still be reused.

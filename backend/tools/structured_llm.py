@@ -117,6 +117,9 @@ class RateLimitError(TransientLLMError):
     conservative 65-second cooldown plus jitter.
     """
 
+    code = "provider_rate_limited"
+
+
 class PermanentLLMError(Exception):
     """Non-retryable error (4xx auth, bad request)."""
 
@@ -178,7 +181,7 @@ def _provider_retry_after(exc: Exception) -> float | None:
 
 
 def _block_exhausted_provider(provider, code: str) -> None:
-    if code in {"provider_daily_quota_exceeded", "provider_quota_exceeded"}:
+    if code in {"provider_daily_quota_exceeded", "provider_quota_exceeded", "provider_zero_quota"}:
         from backend.services.execution_control import current_execution
         control = current_execution()
         if control is not None:
@@ -198,12 +201,14 @@ def _classify_exception(e: Exception) -> Exception:
     "provider_upstream_unavailable" would miss every branch below and fall
     into the default 3-attempt transient path.
     """
-    from backend.llm.provider_limits import exhausted_quota_code
-    exhausted = exhausted_quota_code(e)
-    if exhausted:
-        return DailyQuotaError() if exhausted == "provider_daily_quota_exceeded" else PermanentLLMError(exhausted)
+    from backend.llm.provider_limits import quota_error_code
+    quota_code = quota_error_code(e)
+    if quota_code and quota_code != "provider_rate_limited":
+        return DailyQuotaError() if quota_code == "provider_daily_quota_exceeded" else PermanentLLMError(quota_code)
     if getattr(e, "retryable", True) is False:
         return PermanentLLMError("non_retryable_provider_limit")
+    if quota_code == "provider_rate_limited":
+        return RateLimitError(quota_code, retry_after=_provider_retry_after(e))
     if isinstance(e, ProviderRequestError) and e.code in {"provider_recitation_blocked", "provider_content_blocked"}:
         return PermanentLLMError(e.code)
 
@@ -246,7 +251,7 @@ def _classify_exception(e: Exception) -> Exception:
         if status_code == 429:
             retry_after = _provider_retry_after(e)
             return RateLimitError(
-                msg, retry_after=retry_after or _extract_retry_after(msg)
+                "provider_rate_limited", retry_after=retry_after or _extract_retry_after(msg)
             )
 
     # Auth/permission errors — never retry.
@@ -262,7 +267,7 @@ def _classify_exception(e: Exception) -> Exception:
         or "resourceexhausted" in lower
         or "resource_exhausted" in lower
     ):
-        return RateLimitError(msg, retry_after=_provider_retry_after(e))
+        return RateLimitError("provider_rate_limited", retry_after=_provider_retry_after(e))
 
     # Generic transient (timeout / 5xx / connection) — retryable.
     if any(k in lower for k in ["timeout", "timed out", "connection", "5xx", "internal", "upstream_unavailable"]):
