@@ -819,6 +819,8 @@ def _grading_failure_code(run) -> str | None:
         return None
     kinds = [expert.get("error_kind") for result in missing
              for expert in (result.ai_expert_results or []) if isinstance(expert, dict)]
+    if kinds and all(kind == "zero_quota" for kind in kinds):
+        return "provider_zero_quota"
     if kinds and all(kind == "daily_quota_exhausted" for kind in kinds):
         return "provider_daily_quota_exceeded"
     # Compatibility for already persisted runs from before this stable code.

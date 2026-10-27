@@ -178,7 +178,7 @@ def _provider_retry_after(exc: Exception) -> float | None:
 
 
 def _block_exhausted_provider(provider, code: str) -> None:
-    if code in {"provider_daily_quota_exceeded", "provider_quota_exceeded"}:
+    if code in {"provider_daily_quota_exceeded", "provider_quota_exceeded", "provider_zero_quota"}:
         from backend.services.execution_control import current_execution
         control = current_execution()
         if control is not None:

@@ -223,3 +223,10 @@ describe("submission source reason copy", () => {
     expect(copy.nextStep).toContain("修正身份");
   });
 });
+
+
+it.each(["zh-CN", "en-US"] as const)("zero quota source reports no allowance rather than exhaustion (%s)", locale => {
+  const copy = getSubmissionSourceReasonCopy(source({ reason_code: "provider_zero_quota" }), locale);
+  expect(JSON.stringify(copy)).toContain(locale === "zh-CN" ? "当前无可用配额" : "No quota is currently available");
+  expect(JSON.stringify(copy)).not.toMatch(/已用完|耗尽|exhausted|midnight/);
+});

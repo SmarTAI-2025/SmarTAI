@@ -58,3 +58,18 @@ it.each(["zh-CN", "en-US"] as const)("hides internal diagnostics without changin
   expect(screen.getByRole("link", { name: locale === "zh-CN" ? "返回修改配置" : "Back to edit settings" })).toHaveAttribute("href", "/tasks/T/grading-setup");
   expect(info.technicalDetails.some(item => item.value === "operation_cancelled")).toBe(true);
 });
+
+it.each(["zh-CN", "en-US"] as const)("distinguishes an explicit zero ceiling without hiding retry (%s)", locale => {
+  const retry = vi.fn();
+  const info = classifyRecoverableError("provider_zero_quota", { locale });
+  const { container } = render(<MemoryRouter><RecoverableActionState locale={locale} info={info}
+    workflowRecovery={{ retry: { onClick: retry }, configurationHref: "/tasks/T/grading-setup" }} /></MemoryRouter>);
+  expect(container).toHaveTextContent(locale === "zh-CN" ? "当前无可用配额" : "No quota is currently available");
+  expect(container).toHaveTextContent(locale === "zh-CN" ? "配额为0" : "zero quota limit");
+  expect(container).not.toHaveTextContent(/已用完|耗尽|exhausted|midnight|跨天/);
+  expect(info.dailyQuotaExhausted).toBeFalsy();
+  const button = screen.getByRole("button", { name: locale === "zh-CN" ? "重试失败项" : "Retry failed items" });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  expect(retry).toHaveBeenCalledTimes(2);
+});

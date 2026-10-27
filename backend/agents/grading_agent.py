@@ -63,6 +63,15 @@ def _grading_failure_feedback(
     """Return a stable, C-01-aware message for a deterministic failure path."""
 
     messages = {
+        "zero_quota": {
+            "zh_message": "该题未完成批改，该模型当前无可用配额。",
+            "en_message": "This item remains ungraded: the model currently has no available quota.",
+            "zh_detail": "服务商明确返回配额为0，系统不会自动重试。",
+            "en_detail": "The provider explicitly reported a zero quota limit. Automatic retries have stopped.",
+            "zh_suggestion": "请检查服务商项目与模型权限，调整后主动重试或更换模型。",
+            "en_suggestion": "Check the provider project and model access, then retry after updating them or choose another model.",
+            "legacy_message": "该模型当前无可用配额：服务商明确返回配额为0。请检查服务商项目与模型权限，调整后主动重试或更换模型。",
+        },
         "daily_quota_exhausted": {
             "zh_message": "该题未完成批改，模型服务商明确报告日额度已用完。",
             "en_message": "This item remains ungraded: the provider explicitly reported an exhausted daily quota.",
