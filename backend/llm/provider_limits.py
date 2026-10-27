@@ -40,12 +40,34 @@ def structured_quota_code(value) -> str | None:
 
 
 def quota_error_code(value) -> str | None:
-    """Classify provider evidence once; a structured decision outranks prose."""
-    if code := structured_quota_code(value):
-        return code
-    for code in (getattr(value, "code", None), str(value).strip()):
-        if isinstance(code, str) and code in LIMIT_CODES:
+    """Read SDK causes before turning a generic wrapper into a stable code."""
+    chain = list(_quota_error_chain(value))
+    for item in chain:
+        if code := structured_quota_code(item):
             return code
+    for item in chain:
+        for code in (getattr(item, "code", None), str(item).strip()):
+            if isinstance(code, str) and code in LIMIT_CODES:
+                return code
+    # Without structured fields, prefer the original response's explicit
+    # message over the SDK wrapper's paraphrase of it.
+    for item in reversed(chain):
+        if code := _unstructured_quota_code(item):
+            return code
+    return None
+
+
+def _quota_error_chain(value):
+    seen = set()
+    while value is not None and id(value) not in seen:
+        seen.add(id(value))
+        yield value
+        # SDKs raise their wrapper *from* the response error. Implicit context
+        # can instead be a previous attempt, so it is not current quota evidence.
+        value = value.__cause__ if isinstance(value, BaseException) else None
+
+
+def _unstructured_quota_code(value):
     text = _error_text(value)
     if _has_explicit_zero_ceiling(value):
         return "provider_zero_quota"
