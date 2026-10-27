@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
 import { RecoverableActionState } from "./RecoverableActionState";
@@ -7,19 +7,23 @@ import { questionIssueNeedsReview, recognitionIssueLabel } from "@/lib/reviewCon
 import { normalizeMarkdownMathInput } from "./MarkdownMath";
 import type { PreparationIssue } from "@/types";
 
-it.each(["provider_rate_limited", "provider_daily_quota_exceeded"])("renders truthful recovery controls for %s", code => {
+it.each(["provider_rate_limited", "provider_daily_quota_exceeded", "shared_pool_daily_limit_reached"])("renders truthful recovery controls for %s", code => {
+  const retry = vi.fn();
   render(<MemoryRouter><RecoverableActionState info={classifyRecoverableError(code)}
-    workflowRecovery={{ retry: { onClick: vi.fn() }, configurationHref: "/tasks/T/submissions/upload" }} /></MemoryRouter>);
+    workflowRecovery={{ retry: { onClick: retry }, configurationHref: "/tasks/T/submissions/upload" }} /></MemoryRouter>);
   expect(screen.getByRole("link", { name: "返回修改配置" })).toBeInTheDocument();
   expect(screen.queryByRole("link", { name: "OpenAI" })).not.toBeInTheDocument();
   expect(screen.queryByRole("link", { name: "查看用量" })).not.toBeInTheDocument();
-  if (code.includes("daily")) {
-    expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
-    expect(screen.getByText(/本轮已停止/)).toBeInTheDocument();
-  } else {
-    expect(screen.getByRole("button", { name: "重试失败项" })).toBeEnabled();
+  if (code === "provider_daily_quota_exceeded") {
+    expect(screen.getByText(/自动重试已停止/)).toBeInTheDocument();
+  } else if (code === "provider_rate_limited") {
     expect(screen.getByText(/当前信息不足以确定是分钟限制还是日额度/)).toBeInTheDocument();
   }
+  const button = screen.getByRole("button", { name: "重试失败项" });
+  expect(button).toBeEnabled();
+  fireEvent.click(button);
+  fireEvent.click(button);
+  expect(retry).toHaveBeenCalledTimes(2);
 });
 
 it("distinguishes unverified targets from actual missing source evidence", () => {

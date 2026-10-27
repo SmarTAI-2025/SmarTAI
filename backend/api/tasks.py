@@ -457,6 +457,7 @@ async def parse_submissions_endpoint(
     recognition_provider_id: str | None = Form(default=None),
     replace_confirmed: bool = Form(default=False),
     stored_file_id: str | None = Form(default=None),
+    reuse_input_from_job_id: str | None = Form(default=None),
     reuse_roster_from_job_id: str | None = Form(default=None),
     expected_workflow_revision: int | None = Form(default=None),
     acknowledge_possible_duplicate_call: bool = Form(default=False),
@@ -465,11 +466,12 @@ async def parse_submissions_endpoint(
 ):
     # Form defaults are Param objects in direct Python calls used by workers/tests.
     stored_file_id = stored_file_id if isinstance(stored_file_id, str) else None
+    reuse_input_from_job_id = reuse_input_from_job_id if isinstance(reuse_input_from_job_id, str) else None
     reuse_roster_from_job_id = reuse_roster_from_job_id if isinstance(reuse_roster_from_job_id, str) else None
     expected_workflow_revision = expected_workflow_revision if isinstance(expected_workflow_revision, int) else None
     acknowledge_possible_duplicate_call = acknowledge_possible_duplicate_call is True
     restart_origin = None
-    from backend.services.workflow_inputs import load_submission_input, load_saved_roster
+    from backend.services.workflow_inputs import load_submission_input, load_saved_roster, submission_inputs
     # Bound a new upload before looking up or publishing any workflow state.
     if file is not None and stored_file_id is None:
         body = await file.read(SUBMISSION_UPLOAD_MAX_BYTES + 1)
@@ -483,9 +485,16 @@ async def parse_submissions_endpoint(
         workflow = workflow_repository.get_live_workflow(task_id, owner_id=current.id)
         if expected_workflow_revision is not None and workflow.workflow_revision != expected_workflow_revision:
             raise VersionConflict("The task changed before submission.", code="stale_revision")
-        if (file is None) == (stored_file_id is None):
+        if sum(source is not None for source in (file, stored_file_id, reuse_input_from_job_id)) != 1:
             raise ValidationError("Choose exactly one submission source.", code="exactly_one_source_required")
-        if stored_file_id:
+        if reuse_input_from_job_id is not None:
+            # Recover only the original upload. The current form owns all settings,
+            # and the normal queue path creates a fresh recognition round.
+            saved = submission_inputs(task_id=task_id, owner_id=current.id)["input"]
+            if not saved or saved["job_id"] != reuse_input_from_job_id or not saved["available"]:
+                raise NotFound("submission_source")
+            stored_file_id = saved["stored_file_id"]
+        if stored_file_id is not None:
             if expected_workflow_revision is None:
                 raise ValidationError("Confirm the current task revision.", code="stale_revision")
             stored, body = load_submission_input(task_id=task_id, owner_id=current.id, stored_file_id=stored_file_id)

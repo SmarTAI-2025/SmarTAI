@@ -2554,6 +2554,7 @@ def queue_task_submission_parsing(
     )
     digest = _hash_json({
         "submission_structure_version": 2,
+        "input_workflow_revision": workflow.workflow_revision,
         "sha256": hashlib.sha256(content).hexdigest(),
         "identity_mode": identity_mode,
         "roster": roster_entries or [],
@@ -2590,10 +2591,12 @@ def queue_task_submission_parsing(
     # Freeze this choice on the parent operation. Old or retried work must
     # keep its child OCR identity and any uncertain-submission checkpoint.
     timeout_profile = SOURCE_TIMEOUT_PROFILE
+    execution_scope = f"{task_id}:{digest}"
     if replay is not None:
         if (replay.checkpoint or {}).get("structure_inflight") and not acknowledged_restart_from:
             raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")
         timeout_profile = (replay.payload or {}).get("recognition_timeout_profile")
+        execution_scope = (replay.payload or {}).get("recognition_execution_scope")
     elif retry_from or acknowledged_restart_from:
         if retry_from:
             origin_id, origin_attempt = retry_from.get("operation_id"), retry_from.get("attempt")
@@ -2611,6 +2614,8 @@ def queue_task_submission_parsing(
         if (origin.checkpoint or {}).get("structure_inflight") and not acknowledged_restart_from:
             raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")
         timeout_profile = (origin.payload or {}).get("recognition_timeout_profile")
+        if retry_from:
+            execution_scope = (origin.payload or {}).get("recognition_execution_scope")
     workflow, active = _ensure_no_other_active_operation(
         task_id=task_id, owner_id=owner_id,
         operation_type="submission_recognition", input_hash=digest,
@@ -2718,6 +2723,7 @@ def queue_task_submission_parsing(
                 "roster_name": roster_name,
                 "recognition_provider_id": resolved_provider_id,
                 "recognition_timeout_profile": timeout_profile,
+                "recognition_execution_scope": execution_scope,
                 "provider_configuration_fingerprint": route_fingerprint,
                 "question_snapshot": question_snapshot,
                 "replace_confirmed": replace_confirmed,
@@ -3195,6 +3201,7 @@ async def run_task_submission_parsing(
                                    frozen.get("retry_from") or frozen.get("acknowledged_restart_from") else None),
                         acknowledge_pending_retry=bool(frozen.get("acknowledged_restart_from")),
                         timeout_profile=frozen.get("recognition_timeout_profile"),
+                        execution_scope=frozen.get("recognition_execution_scope"),
                         allow_partial=True,
                         on_pages=lambda pages: on_saved_pages(raw, stored_file_id, pages),
                     )

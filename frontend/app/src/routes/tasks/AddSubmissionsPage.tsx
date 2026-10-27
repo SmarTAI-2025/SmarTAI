@@ -16,11 +16,11 @@ import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useWorkflowInput, type SubmissionInput } from "@/api/workflowInputs";
-import { useParseSubmissions, useRetrySubmissionRecognition, useStageProviders, useTask } from "@/api/hooks";
+import { useParseSubmissions, useStageProviders, useTask } from "@/api/hooks";
 import { ImageRecognitionRecovery, useImageRecoveryReturn } from "@/components/models/ImageRecognitionRecovery";
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
-import { RecoverableActionState, workflowRetryLabel } from "@/components/ui/RecoverableActionState";
+import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { usePageDraft } from "@/hooks/usePageDraft";
 import { submissionDraftFromInput, submissionDraftCodec } from "@/lib/taskPageDrafts";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
@@ -70,14 +70,13 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
   const { t, locale } = useI18n();
   const expertsQuery = useStageProviders();
   const parseSubmissions = useParseSubmissions();
-  const retryRecognition = useRetrySubmissionRecognition();
   const submissionInputRef = useRef<HTMLInputElement>(null);
   const rosterInputRef = useRef<HTMLInputElement>(null);
   const submissionChooseRef = useRef<HTMLDivElement>(null);
   const rosterChooseRef = useRef<HTMLButtonElement>(null);
   const byokLinkRef = useRef<HTMLAnchorElement>(null);
 
-  const draft = usePageDraft(`submissions:${taskId}`, () => submissionDraftFromInput(submittedInput), submissionDraftCodec, taskInputVersion(taskQuery.data, "submissions"), undefined, parseSubmissions.isPending || retryRecognition.isPending);
+  const draft = usePageDraft(`submissions:${taskId}`, () => submissionDraftFromInput(submittedInput), submissionDraftCodec, taskInputVersion(taskQuery.data, "submissions"), undefined, parseSubmissions.isPending);
   const submitting = useRef(false);
   const [selectedFile, setSelectedFile] = draft.field("selectedFile");
   const [rosterFile, setRosterFile] = draft.field("rosterFile");
@@ -114,7 +113,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       && submittedInput?.available !== false
       && !selectedFile,
   );
-  const needsRosterUpload = (!canRetryOriginal || hasStoredFile) && identityMode === "roster" && !rosterFile && !hasSavedRoster;
+  const needsRosterUpload = identityMode === "roster" && !rosterFile && !hasSavedRoster;
   const showRosterError = needsRosterUpload && (missingUpload === "roster" || Boolean(draft.value.rosterFileName));
 
   useEffect(() => {
@@ -124,10 +123,8 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
     }
   }, [needsRosterUpload]);
 
-  const retryLabel = canRetryOriginal && !hasStoredFile
-    ? task?.status === "submissions_paused" ? localText(locale, "继续识别", "Continue Recognition") : workflowRetryLabel(locale)
-    : localText(locale, "重新识别全部作答", "Recognize All Submissions Again");
-  const isPending = parseSubmissions.isPending || retryRecognition.isPending;
+  const retryLabel = localText(locale, "重新识别全部作答", "Recognize All Submissions Again");
+  const isPending = parseSubmissions.isPending;
   const missingSubmissionMessage = localText(locale,
     draft.value.selectedFileName ? `“${draft.value.selectedFileName}” 当前没有可用文件，请重新选择作答文件。其他设置已保留。` : "尚未选择作答文件，请先选择文件。",
     draft.value.selectedFileName ? `“${draft.value.selectedFileName}” is unavailable. Reselect the submission file; other settings are preserved.` : "No submission file is selected. Choose a file first.");
@@ -256,27 +253,20 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
     const acknowledgeRestart = submissionUncertain || task?.status === "submissions_paused" || task?.error === "operation_cancelled";
     submitting.current = true;
     try {
-      const response = canRetryOriginal && !hasStoredFile && task?.last_failed_job_id
-        ? await retryRecognition.mutateAsync({
-            taskId,
-            jobId: task.last_failed_job_id,
-            recognitionProviderId,
-            expectedWorkflowRevision: task.workflow_revision,
-            ...(acknowledgeRestart ? { acknowledgePossibleDuplicateCall: true } : {}),
-          })
-        : await parseSubmissions.mutateAsync({
-            taskId,
-            file: selectedFile,
-            storedFileId: draft.value.storedFileId,
-            reuseRosterFromJobId: identityMode === "roster" ? draft.value.savedRosterJobId : null,
-            expectedWorkflowRevision: task?.workflow_revision,
-            ...(acknowledgeRestart ? { acknowledgePossibleDuplicateCall: true } : {}),
-            identityMode,
-            rosterFile: identityMode === "roster" ? rosterFile : null,
-            recognitionProviderId,
-            replaceConfirmed: replaceConfirmed || (canRetryOriginal && Boolean(task?.student_count)),
-            onProgress: setUploadPercent,
-          });
+      const response = await parseSubmissions.mutateAsync({
+        taskId,
+        file: selectedFile,
+        storedFileId: draft.value.storedFileId,
+        reuseInputFromJobId: canRetryOriginal && !hasStoredFile ? task?.last_failed_job_id : null,
+        reuseRosterFromJobId: identityMode === "roster" ? draft.value.savedRosterJobId : null,
+        expectedWorkflowRevision: task?.workflow_revision,
+        ...(acknowledgeRestart ? { acknowledgePossibleDuplicateCall: true } : {}),
+        identityMode,
+        rosterFile: identityMode === "roster" ? rosterFile : null,
+        recognitionProviderId,
+        replaceConfirmed: replaceConfirmed || (canRetryOriginal && Boolean(task?.student_count)),
+        onProgress: setUploadPercent,
+      });
       if (!draft.protection.isCurrent()) return;
       await draft.clear();
       if (!draft.protection.isCurrent()) return;

@@ -374,7 +374,7 @@ describe("AddSubmissionsPage OCR uploads", () => {
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ file: valid })));
   });
 
-  it("reuses a failed job's preserved original after the teacher switches models", async () => {
+  it("starts a full round with current settings when recovering an original by job", async () => {
     taskState.data = {
       ...taskState.data,
       task_id: "task-retry",
@@ -383,22 +383,25 @@ describe("AddSubmissionsPage OCR uploads", () => {
       pending_submission_file_name: "scan.pdf",
       last_failed_job_id: "job-failed",
     };
-    renderPage("task-retry");
+    const { container } = renderPage("task-retry");
 
     expect(screen.getByText("scan.pdf")).toBeInTheDocument();
     expect(screen.getByText(/原文件已保留/)).toBeInTheDocument();
     expect(screen.queryByText("submissionUploadExisting")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
     fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
-    fireEvent.click(screen.getByRole("button", { name: "重试失败项" }));
+    const roster = new File(["student_id,name\nS1,Alex"], "new-roster.csv", { type: "text/csv" });
+    fireEvent.change(container.querySelectorAll('input[type="file"]')[1]!, { target: { files: [roster] } });
+    fireEvent.click(screen.getByRole("button", { name: "重新识别全部作答" }));
 
-    await waitFor(() => expect(retryMutateAsync).toHaveBeenCalledWith({
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
       taskId: "task-retry",
-      jobId: "job-failed",
+      reuseInputFromJobId: "job-failed",
+      file: null, identityMode: "roster", rosterFile: roster,
       recognitionProviderId: "provider-default",
       expectedWorkflowRevision: 7,
-    }));
-    expect(mutateAsync).not.toHaveBeenCalled();
+    })));
+    expect(retryMutateAsync).not.toHaveBeenCalled();
     expect(await screen.findByText("progress page")).toBeInTheDocument();
   });
 
@@ -411,9 +414,9 @@ describe("AddSubmissionsPage OCR uploads", () => {
       available: true, identity_mode: "filename", recognition_provider_id: "provider-default" };
     renderPage();
     await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
-    fireEvent.click(screen.getByRole("button", { name: restored ? "重新识别全部作答" : legacy ? "重试失败项" : "继续识别" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新识别全部作答" }));
     await screen.findByText("progress page");
-    expect(restored ? mutateAsync : retryMutateAsync).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    expect(mutateAsync).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       expectedWorkflowRevision: 2, acknowledgePossibleDuplicateCall: true,
     }));
   });

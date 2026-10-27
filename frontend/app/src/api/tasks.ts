@@ -131,6 +131,7 @@ export interface ParseSubmissionsInput extends UploadOptions {
   taskId: string;
   file: File | null;
   storedFileId?: string | null;
+  reuseInputFromJobId?: string | null;
   reuseRosterFromJobId?: string | null;
   expectedWorkflowRevision?: number;
   acknowledgePossibleDuplicateCall?: boolean;
@@ -148,6 +149,7 @@ export function parseSubmissions({
   recognitionProviderId,
   replaceConfirmed = false,
   storedFileId,
+  reuseInputFromJobId,
   reuseRosterFromJobId,
   expectedWorkflowRevision,
   acknowledgePossibleDuplicateCall,
@@ -161,6 +163,7 @@ export function parseSubmissions({
       recognition_provider_id: recognitionProviderId,
       replace_confirmed: replaceConfirmed,
       stored_file_id: file ? undefined : storedFileId,
+      reuse_input_from_job_id: file || storedFileId ? undefined : reuseInputFromJobId,
       reuse_roster_from_job_id: rosterFile ? undefined : reuseRosterFromJobId,
       expected_workflow_revision: expectedWorkflowRevision,
       acknowledge_possible_duplicate_call: acknowledgePossibleDuplicateCall || undefined,

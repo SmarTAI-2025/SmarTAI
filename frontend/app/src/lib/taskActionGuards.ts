@@ -1077,7 +1077,7 @@ export function classifyRecoverableError(
   if (code === "provider_daily_quota_exceeded" || code === "shared_pool_daily_limit_reached") {
     return {
       title: tx(locale, "模型日额度已用完", "The model's daily quota is exhausted"),
-      description: tx(locale, "模型日额度已用完，本轮已停止。额度恢复后重新启动，或更换模型。", "The model’s daily quota is exhausted and this run has stopped. Restart once quota is available, or choose another model."),
+      description: tx(locale, "本轮收到日额度限制，自动重试已停止。你可以主动重试以重新请求模型，或更换模型。", "This run received a daily quota limit and automatic retries stopped. Retry to make a new model request, or choose another model."),
       actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/models", actionKind: "byok", tone: "warning",
       dailyQuotaExhausted: true, showUsageLinks: true, technicalDetails,
     };
