@@ -271,6 +271,10 @@ def classify_background_error(
     for item in chain:
         if isinstance(item, StructuredOutputInvalidError):
             return "provider_response_invalid"
+        if isinstance(item, RateLimitError):
+            # The retry boundary already classified this response. Its safe
+            # code must survive wrappers/persistence without reparsing prose.
+            return item.code
         literal_code = f"{item}".strip()
         if literal_code in SAFE_BACKGROUND_ERROR_CODES:
             if literal_code != "provider_rate_limited":
@@ -308,13 +312,17 @@ def classify_background_error(
 
     # Explicit application codes (including local shared-pool caps) take
     # precedence over heuristic classification of provider messages.
-    from backend.llm.provider_limits import exhausted_quota_code
+    from backend.llm.provider_limits import exhausted_quota_code, structured_quota_code
+    # Scan the complete chain for authoritative fields before reading any
+    # lossy outer message (which may have retained only usage/remaining text).
+    for item in chain:
+        if code := structured_quota_code(item):
+            return code
+    if rate_limited:
+        return "provider_rate_limited"
     for item in chain:
         if code := exhausted_quota_code(item):
             return code
-
-    if rate_limited or any(isinstance(item, RateLimitError) for item in chain):
-        return "provider_rate_limited"
 
     if persistence_code and any(isinstance(item, SQLAlchemyError) for item in chain):
         return safe_background_error_code(persistence_code, fallback)

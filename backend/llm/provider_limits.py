@@ -16,10 +16,38 @@ def _error_text(value) -> str:
     return " ".join(parts).lower()
 
 
-def exhausted_quota_code(value) -> str | None:
-    """Only explicit evidence distinguishes daily caps from billing and RPM/TPM."""
+LIMIT_CODES = frozenset({"provider_rate_limited", "provider_daily_quota_exceeded",
+                         "provider_zero_quota", "provider_quota_exceeded"})
+
+
+def structured_quota_code(value) -> str | None:
+    """A QuotaFailure is a complete decision, including a non-daily limit.
+
+    Only quotaValue in a violated quota metric is a structured ceiling. If it
+    is absent, an explicit ceiling in this response's message may supply it;
+    remaining/usage and unrelated limits cannot, nor can any outer wrapper.
+    """
+    violations = list(_violations(value))
+    if not violations:
+        return None
+    ceilings = [item[field] for _, item in violations for field in ("quotaValue", "quota_value")
+                if item.get(field) is not None]
+    if any(_is_zero(value) for value in ceilings) or (not ceilings and _has_explicit_zero_ceiling(value)):
+        return "provider_zero_quota"
+    if any(re.search(_DAILY, metric) for metric, _ in violations):
+        return "provider_daily_quota_exceeded"
+    return "provider_rate_limited"
+
+
+def quota_error_code(value) -> str | None:
+    """Classify provider evidence once; a structured decision outranks prose."""
+    if code := structured_quota_code(value):
+        return code
+    for code in (getattr(value, "code", None), str(value).strip()):
+        if isinstance(code, str) and code in LIMIT_CODES:
+            return code
     text = _error_text(value)
-    if _has_zero_quota(value):
+    if _has_explicit_zero_ceiling(value):
         return "provider_zero_quota"
     if any(code in text for code in (
         "insufficient_quota", "credit_balance_exhausted", "billing_hard_limit_reached",
@@ -30,6 +58,11 @@ def exhausted_quota_code(value) -> str | None:
     if is_daily_quota_error(value):
         return "provider_daily_quota_exceeded"
     return None
+
+
+def exhausted_quota_code(value) -> str | None:
+    code = quota_error_code(value)
+    return code if code != "provider_rate_limited" else None
 
 
 _DAILY = r"per[ _-]?day|daily|requestsperday|tokensperday|\brpd\b|\btpd\b|每日|每天|日配额|日限额"
@@ -84,25 +117,58 @@ def _is_zero(value):
         return False
 
 
-def _has_zero_quota(value):
-    violations = list(_violations(value))
-    # Only a violated limit's ceiling is evidence. Usage/remaining=0 and a
-    # missing value do not mean the model has a zero allowance.
-    ceilings = [item[field] for _, item in violations for field in ("quotaValue", "quota_value")
-                if item.get(field) is not None]
-    if ceilings:
-        return any(_is_zero(ceiling) for ceiling in ceilings)
-    text = _error_text(value)
-    if "provider_zero_quota" in text:
-        return True
-    if not re.search(r"\bquota\b|配额|额度", text):
-        return False
-    # Unstructured Google relays often retain "limit: 0" but lose QuotaFailure.
-    values = re.findall(
-        r"(?:\blimit|\bquota[ _]?value|(?:配额|额度)(?:上限)?)\s*['\"]?"
-        r"\s*(?::|=|为|是)\s*['\"]?([+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?)(?![\w.])", text,
-    )
-    return any(_is_zero(limit) for limit in values)
+_NUMBER = r"[+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?"
+# A complete field label carries the meaning. Never search for a suffix such as
+# 配额 inside 剩余配额, or for an unrelated limit somewhere in the error message.
+_CEILING_FIELD = re.compile(
+    rf"(?:quota (?:limit|ceiling)|(?:配额|额度)上限|总配额|总额度)"
+    rf"\s*(?::|=|为|是)\s*({_NUMBER})\s*[。.]?"
+)
+# Google relays may preserve this explicit error-line shape without retaining
+# the QuotaFailure object. Here `limit` belongs to the named violated metric.
+_QUOTA_LIMIT_LINE = re.compile(
+    rf"\*?\s*quota exceeded for (?:metric:\s*[a-z0-9_./-]+|(?:requests?|tokens?) per (?:day|minute))"
+    rf"\s*[,;]\s*limit:\s*({_NUMBER})(?:\s*,\s*model:\s*[a-z0-9_./-]+)?\s*[.]?"
+)
+
+
+def _zero_ceiling_in_text(text):
+    for line in text.splitlines():
+        if match := _QUOTA_LIMIT_LINE.fullmatch(line.strip()):
+            if _is_zero(match.group(1)):
+                return True
+        for field in re.split(r"[;,，；]", line):
+            if match := _CEILING_FIELD.fullmatch(field.strip()):
+                if _is_zero(match.group(1)):
+                    return True
+    return False
+
+
+def _has_explicit_zero_ceiling(value):
+    return any(_zero_ceiling_in_text(message.lower()) for message in _error_messages(value))
+
+
+def _error_messages(value):
+    """Keep message boundaries intact; concatenating fields changes their meaning."""
+    if isinstance(value, str):
+        yield value
+        try:
+            yield from _error_messages(json.loads(value))
+        except (ValueError, TypeError):
+            pass
+    elif isinstance(value, dict):
+        message = value.get("message")
+        if isinstance(message, str):
+            yield message
+        for field in ("error", "details"):
+            yield from _error_messages(value.get(field))
+    elif isinstance(value, list):
+        for item in value:
+            yield from _error_messages(item)
+    elif isinstance(value, BaseException):
+        yield str(value)
+        for field in ("body", "details", "response_json"):
+            yield from _error_messages(getattr(value, field, None))
 
 
 def is_daily_quota_error(value) -> bool:

@@ -144,3 +144,126 @@ def test_zero_ceiling_text_can_supply_missing_structured_ceiling_but_not_overrid
     assert exhausted_quota_code(body) == "provider_zero_quota"
     body["error"]["details"][0]["violations"][0]["quotaValue"] = "500"
     assert exhausted_quota_code(body) == "provider_daily_quota_exceeded"
+
+
+@pytest.mark.parametrize("message", [
+    "Quota exceeded; quota limit: 0",
+    "配额上限为0",
+    "配额超限，总配额: 0",
+    "Quota exceeded for requests per minute; limit: 0",
+    "* Quota exceeded for metric: generativelanguage.googleapis.com/requests, limit: 0, model: synthetic",
+])
+@pytest.mark.parametrize("representation", ["text", "error", "body", "json"])
+def test_unstructured_zero_requires_an_explicit_ceiling(message, representation):
+    import json
+    value = {"error": {"message": message}}
+    if representation == "text":
+        value = message
+    elif representation == "error":
+        value = ProviderRequestError(message, status_code=429)
+    elif representation == "json":
+        value = json.dumps(value)
+    assert exhausted_quota_code(value) == "provider_zero_quota"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vision", [False, True])
+@pytest.mark.parametrize("structured", [False, True, "missing_ceiling"])
+@pytest.mark.parametrize("message", [
+    "每分钟配额已超出，剩余配额: 0",
+    "每分钟配额超限，剩余额度为0",
+    "Minute quota exceeded; remaining quota limit: 0",
+    "Minute quota exceeded; used quota: 0",
+    "Minute quota exceeded; max output token limit: 0",
+])
+async def test_remaining_or_unrelated_zero_stays_rate_limited_through_final_state(monkeypatch, vision, structured, message):
+    from google.genai.errors import ClientError
+    from backend.skills.base import classify_skill_error
+    from backend.domain.errors import RecognitionError
+    from backend.domain.source_outcomes import safe_source_diagnostic
+    sleep = AsyncMock()
+    monkeypatch.setattr(llm._ainvoke_with_retry.retry, "sleep", sleep)
+    monkeypatch.setattr(llm._invoke_with_rate_retry.retry, "sleep", sleep)
+    if structured:
+        body = quota_body(None if structured == "missing_ceiling" else 500, daily=False)
+        body["error"]["message"] = message
+        error = ClientError(429, body)
+    else:
+        error = ProviderRequestError(message, status_code=429)
+    invoke = AsyncMock(side_effect=error)
+    provider = SimpleNamespace(ainvoke=invoke, ainvoke_vision=invoke)
+    with pytest.raises(llm.RateLimitError) as raised:
+        if vision:
+            await llm.ainvoke_vision_with_rate_retry(provider, "read", [], max_output_tokens=100)
+        else:
+            await llm.ainvoke_with_retry(provider, [])
+    assert invoke.await_count == 3 and sleep.await_count == 2
+    final = classify_background_error(raised.value, "workflow_failed")
+    assert final == "provider_rate_limited"
+    assert classify_skill_error(raised.value)[0] == "quota_exhausted"
+    assert RecognitionError(final).code == final
+    assert safe_source_diagnostic("parse_failed", final, "recognition") == (final, "recognition")
+
+
+@pytest.mark.parametrize("message", ["provider_zero_quota", "Quota exceeded; quota limit: 0"])
+def test_structured_minute_violation_outranks_a_lossy_outer_message(message):
+    from google.genai.errors import ClientError
+    body = quota_body(500, daily=False)
+    body["error"]["message"] = "每分钟配额超限，剩余配额: 0"
+    outer = RuntimeError("Provider failed: " + message)
+    outer.__cause__ = ClientError(429, body)
+    assert classify_background_error(outer, "workflow_failed") == "provider_rate_limited"
+
+
+@pytest.mark.parametrize("field", ["remaining quota", "used quota", "remaining quota limit", "剩余配额", "剩余额度", "已用配额", "输出限制"])
+def test_zero_must_belong_to_a_ceiling_field_instead_of_a_suffix(field):
+    assert exhausted_quota_code(f"Minute quota exceeded; {field}: 0") is None
+
+
+def test_confirmed_rate_classification_is_not_reparsed_after_details_are_lost():
+    from google.genai.errors import ClientError
+    body = quota_body(500, daily=False)
+    # Deliberately conflicting prose verifies evidence precedence, not just a
+    # negated keyword. This must remain true after exception serialization.
+    body["error"]["message"] = "Quota exceeded; quota limit: 0"
+    classified = llm._classify_exception(ClientError(429, body))
+    assert isinstance(classified, llm.RateLimitError)
+    assert str(classified) == "provider_rate_limited"
+    assert classify_background_error(classified, "workflow_failed") == "provider_rate_limited"
+    assert classify_background_error(RuntimeError(str(classified)), "workflow_failed") == "provider_rate_limited"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vision", [False, True])
+async def test_structured_minute_limit_survives_retry_and_persisted_task_projection(monkeypatch, vision):
+    from google.genai.errors import ClientError
+    from backend.db import workflow_repository
+    from backend.services import task_facade
+    from backend.skills.base import classify_skill_error
+    from backend.tests.test_task_background_workflows import _Registry, _seed_task
+
+    body = quota_body(500, daily=False)
+    body["error"]["message"] = "Quota exceeded; quota limit: 0"
+    invoke = AsyncMock(side_effect=ClientError(429, body))
+    provider = SimpleNamespace(ainvoke=invoke, ainvoke_vision=invoke)
+    monkeypatch.setattr(llm._ainvoke_with_retry.retry, "sleep", AsyncMock())
+    monkeypatch.setattr(llm._invoke_with_rate_retry.retry, "sleep", AsyncMock())
+    with pytest.raises(llm.RateLimitError) as raised:
+        if vision:
+            await llm.ainvoke_vision_with_rate_retry(provider, "read", [], max_output_tokens=100)
+        else:
+            await llm.ainvoke_with_retry(provider, [])
+    assert invoke.await_count == 3
+    final = classify_background_error(raised.value, "workflow_failed")
+    owner, task = _seed_task(with_question=True)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="student.txt", content=b"answer", content_type="text/plain", registry=_Registry())
+    operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
+    assert task_facade._fail_operation(task, owner, operation.id, operation.attempt, final)
+    assert workflow_repository.get_operation(operation.id, owner_id=owner).error_code == "provider_rate_limited"
+    assert task_facade.get_task(task_id=task, owner_id=owner, full=False)["error"] == "provider_rate_limited"
+
+    kind, _ = classify_skill_error(raised.value)
+    row = SimpleNamespace(effective_score=None, ai_expert_results=[{"error_kind": kind}])
+    monkeypatch.setattr(task_facade.grading_repository, "list_results_for_run", lambda _: [row])
+    assert task_facade._grading_failure_code(SimpleNamespace(id="synthetic", status="partial_failed", error_message=None)) == "provider_rate_limited"
