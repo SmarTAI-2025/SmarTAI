@@ -1,0 +1,47 @@
+{
+  "parts": [
+    "State the assumptions: 2 points.",
+    "Derive the intermediate relation: 3 points.",
+    "Check the endpoint: 5 points."
+  ],
+  "calls": [
+    "Question 1\nState the assumptions: 2 points.\n\nQuestion 1\nDerive the intermediate relation: 3 points.\n\nQuestion 1\nCheck the endpoint: 5 points."
+  ],
+  "saved": {
+    "q1": {
+      "q_id": "q1",
+      "number": "1",
+      "type": "概念题",
+      "stem": "Explain item 1.",
+      "criterion": "Question 1\nState the assumptions: 2 points.\n\nQuestion 1\nDerive the intermediate relation: 3 points.\n\nQuestion 1\nCheck the endpoint: 5 points.",
+      "max_score": 10.0,
+      "question_structure": {
+        "contract_version": 1,
+        "scoring_unit": "major_question",
+        "major_number": "1",
+        "major_order": 0,
+        "shared_stem": "Explain item 1.",
+        "subparts": [],
+        "structure_source": "deterministic",
+        "review_status": "confirmed"
+      },
+      "review_status": "needs_review",
+      "reference_answer": "Teacher answer.",
+      "source_display_number": "1",
+      "max_score_source": "uniform",
+      "max_score_review_status": "confirmed",
+      "material_provenance": {
+        "criterion": {
+          "authority": "uploaded_material",
+          "review_status": "pending",
+          "scope": "question",
+          "source_filename": "rubric.pdf",
+          "source_kind": "upload",
+          "source_token": "op_b726c656e9ac"
+        }
+      },
+      "preparation_issues": []
+    }
+  },
+  "generation_calls": 0
+}

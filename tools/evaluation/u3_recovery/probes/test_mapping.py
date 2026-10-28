@@ -1,4 +1,7 @@
 """Independent synthetic U3 probes. No product changes; fixed extraction replies."""
+from audit_guard import require_probe_run
+require_probe_run()
+
 import json
 import os
 from pathlib import Path
@@ -16,6 +19,7 @@ from backend.tests.test_incremental_question_preparation import row, persisted, 
 from backend.tests.test_incremental_question_materials import material_setup, parsed_material
 from backend.tests.test_cross_page_teacher_sources import pdf_pipeline
 from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
+from mapping_oracle import LITERAL, STEMS, assert_ambiguous_projection, assert_original_questions_unchanged
 
 SAMPLES = Path(__file__).resolve().parents[1] / 'samples'
 EVIDENCE = Path(os.environ['SMARTAI_U3_EVIDENCE'])
@@ -91,7 +95,7 @@ async def test_three_page_reverse_arrival_retains_all_material_parts(monkeypatch
 
 @pytest.mark.asyncio
 async def test_ambiguous_number_material_remains_visible_as_unresolved_after_manual_handoff(monkeypatch):
-    literal = 'Use the supplied blue formula; award 6 points for the stated condition and 4 for the conclusion.'
+    literal = LITERAL
     source_text = (SAMPLES / 'duplicate_number_problems.txt').read_text()
     original = api.preflight_problem_source
     async def literal_problem_source(**kwargs):
@@ -111,6 +115,7 @@ async def test_ambiguous_number_material_remains_visible_as_unresolved_after_man
     await pipeline.run()
     saved_op, saved = persisted(owner, operation)
     material_units = {key: data for key, data in pipeline.units.items() if key.startswith('material:')}
+    material_token = next(data['q1']['material_provenance']['criterion']['source_token'] for data in material_units.values())
     workflow = workflow_repository.get_workflow(task, owner_id=owner)
     stop_task_run(task_id=task, owner_id=owner, job_id=operation.operation_id, expected_revision=workflow.workflow_revision)
     workflow = workflow_repository.get_workflow(task, owner_id=owner)
@@ -128,6 +133,51 @@ async def test_ambiguous_number_material_remains_visible_as_unresolved_after_man
         'grading_readiness_before_student_upload': readiness,
         'submission_upload_accepted_status': queued.get('status'),
     })
-    assert len([r for r in published.values() if r.get('stem')]) == 2
+    assert_original_questions_unchanged(saved, material_token)
+    assert_original_questions_unchanged(published, material_token)
     assert literal in json.dumps(material_units, ensure_ascii=False), 'The source unit itself must be retained'
-    assert literal in json.dumps(published, ensure_ascii=False), 'Ambiguous uploaded material disappeared from the editable/manual projection'
+    forbidden.assert_not_awaited()
+    assert_ambiguous_projection(published, material_token)
+
+
+@pytest.mark.asyncio
+async def test_full_number_unique_identity_assigns_only_the_matching_question(monkeypatch):
+    source_text = f'Question 1.7: {STEMS[0]}\nQuestion 2.7: {STEMS[1]}'
+    original = api.preflight_problem_source
+    async def full_number_source(**kwargs):
+        if kwargs.get('role') == 'problem':
+            kwargs['inline_text'] = source_text
+        return await original(**kwargs)
+    monkeypatch.setattr(api, 'preflight_problem_source', full_number_source)
+    owner, task, operation, pipeline = await material_setup(monkeypatch, [('rubric', 'Question 2.7\n' + LITERAL)])
+    monkeypatch.setattr(inc, '_extract_problems_call', AsyncMock(return_value=inc._rows([
+        row('1.7', stem=STEMS[0], criterion='Existing rubric A.', reference_answer='Answer A.'),
+        row('2.7', stem=STEMS[1], criterion='', reference_answer='Answer B.'),
+    ])))
+    monkeypatch.setattr(inc, 'structured_llm_call', AsyncMock(return_value=parsed_material('2.7', LITERAL)))
+    forbidden = AsyncMock(side_effect=AssertionError('Unique uploaded source must not be regenerated'))
+    monkeypatch.setattr(inc, 'generate_missing_question_materials', forbidden)
+    await pipeline.run()
+    _, saved = persisted(owner, operation)
+    token = next(draft.source_token for draft, _, _ in pipeline.sources if draft.role == 'rubric')
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    stop_task_run(task_id=task, owner_id=owner, job_id=operation.operation_id, expected_revision=workflow.workflow_revision)
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    response = await api.manually_complete_question_preparation(task, operation.operation_id,
+        api.ManualQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision), current=SimpleNamespace(id=owner))
+    assert response['status'] == 'ready_for_review'
+    published = task_facade.get_task(task_id=task, owner_id=owner)['problem_data']
+    for rows in (saved, published):
+        assert len(rows) == 2
+        by_stem = {item['stem']: item for item in rows.values()}
+        first, second = (by_stem[stem] for stem in STEMS)
+        assert first['number'] == '1.7' and second['number'] == '2.7'
+        assert first['criterion'] == 'Existing rubric A.' and first['reference_answer'] == 'Answer A.'
+        assert second['criterion'] == LITERAL and second['reference_answer'] == 'Answer B.'
+        assert first.get('material_provenance', {}).get('criterion', {}).get('source_token') != token
+        provenance = second['material_provenance']['criterion']
+        assert provenance['source_token'] == token and provenance['scope'] == 'question'
+        assert provenance['review_status'] == 'pending'
+        assert not any(item.get('code') == 'ambiguous_question_match' for item in second['preparation_issues'])
+    forbidden.assert_not_awaited()
+    record('unique_full_number_material', {'source_text': source_text, 'source_token': token, 'saved': saved, 'published': published, 'generation_calls': 0})

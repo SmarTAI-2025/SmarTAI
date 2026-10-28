@@ -3,6 +3,9 @@
 Only lease expiry is accelerated in the disposable SQLite fixture. This does not
 claim real provider, OS sleep, elapsed lease timer, browser, or PostgreSQL coverage.
 """
+from audit_guard import require_probe_run
+require_probe_run()
+
 import json
 import os
 from pathlib import Path

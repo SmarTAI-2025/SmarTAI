@@ -2,6 +2,11 @@
 
 These are fault-injected backend integration checks, not real OCR/GUI acceptance.
 """
+from audit_guard import require_probe_run
+require_probe_run()
+
+import asyncio
+from copy import deepcopy
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -11,11 +16,11 @@ import pytest
 from backend.agents import incremental_question_preparation as inc
 from backend.api import task_preparation as api
 from backend.db import workflow_repository
-from backend.domain.errors import RecognitionError, ValidationError
+from backend.domain.errors import LeaseLost, RecognitionError, ValidationError
 from backend.services import task_facade
 from backend.services.task_execution import stop_task_run
 from backend.tests.test_incremental_question_materials import material_setup
-from backend.tests.test_incremental_question_preparation import row, persisted, generated
+from backend.tests.test_incremental_question_preparation import row, persisted, generated, setup
 from backend.tests.test_question_preparation_recovery import (
     _RecoveryRegistry, _claim, _queue_question_preparation,
 )
@@ -165,3 +170,121 @@ async def test_duplicate_numbers_two_retries_preserve_success_and_manual_unresol
     print("U3_CUSTOM " + json.dumps({"case": "repeat_number_two_retries_manual", "question_numbers": numbers,
         "extract_calls": extracts.await_count, "generation_calls_by_stem": {s:calls.count(s) for s in stems},
         "manual_new_calls": 0, "unresolved_blockers_retained": True}))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('arrival', ['cancel', 'late_after_stop', 'late_after_edit'])
+async def test_inflight_cancel_or_late_response_cannot_replace_manual_saved_content(monkeypatch, arrival):
+    """Real pipeline/fences and SQLite; event-controlled model boundary, no GUI."""
+    owner, task, operation, pipeline = await setup(monkeypatch, 'Synthetic first and second chunks.')
+    release, second_started, first_saved = (asyncio.Event() for _ in range(3))
+    monkeypatch.setattr(inc, '_chunk_problem_text', lambda *_: ['first', 'second', 'queued-third'])
+    pipeline.gate = asyncio.Semaphore(1)
+    source_token = pipeline.sources[0][0].source_token
+    calls = []
+    async def extract(text, *args, **kwargs):
+        calls.append(text)
+        if text == 'second':
+            second_started.set()
+            await release.wait()
+        item = row('1' if text == 'first' else '2',
+            stem='Saved first stem.' if text == 'first' else 'Late second stem.',
+            criterion='Saved original rubric.', reference_answer='Saved original answer.')
+        if text == 'first':
+            # Deliberate provider-side source ambiguity, independent of the
+            # completed first chunk. A closed chunk is not itself incomplete.
+            item['preparation_issues'] = [dict(issue_id='synthetic-open-source', q_id='q1',
+                code='ambiguous_question_match', field='source', severity='warning',
+                status='open', source_ids=[source_token], details={})]
+        return inc._rows([item])
+    original_finish = pipeline.finish
+    async def finish(key, rows=None, error=None):
+        await original_finish(key, rows, error)
+        if key.startswith('extract:') and rows and any(item.get('stem') == 'Saved first stem.' for item in rows.values()):
+            first_saved.set()
+    monkeypatch.setattr(pipeline, 'finish', finish)
+    monkeypatch.setattr(inc, '_extract_problems_call', extract)
+    forbidden = AsyncMock(side_effect=AssertionError('Supplied and manually edited fields must not regenerate'))
+    monkeypatch.setattr(inc, 'generate_missing_question_materials', forbidden)
+    runner = asyncio.create_task(pipeline.run())
+    try:
+        await asyncio.wait_for(asyncio.gather(second_started.wait(), first_saved.wait()), 5)
+        _, saved = persisted(owner, operation)
+        assert len(saved) == 1 and saved['q1']['stem'] == 'Saved first stem.'
+        saved_source_issues = [issue for issue in saved['q1']['preparation_issues']
+                               if issue['code'] == 'ambiguous_question_match' and issue['field'] == 'source']
+        assert len(saved_source_issues) == 1 and saved_source_issues[0]['status'] == 'open'
+        assert source_token in saved_source_issues[0]['source_ids']
+        if arrival == 'cancel':
+            runner.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await runner
+        workflow = workflow_repository.get_workflow(task, owner_id=owner)
+        stopped = stop_task_run(task_id=task, owner_id=owner, job_id=operation.operation_id,
+            expected_revision=workflow.workflow_revision)
+        assert stopped['status'] == 'stopped'
+        if arrival == 'late_after_stop':
+            release.set()
+            with pytest.raises((LeaseLost, asyncio.CancelledError)):
+                await asyncio.wait_for(runner, 5)
+        workflow = workflow_repository.get_workflow(task, owner_id=owner)
+        response = await api.manually_complete_question_preparation(task, operation.operation_id,
+            api.ManualQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision), current=SimpleNamespace(id=owner))
+        assert response['status'] == 'ready_for_review'
+        before_edit = task_facade.get_task(task_id=task, owner_id=owner)['problem_data']
+        assert len(before_edit) == 1
+        original = before_edit['q1']
+        for field in ('q_id', 'number', 'type', 'max_score', 'stem', 'criterion', 'reference_answer'):
+            assert original[field] == saved['q1'][field]
+        assert original.get('material_provenance', {}) == saved['q1'].get('material_provenance', {})
+        assert saved_source_issues[0] in original['preparation_issues'], 'Existing source ambiguity must remain unchanged through manual recovery'
+        original_issues = deepcopy(original['preparation_issues'])
+        if arrival == 'late_after_edit':
+            workflow = workflow_repository.get_workflow(task, owner_id=owner)
+            task_facade.update_problem(task_id=task, owner_id=owner, q_id='q1',
+                patch={'criterion': 'Teacher saved replacement rubric.', 'reference_answer': 'Teacher saved replacement answer.'},
+                expected_revision=workflow.workflow_revision)
+        expected = deepcopy(task_facade.get_task(task_id=task, owner_id=owner)['problem_data'])
+        revision = workflow_repository.get_workflow(task, owner_id=owner).workflow_revision
+        refs = deepcopy(workflow_repository.get_operation(operation.operation_id, owner_id=owner).checkpoint['incremental_unit_artifacts'])
+        if arrival == 'late_after_edit':
+            assert expected['q1']['criterion'] == 'Teacher saved replacement rubric.'
+            assert expected['q1']['reference_answer'] == 'Teacher saved replacement answer.'
+            release.set()
+            with pytest.raises((LeaseLost, asyncio.CancelledError)):
+                await asyncio.wait_for(runner, 5)
+        for _ in range(2):
+            refreshed = task_facade.get_task(task_id=task, owner_id=owner)
+            assert refreshed['problem_data'] == expected
+            assert refreshed['workflow_revision'] == revision
+            async_refreshed = await task_facade.async_task_state(task_id=task, owner_id=owner)
+            assert async_refreshed['status'] == refreshed['status'] == 'problems_ready'
+            assert async_refreshed['workflow_revision'] == revision
+        for issue in original_issues:
+            retained = [item for item in expected['q1']['preparation_issues'] if item['issue_id'] == issue['issue_id']]
+            assert len(retained) == 1, 'Existing issue identity disappeared'
+            if arrival == 'late_after_edit' and issue['code'] == 'manual_completion_required':
+                assert retained[0]['status'] == 'resolved'
+                assert {k: v for k, v in retained[0].items() if k != 'status'} == {k: v for k, v in issue.items() if k != 'status'}
+            else:
+                assert retained[0] == issue, 'Unedited unresolved issue changed'
+        assert saved_source_issues[0] in expected['q1']['preparation_issues']
+        # Replaying the obsolete job is rejected; no new AI or stale publication.
+        before_calls = list(calls)
+        retry = await api.retry_question_preparation(task, operation.operation_id,
+            api.RetryQuestionPreparationRequest(expected_workflow_revision=revision),
+            background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=_RecoveryRegistry())
+        assert retry.status_code == 409
+        assert task_facade.get_task(task_id=task, owner_id=owner)['problem_data'] == expected
+        assert workflow_repository.get_operation(operation.operation_id, owner_id=owner).checkpoint['incremental_unit_artifacts'] == refs
+        assert calls == before_calls == ['first', 'second']
+        forbidden.assert_not_awaited()
+        print('U3_CUSTOM ' + json.dumps({'case': 'inflight_stop_manual', 'arrival': arrival,
+            'provider_calls': calls, 'manual_generation_calls': 0, 'stale_retry_status': retry.status_code,
+            'published_questions': len(expected), 'edited_content_retained': arrival == 'late_after_edit',
+            'unresolved_issues_retained': True}))
+    finally:
+        release.set()
+        if not runner.done():
+            runner.cancel()
+        await asyncio.gather(runner, return_exceptions=True)

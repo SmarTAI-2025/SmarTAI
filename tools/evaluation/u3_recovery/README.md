@@ -4,6 +4,8 @@
 
 结果：旧跨页/恢复反例在本次离线复测中不再出现；另确认 **2 项仍存在的输入/题目映射缺口**，均交文档 07 的实现负责人处理。没有确认独立于该链路的新通用 OCR／跨材料恢复候选任务。
 
+2026-10-28 主审核补测：修正 M2 验收脚本只搜索任意 JSON 原文的漏检，新增身份/原字段/未决来源断言、17 个错误投影变异、唯一完整题号正控，以及实际在途取消/晚到/教师编辑组合。普通pytest发现不再被U3专用入口中止。当前独立集合为 **34 通过、2 原始失败**；其中产品行为11通过/2失败，断言自测19通过，发现/安全入口4通过，后两类不计为产品通过。相关回归221通过。两项产品缺口仍未修复。范围对应见 [CHECKLIST.md](CHECKLIST.md)，补测细节见 [FOLLOWUP.md](FOLLOWUP.md)。
+
 ## 证据边界
 
 - 全部样本为构造数据；不含生产学生数据。模型/OCR返回固定，实际调用当前服务、SQLite、文件存储、artifact 和流程门禁。固定响应调用计数不是供应商账单，也不证明视觉 OCR 准确率。
@@ -21,7 +23,7 @@
 | PR261 乱序/短号/跨页作答误配、格式修复抹掉模型归属疑点 | `test_submission_question_matching.py`、`test_submission_partial_responses.py` | 不确定归属继续保留；汇总前中断按每题所采用版本恢复审核来源 |
 | PR274 7题成功、材料失败后重试变14题 | `test_question_retry_identity.py`；新增 `[1,7,1]` 连续两次失败重试 | 成功来源不重抽、不重复生成；人工接手零新模型调用 |
 | 已存字段但汇总未完成时中断；丢失/篡改恢复artifact | `test_question_preparation_recovery.py`、OCR artifact/cache回归 | 正常保存成果可找回；输入/归属被改或证据损坏时拒绝复用 |
-| 处理中暂停、晚到结果覆盖人工内容 | 既有增量材料、停止/恢复和持久租约回归 | 已保存局部成果保留；晚到写入受版本/租约约束；新独立缺页例另核验人工接手字段/来源 |
+| 处理中暂停、晚到结果覆盖人工内容 | 既有增量材料、停止/恢复和持久租约回归；新增3路实际pipeline暂停/取消/编辑组合 | 首块已存、第二块在途、第三块排队时停止；第三块零调用；晚到第二块不能落盘/覆盖教师编辑；原来源歧义按同一issue完整保留。旧进度计数测试仅证明计数，不单独当内容证据 |
 | 成功页落盘后进程退出；第二页已提交但结果未知时退出 | 新增 `test_process_recovery.py` 两路独立进程 | 成功页不重复处理；未知提交恢复为 `provider_submit_uncertain`，刷新不重放，显式确认后只重试所需页 |
 | PR276 旧错误带入全新执行 | `test_recognition_stop_resume.py`、`test_submission_parsing_recovery.py`、timeout/lease回归 | 配置重启全新执行，失败项重试保留成功；两种语义分别核验 |
 
@@ -52,6 +54,8 @@
 
 对应 `probes/test_mapping.py::test_ambiguous_number_material_remains_visible_as_unresolved_after_manual_handoff`，证据见 [duplicate_number_material.json](evidence/observations/duplicate_number_material.json)。
 
+补强后的同一反例首先检查保存及人工投影中两题的存储身份、题号、题干、原标准/标答与来源未被错配，再检查未归属原文、source token 和开放歧义问题在现有复核投影可见。任意 JSON 包含原文不再算通过；原文偷偷替换/追加到任一题、伪造身份/来源、重复材料和静默解决均由变异测试抓住。正控使用明确的 `1.7` 与 `2.7`，仅完整编号 `2.7` 的题接收该来源。
+
 原上传和不可变材料仍在；缺口是**人工处理投影和未决提示遗漏**，不是原始文件物理删除。也不能据此声称真实评分已经错误放行。用例要求保留原文与未决归属，不要求静默猜配、添加某个新控件，或把所有材料歧义改成 blocking。
 
 当前责任位置：`backend/agents/incremental_question_preparation.py:331-364`。归属 **07 输入／材料与题目映射**，同学决定现有流程内的保留与提示方式，U3 原样复测；不接管实现。
@@ -59,7 +63,7 @@
 ## 执行结果
 
 - 既有相关回归：原始 474 次断言用例执行，40 个重复覆盖；**434 个不同用例通过**，只按去重数量报告。
-- 独立审计：**7 通过、2 预期行为断言失败**。两项失败就是 M1/M2，当前没有修复。审阅后另重跑三页顺序与重复断言 2 项，属同一集合，不重复累计。
+- 初次独立审计：**7 通过、2 预期行为断言失败**。主审核后扩为产品行为 **11 通过、2 失败**，另有 **19 项断言自测、4项发现/入口校验通过**；合计34通过/2失败，相关回归另221通过。两项失败仍是 M1/M2，没有修复、xfail 或失败过滤。
 - 前端：**1,556 通过**；类型检查（含 E2E 类型）、范围审计、public build 通过。634 个前端受版本控制文件与 main 完全一致。未运行浏览器。
 - 后端全量：**7,464 通过、101 条件跳过，0 失败/错误**；已经包含434项定向测试，不再相加。完整分层结果见 [VALIDATION.md](VALIDATION.md)。
 - 审计入口拒绝直接启动 worker，以及拒绝带 `.env` 源码目录的校验通过；相关代码经过独立只读审阅，修正只涉及本审计工具。
@@ -71,13 +75,14 @@
 从没有 `.env` 的当前仓库根目录，用匹配 `requirements-dev.txt` 的 Python 执行。样本 SHA256 见 [manifest.json](samples/manifest.json)。输出中的 `runtime` 包含本次独立数据库、观察数据和 `run.json`；请勿提交这些运行目录中的完整临时数据库。
 
 ```bash
-# 全部独立样例：当前main应为7 passed、2 failed，退出码1。
+# 全部独立样例：当前main应为34 passed、2 failed，退出码1。
+# 其中19项为断言自测、4项为发现/入口校验，不是产品行为通过。
 python tools/evaluation/u3_recovery/run_offline.py -p backend.tests.conftest -q -s tools/evaluation/u3_recovery/probes
 
 # 只重跑两个已知反例：当前main应为2 failed，不能当修复验收。
 python tools/evaluation/u3_recovery/run_offline.py -p backend.tests.conftest -q tools/evaluation/u3_recovery/probes/test_mapping.py -k 'long_selected or ambiguous_number'
 
-# 已通过的独立保留/恢复边界：应为7 passed。
+# 已通过的独立边界、断言与入口自测：应为34 passed。
 python tools/evaluation/u3_recovery/run_offline.py -p backend.tests.conftest -q tools/evaluation/u3_recovery/probes -k 'not long_selected and not ambiguous_number'
 
 # 既有后端全量；部分真实本地HTTP回归需要回环连接与本机监听权限。
@@ -85,6 +90,8 @@ python tools/evaluation/u3_recovery/run_offline.py --allow-loopback -q backend/t
 ```
 
 `--source-root /path/to/clean-checkout` 可将核查脚本用于另一个精确 checkout；部分既有测试需要 `.git` 元数据。不要直接执行 probe 或 worker，入口会拒绝。
+
+普通pytest目录发现自动忽略本目录的专用probe（单独扫描本目录时0项、pytest退出码5；混合普通测试时不影响其收集）。显式指定probe文件或直接导入仍在backend导入前拒绝。只有隔离启动器会正常收集全部36项；未修改仓库根pytest配置或CI。
 
 ## 未测与交接
 

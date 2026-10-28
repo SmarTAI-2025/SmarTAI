@@ -4,7 +4,10 @@
 
 | 层级 | 结果 | 说明 |
 | --- | --- | --- |
-| 独立合成行为审计 | 7 passed、2 failed | 两项原始失败即 M1/M2，未修；不是失败忽略或 xfail |
+| 主审核后独立产品行为 | 11 passed、2 failed | 两项原始失败仍为M1/M2；新增唯一完整题号及3路真实pipeline恢复 |
+| 验收断言自测 | 19 passed | 17个错误投影变异被抓住、2个合法投影控制；不计产品通过 |
+| 默认发现与安全入口 | 4 passed | 普通目录忽略、根式发现保留sentinel；显式pytest文件拒绝；所有probe直接导入在backend前拒绝 |
+| 主审核后相关回归 | 221 passed | 8个现有后端测试文件；64.47秒，外部网络尝试0 |
 | 既有定向后端 | 434 个不同用例通过 | 四批共474例，重复40例不重复计数 |
 | 后端全量 SQLite | **7464 passed、101 skipped、0 failed/error** | 644.10秒；锁定 Python3.12.14，字面回环开放以覆盖真实本地HTTP测试；外部网络尝试0 |
 | 前端单元 | 1556 passed / 151 files | 本机 Node22.22.2；CLI限定maxWorkers=2 |
@@ -17,7 +20,7 @@
 
 初始环境排障不计为产品缺陷：旧Python3.13环境缺包/SDK版本不符；无.git的初始源码归档不能满足既有live-guard测试；沙箱限制本地端口绑定使本地HTTP测试受阻。最终使用锁定3.12环境、精确main的本地Git元数据，以及仅用于本机回环服务的执行权限重新运行。
 
-7464已包含434个定向用例，不能相加；新增独立9项另计。完整本地JUnit以gzip压缩保留在 `evidence/backend-full.xml.gz` 和 `evidence/frontend.xml.gz`，跳过明细见 `evidence/backend-full-summary.json`。
+7464已包含434个初次定向用例，不能相加。初次独立9项为7通过/2失败；主审核后扩为36项，34通过/2失败（产品行为13项，断言及入口控制23项）。本轮221项相关回归属于前轮全量的子集，不相加。新证据在 `evidence/followup/`；前轮完整本地JUnit仍为 `evidence/backend-full.xml.gz` 和 `evidence/frontend.xml.gz`，跳过明细见 `evidence/backend-full-summary.json`。本轮未重复全量前后端，不把原全量改标为新执行。
 
 101个跳过：PostgreSQL 91、真实Linux OCI 3、Linux worker资源限制 3、真实S3 3、显式full-book容量 1。不能把它们计为通过。
 
