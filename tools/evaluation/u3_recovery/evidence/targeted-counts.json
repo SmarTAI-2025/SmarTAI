@@ -1,0 +1,11 @@
+{
+  "raw_count": 474,
+  "unique_count": 434,
+  "overlap_count": 40,
+  "files": [
+    "ocr-regression.xml",
+    "mapping/existing.xml",
+    "mapping/partial-review.xml",
+    "recovery/existing.xml"
+  ]
+}

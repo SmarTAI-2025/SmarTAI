@@ -1,0 +1,150 @@
+{
+  "source_text": "Question 1.7: For matrix A = diag(1,2), compute its determinant.\nQuestion 2.7: For matrix B = diag(3,4), compute its determinant.",
+  "source_token": "op_0d40d4dcc11f",
+  "saved": {
+    "q1": {
+      "q_id": "q1",
+      "number": "1.7",
+      "type": "概念题",
+      "stem": "For matrix A = diag(1,2), compute its determinant.",
+      "criterion": "Existing rubric A.",
+      "max_score": 10.0,
+      "question_structure": {
+        "contract_version": 1,
+        "scoring_unit": "major_question",
+        "major_number": "1.7",
+        "major_order": 0,
+        "shared_stem": "For matrix A = diag(1,2), compute its determinant.",
+        "subparts": [],
+        "structure_source": "deterministic",
+        "review_status": "confirmed"
+      },
+      "review_status": "needs_review",
+      "reference_answer": "Answer A.",
+      "source_display_number": "1.7",
+      "max_score_source": "uniform",
+      "max_score_review_status": "confirmed",
+      "preparation_issues": []
+    },
+    "q2": {
+      "q_id": "q2",
+      "number": "2.7",
+      "type": "概念题",
+      "stem": "For matrix B = diag(3,4), compute its determinant.",
+      "criterion": "Use the supplied blue formula; award 6 points for the stated condition and 4 for the conclusion.",
+      "max_score": 10.0,
+      "question_structure": {
+        "contract_version": 1,
+        "scoring_unit": "major_question",
+        "major_number": "2.7",
+        "major_order": 1,
+        "shared_stem": "For matrix B = diag(3,4), compute its determinant.",
+        "subparts": [],
+        "structure_source": "deterministic",
+        "review_status": "confirmed"
+      },
+      "review_status": "needs_review",
+      "reference_answer": "Answer B.",
+      "source_display_number": "2.7",
+      "max_score_source": "uniform",
+      "max_score_review_status": "confirmed",
+      "material_provenance": {
+        "criterion": {
+          "authority": "uploaded_material",
+          "review_status": "pending",
+          "scope": "question",
+          "source_filename": "rubric.txt",
+          "source_kind": "upload",
+          "source_token": "op_0d40d4dcc11f"
+        }
+      },
+      "preparation_issues": []
+    }
+  },
+  "published": {
+    "q1": {
+      "q_id": "q1",
+      "number": "1.7",
+      "type": "概念题",
+      "stem": "For matrix A = diag(1,2), compute its determinant.",
+      "criterion": "Existing rubric A.",
+      "recognition_confidence": null,
+      "max_score": 10.0,
+      "max_score_source": "uniform",
+      "max_score_review_status": "confirmed",
+      "question_structure": {
+        "contract_version": 1,
+        "scoring_unit": "major_question",
+        "major_number": "1.7",
+        "major_order": 0,
+        "shared_stem": "For matrix A = diag(1,2), compute its determinant.",
+        "subparts": [],
+        "structure_source": "deterministic",
+        "review_status": "confirmed"
+      },
+      "rubric_point_summary": {
+        "contract_version": 1,
+        "has_explicit_subpart_points": false,
+        "items": [],
+        "total_points": null,
+        "major_max_score": "10",
+        "is_valid": true,
+        "issue_code": null
+      },
+      "review_status": "needs_review",
+      "reference_answer": "Answer A.",
+      "solution_code": null,
+      "test_cases": null,
+      "material_provenance": {},
+      "ai_completion_provenance": {},
+      "preparation_issues": []
+    },
+    "q2": {
+      "q_id": "q2",
+      "number": "2.7",
+      "type": "概念题",
+      "stem": "For matrix B = diag(3,4), compute its determinant.",
+      "criterion": "Use the supplied blue formula; award 6 points for the stated condition and 4 for the conclusion.",
+      "recognition_confidence": null,
+      "max_score": 10.0,
+      "max_score_source": "uniform",
+      "max_score_review_status": "confirmed",
+      "question_structure": {
+        "contract_version": 1,
+        "scoring_unit": "major_question",
+        "major_number": "2.7",
+        "major_order": 1,
+        "shared_stem": "For matrix B = diag(3,4), compute its determinant.",
+        "subparts": [],
+        "structure_source": "deterministic",
+        "review_status": "confirmed"
+      },
+      "rubric_point_summary": {
+        "contract_version": 1,
+        "has_explicit_subpart_points": false,
+        "items": [],
+        "total_points": null,
+        "major_max_score": "10",
+        "is_valid": true,
+        "issue_code": null
+      },
+      "review_status": "needs_review",
+      "reference_answer": "Answer B.",
+      "solution_code": null,
+      "test_cases": null,
+      "material_provenance": {
+        "criterion": {
+          "authority": "uploaded_material",
+          "review_status": "pending",
+          "scope": "question",
+          "source_filename": "rubric.txt",
+          "source_kind": "upload",
+          "source_token": "op_0d40d4dcc11f"
+        }
+      },
+      "ai_completion_provenance": {},
+      "preparation_issues": []
+    }
+  },
+  "generation_calls": 0
+}

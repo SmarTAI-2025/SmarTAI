@@ -1,0 +1,66 @@
+{
+  "definition": "For Questions 1 and 2, the operation star is defined by a star b = a + 2*b.",
+  "source_chars": 27756,
+  "real_chunk_chars": [
+    24000,
+    4156
+  ],
+  "call_count": 2,
+  "later_call_context": [
+    "Section 4"
+  ],
+  "definition_in_later_payload": [
+    false
+  ],
+  "saved": {
+    "q1": {
+      "q_id": "q1",
+      "number": "1",
+      "type": "概念题",
+      "stem": "Calculate 2 star 3 using the common definition.",
+      "criterion": "Teacher rubric.",
+      "max_score": 10.0,
+      "question_structure": {
+        "contract_version": 1,
+        "scoring_unit": "major_question",
+        "major_number": "1",
+        "major_order": 0,
+        "shared_stem": "Calculate 2 star 3 using the common definition.",
+        "subparts": [],
+        "structure_source": "deterministic",
+        "review_status": "confirmed"
+      },
+      "review_status": "needs_review",
+      "reference_answer": "Teacher answer.",
+      "source_display_number": "1",
+      "max_score_source": "uniform",
+      "max_score_review_status": "confirmed",
+      "preparation_issues": []
+    },
+    "q2": {
+      "q_id": "q2",
+      "number": "2",
+      "type": "概念题",
+      "stem": "Calculate 4 star 5 using the common definition.",
+      "criterion": "Teacher rubric.",
+      "max_score": 10.0,
+      "question_structure": {
+        "contract_version": 1,
+        "scoring_unit": "major_question",
+        "major_number": "2",
+        "major_order": 1,
+        "shared_stem": "Calculate 4 star 5 using the common definition.",
+        "subparts": [],
+        "structure_source": "deterministic",
+        "review_status": "confirmed"
+      },
+      "review_status": "needs_review",
+      "reference_answer": "Teacher answer.",
+      "source_display_number": "2",
+      "max_score_source": "uniform",
+      "max_score_review_status": "confirmed",
+      "preparation_issues": []
+    }
+  },
+  "generation_calls": 0
+}

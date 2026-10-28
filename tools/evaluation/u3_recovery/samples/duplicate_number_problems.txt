@@ -1,0 +1,7 @@
+Question 7: For matrix A = diag(1,2), compute its determinant.
+Rubric: Existing rubric A.
+Answer: Answer A.
+
+Question 7: For matrix B = diag(3,4), compute its determinant.
+Rubric: Existing rubric B.
+Answer: Answer B.

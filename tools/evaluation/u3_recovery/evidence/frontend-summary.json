@@ -1,0 +1,31 @@
+{
+  "main_sha": "101352c8a7df4e628d2716a2731b702d5f294a8d",
+  "tree_sha": "e2e80a85e87548e044042a791b713eafc19ed209",
+  "platform": "Darwin arm64",
+  "node": "v22.22.2",
+  "npm": "10.9.7",
+  "dependency_lock_sha256": "7ae4c47ef046edf34986bd07bd7d7ad7bb9e6e85223d43d5e49cb74e3c900dea",
+  "vitest": {
+    "name": "vitest tests",
+    "tests": "1556",
+    "failures": "0",
+    "errors": "0",
+    "time": "58.951125419"
+  },
+  "commands": {
+    "test": "npm run test -- --maxWorkers=2 --reporter=default --reporter=junit --outputFile=<evidence>/vitest.xml",
+    "typecheck": "npm run typecheck",
+    "scope": "npm run audit:scope",
+    "build": "npm run build"
+  },
+  "exit_codes": {
+    "vitest": 0,
+    "typecheck": 0,
+    "scope": 0,
+    "build": 0
+  },
+  "network_policy": "fresh env; net Socket TCP connects and HTTP fetch denied by Node preload; no real API endpoint configured",
+  "browser_runtime_tested": false,
+  "production_accessed": false,
+  "frontend_tracked_blobs_changed": 0
+}
