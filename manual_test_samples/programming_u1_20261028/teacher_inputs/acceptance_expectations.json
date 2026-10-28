@@ -1,0 +1,66 @@
+{
+  "provenance": "AI_CONSTRUCTED_EXPECTATIONS_NOT_ADAPTER",
+  "raw_text_file": "teacher_inputs/two_integer_cases.txt",
+  "product_adaptation_executed": false,
+  "cases": [
+    {
+      "raw_text": "用例1：输入 2、3，预期 5。",
+      "function_case_id": "PY-F04-T01",
+      "unspecified_entry_case_id": "PY-F05-T01",
+      "stdin_case_id": "PY-S02-T01",
+      "semantic_input": [
+        2,
+        3
+      ],
+      "expected_result": 5
+    },
+    {
+      "raw_text": "用例2：输入 -2、3，预期 1。",
+      "function_case_id": "PY-F04-T02",
+      "unspecified_entry_case_id": "PY-F05-T02",
+      "stdin_case_id": "PY-S02-T02",
+      "semantic_input": [
+        -2,
+        3
+      ],
+      "expected_result": 1
+    },
+    {
+      "raw_text": "用例3：输入 0、0，预期 0。",
+      "function_case_id": "PY-F04-T03",
+      "unspecified_entry_case_id": "PY-F05-T03",
+      "stdin_case_id": "PY-S02-T03",
+      "semantic_input": [
+        0,
+        0
+      ],
+      "expected_result": 0
+    },
+    {
+      "raw_text": "用例4：输入 100、-100，预期 0。",
+      "function_case_id": "PY-F04-T04",
+      "unspecified_entry_case_id": "PY-F05-T04",
+      "stdin_case_id": "PY-S02-T04",
+      "semantic_input": [
+        100,
+        -100
+      ],
+      "expected_result": 0
+    }
+  ],
+  "paired_same_source_submissions": [
+    "S21-F04",
+    "S21-F05"
+  ],
+  "explicit_signature_violation_submission": "S22-F04",
+  "full_source_context_submissions": [
+    "S23-F02",
+    "S23-F03"
+  ],
+  "must_preserve": [
+    "import operator",
+    "POSITIVE_BOUNDARY = 0",
+    "def is_positive(value):"
+  ],
+  "do_not_infer_teacher_contract_from_validation_binding": true
+}
