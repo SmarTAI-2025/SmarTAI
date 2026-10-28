@@ -1,0 +1,11 @@
+{
+  "build_command": "VITE_SMARTAI_BACKEND_URL=http://127.0.0.1:8188 npm run build -- --mode e2e",
+  "preview_command": "npm run preview -- --host 127.0.0.1 --port 5188 --strictPort",
+  "cwd": "/Users/annie/.codex/worktrees/programming-u2-baseline/SmarTAI/frontend/app",
+  "listener_pid": "67974",
+  "listener_cwd": "p67974\nfcwd\nn/Users/annie/.codex/worktrees/programming-u2-baseline/SmarTAI/frontend/app\n",
+  "source_sha": "101352c8a7df4e628d2716a2731b702d5f294a8d",
+  "index_sha256": "0324ef723fc1d79e61f93043cbe26470f73d58d1e2c957dbf7c3e91d3ae16091",
+  "lock_sha256": "7ae4c47ef046edf34986bd07bd7d7ad7bb9e6e85223d43d5e49cb74e3c900dea",
+  "ps_command": "sandbox unavailable; lsof PID/cwd recorded"
+}

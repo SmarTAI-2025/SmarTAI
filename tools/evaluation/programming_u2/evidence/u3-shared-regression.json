@@ -1,0 +1,81 @@
+{
+  "source_task": "codex://threads/01a180f0-3f9a-76d1-92ab-1f3b20ce1c67",
+  "main_sha": "101352c8a7df4e628d2716a2731b702d5f294a8d",
+  "tree_sha": "e2e80a85e87548e044042a791b713eafc19ed209",
+  "backend": {
+    "suite": {
+      "tests": "7565",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "101",
+      "time": "644.003",
+      "timestamp": "2026-10-28T13:29:22.734180+08:00"
+    },
+    "passed": 7464,
+    "skip_reasons": {
+      "Requires disposable PostgreSQL": 13,
+      "PostgreSQL advisory lock supplements the mandatory shared control directory": 1,
+      "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions).": 71,
+      "SMARTAI_TEST_POSTGRES_URL is required for isolated PostgreSQL execution": 4,
+      "explicit full-book capacity benchmark": 1,
+      "Requires explicitly configured Linux OCI runtime": 3,
+      "Linux container worker uses Linux resource-limit semantics; OCI command tests remain cross-platform": 3,
+      "Set SMARTAI_TEST_S3_INTEGRATION=1 and SMARTAI_STORAGE_S3_* to run the real S3-compatible storage integration test.": 3,
+      "Requires isolated PostgreSQL": 2
+    },
+    "runtime": {
+      "source": "/private/tmp/smartai-u3-20261028/source",
+      "runtime": "/private/var/folders/_p/v8vvlf6x441989_5zxzsl3y40000gn/T/smartai-u3-audit-j22ohg62",
+      "python": "3.12.14 (main, Sep  3 2026, 03:46:19) [Clang 21.1.8 ]",
+      "platform": "macOS-15.6.1-arm64-arm-64bit",
+      "pytest_args": [
+        "backend/tests",
+        "-q",
+        "--junitxml=/Users/annie/code/SmarTAI/docs/project_navigation/2026-10-28-u3-main-audit/evidence/backend-full-final.xml"
+      ],
+      "allow_loopback": true,
+      "blocked_network_attempts": 0,
+      "exit_code": 0
+    },
+    "source_status_after": ""
+  },
+  "frontend": {
+    "main_sha": "101352c8a7df4e628d2716a2731b702d5f294a8d",
+    "tree_sha": "e2e80a85e87548e044042a791b713eafc19ed209",
+    "platform": "Darwin arm64",
+    "node": "v22.22.2",
+    "npm": "10.9.7",
+    "dependency_lock_sha256": "7ae4c47ef046edf34986bd07bd7d7ad7bb9e6e85223d43d5e49cb74e3c900dea",
+    "vitest": {
+      "name": "vitest tests",
+      "tests": "1556",
+      "failures": "0",
+      "errors": "0",
+      "time": "58.951125419"
+    },
+    "commands": {
+      "test": "npm run test -- --maxWorkers=2 --reporter=default --reporter=junit --outputFile=<evidence>/vitest.xml",
+      "typecheck": "npm run typecheck",
+      "scope": "npm run audit:scope",
+      "build": "npm run build"
+    },
+    "exit_codes": {
+      "vitest": 0,
+      "typecheck": 0,
+      "scope": 0,
+      "build": 0
+    },
+    "network_policy": "fresh env; net Socket TCP connects and HTTP fetch denied by Node preload; no real API endpoint configured",
+    "browser_runtime_tested": false,
+    "production_accessed": false,
+    "frontend_tracked_blobs_changed": 0
+  },
+  "source_evidence_sha256": {
+    "/Users/annie/code/SmarTAI/docs/project_navigation/2026-10-28-u3-main-audit/evidence/backend-full-final.xml": "3451897d91aa9f23e904292b4b119c5e5bb640c1b336eaa1b7c4cb80cd8d06ae",
+    "/Users/annie/code/SmarTAI/docs/project_navigation/2026-10-28-u3-main-audit/evidence/backend-full-final.log": "33b1a3e55011d682de2ad43d94ce8794213f433a3f5a12d9e41f786646b46474",
+    "/Users/annie/code/SmarTAI/docs/project_navigation/2026-10-28-u3-main-audit/evidence/backend-full-results.json": "d0d76beb2e5a0832ef228bb02b08ad25fb572de9ffcb2213a1326d34f1b6a8c5",
+    "/Users/annie/code/SmarTAI/docs/project_navigation/2026-10-28-u3-main-audit/evidence/frontend/summary.json": "f8604ee08e65e05bb619d5632e80f58ce40b70e97d2cebbe9a77f43cfe107fcd",
+    "/Users/annie/code/SmarTAI/docs/project_navigation/2026-10-28-u3-main-audit/evidence/backend-environment.json": "5d8271f0dd8634c01cb29db55aa351d0d57072333e86c57df76d96fccffbf436"
+  },
+  "attribution": "Shared U3 final Mac regression, not U2 rerun; no real model/OCI acceptance"
+}
