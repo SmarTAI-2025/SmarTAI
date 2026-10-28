@@ -158,6 +158,8 @@ def main():
     function_question = assignments.list_questions(function_task, teacher_id=function_owner)[0]
     execution_input = grading_adapter.build_problem_store([function_question])["q1"]
     typed_case = ProblemInfo.model_validate(execution_input).test_cases[0]
+    assert function_question.test_cases[0] == function_case
+    assert typed_case.function_args == [0] and typed_case.expected_return == "0"
     observe("FUNCTION_EDITOR_FIELDS", http_status=saved_function.status_code,
         stored_case=function_question.test_cases[0], grading_input_case=typed_case.model_dump(mode="json"),
         actual_execution="not performed", effective_function_args=typed_case.function_args,
@@ -170,6 +172,8 @@ def main():
         response = client.post(f"/tasks/{upload_task}/parse_submissions", headers=headers(upload_owner),
             files={"file": (name, b"def fib(n):\n    return n\n", mime)},
             data={"recognition_provider_id": "test-provider"})
+        assert response.status_code == 200 and response.json()["status"] == "started"
+        assert response.json()["job_id"] and response.json()["task_id"] == upload_task
         observe("UPLOAD_" + name.rsplit('.', 1)[-1].upper(), status=response.status_code,
             body=response.json(), recognition="not run: real model prohibited", actual_model_calls=0)
 
@@ -202,7 +206,8 @@ def main():
     assert len(captured) == 1
     assert captured[0]["problem_store"]["q1"]["test_cases"] == cases
     results = task_facade.task_results(task_id=task, owner_id=owner)
-    assert results["results"]
+    assert len(results["results"]) == 1
+    assert {c["q_id"]: c["score"] for c in results["results"][0]["corrections"]} == {"q1": 10, "q2": 4}
     observe("GRADING_INPUT_AND_RESULTS", saved_cases_equal_batch_input=True, batch_invocations=1,
         batch_provider="fixed response", model_calls=0, execution="not performed", result=results)
 
@@ -221,13 +226,40 @@ def main():
         asyncio.run(grading_runs.process_run(run_id=failed_run["job_id"], worker_id="u2-local"))
     failed_results = task_facade.task_results(task_id=task, owner_id=owner)
     failed_correction = next(c for s in failed_results["results"] for c in s["corrections"] if c["q_id"] == "q2")
+    successful_correction = next(c for s in failed_results["results"] for c in s["corrections"] if c["q_id"] == "q1")
     assert failed_results["grading_run_status"] == "partial_failed"
     assert failed_correction["score"] is None and failed_correction["requires_human_review"]
+    assert failed_correction["provisional_score"] is None and successful_correction["score"] == 10
     assert not task_facade.finalization(task_id=task, owner_id=owner)["ready_for_confirmation"]
     observe("PLATFORM_FAILURE_PERSISTENCE", fixture="explicit all_failed correction with programming_execution_unavailable",
         grading_run_status=failed_results["grading_run_status"], correction=failed_correction,
         finalization=task_facade.finalization(task_id=task, owner_id=owner),
         execution="not performed; only failure-result persistence tested")
+
+    # Separate valid zero and advisory review from an explicit execution failure.
+    # These scores/flags are batch fixtures, not real grading or teacher truth.
+    score_states = []
+    for state_name, fixture_score, advisory in [("valid_zero", 0, False), ("advisory_review", 6, True)]:
+        async def fixed_score_state(**kwargs):
+            return [{"student_id": sid, "corrections": [Correction(q_id=qid, type="programming",
+                score=10 if qid == "q1" else fixture_score, max_score=10, confidence=1 if qid == "q1" else 0,
+                synthesis_method="single", comment="U2 injected scoring-state fixture", steps=[],
+                requires_human_review=advisory and qid == "q2",
+                review_reasons=["low_confidence"] if advisory and qid == "q2" else [])
+                for qid in kwargs["problem_store"]]} for sid in kwargs["student_store"]]
+        with patch.object(grading_runs, "_registry_for", lambda _: Registry()), patch.object(grading_adapter, "grade_batch", fixed_score_state):
+            state_run = task_facade.start_task_grading(task_id=task, owner_id=owner,
+                expected_workflow_revision=snapshot()["workflow_revision"], request_id="u2-state-" + state_name)
+            asyncio.run(grading_runs.process_run(run_id=state_run["job_id"], worker_id="u2-local"))
+        state_result = task_facade.task_results(task_id=task, owner_id=owner)
+        correction = next(c for s in state_result["results"] for c in s["corrections"] if c["q_id"] == "q2")
+        finalization = task_facade.finalization(task_id=task, owner_id=owner)
+        assert correction["score"] == correction["provisional_score"] == fixture_score
+        assert correction["requires_human_review"] == advisory
+        assert finalization["ready_for_confirmation"] and finalization["remaining_review_count"] == 0
+        score_states.append({"fixture": state_name, "correction": correction, "finalization": finalization})
+    observe("SCORING_STATE_MATRIX", states=score_states,
+        evidence="real persistence/gating for injected valid zero and advisory scores; no real scoring")
 
     # Probe malformed teacher data separately, without altering the successful task.
     invalid_owner, invalid_task = _seed_task(with_question=True)
@@ -242,6 +274,7 @@ def main():
             ProblemInfo.model_validate(saved)
         except Exception as exc:
             validation_error = type(exc).__name__
+    assert response.status_code == 200 and saved_malformed == malformed and validation_error == "ValidationError", "D02 baseline changed: inspect readback"
     observe("MALFORMED_CASE_SAVE", status=response.status_code,
         invalid_case_persisted=(saved_malformed == malformed and validation_error is not None),
         saved_cases=saved_malformed, later_problem_validation_error=validation_error, body=response.json())

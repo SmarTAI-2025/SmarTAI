@@ -18,6 +18,7 @@ const evidence = {
   kind: 'real Chromium UI with fixed API responses; no actual persistence, model, or OCI',
   source_sha: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: appDir, encoding: 'utf8' }).trim(),
   frontend, backend, started_at: new Date().toISOString(),
+  real_model_calls: 0, real_oci_executions: 0,
   checks: [], requests: [], unexpected_requests: [], external_attempts: [], console: [], page_errors: [],
 };
 // Verify that the page and its executable bundle are the specified checkout's
@@ -60,6 +61,18 @@ const task = { task_id: 'u2-browser', name: 'U2 local synthetic', status: 'probl
 let rejectNextSave = false;
 let correction = null;
 function setProblem(value) { problem = value; task.problem_data = { q1: value }; }
+function finalizationFixture() {
+  // This fixture only blocks missing scores or its explicit all-failed case.
+  // requires_human_review can be advisory; valid 0/6 scores are not blocked by it.
+  const blocked = correction && (correction.score == null || correction.synthesis_method === 'all_failed');
+  const remaining = blocked
+    ? [{ student_id: 'S1', q_id: 'q1', reasons: correction.review_reasons, confirmed: false }]
+    : [];
+  return { task_id: task.task_id, task_status: task.status, workflow_revision: task.workflow_revision,
+    remaining_review_count: remaining.length, required_review_count: remaining.length,
+    confirmed_required_count: 0, remaining_reviews: remaining, ready_for_confirmation: remaining.length === 0,
+    final_result_version: 0, final_result_dirty: false, analysis_status: 'not_generated', available_result_versions: 0 };
+}
 await context.route('**/*', async route => {
   const request = route.request();
   const url = new URL(request.url());
@@ -82,7 +95,8 @@ await context.route('**/*', async route => {
   if (request.method() === 'GET') {
     if (path === '/tasks/u2-browser/result') return json({ task_id: task.task_id, problem_data: task.problem_data, student_data: task.student_data, results: [{ student_id: 'S1', student_name: 'U2 synthetic student', corrections: [correction] }], timestamp: 1 });
     if (path === '/tasks/u2-browser/source-files') return json({ task_id: task.task_id, workflow_revision: task.workflow_revision, problem_source: null, submission_sources: {} });
-    if (path === '/tasks/u2-browser/finalization') return json({ task_id: task.task_id, task_status: task.status, workflow_revision: task.workflow_revision, remaining_review_count: 0, required_review_count: 0, confirmed_required_count: 0, remaining_reviews: [], ready_for_confirmation: true });
+    if (path === '/tasks/u2-browser/finalization') return json(finalizationFixture());
+    if (path === '/tasks/u2-browser/teacher_comments') return json({ comments: {} });
     if (path === '/experts/available') return json([]);
     if (path === '/tasks/u2-browser') return json(task);
   }
@@ -118,6 +132,40 @@ try {
   assert.equal(await tests.getByRole('textbox', { name: '期望输出', exact: true }).inputValue(), '12');
   await snapshot('stdin-saved-reopened');
   evidence.checks.push({ id: 'UI-01', result: 'pass', observation: 'stdin editor sends exact input/output and reads fixed API saved state after reload/reopen', persisted_in_real_backend: false });
+
+  // A dirty editor is not a saved test case. Exercise the original cancellation
+  // confirmation, then reload from the unchanged fixed API state.
+  const putCount = () => evidence.requests.filter(request => request.method === 'PUT').length;
+  const putsBeforeCancel = putCount();
+  const savedBeforeCancel = structuredClone(problem.test_cases);
+  const revisionBeforeCancel = task.workflow_revision;
+  await tests.getByRole('textbox', { name: '输入', exact: true }).fill('9\n9\n');
+  await tests.getByRole('textbox', { name: '期望输出', exact: true }).fill('18');
+  assert.equal(putCount(), putsBeforeCancel);
+  assert.deepEqual(problem.test_cases, savedBeforeCancel);
+  await tests.getByRole('button', { name: '取消', exact: true }).click();
+  const cancelDialog = page.getByRole('alertdialog', { name: '有未暂存修改', exact: true });
+  await cancelDialog.waitFor();
+  await snapshot('stdin-unsaved-cancel-dialog');
+  assert.equal(putCount(), putsBeforeCancel);
+  await cancelDialog.getByRole('button', { name: '不暂存并离开', exact: true }).click();
+  await tests.getByRole('button', { name: '修改', exact: true }).waitFor();
+  assert.deepEqual(await tests.locator('pre').allTextContents(), ['5\n7\n', '12']);
+  assert.deepEqual(problem.test_cases, savedBeforeCancel);
+  assert.equal(task.workflow_revision, revisionBeforeCancel);
+  await page.reload();
+  await tests.getByRole('button', { name: '修改', exact: true }).click();
+  assert.equal(await tests.getByRole('textbox', { name: '输入', exact: true }).inputValue(), '5\n7\n');
+  assert.equal(await tests.getByRole('textbox', { name: '期望输出', exact: true }).inputValue(), '12');
+  assert.equal(putCount(), putsBeforeCancel);
+  await snapshot('stdin-cancelled-reopened');
+  evidence.checks.push({ id: 'UI-05', result: 'pass',
+    observation: 'Unsaved stdin edits show the original cancellation dialog; discarding sends no PUT, retains the fixed API saved cases/revision, and reload/reopen restores the saved values',
+    unsaved_input: '9\n9\n', unsaved_expected_output: '18', saved_cases: savedBeforeCancel,
+    put_count_before: putsBeforeCancel, put_count_after: putCount(),
+    workflow_revision_before: revisionBeforeCancel, workflow_revision_after: task.workflow_revision,
+    evidence_layer: 'real browser controls and fixed API state only', persisted_in_real_backend: false });
+
   rejectNextSave = true;
   await tests.getByRole('textbox', { name: '期望输出', exact: true }).fill('13');
   await tests.getByRole('button', { name: '保存测试样例', exact: true }).click();
@@ -162,18 +210,60 @@ try {
     ['execution-failure', null, 0, 'U2 模拟结果：执行平台不可用，不能据此扣分。', 'programming_execution_unavailable'],
   ]) {
     correction = { q_id: 'q1', score, provisional_score: score, max_score: 10, confidence, comment, steps: [], requires_human_review: !!errorKind, review_reasons: errorKind ? ['llm_failed'] : [], initial_review_reasons: [], review_status: 'pending', teacher_score: null, teacher_comment: '', synthesis_method: errorKind ? 'all_failed' : 'single', expert_results: [{ provider: 'u2-fixed', score: score ?? 0, max_score: 10, confidence, comment, steps: [], ...(errorKind ? { error_kind: errorKind } : {}) }] };
+    const finalization = finalizationFixture();
+    if (errorKind) {
+      assert.equal(correction.score, null);
+      assert.equal(finalization.ready_for_confirmation, false);
+      assert.equal(finalization.remaining_review_count, 1);
+    }
     await page.goto(frontend + '/tasks/u2-browser/results/questions/q1');
-    await page.getByRole('heading', { name: '代码 / 测试资料', exact: true }).waitFor();
-    const resultText = await page.locator('body').innerText();
-    assert.ok(resultText.includes('U2 synthetic student'));
-    assert.ok(resultText.includes(comment));
+    if (errorKind) {
+      // A failed, unscored item must remain behind the existing review gate.
+      // Do not make finalization artificially ready just to render analysis.
+      await page.waitForURL(frontend + '/tasks/u2-browser/review');
+      await page.getByRole('heading', { name: '复核批改', exact: true }).waitFor();
+      assert.ok((await page.locator('body').innerText()).includes('缺少有效分数'));
+      await page.getByRole('button', { name: '查看结果分析', exact: true }).click();
+      const gateDialog = page.getByRole('alertdialog', { name: '还有结果需要处理', exact: true });
+      await gateDialog.waitFor();
+      assert.ok((await gateDialog.innerText()).includes('还有 1 个关键问题需要处理，暂不能查看结果分析。'));
+      await snapshot('execution-failure-review-gate');
+      await gateDialog.getByRole('button', { name: '留在此页', exact: true }).click();
+    } else {
+      await page.getByRole('heading', { name: '代码 / 测试资料', exact: true }).waitFor();
+      const resultText = await page.locator('body').innerText();
+      assert.ok(resultText.includes('U2 synthetic student'));
+      assert.ok(resultText.includes(comment));
+    }
+    const resultRoute = new URL(page.url()).pathname;
     await snapshot('result-' + name);
     await page.goto(frontend + '/tasks/u2-browser/review/S1/q1');
     const resultRegion = page.getByRole('region', { name: 'SmarTAI 批改结果', exact: true });
     await resultRegion.waitFor();
     assert.ok((await resultRegion.innerText()).includes(comment));
+    let confirmationEvidence = null;
+    if (errorKind) {
+      assert.ok((await resultRegion.innerText()).includes('无有效分数'));
+      const finalScore = page.getByRole('textbox', { name: 'Q1 最终得分', exact: true });
+      assert.equal(await finalScore.inputValue(), '');
+      assert.ok((await page.locator('body').innerText()).includes('缺少有效分数 · 需处理'));
+      const taskWrites = () => evidence.requests.filter(request => request.path.startsWith('/tasks/u2-browser') && !['GET', 'HEAD', 'OPTIONS'].includes(request.method));
+      const writesBeforeConfirm = taskWrites().length;
+      await page.getByRole('button', { name: '全部确认', exact: true }).click();
+      const validationMessage = 'SmarTAI 没有生成有效分数，请先手动输入最终分。';
+      await page.getByText(validationMessage, { exact: true }).first().waitFor();
+      assert.equal(await finalScore.inputValue(), '');
+      assert.equal(taskWrites().length, writesBeforeConfirm);
+      assert.equal(new URL(page.url()).pathname, '/tasks/u2-browser/review/S1/q1');
+      await snapshot('execution-failure-confirmation-blocked');
+      confirmationEvidence = { displayed_score: '无有效分数', final_score_input: '',
+        review_status_displayed: '缺少有效分数 · 需处理', validation_message: validationMessage,
+        task_write_count_before: writesBeforeConfirm, task_write_count_after: taskWrites().length,
+        task_write_requests_added: taskWrites().slice(writesBeforeConfirm),
+        evidence_layer: 'real UI validation with fixed API fixture; no actual scoring, persistence or publication' };
+    }
     await snapshot('review-' + name);
-    evidence.checks.push({ id: 'UI-result-' + name, result: 'rendered_fixture', score_from_fixture: score, comment_from_fixture: comment, observed_body: ['result-' + name + '.txt', 'review-' + name + '.txt'], implication: 'Only display verified, not scoring correctness or actual failure attribution' });
+    evidence.checks.push({ id: 'UI-result-' + name, result: 'rendered_fixture', score_from_fixture: score, comment_from_fixture: comment, finalization_from_fixture: finalization, result_route_observed: resultRoute, analysis_blocked_for_required_review: !!errorKind, confirmation_evidence: confirmationEvidence, observed_body: ['result-' + name + '.txt', 'review-' + name + '.txt'], implication: 'Only display and fixture-driven review gate verified, not scoring correctness or actual failure attribution' });
   }
   assert.deepEqual(evidence.external_attempts, []);
   assert.deepEqual(evidence.unexpected_requests, []);

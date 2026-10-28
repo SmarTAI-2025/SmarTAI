@@ -2,6 +2,8 @@
 
 先读 [简洁基线报告](BASELINE.md)、[可复用验收清单](CHECKLIST.md) 和 [验证记录](VALIDATION.md)。工具是观察器：复现已有行为、记录输入及输出，不实现同学负责的07/08/09和新增三项。
 
+2026-10-28补审：[新增反例和页面门禁证据](FOLLOWUP.md)，清单扩为36项。首轮证据保留原样，不把新版夹具覆盖进旧观察。
+
 U1：[准备编程题验收样本包](codex://threads/01a180ed-d804-7cf2-89ab-920ac32fe354)；U3：[核查旧材料关联与恢复问题](codex://threads/01a180f0-3f9a-76d1-92ab-1f3b20ce1c67)；U2：[建立编程题 U2 验收基线](codex://threads/01a180f2-93ae-7662-9a91-3bd9d1d4ec9d)。U1/U3版本及PR见验证记录。不要复制未确认分数为教师金标准。
 
 ## 复跑
@@ -11,7 +13,10 @@ U1：[准备编程题验收样本包](codex://threads/01a180ed-d804-7cf2-89ab-92
 ```sh
 U2_REPO="$PWD"
 U2_PYTHON=/opt/anaconda3/envs/smartai-py312/bin/python
-U1_PACKET=/Users/annie/code/SmarTAI/manual_test_samples/programming_u1_20261028
+U2_U1_DIR=$(mktemp -d /private/tmp/u2-u1-XXXXXX)
+# 本机须有该冻结对象；若没有，先 git fetch origin c1c36025d2dad7c8f3208f3ba0fdb4dd2acf24bb
+git archive c1c36025d2dad7c8f3208f3ba0fdb4dd2acf24bb manual_test_samples/programming_u1_20261028 | tar -x -C "$U2_U1_DIR"
+U1_PACKET="$U2_U1_DIR/manual_test_samples/programming_u1_20261028"
 "$U2_PYTHON" tools/evaluation/programming_u2/probe_baseline.py --repo "$U2_REPO" --u1 "$U1_PACKET" --out /private/tmp/u2-repeat-programming.json
 "$U2_PYTHON" tools/evaluation/programming_u2/workflow_probe.py --source "$U2_REPO" --output /private/tmp/u2-repeat-workflow
 ```
@@ -34,7 +39,9 @@ node tools/evaluation/programming_u2/browser_baseline.mjs "$PWD/frontend/app" /p
 
 ## 文件与边界
 
-- `probe_baseline.py`：U1合成样本、固定回复，记录20项技能及执行合同观察与消费文件hash。
+- `INPUT_MANIFEST.json`：明确冻结原U1版本与消费hash；新U1扩充样本另轮验收，不静默混入。
+- `probe_baseline.py`：U1合成样本、固定回复，记录22项技能及比较观察，区分评分请求、注入runner证据与真实执行。
+- `runner_contract_probe.py`：2项fake command协议/清理故障观察，必须通过`run_offline.py`运行，不启动容器。
 - `workflow_probe.py`：真实HTTP/SQLite保存、409、进程重开、上传排队、批改输入与固定结果。
 - `browser_baseline.mjs`：原控件保存/刷新、函数用例反例、缺失用例和4类结果显示。
 - `run_offline.py`：现有回归的无凭据/无外网/无子进程运行器。

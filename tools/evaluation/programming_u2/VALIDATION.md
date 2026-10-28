@@ -1,5 +1,7 @@
 # U2 验证记录
 
+首轮记录保留。2026-10-28补审见[FOLLOWUP.md](FOLLOWUP.md)：43项分层观察、63项后端回归再次通过、清单36项；修正平台失败页面夹具并补确认门禁断言，新增D04–D07。后续证据独立保存，不覆盖首轮快照。
+
 ## 固定输入与版本
 
 - 产品源：`101352c8a7df4e628d2716a2731b702d5f294a8d`，tree `e2e80a85e87548e044042a791b713eafc19ed209`。
@@ -8,7 +10,7 @@
 - 本轮 Mac arm64；Python 3.12.14，U3逐项验证 `requirements-dev.txt` 的100个适用依赖、0版本差异。U2浏览器Node26.10.0 / Playwright1.61.1；仓库目标Node22.16.0，单独引用U3的Node22.22.2全前端回归，不把版本混为同一次运行。
 - 前端依赖lock SHA256：`7ae4c47ef046edf34986bd07bd7d7ad7bb9e6e85223d43d5e49cb74e3c900dea`。服务源码与构建字节核对见 [serve-provenance.json](evidence/serve-provenance.json) 和最终 [browser.json](evidence/browser.json) 的 `served_build`。未安装新依赖。
 
-## U2 本轮结果
+## 首轮 U2 结果
 
 | 检查 | 结果 | 原始证据 |
 |---|---|---|
