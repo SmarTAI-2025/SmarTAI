@@ -1,17 +1,19 @@
 # U1 编程题验收样本包
 
-版本：**U1-20261028-v1**。核对主干：`101352c8a7df4e628d2716a2731b702d5f294a8d`。
+版本：**U1-20261028-v2**。核对主干：`101352c8a7df4e628d2716a2731b702d5f294a8d`。
 
 **本包不是教师金标准。** 已确认的完整真实编程教学材料为 **0 套**；只有一道旧仓库 Fibonacci 测试题种子，其满分、接口、分项规则、标答、输入及提交均由本次构造补齐。其余样例全部构造，无真实学生姓名、学号或旧提交正文。所有建议分数和规则均待教师确认。
 
 ## 使用入口
 
-- [题目、满分、教师规则草案、标答及输入预期](QUESTIONS_AND_RULES.md)：Python 函数题3道、stdin题1道；C和C++单文件stdin各1道作为补充批次。
-- [待教师确认的判分表](MANUAL_GRADING_REVIEW.md) / [可填写CSV](MANUAL_GRADING_REVIEW.csv)：32条逐题判分记录，对应24个构造源码文件；真实缺交行没有文件。记录建议分、扣分理由、应否执行、本次执行事实及复核条件。教师最终分等6列留空。
+- [题目、满分、教师规则草案、标答及输入预期](QUESTIONS_AND_RULES.md)：Python 函数题5道、stdin题2道；C和C++单文件stdin各1道作为补充批次。
+- [待教师确认的判分表](MANUAL_GRADING_REVIEW.md) / [可填写CSV](MANUAL_GRADING_REVIEW.csv)：39条逐题判分记录，对应29个构造源码文件；真实缺交行没有文件。记录建议分、扣分理由、应否执行、本次执行事实及复核条件。教师最终分等6列留空。
 - [来源与真实材料缺口](PROVENANCE_AND_GAPS.md)：授权、脱敏和教师确认材料的补充清单。
 - [当前main能力](MAIN_CAPABILITIES.md)：精确源码链接及36项精选离线回归；不等于完整产品验收。
-- [本地验证和限制](VALIDATION.md)：32条题目输入、标答及提交结果核算；错误样例按其预期错误验证。
+- [本地验证和限制](VALIDATION.md)：44条题目输入、标答及提交结果核算；错误样例按其预期错误验证。
 - `questions.json`、`submissions.json`、`scenarios.json` 是可追溯的数据索引；**不是产品导入格式、评分器或输入输出适配器**。
+
+新增覆盖说明见[补充验收材料V2](SUPPLEMENT_V2.md)：同一纯文本双整数输入的函数/stdin对照、未规定入口与明确违规成对样例、import/常量/helper完整源码。原v1材料与记录保留于提交`c1c36025`；当前事实使用`validation/local_fixture_results_v2.json`，旧`local_fixture_results.json`只作v1历史证据。
 
 ## 覆盖与关键反例
 
@@ -26,6 +28,9 @@
 | 文档答案题号倒序 | [S07另一输入形式](mapping_inputs/S07_reverse_answer_blocks.md)，题3→题2；[期望映射](mapping_inputs/expected_assignments.json)。它不是另一份提交，不重复计分；产品识别映射未执行 |
 | stdin、负数、空输入域、跨行空白、额外提示语 | PY-S01 / S13–S16 |
 | 平台故障与错误预期不能扣分 | S17、S18及`scenarios.json`；均为构造情境，保持`score=null`，无真实事故声明 |
+| 双整数纯文本函数/stdin对照 | PY-F04/PY-S02、S20/S24，共用`teacher_inputs/two_integer_cases.txt` |
+| 未规定入口与明确合同违规 | PY-F04/PY-F05、S21同源码成对；S22明确签名违规，不自动修复调用 |
+| import、顶层常量、末尾helper及乱序 | S23-F02/S23-F03，整份源码为共同执行输入 |
 | C/C++单文件补充 | C-S01/CPP-S01 / C01–C04、X01–X04；64位总和、错误逻辑、编译错误、缺交 |
 
 PY-F01的基例2分采用整体门槛（n=0与1都正确才给2分），语法错误的可辨DP思路暂建议3分；这些是需要教师特别确认的草案。stdin题采用不计过程分的结果门槛草案，不能把两题套成统一比例。

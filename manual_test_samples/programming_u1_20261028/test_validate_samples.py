@@ -160,3 +160,41 @@ def test_unresolved_scenario_cannot_claim_a_score(validator, scenario):
     next(s for s in submissions if s["scenario"] == scenario)["suggested_score"] = 0
     with pytest.raises(AssertionError):
         validator.validate_structure(questions, submissions)
+
+
+def test_unspecified_teacher_entry_is_not_a_hidden_fixed_name(validator):
+    questions = copy.deepcopy(validator.load("questions.json"))
+    next(q for q in questions if q["q_id"] == "PY-F05")["teacher_entry_requirement"] = {
+        "function_name": "combine", "positional_arity": 2}
+    with pytest.raises(AssertionError):
+        validator.validate_structure(questions, validator.load("submissions.json"))
+
+
+def test_plain_text_expected_cannot_drift_from_authored_binding(validator, monkeypatch):
+    original = validator.load
+    spec = copy.deepcopy(original("teacher_inputs/acceptance_expectations.json"))
+    spec["cases"][0]["expected_result"] = 6
+    monkeypatch.setattr(validator, "load", lambda name: spec if name == "teacher_inputs/acceptance_expectations.json" else original(name))
+    with pytest.raises(AssertionError):
+        validator.validate_structure(original("questions.json"), original("submissions.json"))
+
+
+def test_same_source_entry_contract_pair_and_signature_fixture(validator):
+    questions = {q["q_id"]: q for q in validator.load("questions.json")}
+    rows = {s["submission_id"]: s for s in validator.load("submissions.json")}
+    validator.validate_supplement(questions, list(rows.values()))
+    assert rows["S21-F04"]["source_file"] == rows["S21-F05"]["source_file"]
+    assert (rows["S21-F04"]["suggested_score"], rows["S21-F05"]["suggested_score"]) == (8, 10)
+    assert rows["S22-F04"]["explicit_contract_violation"]["observed_positional_arity"] == 1
+
+
+@pytest.mark.parametrize("component", ["import operator", "POSITIVE_BOUNDARY = 0", "def is_positive(value):"])
+def test_full_source_fixture_cannot_silently_drop_context(validator, monkeypatch, tmp_path, component):
+    original = validator.local_file
+    source_name = "submissions/S23_full_source_context.py"
+    source = tmp_path / "source.py"
+    source.write_text(original(source_name).read_text().replace(component, "# omitted dependency"))
+    monkeypatch.setattr(validator, "local_file", lambda name: source if name == source_name else original(name))
+    qmap = {q["q_id"]: q for q in validator.load("questions.json")}
+    with pytest.raises(AssertionError):
+        validator.validate_supplement(qmap, validator.load("submissions.json"))

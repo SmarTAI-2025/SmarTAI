@@ -461,5 +461,209 @@
         "expected_file": "cases/CPP-S01/CPP-S01-T06.expected.txt"
       }
     ]
+  },
+  {
+    "q_id": "PY-F04",
+    "title": "双参数求和：教师明确入口",
+    "language": "python",
+    "mode": "function_call",
+    "function_name": "add",
+    "max_score": 10,
+    "provenance": "constructed",
+    "teacher_rules_status": "AI_PROPOSED_PENDING_TEACHER_CONFIRMATION",
+    "teacher_confirmed": false,
+    "stem": "实现 def add(a, b):，接收两个范围[-100,100]的整数位置参数并返回其和；函数名和双参数签名为本题明确要求。",
+    "teacher_rules_draft": [
+      "求和语义正确8分；明确要求的add(a,b)函数名及双位置参数接口作为整体2分。接口不符只扣这2分，不重复扣语义分；禁止自动重命名/改签名后当作原提交运行。",
+      "接口不符时不按错误调用强行执行；可根据清楚可审阅的构造源码建议语义8分，须教师确认，不能把适配异常计为算法错误。"
+    ],
+    "reference": "references/add_explicit.py",
+    "cases": [
+      {
+        "case_id": "PY-F04-T01",
+        "input": [
+          2,
+          3
+        ],
+        "expected": 5,
+        "note": "纯文本双参数语义对照",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F04/PY-F04-T01.in.txt",
+        "expected_file": "cases/PY-F04/PY-F04-T01.expected.txt"
+      },
+      {
+        "case_id": "PY-F04-T02",
+        "input": [
+          -2,
+          3
+        ],
+        "expected": 1,
+        "note": "纯文本双参数语义对照",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F04/PY-F04-T02.in.txt",
+        "expected_file": "cases/PY-F04/PY-F04-T02.expected.txt"
+      },
+      {
+        "case_id": "PY-F04-T03",
+        "input": [
+          0,
+          0
+        ],
+        "expected": 0,
+        "note": "纯文本双参数语义对照",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F04/PY-F04-T03.in.txt",
+        "expected_file": "cases/PY-F04/PY-F04-T03.expected.txt"
+      },
+      {
+        "case_id": "PY-F04-T04",
+        "input": [
+          100,
+          -100
+        ],
+        "expected": 0,
+        "note": "纯文本双参数语义对照",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F04/PY-F04-T04.in.txt",
+        "expected_file": "cases/PY-F04/PY-F04-T04.expected.txt"
+      }
+    ],
+    "teacher_input_file": "teacher_inputs/two_integer_cases.txt",
+    "teacher_entry_requirement": {
+      "function_name": "add",
+      "positional_arity": 2
+    }
+  },
+  {
+    "q_id": "PY-F05",
+    "title": "双参数求和：教师未规定入口",
+    "language": "python",
+    "mode": "function_call",
+    "function_name": "combine",
+    "max_score": 10,
+    "provenance": "constructed",
+    "teacher_rules_status": "AI_PROPOSED_PENDING_TEACHER_CONFIRMATION",
+    "teacher_confirmed": false,
+    "stem": "编写一个Python顶层函数，计算输入的两个整数之和并返回整数，输入范围[-100,100]。教师没有规定函数名或固定签名；能清楚表达两个输入且语义正确的合理实现可接受。",
+    "teacher_rules_draft": [
+      "求和语义正确8分；提供合理可调用的Python顶层函数并返回整数2分。未规定函数名/固定签名，因此不能只因命名不同扣接口分。",
+      "本地样本验证明确固定combine(a,b)为该构造源码的入口，仅是验算记录，不是教师隐含要求或自动入口推断；实际产品不能确定入口时先复核。"
+    ],
+    "reference": "references/combine_unspecified.py",
+    "cases": [
+      {
+        "case_id": "PY-F05-T01",
+        "input": [
+          2,
+          3
+        ],
+        "expected": 5,
+        "note": "纯文本双参数语义对照",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F05/PY-F05-T01.in.txt",
+        "expected_file": "cases/PY-F05/PY-F05-T01.expected.txt"
+      },
+      {
+        "case_id": "PY-F05-T02",
+        "input": [
+          -2,
+          3
+        ],
+        "expected": 1,
+        "note": "纯文本双参数语义对照",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F05/PY-F05-T02.in.txt",
+        "expected_file": "cases/PY-F05/PY-F05-T02.expected.txt"
+      },
+      {
+        "case_id": "PY-F05-T03",
+        "input": [
+          0,
+          0
+        ],
+        "expected": 0,
+        "note": "纯文本双参数语义对照",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F05/PY-F05-T03.in.txt",
+        "expected_file": "cases/PY-F05/PY-F05-T03.expected.txt"
+      },
+      {
+        "case_id": "PY-F05-T04",
+        "input": [
+          100,
+          -100
+        ],
+        "expected": 0,
+        "note": "纯文本双参数语义对照",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F05/PY-F05-T04.in.txt",
+        "expected_file": "cases/PY-F05/PY-F05-T04.expected.txt"
+      }
+    ],
+    "teacher_input_file": "teacher_inputs/two_integer_cases.txt",
+    "teacher_entry_requirement": null,
+    "local_validation_binding": {
+      "function_name": "combine",
+      "positional_arity": 2,
+      "provenance": "AI_CONSTRUCTED_FIXTURE_BINDING_NOT_TEACHER_REQUIREMENT",
+      "automatic_inference": false
+    }
+  },
+  {
+    "q_id": "PY-S02",
+    "title": "双整数stdin求和：同纯文本输入对照",
+    "language": "python",
+    "mode": "stdin_stdout",
+    "function_name": null,
+    "max_score": 10,
+    "provenance": "constructed",
+    "teacher_rules_status": "AI_PROPOSED_PENDING_TEACHER_CONFIRMATION",
+    "teacher_confirmed": false,
+    "stem": "完整Python程序从stdin读取恰好两个整数（范围[-100,100]），以任意空白分隔，输出和及换行，不输出提示语。教师纯文本测试资料与PY-F04/PY-F05使用同一个原文件。",
+    "teacher_rules_draft": [
+      "求和语义正确8分；正确读取两整数并仅输出整数和及换行2分。未设置额外风格分。",
+      "同样的“输入2、3，预期5”由题目决定向stdin给2 3及换行，不把中文描述原句当作程序输入；此处只是验收期望，没有实现适配器。"
+    ],
+    "reference": "references/add_stdin.py",
+    "cases": [
+      {
+        "case_id": "PY-S02-T01",
+        "input": "2 3\n",
+        "expected": "5\n",
+        "note": "纯文本双参数语义对照",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-S02/PY-S02-T01.in.txt",
+        "expected_file": "cases/PY-S02/PY-S02-T01.expected.txt"
+      },
+      {
+        "case_id": "PY-S02-T02",
+        "input": "-2 3\n",
+        "expected": "1\n",
+        "note": "纯文本双参数语义对照",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-S02/PY-S02-T02.in.txt",
+        "expected_file": "cases/PY-S02/PY-S02-T02.expected.txt"
+      },
+      {
+        "case_id": "PY-S02-T03",
+        "input": "0 0\n",
+        "expected": "0\n",
+        "note": "纯文本双参数语义对照",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-S02/PY-S02-T03.in.txt",
+        "expected_file": "cases/PY-S02/PY-S02-T03.expected.txt"
+      },
+      {
+        "case_id": "PY-S02-T04",
+        "input": "100 -100\n",
+        "expected": "0\n",
+        "note": "纯文本双参数语义对照",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-S02/PY-S02-T04.in.txt",
+        "expected_file": "cases/PY-S02/PY-S02-T04.expected.txt"
+      }
+    ],
+    "teacher_input_file": "teacher_inputs/two_integer_cases.txt",
+    "teacher_entry_requirement": null
   }
 ]

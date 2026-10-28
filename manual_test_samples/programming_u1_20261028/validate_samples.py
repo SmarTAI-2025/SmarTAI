@@ -83,7 +83,67 @@ def validate_structure(questions, submissions):
     assert mapping["product_ingestion_executed"] is False
     source = local_file(mapping["same_submission_as"]).read_text(encoding="utf-8")
     assert source in local_file(mapping["file"]).read_text(encoding="utf-8")
+    validate_supplement(qmap, submissions)
     return qmap, len(case_ids)
+
+
+def validate_supplement(qmap, submissions):
+    """Check authored acceptance data; do not interpret or adapt natural language."""
+    spec = load("teacher_inputs/acceptance_expectations.json")
+    assert spec["product_adaptation_executed"] is False
+    assert spec["do_not_infer_teacher_contract_from_validation_binding"] is True
+    raw_lines = local_file(spec["raw_text_file"]).read_text(encoding="utf-8").splitlines()
+    cases = {c["case_id"]: c for q in qmap.values() for c in q["cases"]}
+    assert raw_lines[1:] == [item["raw_text"] for item in spec["cases"]]
+    for index, item in enumerate(spec["cases"], 1):
+        assert item["raw_text"] in raw_lines
+        a, b = item["semantic_input"]
+        assert item["raw_text"] == f"用例{index}：输入 {a}、{b}，预期 {item['expected_result']}。"
+        for key in ["function_case_id", "unspecified_entry_case_id"]:
+            case = cases[item[key]]
+            assert case["input"] == [a, b] and case["expected"] == item["expected_result"]
+        case = cases[item["stdin_case_id"]]
+        assert case["input"] == f"{a} {b}\n" and case["expected"] == str(item["expected_result"]) + "\n"
+    explicit, unspecified = qmap["PY-F04"], qmap["PY-F05"]
+    assert explicit["teacher_entry_requirement"] == {"function_name": "add", "positional_arity": 2}
+    assert unspecified["teacher_entry_requirement"] is None
+    assert unspecified["local_validation_binding"] == {
+        "function_name": "combine", "positional_arity": 2,
+        "provenance": "AI_CONSTRUCTED_FIXTURE_BINDING_NOT_TEACHER_REQUIREMENT", "automatic_inference": False}
+    assert unspecified["function_name"] == "combine"
+    assert all(qmap[qid]["teacher_input_file"] == spec["raw_text_file"] for qid in ["PY-F04", "PY-F05", "PY-S02"])
+    rows = {s["submission_id"]: s for s in submissions}
+    pair = [rows[sid] for sid in spec["paired_same_source_submissions"]]
+    assert pair[0]["source_file"] == pair[1]["source_file"]
+    assert pair[0]["q_id"] == "PY-F04" and pair[1]["q_id"] == "PY-F05"
+    assert pair[0]["execution_policy"] == "do_not_execute_explicit_contract_violation"
+    assert pair[1]["execution_policy"] == "execute_after_contract_confirmation"
+    for row in submissions:
+        if row["scenario"] != "explicit_contract_violation":
+            continue
+        assert row["execution_policy"] == "do_not_execute_explicit_contract_violation"
+        rule = qmap[row["q_id"]]["teacher_entry_requirement"]
+        evidence = row["explicit_contract_violation"]
+        functions = {n.name: n for n in ast.parse(local_file(row["source_file"]).read_text()).body
+                     if isinstance(n, ast.FunctionDef)}
+        observed = functions[evidence["observed_name"]]
+        arity = len(observed.args.posonlyargs) + len(observed.args.args)
+        assert rule["function_name"] == evidence["required_name"]
+        assert rule["positional_arity"] == evidence["required_positional_arity"]
+        assert arity == evidence["observed_positional_arity"]
+        if evidence["kind"] == "function_name":
+            assert rule["function_name"] not in functions
+        else:
+            assert evidence["kind"] == "positional_arity" and arity != rule["positional_arity"]
+    context = [rows[sid] for sid in spec["full_source_context_submissions"]]
+    assert len({s["source_file"] for s in context}) == 1
+    code = local_file(context[0]["source_file"]).read_text()
+    assert all(part in code for part in spec["must_preserve"])
+    tree = ast.parse(code)
+    assert any(isinstance(n, ast.Import) and any(a.name == "operator" for a in n.names) for n in tree.body)
+    assert any(isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "POSITIVE_BOUNDARY" for t in n.targets) for n in tree.body)
+    names = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
+    assert names == ["count_positive", "sum_positive", "is_positive"]
 
 
 def run_process(command, cwd, input_text="", timeout=5):
