@@ -1,0 +1,30 @@
+{
+  "packet_version": "U1-20261028-v1",
+  "repository": "SmarTAI-2025/SmarTAI",
+  "audited_main_sha": "101352c8a7df4e628d2716a2731b702d5f294a8d",
+  "root_local_sha": "7e2b7a4993c3e8850cdf9eb0261a9a2e8fc40484",
+  "thread_id": "01a180ed-d804-7cf2-89ab-920ac32fe354",
+  "date": "2026-10-28 Asia/Singapore",
+  "real_programming_sets_confirmed": 0,
+  "legacy_question_seeds": 1,
+  "question_count": 6,
+  "scoring_row_count": 32,
+  "rules_status": "ALL_PENDING_TEACHER_CONFIRMATION",
+  "paid_model_calls": 0,
+  "production_access": false,
+  "samples": "AI constructed; PY-F01 includes one legacy repository question seed",
+  "schema_notice": "Local sample manifest, not a product API import schema or scoring implementation",
+  "delivery_authorization": "User subsequently authorized local Mac review/tests, latest-main compatibility check, commit/push and PR; no merge or deploy",
+  "execution_environment": "Mac local only; constructed fixture validation separate from product OCI",
+  "validation_counts": {
+    "references": 6,
+    "reference_case_runs": 32,
+    "executed_scoring_rows": 19,
+    "submission_case_runs": 99,
+    "syntax_check_only_rows": 2,
+    "compile_check_only_rows": 2,
+    "not_executed_rows": 9,
+    "validator_regression_tests": 10,
+    "main_selected_offline_tests": 36
+  }
+}

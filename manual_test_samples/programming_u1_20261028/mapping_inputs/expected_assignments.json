@@ -1,0 +1,15 @@
+{
+  "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+  "file": "mapping_inputs/S07_reverse_answer_blocks.md",
+  "order_in_document": [
+    "PY-F03",
+    "PY-F02"
+  ],
+  "expected_mapping": {
+    "PY-F02": "sum_positive",
+    "PY-F03": "count_positive"
+  },
+  "same_submission_as": "submissions/S07_shared_reverse.py",
+  "product_ingestion_executed": false,
+  "must_preserve_full_source": true
+}

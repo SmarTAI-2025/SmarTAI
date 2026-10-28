@@ -1,0 +1,465 @@
+[
+  {
+    "q_id": "PY-F01",
+    "title": "斐波那契：动态规划方法约束",
+    "language": "python",
+    "mode": "function_call",
+    "function_name": "fib",
+    "max_score": 10,
+    "provenance": "legacy_repository_question_with_constructed_completion",
+    "teacher_rules_status": "AI_PROPOSED_PENDING_TEACHER_CONFIRMATION",
+    "teacher_confirmed": false,
+    "stem": "实现 def fib(n): 返回 F_n。构造补充约定 F_0=0、F_1=1，整数 0≤n≤30；必须动态规划，时间 O(n)，可用滚动状态。原仓库仅明确函数计算第n项、动态规划及 O(n)。",
+    "teacher_rules_draft": [
+      "普通项结果正确4分（n≥2）；基例n=0、1作为整体2分（两者都正确才给这2分）；动态规划且O(n)方法3分；指定fib(n)返回整数1分。",
+      "各维度独立、同一问题不重复扣；样例通过率仅作证据，不按比例结算。递归未记忆化即使全部小样例正确，也不给方法3分。",
+      "确认真实缺交为0；语法错误可对清楚可辨的正确DP思路给3分，其余不给。此语法错误过程分规则须教师特别确认。"
+    ],
+    "reference": "references/fib.py",
+    "cases": [
+      {
+        "case_id": "PY-F01-T01",
+        "input": [
+          0
+        ],
+        "expected": 0,
+        "note": "零边界",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F01/PY-F01-T01.in.txt",
+        "expected_file": "cases/PY-F01/PY-F01-T01.expected.txt"
+      },
+      {
+        "case_id": "PY-F01-T02",
+        "input": [
+          1
+        ],
+        "expected": 1,
+        "note": "一边界",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F01/PY-F01-T02.in.txt",
+        "expected_file": "cases/PY-F01/PY-F01-T02.expected.txt"
+      },
+      {
+        "case_id": "PY-F01-T03",
+        "input": [
+          2
+        ],
+        "expected": 1,
+        "note": "递推初项",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F01/PY-F01-T03.in.txt",
+        "expected_file": "cases/PY-F01/PY-F01-T03.expected.txt"
+      },
+      {
+        "case_id": "PY-F01-T04",
+        "input": [
+          5
+        ],
+        "expected": 5,
+        "note": "普通项",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F01/PY-F01-T04.in.txt",
+        "expected_file": "cases/PY-F01/PY-F01-T04.expected.txt"
+      },
+      {
+        "case_id": "PY-F01-T05",
+        "input": [
+          10
+        ],
+        "expected": 55,
+        "note": "普通项",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F01/PY-F01-T05.in.txt",
+        "expected_file": "cases/PY-F01/PY-F01-T05.expected.txt"
+      }
+    ]
+  },
+  {
+    "q_id": "PY-F02",
+    "title": "正数求和",
+    "language": "python",
+    "mode": "function_call",
+    "function_name": "sum_positive",
+    "max_score": 10,
+    "provenance": "constructed",
+    "teacher_rules_status": "AI_PROPOSED_PENDING_TEACHER_CONFIRMATION",
+    "teacher_confirmed": false,
+    "stem": "实现 def sum_positive(nums): 返回列表中严格大于0的整数之和；重复值逐个计入，空列表返回0；长度0..100，元素-1000..1000。与PY-F03可共用一份完整源码及helper。",
+    "teacher_rules_draft": [
+      "重复值贡献正确4分；正负筛选的数值贡献正确2分（零贡献为0，允许等价的>=0实现）；非重复普通求和正确2分；约定函数接口和空序列返回正确2分。",
+      "sum(set(...))丢重复值只扣重复值4分，不能因为4/5通过而给8分；确认缺交0分。"
+    ],
+    "reference": "references/positive_sum.py",
+    "cases": [
+      {
+        "case_id": "PY-F02-T01",
+        "input": [
+          []
+        ],
+        "expected": 0,
+        "note": "空序列",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F02/PY-F02-T01.in.txt",
+        "expected_file": "cases/PY-F02/PY-F02-T01.expected.txt"
+      },
+      {
+        "case_id": "PY-F02-T02",
+        "input": [
+          [
+            1,
+            2,
+            3
+          ]
+        ],
+        "expected": 6,
+        "note": "普通正数",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F02/PY-F02-T02.in.txt",
+        "expected_file": "cases/PY-F02/PY-F02-T02.expected.txt"
+      },
+      {
+        "case_id": "PY-F02-T03",
+        "input": [
+          [
+            -2,
+            0,
+            5
+          ]
+        ],
+        "expected": 5,
+        "note": "负数与零",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F02/PY-F02-T03.in.txt",
+        "expected_file": "cases/PY-F02/PY-F02-T03.expected.txt"
+      },
+      {
+        "case_id": "PY-F02-T04",
+        "input": [
+          [
+            2,
+            2,
+            3
+          ]
+        ],
+        "expected": 7,
+        "note": "重复值必须逐次贡献",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F02/PY-F02-T04.in.txt",
+        "expected_file": "cases/PY-F02/PY-F02-T04.expected.txt"
+      },
+      {
+        "case_id": "PY-F02-T05",
+        "input": [
+          [
+            -4,
+            -1
+          ]
+        ],
+        "expected": 0,
+        "note": "全负数",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F02/PY-F02-T05.in.txt",
+        "expected_file": "cases/PY-F02/PY-F02-T05.expected.txt"
+      }
+    ]
+  },
+  {
+    "q_id": "PY-F03",
+    "title": "正数计数",
+    "language": "python",
+    "mode": "function_call",
+    "function_name": "count_positive",
+    "max_score": 10,
+    "provenance": "constructed",
+    "teacher_rules_status": "AI_PROPOSED_PENDING_TEACHER_CONFIRMATION",
+    "teacher_confirmed": false,
+    "stem": "实现 def count_positive(nums): 统计严格大于0的整数个数；重复元素分别计数；空列表返回0；输入范围同PY-F02。",
+    "teacher_rules_draft": [
+      "遍历计数及重复值语义5分；严格大于0、排除零的边界3分；指定接口和空序列2分。",
+      "同一helper对不同题的影响按题判断；把 >0 写成 >=0 不影响PY-F02求和，但本题扣边界3分。确认缺交0分。"
+    ],
+    "reference": "references/positive_count.py",
+    "cases": [
+      {
+        "case_id": "PY-F03-T01",
+        "input": [
+          []
+        ],
+        "expected": 0,
+        "note": "空序列",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F03/PY-F03-T01.in.txt",
+        "expected_file": "cases/PY-F03/PY-F03-T01.expected.txt"
+      },
+      {
+        "case_id": "PY-F03-T02",
+        "input": [
+          [
+            1,
+            2,
+            3
+          ]
+        ],
+        "expected": 3,
+        "note": "普通正数",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F03/PY-F03-T02.in.txt",
+        "expected_file": "cases/PY-F03/PY-F03-T02.expected.txt"
+      },
+      {
+        "case_id": "PY-F03-T03",
+        "input": [
+          [
+            -2,
+            0,
+            5
+          ]
+        ],
+        "expected": 1,
+        "note": "零不能计入",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F03/PY-F03-T03.in.txt",
+        "expected_file": "cases/PY-F03/PY-F03-T03.expected.txt"
+      },
+      {
+        "case_id": "PY-F03-T04",
+        "input": [
+          [
+            2,
+            2,
+            3
+          ]
+        ],
+        "expected": 3,
+        "note": "重复值各计一次",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F03/PY-F03-T04.in.txt",
+        "expected_file": "cases/PY-F03/PY-F03-T04.expected.txt"
+      },
+      {
+        "case_id": "PY-F03-T05",
+        "input": [
+          [
+            -4,
+            -1
+          ]
+        ],
+        "expected": 0,
+        "note": "全负数",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-F03/PY-F03-T05.in.txt",
+        "expected_file": "cases/PY-F03/PY-F03-T05.expected.txt"
+      }
+    ]
+  },
+  {
+    "q_id": "PY-S01",
+    "title": "stdin整数求和",
+    "language": "python",
+    "mode": "stdin_stdout",
+    "function_name": null,
+    "max_score": 10,
+    "provenance": "constructed",
+    "teacher_rules_status": "AI_PROPOSED_PENDING_TEACHER_CONFIRMATION",
+    "teacher_confirmed": false,
+    "stem": "首个整数n(0..100)，随后恰有n个整数(-10^9..10^9)，空白可跨行；输出它们之和及换行，不输出提示语。输入均合法，不要求处理格式错误。",
+    "teacher_rules_draft": [
+      "本题采用构造的结果门槛规则：所有合法输入语义正确且接口正确10分；确认任一合法输入错误为0分，不给过程分；确认缺交0分。",
+      "有限用例全通过仅是证据，还须人工检查题意；不能用4/5直接给8分。语法/编译失败归因学生源码时建议0分；平台故障不触发0分。"
+    ],
+    "reference": "references/sum_stdin.py",
+    "cases": [
+      {
+        "case_id": "PY-S01-T01",
+        "input": "3\n1 2 3\n",
+        "expected": "6\n",
+        "note": "普通",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-S01/PY-S01-T01.in.txt",
+        "expected_file": "cases/PY-S01/PY-S01-T01.expected.txt"
+      },
+      {
+        "case_id": "PY-S01-T02",
+        "input": "3\n-2 0 5\n",
+        "expected": "3\n",
+        "note": "负数",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-S01/PY-S01-T02.in.txt",
+        "expected_file": "cases/PY-S01/PY-S01-T02.expected.txt"
+      },
+      {
+        "case_id": "PY-S01-T03",
+        "input": "0\n",
+        "expected": "0\n",
+        "note": "空数据",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-S01/PY-S01-T03.in.txt",
+        "expected_file": "cases/PY-S01/PY-S01-T03.expected.txt"
+      },
+      {
+        "case_id": "PY-S01-T04",
+        "input": "4\n2 2\n3 4\n",
+        "expected": "11\n",
+        "note": "跨行空白",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-S01/PY-S01-T04.in.txt",
+        "expected_file": "cases/PY-S01/PY-S01-T04.expected.txt"
+      },
+      {
+        "case_id": "PY-S01-T05",
+        "input": "2\n1000000000 1000000000\n",
+        "expected": "2000000000\n",
+        "note": "较大整数",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/PY-S01/PY-S01-T05.in.txt",
+        "expected_file": "cases/PY-S01/PY-S01-T05.expected.txt"
+      }
+    ]
+  },
+  {
+    "q_id": "C-S01",
+    "title": "C单文件整数求和（补充批次）",
+    "language": "c",
+    "mode": "stdin_stdout",
+    "function_name": null,
+    "max_score": 10,
+    "provenance": "constructed",
+    "teacher_rules_status": "AI_PROPOSED_PENDING_TEACHER_CONFIRMATION",
+    "teacher_confirmed": false,
+    "stem": "首个整数n(0..100)，随后恰有n个整数(-10^9..10^9)，空白可跨行；输出它们之和及换行，不输出提示语。输入均合法，不要求处理格式错误。 总和须使用足够范围（例如long long）；C11单文件。",
+    "teacher_rules_draft": [
+      "本题采用构造的结果门槛规则：所有合法输入语义正确且接口正确10分；确认任一合法输入错误为0分，不给过程分；确认缺交0分。",
+      "有限用例全通过仅是证据，还须人工检查题意；不能用4/5直接给8分。语法/编译失败归因学生源码时建议0分；平台故障不触发0分。"
+    ],
+    "reference": "references/sum_stdin.c",
+    "cases": [
+      {
+        "case_id": "C-S01-T01",
+        "input": "3\n1 2 3\n",
+        "expected": "6\n",
+        "note": "普通",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/C-S01/C-S01-T01.in.txt",
+        "expected_file": "cases/C-S01/C-S01-T01.expected.txt"
+      },
+      {
+        "case_id": "C-S01-T02",
+        "input": "3\n-2 0 5\n",
+        "expected": "3\n",
+        "note": "负数",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/C-S01/C-S01-T02.in.txt",
+        "expected_file": "cases/C-S01/C-S01-T02.expected.txt"
+      },
+      {
+        "case_id": "C-S01-T03",
+        "input": "0\n",
+        "expected": "0\n",
+        "note": "空数据",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/C-S01/C-S01-T03.in.txt",
+        "expected_file": "cases/C-S01/C-S01-T03.expected.txt"
+      },
+      {
+        "case_id": "C-S01-T04",
+        "input": "4\n2 2\n3 4\n",
+        "expected": "11\n",
+        "note": "跨行空白",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/C-S01/C-S01-T04.in.txt",
+        "expected_file": "cases/C-S01/C-S01-T04.expected.txt"
+      },
+      {
+        "case_id": "C-S01-T05",
+        "input": "2\n1000000000 1000000000\n",
+        "expected": "2000000000\n",
+        "note": "较大整数",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/C-S01/C-S01-T05.in.txt",
+        "expected_file": "cases/C-S01/C-S01-T05.expected.txt"
+      },
+      {
+        "case_id": "C-S01-T06",
+        "input": "3\n1000000000 1000000000 1000000000\n",
+        "expected": "3000000000\n",
+        "note": "必须支持64位总和",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/C-S01/C-S01-T06.in.txt",
+        "expected_file": "cases/C-S01/C-S01-T06.expected.txt"
+      }
+    ]
+  },
+  {
+    "q_id": "CPP-S01",
+    "title": "C++单文件整数求和（补充批次）",
+    "language": "cpp",
+    "mode": "stdin_stdout",
+    "function_name": null,
+    "max_score": 10,
+    "provenance": "constructed",
+    "teacher_rules_status": "AI_PROPOSED_PENDING_TEACHER_CONFIRMATION",
+    "teacher_confirmed": false,
+    "stem": "首个整数n(0..100)，随后恰有n个整数(-10^9..10^9)，空白可跨行；输出它们之和及换行，不输出提示语。输入均合法，不要求处理格式错误。 总和须使用足够范围（例如long long）；C++17单文件。",
+    "teacher_rules_draft": [
+      "本题采用构造的结果门槛规则：所有合法输入语义正确且接口正确10分；确认任一合法输入错误为0分，不给过程分；确认缺交0分。",
+      "有限用例全通过仅是证据，还须人工检查题意；不能用4/5直接给8分。语法/编译失败归因学生源码时建议0分；平台故障不触发0分。"
+    ],
+    "reference": "references/sum_stdin.cpp",
+    "cases": [
+      {
+        "case_id": "CPP-S01-T01",
+        "input": "3\n1 2 3\n",
+        "expected": "6\n",
+        "note": "普通",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/CPP-S01/CPP-S01-T01.in.txt",
+        "expected_file": "cases/CPP-S01/CPP-S01-T01.expected.txt"
+      },
+      {
+        "case_id": "CPP-S01-T02",
+        "input": "3\n-2 0 5\n",
+        "expected": "3\n",
+        "note": "负数",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/CPP-S01/CPP-S01-T02.in.txt",
+        "expected_file": "cases/CPP-S01/CPP-S01-T02.expected.txt"
+      },
+      {
+        "case_id": "CPP-S01-T03",
+        "input": "0\n",
+        "expected": "0\n",
+        "note": "空数据",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/CPP-S01/CPP-S01-T03.in.txt",
+        "expected_file": "cases/CPP-S01/CPP-S01-T03.expected.txt"
+      },
+      {
+        "case_id": "CPP-S01-T04",
+        "input": "4\n2 2\n3 4\n",
+        "expected": "11\n",
+        "note": "跨行空白",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/CPP-S01/CPP-S01-T04.in.txt",
+        "expected_file": "cases/CPP-S01/CPP-S01-T04.expected.txt"
+      },
+      {
+        "case_id": "CPP-S01-T05",
+        "input": "2\n1000000000 1000000000\n",
+        "expected": "2000000000\n",
+        "note": "较大整数",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/CPP-S01/CPP-S01-T05.in.txt",
+        "expected_file": "cases/CPP-S01/CPP-S01-T05.expected.txt"
+      },
+      {
+        "case_id": "CPP-S01-T06",
+        "input": "3\n1000000000 1000000000 1000000000\n",
+        "expected": "3000000000\n",
+        "note": "必须支持64位总和",
+        "provenance": "AI_CONSTRUCTED_PENDING_TEACHER_CONFIRMATION",
+        "input_file": "cases/CPP-S01/CPP-S01-T06.in.txt",
+        "expected_file": "cases/CPP-S01/CPP-S01-T06.expected.txt"
+      }
+    ]
+  }
+]
