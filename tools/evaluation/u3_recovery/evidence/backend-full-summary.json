@@ -1,0 +1,417 @@
+{
+  "main_sha": "101352c8a7df4e628d2716a2731b702d5f294a8d",
+  "passed": 7464,
+  "skipped": 101,
+  "failed": 0,
+  "errors": 0,
+  "wall_seconds": 644.1,
+  "external_network_attempts": 0,
+  "allow_literal_loopback": true,
+  "junit_sha256": "3451897d91aa9f23e904292b4b119c5e5bb640c1b336eaa1b7c4cb80cd8d06ae",
+  "skipped_tests": [
+    {
+      "test": "backend.tests.test_admin_postgres::test_demo_cleanup_retry_order_does_not_starve_postgres[storage_failure]",
+      "reason": "Requires disposable PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_admin_postgres::test_demo_cleanup_retry_order_does_not_starve_postgres[task_cleanup]",
+      "reason": "Requires disposable PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_admin_postgres::test_demo_expiry_serializes_reclaims_and_preserves_global_budget",
+      "reason": "Requires disposable PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_admin_postgres::test_existing_postgres_branches_upgrade_with_legacy_identity[base]",
+      "reason": "Requires disposable PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_admin_postgres::test_existing_postgres_branches_upgrade_with_legacy_identity[0018_knowledge_ingestion]",
+      "reason": "Requires disposable PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_admin_postgres::test_existing_postgres_branches_upgrade_with_legacy_identity[0019_admin_usage_events]",
+      "reason": "Requires disposable PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_admin_postgres::test_existing_postgres_branches_upgrade_with_legacy_identity[0022_account_closures]",
+      "reason": "Requires disposable PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_admin_postgres::test_existing_postgres_branches_upgrade_with_legacy_identity[0023_business_configuration]",
+      "reason": "Requires disposable PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_admin_postgres::test_two_admins_cannot_concurrently_remove_all_management",
+      "reason": "Requires disposable PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_admin_postgres::test_business_config_concurrency_live_quota_and_private_permissions",
+      "reason": "Requires disposable PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_admin_postgres::test_model_daily_admission_serializes_postgres_sessions",
+      "reason": "Requires disposable PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_admin_reset::test_postgres_guard_also_blocks_a_different_control_directory[sqlite]",
+      "reason": "PostgreSQL advisory lock supplements the mandatory shared control directory"
+    },
+    {
+      "test": "backend.tests.test_custom_provider_migration::test_postgres_endpoint_identity_and_owner_isolation",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_database_target::test_postgres_runtime_and_migration_share_target[heavy]",
+      "reason": "SMARTAI_TEST_POSTGRES_URL is required for isolated PostgreSQL execution"
+    },
+    {
+      "test": "backend.tests.test_database_target::test_postgres_runtime_and_migration_share_target[legacy]",
+      "reason": "SMARTAI_TEST_POSTGRES_URL is required for isolated PostgreSQL execution"
+    },
+    {
+      "test": "backend.tests.test_database_target::test_postgres_runtime_and_migration_share_target[same]",
+      "reason": "SMARTAI_TEST_POSTGRES_URL is required for isolated PostgreSQL execution"
+    },
+    {
+      "test": "backend.tests.test_database_target::test_postgres_runtime_and_migration_share_target[conflict]",
+      "reason": "SMARTAI_TEST_POSTGRES_URL is required for isolated PostgreSQL execution"
+    },
+    {
+      "test": "backend.tests.test_execution_admission_postgres::test_postgres_one_owner_across_two_claimers",
+      "reason": "Requires disposable PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_execution_admission_postgres::test_postgres_global_capacity_is_shared_across_users_and_workers",
+      "reason": "Requires disposable PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_knowledge_whole_book_capacity::test_thousand_native_pages_run_through_real_worker_without_truncation",
+      "reason": "explicit full-book capacity benchmark"
+    },
+    {
+      "test": "backend.tests.test_oci_real_runtime::test_real_stdin_and_multiple_functions",
+      "reason": "Requires explicitly configured Linux OCI runtime"
+    },
+    {
+      "test": "backend.tests.test_oci_real_runtime::test_real_timeout_output_and_student_runtime_error",
+      "reason": "Requires explicitly configured Linux OCI runtime"
+    },
+    {
+      "test": "backend.tests.test_oci_real_runtime::test_real_no_secrets_or_network",
+      "reason": "Requires explicitly configured Linux OCI runtime"
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_task_metadata_compare_and_update_is_atomic",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_incremental_question_results_survive_independent_work[pause]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_incremental_question_results_survive_independent_work[failure]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_incremental_question_results_survive_independent_work[fields]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_incremental_question_results_survive_independent_work[28_questions]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_empty_question_handoff_allows_manual_count[failed]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_empty_question_handoff_allows_manual_count[empty]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_empty_question_handoff_allows_manual_count[paused]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_partial_submission_manual_preserves_valid_siblings[content-False]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_partial_submission_manual_preserves_valid_siblings[content-True]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_partial_submission_manual_preserves_valid_siblings[type-False]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_partial_submission_manual_preserves_valid_siblings[type-True]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_retry_preserves_question_boundary_evidence",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_review_row_mutations_have_one_winner[actions0-question]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_review_row_mutations_have_one_winner[actions0-student]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_review_row_mutations_have_one_winner[actions1-question]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_review_row_mutations_have_one_winner[actions1-student]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_review_row_mutations_have_one_winner[actions2-question]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_review_row_mutations_have_one_winner[actions2-student]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_detail_and_row_mutation_share_revision[add-question]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_detail_and_row_mutation_share_revision[add-question_confirm]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_detail_and_row_mutation_share_revision[add-answer]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_detail_and_row_mutation_share_revision[add-answer_confirm]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_detail_and_row_mutation_share_revision[add-identity]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_detail_and_row_mutation_share_revision[delete-question]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_detail_and_row_mutation_share_revision[delete-question_confirm]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_detail_and_row_mutation_share_revision[delete-answer]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_detail_and_row_mutation_share_revision[delete-answer_confirm]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_detail_and_row_mutation_share_revision[delete-identity]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_task_identity_migration_preserves_existing_results",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_unchanged_matching_confirmation[False]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_unchanged_matching_confirmation[True]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_answer_swap_and_grading_gate",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_partial_three_way_answer_conflict",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_explicit_email_login_and_username_mail_guard",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_registration_waits_for_cross_worker_flow_lock",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_single_active_run",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_optimistic_update_conflict",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_lease_claim_is_owner_scoped",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_finalization_locks_grading_before_workflow",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_report_failure_rolls_back_snapshot[render]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_report_failure_rolls_back_snapshot[persist]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_concurrent_report_generation_is_idempotent",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_invalid_review_leaves_all_state_unchanged[draft]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_invalid_review_leaves_all_state_unchanged[released]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_invalid_review_leaves_all_state_unchanged[missing]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_review_failure_rolls_back_all_state[draft]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_review_failure_rolls_back_all_state[released]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_review_failure_rolls_back_all_state[missing]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_concurrent_reviews_have_one_winner[draft]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_concurrent_reviews_have_one_winner[released]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_report_and_review_share_one_revision",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_task_delete_finalizer_locks_children_before_workflow",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_role_scoped_reads_hide_other_owner",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_source_outcome_persistence_and_owner_isolation",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_operation_checkpoint_cas_and_owner_isolation",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_operation_lease_one_winner_claim",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_live_lease_rejects_same_worker_claim",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_missing_source_and_replacement_use_user_then_file_lock_order",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_question_preparation_atomic_publication_has_one_winner",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_task_delete_worker_removes_full_restrict_graph_and_storage",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_knowledge_quota_concurrent_admission_has_one_winner",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_knowledge_attach_and_reserve_share_user_first_lock_order",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_source_and_task_knowledge_use_compatible_owner_assignment_order[same-task]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_source_and_task_knowledge_use_compatible_owner_assignment_order[cross-task]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_grading_knowledge_fence_and_cleanup_are_mutually_exclusive",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_grading_and_source_admission_share_workflow_first_order",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_completion_retains_failed_recognition_source[False]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_completion_retains_failed_recognition_source[True]",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_postgres_integration::test_postgres_cleanup_rechecks_saved_inputs",
+      "reason": "Set SMARTAI_TEST_POSTGRES_URL to run PostgreSQL integration (GitHub Actions)."
+    },
+    {
+      "test": "backend.tests.test_runner_spike::test_worker_clears_launcher_environment_and_matches_runner_contract",
+      "reason": "Linux container worker uses Linux resource-limit semantics; OCI command tests remain cross-platform"
+    },
+    {
+      "test": "backend.tests.test_runner_spike::test_worker_enforces_wall_timeout_without_returning_a_host_path",
+      "reason": "Linux container worker uses Linux resource-limit semantics; OCI command tests remain cross-platform"
+    },
+    {
+      "test": "backend.tests.test_runner_spike::test_worker_bounds_output_before_serializing_it",
+      "reason": "Linux container worker uses Linux resource-limit semantics; OCI command tests remain cross-platform"
+    },
+    {
+      "test": "backend.tests.test_s3_storage_integration::test_s3_storage_round_trip_listing_delete_and_missing_object",
+      "reason": "Set SMARTAI_TEST_S3_INTEGRATION=1 and SMARTAI_STORAGE_S3_* to run the real S3-compatible storage integration test."
+    },
+    {
+      "test": "backend.tests.test_s3_storage_integration::test_task_delete_worker_reconciles_only_the_exact_assignment_prefix",
+      "reason": "Set SMARTAI_TEST_S3_INTEGRATION=1 and SMARTAI_STORAGE_S3_* to run the real S3-compatible storage integration test."
+    },
+    {
+      "test": "backend.tests.test_s3_storage_integration::test_knowledge_cleanup_worker_permanently_removes_every_object_version",
+      "reason": "Set SMARTAI_TEST_S3_INTEGRATION=1 and SMARTAI_STORAGE_S3_* to run the real S3-compatible storage integration test."
+    },
+    {
+      "test": "backend.tests.test_shared_vision_quota::test_postgres_parallel_vision_last_allowance[request]",
+      "reason": "Requires isolated PostgreSQL"
+    },
+    {
+      "test": "backend.tests.test_shared_vision_quota::test_postgres_parallel_vision_last_allowance[token]",
+      "reason": "Requires isolated PostgreSQL"
+    }
+  ]
+}

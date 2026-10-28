@@ -1,0 +1,9 @@
+{
+  "checked_at": "2026-10-28T05:18:21.921Z",
+  "remote_main_sha": "101352c8a7df4e628d2716a2731b702d5f294a8d",
+  "tree_sha": "e2e80a85e87548e044042a791b713eafc19ed209",
+  "message": "Merge pull request #276 from SmarTAI-2025/codex/fresh-runs-and-retries-20261027\n\nfix: 三阶段全新执行隔离旧结果，失败项重试不沿用额度错误",
+  "url": "https://api.github.com/repos/SmarTAI-2025/SmarTAI/branches/main",
+  "local_archive_from_tree": "e2e80a85e87548e044042a791b713eafc19ed209",
+  "local_tree_available_via": "ae36ee15dfa589e21ecb03170988a290d84100ce"
+}
