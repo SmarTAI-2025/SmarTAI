@@ -314,7 +314,7 @@
       {
         "id": "api-overview",
         "title": "开始之前",
-        "body": "<p>SmarTAI 支持通过自带 API Key 调用不同厂商的模型，按照以下步骤添加配置即可使用。</p><div class=\"note\"><p><strong>无需配置本地代理：</strong> 模型请求由 SmarTAI 平台服务器发起，使用时无需针对不同厂商开启或切换本地 VPN／网络代理。实际调用仍需满足厂商的账号权限、支持地区及接口连通性要求。</p></div><p class=\"secondary\">本指南内容版本：2026 年 10 月；型号与主要额度信息核对至 2026 年 10 月 19 日。型号、免费额度、申请流程与调用限额可能调整，请以厂商官方文档及本人账号控制台为准。</p>"
+        "body": "<p>SmarTAI 支持通过自带 API Key 调用不同厂商的模型，按照以下步骤添加配置即可使用。</p><div class=\"note\"><p><strong>无需配置本地代理：</strong> 模型请求由 SmarTAI 平台服务器发起，使用时无需针对不同厂商开启或切换本地 VPN／网络代理。实际调用仍需满足厂商的账号权限、支持地区及接口连通性要求。</p></div><p class=\"secondary\">本指南内容版本：2026 年 11 月。型号、免费额度、申请流程与调用限额可能调整，请以厂商官方文档及本人账号控制台为准。</p>"
       },
       {
         "id": "api-entry",
@@ -383,7 +383,7 @@
       {
         "id": "api-openai-quota",
         "title": "额度与使用说明",
-        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 下列型号没有通用 API 免费层，通常按量付费；账户已有有效 API 赠金时可抵扣。ChatGPT 订阅与 API 费用分开。</p></div>"
+        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 下列型号没有通用 API 免费层，通常按量付费；有效 API 赠金可抵扣。符合条件且已开放此权益的 ChatGPT Pro 订阅可领取每月 100 / 200 / 500 美元 API 额度（对应订阅档位）；Business 额度按付费席位计算，详见<a href=\"https://developers.openai.com/api/docs/guides/chatgpt-api-credits\">官方说明</a>和<a href=\"https://help.openai.com/en/articles/20001626-api-credits-benefit-for-eligible-chatgpt-subscriptions\">开放条件</a>。</p><p><strong>领取与使用：</strong> 付费订阅须满 7 天，ChatGPT 与 API 账号邮箱相同，且本人拥有订阅（或 Business 工作区）和接收额度的 API 组织。进入 OpenAI Platform 的 <strong>Billing</strong> 领取并关联该组织，再用该组织的项目 API Key 配置 SmarTAI。有有效赠金时无需添加 API 支付方式；首次额度按账期剩余时间折算，账期结束时到期，不结转。权益有效且订阅符合条件时，续订后自动发放。</p></div>"
       },
       {
         "id": "api-openai-1",
@@ -485,7 +485,7 @@
       {
         "id": "api-kimi-3",
         "title": "在 SmarTAI 中填写",
-        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>Kimi（Moonshot）</strong></td></tr><tr><td>模型名称</td><td><code>kimi-k2.6</code> 或 <code>kimi-k3</code>，均可处理文字和图片；使用新人券时选 <code>kimi-k2.6</code>。</td></tr><tr><td>API key</td><td>Kimi 开放平台的 API 密钥。</td></tr><tr><td>API Base URL</td><td><code>https://api.moonshot.cn/v1</code></td></tr><tr><td>API 协议</td><td>跟随厂商（OpenAI Chat Completions）。</td></tr></tbody></table></div><div class=\"note\"><p><strong>模型区别：</strong> <code>kimi-k2.6</code> 适合通用图文任务，符合条件的新用户可使用试用代金券；<code>kimi-k3</code> 面向复杂推理与长文本任务，但不适用该新人代金券。两者均支持文字和图片输入。</p></div><p>Kimi 网页会员、Kimi Code 与 API 的余额分开。海外平台 <code>platform.kimi.ai</code> 使用 <code>https://api.moonshot.ai/v1</code>，其账号、密钥和余额与国内站独立。</p><p>官方参考：<a href=\"https://www.kimi.com/help/kimi-api/api-free-trial\">新人免费权益</a> · <a href=\"https://platform.kimi.com/docs/models\">模型列表</a> · <a href=\"https://www.kimi.com/help/kimi-api/api-rate-limits\">速率限制</a> · <a href=\"https://www.kimi.com/help/kimi-api/api-troubleshooting\">常见问题</a>。</p>"
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>Kimi（Moonshot）</strong></td></tr><tr><td>模型名称</td><td><code>kimi-k3</code>，可处理文字和图片。</td></tr><tr><td>API key</td><td>Kimi 开放平台的 API 密钥。</td></tr><tr><td>API Base URL</td><td><code>https://api.moonshot.cn/v1</code></td></tr><tr><td>API 协议</td><td>跟随厂商（OpenAI Chat Completions）。</td></tr></tbody></table></div><div class=\"note\"><p><strong>模型说明：</strong> <code>kimi-k3</code> 面向复杂推理与长文本任务，支持文字和图片输入，但不适用该新人代金券。</p></div><p>Kimi 网页会员、Kimi Code 与 API 的余额分开。海外平台 <code>platform.kimi.ai</code> 使用 <code>https://api.moonshot.ai/v1</code>，其账号、密钥和余额与国内站独立。</p><p>官方参考：<a href=\"https://www.kimi.com/help/kimi-api/api-free-trial\">新人免费权益</a> · <a href=\"https://platform.kimi.com/docs/models\">模型列表</a> · <a href=\"https://www.kimi.com/help/kimi-api/api-rate-limits\">速率限制</a> · <a href=\"https://www.kimi.com/help/kimi-api/api-troubleshooting\">常见问题</a>。</p>"
       }
     ]
   },
@@ -595,7 +595,7 @@
       {
         "id": "api-minimax-3",
         "title": "在 SmarTAI 中填写",
-        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>MiniMax</strong></td></tr><tr><td>模型名称</td><td><code>MiniMax-M3</code>，可处理文字和图片；注意保留大小写。</td></tr><tr><td>API key</td><td>普通按量付费 API 密钥。</td></tr><tr><td>API Base URL</td><td><code>https://api.minimax.cn/v1</code></td></tr><tr><td>API 协议</td><td>跟随厂商（OpenAI Chat Completions）。</td></tr></tbody></table></div><p>普通按量 Key 请使用模型列表中对应的型号；<code>MiniMax-M3.1-Flash-Preview</code> 当前属于 M Plan / MiniMax Code 的提供范围。</p><p>官方参考：<a href=\"https://platform.minimax.cn/docs/guides/quickstart-preparation\">申请与准备</a> · <a href=\"https://platform.minimax.cn/docs/faq/models\">模型列表</a> · <a href=\"https://platform.minimax.cn/docs/pricing/overview\">API 价格</a> · <a href=\"https://platform.minimax.cn/docs/faq/about-account\">账户说明</a>。</p>"
+        "body": "<div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">内容</th></tr></thead><tbody><tr><td>服务商</td><td><strong>MiniMax</strong></td></tr><tr><td>模型名称</td><td><code>MiniMax-M3</code> 或 <code>MiniMax-M3.1-Flash</code>，均可处理文字和图片；注意保留大小写。</td></tr><tr><td>API key</td><td>普通按量付费 API 密钥。</td></tr><tr><td>API Base URL</td><td><code>https://api.minimax.cn/v1</code></td></tr><tr><td>API 协议</td><td>跟随厂商（OpenAI Chat Completions）。</td></tr></tbody></table></div><p>官方参考：<a href=\"https://platform.minimax.cn/docs/guides/quickstart-preparation\">申请与准备</a> · <a href=\"https://platform.minimax.cn/docs/faq/models\">模型列表</a> · <a href=\"https://platform.minimax.cn/docs/pricing/overview\">API 价格</a> · <a href=\"https://platform.minimax.cn/docs/faq/about-account\">账户说明</a>。</p>"
       }
     ]
   },
