@@ -383,7 +383,7 @@
       {
         "id": "api-openai-quota",
         "title": "额度与使用说明",
-        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 下列型号没有通用 API 免费层，通常按量付费；账户已有有效 API 赠金时可抵扣。ChatGPT 订阅与 API 费用分开。</p></div>"
+        "body": "<div class=\"note\"><p><strong>免费额度：</strong> 下列型号没有通用 API 免费层，通常按量付费；有效 API 赠金可抵扣。符合条件且已开放此权益的 ChatGPT Pro 订阅可领取每月 100 / 200 / 500 美元 API 额度（对应订阅档位）；Business 额度按付费席位计算，详见<a href=\"https://developers.openai.com/api/docs/guides/chatgpt-api-credits\">官方说明</a>和<a href=\"https://help.openai.com/en/articles/20001626-api-credits-benefit-for-eligible-chatgpt-subscriptions\">开放条件</a>。</p><p><strong>领取与使用：</strong> 付费订阅须满 7 天，ChatGPT 与 API 账号邮箱相同，且本人拥有订阅（或 Business 工作区）和接收额度的 API 组织。进入 OpenAI Platform 的 <strong>Billing</strong> 领取并关联该组织，再用该组织的项目 API Key 配置 SmarTAI。有有效赠金时无需添加 API 支付方式；首次额度按账期剩余时间折算，账期结束时到期，不结转。权益有效且订阅符合条件时，续订后自动发放。</p></div>"
       },
       {
         "id": "api-openai-1",

@@ -383,7 +383,7 @@
       {
         "id": "api-openai-quota",
         "title": "Quotas and usage notes",
-        "body": "<div class=\"note\"><p><strong>Free quota:</strong> The models below do not have a general API free tier and normally use pay-as-you-go billing. Any valid API credits already in your account can offset charges. ChatGPT subscriptions and API charges are separate.</p></div>"
+        "body": "<div class=\"note\"><p><strong>Free quota:</strong> The models below have no general API free tier; valid API credits can offset usage charges. Eligible ChatGPT Pro subscriptions with access to this benefit can claim $100 / $200 / $500 in monthly API credits, matching the subscription tier. Business credits depend on paid seats; see the <a href=\"https://developers.openai.com/api/docs/guides/chatgpt-api-credits\">official guide</a> and <a href=\"https://help.openai.com/en/articles/20001626-api-credits-benefit-for-eligible-chatgpt-subscriptions\">availability details</a>.</p><p><strong>Claim and use:</strong> Your paid subscription must be at least 7 days old. Use the same email for ChatGPT and API accounts, and own both the subscription (or Business workspace) and receiving API organization. Claim and link that organization in OpenAI Platform <strong>Billing</strong>, then use its project API key in SmarTAI. No API payment method is required while valid free credits remain. The first grant is prorated; credits expire at the billing cycle's end without rolling over. Renewal grants are automatic while the benefit remains available and your subscription stays eligible.</p></div>"
       },
       {
         "id": "api-openai-1",
