@@ -29,6 +29,7 @@ export function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const inputProtection = useDraftProtection({ scope: "credential:RegisterPage", value: { username, email, password, confirmation }, baseline: { username: "", email: "", password: "", confirmation: "" }, secret: true, onRestore: (draft) => { setUsername(draft.username); setEmail(draft.email); setPassword(draft.password); setConfirmation(draft.confirmation); } });
   const [domainRejected, setDomainRejected] = useState(false);
@@ -78,6 +79,10 @@ export function RegisterPage() {
       setFormError(validationError);
       return;
     }
+    if (!inviteCode.trim()) {
+      setFormError(zh ? "请输入邀请码。" : "Enter an invitation code.");
+      return;
+    }
 
     submitting.current = true;
     checkVersion.current += 1;
@@ -88,6 +93,7 @@ export function RegisterPage() {
         username: normalizedUsername,
         email: normalizedEmail,
         password,
+        invite_code: inviteCode.trim(),
       });
       const flow = createPendingRegistrationFlow(normalizedEmail, response);
       requestRegistration.reset();
@@ -95,6 +101,7 @@ export function RegisterPage() {
       setConfirmation("");
       setUsername("");
       setEmail("");
+      setInviteCode("");
       savePendingRegistrationFlow(flow);
       await inputProtection.clear();
       navigate("/register/check-email", { replace: true });
@@ -174,6 +181,20 @@ export function RegisterPage() {
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
+            />
+          </Field>
+          <Field label={zh ? "邀请码" : "Invitation code"}>
+            <Input
+              aria-label={zh ? "邀请码" : "Invitation code"}
+              className="h-11 w-full"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={requestRegistration.isPending}
+              maxLength={128}
+              placeholder={zh ? "输入收到的邀请码" : "Enter your invitation code"}
+              required
+              value={inviteCode}
+              onChange={(event) => setInviteCode(event.target.value)}
             />
           </Field>
           <div className="grid gap-3.5 sm:grid-cols-2">

@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from backend.auth import hash_password
 from backend.config import settings
 from backend.db.auth_repository import AuthRepositoryError, _ensure_unique_identity, _persist_user
-from backend.db.models import EmailVerificationRequestRecord, UserRecord
+from backend.db.models import EmailVerificationRequestRecord, RegistrationInviteRecord, UserRecord
 from backend.db.session import session_scope
 from backend.services.business_config import read_business_config
 from backend.services.email_sender import EmailSender, get_email_sender, verification_message
@@ -175,6 +175,19 @@ def digest_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def digest_registration_invite(code: str) -> str:
+    # Printed groups are for readability; admission codes are case-insensitive.
+    return digest_token(code.strip().upper().replace("-", ""))
+
+
+def _require_registration_invite(session, digest: str | None) -> None:
+    if not digest:
+        raise RegistrationError("registration_invite_required")
+    allowed = {value.strip() for value in settings.registration_invite_digests.split(",") if value.strip()}
+    if digest not in allowed or session.get(RegistrationInviteRecord, digest) is not None:
+        raise RegistrationError("registration_invite_invalid")
+
+
 def _validate_identity(username: str, email: str, password: str) -> tuple[str, str]:
     normalized_username = username.strip()
     if not 3 <= len(normalized_username) <= 64:
@@ -189,13 +202,15 @@ def _validate_identity(username: str, email: str, password: str) -> tuple[str, s
 
 
 def request_registration(*, username: str, email: str, password: str, source_ip: str | None,
-                         sender: EmailSender | None = None) -> dict[str, object]:
+                         invite_code: str = "", sender: EmailSender | None = None) -> dict[str, object]:
     normalized_username, normalized_email = _validate_identity(username, email, password)
+    invite_digest = digest_registration_invite(invite_code) if invite_code.strip() else None
     with _process_flow_locks(normalized_email, source_ip, normalized_username):
         return _request_registration_locked(
             normalized_username=normalized_username,
             normalized_email=normalized_email,
             password=password,
+            invite_digest=invite_digest,
             source_ip=source_ip,
             sender=sender,
         )
@@ -219,6 +234,7 @@ def _request_registration_locked(
     normalized_username: str,
     normalized_email: str,
     password: str,
+    invite_digest: str | None,
     source_ip: str | None,
     sender: EmailSender | None = None,
 ) -> dict[str, object]:
@@ -278,6 +294,7 @@ def _request_registration_locked(
             # still disclosed only after proof of mailbox ownership. This is
             # not a reservation: verify retains its locks and unique checks.
             _ensure_username_available(session, normalized_username)
+            _require_registration_invite(session, invite_digest)
             row = EmailVerificationRequestRecord(
                 id=request_id,
                 normalized_username=normalized_username,
@@ -289,6 +306,7 @@ def _request_registration_locked(
                 resend_available_at=now + config["email_verification_resend_seconds"],
                 delivery_status="pending",
                 source_ip=source_ip,
+                registration_invite_digest=invite_digest,
             )
             session.add(row)
             session.flush()
@@ -410,6 +428,7 @@ def _resend_registration_locked(
         ):
             raise RegistrationError("registration_rate_limited", retry_after=3600)
         _ensure_username_available(session, normalized_username)
+        _require_registration_invite(session, previous.registration_invite_digest)
         try:
             subject, text_body, html_body = verification_message(previous.normalized_username, raw_token)
         except Exception as exc:
@@ -425,6 +444,7 @@ def _resend_registration_locked(
             resend_available_at=now + config["email_verification_resend_seconds"],
             delivery_status="pending",
             source_ip=source_ip,
+            registration_invite_digest=previous.registration_invite_digest,
         )
         previous.resend_available_at = now + config["email_verification_resend_seconds"]
         session.add(replacement)
@@ -538,6 +558,19 @@ def _verify_registration_locked(
                     username=row.normalized_username,
                     email=row.normalized_email,
                 )
+                _require_registration_invite(session, row.registration_invite_digest)
+                # The database predicate arbitrates across workers. Claim and
+                # account creation commit together, or both roll back. A used
+                # code stays spent even if the account is later deleted.
+                try:
+                    session.add(RegistrationInviteRecord(
+                        code_digest=row.registration_invite_digest,
+                        created_at=now,
+                        used_at=now,
+                    ))
+                    session.flush()
+                except IntegrityError as exc:
+                    raise RegistrationError("registration_invite_invalid") from exc
                 _persist_user(
                     session=session,
                     username=row.normalized_username,

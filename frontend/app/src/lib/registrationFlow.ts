@@ -73,6 +73,16 @@ export function clearPendingRegistrationFlow(): void {
   }
 }
 
+/** Read-only identity check: a late response must not clear/replace a newer flow. */
+export function isCurrentPendingRegistrationFlow(requestId: string): boolean {
+  try {
+    const raw = window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY);
+    return raw !== null && JSON.parse(raw)?.requestId === requestId;
+  } catch {
+    return false;
+  }
+}
+
 export function maskEmail(email: string): string {
   const normalized = email.trim().toLowerCase();
   const at = normalized.lastIndexOf("@");

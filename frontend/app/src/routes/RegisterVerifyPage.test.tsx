@@ -65,6 +65,16 @@ describe("RegisterVerifyPage", () => {
     expect(screen.getByText("邮箱已验证")).toBeInTheDocument();
   });
 
+  it.each(["registration_invite_invalid", "registration_invite_required"])("explains invitation failure (%s) and offers a new registration", async (code) => {
+    mutateAsync.mockRejectedValue(new APIError(400, code, { detail: { code } }));
+    renderPage();
+    await act(async () => screen.getByRole("button", { name: "确认并完成注册" }).click());
+    expect(await screen.findByRole("heading", { name: "邀请码不可用" })).toBeInTheDocument();
+    expect(screen.getByText(/账号尚未创建，请使用有效且未使用的邀请码重新注册/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新注册" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "重试验证" })).not.toBeInTheDocument();
+  });
+
   it.each([
     ["verification_link_expired", "重置链接"],
     ["verification_link_already_used", "此链接不可再用"],

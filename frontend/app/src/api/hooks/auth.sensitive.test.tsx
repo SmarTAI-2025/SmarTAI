@@ -60,6 +60,7 @@ describe("public auth mutation cache", () => {
       });
       result.current.login.reset();
       await result.current.registration.mutateAsync({
+        invite_code: "private-invitation",
         username: "teacher",
         email: "private.teacher@ustc.edu.cn",
         password: "registration-password",
