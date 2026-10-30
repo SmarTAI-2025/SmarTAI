@@ -1,0 +1,584 @@
+{
+  "schema_version": 1,
+  "source_sha": "4ac06c80299196d94d6a490984ebe03f5329072f",
+  "evidence_type": "real mounted HTTP + SQLite; fixed grading batch; no model/OCI",
+  "python": "3.12.14",
+  "runtime": "/var/folders/_p/v8vvlf6x441989_5zxzsl3y40000gn/T/smartai-u2-workflow-dx5x2sew",
+  "observations": [
+    {
+      "id": "HTTP_SAVE",
+      "status": 200,
+      "cases_exact": true,
+      "other_question_unchanged": true,
+      "revision_before": 1,
+      "revision_after": 2
+    },
+    {
+      "id": "STALE_SAVE",
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "stale_revision",
+          "message": "The task changed before editing review rows."
+        }
+      },
+      "saved_cases_unchanged": true
+    },
+    {
+      "id": "FRESH_PROCESS_READ",
+      "exact": true,
+      "database": "disposable SQLite",
+      "mocked_storage": false
+    },
+    {
+      "id": "FUNCTION_EDITOR_FIELDS",
+      "http_status": 200,
+      "stored_case": {
+        "input": "[5]",
+        "expected_output": "5",
+        "function_name": "fib",
+        "function_args": [
+          0
+        ],
+        "expected_return": "0",
+        "io_mode": "function",
+        "source": "teacher",
+        "sandbox_feasible": true
+      },
+      "grading_input_case": {
+        "input": "[5]",
+        "expected_output": "5",
+        "description": "",
+        "title": "",
+        "visibility": "example",
+        "purpose": "normal",
+        "io_mode": "function",
+        "source": "teacher",
+        "sandbox_feasible": true,
+        "function_name": "fib",
+        "function_args": [
+          0
+        ],
+        "expected_return": "0"
+      },
+      "actual_execution": "not performed",
+      "effective_function_args": [
+        0
+      ],
+      "effective_expected_return": "0",
+      "requested_text_input": "[5]",
+      "requested_text_expected": "5"
+    },
+    {
+      "id": "UPLOAD_PY",
+      "status": 200,
+      "body": {
+        "status": "started",
+        "task_id": "assignment_75ed0e3a28",
+        "job_id": "op_8f284cb77fed",
+        "workflow_revision": 1,
+        "_job_attempt": 1,
+        "_recognition_provider_id": "test-provider"
+      },
+      "recognition": "not run: real model prohibited",
+      "actual_model_calls": 0
+    },
+    {
+      "id": "UPLOAD_TXT",
+      "status": 200,
+      "body": {
+        "status": "started",
+        "task_id": "assignment_1d33dfac19",
+        "job_id": "op_8cf81ab89e56",
+        "workflow_revision": 1,
+        "_job_attempt": 1,
+        "_recognition_provider_id": "test-provider"
+      },
+      "recognition": "not run: real model prohibited",
+      "actual_model_calls": 0
+    },
+    {
+      "id": "GRADING_INPUT_AND_RESULTS",
+      "saved_cases_equal_batch_input": true,
+      "batch_invocations": 1,
+      "batch_provider": "fixed response",
+      "model_calls": 0,
+      "execution": "not performed",
+      "result": {
+        "status": "completed",
+        "task_id": "assignment_e0c7673732",
+        "results": [
+          {
+            "student_id": "S001",
+            "student_name": "Synthetic",
+            "corrections": [
+              {
+                "result_id": "gr_ec29c31aba0b",
+                "q_id": "q1",
+                "type": "",
+                "score": 10.0,
+                "provisional_score": 10.0,
+                "max_score": 10.0,
+                "confidence": 1.0,
+                "comment": "Fixed observation; not a real model grade",
+                "steps": [],
+                "hits": null,
+                "logs": null,
+                "expert_results": [],
+                "synthesis_method": "single",
+                "is_score": null,
+                "requires_human_review": false,
+                "review_reasons": [],
+                "initial_review_reasons": [],
+                "teacher_score": null,
+                "teacher_comment": "",
+                "review_status": "confirmed",
+                "reviewed_at": null
+              },
+              {
+                "result_id": "gr_bd96a7b46718",
+                "q_id": "q2",
+                "type": "",
+                "score": 4.0,
+                "provisional_score": 4.0,
+                "max_score": 10.0,
+                "confidence": 1.0,
+                "comment": "Fixed observation; not a real model grade",
+                "steps": [],
+                "hits": null,
+                "logs": null,
+                "expert_results": [],
+                "synthesis_method": "single",
+                "is_score": null,
+                "requires_human_review": false,
+                "review_reasons": [],
+                "initial_review_reasons": [],
+                "teacher_score": null,
+                "teacher_comment": "",
+                "review_status": "confirmed",
+                "reviewed_at": null
+              }
+            ],
+            "student_answers": [
+              {
+                "answer_id": "answer_f6865088f84b4e56b34c5fedff41318d",
+                "q_id": "q2",
+                "number": "2",
+                "type": "编程题",
+                "content": "def count_positive(nums): return 0",
+                "flag": [],
+                "recognition_confidence": null,
+                "review_status": "pending"
+              },
+              {
+                "answer_id": "answer_5c020db1943347ec8e5e8f629198ddaa",
+                "q_id": "q1",
+                "number": "1",
+                "type": "编程题",
+                "content": "a=int(input()); b=int(input()); print(a+b)",
+                "flag": [],
+                "recognition_confidence": null,
+                "review_status": "pending"
+              }
+            ]
+          }
+        ],
+        "grading_run_id": "run_8e453b3b8cb2",
+        "grading_run_status": "completed",
+        "primary_provider_id": "952a906a05cc442982276e76485dfc41",
+        "retry_scope": null,
+        "problem_data": {
+          "q1": {
+            "q_id": "q1",
+            "number": "1",
+            "type": "编程题",
+            "stem": "Read two integers and print their sum.",
+            "criterion": "Correct sum 8 points; input/output 2 points.",
+            "recognition_confidence": null,
+            "max_score": 10.0,
+            "max_score_source": "default_10",
+            "max_score_review_status": "needs_review",
+            "question_structure": {
+              "contract_version": 1,
+              "scoring_unit": "major_question",
+              "major_number": "1",
+              "major_order": 0,
+              "shared_stem": "Read two integers and print their sum.",
+              "subparts": [],
+              "structure_source": "deterministic",
+              "review_status": "needs_review"
+            },
+            "rubric_point_summary": {
+              "contract_version": 1,
+              "has_explicit_subpart_points": false,
+              "items": [],
+              "total_points": null,
+              "major_max_score": "10",
+              "is_valid": true,
+              "issue_code": null
+            },
+            "review_status": "needs_review",
+            "reference_answer": "a=int(input()); b=int(input()); print(a+b)",
+            "solution_code": "a=int(input()); b=int(input()); print(a+b)",
+            "test_cases": [
+              {
+                "input": "2\n3\n",
+                "expected_output": "5",
+                "source": "teacher",
+                "description": "synthetic exact saved case",
+                "io_mode": "stdin"
+              }
+            ],
+            "material_provenance": {},
+            "ai_completion_provenance": {},
+            "preparation_issues": []
+          },
+          "q2": {
+            "q_id": "q2",
+            "number": "2",
+            "type": "编程题",
+            "stem": "Implement def count_positive(nums).",
+            "criterion": "Award 10 points for correctness.",
+            "recognition_confidence": null,
+            "max_score": 10.0,
+            "max_score_source": "default_10",
+            "max_score_review_status": "needs_review",
+            "question_structure": {
+              "contract_version": 1,
+              "scoring_unit": "major_question",
+              "major_number": "2",
+              "major_order": 1,
+              "shared_stem": "Implement def count_positive(nums).",
+              "subparts": [],
+              "structure_source": "deterministic",
+              "review_status": "needs_review"
+            },
+            "rubric_point_summary": {
+              "contract_version": 1,
+              "has_explicit_subpart_points": false,
+              "items": [],
+              "total_points": null,
+              "major_max_score": "10",
+              "is_valid": true,
+              "issue_code": null
+            },
+            "review_status": "needs_review",
+            "reference_answer": null,
+            "solution_code": null,
+            "test_cases": null,
+            "material_provenance": {},
+            "ai_completion_provenance": {},
+            "preparation_issues": []
+          }
+        },
+        "student_data": {
+          "S001": {
+            "stu_id": "S001",
+            "stu_name": "Synthetic",
+            "stu_ans": [
+              {
+                "answer_id": "answer_f6865088f84b4e56b34c5fedff41318d",
+                "q_id": "q2",
+                "number": "2",
+                "type": "编程题",
+                "content": "def count_positive(nums): return 0",
+                "flag": [],
+                "recognition_confidence": null,
+                "review_status": "pending"
+              },
+              {
+                "answer_id": "answer_5c020db1943347ec8e5e8f629198ddaa",
+                "q_id": "q1",
+                "number": "1",
+                "type": "编程题",
+                "content": "a=int(input()); b=int(input()); print(a+b)",
+                "flag": [],
+                "recognition_confidence": null,
+                "review_status": "pending"
+              }
+            ],
+            "source_filename": "",
+            "identity_match_method": "filename",
+            "identity_status": "matched",
+            "source_id": null,
+            "source_choices": []
+          }
+        },
+        "timestamp": 1793168444.6445792
+      }
+    },
+    {
+      "id": "PLATFORM_FAILURE_PERSISTENCE",
+      "fixture": "explicit all_failed correction with programming_execution_unavailable",
+      "grading_run_status": "partial_failed",
+      "correction": {
+        "result_id": "gr_626100f7f8da",
+        "q_id": "q2",
+        "type": "",
+        "score": null,
+        "provisional_score": null,
+        "max_score": 10.0,
+        "confidence": 0.0,
+        "comment": "Fixed platform failure; no OCI execution",
+        "steps": [],
+        "hits": null,
+        "logs": null,
+        "expert_results": [
+          {
+            "provider": "u2-fixed",
+            "provider_id": null,
+            "score": 0.0,
+            "max_score": 10.0,
+            "confidence": 0.0,
+            "comment": "Isolated runner unavailable",
+            "steps": [],
+            "hits": null,
+            "logs": null,
+            "raw_output": null,
+            "knowledge_citations": [],
+            "duration_ms": null,
+            "error_kind": "programming_execution_unavailable"
+          }
+        ],
+        "synthesis_method": "all_failed",
+        "is_score": null,
+        "requires_human_review": true,
+        "review_reasons": [
+          "llm_failed"
+        ],
+        "initial_review_reasons": [
+          "llm_failed"
+        ],
+        "teacher_score": null,
+        "teacher_comment": "",
+        "review_status": "pending",
+        "reviewed_at": null
+      },
+      "finalization": {
+        "task_id": "assignment_e0c7673732",
+        "task_status": "graded",
+        "workflow_revision": 6,
+        "ready_for_confirmation": false,
+        "required_review_count": 1,
+        "confirmed_required_count": 0,
+        "remaining_review_count": 1,
+        "remaining_reviews": [
+          {
+            "student_id": "S001",
+            "q_id": "q2",
+            "reasons": [
+              "llm_failed"
+            ],
+            "confirmed": false
+          }
+        ],
+        "final_result_version": 0,
+        "final_result_updated_at": null,
+        "final_result_dirty": false,
+        "analysis_status": "not_generated",
+        "analysis_result_version": null,
+        "analysis_generated_at": null,
+        "analysis_error": null,
+        "available_result_versions": 0,
+        "source_cleanup": {
+          "status": "not_requested",
+          "total_count": 0,
+          "deleted_count": 0,
+          "pending_count": 0,
+          "retrying_count": 0,
+          "pending_bytes": 0,
+          "retrying_bytes": 0,
+          "automatic_retry": false
+        }
+      },
+      "execution": "not performed; only failure-result persistence tested"
+    },
+    {
+      "id": "SCORING_STATE_MATRIX",
+      "states": [
+        {
+          "fixture": "valid_zero",
+          "correction": {
+            "result_id": "gr_9a2d798b0ac5",
+            "q_id": "q2",
+            "type": "",
+            "score": 0.0,
+            "provisional_score": 0.0,
+            "max_score": 10.0,
+            "confidence": 0.0,
+            "comment": "U2 injected scoring-state fixture",
+            "steps": [],
+            "hits": null,
+            "logs": null,
+            "expert_results": [],
+            "synthesis_method": "single",
+            "is_score": null,
+            "requires_human_review": false,
+            "review_reasons": [],
+            "initial_review_reasons": [],
+            "teacher_score": null,
+            "teacher_comment": "",
+            "review_status": "confirmed",
+            "reviewed_at": null
+          },
+          "finalization": {
+            "task_id": "assignment_e0c7673732",
+            "task_status": "graded",
+            "workflow_revision": 7,
+            "ready_for_confirmation": true,
+            "required_review_count": 0,
+            "confirmed_required_count": 0,
+            "remaining_review_count": 0,
+            "remaining_reviews": [],
+            "final_result_version": 0,
+            "final_result_updated_at": null,
+            "final_result_dirty": false,
+            "analysis_status": "not_generated",
+            "analysis_result_version": null,
+            "analysis_generated_at": null,
+            "analysis_error": null,
+            "available_result_versions": 0,
+            "source_cleanup": {
+              "status": "not_requested",
+              "total_count": 0,
+              "deleted_count": 0,
+              "pending_count": 0,
+              "retrying_count": 0,
+              "pending_bytes": 0,
+              "retrying_bytes": 0,
+              "automatic_retry": false
+            }
+          }
+        },
+        {
+          "fixture": "advisory_review",
+          "correction": {
+            "result_id": "gr_45c250496b6e",
+            "q_id": "q2",
+            "type": "",
+            "score": 6.0,
+            "provisional_score": 6.0,
+            "max_score": 10.0,
+            "confidence": 0.0,
+            "comment": "U2 injected scoring-state fixture",
+            "steps": [],
+            "hits": null,
+            "logs": null,
+            "expert_results": [],
+            "synthesis_method": "single",
+            "is_score": null,
+            "requires_human_review": true,
+            "review_reasons": [
+              "low_confidence"
+            ],
+            "initial_review_reasons": [
+              "low_confidence"
+            ],
+            "teacher_score": null,
+            "teacher_comment": "",
+            "review_status": "pending",
+            "reviewed_at": null
+          },
+          "finalization": {
+            "task_id": "assignment_e0c7673732",
+            "task_status": "graded",
+            "workflow_revision": 8,
+            "ready_for_confirmation": true,
+            "required_review_count": 0,
+            "confirmed_required_count": 0,
+            "remaining_review_count": 0,
+            "remaining_reviews": [],
+            "final_result_version": 0,
+            "final_result_updated_at": null,
+            "final_result_dirty": false,
+            "analysis_status": "not_generated",
+            "analysis_result_version": null,
+            "analysis_generated_at": null,
+            "analysis_error": null,
+            "available_result_versions": 0,
+            "source_cleanup": {
+              "status": "not_requested",
+              "total_count": 0,
+              "deleted_count": 0,
+              "pending_count": 0,
+              "retrying_count": 0,
+              "pending_bytes": 0,
+              "retrying_bytes": 0,
+              "automatic_retry": false
+            }
+          }
+        }
+      ],
+      "evidence": "real persistence/gating for injected valid zero and advisory scores; no real scoring"
+    },
+    {
+      "id": "MALFORMED_CASE_SAVE",
+      "status": 200,
+      "invalid_case_persisted": true,
+      "saved_cases": [
+        {
+          "function_name": "fib",
+          "function_args": "not-a-list",
+          "expected_return": 1
+        }
+      ],
+      "later_problem_validation_error": "ValidationError",
+      "body": {
+        "status": "ok",
+        "q_id": "q1",
+        "problem": {
+          "q_id": "q1",
+          "number": "1",
+          "type": "编程题",
+          "stem": "Original",
+          "criterion": "Award up to 10 points for the method and result.",
+          "recognition_confidence": null,
+          "max_score": 10.0,
+          "max_score_source": "default_10",
+          "max_score_review_status": "needs_review",
+          "question_structure": {
+            "contract_version": 1,
+            "scoring_unit": "major_question",
+            "major_number": "1",
+            "major_order": 0,
+            "shared_stem": "Original",
+            "subparts": [],
+            "structure_source": "deterministic",
+            "review_status": "needs_review"
+          },
+          "rubric_point_summary": {
+            "contract_version": 1,
+            "has_explicit_subpart_points": false,
+            "items": [],
+            "total_points": null,
+            "major_max_score": "10",
+            "is_valid": true,
+            "issue_code": null
+          },
+          "review_status": "needs_review",
+          "reference_answer": null,
+          "solution_code": null,
+          "test_cases": [
+            {
+              "function_name": "fib",
+              "function_args": "not-a-list",
+              "expected_return": 1
+            }
+          ],
+          "material_provenance": {},
+          "ai_completion_provenance": {},
+          "preparation_issues": []
+        },
+        "workflow_revision": 1
+      }
+    }
+  ],
+  "local_probe_wall_seconds": 2.155,
+  "blocked_io_attempts": [],
+  "real_model_calls": 0,
+  "real_oci_executions": 0,
+  "cost": {
+    "incurred_by_this_probe": 0,
+    "production_estimate": null
+  }
+}

@@ -1,0 +1,28 @@
+INFO:backend.main:Starting SmarTAI with GRADING_ENGINE=v2
+INFO:backend.tools.knowledge:Knowledge retriever set to CombinedKnowledgeRetriever
+INFO:backend.skills.base:Registered skill ConceptSkill for type '概念题'
+INFO:backend.skills.base:Registered skill ConceptSkill for type '其他'
+INFO:backend.skills.base:Registered skill ConceptSkill for type '其它'
+INFO:backend.skills.base:Registered skill CalculationSkill for type '计算题'
+INFO:backend.skills.base:Registered skill ProofSkill for type '推理题'
+INFO:backend.skills.base:Registered skill ProgrammingSkill for type '编程题'
+INFO:backend.main:V2 routers loaded: auth, course-labels, knowledge, experts, ocr-providers, tasks, task-preparation, course-materials, tags, analytics
+INFO:backend.main:Starting SmarTAI with GRADING_ENGINE=v2
+INFO:backend.tools.knowledge:Knowledge retriever set to CombinedKnowledgeRetriever
+INFO:backend.main:V2 routers loaded: auth, course-labels, knowledge, experts, ocr-providers, tasks, task-preparation, course-materials, tags, analytics
+INFO:httpx2:HTTP Request: GET http://testserver/tasks/assignment_e0c7673732 "HTTP/1.1 200 OK"
+INFO:httpx2:HTTP Request: PUT http://testserver/tasks/assignment_e0c7673732/problems/q1 "HTTP/1.1 200 OK"
+INFO:httpx2:HTTP Request: GET http://testserver/tasks/assignment_e0c7673732 "HTTP/1.1 200 OK"
+INFO:httpx2:HTTP Request: PUT http://testserver/tasks/assignment_e0c7673732/problems/q1 "HTTP/1.1 409 Conflict"
+INFO:httpx2:HTTP Request: GET http://testserver/tasks/assignment_e0c7673732 "HTTP/1.1 200 OK"
+INFO:httpx2:HTTP Request: PUT http://testserver/tasks/assignment_4da6d379e4/problems/q1 "HTTP/1.1 200 OK"
+INFO:httpx2:HTTP Request: POST http://testserver/tasks/assignment_75ed0e3a28/parse_submissions "HTTP/1.1 200 OK"
+INFO:httpx2:HTTP Request: POST http://testserver/tasks/assignment_1d33dfac19/parse_submissions "HTTP/1.1 200 OK"
+INFO:httpx2:HTTP Request: GET http://testserver/tasks/assignment_e0c7673732 "HTTP/1.1 200 OK"
+INFO:httpx2:HTTP Request: GET http://testserver/tasks/assignment_e0c7673732 "HTTP/1.1 200 OK"
+INFO:httpx2:HTTP Request: GET http://testserver/tasks/assignment_e0c7673732 "HTTP/1.1 200 OK"
+INFO:httpx2:HTTP Request: GET http://testserver/tasks/assignment_e0c7673732 "HTTP/1.1 200 OK"
+INFO:httpx2:HTTP Request: GET http://testserver/tasks/assignment_e0c7673732 "HTTP/1.1 200 OK"
+INFO:httpx2:HTTP Request: PUT http://testserver/tasks/assignment_14f88cb2a6/problems/q1 "HTTP/1.1 200 OK"
+git: warning: confstr() failed with code 5: couldn't get path of DARWIN_USER_TEMP_DIR; using /tmp instead
+{"observations": 10, "output": "/private/tmp/u2-followup-workflow", "blocked_io_attempts": []}

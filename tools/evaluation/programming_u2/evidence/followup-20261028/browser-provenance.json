@@ -1,0 +1,13 @@
+{
+  "source_sha": "4ac06c80299196d94d6a490984ebe03f5329072f",
+  "source_frontend_diff_from_main": "",
+  "build_reused_from": "/private/tmp/u2-followup-browser/build.log",
+  "build_command": "VITE_SMARTAI_BACKEND_URL=http://127.0.0.1:8188 npm --prefix frontend/app run build -- --mode e2e",
+  "preview_command": "npm run preview -- --host 127.0.0.1 --port 5188 --strictPort",
+  "preview_cwd": "/Users/annie/.codex/worktrees/programming-u2-baseline/SmarTAI/frontend/app",
+  "listener_pid": "88742",
+  "listener_cwd": "p88742\nfcwd\nn/Users/annie/.codex/worktrees/programming-u2-baseline/SmarTAI/frontend/app\n",
+  "index_sha256": "0324ef723fc1d79e61f93043cbe26470f73d58d1e2c957dbf7c3e91d3ae16091",
+  "package_lock_sha256": "7ae4c47ef046edf34986bd07bd7d7ad7bb9e6e85223d43d5e49cb74e3c900dea",
+  "harness_sha256": "f42b0b5223815834e6ee3b55e68f092f8d60491e901c3d799e42ab339af46b0f"
+}

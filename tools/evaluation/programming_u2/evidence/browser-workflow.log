@@ -1,0 +1,33 @@
+
+> smartai-react-app@0.1.0 e2e
+> npm run typecheck:e2e && playwright test e2e/workflow-navigation.spec.ts e2e/answer-assignment-review.spec.ts --output=/private/tmp/smartai-u2-browser/workflow-results
+
+
+> smartai-react-app@0.1.0 typecheck:e2e
+> tsc -p tsconfig.e2e.json
+
+[WebServer] (node:65235) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] (node:65292) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 14 tests using 1 worker
+
+(node:65295) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/answer-assignment-review.spec.ts:58:5 › assignment review 1440 › save duplicate, reload, locate other answer, resolve swap and proceed (6.0s)
+  ✓   2 [chromium] › e2e/answer-assignment-review.spec.ts:58:5 › assignment review 390 › save duplicate, reload, locate other answer, resolve swap and proceed (5.6s)
+  ✓   3 [chromium] › e2e/answer-assignment-review.spec.ts:111:35 › confirm matching doubt with unchanged text: editor=false (2.6s)
+  ✓   4 [chromium] › e2e/answer-assignment-review.spec.ts:111:35 › confirm matching doubt with unchanged text: editor=true (2.7s)
+  ✓   5 [chromium] › e2e/answer-assignment-review.spec.ts:126:1 › duplicate answers restore separate text and question-number drafts (1.9s)
+  ✓   6 [chromium] › e2e/workflow-navigation.spec.ts:134:1 › empty question text blocks both countdown and manual grading without a mutation (986ms)
+  ✓   7 [chromium] › e2e/workflow-navigation.spec.ts:146:48 › manual identity and answer confirmations update the matrix and all-confirmed state immediately (1.2s)
+  ✓   8 [chromium] › e2e/workflow-navigation.spec.ts:146:48 › all identity and answer confirmations update the matrix and all-confirmed state immediately (1.1s)
+  ✓   9 [chromium] › e2e/workflow-navigation.spec.ts:174:3 › problems: history opens completed work while the detail cache still says running (1.0s)
+  ✓  10 [chromium] › e2e/workflow-navigation.spec.ts:196:3 › problems: one start click → progress → next page; history reopens without reload (3.0s)
+  ✓  11 [chromium] › e2e/workflow-navigation.spec.ts:174:3 › submissions: history opens completed work while the detail cache still says running (4.3s)
+  ✓  12 [chromium] › e2e/workflow-navigation.spec.ts:196:3 › submissions: one start click → progress → next page; history reopens without reload (3.8s)
+  ✓  13 [chromium] › e2e/workflow-navigation.spec.ts:174:3 › grading: history opens completed work while the detail cache still says running (4.3s)
+  ✓  14 [chromium] › e2e/workflow-navigation.spec.ts:196:3 › grading: one start click → progress → next page; history reopens without reload (3.0s)
+
+  14 passed (53.4s)

@@ -1,0 +1,30 @@
+{
+  "observations": [
+    {
+      "id": "D06",
+      "evidence": "real parser/adapter; fixed command response",
+      "duration_from_fixture": "Infinity",
+      "observed_duration_finite": false,
+      "observed_passed": true,
+      "real_oci_executions": 0
+    },
+    {
+      "id": "D07",
+      "evidence": "real host-slot logic; injected run timeout and rm failure",
+      "max_concurrent": 1,
+      "command_operations": [
+        "run",
+        "rm",
+        "run",
+        "rm"
+      ],
+      "second_run_request_admitted": true,
+      "cleanup_successes": 0,
+      "real_oci_executions": 0,
+      "limitation": "No actual containers exist; does not prove production leakage or full runtime cleanup behavior"
+    }
+  ],
+  "real_model_calls": 0,
+  "real_oci_executions": 0,
+  "host_student_code_executions": 0
+}

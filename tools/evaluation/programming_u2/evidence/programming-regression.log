@@ -1,0 +1,17 @@
+...............................................................          [100%]
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+63 passed, 7 deselected, 5 warnings in 2.25s
+U2_OFFLINE_RUN {"repo": "/Users/annie/.codex/worktrees/programming-u2-baseline/SmarTAI", "runtime": "/var/folders/_p/v8vvlf6x441989_5zxzsl3y40000gn/T/u2-offline-5n1s8i_3", "network_or_process_attempts_blocked": 0, "blocked_events": [], "blocked_process_names": [], "blocked_process_callers": [], "real_model_calls": 0, "real_oci_executions": 0, "pytest_exit_code": 0, "exit_code": 0}
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

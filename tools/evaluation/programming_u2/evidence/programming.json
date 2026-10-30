@@ -1,0 +1,2397 @@
+{
+  "schema_version": 1,
+  "observed_repository_sha": "101352c8a7df4e628d2716a2731b702d5f294a8d",
+  "python_version": "3.12.14",
+  "python_executable": "/opt/anaconda3/envs/smartai-py312/bin/python",
+  "evidence_kind": "offline fixed-response baseline, NOT real grading quality or OCI validation",
+  "rules_status": "U1 AI-proposed; not teacher gold standard",
+  "real_model_calls": 0,
+  "real_oci_executions": 0,
+  "host_student_code_executions": 0,
+  "billed_cost": "not_applicable_no_calls",
+  "network_or_process_attempts_blocked": 0,
+  "u1_input_sha256": {
+    "manifest.json": "a1d9acdb7f55291c4f90c92e70e61428f729af2646e2c284e886a67fb2352981",
+    "questions.json": "af31e7fe5582d908fd62d360cd889829d7c57430c4e170ece85779ee0b320576",
+    "references/fib.py": "a98b6fb26df105b3ff39a9adfe18b43929ead8890526fac54742837c1e486b98",
+    "references/positive_sum.py": "71560a1e20871f1d304ae5259bd851a7874bf22ce8b2a769860cd9006a315124",
+    "references/sum_stdin.cpp": "789b1ef4175d90839c9901953d06823d4ab32497a5745b96c7eb07a3b8dcf9a0",
+    "references/sum_stdin.py": "74d8d0b249fb9259cc9bfe90acd302185ba7cf77331a5b61d89a3bee161fdf26",
+    "submissions.json": "ebdd75ca003394a5b1dcc47a80d20e37fa01ba4599ed959c83b455ad045abafd",
+    "submissions/S01_fib_correct.py": "a98b6fb26df105b3ff39a9adfe18b43929ead8890526fac54742837c1e486b98",
+    "submissions/S03_fib_bad_zero.py": "3c6141e06fde915977c46e93d867748d1490a438ecd468ab51006788413aa50c",
+    "submissions/S05_fib_syntax.py": "4d65c41af394141f52ce6abecb584703115c4f833c091f4cf0bb5c970d575ecd",
+    "submissions/S06_fib_runtime.py": "0c6a483464d044e8b2975786ee39d075edae2946dc827f988ea1e8c4322128da",
+    "submissions/S07_shared_reverse.py": "1f298cfd4f5df61836556c893caf463457112df8081f28c93378a798962a1e63",
+    "submissions/S08_helper_first.py": "3f6bf694a826269b8343f02af01b5f92caf1ccf028e378513d833700197db684",
+    "submissions/S09_unique_sum.py": "5377f1350269c1e91d66e107dde45d559679fdbe5260b673c3bb264443f4523b",
+    "submissions/S13_stdin_correct.py": "74d8d0b249fb9259cc9bfe90acd302185ba7cf77331a5b61d89a3bee161fdf26",
+    "submissions/S14_stdin_abs_bug.py": "f4a001f4b5082e10bbaec378feba5d178d2f284998e15f50dd5482eb0a6a42b8",
+    "submissions/X01_correct.cpp": "789b1ef4175d90839c9901953d06823d4ab32497a5745b96c7eb07a3b8dcf9a0"
+  },
+  "observations": [
+    {
+      "id": "B01-correct-function",
+      "u1_submission_id": "S01-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000604
+    },
+    {
+      "id": "B02-partial-function",
+      "u1_submission_id": "S03-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 8,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 8.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 4/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000226
+    },
+    {
+      "id": "B03-weighted-rubric-not-pass-rate",
+      "u1_submission_id": "S09-F02",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 6,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "sum_positive",
+            "function_args": [
+              []
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "sum_positive",
+            "function_args": [
+              [
+                1,
+                2,
+                3
+              ]
+            ],
+            "expected_return": "6"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "sum_positive",
+            "function_args": [
+              [
+                -2,
+                0,
+                5
+              ]
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "sum_positive",
+            "function_args": [
+              [
+                2,
+                2,
+                3
+              ]
+            ],
+            "expected_return": "7"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "sum_positive",
+            "function_args": [
+              [
+                -4,
+                -1
+              ]
+            ],
+            "expected_return": "0"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 6.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 4/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000209
+    },
+    {
+      "id": "B04-confirmed-empty-code",
+      "u1_submission_id": "S04-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 0,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 0,
+        "runner_boundary": 0
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 0.0,
+          "max_score": 10.0,
+          "confidence": 1.0,
+          "comment": "No code provided by student.\n\n（沙箱测评：✗ 学生未提交代码）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": null,
+          "knowledge_citations": [],
+          "duration_ms": null,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [],
+      "grading_prompt_contains_reference": null,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000105
+    },
+    {
+      "id": "B05-syntax-error-fixture",
+      "u1_submission_id": "S05-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 3,
+        "confidence": 0.95,
+        "failure": "syntax",
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 3.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 0/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000185
+    },
+    {
+      "id": "B06-runtime-error-fixture",
+      "u1_submission_id": "S06-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 8,
+        "confidence": 0.95,
+        "failure": "runtime",
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 8.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 4/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000243
+    },
+    {
+      "id": "B07-platform-unavailable-fixture",
+      "u1_submission_id": "S01-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": "platform",
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 0,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 0.0,
+          "max_score": 10.0,
+          "confidence": 0.0,
+          "comment": "该题未执行：隔离执行服务不可用，已保留其他成功结果。请联系管理员恢复执行服务后仅重试失败项，或人工复核。",
+          "steps": [],
+          "hits": null,
+          "logs": null,
+          "raw_output": null,
+          "knowledge_citations": [],
+          "duration_ms": null,
+          "error_kind": "programming_execution_unavailable"
+        }
+      ],
+      "grading_prompt_branch": [],
+      "grading_prompt_contains_reference": null,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.002852
+    },
+    {
+      "id": "B08-generation-failure-fallback",
+      "u1_submission_id": "S01-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 9,
+        "confidence": 0.99,
+        "failure": null,
+        "generation_failure": true,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 1,
+        "grading_boundary": 1,
+        "runner_boundary": 0
+      },
+      "generated_function_names": [
+        "fib"
+      ],
+      "selected_runner_cases": [],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 9.0,
+          "max_score": 10.0,
+          "confidence": 0.99,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✗ AI 生成测试用例时调用失败（网络/限流），本评分基于 AI 代码审查；建议稍后重新批改本题）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_LLM_CALL_FAILED"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000333
+    },
+    {
+      "id": "B09-helper-first-without-cases",
+      "u1_submission_id": "S08-F02",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 1,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [
+        "is_positive"
+      ],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "is_positive",
+            "function_args": [
+              []
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "is_positive",
+            "function_args": [
+              [
+                1,
+                2,
+                3
+              ]
+            ],
+            "expected_return": "6"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "is_positive",
+            "function_args": [
+              [
+                -2,
+                0,
+                5
+              ]
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "is_positive",
+            "function_args": [
+              [
+                2,
+                2,
+                3
+              ]
+            ],
+            "expected_return": "7"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "is_positive",
+            "function_args": [
+              [
+                -4,
+                -1
+              ]
+            ],
+            "expected_return": "0"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成函数调用测试 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000254
+    },
+    {
+      "id": "B10-reversed-functions-without-cases",
+      "u1_submission_id": "S07-F02",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 1,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [
+        "count_positive"
+      ],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "count_positive",
+            "function_args": [
+              []
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "count_positive",
+            "function_args": [
+              [
+                1,
+                2,
+                3
+              ]
+            ],
+            "expected_return": "6"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "count_positive",
+            "function_args": [
+              [
+                -2,
+                0,
+                5
+              ]
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "count_positive",
+            "function_args": [
+              [
+                2,
+                2,
+                3
+              ]
+            ],
+            "expected_return": "7"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "count_positive",
+            "function_args": [
+              [
+                -4,
+                -1
+              ]
+            ],
+            "expected_return": "0"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成函数调用测试 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000268
+    },
+    {
+      "id": "B11-empty-cases-three-students",
+      "u1_submission_id": "S01-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 3,
+      "event_counts": {
+        "generation_boundary": 3,
+        "grading_boundary": 3,
+        "runner_boundary": 3
+      },
+      "generated_function_names": [
+        "fib",
+        "fib",
+        "fib"
+      ],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ],
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ],
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成函数调用测试 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        },
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成函数调用测试 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        },
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成函数调用测试 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES",
+        "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES",
+        "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000387
+    },
+    {
+      "id": "B12-saved-cases-three-students",
+      "u1_submission_id": "S01-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 3,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 3,
+        "runner_boundary": 3
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ],
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ],
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        },
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        },
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES",
+        "SANDBOX_RAN_TEACHER_CASES",
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000379
+    },
+    {
+      "id": "B13-ai-function-zero-passes",
+      "u1_submission_id": "S01-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 9,
+        "confidence": 0.99,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": 0
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 9.0,
+          "max_score": 10.0,
+          "confidence": 0.99,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成函数调用测试 5 个，通过 0/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000272
+    },
+    {
+      "id": "B14-stdin-normal",
+      "u1_submission_id": "S13-S01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "3\n1 2 3\n",
+            "expected_output": "6\n",
+            "description": "PY-S01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "3\n-2 0 5\n",
+            "expected_output": "3\n",
+            "description": "PY-S01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "0\n",
+            "expected_output": "0\n",
+            "description": "PY-S01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "4\n2 2\n3 4\n",
+            "expected_output": "11\n",
+            "description": "PY-S01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "2\n1000000000 1000000000\n",
+            "expected_output": "2000000000\n",
+            "description": "PY-S01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000242
+    },
+    {
+      "id": "B15-stdin-partial",
+      "u1_submission_id": "S14-S01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 0,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "3\n1 2 3\n",
+            "expected_output": "6\n",
+            "description": "PY-S01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "3\n-2 0 5\n",
+            "expected_output": "3\n",
+            "description": "PY-S01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "0\n",
+            "expected_output": "0\n",
+            "description": "PY-S01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "4\n2 2\n3 4\n",
+            "expected_output": "11\n",
+            "description": "PY-S01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "2\n1000000000 1000000000\n",
+            "expected_output": "2000000000\n",
+            "description": "PY-S01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 0.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 4/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000336
+    },
+    {
+      "id": "B16-ai-stdin-zero-passes",
+      "u1_submission_id": "S13-S01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 9,
+        "confidence": 0.99,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": 0
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "3\n1 2 3\n",
+            "expected_output": "6\n",
+            "description": "PY-S01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "3\n-2 0 5\n",
+            "expected_output": "3\n",
+            "description": "PY-S01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "0\n",
+            "expected_output": "0\n",
+            "description": "PY-S01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "4\n2 2\n3 4\n",
+            "expected_output": "11\n",
+            "description": "PY-S01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "2\n1000000000 1000000000\n",
+            "expected_output": "2000000000\n",
+            "description": "PY-S01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 9.0,
+          "max_score": 10.0,
+          "confidence": 0.5,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成测试用例 5 个，通过 0/5 ⚠ 全部未通过，AI 生成的测试用例可能不准确，建议人工复核）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_LLM_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000224
+    },
+    {
+      "id": "B17-empty-stdout-expectation",
+      "evidence_kind": "real comparison; fixed process output; no code execution",
+      "expected_output": "",
+      "actual_output": "UNEXPECTED\n",
+      "passed_count": 1,
+      "total_count": 1
+    },
+    {
+      "id": "B18-multiple-code-fences",
+      "evidence_kind": "pure function; no execution",
+      "input": "```python\ndef helper(): return 1\n```\n```python\ndef solve(): return helper()\n```",
+      "extracted_code": "def helper(): return 1",
+      "solve_preserved": false
+    },
+    {
+      "id": "B19-local-oci-unavailable",
+      "evidence_kind": "real local capability rejection, no process or container launched",
+      "cli_available": {
+        "docker": false,
+        "podman": false
+      },
+      "results": [
+        {
+          "provider": "u2:no-live-provider",
+          "provider_id": null,
+          "score": 0.0,
+          "max_score": 10.0,
+          "confidence": 0.0,
+          "comment": "该题未执行：隔离执行服务不可用，已保留其他成功结果。请联系管理员恢复执行服务后仅重试失败项，或人工复核。",
+          "steps": [],
+          "hits": null,
+          "logs": null,
+          "raw_output": null,
+          "knowledge_citations": [],
+          "duration_ms": null,
+          "error_kind": "programming_execution_unavailable"
+        }
+      ]
+    },
+    {
+      "id": "B20-cpp-code-review-only",
+      "u1_submission_id": "X01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 0
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✗ 跳过 — 当前仅支持 Python，detected language: cpp；本评分基于 AI 代码审查）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_SKIPPED_LANGUAGE"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000324
+    }
+  ]
+}
