@@ -2,6 +2,7 @@ import { CheckCircle2, Clock3, Link2Off, Loader2, ShieldCheck, type LucideIcon }
 import { useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useVerifyRegistration } from "@/api/hooks";
+import { getAPIErrorCode } from "@/api/client";
 import { AuthFlowHeader } from "@/components/auth/AuthFlowHeader";
 import { AuthCard, AuthError, AuthFrame } from "@/components/auth/AuthFrame";
 import { Button } from "@/components/ui/Button";
@@ -30,6 +31,7 @@ export function RegisterVerifyPage() {
   const [state, setState] = useState<VerifyState>(tokenRef.current ? "ready" : "invalid");
   const [retryError, setRetryError] = useState<string | null>(null);
   const [alreadyVerified, setAlreadyVerified] = useState(false);
+  const [inviteUnavailable, setInviteUnavailable] = useState(false);
   const steps = zh ? ["填写信息", "验证邮箱", "登录使用"] : ["Account details", "Verify email", "Sign in"];
 
   useLayoutEffect(() => {
@@ -61,6 +63,8 @@ export function RegisterVerifyPage() {
       setState("success");
     } catch (error) {
       verifyRegistration.reset();
+      const code = getAPIErrorCode(error);
+      setInviteUnavailable(code === "registration_invite_required" || code === "registration_invite_invalid");
       const failure = registrationLinkFailure(error);
       if (failure === "retry") tokenRef.current = token;
       cooldown.start(rateLimitDelay(error, "registration_rate_limited"));
@@ -132,9 +136,9 @@ export function RegisterVerifyPage() {
         icon={Link2Off}
         tone="danger"
         eyebrow={zh ? "链接不可用" : "Link unavailable"}
-        helper={zh ? "链接缺失或已损坏" : "The link is missing or damaged"}
-        title={zh ? "无法验证此链接" : "We cannot verify this link"}
-        description={zh ? "请确认链接复制完整，或重新注册获取新邮件。" : "Check that the complete link was copied, or register again for a new email."}
+        helper={inviteUnavailable ? (zh ? "需要有效的邀请码" : "A valid invitation code is required") : (zh ? "链接缺失或已损坏" : "The link is missing or damaged")}
+        title={inviteUnavailable ? (zh ? "邀请码不可用" : "Invitation code unavailable") : (zh ? "无法验证此链接" : "We cannot verify this link")}
+        description={inviteUnavailable ? (zh ? "账号尚未创建，请使用有效且未使用的邀请码重新注册。" : "No account was created. Register again with a valid, unused invitation code.") : (zh ? "请确认链接复制完整，或重新注册获取新邮件。" : "Check that the complete link was copied, or register again for a new email.")}
         steps={steps}
         stepsLabel={zh ? "注册进度" : "Registration progress"}
         actionLabel={zh ? "重新注册" : "Start again"}

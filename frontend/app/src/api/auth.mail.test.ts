@@ -30,7 +30,7 @@ describe("public mail auth API contract", () => {
       .mockResolvedValueOnce({ status: "password_reset" })
       .mockResolvedValueOnce({ available: true });
 
-    await requestRegistration({ username: "teacher", email: "teacher@ustc.edu.cn", password: "safe-password" });
+    await requestRegistration({ username: "teacher", email: "teacher@ustc.edu.cn", password: "safe-password", invite_code: "test-invite" });
     await resendRegistration("request-1");
     await verifyRegistration("verification-secret");
     await requestPasswordReset({ email: "teacher@ustc.edu.cn" });
@@ -54,7 +54,7 @@ describe("public mail auth API contract", () => {
       ...validRegistration,
       request_id: "",
     });
-    await expect(requestRegistration({ username: "teacher", email: "teacher@ustc.edu.cn", password: "safe-password" }))
+    await expect(requestRegistration({ username: "teacher", email: "teacher@ustc.edu.cn", password: "safe-password", invite_code: "test-invite" }))
       .rejects.toMatchObject({ status: 502, message: "public_auth_response_invalid" });
   });
 

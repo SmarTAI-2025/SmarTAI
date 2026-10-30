@@ -109,6 +109,16 @@ class RefreshSessionRecord(Base):
     revoked_at: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
+class RegistrationInviteRecord(Base):
+    """Single-use admission only; independent of roles, quotas and legacy invites."""
+
+    __tablename__ = "registration_invites"
+
+    code_digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    used_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
 class EmailVerificationRequestRecord(Base):
     """One-time email verification state for public teacher registration."""
 
@@ -137,6 +147,7 @@ class EmailVerificationRequestRecord(Base):
     )
     last_delivery_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    registration_invite_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class PasswordResetRequestRecord(Base):

@@ -12,6 +12,7 @@ differ between SQLite and PostgreSQL against a live database:
 * role-scoped assignment/submission reads hide other owners.
 """
 from __future__ import annotations
+from backend.tests.registration_invite_helpers import invite_code, invite_digest
 
 import asyncio
 import hashlib
@@ -67,6 +68,21 @@ def _seed_user(role: str) -> str:
     with session_scope() as session:
         session.add(UserRecord(id=uid, username=uid, role=role, password_hash="x", is_active=True))
     return uid
+
+
+@pytest.mark.parametrize("case", ["race", "rollback", "resend", "single_use"])
+def test_registration_invitations_are_atomic_on_postgres(pg_database, monkeypatch, case):
+    from backend.config import settings
+    from backend.tests import test_registration_invites as cases
+    monkeypatch.setattr(settings, "allowed_email_domains", "ustc.edu.cn")
+    if case == "race":
+        cases.test_independent_confirmations_with_one_code_have_one_winner(monkeypatch)
+    elif case == "rollback":
+        cases.test_failed_mail_and_failed_account_creation_do_not_spend_code(monkeypatch)
+    elif case == "resend":
+        cases.test_resend_preserves_code_and_only_latest_link_can_consume_it()
+    else:
+        cases.test_code_is_spent_only_on_registration_and_replay_does_not_spend_again()
 
 
 def test_postgres_task_metadata_compare_and_update_is_atomic(pg_database):
@@ -208,7 +224,7 @@ def test_postgres_explicit_email_login_and_username_mail_guard(pg_database, monk
 
     monkeypatch.setattr(settings, "allowed_email_domains", "ustc.edu.cn")
     monkeypatch.setattr("backend.api.auth.get_email_sender", NoMail)
-    rejected = client.post("/auth/register/request", json={"username": "email-owner", "email": "new@ustc.edu.cn", "password": "test-password"})
+    rejected = client.post("/auth/register/request", json={"invite_code": invite_code(), "username": "email-owner", "email": "new@ustc.edu.cn", "password": "test-password"})
     assert rejected.status_code == 409
     assert rejected.json() == {"detail": {"code": "registration_username_taken"}}
 

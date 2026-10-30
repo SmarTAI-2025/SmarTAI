@@ -46,6 +46,12 @@ export function localizedRegistrationRequestError(error: unknown, locale: Locale
   if (code === "registration_username_taken") {
     return zh ? "该用户名已被使用，请更换" : "This username is already in use. Choose another.";
   }
+  if (code === "registration_invite_required") {
+    return zh ? "请输入邀请码。" : "Enter an invitation code.";
+  }
+  if (code === "registration_invite_invalid") {
+    return zh ? "邀请码无效或已使用，请检查或更换。" : "This invitation code is invalid or already used. Check it or use another.";
+  }
   if (code === "registration_rate_limited") {
     return retryMessage(normalized.retryAfterSeconds, locale, "注册邮件请求过于频繁", "Too many registration email requests");
   }

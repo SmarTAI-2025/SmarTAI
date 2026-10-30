@@ -1,4 +1,5 @@
 """No provider/SMTP calls: temporary SQLite, synthetic accounts and fake sender."""
+from backend.tests.registration_invite_helpers import invite_code, invite_digest
 import hashlib
 import re
 import time
@@ -156,7 +157,7 @@ def test_user_version_rejects_changed_parent_and_inheritance_order(client):
 
 
 def request(email, sender, username=None, ip="127.0.0.1"):
-    return request_registration(username=username or uuid.uuid4().hex, email=email, password="synthetic-password", source_ip=ip, sender=sender)
+    return request_registration(invite_code=invite_code(), username=username or uuid.uuid4().hex, email=email, password="synthetic-password", source_ip=ip, sender=sender)
 
 
 def test_registration_rules_apply_at_request_resend_and_verification(client):

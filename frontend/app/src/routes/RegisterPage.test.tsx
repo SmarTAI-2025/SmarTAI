@@ -34,6 +34,7 @@ function renderPage() {
 }
 
 function fillRegistration() {
+  fireEvent.change(screen.getByRole("textbox", { name: "邀请码" }), { target: { value: "test-invite" } });
   fireEvent.change(screen.getByRole("textbox", { name: "用户名" }), { target: { value: "teacher" } });
   fireEvent.change(screen.getByRole("textbox", { name: "学校邮箱" }), { target: { value: "Teacher@USTC.edu.cn" } });
   fireEvent.change(screen.getByLabelText("设置密码"), { target: { value: "safe-password" } });
@@ -75,6 +76,7 @@ describe("RegisterPage", () => {
       username: "teacher",
       email: "teacher@ustc.edu.cn",
       password: "safe-password",
+      invite_code: "test-invite",
     });
     expect(resetMutation).toHaveBeenCalledTimes(1);
     expect(await screen.findByTestId("location")).toHaveTextContent("/register/check-email");
@@ -82,6 +84,7 @@ describe("RegisterPage", () => {
     expect(stored).toContain("request-1");
     expect(stored).not.toContain("teacher@ustc.edu.cn");
     expect(stored).not.toContain("safe-password");
+    expect(stored).not.toContain("test-invite");
     expect(window.localStorage.length).toBe(0);
   });
 
@@ -101,6 +104,25 @@ describe("RegisterPage", () => {
     expect(screen.getByLabelText("设置密码")).toHaveValue("");
     expect(screen.getByLabelText("确认密码")).toHaveValue("");
     expect(resetMutation).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires an invitation before sending any registration request", () => {
+    renderPage();
+    fillRegistration();
+    fireEvent.change(screen.getByRole("textbox", { name: "邀请码" }), { target: { value: "   " } });
+    fireEvent.submit(screen.getByRole("button", { name: "发送验证链接" }).closest("form")!);
+    expect(screen.getByRole("alert")).toHaveTextContent("请输入邀请码");
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("explains a used code and allows replacing it", async () => {
+    mutateAsync.mockRejectedValue(new APIError(400, "unavailable", { detail: { code: "registration_invite_invalid" } }));
+    renderPage();
+    fillRegistration();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "发送验证链接" })));
+    expect(screen.getByRole("alert")).toHaveTextContent("邀请码无效或已使用");
+    expect(screen.getByRole("textbox", { name: "邀请码" })).toBeEnabled();
+    expect(screen.queryByTestId("location")).not.toBeInTheDocument();
   });
 
   it("shows the frozen requirements and blocks mismatched confirmation locally", async () => {
