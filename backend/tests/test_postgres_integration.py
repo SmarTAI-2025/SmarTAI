@@ -250,6 +250,7 @@ def test_postgres_registration_waits_for_cross_worker_flow_lock(pg_database, mon
             future = pool.submit(
                 email_registration.request_registration,
                 username="pg-cross-worker",
+                invite_code=invite_code(),
                 email="pg-cross-worker@ustc.edu.cn",
                 password="long-enough-password",
                 source_ip=source_ip,
