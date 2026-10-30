@@ -94,6 +94,44 @@ def test_resend_preserves_code_and_only_latest_link_can_consume_it():
     assert registration.verify_registration(sender.tokens[1])["status"] == "registered"
 
 
+@pytest.mark.parametrize("reason", ["missing", "used", "revoked"])
+def test_unavailable_invite_blocks_resend_and_verify_but_new_code_recovers(monkeypatch, reason):
+    code = invite_code()
+    sender = Sender()
+    pending = request(code, sender=sender)
+    with session_scope() as session:
+        row = session.get(EmailVerificationRequestRecord, pending["request_id"])
+        row.resend_available_at = 0
+        if reason == "missing":
+            row.registration_invite_digest = None
+    if reason == "used":
+        winner = Sender()
+        request(code, username="invite-winner", sender=winner)
+        assert registration.verify_registration(winner.tokens[0])["status"] == "registered"
+    elif reason == "revoked":
+        monkeypatch.setattr(settings, "registration_invite_digests", "")
+    expected = "registration_invite_required" if reason == "missing" else "registration_invite_invalid"
+    monkeypatch.setattr("backend.api.auth.get_email_sender", lambda: sender)
+    client = TestClient(app)
+    for _ in range(2):
+        response = client.post("/auth/register/resend", json={"request_id": pending["request_id"]})
+        assert response.status_code == 400
+        assert response.json() == {"detail": {"code": expected}}
+    with pytest.raises(registration.RegistrationError, match=expected):
+        registration.verify_registration(sender.tokens[0])
+    assert len(sender.tokens) == 1
+    with session_scope() as session:
+        assert session.query(EmailVerificationRequestRecord).count() == (2 if reason == "used" else 1)
+        assert session.query(UserRecord).count() == (1 if reason == "used" else 0)
+        assert session.query(RegistrationInviteRecord).count() == (1 if reason == "used" else 0)
+        row = session.get(EmailVerificationRequestRecord, pending["request_id"])
+        assert row.verified_at is None and row.superseded_at is None
+    # Returning to the form and submitting a fresh code can complete registration.
+    replacement = Sender()
+    request(invite_code(), sender=replacement)
+    assert registration.verify_registration(replacement.tokens[0])["status"] == "registered"
+
+
 def test_failed_mail_and_failed_account_creation_do_not_spend_code(monkeypatch):
     code = invite_code()
     with pytest.raises(registration.RegistrationError, match="registration_email_delivery_failed"):
