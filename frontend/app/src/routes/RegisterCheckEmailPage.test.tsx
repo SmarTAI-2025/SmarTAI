@@ -10,20 +10,24 @@ import {
   savePendingRegistrationFlow,
 } from "@/lib/registrationFlow";
 import { RegisterCheckEmailPage } from "@/routes/RegisterCheckEmailPage";
+import { RegisterPage } from "@/routes/RegisterPage";
 
-vi.mock("@/api/hooks", () => ({ useResendRegistration: vi.fn() }));
+vi.mock("@/api/hooks", () => ({ useResendRegistration: vi.fn(), useRequestRegistration: vi.fn() }));
+vi.mock("@/api/auth", () => ({ checkRegistrationUsername: vi.fn() }));
 
-const { useResendRegistration } = await import("@/api/hooks");
+const { useResendRegistration, useRequestRegistration } = await import("@/api/hooks");
+const { checkRegistrationUsername } = await import("@/api/auth");
 const mutateAsync = vi.fn();
 const resetMutation = vi.fn();
+const requestRegistration = vi.fn();
 
-function renderPage() {
+function renderPage(realRegistration = false) {
   return render(
     <StrictMode><I18nProvider>
       <MemoryRouter initialEntries={["/register/check-email"]}>
         <Routes>
           <Route path="/register/check-email" element={<RegisterCheckEmailPage />} />
-          <Route path="/register" element={<h1>注册页</h1>} />
+          <Route path="/register" element={realRegistration ? <RegisterPage /> : <h1>注册页</h1>} />
         </Routes>
       </MemoryRouter>
     </I18nProvider></StrictMode>,
@@ -47,6 +51,8 @@ describe("RegisterCheckEmailPage", () => {
       reset: resetMutation,
       isPending: false,
     });
+    vi.mocked(useRequestRegistration).mockReturnValue({ mutateAsync: requestRegistration, reset: vi.fn(), isPending: false } as unknown as ReturnType<typeof useRequestRegistration>);
+    vi.mocked(checkRegistrationUsername).mockResolvedValue(true);
   });
 
   afterEach(() => vi.useRealTimers());
@@ -199,7 +205,89 @@ describe("RegisterCheckEmailPage", () => {
     await act(async () => vi.advanceTimersByTime(60_000));
     expect(screen.getByRole("button", { name: "重新发送验证链接" })).toBeEnabled();
   });
+
+  const lateResults = ["registration_invite_required", "registration_invite_invalid",
+    "verification_link_expired", "verification_link_invalid", "verification_link_already_used",
+    "success", "registration_rate_limited", "network"];
+
+  it.each(lateResults)("late %s cannot change a new flow submitted through the actual form", async (result) => {
+    saveReadyFlow();
+    const pending = deferredResend();
+    const view = renderPage(true);
+    await act(async () => screen.getByRole("button", { name: "重新发送验证链接" }).click());
+    await act(async () => screen.getByRole("button", { name: "返回修改信息" }).click());
+    expect(window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY)).toBeNull();
+    requestRegistration.mockResolvedValue({ status: "verification_required", request_id: "new-registration",
+      expires_in_seconds: 1800, resend_after_seconds: 0 });
+    fireEvent.change(screen.getByRole("textbox", { name: "用户名" }), { target: { value: "new-teacher" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "学校邮箱" }), { target: { value: "new@ustc.edu.cn" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "邀请码" }), { target: { value: "new-unused-invite" } });
+    fireEvent.change(screen.getByLabelText("设置密码"), { target: { value: "synthetic-password" } });
+    fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "synthetic-password" } });
+    await act(async () => screen.getByRole("button", { name: "发送验证链接" }).click());
+    expect(requestRegistration).toHaveBeenCalledWith(expect.objectContaining({ invite_code: "new-unused-invite" }));
+    const saved = window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY);
+    expect(saved).toContain("new-registration");
+    await act(async () => pending.settle(result));
+    expect(window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY)).toBe(saved);
+    expect(resetMutation).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    view.unmount();
+    renderPage();
+    expect(screen.getByRole("heading", { name: "请查收学校邮箱" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新发送验证链接" })).toBeEnabled();
+  });
+
+  it.each(lateResults)("late %s cannot mutate a replacement request while the page remains mounted", async (result) => {
+    saveReadyFlow();
+    const pending = deferredResend();
+    renderPage();
+    await act(async () => screen.getByRole("button", { name: "重新发送验证链接" }).click());
+    savePendingRegistrationFlow(createPendingRegistrationFlow("other@ustc.edu.cn", {
+      status: "verification_required", request_id: "replacement-request", expires_in_seconds: 1800, resend_after_seconds: 0,
+    }));
+    const saved = window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY);
+    await act(async () => pending.settle(result));
+    expect(window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY)).toBe(saved);
+    expect(resetMutation).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("新链接已发送")).not.toBeInTheDocument();
+  });
+
+  it("late success cannot resurrect the old flow after leaving without submitting", async () => {
+    saveReadyFlow();
+    const pending = deferredResend();
+    renderPage(true);
+    await act(async () => screen.getByRole("button", { name: "重新发送验证链接" }).click());
+    await act(async () => screen.getByRole("button", { name: "返回修改信息" }).click());
+    await act(async () => pending.settle("success"));
+    expect(window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY)).toBeNull();
+    expect(screen.getByRole("heading", { name: "创建教师账号" })).toBeInTheDocument();
+  });
+
+  it("still accepts the current resend when the old link expires during the response delay", async () => {
+    saveReadyFlow();
+    const pending = deferredResend();
+    renderPage();
+    await act(async () => screen.getByRole("button", { name: "重新发送验证链接" }).click());
+    await act(async () => vi.advanceTimersByTime(1801_000));
+    await act(async () => pending.settle("success"));
+    expect(window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY)).toContain("late-resend");
+    expect(screen.getByText("新链接已发送")).toBeInTheDocument();
+  });
 });
+
+function deferredResend() {
+  let resolve!: (value: unknown) => void;
+  let reject!: (reason: unknown) => void;
+  mutateAsync.mockReturnValueOnce(new Promise((ok, fail) => { resolve = ok; reject = fail; }));
+  return { settle(result: string) {
+    if (result === "success") resolve({ status: "verification_required", request_id: "late-resend", expires_in_seconds: 1800, resend_after_seconds: 60 });
+    else reject(new APIError(result === "network" ? 0 : 400, result, { detail: { code: result } }, result === "registration_rate_limited" ? 60 : undefined));
+  } };
+}
 
 function saveReadyFlow() {
   savePendingRegistrationFlow(createPendingRegistrationFlow("teacher@ustc.edu.cn", {

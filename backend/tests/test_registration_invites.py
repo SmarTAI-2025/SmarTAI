@@ -132,6 +132,33 @@ def test_unavailable_invite_blocks_resend_and_verify_but_new_code_recovers(monke
     assert registration.verify_registration(replacement.tokens[0])["status"] == "registered"
 
 
+@pytest.mark.parametrize("confirm_new_first", [False, True])
+def test_switching_codes_does_not_reserve_or_consume_the_original_code(confirm_new_first):
+    original_code, replacement_code = invite_code(), invite_code()
+    original, replacement, reuse = Sender(), Sender(), Sender()
+    pending = request(original_code, sender=original)
+    with session_scope() as session:
+        session.get(EmailVerificationRequestRecord, pending["request_id"]).resend_available_at = 0
+    request(replacement_code, sender=replacement)
+    with session_scope() as session:
+        assert session.query(RegistrationInviteRecord).count() == 0
+    with pytest.raises(registration.RegistrationError, match="verification_link_already_used"):
+        registration.verify_registration(original.tokens[0])
+    if confirm_new_first:
+        assert registration.verify_registration(replacement.tokens[0])["status"] == "registered"
+    # Original code remains usable by another registration, before or after the
+    # replacement finishes. No release endpoint or pending-code reservation exists.
+    request(original_code, username="reuse-original-code", sender=reuse)
+    assert registration.verify_registration(reuse.tokens[0])["status"] == "registered"
+    if not confirm_new_first:
+        assert registration.verify_registration(replacement.tokens[0])["status"] == "registered"
+    with session_scope() as session:
+        assert session.query(UserRecord).count() == 2
+        assert session.query(RegistrationInviteRecord).count() == 2
+    with pytest.raises(registration.RegistrationError, match="registration_invite_invalid"):
+        request(original_code, username="cannot-reuse-consumed")
+
+
 def test_failed_mail_and_failed_account_creation_do_not_spend_code(monkeypatch):
     code = invite_code()
     with pytest.raises(registration.RegistrationError, match="registration_email_delivery_failed"):

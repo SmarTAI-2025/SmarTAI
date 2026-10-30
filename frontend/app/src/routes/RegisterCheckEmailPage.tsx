@@ -1,5 +1,5 @@
 import { Check, Clock3, Inbox, Loader2, RotateCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useResendRegistration } from "@/api/hooks";
@@ -11,6 +11,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { localizedRegistrationRequestError } from "@/lib/authErrors";
 import {
   clearPendingRegistrationFlow,
+  isCurrentPendingRegistrationFlow,
   readPendingRegistrationFlow,
   savePendingRegistrationFlow,
   updatePendingRegistrationFlow,
@@ -23,6 +24,7 @@ export function RegisterCheckEmailPage() {
   const zh = locale === "zh-CN";
   const resendRegistration = useResendRegistration();
   const submitting = useRef(false);
+  const active = useRef(false);
   const [flow, setFlow] = useState<PendingRegistrationFlow | null>(() => readPendingRegistrationFlow());
   const [now, setNow] = useState(Date.now());
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +32,11 @@ export function RegisterCheckEmailPage() {
   const [recoveryReason, setRecoveryReason] = useState<"expired" | "invalid" | null>(null);
   const [inviteFailure, setInviteFailure] = useState<"required" | "invalid" | null>(null);
   const steps = zh ? ["填写信息", "验证邮箱", "登录使用"] : ["Account details", "Verify email", "Sign in"];
+
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
 
   useEffect(() => {
     if (!flow) return undefined;
@@ -72,12 +79,16 @@ export function RegisterCheckEmailPage() {
   const secondsUntilResend = Math.max(0, Math.ceil((flow.resendAvailableAt - now) / 1000));
 
   async function handleResend() {
-    if (!flow || inviteFailure || secondsUntilResend > 0 || submitting.current || resendRegistration.isPending) return;
+    if (!active.current || !flow || inviteFailure || secondsUntilResend > 0 || submitting.current || resendRegistration.isPending) return;
+    const requestId = flow.requestId;
+    const isCurrent = () => active.current && isCurrentPendingRegistrationFlow(requestId);
+    if (!isCurrent()) return;
     submitting.current = true;
     setError(null);
     setResent(false);
     try {
-      const response = await resendRegistration.mutateAsync(flow.requestId);
+      const response = await resendRegistration.mutateAsync(requestId);
+      if (!isCurrent()) return;
       const updated = updatePendingRegistrationFlow(flow, response);
       resendRegistration.reset();
       savePendingRegistrationFlow(updated);
@@ -85,6 +96,7 @@ export function RegisterCheckEmailPage() {
       setNow(Date.now());
       setResent(true);
     } catch (nextError) {
+      if (!isCurrent()) return;
       resendRegistration.reset();
       const code = getAPIErrorCode(nextError);
       if (code === "registration_invite_required" || code === "registration_invite_invalid") {
@@ -118,7 +130,8 @@ export function RegisterCheckEmailPage() {
   }
 
   function restartRegistration() {
-    clearPendingRegistrationFlow();
+    active.current = false;
+    if (flow && isCurrentPendingRegistrationFlow(flow.requestId)) clearPendingRegistrationFlow();
     navigate("/register", { replace: true });
   }
 
