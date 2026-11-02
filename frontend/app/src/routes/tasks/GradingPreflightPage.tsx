@@ -522,8 +522,8 @@ function getDisabledReason({
 
 function gradingBlockerMessage(code: string | null, locale: Locale): string | null {
   const messages: Record<string, [string, string]> = {
-    question_review_blocked: ["题目存在关键缺项或冲突。请修正并确认后再开始批改。", "Questions have required missing information or conflicts. Resolve and confirm them before grading."],
-    submission_recognition_blocked: ["学生身份或作答识别存在关键问题。请修正并确认后再开始批改。", "Student identities or recognized responses have blocking issues. Resolve and confirm them before grading."],
+    question_review_blocked: ["题目存在关键缺项或冲突。请修正后再开始批改。", "Questions have required missing information or conflicts. Resolve them before grading."],
+    submission_recognition_blocked: ["学生身份或作答识别存在关键问题。请修正后再开始批改。", "Student identities or recognized responses have blocking issues. Resolve them before grading."],
     submission_sources_failed: ["仍有文件识别失败。请在上方查看具体原因并重新处理后再开始批改。", "Some files failed recognition. Review the exact reasons above and resolve them before grading."],
     submission_sources_pending: ["还有作答文件未处理完，请稍后再检查。", "Some submission files are still being processed. Please check again later."],
     submission_source_evidence_missing: ["作答来源状态需要重新确认。请刷新；若结构化题目和作答仍在，可直接重试批改。", "The submission source state needs confirmation. Refresh; if the structured questions and answers remain, retry grading directly."],

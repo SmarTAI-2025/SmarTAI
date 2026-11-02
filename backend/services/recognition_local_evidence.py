@@ -137,7 +137,8 @@ class RecognitionLocalEvidenceReader:
                 if remaining <= 0:
                     raise RecognitionError("recognition_timeout")
                 reader = read_image_evidence if isinstance(command, ImagePrepareRequest) else read_pdf_evidence
-                result = await reader(source_bytes, command, timeout_seconds=remaining, progress=self.progress)
+                result = await reader(source_bytes, command, timeout_seconds=remaining, progress=self.progress,
+                                      wait_for_slot=self._source.scope != "knowledge_document")
                 result = await run_in_threadpool(lambda: validate_evidence_result(result.model_dump(warnings=False), command))
                 if isinstance(result, ImagePreparedResult) and result.source_sha256 != self._source.input_sha256:
                     raise RecognitionError("recognition_source_mismatch")

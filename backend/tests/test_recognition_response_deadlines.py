@@ -338,8 +338,7 @@ def session_for(request, *, guard=None):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("layer", ["recognition", "provider"])
-async def test_real_reader_queues_do_not_authorize_or_start_a_model_request(scheduler, monkeypatch, layer):
+async def test_real_reader_provider_queue_does_not_authorize_or_start_a_model_request(scheduler, monkeypatch):
     post_calls = []
 
     async def handle(request):
@@ -360,18 +359,35 @@ async def test_real_reader_queues_do_not_authorize_or_start_a_model_request(sche
         session, service = session_for(request)
         capacity = RecognitionCapacity(global_limit=1)
         call = arguments(request, engine, budget, capacity)
-        if layer == "provider":
-            monkeypatch.setattr(providers, "get_scheduler", lambda: SimpleNamespace(lease=unavailable))
-            with pytest.raises(RecognitionError, match="provider_capacity_unavailable") as caught:
-                await run_initial_read(**call, call_session=session)
-        else:
-            async with capacity.lease("other-owner"):
-                with pytest.raises(RecognitionError, match="provider_capacity_unavailable") as caught:
-                    await run_initial_read(**call, call_session=session)
+        monkeypatch.setattr(providers, "get_scheduler", lambda: SimpleNamespace(lease=unavailable))
+        with pytest.raises(RecognitionError, match="provider_capacity_unavailable") as caught:
+            await run_initial_read(**call, call_session=session)
     assert not caught.value.submission_may_exist
     assert post_calls == [] and service.before_dispatch.await_count == 0
     assert budget.snapshot().pending_calls == budget.snapshot().total_calls == 0
     assert session._pending is None
+
+
+@pytest.mark.asyncio
+async def test_real_reader_uses_byok_admission_without_waiting_for_separate_ocr_gate(scheduler, monkeypatch):
+    posts = []
+
+    async def handle(request):
+        posts.append(request)
+        return relay_response()
+
+    monkeypatch.setattr(settings, "llm_timeout", 1)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle), timeout=120) as client:
+        engine = LLMRecognitionEngine(relay(client), route_id="test-route", fingerprint="frozen")
+        request = new_policy(read_request(), engine)
+        budget = RecognitionBudget(request.source, request.policy, engine.capabilities)
+        session, service = session_for(request)
+        capacity = RecognitionCapacity(global_limit=1)
+        async with capacity.lease("other-owner"):
+            result = await run_initial_read(**arguments(request, engine, budget, capacity), call_session=session)
+    assert result.candidate.status == "ok"
+    assert len(posts) == service.before_dispatch.await_count == 1
+    assert budget.snapshot().settled_calls == 1 and budget.snapshot().pending_calls == 0
 
 
 @pytest.mark.asyncio
@@ -509,21 +525,32 @@ async def test_durable_guard_lease_loss_reaches_worker_without_a_terminal_overwr
 
 
 @pytest.mark.asyncio
-async def test_interrupted_guard_commit_remains_conservative_without_automatic_resubmit(tmp_path, monkeypatch):
-    from backend.recognition import runtime
-
+@pytest.mark.parametrize("preflight_delay", [0, 0.05], ids=["normal-db", "slow-db"])
+async def test_interrupted_guard_commit_remains_conservative_without_automatic_resubmit(
+    tmp_path, monkeypatch, preflight_delay,
+):
     service, request, data, engine = new_runner(tmp_path, initial=["literal 1 + 1 = 3"])
     original = recognition_runs._RunContext.write
+    original_active = recognition_runs._RunContext.active
     committed = asyncio.Event()
+
+    async def active(self):
+        # Slow pre-commit I/O must not consume a synthetic 20ms deadline
+        # intended to interrupt the later, already-committed guard write.
+        await asyncio.sleep(preflight_delay)
+        return await original_active(self)
 
     async def interrupted(self, checkpoint, **kwargs):
         await original(self, checkpoint, **kwargs)
         if checkpoint.calls and kwargs.get("status") is None and not committed.is_set():
             committed.set()
-            await asyncio.Event().wait()
+            # Arm the real cancellation/TimeoutError only after persistence.
+            # Do not shorten the product's entire authorization/DB deadline.
+            async with asyncio.timeout(0):
+                await asyncio.Event().wait()
 
+    monkeypatch.setattr(recognition_runs._RunContext, "active", active)
     monkeypatch.setattr(recognition_runs._RunContext, "write", interrupted)
-    monkeypatch.setattr(runtime, "LOCAL_STEP_SECONDS", 0.02)
     result = await run(service, request, data, engine)
     assert committed.is_set() and engine.sends == []
     assert result.status == "needs_review" and result.safe_error_code == "provider_submit_uncertain"

@@ -138,8 +138,8 @@ export function FinalResultsWorkspacePage() {
           className="mt-3 block rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 hover:underline dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200"
         >
           {tx(locale,
-            `有 ${disagreementCount} 个题次专家分歧较大（标准差 ÷ 满分 > 15%），可返回复核；该信号不影响查看结果。`,
-            `${disagreementCount} ${disagreementCount === 1 ? "response has" : "responses have"} high expert disagreement (standard deviation / max score > 15%). Return to review (optional).`,
+            `有 ${disagreementCount} 个题次的专家评分差异较大，可返回复核；该信号不影响查看结果。`,
+            `${disagreementCount} ${disagreementCount === 1 ? "response has" : "responses have"} large differences in expert scores. Return to review (optional).`,
           )}
         </Link>
       )}

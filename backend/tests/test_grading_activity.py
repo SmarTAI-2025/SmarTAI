@@ -175,7 +175,7 @@ async def test_fast_model_finishes_other_questions_while_slow_waits(monkeypatch)
 
     monkeypatch.setattr(multi_expert, "get_skill_for_type", lambda _: Skill)
     reporter, events = recorder(3)
-    problems = {f"q{i}": {"q_id": f"q{i}", "type": "简答题", "number": str(i), "stem": "question", "criterion": "Correctness", "max_score": 10} for i in range(3)}
+    problems = {f"q{i}": {"q_id": f"q{i}", "type": "概念题", "number": str(i), "stem": "question", "criterion": "Correctness", "max_score": 10} for i in range(3)}
     students = {"s": {"stu_id": "s", "stu_ans": [{"q_id": q, "content": "answer"} for q in problems]}}
     # This test isolates expert scheduling after question-level preparation.
     # Freeze real plans so the fake provider is never asked to interpret rules.

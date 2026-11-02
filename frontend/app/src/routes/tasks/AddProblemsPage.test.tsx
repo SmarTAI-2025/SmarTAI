@@ -145,6 +145,60 @@ beforeEach(async () => {
   expertsRefetch.mockResolvedValue({ data: [] });
 });
 
+describe("AddProblemsPage source limits", () => {
+  it("has one source slot per role across upload, library and text entry", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    expect(screen.queryByRole("button", { name: /再添加一份题目|添加题目/ })).not.toBeInTheDocument();
+    for (const [tab, add, upload] of [
+      [/2\. 标答/, "添加标答", "标答来源文件上传"],
+      [/3\. 评分标准/, "添加评分标准", "评分标准来源文件上传"],
+      [/4\. 测试样例/, "添加测试资料", "测试资料来源文件上传"],
+    ] as const) {
+      await user.click(screen.getByRole("button", { name: tab }));
+      await user.click(screen.getByRole("button", { name: add }));
+      expect(screen.queryByRole("button", { name: add })).not.toBeInTheDocument();
+      expect(screen.getAllByLabelText(upload)).toHaveLength(1);
+      await user.click(screen.getByRole("button", { name: "课程资料库" }));
+      expect(screen.queryByRole("button", { name: add })).not.toBeInTheDocument();
+      if (add === "添加评分标准") {
+        await user.click(screen.getByRole("button", { name: "自然语言描述" }));
+        expect(screen.queryByRole("button", { name: add })).not.toBeInTheDocument();
+      }
+      await user.click(screen.getByRole("button", { name: "删除这份资料" }));
+      expect(screen.getByRole("button", { name: add })).toBeVisible();
+    }
+  });
+
+  it("rejects a multiple-file drop without silently choosing the first file", async () => {
+    renderPage();
+    fireEvent.drop(screen.getByLabelText("题目来源文件上传"), { dataTransfer: { files: [
+      new File(["one"], "one.txt", { type: "text/plain" }), new File(["two"], "two.txt", { type: "text/plain" }),
+    ] } });
+    expect(screen.getByRole("alert")).toHaveTextContent("每次只能选择一个文件");
+    expect(screen.queryByText("one.txt")).not.toBeInTheDocument();
+    expect(preflightMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("keeps duplicate saved sources visible but blocks submission until one is removed", async () => {
+    inputState.input = { recognition_provider_id: "mock:test", score_policy: { mode: "default_10" }, sources: [1, 2].map(index => ({
+      source_token: `source-${index}`, role: "problem", source_kind: "upload", filename: `saved-${index}.pdf`,
+      stored_file_id: `stored-${index}`, library_material_id: null, inline_text: "", structure_mode: "organized",
+      extraction_hint: "", recognition_options: {}, enable_material_ocr: false, save_to_library: false, available: true,
+    })) };
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("题目最多保留一份来源");
+    expect(screen.getAllByLabelText("题目来源文件上传")).toHaveLength(2);
+    expect(preflightMutateAsync).not.toHaveBeenCalled();
+    expect(startMutateAsync).not.toHaveBeenCalled();
+    await user.click(screen.getAllByRole("button", { name: "删除这份资料" })[1]);
+    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await waitFor(() => expect(startMutateAsync).toHaveBeenCalledTimes(1));
+  });
+});
+
 describe("AddProblemsPage score configuration", () => {
   it("selects the task's English default in Chinese UI and submits an independent generation choice", async () => {
     languageState.initial = "en";
@@ -305,7 +359,7 @@ describe("AddProblemsPage upload capability contract", () => {
     const user = userEvent.setup();
     renderPage();
     await user.click(screen.getByRole("button", { name: /4\. 测试样例/ }));
-    await user.click(screen.getByRole("button", { name: "再添加一份测试资料" }));
+    await user.click(screen.getByRole("button", { name: "添加测试资料" }));
 
     fireEvent.drop(screen.getByLabelText("测试资料来源文件上传"), {
       dataTransfer: {

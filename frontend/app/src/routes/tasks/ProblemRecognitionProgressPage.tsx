@@ -22,7 +22,7 @@ import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
-import { manualReviewDestination } from "@/lib/taskFlow";
+import { getTaskDestination, manualReviewDestination } from "@/lib/taskFlow";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
 import type { JobProgress, TaskStatus } from "@/types";
 
@@ -69,6 +69,10 @@ export function ProblemRecognitionProgressPage() {
 
   if (taskId && status === "draft" && !taskQuery.isFetching && !progressQuery.isFetching) {
     return <Navigate to={`/tasks/${taskId}/upload/problems`} replace />;
+  }
+
+  if (taskState && status === "finalized") {
+    return <Navigate to={getTaskDestination(taskState)} replace />;
   }
 
   if (taskId && status && QUESTION_WORKSPACE_STATUSES.has(status) && !openingManual) {
@@ -137,10 +141,10 @@ export function ProblemRecognitionProgressPage() {
       info.actionKind = "retry";
     }
     const canRetryPreparedSources = Boolean(
-      failedJobId && recognitionProviderId && taskState,
+      !info.retryUnavailable && failedJobId && recognitionProviderId && taskState,
     );
     const retryPreparedSources = async () => {
-      if (retrying.current || retryPreparation.isPending) return;
+      if (info.retryUnavailable || retrying.current || retryPreparation.isPending) return;
       if (!taskId || !failedJobId || !recognitionProviderId || !taskState) return;
       if (submissionUncertain && acknowledgedJobId !== failedJobId) return;
       setRetryFailure(null);
@@ -164,7 +168,7 @@ export function ProblemRecognitionProgressPage() {
     return (
       <ProgressPageFrame title={t("problemProgressTitle")} returnState={{ imageRecoveryModel: recognitionProviderId }}>
         <div className="grid grid-cols-1 gap-4">
-          {failedJobId ? (
+          {failedJobId && !info.retryUnavailable ? (
             <StageProviderSelect
               id="question-retry-provider"
               label={locale === "zh-CN" ? "题目识别模型" : "Question recognition model"}
@@ -173,7 +177,7 @@ export function ProblemRecognitionProgressPage() {
                 : "Your source materials are preserved. Choose a model and retry without uploading again."}
               experts={enabledExperts}
               value={recognitionProviderId}
-              disabled={retryPreparation.isPending || expertsQuery.isLoading}
+              disabled={openingManual || retryPreparation.isPending || expertsQuery.isLoading}
               locale={locale}
               onChange={(id) => { setProviderChoice({ jobId: failedJobId, id }); setRetryFailure(null); }}
             />
@@ -191,10 +195,10 @@ export function ProblemRecognitionProgressPage() {
               {locale === "zh-CN" ? "我了解可能再次计费，确认重试未完成的题目" : "I understand possible additional charges and confirm retrying incomplete questions"}
             </label>
           ) : null}
-          {paused && !retryFailure ? <TaskPausedState status="problems_paused"
+          {paused && !retryFailure && !info.retryUnavailable ? <TaskPausedState status="problems_paused"
             onContinue={() => void retryPreparedSources()} onManual={failedJobId ? () => void openManualReview() : undefined}
             busy={isRefreshing || retryPreparation.isPending || manualPreparation.isPending || openingManual}
-            disabled={!canRetryPreparedSources} /> : <RecoverableActionState
+            manualBusy={openingManual} disabled={!canRetryPreparedSources} /> : <RecoverableActionState
             info={info}
             locale={locale}
             usageContext={{ providerIds: [recognitionProviderId], providers: expertsQuery.data ?? [] }}
@@ -202,18 +206,18 @@ export function ProblemRecognitionProgressPage() {
             workflowRecovery={{
               retry: { onClick: () => void retryPreparedSources(),
                 busy: isRefreshing || retryPreparation.isPending,
-                disabled: !canRetryPreparedSources || (submissionUncertain && acknowledgedJobId !== failedJobId) },
+                disabled: openingManual || !canRetryPreparedSources || (submissionUncertain && acknowledgedJobId !== failedJobId) },
               configurationHref: `/tasks/${taskId}/upload/problems`,
               configurationState: { imageRecoveryModel: recognitionProviderId },
             }}
             additionalActions={[
-              ...(failedJobId ? [{
-                label: locale === "zh-CN" ? "人工继续处理" : "Continue manually",
-                busy: manualPreparation.isPending,
+              ...(failedJobId && !info.retryUnavailable ? [{
+                label: openingManual ? (locale === "zh-CN" ? "正在打开…" : "Opening…") : (locale === "zh-CN" ? "人工继续处理" : "Continue manually"),
+                busy: openingManual || manualPreparation.isPending,
                 disabled: retryPreparation.isPending || openingManual,
                 onClick: openManualReview,
               }] : []),
-              { label: t("problemProgressRefresh"), onClick: () => void refresh(), busy: isRefreshing || retryPreparation.isPending },
+              { label: t("problemProgressRefresh"), onClick: () => void refresh(), busy: isRefreshing || retryPreparation.isPending, disabled: openingManual },
             ]}
           />}
         </div>
@@ -310,9 +314,7 @@ export function ProblemRecognitionProgressPage() {
             {activeStageLabel}
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            {progressQuery.data?.recovering_saved_text
-              ? (locale === "zh-CN" ? "正在整理已保存的识别文字，完成后自动进入复核。" : "Organizing saved recognition text. Review will open when ready.")
-              : queued ? queuedDescription : t("problemProgressBackgroundDescription")}
+            {queued ? queuedDescription : t("problemProgressBackgroundDescription")}
           </p>
           </div>
           <SmarTAIMascot variant="thinking" size="md" className="hidden sm:inline-flex" />

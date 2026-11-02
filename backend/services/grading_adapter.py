@@ -74,6 +74,8 @@ def build_problem_store(questions: list[education.QuestionDTO]) -> dict[str, dic
             # Private orchestration metadata, consumed before public DTO
             # conversion; preserve teacher/AI provenance in the plan hash.
             "_math_rubric_source": q.source or {},
+            "_math_question_id": q.id,
+            "_math_question_version": q.version,
         }
     return store
 

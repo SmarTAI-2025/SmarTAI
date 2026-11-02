@@ -1,9 +1,9 @@
 import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
-import { questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewBlocked, questionReviewNextBlocked, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { questionReviewConfirmed, questionReviewIssues, questionReviewNotes, questionReviewBlocked, questionReviewNextBlocked, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
-import { QUESTION_TYPES, questionTypeLabel, testCaseLabel } from "@/lib/reviewLabels";
+import { QUESTION_TYPES, hasQuestionType, questionTypeLabel, testCaseLabel } from "@/lib/reviewLabels";
 import { normalizeFilterType } from "@/lib/taskFilterIntent";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -65,7 +65,7 @@ function QuestionPreparationDetailPageForm() {
   const navigate = useNavigate();
   const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
-  const { updateProblem, latestRevision: latestWorkflowRevisionRef, confirming, confirm, failure, blocked, clearBlocked } = useQuestionReview(stableTaskId, taskQuery.data?.workflow_revision);
+  const { updateProblem, latestRevision: latestWorkflowRevisionRef, confirming, confirm, failure, blocked, clearBlocked } = useQuestionReview(stableTaskId, taskQuery.data?.workflow_revision, locale);
   const sourcePreview = useSourcePreview({
     taskId,
     workflowRevision: taskQuery.data?.workflow_revision,
@@ -255,7 +255,7 @@ function QuestionPreparationDetailPageForm() {
         </div>
       </div>
       <ReviewBlockDialog locale={locale} issues={nextBlockers.length ? nextBlockers : blocked} onClose={() => { clearBlocked(); setNextBlockers([]); }} />
-      <NewTaskStepper currentStep={2} blockedFromStep={questionReviewBlockers(problems, taskId ?? "", locale).length ? 3 : undefined} lockedStepReason={tx(locale, "请先处理并确认关键问题", "Resolve and confirm required items first")} onLockedStepActivate={() => setNextBlockers(questionReviewBlockers(problems, taskId ?? "", locale))} />
+      <NewTaskStepper currentStep={2} blockedFromStep={questionReviewBlockers(problems, taskId ?? "", locale).length ? 3 : undefined} lockedStepReason={tx(locale, "请先处理关键问题", "Resolve required items first")} onLockedStepActivate={() => setNextBlockers(questionReviewBlockers(problems, taskId ?? "", locale))} />
 
       <SourceComparisonWorkspace
         open={sourcePreview.isOpen}
@@ -406,7 +406,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
             <p className="text-xs text-muted-foreground">{tx(locale, `筛选结果中的第 ${index + 1} / ${total} 题`, `${index + 1} of ${total}`)}</p>
-            <ReviewIssueNotes issues={risks.map(issue => ({ label: recognitionIssueLabel(issue, locale) ?? riskShortLabel(issue.code, locale), severity: issue.severity === "blocking" ? "blocking" : "advisory" }))} />
+            <ReviewIssueNotes issues={questionReviewNotes(problem, locale, code => riskShortLabel(code, locale))} />
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 max-sm:[&_button]:px-2 max-sm:[&_button]:text-xs! sm:shrink-0">
@@ -419,7 +419,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
       <div className="space-y-0 divide-y">
         <div className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0">
           <EditableTextField fieldKey={`${problem.q_id}:number`} label={tx(locale, "题号", "Question number")} value={problem.number ?? ""} problem={problem} field="number" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
-          <EditableTextField fieldKey={`${problem.q_id}:type`} label={tx(locale, "题型", "Question type")} value={problem.type ?? "other"} problem={problem} field="type" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
+          <EditableTextField fieldKey={`${problem.q_id}:type`} label={tx(locale, "题型", "Question type")} value={problem.type ?? ""} problem={problem} field="type" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
         </div>
         <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Question")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
 
@@ -504,6 +504,10 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   }
 
   const sourceLabel = maxScoreSourceLabel(problem.max_score_source, locale);
+  const scoringGuidance = questionReviewIssues(problem).flatMap(issue =>
+    issue.code === "math_rubric_advisory" && typeof issue.details?.message === "string" && issue.details.message.trim()
+      ? [{ id: issue.issue_id, message: issue.details.message }] : [],
+  );
   return (
     <section className="min-w-0 px-5 py-5 sm:px-6">
       <div className="flex items-start justify-between gap-3">
@@ -560,6 +564,12 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           <RubricPointStatus summary={savedSummary} locale={locale} />
         </div>
       )}
+      {scoringGuidance.map(({ id, message }) => (
+        <details key={id} className="mt-3 text-sm">
+          <summary className="cursor-pointer font-medium text-primary">{tx(locale, "查看 AI 补充评分说明", "View AI scoring guidance")}</summary>
+          <p className="mt-2 whitespace-pre-wrap break-words leading-6 text-foreground">{message}</p>
+        </details>
+      ))}
     </section>
   );
 }
@@ -636,8 +646,8 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
       </div>
       {editing ? (
         <div className="mt-3">
-          {field === "type" ? <select value={normalizeFilterType(draft)} onChange={event => setDraft(event.target.value)} aria-label={label} className="h-[50px] w-full rounded-[8px] border bg-background px-4 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15">
-            {!QUESTION_TYPES.includes(normalizeFilterType(draft)) ? <option value={normalizeFilterType(draft)}>{questionTypeLabel(draft, locale)}</option> : null}
+          {field === "type" ? <select value={hasQuestionType(draft) ? normalizeFilterType(draft) : ""} onChange={event => setDraft(event.target.value)} aria-label={label} className="h-[50px] w-full rounded-[8px] border bg-background px-4 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15">
+            <option value="" disabled>{tx(locale, "请选择", "Please select")}</option>
             {QUESTION_TYPES.map(type => <option key={type} value={type}>{questionTypeLabel(type, locale)}</option>)}
           </select> : <textarea value={draft} onChange={(event) => setDraft(event.target.value)} aria-label={label} rows={field === "number" ? 1 : field === "stem" ? 7 : compact ? 6 : 8} className={cn("w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15", field === "solution_code" && "font-mono text-xs")} />}
           <div className="mt-3 flex items-center justify-between gap-3">
@@ -646,14 +656,14 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
               : field === "solution_code"
                 ? tx(locale, "可直接编辑源码；保存后恢复语法高亮。", "Edit the source code directly; syntax highlighting returns after saving.")
                 : field === "type" ? "" : tx(locale, "支持 Markdown 和 LaTeX。", "Markdown and LaTeX are supported.")}</p>
-            <button type="button" disabled={saving || localDraft.formalPending || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存", "Save")}</button>
+            <button type="button" disabled={saving || localDraft.formalPending || !dirty || (field === "type" && !hasQuestionType(draft))} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存", "Save")}</button>
           </div>
         </div>
       ) : (
         <div className={cn("mt-3 min-h-[92px] rounded-[8px] bg-slate-50 px-4 py-3 text-sm leading-6 dark:bg-slate-950/20", compact && "min-h-[72px]", (field === "number" || field === "type") && "min-h-[50px]")}>
           {field === "type" ? questionTypeLabel(value, locale) : value.trim() ? (field === "solution_code"
             ? <SyntaxHighlightedCode code={value} languageHint={`${problem.type}\n${problem.stem}`} locale={locale} />
-            : <MarkdownMath>{value}</MarkdownMath>) : <p className="text-sm text-muted-foreground">{tx(locale, "SmarTAI 正在生成或本次处理未成功，请在风险总览查看。", "SmarTAI generation is pending or failed; check the risk overview.")}</p>}
+            : <MarkdownMath>{value}</MarkdownMath>) : <p className="text-sm text-muted-foreground">{field === "reference_answer" ? tx(locale, "未提供标答（可选）。", "No reference answer provided (optional).") : tx(locale, "尚未提供。", "Not provided.")}</p>}
         </div>
       )}
     </section>
@@ -795,7 +805,7 @@ function sortProblems(problems: ProblemInfo[], locale: string) {
 }
 
 function openRiskCount(problem: ProblemInfo) {
-  return (problem.preparation_issues ?? []).filter(questionIssueNeedsReview).length;
+  return questionReviewIssues(problem).length;
 }
 
 function riskShortLabel(code: string, locale: string) {

@@ -20,7 +20,7 @@ async function fixture(page: Page, stage: Stage) {
   const provider = { provider_id: "test-provider", provider_type: "openai", model: "synthetic", enabled: true,
     is_default: true, is_shared: false, scope: "owner", editable: true, max_concurrent: 1, rpm: 10 };
   const activity = { sequence: 1, ts: Date.now() / 1000, code: "responding", model_id: "model-1" };
-  const problem: ProblemInfo = { q_id: "q1", number: "1", type: "short_answer", stem: "What is 6 × 7?", max_score: 1,
+  const problem: ProblemInfo = { q_id: "q1", number: "1", type: "concept", stem: "What is 6 × 7?", max_score: 1,
     reference_answer: "42", criterion: "One point for 42.", review_status: "confirmed" };
   const student = { stu_id: "s1", stu_name: "Synthetic student", identity_status: "matched", identity_review_status: "confirmed",
     stu_ans: [{ q_id: "q1", content: "42", review_status: "confirmed", flag: [] as string[] }] };
@@ -135,7 +135,7 @@ test("empty question text blocks both countdown and manual grading without a mut
   const run = await fixture(page, "grading");
   run.task.problem_data.q1!.stem = "";
   await page.goto("/tasks/navigation-task/grading/preflight");
-  await expect(page.getByText("题目存在关键缺项或冲突。请修正并确认后再开始批改。", { exact: true })).toBeVisible();
+  await expect(page.getByText("题目存在关键缺项或冲突。请修正后再开始批改。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "立即开始批改", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await expect(page).toHaveURL(/\/grading\/preflight$/);

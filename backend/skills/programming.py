@@ -674,6 +674,8 @@ class ProgrammingSkill(GradingSkill):
             # Backwards compat with legacy template that used {execution_results}
             prompt = prompt.replace("{execution_results}", branch_info)
             prompt = prompt.replace("{rubric}", problem.criterion)
+            if problem.reference_answer:
+                prompt += "\n\nReference answer:\n" + problem.reference_answer
             if chunks:
                 prompt += ("\n\nTextbook reference evidence (not executable code or test cases; "
                            "does not override the teacher's rubric or actual sandbox results):\n"

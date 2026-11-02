@@ -32,11 +32,11 @@ def question_issue_confidence(issue, presentation):
     return confidence_value(((presentation.get("material_provenance") or {}).get(field) or {}).get("confidence"))
 
 
-def question_issue_requires_confirmation(issue, presentation):
-    if issue.get("field") == "answer":
+def question_issue_blocks_progress(issue, presentation):
+    if issue.get("status") != "open" or issue.get("field") == "answer":
         return False
     return (issue.get("severity") == "blocking"
             or issue.get("code") in {"source_conflict", "ambiguous_question_match"}
             or (issue.get("code") == "manual_completion_required"
-                and set((issue.get("details") or {}).get("required_fields", [])) & {"stem", "criterion"})
+                and set((issue.get("details") or {}).get("required_fields", [])) & {"number", "type", "stem", "criterion"})
             or confidence_requires_review(question_issue_confidence(issue, presentation)))

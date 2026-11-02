@@ -14,18 +14,14 @@ from backend.tests.test_ocr_mounted_routes import client_registry, headers
 
 
 @pytest.mark.asyncio
-async def test_student_reader_rejects_csv_instead_of_silently_reading_it():
-    with pytest.raises(HTTPException) as caught:
-        await extract_text_from_upload(b"student,answer\n1,2\n", "submission.csv", purpose="submissions")
-    assert caught.value.status_code == 415
-    assert caught.value.detail["code"] == "submission_source_type_not_allowed"
+async def test_student_reader_keeps_existing_csv_as_native_data():
+    original = b"student,answer\n1,2\n"
+    assert await extract_text_from_upload(original, "submission.csv", purpose="submissions") == original.decode()
 
 
 @pytest.mark.asyncio
-async def test_rubric_reader_rejects_markdown_alias_not_in_its_matrix():
-    with pytest.raises(HTTPException) as caught:
-        await extract_text_from_upload(b"Teacher standard", "rubric.markdown", purpose="rubric")
-    assert caught.value.detail["code"] == "source_type_not_allowed"
+async def test_rubric_reader_keeps_existing_markdown_alias():
+    assert await extract_text_from_upload(b"Teacher standard", "rubric.markdown", purpose="rubric") == "Teacher standard"
 
 
 @pytest.mark.asyncio
@@ -45,7 +41,7 @@ async def test_programming_json_non_finite_data_is_rejected_before_reading():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("purpose", ["rubric", "test_cases", "knowledge"])
+@pytest.mark.parametrize("purpose", ["knowledge"])
 async def test_restricted_image_inputs_do_not_reach_ocr(purpose):
     skill = FakeOCRSkill("must not be called")
     with pytest.raises(HTTPException) as caught:
@@ -55,7 +51,7 @@ async def test_restricted_image_inputs_do_not_reach_ocr(purpose):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("purpose", ["submissions", "problems", "reference"])
+@pytest.mark.parametrize("purpose", ["submissions", "problems", "reference", "rubric", "test_cases"])
 async def test_allowed_image_inputs_keep_real_reader_ocr_dispatch(purpose):
     skill = FakeOCRSkill("Literal student error 1 + 1 = 3")
     text = await extract_text_from_upload(_valid_png_1x1(), "source.png", purpose=purpose, ocr_skill=skill)
@@ -79,13 +75,13 @@ def archive(items):
 
 
 def test_raw_zip_member_policy_preserves_legal_sibling_and_rejected_original():
-    sources = extract_raw_files_from_archive(archive([("good.txt", b"valid student source"), ("bad.csv", b"name,answer")]), "class.zip")
+    sources = extract_raw_files_from_archive(archive([("good.txt", b"valid student source"), ("bad.bin", b"\x00binary")]), "class.zip")
     by_name = {source.filename: source for source in sources}
-    assert set(by_name) == {"good.txt", "bad.csv"}
+    assert set(by_name) == {"good.txt", "bad.bin"}
     assert by_name["good.txt"].content == b"valid student source"
     assert by_name["good.txt"].pre_error_code is None
-    assert by_name["bad.csv"].content == b"name,answer"
-    assert by_name["bad.csv"].pre_error_code == "submission_source_type_not_allowed"
+    assert by_name["bad.bin"].content == b"\x00binary"
+    assert by_name["bad.bin"].pre_error_code == "submission_source_type_not_allowed"
 
 
 def test_docx_is_one_source_not_an_archive_of_students():
@@ -108,7 +104,8 @@ async def test_native_teacher_text_remains_readable_without_ocr(purpose):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("purpose", ["rubric", "test_cases"])
-async def test_shared_reader_cannot_opt_restricted_images_into_ocr(tmp_path, monkeypatch, purpose):
+@pytest.mark.parametrize("allow_vision", [False, True])
+async def test_shared_reader_teacher_image_obeys_explicit_ocr_choice(tmp_path, monkeypatch, purpose, allow_vision):
     from backend.domain.errors import RecognitionError
     from backend.services import question_sources
     from backend.services.stage_provider_routing import StageProviderRoute
@@ -119,34 +116,36 @@ async def test_shared_reader_cannot_opt_restricted_images_into_ocr(tmp_path, mon
     registry = SimpleNamespace(list_configs=lambda: [{"provider_id": provider.provider_id, "enabled": True}], pick_vision=lambda preferred=None: provider)
     route = StageProviderRoute(route_id=provider.provider_id, kind="llm", provider=provider)
     monkeypatch.setattr(question_sources, "get_storage", lambda: results.store.storage)
-    with pytest.raises(RecognitionError, match="source_type_not_allowed"):
-        await question_sources.read_question_source(
-            owner_id=request.source.owner_id, task_id=request.source.business_id,
-            content=data, filename="teacher.png", stored_file_id=request.source.stored_file_id,
-            purpose=purpose, allow_vision=True, route=route, registry=registry,
-        )
-    provider.ainvoke_vision.assert_not_awaited()
+    kwargs = dict(owner_id=request.source.owner_id, task_id=request.source.business_id,
+        content=data, filename="teacher.png", stored_file_id=request.source.stored_file_id,
+        purpose=purpose, allow_vision=allow_vision, route=route, registry=registry)
+    if allow_vision:
+        result = await question_sources.read_question_source(**kwargs)
+        assert result.text == "Teacher literal -2"
+        assert provider.ainvoke_vision.await_count == 1
+    else:
+        with pytest.raises(RecognitionError, match="material_ocr_confirmation_required"):
+            await question_sources.read_question_source(**kwargs)
+        provider.ainvoke_vision.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("purpose", ["rubric", "test_cases"])
-async def test_compatibility_pdf_reader_cannot_enable_teacher_ocr(purpose):
+async def test_compatibility_pdf_reader_honors_provided_teacher_ocr_skill(purpose):
     import fitz
     with fitz.open() as document:
         document.new_page()
         data = document.tobytes()
-    skill = FakeOCRSkill("Forbidden teacher OCR")
-    with pytest.raises(HTTPException) as caught:
-        await extract_text_from_upload(data, "scan.pdf", purpose=purpose, ocr_skill=skill)
-    assert caught.value.detail["code"] == "material_ocr_not_allowed_for_role"
-    assert skill.calls == []
+    skill = FakeOCRSkill("Teacher OCR explicitly enabled")
+    assert await extract_text_from_upload(data, "scan.pdf", purpose=purpose, ocr_skill=skill) == "Teacher OCR explicitly enabled"
+    assert len(skill.calls) == 1 and skill.calls[0]["purpose"] == purpose
 
 
 @pytest.mark.parametrize("role,extensions", [
-    ("problem", {".pdf", ".txt", ".md", ".markdown", ".docx", ".png", ".jpg", ".jpeg"}),
-    ("reference_answer", {".pdf", ".txt", ".md", ".markdown", ".docx", ".png", ".jpg", ".jpeg"}),
-    ("rubric", {".pdf", ".txt", ".md"}),
-    ("programming_tests", {".pdf", ".txt", ".md", ".json"}),
+    ("problem", {".pdf", ".txt", ".md", ".markdown", ".docx", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
+    ("reference_answer", {".pdf", ".txt", ".md", ".markdown", ".docx", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
+    ("rubric", {".pdf", ".txt", ".md", ".markdown", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
+    ("programming_tests", {".pdf", ".txt", ".md", ".markdown", ".json", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
 ])
 def test_draft_selectable_types_match_the_business_role(role, extensions):
     from backend.api import task_preparation
@@ -191,7 +190,7 @@ def test_problem_queue_rejects_invalid_file_before_publishing_source(filename, c
     ("answers.7z", b"7z\xbc\xaf\x27\x1cinvalid"),
     ("answers.zip", b"not a ZIP"),
 ])
-def test_submission_queue_denies_non_zip_or_invalid_container(filename, content):
+def test_submission_queue_denies_invalid_container_before_publication(filename, content):
     from backend.domain.errors import ValidationError
     from backend.db import file_repository
     from backend.services import task_facade
@@ -207,23 +206,35 @@ def test_submission_queue_denies_non_zip_or_invalid_container(filename, content)
 
 @pytest.mark.parametrize("alias", ["problem-sources/preflight", "question-preparation/sources/preflight"])
 @pytest.mark.parametrize("role", ["rubric", "programming_tests"])
-def test_mounted_old_aliases_cannot_opt_images_into_teacher_ocr(client_registry, monkeypatch, alias, role):
+@pytest.mark.parametrize("opt_in", [False, True])
+def test_mounted_aliases_require_explicit_teacher_ocr_opt_in(client_registry, monkeypatch, alias, role, opt_in):
     from unittest.mock import AsyncMock
     from backend.db import file_repository
     from backend.tests.test_task_background_workflows import _seed_task
     client, registry = client_registry
     provider = registry.provider
     monkeypatch.setattr(provider, "supports_vision", True)
-    invoke = AsyncMock(side_effect=AssertionError("Teacher image must never reach OCR"))
+    invoke = AsyncMock(return_value=SimpleNamespace(content="Question 1: OCR result",
+        provider=provider.provider_id, model="synthetic", duration_ms=1,
+        input_tokens=5, output_tokens=5, finish_reason="stop"))
     monkeypatch.setattr(provider, "ainvoke_vision", invoke, raising=False)
     owner, task = _seed_task()
     response = client.post(f"/tasks/{task}/{alias}", headers=headers(owner),
-        data={"role": role, "enable_material_ocr": "true"},
+        data={"role": role, "enable_material_ocr": str(opt_in).lower()},
         files={"file": ("teacher.png", _valid_png_1x1(), "image/png")})
-    assert response.status_code == 415
-    assert response.json()["detail"]["code"] == "source_type_not_allowed"
-    assert file_repository.list_files(owner_id=owner, assignment_id=task) == []
-    invoke.assert_not_awaited()
+    originals = [row for row in file_repository.list_files(owner_id=owner, assignment_id=task)
+                 if row.kind == "problem_source"]
+    assert len(originals) == 1
+    from backend.storage import get_storage
+    with get_storage().open(originals[0].storage_key) as stored:
+        assert stored.read() == _valid_png_1x1()
+    if opt_in:
+        assert response.status_code == 200, response.text
+        invoke.assert_awaited_once()
+    else:
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "material_ocr_confirmation_required"
+        invoke.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -255,10 +266,10 @@ async def test_prepared_source_reuse_revalidates_original_against_current_role()
     from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
     owner, task = _seed_task()
     response = await api.preflight_problem_source(task_id=task,
-        file=UploadFile(filename="teacher.markdown", file=io.BytesIO(b"1. Original teacher standard")),
+        file=UploadFile(filename="teacher.json", file=io.BytesIO(b'{"input":1,"expected_output":2}')),
         library_material_id=None, inline_text=None, structure_mode="organized",
         extraction_hint="", save_to_library=False, recognition_options=None,
-        role="problem", current=SimpleNamespace(id=owner), registry=_RecoveryRegistry())
+        role="programming_tests", current=SimpleNamespace(id=owner), registry=_RecoveryRegistry())
     assert isinstance(response, dict), getattr(response, "body", response)
     operation = workflow_repository.get_operation(response["source_token"], owner_id=owner)
     # A historical prepared source with a newly restricted role cannot reuse
@@ -309,8 +320,8 @@ async def test_cached_submission_source_cannot_bypass_current_type_policy():
     def reuse(raw, source_id, stored_file_id):
         reused.append(source_id)
         return True
-    result = await pipeline.prepare_submission_sources(content=b"student,answer", filename="answer.csv",
-        content_type="text/csv", owner_id=owner, task_id=task, job_id=running.id,
+    result = await pipeline.prepare_submission_sources(content=b"\x00binary", filename="answer.bin",
+        content_type="application/octet-stream", owner_id=owner, task_id=task, job_id=running.id,
         job_attempt=running.attempt, operation_lease_token=running.lease_token,
         ocr_skill=None, reuse_source=reuse)
     assert len(result) == 1
@@ -319,12 +330,12 @@ async def test_cached_submission_source_cannot_bypass_current_type_policy():
     assert reused == []
     source = source_outcome_repository.get_source(result[0].source_id, owner_id=owner)
     stored = file_repository.get_file(file_id=source.stored_file_id, owner_id=owner)
-    assert stored.original_name == "answer.csv"
-    assert stored.sha256 == __import__("hashlib").sha256(b"student,answer").hexdigest()
+    assert stored.original_name == "answer.bin"
+    assert stored.sha256 == __import__("hashlib").sha256(b"\x00binary").hexdigest()
 
 
 @pytest.mark.parametrize("actor,alias", [("student", "upload"), ("teacher", "teacher-upload")])
-def test_personal_submission_denies_non_zip_container_before_original_storage(client_registry, actor, alias):
+def test_personal_submission_denies_invalid_container_before_original_storage(client_registry, actor, alias):
     from backend.tests.test_ocr_normalized_ingest import _published_assignment
     from backend.db import file_repository
     client, _ = client_registry
@@ -333,7 +344,7 @@ def test_personal_submission_denies_non_zip_container_before_original_storage(cl
         data={"assignment_id": task, "student_id": student},
         files={"file": ("answer.rar", b"Rar!\x1a\x07\x00invalid", "application/octet-stream")})
     assert response.status_code == 422
-    assert response.json()["error"]["code"] == "submission_source_type_not_allowed"
+    assert response.json()["error"]["code"] == "submission_archive_invalid"
     assert file_repository.list_files(owner_id=teacher, assignment_id=task) == []
     assert file_repository.list_files(owner_id=student) == []
 
@@ -346,8 +357,8 @@ def test_saved_submission_retry_revalidates_original_format_without_deleting_it(
     from backend.tests.test_task_background_workflows import _seed_task
     owner, task = _seed_task()
     stored = file_repository.save_file(storage=get_storage(), owner_id=owner,
-        kind="submission_source", original_name="old.csv", content=b"student,answer",
-        content_type="text/csv", assignment_id=task)
+        kind="submission_source", original_name="old.bin", content=b"\x00binary",
+        content_type="application/octet-stream", assignment_id=task)
     with pytest.raises(ValidationError) as caught:
         workflow_inputs.load_submission_input(task_id=task, owner_id=owner, stored_file_id=stored.id)
     assert caught.value.code == "submission_source_type_not_allowed"
@@ -412,7 +423,7 @@ def test_all_remaining_http_uploads_read_only_effective_limit_plus_one(client_re
 
 
 @pytest.mark.asyncio
-async def test_background_submission_recovery_does_not_unpack_legacy_tar():
+async def test_background_submission_recovery_unpacks_valid_legacy_tar_without_ocr():
     import tarfile
     from backend.services import submission_source_pipeline as pipeline
     from backend.db import workflow_repository
@@ -425,13 +436,14 @@ async def test_background_submission_recovery_does_not_unpack_legacy_tar():
         member = tarfile.TarInfo("student.txt")
         member.size = 6
         package.addfile(member, io.BytesIO(b"answer"))
-    skill = FakeOCRSkill("never OCR a forbidden container")
+    skill = FakeOCRSkill("native TAR members never require OCR")
     result = await pipeline.prepare_submission_sources(content=archive.getvalue(), filename="legacy.tar",
         content_type="application/x-tar", owner_id=owner, task_id=task, job_id=running.id,
         job_attempt=running.attempt, operation_lease_token=running.lease_token, ocr_skill=skill)
     assert len(result) == 1
-    assert result[0].filename == "legacy.tar"
-    assert result[0].pre_error_code == "submission_source_type_not_allowed"
+    assert result[0].filename == "student.txt"
+    assert result[0].pre_error_code is None
+    assert result[0].text == "answer"
     assert skill.calls == []
 
 
@@ -457,7 +469,7 @@ async def test_library_category_and_cached_chunks_cannot_grant_disallowed_format
 @pytest.mark.parametrize("role", ["rubric", "programming_tests"])
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("pending", [False, True])
-async def test_deferred_recovery_ignores_legacy_true_for_teacher_pdf(tmp_path, monkeypatch, role, native, pending):
+async def test_deferred_recovery_keeps_teacher_default_off_and_preserves_native_data(tmp_path, monkeypatch, role, native, pending):
     import hashlib
     import time
     import fitz
@@ -490,7 +502,7 @@ async def test_deferred_recovery_ignores_legacy_true_for_teacher_pdf(tmp_path, m
         role=role, source_kind="upload", structure_mode="organized", filename="teacher.pdf",
         content_type="application/pdf", size_bytes=len(body), content_sha256=hashlib.sha256(body).hexdigest(),
         expires_at=time.time() + 60)
-    payload = {"recognition_pending": pending, "enable_material_ocr": True,
+    payload = {"recognition_pending": pending, "enable_material_ocr": False,
                "source_ref": {"stored_file_id": stored.id}}
     operation = SimpleNamespace(owner_id=owner, assignment_id=task, update_progress=AsyncMock(),
                                 operation_id="historical", payload={}, attempt=1)
@@ -500,15 +512,15 @@ async def test_deferred_recovery_ignores_legacy_true_for_teacher_pdf(tmp_path, m
         resolved = await api._recognize_saved_question_sources([(draft, cached, payload)], **kwargs)
         assert ("Original teacher data -2" if pending else cached) in resolved[0][1]
     else:
-        with pytest.raises(RecognitionError, match="material_ocr_not_allowed_for_role"):
+        with pytest.raises(RecognitionError, match="material_ocr_confirmation_required"):
             await api._recognize_saved_question_sources([(draft, cached, payload)], **kwargs)
     material = {"targets": ["criterion" if role == "rubric" else "test_cases"],
                 "source_kind": "upload", "original_stored_file_id": stored.id,
-                "original_sha256": stored.sha256, "enable_material_ocr": True}
+                "original_sha256": stored.sha256, "enable_material_ocr": False}
     if native:
         await api._revalidate_material_original(material, owner_id=owner, task_id=task)
     else:
-        with pytest.raises(RecognitionError, match="material_ocr_not_allowed_for_role"):
+        with pytest.raises(RecognitionError, match="material_ocr_confirmation_required"):
             await api._revalidate_material_original(material, owner_id=owner, task_id=task)
     provider.ainvoke_vision.assert_not_awaited()
 
@@ -553,12 +565,12 @@ def test_retry_loader_uses_original_filename_not_legacy_payload_permission():
     owner, task = _seed_task()
     operation = _create_operation(owner, task)
     stored = file_repository.save_file(storage=get_storage(), owner_id=owner, assignment_id=task,
-        kind="submission_container", original_name="legacy.csv", content=b"student,answer", content_type="text/csv")
+        kind="submission_container", original_name="legacy.bin", content=b"\x00binary", content_type="application/octet-stream")
     operation = workflow_repository.save_operation_checkpoint(operation.id, owner_id=owner,
         expected_attempt=operation.attempt, expected_checkpoint_revision=operation.checkpoint_revision,
         stage="submission_input_saved", checkpoint={}, artifact_refs=[stored.id])
     workflow_repository.update_operation(operation.id, owner_id=owner, expected_attempt=operation.attempt,
-        status="error", payload={"filename": "promoted.txt"})
+        status="error", payload={"filename": "promoted.txt", "submission_structure_version": 2})
     with pytest.raises(ValidationError) as caught:
         task_facade.load_submission_retry_upload(task_id=task, owner_id=owner, job_id=operation.id)
     assert caught.value.code == "submission_source_type_not_allowed"
@@ -647,10 +659,11 @@ async def test_material_background_revalidates_original_before_parser_or_cache(m
     from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
     owner, task = _seed_task(with_question=True)
     registry = _RecoveryRegistry()
-    filename = "teacher.markdown" if case == "forbidden_role" else "teacher.txt"
+    filename = "teacher.json" if case == "forbidden_role" else "teacher.txt"
+    original = b'{"input":1,"expected_output":2}' if case == "forbidden_role" else b"four"
     response = await api.preflight_material_import(task_id=task,
-        file=UploadFile(filename=filename, file=io.BytesIO(b"four")), library_material_id=None,
-        targets='["reference_answer"]', structure_mode="organized", extraction_hint="", save_to_library=False,
+        file=UploadFile(filename=filename, file=io.BytesIO(original)), library_material_id=None,
+        targets='["test_cases"]' if case == "forbidden_role" else '["reference_answer"]', structure_mode="organized", extraction_hint="", save_to_library=False,
         current=SimpleNamespace(id=owner), registry=registry)
     source = workflow_repository.get_operation(response["source_token"], owner_id=owner)
     payload = {**source.payload, "targets": ["criterion"]}
@@ -696,7 +709,7 @@ async def test_mixed_zip_records_rejected_source_and_publishes_valid_sibling(mon
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("S001.txt", b"Wrong -2")
-        archive.writestr("rejected.csv", b"student,answer")
+        archive.writestr("rejected.bin", b"\x00binary")
     queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
         filename="answers.zip", content=buffer.getvalue(), content_type="application/zip", registry=registry)
     claimed = workflow_repository.claim_operation(queued["job_id"], owner_id=owner, worker_id="mixed-policy", lease_seconds=60)
@@ -704,12 +717,12 @@ async def test_mixed_zip_records_rejected_source_and_publishes_valid_sibling(mon
     rows = source_outcome_repository.list_source_results(operation_id=claimed.id, owner_id=owner, attempt=claimed.attempt)
     results = {row.source.original_name: row for row in rows}
     assert results["S001.txt"].outcome.status == "parsed"
-    assert results["rejected.csv"].outcome.stable_error_code == "submission_source_type_not_allowed"
-    assert results["rejected.csv"].outcome.failure_phase == "source_read"
-    stored = file_repository.get_file(file_id=results["rejected.csv"].source.stored_file_id, owner_id=owner)
-    assert stored.sha256 == hashlib.sha256(b"student,answer").hexdigest()
+    assert results["rejected.bin"].outcome.stable_error_code == "submission_source_type_not_allowed"
+    assert results["rejected.bin"].outcome.failure_phase == "source_read"
+    stored = file_repository.get_file(file_id=results["rejected.bin"].source.stored_file_id, owner_id=owner)
+    assert stored.sha256 == hashlib.sha256(b"\x00binary").hexdigest()
     with get_storage().open(stored.storage_key) as stream:
-        assert stream.read() == b"student,answer"
+        assert stream.read() == b"\x00binary"
     assert provider.ainvoke.await_count == 1
     snapshot = task_facade.get_task(task_id=task, owner_id=owner)
     assert snapshot["submission_source_summary"]["parsed"] == 1
@@ -801,10 +814,10 @@ def test_teacher_scanned_pdf_is_actionable_role_error_not_provider_failure(clien
     monkeypatch.setattr(registry.provider, "ainvoke_vision", invoke, raising=False)
     owner, task = _seed_task()
     response = client.post(f"/tasks/{task}/{alias}", headers=headers(owner),
-        data={"role": role, "enable_material_ocr": "true"},
+        data={"role": role, "enable_material_ocr": "false"},
         files={"file": ("teacher.pdf", body, "application/pdf")})
     assert response.status_code == 422, response.text
-    assert response.json()["detail"]["code"] == "material_ocr_not_allowed_for_role"
+    assert response.json()["detail"]["code"] == "material_ocr_confirmation_required"
     originals = [row for row in file_repository.list_files(owner_id=owner, assignment_id=task) if row.kind == "problem_source"]
     assert len(originals) == 1 and get_storage().exists(originals[0].storage_key)
     invoke.assert_not_awaited()
@@ -856,11 +869,11 @@ async def test_shared_reader_teacher_pdf_never_opted_into_ocr(tmp_path, monkeypa
     monkeypatch.setattr(question_sources, "get_storage", lambda: results.store.storage)
     kwargs = dict(owner_id=request.source.owner_id, task_id=request.source.business_id,
                   content=content, filename="teacher.pdf", stored_file_id=request.source.stored_file_id,
-                  purpose=purpose, allow_vision=True, route=route, registry=registry)
+                  purpose=purpose, allow_vision=False, route=route, registry=registry)
     if native:
         result = await question_sources.read_question_source(**kwargs)
         assert "Teacher original standard -2" in result.text
     else:
-        with pytest.raises(RecognitionError, match="material_ocr_not_allowed_for_role"):
+        with pytest.raises(RecognitionError, match="material_ocr_confirmation_required"):
             await question_sources.read_question_source(**kwargs)
     provider.ainvoke_vision.assert_not_awaited()

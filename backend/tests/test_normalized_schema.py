@@ -137,9 +137,10 @@ def test_submission_revision_unique_constraint():
 
 def test_submission_answer_unique_constraint():
     uniques = _collect_unique_constraints("submission_answers")
-    assert ("revision_id", "question_id") in uniques, (
-        "submission_answers must enforce (revision_id, question_id) uniqueness"
+    assert ("revision_id", "answer_key") in uniques, (
+        "submission_answers must enforce stable answer identity within each revision"
     )
+    assert ("revision_id", "question_id") not in uniques  # Temporary review conflicts retain both answers.
 
 
 def test_teacher_review_sequence_is_unique_per_result():

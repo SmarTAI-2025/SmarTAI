@@ -665,6 +665,7 @@ def create_archive_member_reference(
     owner_id: str,
     assignment_id: str,
     member_name: str,
+    source_order_index: int | None = None,
     fence_operation_id: str | None = None,
     fence_operation_attempt: int | None = None,
     fence_lease_token: str | None = None,
@@ -696,6 +697,8 @@ def create_archive_member_reference(
         storage_prefix = (
             f"{storage_prefix}/{fence_operation_id}/{fence_operation_attempt}"
         )
+    if source_order_index is not None:
+        storage_prefix = f"{storage_prefix}/{source_order_index}"
     return save_file(
         storage=storage,
         owner_id=owner_id,

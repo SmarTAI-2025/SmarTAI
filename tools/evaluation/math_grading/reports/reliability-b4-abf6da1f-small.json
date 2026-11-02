@@ -1,0 +1,118 @@
+{
+  "kind": "B4_incremental_independent_acceptance",
+  "status": "failed",
+  "candidate": "abf6da1f24a560e3f160e01cd33b45889e535b09",
+  "parent": "6e9f54a1270c2b3e024639e8327835ed4d7288c1",
+  "recorded_at": "2026-10-23T14:26:59.266452+00:00",
+  "suites": [
+    {
+      "name": "original_contract",
+      "selected": 68,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 23.043,
+      "failed_cases": [],
+      "log": "/private/tmp/math-b4-contract-abf6da1f.log",
+      "junit": "/private/tmp/math-b4-contract-abf6da1f.xml",
+      "junit_sha256": "c5a74570e69cc737ce8876641e195a9f455649cccafcaab0a20f8890a5528daa"
+    },
+    {
+      "name": "safety",
+      "selected": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 6.607,
+      "failed_cases": [],
+      "log": "/private/tmp/math-b4-safety-abf6da1f.log",
+      "junit": "/private/tmp/math-b4-safety-abf6da1f.xml",
+      "junit_sha256": "f69908907ca2ba83431eee01f7b7781bd5127e1456e5ed27014f7557d631355f"
+    },
+    {
+      "name": "increment",
+      "selected": 28,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 4.493,
+      "failed_cases": [
+        "test_line_break_does_not_remove_negation_or_hypothesis_scope[\\u4e0d\\u80fd\\u63a8\\u51fa\\u4ee5\\u4e0b\\u7b49\\u5f0f\\uff1a\\n7+8=16\\u3002]",
+        "test_line_break_does_not_remove_negation_or_hypothesis_scope[\\u5047\\u8bbe\\u5982\\u4e0b\\u7b49\\u5f0f\\u6210\\u7acb\\uff1a\\n7+8=16\\u3002]"
+      ],
+      "log": "/private/tmp/math-b4-increment-final-abf6da1f.log",
+      "junit": "/private/tmp/math-b4-increment-final-abf6da1f.xml",
+      "junit_sha256": "92a195a450ddbc9aec0e5d2525b7a3c8e24c1dd3491ecd66194852c3c69fff33"
+    }
+  ],
+  "source_sha256": {
+    "backend/tests/math_grading_evaluation/acceptance_reliability.py": "c413b9a8ffd6fe58f535f4853265d56ea55f20410e86208feb8962d6b4097e5f",
+    "backend/tests/math_grading_evaluation/acceptance_reliability_safety.py": "1f381f2de2a1451139492235d29f9c8026324c88b88589c71fb83957976e3335",
+    "backend/tests/math_grading_evaluation/acceptance_reliability_b4.py": "3a095712c97bc56c44abb731686acac7a96f18e66246f7e6a7d0ff6a96205e30",
+    "tools/evaluation/math_grading/reliability_cases.py": "57034388c5761327159598378e551de24b25112d5b95c81f7cba6a8a49e0cc79",
+    "tools/evaluation/math_grading/corpus.py": "58a993d3179a29a53dfbb912a1366d8e0a15a25ae2b55fd3698c2460f90e3084"
+  },
+  "counterexamples": [
+    {
+      "quote": "不能推出以下等式：\n7+8=16。",
+      "expected": "No automatic unqualified check; explicit request rejected for this scoped full claim.",
+      "parent_auto": [],
+      "candidate_auto": [
+        {
+          "claim_id": "scoped",
+          "context_quote": "独立核查给出的关系。",
+          "request": {
+            "student_expression": "16",
+            "reference_expression": "7+8",
+            "comparison": "equivalence",
+            "variable": null,
+            "assumptions": {},
+            "domain": null,
+            "allow_approximation": false,
+            "absolute_tolerance": null,
+            "relative_tolerance": null,
+            "student_unit": null,
+            "reference_unit": null
+          },
+          "origin": "explicit_relation"
+        }
+      ],
+      "candidate_binding_error": null
+    },
+    {
+      "quote": "假设如下等式成立：\n7+8=16。",
+      "expected": "No automatic unqualified check; explicit request rejected for this scoped full claim.",
+      "parent_auto": [],
+      "candidate_auto": [
+        {
+          "claim_id": "scoped",
+          "context_quote": "独立核查给出的关系。",
+          "request": {
+            "student_expression": "16",
+            "reference_expression": "7+8",
+            "comparison": "equivalence",
+            "variable": null,
+            "assumptions": {},
+            "domain": null,
+            "allow_approximation": false,
+            "absolute_tolerance": null,
+            "relative_tolerance": null,
+            "student_unit": null,
+            "reference_unit": null
+          },
+          "origin": "explicit_relation"
+        }
+      ],
+      "candidate_binding_error": null
+    }
+  ],
+  "initial_harness_error": "First increment run used LLMResponse.text instead of content/provider: 5 harness failures plus the same 2 source-scope failures. Corrected response envelope only; all 28 original expectations retained for final run.",
+  "limitations": [
+    "Synthetic program contracts, not actual model accuracy or a demonstrated incorrect final grade.",
+    "Before/after comparison loads only the relation-planner module from the parent with unchanged dependencies; it is not a full parent-candidate rerun.",
+    "No combined d69a0466, PostgreSQL, browser, deployment or live acceptance in B."
+  ],
+  "paid_model_calls": 0,
+  "subagents": 0,
+  "production_changes": 0
+}

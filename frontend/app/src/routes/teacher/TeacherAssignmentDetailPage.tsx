@@ -13,6 +13,7 @@ import { Card, SectionHeader } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { QUESTION_TYPES, hasQuestionType, questionTypeLabel } from "@/lib/reviewLabels";
 
 /**
  * Teacher assignment detail: add questions to a draft, publish (optimistic-lock
@@ -32,7 +33,7 @@ export function TeacherAssignmentDetailPage() {
 
   const [qId, setQId] = useState("");
   const [stem, setStem] = useState("");
-  const [type, setType] = useState("short");
+  const [type, setType] = useState("");
   const [maxScore, setMaxScore] = useState(10);
 
   function addQ(e: React.FormEvent) {
@@ -41,7 +42,7 @@ export function TeacherAssignmentDetailPage() {
     // param, so the mutate fires once data is available even if the route
     // param is absent in tests.
     const id = assignment.data?.id ?? assignmentId;
-    if (!id || !qId.trim()) return;
+    if (!id || !qId.trim() || !hasQuestionType(type)) return;
     addQuestion.mutate(
       {
         assignmentId: id,
@@ -113,7 +114,7 @@ export function TeacherAssignmentDetailPage() {
               {questions.data.map((q, i) => (
                 <li key={q.id} className="px-4 py-3 text-sm">
                   <div className="font-medium">
-                    {i + 1}. {q.q_id} <span className="text-muted-foreground">({q.type}, {q.max_score} 分)</span>
+                    {i + 1}. {q.q_id} <span className="text-muted-foreground">({questionTypeLabel(q.type, "zh-CN")}, {q.max_score} 分)</span>
                   </div>
                   <div className="mt-1 text-muted-foreground">{q.stem || "（无题干）"}</div>
                 </li>
@@ -132,11 +133,8 @@ export function TeacherAssignmentDetailPage() {
               </Field>
               <Field label="题型">
                 <select className="h-9 rounded-md border bg-background px-2 text-sm" value={type} onChange={(e) => setType(e.target.value)}>
-                  <option value="short">short</option>
-                  <option value="concept">concept</option>
-                  <option value="calculation">calculation</option>
-                  <option value="programming">programming</option>
-                  <option value="proof">proof</option>
+                  <option value="" disabled>请选择</option>
+                  {QUESTION_TYPES.map((value) => <option key={value} value={value}>{questionTypeLabel(value, "zh-CN")}</option>)}
                 </select>
               </Field>
             </div>
@@ -153,7 +151,7 @@ export function TeacherAssignmentDetailPage() {
                 <Input type="number" value={maxScore} onChange={(e) => setMaxScore(Number(e.target.value))} />
               </Field>
               <div className="flex items-end">
-                <Button type="submit" disabled={addQuestion.isPending || !qId.trim()}>
+                <Button type="submit" disabled={addQuestion.isPending || !qId.trim() || !hasQuestionType(type)}>
                   添加题目
                 </Button>
               </div>

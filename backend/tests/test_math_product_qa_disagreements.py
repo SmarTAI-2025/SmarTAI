@@ -17,6 +17,7 @@ async def test_unresolved_holistic_scores_remain_advisory(monkeypatch, review_fa
     p, a, plan = problem(), answer(), plan_for(mode="holistic")
     experts = [expert_for(grading.MathAssessment(
         route_id="main", route_reason="Overall teacher criterion applies.", score=score,
+        claims=[grading.Claim(id="c", quote=a.content, verdict="refuted", reason="Final product is wrong.")],
         rationale="The method is valid but the final product is wrong.",
         confidence=.95, comment="Final arithmetic error."), plan, a.content)
         for score in (8, 9)]
@@ -29,7 +30,7 @@ async def test_unresolved_holistic_scores_remain_advisory(monkeypatch, review_fa
     assert call.await_count == 1
     assert correction.score == sum(step.score for step in correction.steps) == 8.5
     assert [expert.score for expert in correction.expert_results] == [8, 9]
-    assert correction.review_reasons == ["math_scoring_uncertainty"]
+    assert correction.review_reasons == ["math_expert_disagreement"]
     # This disagreement is below the old variance threshold, yet it remains
     # visible as advice and keeps a real score usable by the existing result UI.
     assert multi._compute_review_signal(reviewed)[1] is False
@@ -68,7 +69,7 @@ async def test_same_score_different_error_origin_gets_one_review(monkeypatch, se
     correction = multi._weighted_average_fallback(p, reviewed)
     assert call.await_count == 1
     assert correction.score == sum(step.score for step in correction.steps) == 9
-    assert correction.review_reasons == ["math_scoring_uncertainty"]
+    assert correction.review_reasons == ["math_expert_disagreement"]
 
 
 @pytest.mark.asyncio

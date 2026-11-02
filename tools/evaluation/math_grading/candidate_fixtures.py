@@ -49,13 +49,15 @@ def plan_reply(case):
     mode, items = "holistic", []
     if id in POINT_RULES:
         mode = "points"
-        items = [dict(id=f"p{i}", description=text, points=points, source="provided")
+        items = [dict(id=f"p{i}", description=text, source_quote=text, points=points, source="provided")
                  for i, (text, points) in enumerate(POINT_RULES[id])]
     elif id in {"C08", "C09"}:
         mode = "deductions"
         items = [dict(id="error", description=(
             "首次数值错误扣1分" if id == "C08" else "每个独立数值错误扣1分"),
                       points=1, source="provided", max_occurrences=1 if id == "C08" else None)]
+    for item in items:
+        item.setdefault("source_quote", item["description"])
     return dict(effective_criterion=case["problem"]["criterion"],
                 routes=[dict(id="main", description="按本题明确标准计分",
                              applies_when="所有本题作答", mode=mode, items=items)],

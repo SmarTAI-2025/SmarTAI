@@ -158,7 +158,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                                route: StageProviderRoute, registry, stored_file_id=None,
                                extraction_hint="", options=None, purpose="problems", reporter=None, text_reader=None,
                                allow_vision=None, binding=None, retry_key=None, acknowledge_pending_retry=False,
-                               timeout_profile=None):
+                               timeout_profile=None, execution_scope=None, allow_partial=False, on_pages=None):
     from backend.services.source_files import persist_problem_source
 
     try:
@@ -168,7 +168,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         raise RecognitionError(exc.code) from None
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
     restricted_role = role in {"rubric", "programming_tests"}
-    allow_vision = not restricted_role and (allow_vision is None or allow_vision is True)
+    allow_vision = not restricted_role if allow_vision is None else allow_vision is True
     reporter = reporter or ProgressReporter(f"recognition-{task_id}")
     inspection = inspect_upload_content(content, filename, content_type)
     media_type = inspection.content_type
@@ -176,8 +176,8 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         text = await (text_reader or extract_text_from_upload)(content, filename, purpose=purpose, reporter=reporter)
         return QuestionSourceRead(text, stored_file_id=stored_file_id)
     total_pages = None
-    if media_type == "application/pdf" and purpose == "problems":
-        index = await read_pdf_evidence(content, PdfIndexRequest(window_pages=1), progress=reporter)
+    if media_type == "application/pdf":
+        index = await read_pdf_evidence(content, PdfIndexRequest(window_pages=1), progress=reporter, wait_for_slot=True)
         total_pages = index.total_pages
         if scope.pages and max(scope.pages) > index.total_pages:
             raise RecognitionError("question_source_pages_out_of_range")
@@ -204,7 +204,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         targets=scope.targets if locate_targets else [], pages=[] if locate_targets else scope.pages,
         page_hints={target: scope.pages for target in scope.targets} if locate_targets and scope.pages else {},
         search_start_page=scope.search_start_page, search_window_pages=scope.search_window_pages,
-        policy=RecognitionPolicyV1(allow_native_fallback=allow_vision),
+        policy=RecognitionPolicyV1(allow_native_fallback=allow_vision, execution_scope=execution_scope),
     )
     async with recognition_engine(owner_id=owner_id, route=route if allow_vision else None, registry=registry) as engine:
         if media_type.startswith("image/") and engine is None:
@@ -223,7 +223,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                 service=service, request=native_request, content=content, engine=None,
                 total_pages=total_pages, reporter=reporter, binding=binding, allow_native_partial=True,
                 retry_key=retry_key, acknowledge_pending_retry=acknowledge_pending_retry,
-                timeout_profile=timeout_profile,
+                timeout_profile=timeout_profile, allow_partial=allow_partial, on_pages=on_pages,
             )
             return QuestionSourceRead(text, summary, stored_file_id)
 
@@ -235,9 +235,11 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                     service=service, request=request, content=content, engine=engine,
                     total_pages=total_pages, reporter=reporter, binding=binding, retry_key=retry_key,
                     acknowledge_pending_retry=acknowledge_pending_retry,
-                    timeout_profile=timeout_profile,
+                    timeout_profile=timeout_profile, allow_partial=allow_partial, on_pages=on_pages,
                 )
             except RecognitionError as exc:
+                if not allow_vision and exc.code in {"visual_capability_unavailable", "ocr_empty_result"}:
+                    raise RecognitionError("material_ocr_confirmation_required", **(exc.details or {})) from None
                 if exc.code != "provider_vision_not_supported" or not allow_vision or engine is None:
                     raise
                 # An actual image rejection says nothing about native PDF text.
@@ -262,8 +264,8 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         raise RecognitionError("recognition_already_running")
     assembly = run.assembly
     if assembly is None or assembly.document is None:
-        if restricted_role and run.safe_error_code in {"ocr_empty_result", "visual_capability_unavailable"}:
-            raise RecognitionError("material_ocr_not_allowed_for_role")
+        if not allow_vision and run.safe_error_code == "visual_capability_unavailable":
+            raise RecognitionError("material_ocr_confirmation_required")
         raise RecognitionError(run.safe_error_code or "recognition_artifact_unavailable")
     document = assembly.document
     text = document.final_markdown
@@ -271,7 +273,14 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     # page artifacts for recovery, but never let missing source evidence become
     # an apparently unanswered question in the structure parser.
     coverage = document.coverage
-    if coverage.failed_pages or coverage.unprocessed_pages or coverage.missing_targets:
+    if on_pages is not None:
+        ready = [dict(page_number=page.page_number,
+            text="\n".join(span.final_text for span in page.spans if span.final_text))
+            for page in document.pages if page.page_number in coverage.processed_pages]
+        if ready:
+            await on_pages(ready)
+    incomplete = bool(coverage.failed_pages or coverage.unprocessed_pages or coverage.missing_targets)
+    if incomplete and not (allow_partial and text.strip()):
         raise RecognitionError(
             run.safe_error_code or assembly.safe_error_code or "question_source_incomplete",
             failed_pages=sorted(set(coverage.failed_pages) | set(coverage.unprocessed_pages)),
@@ -279,8 +288,6 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
             page_diagnostics=recognition_page_diagnostics(assembly),
         )
     if not text.strip():
-        if restricted_role:
-            raise RecognitionError("material_ocr_not_allowed_for_role")
         if not allow_vision and run.safe_error_code == "visual_capability_unavailable":
             raise RecognitionError("material_ocr_confirmation_required")
         if run.safe_error_code == "visual_capability_unavailable" and route.provider is not None:
@@ -289,10 +296,11 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         failure_code = image_quality_failure(failure_code, document)
         raise RecognitionError(failure_code)
     summary = dict(
-        schema_version=1, operation_id=run.operation_id, status=run.status,
+        schema_version=1, operation_id=run.operation_id, status="failed" if incomplete else run.status,
         artifact_ids=list(run.artifact_ids), coverage=document.coverage.model_dump(mode="json"),
         confidence=document.confidence, warning_codes=document.warning_codes,
-        confidence_reasons=document.confidence_reasons, error_code=run.safe_error_code,
+        confidence_reasons=document.confidence_reasons,
+        error_code=(run.safe_error_code or assembly.safe_error_code or "question_source_incomplete") if incomplete else run.safe_error_code,
         page_diagnostics=recognition_page_diagnostics(assembly),
         usage=run.current_usage.model_dump(mode="json"), operation_usage=run.operation_usage.model_dump(mode="json"),
         requires_review=True,

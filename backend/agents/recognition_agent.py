@@ -220,11 +220,12 @@ class RecognitionAgent:
     def __init__(self, engine: RecognitionEngine | None, *, capacity: RecognitionCapacity,
                  progress: ProgressReporter | None = None, clock: Callable[[], float] = time.monotonic,
                  local_reader: RecognitionLocalEvidenceReader | None = None,
-                 call_service=None, elapsed_seconds: float = 0):
+                 call_service=None, elapsed_seconds: float = 0, repair_admission=None):
         self.engine, self.capacity, self.progress, self.clock = engine, capacity, progress, clock
         self.local_reader = local_reader
         self.call_service = call_service
         self.elapsed_seconds = elapsed_seconds
+        self.repair_admission = repair_admission
 
     async def read(self, request: RecognitionReadRequestV1, source_bytes: bytes, *, authorized_owner_id: str) -> RecognitionWorkflowReadV1:
         raw, _budget = await self._read(request, source_bytes, authorized_owner_id=authorized_owner_id)
@@ -265,7 +266,8 @@ class RecognitionAgent:
                 return (await local_reader.read(
                     source_bytes, command, timeout_seconds=budget.local_timeout(10, phase),
                 )).evidence
-            return await read_pdf_evidence(source_bytes, command, timeout_seconds=budget.local_timeout(10, phase), progress=self.progress)
+            return await read_pdf_evidence(source_bytes, command, timeout_seconds=budget.local_timeout(10, phase),
+                                           progress=self.progress, wait_for_slot=request.source.scope != "knowledge_document")
 
         try:
             if self.progress:
@@ -285,7 +287,10 @@ class RecognitionAgent:
                                              local_reader=local_reader, call_session=call_session)
             else:
                 start = min(request.pages) if request.pages else request.search_start_page
-                index = await pdf_read(PdfIndexRequest(start_page=start, window_pages=request.search_window_pages,
+                # Explicit page reads do not need to inspect the remaining document.
+                # Target localization still owns its independent search window.
+                window = min(request.search_window_pages, max(request.pages) - start + 1) if request.pages else request.search_window_pages
+                index = await pdf_read(PdfIndexRequest(start_page=start, window_pages=window,
                                                        targets=_index_terms(request.targets)))
                 if not isinstance(index, PdfIndexResult):
                     raise RecognitionError("recognition_response_invalid")
@@ -390,7 +395,7 @@ class RecognitionAgent:
         return await recheck_recognition(
             result, source_bytes, authorized_owner_id=authorized_owner_id, engine=self.engine,
             budget=budget, capacity=self.capacity, progress=self.progress, local_reader=local_reader,
-            call_session=call_session,
+            call_session=call_session, repair_admission=self.repair_admission,
         )
 
     async def _scan(self, request, source_bytes, index, details, native, targets, policy, budget, capabilities, *, local_reader=None, call_session=None):

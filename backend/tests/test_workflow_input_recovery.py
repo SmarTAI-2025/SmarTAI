@@ -77,7 +77,8 @@ def queue_submission(owner, task):
 
 
 @pytest.mark.asyncio
-async def test_saved_zip_and_roster_restore_then_apply_current_options_without_upload():
+@pytest.mark.parametrize("source_field", ["stored_file_id", "reuse_input_from_job_id"])
+async def test_saved_zip_and_roster_restore_then_apply_current_options_without_upload(source_field):
     owner, task = _seed_task(with_question=True)
     queued, content = queue_submission(owner, task)
     workflow = fail(owner, task, queued)
@@ -88,7 +89,8 @@ async def test_saved_zip_and_roster_restore_then_apply_current_options_without_u
     assert restored == content
     result = await tasks.parse_submissions_endpoint(
         task_id=task, background_tasks=BackgroundTasks(), file=None,
-        stored_file_id=snapshot["stored_file_id"], identity_mode="manual_review", roster_file=None,
+        **{source_field: snapshot["stored_file_id"] if source_field == "stored_file_id" else queued["job_id"]},
+        identity_mode="manual_review", roster_file=None,
         reuse_roster_from_job_id=queued["job_id"], recognition_provider_id="test-provider",
         replace_confirmed=False, expected_workflow_revision=workflow.workflow_revision,
         current=SimpleNamespace(id=owner), registry=_Registry(),
@@ -156,3 +158,26 @@ async def test_mounted_read_routes_and_saved_inputs_isolate_users_tasks_and_revi
         expected_workflow_revision=workflow.workflow_revision - 1, recognition_provider_id="test-provider", replace_confirmed=False,
         current=SimpleNamespace(id=owner), registry=_Registry())
     assert stale.status_code == 409
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["owner", "task", "job", "revision", "missing_revision", "duplicate_source", "empty_job"])
+async def test_configuration_original_upload_fallback_keeps_access_and_revision_guards(invalid):
+    owner, task = _seed_task(with_question=True)
+    other, other_task = _seed_task(with_question=True)
+    queued, _ = queue_submission(owner, task)
+    workflow = fail(owner, task, queued)
+    saved = workflow_inputs.submission_inputs(task_id=task, owner_id=owner)["input"]
+    result = await tasks.parse_submissions_endpoint(
+        task_id=other_task if invalid == "task" else task,
+        background_tasks=BackgroundTasks(), file=None,
+        reuse_input_from_job_id=("unknown-job" if invalid == "job" else "" if invalid == "empty_job" else queued["job_id"]),
+        stored_file_id=saved["stored_file_id"] if invalid == "duplicate_source" else None,
+        identity_mode="filename", roster_file=None, recognition_provider_id="test-provider", replace_confirmed=False,
+        expected_workflow_revision=(None if invalid in {"missing_revision", "task"} else
+                                    workflow.workflow_revision - (invalid == "revision")),
+        current=SimpleNamespace(id=other if invalid == "owner" else owner), registry=_Registry(),
+    )
+    assert result.status_code in {404, 409, 422}
+    assert workflow_repository.get_operation(queued["job_id"], owner_id=owner).status == "error"
+    assert workflow_repository.get_live_workflow(task, owner_id=owner).workflow_revision == workflow.workflow_revision

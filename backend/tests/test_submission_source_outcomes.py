@@ -66,8 +66,8 @@ def _seed_task() -> tuple[str, str]:
         task_id,
         teacher_id=owner_id,
         q_id="q1",
-        order_index=0,
-        type="short",
+        order_index=0, number="1",
+        type="concept",
         stem="Question one",
         criterion="Award up to 10 points for the method and result.",
         max_score=10,
@@ -351,7 +351,7 @@ async def test_partial_batch_keeps_success_and_exact_per_file_failure(monkeypatc
             "stu_ans": [{
                 "q_id": "q1",
                 "number": "1",
-                "type": "short",
+                "type": "concept",
                 "content": "answer",
             }],
         }))
@@ -438,7 +438,7 @@ async def test_teacher_identity_confirmation_resolves_current_attention_without_
             "stu_id": "S010",
             "stu_name": "Candidate",
             "stu_ans": [{
-                "q_id": "q1", "number": "1", "type": "short", "content": "answer"
+                "q_id": "q1", "number": "1", "type": "concept", "content": "answer"
             }],
         }))
 
@@ -624,7 +624,7 @@ async def test_no_matching_answer_is_not_student_answer_wrong(monkeypatch):
             "stu_ans": [{
                 "q_id": "q99",
                 "number": "99",
-                "type": "short",
+                "type": "concept",
                 "content": "an answer for another assignment",
             }],
         }))
@@ -638,7 +638,7 @@ async def test_no_matching_answer_is_not_student_answer_wrong(monkeypatch):
             content_type="text/plain",
             text="answer",
         )],
-        {"q1": {"q_id": "q1", "number": "1", "type": "short", "stem": "Q1"}},
+        {"q1": {"q_id": "q1", "number": "1", "type": "concept", "stem": "Q1"}},
         SimpleNamespace(provider_id="test"),
     )
     result = results[0]
@@ -667,7 +667,7 @@ async def test_empty_answer_list_has_a_distinct_teacher_reason(monkeypatch):
             content_type="text/plain",
             text="student name but no answer region",
         )],
-        {"q1": {"q_id": "q1", "number": "1", "type": "short", "stem": "Q1"}},
+        {"q1": {"q_id": "q1", "number": "1", "type": "concept", "stem": "Q1"}},
         SimpleNamespace(provider_id="test"),
     )
     result = results[0]
@@ -685,7 +685,7 @@ async def test_duplicate_student_ids_preserve_both_sources_for_review(monkeypatc
             "stu_id": "S003",
             "stu_name": "Student Three",
             "stu_ans": [{
-                "q_id": "q1", "number": "1", "type": "short", "content": "A"
+                "q_id": "q1", "number": "1", "type": "concept", "content": "A"
             }],
         }))
 
@@ -702,7 +702,7 @@ async def test_duplicate_student_ids_preserve_both_sources_for_review(monkeypatc
     ]
     results = await parse_student_answer_sources(
         sources,
-        {"q1": {"q_id": "q1", "number": "1", "type": "short", "stem": "Q1"}},
+        {"q1": {"q_id": "q1", "number": "1", "type": "concept", "stem": "Q1"}},
         SimpleNamespace(provider_id="test"),
     )
     assert [result.status for result in results] == ["identity_conflict", "identity_conflict"]

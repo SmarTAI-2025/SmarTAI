@@ -13,10 +13,32 @@ vi.mock("@/api/tasks", () => ({ getTask: vi.fn(), addTaskQuestion: vi.fn(), dele
 vi.mock("@/components/new-task/NewTaskStepper", () => ({ NewTaskStepper: () => null }));
 const api = await import("@/api/tasks");
 beforeEach(() => { vi.clearAllMocks(); localStorage.setItem("smartai_locale", "zh-CN"); });
+it.each(["zh-CN", "en-US"])("lists current missing fields on confirmation and drops each saved repair (%s)", async locale => {
+  const problem = { q_id: "Q1", number: "1", type: "", stem: "", criterion: "", reference_answer: "", max_score: 10,
+    review_status: "needs_review", max_score_review_status: "confirmed", preparation_issues: [
+      { issue_id: "manual", code: "manual_completion_required", field: "source", severity: "blocking", status: "open", details: { required_fields: ["type", "stem", "criterion"] } },
+    ],
+  } as ProblemInfo;
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const { result } = renderHook(() => useQuestionReview("T", 1, locale), { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+  const fields = locale === "zh-CN" ? ["题型", "题干", "评分标准"] : ["question type", "question text", "rubric"];
+  for (const [index, field] of (["type", "stem", "criterion"] as const).entries()) {
+    await act(async () => { result.current.clearBlocked(); expect(await result.current.confirm([problem])).toBe(false); });
+    expect(result.current.blocked).toHaveLength(3 - index);
+    result.current.blocked.forEach((item, offset) => {
+      expect(item.label).toContain(fields[index + offset]);
+      expect(item.label).not.toMatch(/标答|reference answer|—/);
+      expect(item.href).toBe("/tasks/T/questions/Q1/content#question-Q1");
+    });
+    problem[field] = field === "type" ? "reasoning" : "Saved content";
+  }
+  expect(api.updateProblem).not.toHaveBeenCalled();
+  client.clear();
+});
 it.each(["zh-CN", "en-US"])("synchronizes cells, counts and queue after confirming a advisory package (%s)", async locale => {
   localStorage.setItem("smartai_locale", locale);
   const zh = locale === "zh-CN";
-  const problem = { q_id: "Q1", number: "1", stem: "x + 1 = 2", type: "math", max_score: 10,
+  const problem = { q_id: "Q1", number: "1", stem: "x + 1 = 2", type: "calculation", max_score: 10,
     reference_answer: "x = 1", criterion: "Solve", review_status: "needs_review", max_score_review_status: "confirmed",
     preparation_issues: [{ issue_id: "uncertain", code: "low_confidence", field: "stem", severity: "warning", status: "open", details: { confidence: .4 } }],
   } as ProblemInfo;
@@ -43,7 +65,7 @@ it.each(["zh-CN", "en-US"])("synchronizes cells, counts and queue after confirmi
 
 it("counts ordinary and flagged pending responses consistently, then clears both after confirmation", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  const flagged = { q_id: "Q1", number: "1", type: "short", content: "literal student answer", recognition_confidence: .4, flag: [], review_status: "pending" as const };
+  const flagged = { q_id: "Q1", number: "1", type: "concept", content: "literal student answer", recognition_confidence: .4, flag: [], review_status: "pending" as const };
   client.setQueryData(taskKeys.detail("T"), { task_id: "T", status: "submissions_ready", workflow_revision: 1,
     problem_data: { Q1: { q_id: "Q1", stem: "Question" } }, student_data: {
       S1: { stu_id: "S1", stu_name: "Normal", identity_status: "matched", stu_ans: [{ ...flagged, flag: ["external_annotation_present"] }] },
@@ -70,12 +92,12 @@ it("counts ordinary and flagged pending responses consistently, then clears both
 
 
 it("can explicitly confirm a saved rubric while its manual-completion marker still exists", async () => {
-  const problem = { q_id: "Q1", number: "1", type: "short_answer", stem: "Visible question", criterion: "Teacher completed rubric", reference_answer: "", max_score: 10,
+  const problem = { q_id: "Q1", number: "1", type: "concept", stem: "Visible question", criterion: "Teacher completed rubric", reference_answer: "", max_score: 10,
     preparation_issues: [{ issue_id: "manual", code: "manual_completion_required", field: "source", severity: "warning", status: "open", details: { required_fields: ["stem", "criterion"] } }],
   } as ProblemInfo;
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.mocked(api.updateProblem).mockResolvedValue({ status: "ok", q_id: "Q1", workflow_revision: 2, problem: { ...problem, review_status: "confirmed" } });
-  const { result } = renderHook(() => useQuestionReview("T", 1), { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+  const { result } = renderHook(() => useQuestionReview("T", 1, "zh-CN"), { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
   await act(async () => { expect(await result.current.confirm([problem])).toBe(true); });
   expect(api.updateProblem).toHaveBeenCalledWith("T", "Q1", { review_status: "confirmed", expected_workflow_revision: 1 });
   expect(result.current.blocked).toEqual([]);

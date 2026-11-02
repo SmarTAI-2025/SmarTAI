@@ -59,6 +59,22 @@ def test_invalid_legacy_fields_are_omitted_instead_of_returned_or_crashing():
 
 
 @pytest.mark.asyncio
+async def test_saved_counts_and_events_survive_later_provider_updates():
+    from backend.progress.tracker import ProgressReporter
+    reporter = ProgressReporter("incremental-counts")
+    await reporter.set_preparation_counts(questions=3, stems=3, reference_answers=1, rubrics=2)
+    await reporter._emit_message("Saved 3 items from PRIVATE.pdf, part 1")
+    await reporter._emit_message("Preparing missing materials for question PRIVATE")
+    await reporter.set_current_step("recognition_read", message="Reading source evidence")
+    result = public_progress((await reporter.snapshot()).model_dump(mode="json"))
+    assert result["preparation_counts"] == dict(questions=3, stems=3, reference_answers=1, rubrics=2)
+    assert {"activity_saved", "activity_materials"} <= {event["message"] for event in result["messages"]}
+    assert "PRIVATE" not in json.dumps(result)
+    assert "preparation_counts" not in public_progress({})
+    assert "preparation_counts" not in public_progress({"preparation_counts": {"questions": 3}})
+
+
+@pytest.mark.asyncio
 async def test_large_batch_telemetry_stays_bounded_without_losing_request_counts():
     from backend.progress.recognition_activity import RecognitionActivity
     reporter = get_or_create_reporter("bounded-progress")

@@ -94,7 +94,7 @@ export interface PreparationIssue {
   issue_id: string;
   q_id?: string | null;
   field: "stem" | "answer" | "rubric" | "programming_tests" | "source" | "max_score";
-  code: "low_confidence" | "source_conflict" | "ai_source_conflict" | "ambiguous_question_match" | "unmapped_source_content" | "parse_anomaly" | "generation_failed" | "rubric_step_reference_conflict" | "invalid_test_case" | "reference_solution_failed_case" | "default_max_score_requires_review" | "max_score_not_found" | "recognition_partial" | "recognition_needs_review" | "manual_completion_required" | "required_review_confirmation" | "math_rubric_advisory";
+  code: "low_confidence" | "source_conflict" | "ai_source_conflict" | "ambiguous_question_match" | "unmapped_source_content" | "parse_anomaly" | "generation_failed" | "rubric_step_reference_conflict" | "invalid_test_case" | "reference_solution_failed_case" | "default_max_score_requires_review" | "max_score_not_found" | "recognition_partial" | "recognition_needs_review" | "manual_completion_required" | "math_rubric_advisory";
   severity: "info" | "warning" | "blocking";
   source_ids?: string[];
   details?: Record<string, unknown>;
@@ -128,6 +128,7 @@ export interface AICompletionProvenance {
 }
 
 export interface StudentAnswerInfo {
+  answer_id?: string;
   recognition_confidence?: number | null;
   q_id: string;
   number: string;
@@ -327,7 +328,6 @@ export interface Task extends TaskLite {
 }
 
 export interface TaskStateSnapshot extends TaskLite {
-  recovering_saved_text?: boolean;
   submission_sources?: SubmissionSourceOutcome[];
   progress?: JobProgress | null;
   active_job_id?: string | null;
@@ -369,6 +369,7 @@ export interface TaskResultResponse {
   task_id: string;
   grading_run_id?: string;
   grading_run_status?: "completed" | "partial_failed";
+  primary_provider_id?: string | null;
   retry_scope?: "full_batch" | "failed_only" | null;
   results?: StudentResult[];
   problem_data?: Record<string, ProblemInfo>;
@@ -379,13 +380,6 @@ export interface TaskResultResponse {
 
 export interface TeacherCommentsResponse {
   comments: Record<string, string>;
-}
-
-export interface TeacherCommentResponse {
-  status: "ok";
-  student_id: string;
-  q_id: string;
-  teacher_comment: string;
 }
 
 export interface CorrectionReviewResponse {

@@ -238,6 +238,7 @@ async def test_submission_failure_diagnostics_survive_reporter_eviction(monkeypa
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reason", [None, "recognition_response_invalid", "provider_recitation_blocked", "provider_content_blocked"])
 async def test_question_failure_diagnostics_survive_reporter_eviction(monkeypatch, reason):
+    from backend.agents import incremental_question_preparation
     from backend.api import task_preparation
     from backend.progress.tracker import remove_reporter
     from backend.services import task_facade
@@ -247,14 +248,14 @@ async def test_question_failure_diagnostics_survive_reporter_eviction(monkeypatc
     owner, task = _seed_task()
     _, queued, _ = await _queue_question_preparation(owner, task)
 
-    async def failed_prepare(_sources, _provider, **kwargs):
+    async def failed_extract(_text, _provider, **kwargs):
         if reason:
             await kwargs["reporter"].record_provider_failure(RecognitionError(reason), pages=[8])
             raise RecognitionError("provider_submit_uncertain", submission_may_exist=True)
         provider = SimpleNamespace(ainvoke=AsyncMock(side_effect=gemini_unavailable()))
         await _SubmissionSafeProvider(provider, reporter=kwargs["reporter"]).ainvoke("fixture")
 
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", failed_prepare)
+    monkeypatch.setattr(incremental_question_preparation, "_extract_problems_call", failed_extract)
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _RecoveryRegistry())
     await task_preparation.run_durable_question_preparation(_claim(owner, queued["job_id"], "test"))
     remove_reporter(queued["job_id"])
@@ -299,3 +300,38 @@ async def test_refused_page_is_persisted_and_only_explicit_retry_reads_it_again(
     assert provider.ainvoke_vision.await_count == 3
     assert retry.assembly.raw.read_batch.provenance[0].origin == "cache_hit"
     assert (await service.progress.snapshot()).provider_failures[-1].pages == [2]
+
+
+@pytest.mark.parametrize("link", ["__cause__", "__context__"])
+def test_only_explicit_cause_supplies_provider_diagnostic(link):
+    from backend.llm.providers import ProviderRequestError
+    from backend.services.background_errors import classify_background_error
+    outer = RuntimeError("request failed")
+    setattr(outer, link, ProviderRequestError("provider_upstream_unavailable", status_code=503))
+    if link == "__cause__":
+        assert classify_background_error(outer, "workflow_failed") == "provider_upstream_unavailable"
+        assert provider_failure_diagnostic(outer).model_dump() == {
+            "code": "provider_upstream_unavailable", "http_status": 503,
+        }
+    else:
+        assert classify_background_error(outer, "workflow_failed") == "workflow_failed"
+        assert provider_failure_diagnostic(outer) is None
+
+
+@pytest.mark.asyncio
+async def test_reader_diagnostic_failure_does_not_replace_uncertain_recovery(monkeypatch):
+    from backend.skills import recognition_reader
+    from backend.tests.test_recognition_reader import llm, request
+    provider, engine = llm()
+    provider.ainvoke_vision.side_effect = gemini_unavailable()
+
+    def fail(_exc):
+        raise RuntimeError("diagnostic failed")
+
+    monkeypatch.setattr(recognition_reader, "provider_failure_diagnostic", fail)
+    with pytest.raises(RecognitionError) as raised:
+        await engine.recognize(request())
+    assert raised.value.code == "provider_upstream_unavailable"
+    assert raised.value.submission_may_exist
+    assert raised.value.upstream_status_code is None
+    provider.ainvoke_vision.assert_awaited_once()

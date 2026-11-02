@@ -449,11 +449,13 @@ async def read_pdf_evidence(
     *,
     timeout_seconds: float = 10,
     progress: ProgressReporter | None = None,
+    wait_for_slot: bool = False,
 ) -> PdfResult:
     """Inspect a bounded range without parsing PDFs in the parent process."""
     if not isinstance(request, (PdfIndexRequest, PdfPagesRequest, PdfRenderRequest, PdfContactSheetRequest)):
         raise PdfEvidenceError("pdf_invalid_request")
-    return await _read_evidence(pdf_bytes, request, timeout_seconds=timeout_seconds, progress=progress)
+    return await _read_evidence(pdf_bytes, request, timeout_seconds=timeout_seconds, progress=progress,
+                                wait_for_slot=wait_for_slot)
 
 
 async def read_image_evidence(
@@ -462,11 +464,13 @@ async def read_image_evidence(
     *,
     timeout_seconds: float = 10,
     progress: ProgressReporter | None = None,
+    wait_for_slot: bool = False,
 ) -> ImagePreparedResult:
     """Prepare authorized image bytes in the shared isolated worker, not the parent."""
     if not isinstance(request, ImagePrepareRequest):
         raise PdfEvidenceError("pdf_invalid_request")
-    return await _read_evidence(image_bytes, request, timeout_seconds=timeout_seconds, progress=progress)
+    return await _read_evidence(image_bytes, request, timeout_seconds=timeout_seconds, progress=progress,
+                                wait_for_slot=wait_for_slot)
 
 
 async def _read_evidence(
@@ -475,6 +479,7 @@ async def _read_evidence(
     *,
     timeout_seconds: float,
     progress: ProgressReporter | None,
+    wait_for_slot: bool = False,
 ) -> PdfResult | ImagePreparedResult:
     image = isinstance(request, ImagePrepareRequest)
     if image:
@@ -496,8 +501,14 @@ async def _read_evidence(
     if file_processing.fitz is None:
         raise PdfEvidenceError("pdf_processing_unavailable")
     slots = file_processing._PDF_EXTRACTION_SLOTS
-    if not slots.acquire(blocking=False):
-        raise PdfEvidenceError("pdf_evidence_busy")
+    # Model calls may run concurrently while local PDF workers remain bounded.
+    # Task pipelines wait only for this short CPU step, never hold its slot
+    # throughout a model response. Other callers retain fail-fast admission.
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while not slots.acquire(blocking=False):
+        if not wait_for_slot or asyncio.get_running_loop().time() >= deadline:
+            raise PdfEvidenceError("pdf_evidence_busy")
+        await asyncio.sleep(0.02)
     launch_task = None
     failure: BaseException | None = None
     try:

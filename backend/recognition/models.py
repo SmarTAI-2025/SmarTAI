@@ -284,6 +284,11 @@ class RecognitionUsageV1(EvidenceModel):
 
 
 class RecognitionPolicyV1(EvidenceModel):
+    # Fresh user runs isolate model evidence. Explicit failed-item retries keep
+    # the original scope; omit legacy defaults to preserve stored identities.
+    execution_scope: str | None = Field(
+        default=None, min_length=1, max_length=160, exclude_if=lambda value: value is None,
+    )
     # Keep legacy defaults/cache identities. Opt-in caps are 12*300+360 for
     # locating, 18*300+600 for reading, and both phases plus 60 for finalization.
     version: str = "faithful-v2"

@@ -1,0 +1,81 @@
+{
+  "scope": "Local schema and arithmetic/tool validation only; no model or agent grading run.",
+  "cases": 6,
+  "json_sha256": "caca4e2b91e40faa72857212b4ef0909554bc5c3b2b5e892beee565501faf1ae",
+  "approximation_error": "3.660255169038434e-8",
+  "probes": [
+    {
+      "id": "SYN26_01",
+      "probe": 1,
+      "expected_status": "supported",
+      "actual_status": "supported",
+      "method": "exact",
+      "reason": "The finite constant expressions are exactly equal."
+    },
+    {
+      "id": "SYN26_01",
+      "probe": 2,
+      "expected_status": "supported",
+      "actual_status": "supported",
+      "method": "numeric",
+      "reason": "The constants meet the supplied tolerance."
+    },
+    {
+      "id": "SYN26_02",
+      "probe": 1,
+      "expected_status": "refuted",
+      "actual_status": "refuted",
+      "method": "exact",
+      "reason": "The constants are not exactly equal; approximation was not permitted."
+    },
+    {
+      "id": "SYN26_02",
+      "probe": 2,
+      "expected_status": "refuted",
+      "actual_status": "refuted",
+      "method": "exact",
+      "reason": "The constants are not exactly equal; approximation was not permitted."
+    },
+    {
+      "id": "SYN26_02",
+      "probe": 3,
+      "expected_status": "supported",
+      "actual_status": "supported",
+      "method": "exact",
+      "reason": "The finite constant expressions are exactly equal."
+    },
+    {
+      "id": "SYN26_03",
+      "probe": 1,
+      "expected_status": "supported",
+      "actual_status": "supported",
+      "method": "symbolic",
+      "reason": "Symbolic reduction establishes this relation on the stated domain."
+    },
+    {
+      "id": "SYN26_03",
+      "probe": 2,
+      "expected_status": "supported",
+      "actual_status": "supported",
+      "method": "symbolic",
+      "reason": "Symbolic reduction establishes this relation on the stated domain."
+    },
+    {
+      "id": "SYN26_04",
+      "probe": 1,
+      "expected_status": "refuted",
+      "actual_status": "refuted",
+      "method": "exact",
+      "reason": "The constants are not exactly equal; approximation was not permitted."
+    },
+    {
+      "id": "SYN26_04",
+      "probe": 2,
+      "expected_status": "supported",
+      "actual_status": "supported",
+      "method": "exact",
+      "reason": "The finite constant expressions are exactly equal."
+    }
+  ],
+  "all_expected_statuses": true
+}

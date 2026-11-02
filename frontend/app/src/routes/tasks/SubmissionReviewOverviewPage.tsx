@@ -202,7 +202,7 @@ export function SubmissionReviewOverviewPage() {
     try {
       const progress = (completed: number) => setBatchProgress({ completed, total });
       const revision = taskQuery.data.workflow_revision;
-      const result = await confirmSubmissionBatch(pendingReviews, revision, ({ student, answer }, expectedWorkflowRevision) => answerMutation.mutateAsync({ taskId, studentId: student.stu_id, qId: answer.q_id, reviewStatus: "confirmed", expectedWorkflowRevision }), progress);
+      const result = await confirmSubmissionBatch(pendingReviews, revision, ({ student, answer }, expectedWorkflowRevision) => answerMutation.mutateAsync({ taskId, studentId: student.stu_id, qId: answer.q_id, answerId: answer.answer_id, reviewStatus: "confirmed", expectedWorkflowRevision }), progress);
       const unit = locale === "zh-CN" ? "项" : "items";
       if (result.error) {
         const code = getAPIErrorCode(result.error);
@@ -240,7 +240,7 @@ export function SubmissionReviewOverviewPage() {
       </UnsavedChangesDialog> : null}
       {rowError && !deletingStudent ? <p role="alert" className="mt-3 text-sm text-danger">{rowError}</p> : null}
       <ReviewBlockDialog locale={locale} issues={blocked} onClose={() => setBlocked([])} />
-      <NewTaskStepper currentStep={4} blockedFromStep={submissionReviewBlockers(taskQuery.data, locale).length ? 5 : undefined} lockedStepReason={locale === "zh-CN" ? "请先处理并确认关键问题" : "Resolve and confirm required items first"} onLockedStepActivate={() => setBlocked(submissionReviewBlockers(taskQuery.data, locale))} />
+      <NewTaskStepper currentStep={4} blockedFromStep={submissionReviewBlockers(taskQuery.data, locale).length ? 5 : undefined} lockedStepReason={locale === "zh-CN" ? "请先处理关键问题" : "Resolve required items first"} onLockedStepActivate={() => setBlocked(submissionReviewBlockers(taskQuery.data, locale))} />
 
 
       <section className="mt-[22px] min-w-0" aria-labelledby="submission-review-matrix">
@@ -690,14 +690,14 @@ function buildSubmissionQueueItems(
       });
     }
 
-    const answers = answerMap(student);
-    for (const question of questions) {
-      const answer = answers.get(question.id);
+    for (const answer of student.stu_ans) {
+      const question = questions.find(item => item.id === answer.q_id);
+      if (!question) continue;
       const attention = answerReviewAttention(answer);
       if (attention === "none") continue;
       items.push({
-        key: `${student.stu_id}:${question.id}`,
-        href: studentReviewPath(taskId, student.stu_id, question.id, returnSearch),
+        key: `${student.stu_id}:${answer.answer_id ?? question.id}`,
+        href: studentReviewPath(taskId, student.stu_id, answer.answer_id ?? question.id, returnSearch),
         studentId: student.stu_id,
         studentName: student.stu_name || student.stu_id,
         questionLabel: question.label,

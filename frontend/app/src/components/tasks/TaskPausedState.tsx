@@ -4,11 +4,12 @@ import { Button } from "@/components/ui/Button";
 import { useI18n } from "@/i18n/I18nProvider";
 import { TASK_ACTION_KEYS, TASK_STAGE_KEYS } from "@/lib/taskPresentation";
 
-export function TaskPausedState({ status, onContinue, onManual, busy, disabled, children }: {
+export function TaskPausedState({ status, onContinue, onManual, busy, manualBusy, disabled, children }: {
   status: "problems_paused" | "submissions_paused" | "grading_paused";
   onContinue: () => void;
   onManual?: () => void;
   busy?: boolean;
+  manualBusy?: boolean;
   disabled?: boolean;
   children?: ReactNode;
 }) {
@@ -21,10 +22,10 @@ export function TaskPausedState({ status, onContinue, onManual, busy, disabled, 
       {children}
       <div className="flex flex-wrap items-center gap-2 max-sm:[&_button]:px-2 max-sm:[&_button]:text-xs!">
         <Button onClick={onContinue} disabled={busy || disabled} aria-busy={busy || undefined}>
-          {t(TASK_ACTION_KEYS[status])}
+          {busy && !manualBusy ? (locale === "zh-CN" ? "正在处理…" : "Working…") : t(TASK_ACTION_KEYS[status])}
         </Button>
-        {onManual ? <Button variant="secondary" onClick={onManual} disabled={busy}>
-          {locale === "zh-CN" ? "人工继续处理" : "Continue manually"}
+        {onManual ? <Button variant="secondary" onClick={onManual} disabled={busy} aria-busy={manualBusy || undefined}>
+          {manualBusy ? (locale === "zh-CN" ? "正在打开…" : "Opening…") : (locale === "zh-CN" ? "人工继续处理" : "Continue manually")}
         </Button> : null}
       </div>
     </section>

@@ -17,10 +17,10 @@ from PIL import Image
 # Independent expected values, not imported from the policy being tested.
 ROLE_EXTENSIONS = {
     "course_knowledge": ("pdf", "txt", "md", "markdown"),
-    "problem_reference": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png"),
-    "rubric": ("pdf", "txt", "md"),
-    "programming_tests": ("pdf", "txt", "md", "json"),
-    "student_submission": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "py", "c", "cc", "cpp"),
+    "problem_reference": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
+    "rubric": ("pdf", "txt", "md", "markdown", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
+    "programming_tests": ("pdf", "txt", "md", "markdown", "json", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
+    "student_submission": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp", "py", "c", "cc", "cpp", "csv", "tsv", "rst"),
 }
 OTHER_EXTENSIONS = ("csv", "tsv", "rst", "pptx", "bmp", "tif", "tiff", "webp", "exe", "zip", "rar", "7z", "tar")
 
@@ -50,9 +50,10 @@ def payload(extension):
         with fitz.open() as doc:
             doc.new_page().insert_text((72, 72), "Teacher original source")
             return doc.tobytes()
-    if extension in {"png", "jpg", "jpeg"}:
+    if extension in {"png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"}:
         out = io.BytesIO()
-        Image.new("RGB", (1, 1)).save(out, format="PNG" if extension == "png" else "JPEG")
+        formats = {"png": "PNG", "jpg": "JPEG", "jpeg": "JPEG", "bmp": "BMP", "tif": "TIFF", "tiff": "TIFF", "webp": "WEBP"}
+        Image.new("RGB", (1, 1)).save(out, format=formats[extension])
         return out.getvalue()
     if extension == "docx":
         return office_package()
@@ -205,7 +206,8 @@ def test_contract_distinguishes_effective_entrypoint_limits_and_does_not_leak_mu
         assert contract["roles"][role]["extensions"] == sorted(extensions)
     json.dumps(contract, allow_nan=False)
     contract["roles"]["rubric"]["extensions"].append("png")
-    assert module.get_upload_contract()["roles"]["rubric"]["extensions"] == ["md", "pdf", "txt"]
+    assert module.get_upload_contract()["roles"]["rubric"]["extensions"] == [
+        "bmp", "jpeg", "jpg", "markdown", "md", "pdf", "png", "tif", "tiff", "txt", "webp"]
 
 
 def test_policy_module_import_does_not_start_application():

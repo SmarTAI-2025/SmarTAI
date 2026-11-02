@@ -9,8 +9,9 @@ import {
   hasPartialExperts,
   validExpertResults,
   isLowConfidence,
-  effectiveCorrectionScore,
   reviewReasonLabel,
+  mathReviewLabels,
+  MATH_REVIEW_REASONS,
   type QuestionSummary,
   type ResultsModel,
   type StudentSummary,
@@ -83,9 +84,7 @@ export function correctionReviewNotes(correction: Correction, locale: Locale) {
   const labels = new Map<string, "blocking" | "advisory">();
   const add = (label: string, severity: "blocking" | "advisory" = "advisory") => labels.set(label, severity);
   if (correctionReviewBlocked(correction)) {
-    const score = effectiveCorrectionScore(correction);
-    const valid = score !== null && Number.isFinite(correction.max_score) && correction.max_score > 0 && score >= 0 && score <= correction.max_score;
-    add(valid ? text("缺失分数已补齐，请确认", "Corrected score needs confirmation") : text("缺少有效分数，请填写并确认", "Enter and confirm a valid score"), "blocking");
+    add(text("缺少有效分数，请填写", "Enter a valid score"), "blocking");
   }
   const experts = validExpertResults(correction);
   const multi = new Set((correction.expert_results ?? []).map(expert => expert.provider_id || expert.provider)).size > 1 || hasPartialExperts(correction);
@@ -99,15 +98,14 @@ export function correctionReviewNotes(correction: Correction, locale: Locale) {
     add(text(`置信度 ${correction.confidence} 较低，建议核对确认。`, `Low confidence (${correction.confidence}); review suggested.`));
   }
   if (hasPartialExperts(correction)) add(text("部分专家完成，已保留有效评分和评语，建议核对。", "Some experts completed. Valid scores and feedback are retained; review suggested."));
-  if (!correctionReviewBlocked(correction) && correctionReviewReasonIds(correction).includes("math_scoring_uncertainty")) {
-    add(reviewReasonLabel("math_scoring_uncertainty", locale));
+  for (const label of mathReviewLabels(correction, locale)) {
+    const persistedReason = correctionReviewReasonIds(correction).some(reason =>
+      MATH_REVIEW_REASONS.includes(reason) && reviewReasonLabel(reason, locale) === label);
+    add(label, correctionReviewBlocked(correction) && persistedReason ? "blocking" : "advisory");
   }
   if (correctionReviewBlocked(correction)) for (const reason of correctionReviewReasonIds(correction)) {
-    if (["low_confidence", "partial_experts", "degraded_to_single", "high_indecisiveness", "score_spread_high", "minority_veto"].includes(reason)) continue;
+    if ([...MATH_REVIEW_REASONS, "low_confidence", "partial_experts", "degraded_to_single", "high_indecisiveness", "score_spread_high", "minority_veto"].includes(reason)) continue;
     add(reviewReasonLabel(reason, locale), "blocking");
-  }
-  if (hasExpertDisagreement(correction)) {
-    add(text("专家分歧较大（标准差 ÷ 满分 > 15%），可按需复核", "High expert disagreement (standard deviation / max score > 15%); optional review"));
   }
   return Array.from(labels, ([label, severity]) => ({ label, severity }));
 }

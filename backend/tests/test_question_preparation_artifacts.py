@@ -126,7 +126,7 @@ def _problem_data() -> dict[str, dict]:
         "q2": {
             "q_id": "q2",
             "number": "2",
-            "type": "证明题",
+            "type": "推理题",
             "stem": "第二大题",
             "criterion": "结论与推导完整得满分",
             "max_score": 6,

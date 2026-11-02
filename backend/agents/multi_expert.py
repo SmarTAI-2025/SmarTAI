@@ -87,7 +87,7 @@ class SynthesisOutput(BaseModel):
 
 
 # Explicit daily exhaustion must stop retries even alongside transient failures.
-_ERROR_KIND_PRIORITY = ("general", "parse_failed", "transient_llm", "quota_exhausted", "daily_quota_exhausted")
+_ERROR_KIND_PRIORITY = ("general", "parse_failed", "transient_llm", "quota_exhausted", "daily_quota_exhausted", "zero_quota")
 
 
 def dominant_error_kind(failures: List[ExpertResult]) -> str:
@@ -156,18 +156,34 @@ def _apply_math_review_advisory(correction: Correction) -> Correction:
     """Keep a residual evidence concern visible without changing score/confidence."""
     from backend.skills.math_grading import math_scoring_disagreement, read_math_trace
 
-    unresolved = math_scoring_disagreement(correction.expert_results)
+    reasons = []
+    if math_scoring_disagreement(correction.expert_results):
+        reasons.append("math_expert_disagreement")
+    model_requested = False
+    unclassified_advisory = False
     for expert in correction.expert_results:
         trace = read_math_trace(expert) if _is_successful_expert(expert) else None
         assessment = trace.get("assessment") if trace else None
+        if trace and trace.get("review_advisory"):
+            # Classify only an already-active advisory; do not add review triggers.
+            if trace.get("review_pending"):
+                reasons.append("math_verification_conflict")
+            proof_audit = trace.get("proof_audit") or {}
+            proof_concerns = isinstance(proof_audit, dict) and proof_audit.get("review_concerns")
+            if proof_concerns:
+                reasons.append("math_proof_concern")
+            if not trace.get("review_pending") and not proof_concerns:
+                unclassified_advisory = True
         if isinstance(assessment, dict) and assessment.get("needs_review") is True:
-            unresolved = True
-            break
-    if unresolved:
+            model_requested = True
+    if not reasons:
+        if model_requested:
+            reasons.append("math_model_review")
+        elif unclassified_advisory:
+            reasons.append("math_scoring_uncertainty")
+    if reasons:
         correction.requires_human_review = True
-        correction.review_reasons = list(dict.fromkeys([
-            *correction.review_reasons, "math_scoring_uncertainty",
-        ]))
+        correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, *reasons]))
     return correction
 
 
@@ -352,11 +368,12 @@ async def _run_multi_expert(
     # Configured weights still apply.
     if getattr(skill_cls, "uses_math_evidence", False):
         from backend.skills.math_grading import review_math_experts
+        from backend.services.math_grading_context import report_math_progress
         review_provider = providers[0]
         if grading_setup is not None and callable(getattr(registry, "get", None)):
             review_provider = registry.get(grading_setup.primary_provider_id) or review_provider
         if reporter:
-            await reporter._emit_message(f"{student_id}/{problem.q_id}: synthesize_experts_started")
+            await report_math_progress(reporter._emit_message, f"{student_id}/{problem.q_id}: synthesize_experts_started")
         try:
             successes = await review_math_experts(
                 problem, answer, successes, review_provider,
@@ -364,7 +381,7 @@ async def _run_multi_expert(
             )
         finally:
             if reporter:
-                await reporter._emit_message(f"{student_id}/{problem.q_id}: synthesize_experts_finished")
+                await report_math_progress(reporter._emit_message, f"{student_id}/{problem.q_id}: synthesize_experts_finished")
 
     if len(successes) == 1:
         # Review any deferred concern before returning the surviving grade.

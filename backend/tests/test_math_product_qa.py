@@ -58,7 +58,7 @@ async def test_equal_total_residual_item_dispute_is_advisory(case, monkeypatch, 
     assert correction.score == sum(step.score for step in correction.steps) == 8
     assert correction.confidence == .95
     assert row.result_status == "needs_review"
-    assert public["review_reasons"] == ["math_scoring_uncertainty"]
+    assert public["review_reasons"] == ["math_expert_disagreement"]
     assert review_state(public) == (True, False)
     assert not task_facade._correction_review_blocks_finalization(row)
     grades.mark_completed(run_id, worker_id="checkpoint-test", completed=1, failed=1)
@@ -108,7 +108,7 @@ def test_manual_override_survives_retry_without_reusing_old_ai(case, monkeypatch
         finish(case, resumed, monkeypatch, failed=("q1",) if save_path == "batch_failed" else (), score=8)
     elif save_path == "checkpoint":
         checkpoints, _, revisions, _ = prepare(case, resumed)
-        checkpoints.save_correction(revisions[0][1], Correction(q_id="q1", type="short", score=8,
+        checkpoints.save_correction(revisions[0][1], Correction(q_id="q1", type="concept", score=8,
             max_score=10, confidence=1, comment="New AI judgment", steps=[], synthesis_method="single"))
         stop(case, resumed)
     else:
@@ -117,10 +117,9 @@ def test_manual_override_survives_retry_without_reusing_old_ai(case, monkeypatch
     assert current.ai_score == (None if save_path in {"pause", "batch_failed"} else 8)
     assert current.effective_score == 9
     assert current.teacher_review["confirmed"] is confirmed
-    assert current.result_status == ("graded" if confirmed else "needs_review")
-    assert current.review_reasons == ([] if confirmed else ["teacher_edit_pending_confirmation"])
-    assert task_facade._correction_review_blocks_finalization(current) is (
-        not confirmed and save_path in {"pause", "batch_failed"})
+    assert current.result_status == "graded"
+    assert current.review_reasons == []
+    assert task_facade._correction_review_blocks_finalization(current) is False
     assert current.effective_comment == "Teacher checked the actual work."
     original = next(row for row in grades.list_results_for_run(first) if row.q_id == "q1")
     assert original.ai_score is None and original.effective_score == 9

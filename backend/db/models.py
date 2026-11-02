@@ -15,6 +15,7 @@ as JSON aggregates — each is its own normalized row.
 from __future__ import annotations
 
 import time
+import uuid
 
 from sqlalchemy import (
     Boolean,
@@ -584,14 +585,15 @@ class SubmissionRevisionRecord(Base):
 class SubmissionAnswerRecord(Base):
     __tablename__ = "submission_answers"
     __table_args__ = (
-        # Exactly one structured answer per (revision, question).
+        # Review can temporarily assign two distinct answers to one question.
         UniqueConstraint(
-            "revision_id", "question_id",
-            name="uq_submission_answers_revision_question",
+            "revision_id", "answer_key",
+            name="uq_submission_answers_revision_identity",
         ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    answer_key: Mapped[str] = mapped_column(String(64), nullable=False, default=lambda: f"answer_{uuid.uuid4().hex}")
     revision_id: Mapped[str] = mapped_column(
         ForeignKey("submission_revisions.id", ondelete="CASCADE"),
         nullable=False, index=True,

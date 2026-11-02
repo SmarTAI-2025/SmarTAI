@@ -53,6 +53,35 @@ async def test_deterministically_repairable_json_uses_no_extra_model_call():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("allow_partial", [False, True])
+@pytest.mark.parametrize("command", ["underbrace", "underline", "uparrow", "underset"])
+async def test_underescaped_u_tex_is_recovered_in_one_generation(allow_partial, command):
+    answer = "设 $\\" + command + r"{x} + \frac{1}{2}$。"
+    response = json.dumps({"candidates": [{"target_id": "q1:reference_answer", "q_id": "q1",
+        "target": "reference_answer", "text_value": answer}]}).replace("\\\\" + command, "\\" + command)
+    provider = Provider([response])
+    result = await generate_missing_question_materials(
+        {"q1": {"stem": "Explain the notation.", "max_score": 10}},
+        [{"target_id": "q1:reference_answer", "q_id": "q1", "target": "reference_answer"}],
+        6, provider, allow_partial=allow_partial)
+    assert result[0].text_value == answer
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text,expected", [
+    (r"$$x+y=z$", r"$x+y=z$"),
+    (r"Keep $\frac{1}{$ for editing.", r"Keep $\frac{1}{$ for editing."),
+    (r"Keep $\unknowncommand{x}$ for editing.", r"Keep $\unknowncommand{x}$ for editing."),
+])
+async def test_display_only_math_issues_do_not_retry_or_fail_generation(text, expected):
+    provider = Provider([json.dumps({"candidates": [{"target_id": "q1:reference_answer", "q_id": "q1",
+        "target": "reference_answer", "text_value": text}]})])
+    assert (await generate(provider))[0].text_value == expected
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_missing_subpart_is_repaired_within_the_same_question():
     from backend.agents.question_preparation_agent import generate_major_question_materials, requested_major_question_materials
     from backend.progress.tracker import ProgressReporter
@@ -75,6 +104,30 @@ async def test_invalid_repair_stops_without_a_third_generation():
     with pytest.raises(StructuredOutputInvalidError):
         await generate(provider)
     assert len(provider.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allow_partial", [False, True])
+@pytest.mark.parametrize("repair_succeeds", [False, True])
+async def test_malformed_unicode_retries_before_accepting_generated_materials(allow_partial, repair_succeeds):
+    broken = (r'{"candidates":[{"target_id":"q1:reference_answer","q_id":"q1",'
+              r'"target":"reference_answer","text_value":"\u8bbe $\\mathbb{Z}$ \uffa"}]}')
+    answer = '设 $\\bar{a} \\in \\mathbb{Z}/n\\mathbb{Z}$。'
+    corrected = json.dumps({"candidates": [{"target_id": "q1:reference_answer", "q_id": "q1",
+        "target": "reference_answer", "text_value": answer}]})
+    provider = Provider([broken, corrected if repair_succeeds else broken])
+    call = generate_missing_question_materials(
+        {"q1": {"stem": "Prove residue-class multiplication is associative.", "max_score": 10}},
+        [{"target_id": "q1:reference_answer", "q_id": "q1", "target": "reference_answer"}],
+        6, provider, allow_partial=allow_partial)
+    if repair_succeeds:
+        assert (await call)[0].text_value == answer
+    else:
+        with pytest.raises(StructuredOutputInvalidError):
+            await call
+    assert len(provider.calls) == 2
+    assert provider.calls[0][1] is provider.calls[1][1]
+    assert broken not in provider.calls[1][-1].content
 
 
 @pytest.mark.asyncio

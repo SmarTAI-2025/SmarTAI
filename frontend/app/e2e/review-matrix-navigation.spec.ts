@@ -19,7 +19,7 @@ for (const stage of ["submissions", "grading"]) for (const demo of [false, true]
     }, { demo, locale, taskId, owner });
     const problem_data = Object.fromEntries(Array.from({ length: 2 }, (_, i) => {
       const q_id = `q${i + 1}`;
-      return [q_id, { q_id, number: String(i + 1), type: "Proof", stem: `Question ${i + 1}.`, criterion: "Award 10 points for valid reasoning.", reference_answer: "A complete proof.", max_score: 10, review_status: "confirmed", max_score_review_status: "confirmed" }];
+      return [q_id, { q_id, number: String(i + 1), type: "Reasoning", stem: `Question ${i + 1}.`, criterion: "Award 10 points for valid reasoning.", reference_answer: "A complete proof.", max_score: 10, review_status: "confirmed", max_score_review_status: "confirmed" }];
     }));
     const students = Array.from({ length: 12 }, (_, i) => ({ stu_id: `S${String(i + 1).padStart(3, "0")}`, stu_name: `Student S${String(i + 1).padStart(3, "0")}`, identity_status: "matched",
       stu_ans: Object.keys(problem_data).map(q_id => ({ q_id, content: "Synthetic answer.", review_status: "confirmed", flag: [] })) }));

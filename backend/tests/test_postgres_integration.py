@@ -78,6 +78,48 @@ def test_postgres_task_metadata_compare_and_update_is_atomic(pg_database):
     test_invalid_tags_roll_back_name_and_semester_and_enforce_owner()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["pause", "failure", "fields", "28_questions"])
+async def test_postgres_incremental_question_results_survive_independent_work(pg_database, monkeypatch, case):
+    from backend.tests import test_incremental_question_preparation as cases
+    if case == "28_questions":
+        await cases.test_real_worker_roundtrip_multiple_snapshot_sizes(monkeypatch, 28)
+    else:
+        run = {
+            "pause": cases.test_one_chunk_is_durable_while_another_waits_and_manual_never_calls_model,
+            "failure": cases.test_one_chunk_failure_does_not_cancel_other_questions,
+            "fields": cases.test_failed_field_keeps_valid_answer_and_retries_only_rubric,
+        }[case]
+        await run(monkeypatch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["failed", "empty", "paused"])
+async def test_postgres_empty_question_handoff_allows_manual_count(pg_database, monkeypatch, outcome):
+    from backend.tests.test_question_manual_completion import (
+        test_empty_worker_projection_allows_manual_count_and_completion,
+    )
+    await test_empty_worker_projection_allows_manual_count_and_completion(monkeypatch, outcome, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", [False, True])
+@pytest.mark.parametrize("bad_field", ["content", "type"])
+async def test_postgres_partial_submission_manual_preserves_valid_siblings(pg_database, monkeypatch, stop, bad_field):
+    from backend.tests.test_submission_partial_responses import (
+        test_unlabelled_response_persists_valid_siblings_before_repair_or_manual,
+    )
+    await test_unlabelled_response_persists_valid_siblings_before_repair_or_manual(monkeypatch, stop, bad_field)
+
+
+@pytest.mark.asyncio
+async def test_postgres_retry_preserves_question_boundary_evidence(pg_database, monkeypatch):
+    from backend.tests.test_incremental_question_review_edges import (
+        test_changed_model_copy_preserves_source_boundary_evidence,
+    )
+    await test_changed_model_copy_preserves_source_boundary_evidence(monkeypatch, True)
+
+
 @pytest.mark.parametrize("kind", ["question", "student"])
 @pytest.mark.parametrize("actions", [("add", "add"), ("add", "delete"), ("delete", "delete")])
 def test_postgres_review_row_mutations_have_one_winner(pg_database, kind, actions):
@@ -103,13 +145,16 @@ def test_postgres_task_identity_migration_preserves_existing_results(pg_database
 
     config = Config("alembic.ini")
     config.attributes.update(database_url=PG_URL, database_heavy=True)
-    command.downgrade(config, "0026_image_capability")
     seeded = _seed_legacy_imports(monkeypatch)
+    # Seed with the current ORM before restoring the historical schema.
+    command.downgrade(config, "0026_image_capability")
     engine = get_engine()
     before = _business_snapshot(engine)
     assert len(before["grade_results"]) == 3
     command.upgrade(config, "head")
     assert _business_snapshot(engine) == before
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT COUNT(*) FROM submission_answers WHERE answer_key != id OR answer_key IS NULL").scalar_one() == 0
     removable, protected, real = [student.id for student in seeded["students"]]
     with session_scope() as session:
         assert session.get(UserRecord, removable) is None
@@ -121,6 +166,22 @@ def test_postgres_task_identity_migration_preserves_existing_results(pg_database
     assert _business_snapshot(engine) == before
     command.upgrade(config, "head")
     assert _business_snapshot(engine) == before
+
+
+@pytest.mark.parametrize("editor", [False, True])
+def test_postgres_unchanged_matching_confirmation(pg_database, editor):
+    from backend.tests.test_answer_assignment_review import test_matching_confirmation_without_rewriting_survives_reload_and_sibling_edit
+    test_matching_confirmation_without_rewriting_survives_reload_and_sibling_edit(editor)
+
+
+def test_postgres_answer_swap_and_grading_gate(pg_database):
+    from backend.tests.test_answer_assignment_review import test_two_answers_swap_via_saved_duplicate_without_overwrite_and_can_grade
+    test_two_answers_swap_via_saved_duplicate_without_overwrite_and_can_grade()
+
+
+def test_postgres_partial_three_way_answer_conflict(pg_database):
+    from backend.tests.test_answer_assignment_review import test_three_way_conflict_only_clears_resolved_answers
+    test_three_way_conflict_only_clears_resolved_answers()
 
 
 def test_postgres_explicit_email_login_and_username_mail_guard(pg_database, monkeypatch):
@@ -198,7 +259,7 @@ def test_postgres_single_active_run(pg_database):
     course_repository.enroll(course_id=course.id, student_id=student)
     asg = assignment_repository.create_assignment(teacher_id=teacher, course_id=course.id, name="A")
     assignment_repository.add_question(
-        assignment_id=asg.id, teacher_id=teacher, q_id="q1", order_index=0, type="short", stem="?",
+        assignment_id=asg.id, teacher_id=teacher, q_id="q1", order_index=0, type="concept", stem="?",
     )
     assignment_repository.publish(assignment_id=asg.id, teacher_id=teacher, expected_version=1)
 
@@ -230,7 +291,7 @@ def test_postgres_lease_claim_is_owner_scoped(pg_database):
     course_repository.enroll(course_id=course.id, student_id=student)
     asg = assignment_repository.create_assignment(teacher_id=teacher, course_id=course.id, name="A")
     assignment_repository.add_question(
-        assignment_id=asg.id, teacher_id=teacher, q_id="q1", order_index=0, type="short", stem="?",
+        assignment_id=asg.id, teacher_id=teacher, q_id="q1", order_index=0, type="concept", stem="?",
     )
     assignment_repository.publish(assignment_id=asg.id, teacher_id=teacher, expected_version=1)
 
@@ -310,6 +371,33 @@ def test_postgres_concurrent_report_generation_is_idempotent(pg_database, monkey
     from backend.tests.test_atomic_report_generation import test_concurrent_generation_and_replay_only_create_one_report
 
     test_concurrent_generation_and_replay_only_create_one_report(monkeypatch)
+
+
+@pytest.mark.parametrize("state", ["draft", "released", "missing"])
+def test_postgres_invalid_review_leaves_all_state_unchanged(pg_database, state):
+    from backend.tests.test_correction_review_atomic import test_invalid_score_has_no_persisted_side_effects
+
+    test_invalid_score_has_no_persisted_side_effects(state, 11)
+
+
+@pytest.mark.parametrize("state", ["draft", "released", "missing"])
+def test_postgres_review_failure_rolls_back_all_state(pg_database, state):
+    from backend.tests.test_correction_review_atomic import test_failure_after_review_flush_rolls_back_every_change
+
+    test_failure_after_review_flush_rolls_back_every_change(state)
+
+
+@pytest.mark.parametrize("state", ["draft", "released"])
+def test_postgres_concurrent_reviews_have_one_winner(pg_database, state):
+    from backend.tests.test_correction_review_atomic import test_concurrent_reviews_have_one_revision_winner
+
+    test_concurrent_reviews_have_one_revision_winner(state)
+
+
+def test_postgres_report_and_review_share_one_revision(pg_database):
+    from backend.tests.test_correction_review_atomic import test_report_generation_and_review_share_one_revision_winner
+
+    test_report_generation_and_review_share_one_revision_winner()
 
 
 def test_postgres_task_delete_finalizer_locks_children_before_workflow(pg_database):

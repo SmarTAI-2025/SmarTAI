@@ -2,6 +2,9 @@ import { expect, test } from "@playwright/test";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 
+// Each case owns its page routes, mutable fixtures and screenshot paths.
+test.describe.configure({ mode: "parallel" });
+
 for (const mode of ["individual", "overview-all", "detail-all", "advisory", "math-advisory"]) for (const locale of ["zh-CN", "en-US"]) {
   test(`${mode} ${locale}: confirmation, live results and queue stay consistent`, async ({ page }, testInfo) => {
     const zh = locale === "zh-CN", taskId = "asg_review_status";
@@ -17,9 +20,9 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
       localStorage.setItem("smartai_locale", locale);
       localStorage.setItem("smartai_token", "synthetic-teacher-token");
     }, locale);
-    const sharedRule = zh ? "本轮统一按首次错误扣分，后续正确推导保留过程分。" : "Deduct for the first error; credit correct subsequent reasoning.";
+    const sharedRule = zh ? "本轮统一按首次错误扣分，后续正确推导保留过程分。\n方法正确得 3 分；完成关键推导时至少得 2 分。" : "Deduct for the first error; credit correct subsequent reasoning.\nAward 3 points for the correct method; at least 2 points when the key derivation is complete.";
     const problem_data = Object.fromEntries([1, 2, 3, 4].map(n => [`q${n}`, {
-      q_id: `q${n}`, number: String(n), stem: `Synthetic question ${n}.`, criterion: "Reasoning rubric.", max_score: 10,
+      q_id: `q${n}`, number: String(n), type: "calculation", stem: `Synthetic question ${n}.`, criterion: "Reasoning rubric.", max_score: 10,
       review_status: "confirmed", max_score_review_status: "confirmed",
       preparation_issues: mode === "math-advisory" && n === 1 ? [{
         issue_id: "shared-plan", field: "rubric", code: "math_rubric_advisory", severity: "warning", status: "open",
@@ -76,6 +79,7 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
       }
       if (path.startsWith("/experts") || path === "/tags/") return json([]);
       if (path === `/tasks/${taskId}`) return json(task);
+      if (path === `/tasks/${taskId}/source-files`) return json({ task_id: taskId, workflow_revision: task.workflow_revision, problem_source: null, submission_sources: {} });
       if (path.endsWith("/result")) return json({ task_id: taskId, problem_data, student_data, results: [{ student_id: "S1", student_name: "Example", corrections }], timestamp: 1 });
       if (path.endsWith("/teacher_comments")) return json({ comments: {} });
       if (path.endsWith("/finalization")) return json(finalization());
@@ -87,9 +91,23 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
     if (mode === "math-advisory") {
       await page.goto(`${root}/questions`);
       const questionQueue = page.getByRole("region", { name: zh ? "待复核队列" : "Review queue" });
-      await expect(questionQueue).toContainText(sharedRule);
+      await expect(questionQueue).toContainText(zh ? "本题评分标准有待核对的内容。" : "Some rubric details need review.");
+      await expect(questionQueue).not.toContainText(sharedRule);
       await expect(questionQueue.getByRole("link")).toHaveCount(1);
       await expect(questionQueue.getByRole("tab", { name: zh ? "建议处理 (1)" : "Suggested review (1)", exact: true })).toBeVisible();
+      await questionQueue.getByRole("link").click();
+      const question = page.locator('[data-question-id="q1"]');
+      const guidance = question.locator("details").filter({ hasText: zh ? "查看 AI 补充评分说明" : "View AI scoring guidance" });
+      await expect(guidance.locator("summary")).toBeVisible();
+      await expect(guidance.locator("p")).not.toBeVisible();
+      await guidance.locator("summary").click();
+      await expect(guidance.locator("p")).toBeVisible();
+      expect(await guidance.locator("p").textContent()).toBe(sharedRule);
+      await expect(page.locator('[data-question-id="q2"] details')).toHaveCount(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath("question-scoring-guidance.png"), fullPage: true });
+      await guidance.locator("summary").click();
+      await expect(guidance.locator("p")).not.toBeVisible();
       expect(writes).toEqual([]);
     }
     // Partial experts and disagreement are suggestions; valid results remain accessible.
@@ -111,14 +129,15 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
       await expect(page).toHaveURL(`${root}/results`);
       for (const suffix of ["", "/questions/q1", "/students/S1", "/visualizations", "/reports"]) {
         await page.goto(`${root}/results${suffix}`);
-        const reminder = page.getByRole("link", { name: zh ? /专家分歧较大.*不影响查看/ : /high expert disagreement.*optional/ });
+        const reminder = page.getByRole("link", { name: zh ? /专家评分差异较大.*不影响查看/ : /large differences in expert scores.*optional/ });
         await expect(reminder).toBeVisible();
+        await expect(reminder).not.toContainText(/标准差|standard deviation|15%/);
         await expect(reminder).toHaveAttribute("href", `${root}/review`);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
       }
       await page.screenshot({ path: testInfo.outputPath("optional-review-results.png"), fullPage: true });
       expect(writes).toEqual([]);
-      await page.getByRole("link", { name: zh ? /专家分歧较大.*不影响查看/ : /high expert disagreement.*optional/ }).click();
+      await page.getByRole("link", { name: zh ? /专家评分差异较大.*不影响查看/ : /large differences in expert scores.*optional/ }).click();
       await expect(queue.getByRole("link")).toHaveCount(3);
     }
     await page.goto(`${root}/review${mode === "overview-all" ? "" : "/S1/q1"}`);

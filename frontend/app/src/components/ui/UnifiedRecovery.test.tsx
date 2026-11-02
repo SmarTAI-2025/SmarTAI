@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { expect, it, vi } from "vitest";
 import { RecoverableActionState } from "./RecoverableActionState";
@@ -7,19 +7,23 @@ import { questionIssueNeedsReview, recognitionIssueLabel } from "@/lib/reviewCon
 import { normalizeMarkdownMathInput } from "./MarkdownMath";
 import type { PreparationIssue } from "@/types";
 
-it.each(["provider_rate_limited", "provider_daily_quota_exceeded"])("renders truthful recovery controls for %s", code => {
+it.each(["provider_rate_limited", "provider_daily_quota_exceeded", "shared_pool_daily_limit_reached"])("renders truthful recovery controls for %s", code => {
+  const retry = vi.fn();
   render(<MemoryRouter><RecoverableActionState info={classifyRecoverableError(code)}
-    workflowRecovery={{ retry: { onClick: vi.fn() }, configurationHref: "/tasks/T/submissions/upload" }} /></MemoryRouter>);
+    workflowRecovery={{ retry: { onClick: retry }, configurationHref: "/tasks/T/submissions/upload" }} /></MemoryRouter>);
   expect(screen.getByRole("link", { name: "返回修改配置" })).toBeInTheDocument();
   expect(screen.queryByRole("link", { name: "OpenAI" })).not.toBeInTheDocument();
   expect(screen.queryByRole("link", { name: "查看用量" })).not.toBeInTheDocument();
-  if (code.includes("daily")) {
-    expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
-    expect(screen.getByText(/本轮已停止/)).toBeInTheDocument();
-  } else {
-    expect(screen.getByRole("button", { name: "重试失败项" })).toBeEnabled();
+  if (code === "provider_daily_quota_exceeded") {
+    expect(screen.getByText(/自动重试已停止/)).toBeInTheDocument();
+  } else if (code === "provider_rate_limited") {
     expect(screen.getByText(/当前信息不足以确定是分钟限制还是日额度/)).toBeInTheDocument();
   }
+  const button = screen.getByRole("button", { name: "重试失败项" });
+  expect(button).toBeEnabled();
+  fireEvent.click(button);
+  fireEvent.click(button);
+  expect(retry).toHaveBeenCalledTimes(2);
 });
 
 it("distinguishes unverified targets from actual missing source evidence", () => {
@@ -53,4 +57,19 @@ it.each(["zh-CN", "en-US"] as const)("hides internal diagnostics without changin
   expect(retry).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("link", { name: locale === "zh-CN" ? "返回修改配置" : "Back to edit settings" })).toHaveAttribute("href", "/tasks/T/grading-setup");
   expect(info.technicalDetails.some(item => item.value === "operation_cancelled")).toBe(true);
+});
+
+it.each(["zh-CN", "en-US"] as const)("distinguishes an explicit zero ceiling without hiding retry (%s)", locale => {
+  const retry = vi.fn();
+  const info = classifyRecoverableError("provider_zero_quota", { locale });
+  const { container } = render(<MemoryRouter><RecoverableActionState locale={locale} info={info}
+    workflowRecovery={{ retry: { onClick: retry }, configurationHref: "/tasks/T/grading-setup" }} /></MemoryRouter>);
+  expect(container).toHaveTextContent(locale === "zh-CN" ? "当前无可用配额" : "No quota is currently available");
+  expect(container).toHaveTextContent(locale === "zh-CN" ? "配额为0" : "zero quota limit");
+  expect(container).not.toHaveTextContent(/已用完|耗尽|exhausted|midnight|跨天/);
+  expect(info.dailyQuotaExhausted).toBeFalsy();
+  const button = screen.getByRole("button", { name: locale === "zh-CN" ? "重试失败项" : "Retry failed items" });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  expect(retry).toHaveBeenCalledTimes(2);
 });

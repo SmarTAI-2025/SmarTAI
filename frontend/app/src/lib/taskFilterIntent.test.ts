@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FilterIntentResult, PreparationIssue, ProblemInfo, StudentSubmission } from "@/types";
 import type { QuestionSummary, StudentSummary } from "@/components/tasks/resultsModel";
 import { scopeResultQuestions } from "@/components/tasks/ResultQuestionQuery";
-import { buildSubmissionQuestions } from "@/lib/submissionReview";
+import { buildStudentAnswerQuestions, buildSubmissionQuestions } from "@/lib/submissionReview";
 import { compareValues } from "./sortValues";
 import { EMPTY_FILTER_INTENT, parseLocalTaskFilter, supportsFilterIntent } from "./taskFilterIntent";
 import { selectPreparationQuestions, selectStudentAnswerQuestions, selectSubmissionQuestions } from "./taskPreparationFilter";
@@ -12,7 +12,7 @@ const problem = (number: string, maxScore: number | undefined, codes: Preparatio
   q_id: number, number, type, stem: "Compute a derivative", criterion: "Check the derivative", max_score: maxScore,
   preparation_issues: codes.map((code, index) => ({ issue_id: `${number}-${index}`, code, severity: "warning", field: "stem", message: code, status: "open" })),
 } as ProblemInfo);
-const problems = [problem("Q1", 10, ["low_confidence"]), problem("Q2", 5, ["low_confidence", "source_conflict"]), problem("Q10", undefined, ["source_conflict"], "proof")];
+const problems = [problem("Q1", 10, ["low_confidence"]), problem("Q2", 5, ["low_confidence", "source_conflict"]), problem("Q10", undefined, ["source_conflict"], "reasoning")];
 const student = (id: string, reviewed: boolean[]): StudentSubmission => ({ stu_id: id, stu_name: id,
   stu_ans: reviewed.map((done, index) => ({ q_id: `Q${index+1}`, number: String(index+1), type: "calculation", content: "answer", flag: [], review_status: done ? "confirmed" : "pending" })),
 });
@@ -62,6 +62,36 @@ describe("shared Ask controls and local execution", () => {
     expect(selectStudentAnswerQuestions(questions, a, intent({ sort: "question_desc" })).map((q) => q.id)).toEqual(["Q2", "Q1"]);
     expect(a.stu_id).toBe("S1");
   });
+  it("keeps every answer to selected questions in Ask order and stable answer order", () => {
+    const current = student("S1", [false, false, false, false]);
+    current.stu_ans = current.stu_ans.map((answer, index) => ({ ...answer, answer_id: `answer-${index + 1}`,
+      q_id: ["Q1", "Q2", "Q1", "Q3"][index] }));
+    const questions = buildStudentAnswerQuestions(buildSubmissionQuestions([
+      problem("Q1", 5), problem("Q2", 10), { ...problem("Q3", 5), number: "Q1" },
+    ], [current]), current);
+    const before = [...questions];
+    const result = selectStudentAnswerQuestions(questions, current, intent({ execution: {
+      recognized: true, kind: "questions", explanation: "Selected questions", data: { columns: [], rows: [] },
+      selection: { kind: "questions", ids: ["Q2", "unknown", "Q1"] }, chart: null,
+    } }));
+    expect(result.map(question => question.id)).toEqual(["answer-2", "answer-1", "answer-3"]);
+    expect(result.every(question => questions.includes(question))).toBe(true);
+    expect(questions).toEqual(before);
+  });
+  it("preserves empty selections, non-question results and legacy question IDs", () => {
+    const current = student("S1", [false, false]);
+    const questions = buildSubmissionQuestions([problem("Q1", 5), problem("Q2", 10)], [current]);
+    const execution = { recognized: true, kind: "questions" as const, explanation: "", data: { columns: [], rows: [] }, selection: null, chart: null };
+    const selected = (ids: string[]) => intent({ execution: { ...execution, selection: { kind: "questions", ids } } });
+    expect(selectStudentAnswerQuestions(questions, current, selected(["Q2"]))).toEqual([questions[1]]);
+    expect(selectStudentAnswerQuestions(questions, current, selected([]))).toEqual([]);
+    expect(selectStudentAnswerQuestions(questions, current, selected(["unknown"]))).toEqual([]);
+    for (const result of [execution, { ...execution, recognized: false },
+      { ...execution, selection: { kind: "students" as const, ids: ["S1"] } }]) {
+      expect(selectStudentAnswerQuestions(questions, current, intent({ execution: result }))).toBe(questions);
+    }
+    expect(selectStudentAnswerQuestions(questions, current, null)).toBe(questions);
+  });
   it("uses individual scores rather than class averages in student/review details", () => {
     const question = { id: "Q1", label: "Q1", count: 2, avgScore: 5, avgPercent: 50, maxScore: 10, minScore: 1, maxObservedScore: 9, lowConfidenceCount: 1, reviewCount: 1,
       entries: [{ student: { id: "S1" } as StudentSummary, correction: { q_id: "Q1", score: 9, max_score: 10, confidence: 0.9 } },
@@ -71,4 +101,9 @@ describe("shared Ask controls and local execution", () => {
     expect(scopeResultQuestions([question], "S2")[0]).toMatchObject({ avgScore: 1, avgPercent: 10, count: 1, lowConfidenceCount: 1 });
     expect(question.entries).toHaveLength(2);
   });
+});
+
+
+it.each(["proof", "证明题", "short", "short_answer", "choice", "multiple_choice", "fill_blank"])("rejects retired type %s in filter payloads", type => {
+  expect(supportsFilterIntent(intent({ question_types: [type] }), "question_preparation")).toBe(false);
 });

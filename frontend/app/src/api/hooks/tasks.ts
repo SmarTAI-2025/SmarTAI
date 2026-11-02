@@ -48,9 +48,14 @@ export function useTaskHistory(query: TaskHistoryQuery) {
 }
 
 export function useTask(taskId?: string, options: { pollAICompletion?: boolean; refetchOnMount?: boolean | "always" } = {}) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: taskKeys.detail(taskId ?? ""),
-    queryFn: () => tasksApi.getTask(taskId as string),
+    queryFn: async () => {
+      const incoming = await tasksApi.getTask(taskId as string);
+      const current = queryClient.getQueryData<Task>(taskKeys.detail(taskId ?? ""));
+      return current && current.workflow_revision > incoming.workflow_revision ? current : incoming;
+    },
     enabled: Boolean(taskId),
     refetchOnMount: options.refetchOnMount,
     refetchInterval: options.pollAICompletion
@@ -370,6 +375,8 @@ export function useUpdateStudentAnswer() {
       taskId,
       studentId,
       qId,
+      answerId,
+      targetQId,
       expectedWorkflowRevision,
       content,
       flag,
@@ -378,11 +385,15 @@ export function useUpdateStudentAnswer() {
       taskId: string;
       studentId: string;
       qId: string;
+      answerId?: string;
+      targetQId?: string;
       expectedWorkflowRevision?: number;
       content?: string;
       flag?: string[];
       reviewStatus?: "pending" | "confirmed";
     }) => tasksApi.updateStudentAnswer(taskId, studentId, qId, {
+      answer_id: answerId,
+      target_q_id: targetQId,
       expected_workflow_revision: expectedWorkflowRevision,
       content,
       flag,
@@ -393,7 +404,8 @@ export function useUpdateStudentAnswer() {
         const student = current?.student_data[variables.studentId];
         if (!current || !student) return current;
         const answers = [...student.stu_ans];
-        const answerIndex = answers.findIndex((answer) => answer.q_id === variables.qId);
+        if (current.workflow_revision > data.workflow_revision) return current;
+        const answerIndex = answers.findIndex((answer) => variables.answerId ? answer.answer_id === variables.answerId : answer.q_id === variables.qId);
         if (answerIndex >= 0) answers[answerIndex] = data.answer;
         else answers.push(data.answer);
         return {
@@ -401,7 +413,7 @@ export function useUpdateStudentAnswer() {
           workflow_revision: data.workflow_revision,
           student_data: {
             ...current.student_data,
-            [variables.studentId]: { ...student, stu_ans: answers },
+            [variables.studentId]: { ...student, stu_ans: data.answers ?? answers },
           },
         };
       });
@@ -452,29 +464,6 @@ export function useUpdateStudentIdentity() {
   });
 }
 
-export function useSetTeacherComment() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: ({
-      taskId,
-      studentId,
-      qId,
-      comment,
-    }: {
-      taskId: string;
-      studentId: string;
-      qId: string;
-      comment: string;
-    }) => tasksApi.setTeacherComment(taskId, studentId, qId, comment),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: taskKeys.comments(variables.taskId) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.finalization(variables.taskId) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.result(variables.taskId) });
-    },
-  });
-}
-
 export function useUpdateCorrectionReview() {
   const queryClient = useQueryClient();
 
@@ -504,7 +493,11 @@ export function useUpdateCorrectionReview() {
           results: current.results.map((student) => student.student_id === variables.studentId
             ? {
                 ...student,
-                corrections: student.corrections.map((correction) => correction.q_id === variables.qId ? data.correction : correction),
+                // Reviewing changes teacher fields, not the immutable AI vote.
+                // Keep the result endpoint's concise evidence presentation.
+                corrections: student.corrections.map((correction) => correction.q_id === variables.qId ? {
+                  ...data.correction, steps: correction.steps, expert_results: correction.expert_results,
+                } : correction),
               }
             : student),
         };

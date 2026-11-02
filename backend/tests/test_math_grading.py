@@ -172,9 +172,12 @@ async def test_surviving_expert_gets_deferred_review(monkeypatch):
         if kwargs["output_model"] is grading.MathAssessment:
             return assessment(needs_review=True), response()
         assert kwargs["output_model"] is grading.ExpertReview
+        revised = assessment(6, 0)
+        revised.evidence_judgments = [grading.EvidenceJudgment(evidence_id="v1", applicability="applies",
+            reason="The tool confirms the same final arithmetic error.")]
         return grading.ExpertReview(revisions=[grading.ExpertRevision(
             expert_index=0, source_quote=a.content, reason="Missing method justification.",
-            assessment=assessment(6, 0))]), response()
+            assessment=revised)]), response()
 
     monkeypatch.setattr(grading, "structured_llm_call", model)
     monkeypatch.setattr(multi_expert, "get_skill_for_type", lambda _: CalculationSkill)
@@ -335,6 +338,43 @@ def test_direct_grade_rejects_whitespace_only_rationale():
         grading.DirectMathGrade(score=8, rationale=" \n ", comment="Partial credit.")
 
 
+@pytest.mark.asyncio
+async def test_original_formula_survives_real_json_parser_and_deduction_scoring():
+    """Do not mock the parser whose formatting used to discard this graph."""
+    from backend.llm.providers import LLMResponse
+
+    p = problem(kind="推理题")
+    a = answer(r"\(2+2=5\)")
+    plan = plan_for(p, mode="deductions")
+    payload = grading.MathAssessment(
+        route_id="main", route_reason="Teacher's deduction rule applies.",
+        claims=[grading.Claim(id="s1", quote=a.content, item_ids=["error"],
+                              verdict="refuted", reason="One arithmetic error.")],
+        deductions=[grading.Deduction(error_id="e1", rule_id="error", claim_id="s1",
+                                      reason="One independent error.")],
+        confidence=.9, comment="One point deducted.",
+    )
+    calls = []
+
+    async def invoke(messages):
+        calls.append(messages)
+        if len(calls) == 2:
+            assert "APPLY SCOPED EVIDENCE" in messages[-1].content
+            payload.evidence_judgments = [grading.EvidenceJudgment(
+                evidence_id="v1", applicability="applies", reason="The explicit arithmetic error is the same one already deducted.")]
+        elif len(calls) > 2:
+            raise grading.PermanentLLMError("Unexpected extra model call in fixed replay")
+        return LLMResponse(content=payload.model_dump_json(), provider="replay", model="raw-json",
+                           duration_ms=1)
+
+    with math_plans_context({p.q_id: plan}):
+        result = await ProofSkill(SimpleNamespace(provider_id="replay", ainvoke=invoke)).grade(p, a)
+    trace = grading.read_math_trace(result)
+    assert result.score == 9 and not result.error_kind
+    assert len(calls) == 2 and "direct" not in trace
+    assert trace["assessment"]["claims"][0]["quote"] == a.content
+
+
 def test_deductions_apply_only_teacher_floor_and_no_negative_frontend_steps():
     plan = plan_for(mode="deductions", floor=6, nonblank=True)
     draft = grading.MathAssessment(route_id="main", route_reason="Teacher deduction rule",
@@ -381,6 +421,7 @@ async def test_blank_answer_uses_actual_rubric_once_without_empty_deduction_full
 
 def test_holistic_evidence_is_separate_from_brief_comment():
     draft = grading.MathAssessment(route_id="main", route_reason="Whole rubric", score=8,
+        claims=[grading.Claim(id="s1", quote="6*7=41", verdict="refuted", reason="Arithmetic error.")],
         rationale="Method 8/8: correct equation. Final arithmetic 0/2: 6*7=41.",
         comment="Final arithmetic error.", confidence=.9)
     score, steps = grading.score_assessment(draft, plan_for(mode="holistic"), "6*7=41")
@@ -413,7 +454,7 @@ async def test_actual_math_tool_evidence_is_consumed_before_final_ledger(
     p = problem()
     p.stem = "Compare the two expressions under the stated precision/domain."
     p.reference_answer = reference
-    p.criterion += " Approximation with absolute error 1e-7 is allowed." if status == "supported" else ""
+    p.criterion += " Approximation with absolute tolerance 1e-7 is allowed." if status == "supported" else ""
     a, plan = answer(student), plan_for(p)
     draft = assessment(8, initial, text=student, checks=[grading.Verification(
         claim_id="s1", context_quote=p.criterion,
@@ -457,7 +498,7 @@ async def test_late_tool_timeout_keeps_earlier_completed_evidence(monkeypatch, p
     monkeypatch.setattr(math_verification, "verify_math", verify)
     p, a, plan = problem(), answer(), plan_for()
     draft = assessment(checks=[grading.Verification(claim_id="s1", context_quote=p.stem,
-        request={"student_expression": "42", "reference_expression": "42"}) for _ in range(3)])
+        request={"student_expression": "41", "reference_expression": "42"}) for _ in range(3)])
     evidence = await CalculationSkill(provider)._verify(draft, p, a, plan)
     assert [entry["status"] for entry in evidence] == ["supported", "unknown", "unknown"]
     assert calls == 2  # No third launch after the total budget expires.

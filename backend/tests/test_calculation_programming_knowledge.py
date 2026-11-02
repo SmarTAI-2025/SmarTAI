@@ -6,7 +6,7 @@ import pytest
 from backend.models import TestCase
 from backend.skills.calculation import CalculationSkill
 from backend.skills.programming import ProgrammingSkill
-from backend.skills.math_grading import MathAssessment
+from backend.skills.math_grading import MathAssessment, Claim, EvidenceJudgment
 from backend.tests.test_calculation_skill import _make_problem as calc_problem, _make_answer as calc_answer
 from backend.tests.test_programming_skill import _make_problem as prog_problem, _make_answer as prog_answer, PYTHON_ADD_CODE
 from backend.tools import knowledge
@@ -29,6 +29,9 @@ async def test_selected_textbook_is_reference_only_and_has_system_citations(monk
         prompts.append(kwargs["user_prompt"])
         if kind == "calculation":
             return (MathAssessment(route_id="holistic", route_reason="Apply the original standard",
+                    claims=[Claim(id="c", quote="6 * 7 = 42", verdict="supported", reason="Correct arithmetic")],
+                    rationale="One point under the teacher's overall standard.",
+                    evidence_judgments=[EvidenceJudgment(evidence_id="v1", applicability="applies", reason="Arithmetic matches.")],
                     score=1, confidence=.9, comment="Feedback"),
                     SimpleNamespace(content="{}", duration_ms=1))
         return (SimpleNamespace(score=1, max_score=10, confidence=.9, comment="Feedback", steps=[], logs=""),
@@ -51,7 +54,7 @@ async def test_selected_textbook_is_reference_only_and_has_system_citations(monk
 
     result = await skill.grade(problem, answer, student_id="synthetic")
     retrieve.assert_awaited_once_with(problem.stem, k=3, scope="grading-run:frozen", provider=provider, reporter=None)
-    assert len(prompts) == 1
+    assert len(prompts) == (2 if kind == "calculation" else 1)
     assert ("PRIVATE_REFERENCE" in prompts[0]) == selected
     assert result.knowledge_citations == ([chunk.citation] if selected else [])
     if selected:

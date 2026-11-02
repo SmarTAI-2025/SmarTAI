@@ -44,6 +44,7 @@ export interface ProviderFailure {
 }
 
 export interface JobProgress {
+  preparation_counts?: { stems: number; reference_answers: number; rubrics: number; questions: number };
   recognition_requests?: RecognitionRequestState[];
   model_progress?: GradingModelProgress[];
   model_eta_seconds?: number | null;

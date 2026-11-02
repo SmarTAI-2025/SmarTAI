@@ -737,7 +737,7 @@ versions continue using the ingestion/storage boundaries described above.
 
 The library and task setup expose content search. Retrieved references are
 system-supplied, not model-certified claim support. Existing concept,
-objective and proof grading carry those references into saved expert results;
+calculation, concept and reasoning grading carry those references into saved expert results;
 teacher review can inspect the frozen passage and original page. PDF preview
 mounts at most three canvases and can reach every page, including page 1000.
 Calculation/programming prompt expansion is held for explicit data-egress

@@ -149,6 +149,8 @@ class UpdateProblemRequest(BaseModel):
 
 class UpdateStudentAnswerRequest(BaseModel):
     expected_workflow_revision: int | None = Field(default=None, ge=0)
+    answer_id: str | None = Field(default=None, min_length=1, max_length=64)
+    target_q_id: str | None = Field(default=None, min_length=1, max_length=64)
     content: str | None = None
     flag: list[str] | None = None
     review_status: Literal["pending", "confirmed"] | None = None
@@ -162,15 +164,9 @@ class UpdateStudentIdentityRequest(BaseModel):
 
 class UpdateCorrectionReviewRequest(BaseModel):
     expected_workflow_revision: int = Field(ge=0)
-    teacher_score: float = Field(ge=0)
+    teacher_score: float = Field(ge=0, allow_inf_nan=False)
     teacher_comment: str = Field(default="", max_length=4000)
     confirm: bool = False
-
-
-class UpdateTeacherCommentRequest(BaseModel):
-    student_id: str
-    q_id: str
-    comment: str = Field(default="", max_length=4000)
 
 
 class GenerateResultArtifactsRequest(BaseModel):
@@ -465,6 +461,7 @@ async def parse_submissions_endpoint(
     recognition_provider_id: str | None = Form(default=None),
     replace_confirmed: bool = Form(default=False),
     stored_file_id: str | None = Form(default=None),
+    reuse_input_from_job_id: str | None = Form(default=None),
     reuse_roster_from_job_id: str | None = Form(default=None),
     expected_workflow_revision: int | None = Form(default=None),
     acknowledge_possible_duplicate_call: bool = Form(default=False),
@@ -473,11 +470,12 @@ async def parse_submissions_endpoint(
 ):
     # Form defaults are Param objects in direct Python calls used by workers/tests.
     stored_file_id = stored_file_id if isinstance(stored_file_id, str) else None
+    reuse_input_from_job_id = reuse_input_from_job_id if isinstance(reuse_input_from_job_id, str) else None
     reuse_roster_from_job_id = reuse_roster_from_job_id if isinstance(reuse_roster_from_job_id, str) else None
     expected_workflow_revision = expected_workflow_revision if isinstance(expected_workflow_revision, int) else None
     acknowledge_possible_duplicate_call = acknowledge_possible_duplicate_call is True
     restart_origin = None
-    from backend.services.workflow_inputs import load_submission_input, load_saved_roster
+    from backend.services.workflow_inputs import load_submission_input, load_saved_roster, submission_inputs
     from backend.services.upload_contract import upload_limit
     maximum = upload_limit("submission_upload_max_bytes", SUBMISSION_UPLOAD_MAX_BYTES)
     # Bound a new upload before looking up or publishing any workflow state.
@@ -493,16 +491,25 @@ async def parse_submissions_endpoint(
         workflow = workflow_repository.get_live_workflow(task_id, owner_id=current.id)
         if expected_workflow_revision is not None and workflow.workflow_revision != expected_workflow_revision:
             raise VersionConflict("The task changed before submission.", code="stale_revision")
-        if (file is None) == (stored_file_id is None):
+        if sum(source is not None for source in (file, stored_file_id, reuse_input_from_job_id)) != 1:
             raise ValidationError("Choose exactly one submission source.", code="exactly_one_source_required")
-        if stored_file_id:
+        if reuse_input_from_job_id is not None:
+            # Recover only the original upload. The current form owns all settings,
+            # and the normal queue path creates a fresh recognition round.
+            saved = submission_inputs(task_id=task_id, owner_id=current.id)["input"]
+            if not saved or saved["job_id"] != reuse_input_from_job_id or not saved["available"]:
+                raise NotFound("submission_source")
+            stored_file_id = saved["stored_file_id"]
+        if stored_file_id is not None:
             if expected_workflow_revision is None:
                 raise ValidationError("Confirm the current task revision.", code="stale_revision")
             stored, body = load_submission_input(task_id=task_id, owner_id=current.id, stored_file_id=stored_file_id)
             filename, content_type = stored.original_name, stored.content_type
         if workflow.last_failed_job_id == workflow.parse_job_id and workflow.parse_job_id:
             failed = workflow_repository.get_operation(workflow.parse_job_id, owner_id=current.id)
-            if failed.error_code == "provider_submit_uncertain" or (failed.checkpoint or {}).get("ocr_inflight_source_id"):
+            task_facade.require_current_submission_pipeline(failed.payload)
+            if (failed.error_code == "provider_submit_uncertain" or (failed.checkpoint or {}).get("ocr_inflight_source_id")
+                    or (failed.checkpoint or {}).get("structure_inflight")):
                 if not acknowledge_possible_duplicate_call:
                     raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")
                 restart_origin = f"{failed.id}:{failed.attempt}"
@@ -607,11 +614,15 @@ async def retry_submission_recognition_endpoint(
                 code="stale_revision",
             )
         failed = workflow_repository.get_operation(job_id, owner_id=current.id)
+        if failed.assignment_id != task_id or failed.operation_type != "submission_recognition":
+            raise NotFound("submission_recognition")
+        task_facade.require_current_submission_pipeline(failed.payload)
         summary = source_outcome_repository.summarize_sources(operation_id=job_id, owner_id=current.id, attempt=failed.attempt)
         legacy_partial = workflow.parse_job_id == job_id and bool(summary.failed_count)
         if workflow.last_failed_job_id != job_id and not legacy_partial:
             raise InvalidTransition("Only the latest failed input can be retried.", code="submission_retry_not_available")
-        uncertain = failed.error_code == "provider_submit_uncertain" or bool((failed.checkpoint or {}).get("ocr_inflight_source_id"))
+        uncertain = failed.error_code == "provider_submit_uncertain" or bool(
+            (failed.checkpoint or {}).get("ocr_inflight_source_id") or (failed.checkpoint or {}).get("structure_inflight"))
         if uncertain and not request.acknowledge_possible_duplicate_call:
             raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")
         retry = task_facade.load_submission_retry_upload(
@@ -632,7 +643,6 @@ async def retry_submission_recognition_endpoint(
             recognition_provider_id=request.recognition_provider_id,
             replace_confirmed=retry["replace_confirmed"] or legacy_partial,
             retry_from=retry["retry_from"],
-            manual_saved_sources=failed.payload.get("manual_saved_sources"),
             acknowledged_restart_from=(f"{failed.id}:{failed.attempt}" if uncertain or
                 (failed.error_code == "operation_cancelled" and request.acknowledge_possible_duplicate_call) else None),
             expected_workflow_revision=request.expected_workflow_revision,
@@ -800,33 +810,6 @@ def update_correction_review(
         teacher_comment=request.teacher_comment, confirm=request.confirm,
         expected_revision=request.expected_workflow_revision,
     ))
-
-
-@router.post("/{task_id}/teacher_comment")
-def set_teacher_comment(
-    task_id: str, request: UpdateTeacherCommentRequest,
-    current: User = Depends(require_teacher),
-):
-    try:
-        workflow = workflow_repository.get_live_workflow(
-            task_id, owner_id=current.id
-        )
-        results = task_facade.task_results(task_id=task_id, owner_id=current.id)
-        student = next((item for item in results.get("results", []) if item["student_id"] == request.student_id), None)
-        correction = next((item for item in (student or {}).get("corrections", []) if item["q_id"] == request.q_id), None)
-        if correction is None:
-            raise NotFound("grade_result")
-        task_facade.update_correction_review(
-            task_id=task_id, owner_id=current.id,
-            display_student_id=request.student_id, q_id=request.q_id,
-            teacher_score=correction.get("teacher_score") if correction.get("teacher_score") is not None else correction["score"],
-            teacher_comment=request.comment, confirm=False,
-            expected_revision=workflow.workflow_revision,
-        )
-        return {"status": "ok", "student_id": request.student_id,
-                "q_id": request.q_id, "teacher_comment": request.comment}
-    except DomainError as exc:
-        return domain_error_response(exc)
 
 
 @router.get("/{task_id}/teacher_comments")

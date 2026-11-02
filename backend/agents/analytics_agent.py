@@ -64,7 +64,7 @@ class FilterIntentOutput(BaseModel):
     ]] = None
     question_tokens: List[str] = Field(default_factory=list, max_length=4)
     question_types: List[Literal[
-        "calculation", "programming", "proof", "concept", "choice", "fill_blank", "short_answer",
+        "calculation", "concept", "reasoning", "programming", "other",
     ]] = Field(default_factory=list, max_length=4)
     max_average_confidence: Optional[float] = Field(None, ge=0, le=1)
     missing_knowledge: bool = False

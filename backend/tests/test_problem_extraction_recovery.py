@@ -417,7 +417,7 @@ def _problem_data(stem: str = "Recovered") -> dict[str, dict]:
         "q1": {
             "q_id": "q1",
             "number": "1",
-            "type": "short",
+            "type": "concept",
             "stem": stem,
             "criterion": "",
             "max_score": 10,

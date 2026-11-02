@@ -241,7 +241,7 @@ test("real question-review route retains question navigation while the original 
   const task = {
     task_id: "local-pdf", name: "本地 PDF 复核验收", status: "problems_ready", workflow_revision: 1,
     problem_file_name: "multiple.pdf", problem_data: Object.fromEntries([1, 2].map((n) => [`Q${n}`, {
-      q_id: `Q${n}`, number: String(n), type: "Proof", stem: String.raw`合成题目 ${n}：证明 $a^2 + b^2 \geq 2ab$。`,
+      q_id: `Q${n}`, number: String(n), type: "Reasoning", stem: String.raw`合成题目 ${n}：证明 $a^2 + b^2 \geq 2ab$。`,
       max_score: 10, criterion: "论证完整 10 分", reference_answer: "由平方非负可得。", preparation_issues: [],
     }])), students: [], created_at: 0,
   };

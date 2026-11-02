@@ -14,7 +14,7 @@ def expert(provider, score, confidence=0, error_kind=None):
 
 
 def problem():
-    return ProblemInfo(q_id="q1", number="1", type="proof", stem="Synthetic proof", criterion="Reasoning", max_score=10)
+    return ProblemInfo(q_id="q1", number="1", type="reasoning", stem="Synthetic proof", criterion="Reasoning", max_score=10)
 
 
 def setup(weights=None):
@@ -80,10 +80,10 @@ async def test_no_confidence_survives_fanout_and_persistence_adapter(monkeypatch
         def __init__(self, provider, **kwargs): self.provider = provider
         async def grade(self, *args, **kwargs): return expert(self.provider.provider_id, 0 if self.provider.provider_id == "a" else 9)
     monkeypatch.setattr("backend.agents.multi_expert.get_skill_for_type", lambda _: Skill)
-    result = await run_multi_expert(problem=problem(), answer=StudentAnswerInfo(q_id="q1", content="Answer", number="1", type="proof"), student_id="s1",
+    result = await run_multi_expert(problem=problem(), answer=StudentAnswerInfo(q_id="q1", content="Answer", number="1", type="reasoning"), student_id="s1",
         registry=SimpleNamespace(list_available=lambda: [SimpleNamespace(provider_id="a"), SimpleNamespace(provider_id="b")]), aggregation_method="weighted_average")
     assert result.score == 4.5
-    question = QuestionDTO(id="q", assignment_id="task", q_id="q1", number="1", type="proof", stem="Synthetic", criterion="Rubric", max_score=10, order_index=0, created_at=0, updated_at=0)
+    question = QuestionDTO(id="q", assignment_id="task", q_id="q1", number="1", type="reasoning", stem="Synthetic", criterion="Rubric", max_score=10, order_index=0, created_at=0, updated_at=0)
     stored = correction_to_result(run_id="run", revision_id="rev", question=question, student_id="s1", correction=result)
     assert stored.ai_score == 4.5
     assert stored.result_status != "failed"
@@ -100,7 +100,7 @@ async def test_custom_weights_use_saved_ids_even_for_identical_model_names(monke
     monkeypatch.setattr("backend.agents.multi_expert.get_skill_for_type", lambda _: Skill)
     configured = TaskGradingSetup(selected_provider_ids=list(providers), primary_provider_id="saved-a",
         aggregation_method="weighted_average", expert_weights={"saved-a": 1, "saved-b": 3})
-    result = await run_multi_expert(problem=problem(), answer=StudentAnswerInfo(q_id="q1", content="Answer", number="1", type="proof"), student_id="s1",
+    result = await run_multi_expert(problem=problem(), answer=StudentAnswerInfo(q_id="q1", content="Answer", number="1", type="reasoning"), student_id="s1",
         registry=SimpleNamespace(get=providers.get, list_available=lambda: list(reversed(providers.values()))),
         aggregation_method="weighted_average", grading_setup=configured)
     assert result.score == 7

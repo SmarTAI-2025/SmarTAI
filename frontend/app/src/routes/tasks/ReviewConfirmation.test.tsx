@@ -11,10 +11,14 @@ import { ReviewDetailPage } from "./ReviewDetailPage";
 
 const state = vi.hoisted(() => ({
   locale: "en-US",
+  primaryProviderId: undefined as string | undefined,
   task: { task_id: "T1", name: "Review", status: "graded", workflow_revision: 5, problem_data: {}, student_data: {}, grading_job_id: null as string | null, last_failed_job_id: null as string | null },
-  result: { results: [] as unknown[] } as { results: unknown[]; grading_run_status?: string },
+  result: { results: [] as unknown[] } as { results: unknown[]; grading_run_status?: string; primary_provider_id?: string },
   finalization: { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 },
   retry: vi.fn(), bulk: vi.fn(), update: vi.fn(), generate: vi.fn(), refetch: vi.fn(),
+}));
+vi.mock("@/api/hooks/gradingSetup", () => ({
+  useGradingSetup: () => ({ data: { grading_setup: { primary_provider_id: state.primaryProviderId } } }),
 }));
 vi.mock("@/api/hooks/tasks", () => ({
   useStartGrading: () => ({ mutate: state.retry }),
@@ -37,7 +41,7 @@ vi.mock("@/components/tasks/ResultQuestionQuery", () => ({
   ResultQuestionQuery: () => null,
   useResultQuestionFilter: ({ questions }: { questions: unknown[] }) => ({ filter: {}, visibleQuestions: questions }),
 }));
-vi.mock("@/components/knowledge-base/KnowledgeCitationPreview", () => ({ KnowledgeCitationPreview: () => null }));
+vi.mock("@/components/knowledge-base/KnowledgeCitationPreview", () => ({ KnowledgeCitationPreview: ({ citation }: { citation: { citation_id: string } }) => <span>{citation.citation_id}</span> }));
 vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: state.locale, t: (key: string) => key }) }));
 function correction(qId: string, patch = {}) {
   return { q_id: qId, type: "calculation", score: 7, provisional_score: 7, max_score: 10, confidence: 0.4,
@@ -55,12 +59,14 @@ function show(detail = false, suffix = "") {
 }
 beforeEach(async () => {
   state.locale = "en-US";
+  state.primaryProviderId = undefined;
   await clearPageDrafts();
   state.task.status = "graded";
   state.task.grading_job_id = null;
   state.task.last_failed_job_id = null;
   vi.clearAllMocks();
   state.result.grading_run_status = undefined;
+  state.result.primary_provider_id = undefined;
   state.result.results = [{ student_id: "S1", student_name: "Sample", corrections: [correction("Q1"), correction("Q2", { score: 0, provisional_score: 0, teacher_comment: "Keep this" })] }];
   state.finalization = { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 };
   state.bulk.mockResolvedValue(7);
@@ -70,6 +76,26 @@ beforeEach(async () => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 describe("one-click grading review", () => {
+  it.each(["zh-CN", "en-US"])("keeps partial completion, low confidence and every math concern visible (%s)", locale => {
+    state.locale = locale;
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", {
+      review_status: "pending", review_reasons: ["math_expert_disagreement", "math_verification_conflict", "math_proof_concern", "math_model_review"],
+      expert_results: [
+        { provider: "valid", score: 7, max_score: 10, confidence: .4, comment: "", steps: [] },
+        { provider: "failed", score: 0, max_score: 10, confidence: 0, comment: "", steps: [], error_kind: "parse_failed" },
+      ],
+    })] }];
+    show();
+    const queue = screen.getByRole("region", { name: locale === "en-US" ? "Review queue" : "待复核队列" });
+    const expected = locale === "en-US"
+      ? ["Some experts completed", "Low confidence", "Expert disagreement; review suggested.", "Verification evidence still needs checking.", "Key reasoning evidence needs checking."]
+      : ["部分专家完成", "置信度较低", "专家分歧，建议复核。", "核验结果与评分依据待核对。", "关键推理依据待核对。"];
+    for (const label of expected) expect(queue).toHaveTextContent(label);
+    expect(queue).not.toHaveTextContent(locale === "en-US" ? "The model suggests human review." : "模型建议人工复核。");
+    expect(state.update).not.toHaveBeenCalled();
+    expect(state.bulk).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])("shows a 10-versus-6 review signal without requiring confirmation (detail=%s)", async detail => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", {
       review_status: "pending", expert_results: [10, 6].map(score => ({ provider: "expert", score, max_score: 10, confidence: .95, comment: "", steps: [] })),
@@ -127,14 +153,142 @@ describe("one-click grading review", () => {
       const result = card.getByRole("region", { name: locale === "zh-CN" ? "SmarTAI 批改结果" : "SmarTAI Grading Result" });
       expect(result).toHaveTextContent("8.5 / 10");
       expect(card.getByRole("textbox", { name: `${id} ${locale === "zh-CN" ? "最终得分" : "final score"}` })).toHaveValue("8.5");
-      expect(result).toHaveTextContent(id === "Q1" ? "Spread-only rationale" : "Flagged rationale");
+      expect(result).toHaveTextContent("Expert rationale 0");
+      expect(result).not.toHaveTextContent(id === "Q1" ? "Spread-only rationale" : "Flagged rationale");
       await userEvent.click(card.getByText(locale === "zh-CN" ? "查看各专家原始结果" : "View Original Model Results"));
-      expect(card.getByText("Expert rationale 0")).toBeVisible();
-      expect(card.getByText("Expert reasoning 1")).toBeVisible();
+      expect(within(card.getByRole("tabpanel")).getByText("Expert rationale 0")).toBeVisible();
+      expect(card.queryByText("Expert reasoning 1")).not.toBeInTheDocument();
+      await userEvent.click(card.getByRole("tab", { name: "expert-1" }));
+      expect(within(card.getByRole("tabpanel")).getByText("Expert reasoning 1")).toBeVisible();
     }
-    expect(screen.getByText("Combined reasoning")).toBeVisible();
+    expect(screen.queryByText("Combined reasoning")).not.toBeInTheDocument();
     expect(screen.queryByText(/已隐藏|details are hidden/)).not.toBeInTheDocument();
     expect(state.update).not.toHaveBeenCalled();
+  });
+
+  it("keeps the completed run's primary model after setup changes and switches only with a new result", async () => {
+    state.primaryProviderId = "A";
+    state.result.primary_provider_id = "A";
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { expert_results: [
+      { provider_id: "B", provider: "Model B", score: 4, max_score: 10, confidence: 1, comment: "B comment", steps: [{ step_no: 1, desc: "B step", score: 4, is_correct: false }] },
+      { provider_id: "A", provider: "Model A", score: 10, max_score: 10, confidence: 1, comment: "A comment", steps: [{ step_no: 1, desc: "A step", score: 10, is_correct: true }] },
+    ] })] }];
+    const originalResults = JSON.stringify(state.result.results);
+    const router = show(true);
+    const expectPrimary = (name: string) => {
+      const result = screen.getByRole("region", { name: "SmarTAI Grading Result" });
+      expect(within(result).getAllByText(`${name} comment`)[0]).toBeVisible();
+      expect(within(result).getAllByText(`${name} step`)[0]).toBeVisible();
+      expect(result).toHaveTextContent("7 / 10");
+    };
+    expectPrimary("A");
+    await act(() => router.navigate("/tasks/T1/results"));
+    state.primaryProviderId = "B";
+    await act(() => router.navigate("/tasks/T1/review/S1/Q1"));
+    expectPrimary("A");
+    expect(JSON.stringify(state.result.results)).toBe(originalResults);
+    expect(state.retry).not.toHaveBeenCalled();
+    expect(state.update).not.toHaveBeenCalled();
+    await act(() => router.navigate("/tasks/T1/results"));
+    state.result = { ...state.result, primary_provider_id: "B" };
+    await act(() => router.navigate("/tasks/T1/review/S1/Q1"));
+    expectPrimary("B");
+  });
+
+  it("uses the frozen primary model rather than the first result and keeps compact scores outside the disclosure", async () => {
+    state.primaryProviderId = "first";
+    state.result.primary_provider_id = "second";
+    const experts = ["first", "second", "third", "fourth"].map((provider_id, index) => ({
+      provider_id, provider: `model-${index}`, score: index + 2, max_score: 10, confidence: 0.9,
+      comment: `Original ${provider_id} comment`, steps: [0, 0, 1, index + 1].map((score, step) => ({ step_no: step + 1, desc: `${provider_id} step ${step + 1}`, score, is_correct: score > 0 })),
+    }));
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { expert_results: experts, comment: "Repeated aggregate", steps: [{ step_no: 1, desc: "Repeated aggregate step", score: 7, is_correct: true }] })] }];
+    show(true);
+    const result = screen.getByRole("region", { name: "SmarTAI Grading Result" });
+    expect(within(result).getByText("model-1（3/10, [0,0,1,2], conf=0.90）")).toBeVisible();
+    expect(within(result).getByText("Original second comment")).toBeVisible();
+    expect(within(result).getByText("second step 4")).toBeVisible();
+    expect(within(result).queryByText("Repeated aggregate")).not.toBeInTheDocument();
+    expect(within(result).queryByText("Repeated aggregate step")).not.toBeInTheDocument();
+    const scores = result.querySelectorAll("dl")[1];
+    expect(scores.children).toHaveLength(4);
+    expect(scores.children[0]).toHaveTextContent("model-02/10[0,0,1,1]");
+    expect(scores.children[1]).toHaveTextContent("model-13/10[0,0,1,2]");
+    expect(within(result).queryByText("Original first comment")).not.toBeVisible();
+    expect(result).toHaveTextContent("7 / 10");
+    await userEvent.click(within(result).getByText("View Original Model Results"));
+    const tabs = within(result).getAllByRole("tab");
+    expect(tabs).toHaveLength(4);
+    await userEvent.click(tabs[0]);
+    await userEvent.keyboard("{ArrowRight}");
+    expect(tabs[1]).toHaveFocus();
+    expect(tabs[1]).toHaveAttribute("aria-selected", "true");
+    expect(within(within(result).getByRole("tabpanel")).getByText("Original second comment")).toBeVisible();
+    await userEvent.keyboard("{End}");
+    expect(tabs[3]).toHaveFocus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(tabs[0]).toHaveFocus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(tabs[3]).toHaveFocus();
+    await userEvent.keyboard("{Home}");
+    expect(tabs[0]).toHaveFocus();
+    expect(state.update).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a valid model when the primary failed and preserves its failure in the model tab", async () => {
+    state.result.primary_provider_id = "failed";
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { expert_results: [
+      { provider_id: "failed", provider: "failed", score: 0, max_score: 10, confidence: 0, error_kind: "transient_llm", comment: "Original failure", steps: [] },
+      { provider_id: "good", provider: "good", score: 0, max_score: 10, confidence: 0.9, comment: "Valid zero grade", steps: [] },
+    ] })] }];
+    show(true);
+    const result = screen.getByRole("region", { name: "SmarTAI Grading Result" });
+    expect(within(result).getByText("Valid zero grade")).toBeVisible();
+    expect(result.querySelectorAll("dl")[1].children[0]).toHaveTextContent("failed--/10");
+    expect(result.querySelectorAll("dl")[1].children[1]).toHaveTextContent("good0/10");
+    await userEvent.click(within(result).getByText("View Original Model Results"));
+    expect(within(result).getByRole("tabpanel")).toHaveTextContent("Network error or timeout · No valid score; excluded from synthesis");
+    expect(within(within(result).getByRole("tabpanel")).getByText("Original failure")).toBeVisible();
+  });
+
+  it.each([0, 1, 2])("omits the extra score cards for %s results from at most one model", count => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { expert_results: Array.from({ length: count }, (_, i) => ({
+      provider_id: "single", provider: `model#sample${i + 1}`, score: 7, max_score: 10, confidence: 1, comment: "Single model", steps: [],
+    })) })] }];
+    show(true);
+    const result = screen.getByRole("region", { name: "SmarTAI Grading Result" });
+    expect(result.querySelectorAll("dl")).toHaveLength(1);
+    if (!count) expect(within(result).getByText("AI note")).toBeVisible();
+  });
+
+  it("keeps retrieval references with their own model when switching tabs", async () => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { expert_results: ["first", "second"].map(provider => ({
+      provider, score: 7, max_score: 10, confidence: .9, comment: provider, steps: [], knowledge_citations: [{ citation_id: `${provider}-reference` }],
+    })) })] }];
+    show(true);
+    await userEvent.click(screen.getByText("View Original Model Results"));
+    expect(within(screen.getByRole("tabpanel")).getByText("first-reference")).toBeVisible();
+    await userEvent.click(screen.getByRole("tab", { name: "second" }));
+    expect(screen.queryByText("first-reference")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("tabpanel")).getByText("second-reference")).toBeVisible();
+    expect(screen.getByText("Retrieved references (not verified support)")).toBeVisible();
+  });
+
+  it.each([
+    ["operation_cancelled", "Manually stopped before completion"],
+    ["quota_exhausted", "Quota exhausted · No valid score; excluded from synthesis"],
+    ["general", "Model error · No valid score; excluded from synthesis"],
+  ])("preserves %s feedback without fabricating a grade", async (error_kind, feedback) => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: null, provisional_score: null, synthesis_method: "all_failed", expert_results: [
+      { provider: "failed-model", score: 0, max_score: 10, confidence: 0, error_kind, comment: "Original failure details", steps: [] },
+    ] })] }];
+    show(true);
+    const result = screen.getByRole("region", { name: "SmarTAI Grading Result" });
+    expect(result).toHaveTextContent("No valid score");
+    expect(within(result).getByText("AI note")).toBeVisible();
+    await userEvent.click(within(result).getByText("View Original Model Results"));
+    expect(within(result).getByRole("tabpanel")).toHaveTextContent(feedback);
+    expect(within(result).getByRole("tabpanel")).not.toHaveTextContent("0/10");
   });
 
   it("keeps original AI score after a teacher override and labels failed experts without a zero grade", () => {
@@ -145,7 +299,7 @@ describe("one-click grading review", () => {
     show(true);
     expect(screen.getByRole("region", { name: "SmarTAI Grading Result" })).toHaveTextContent("8.5 / 10");
     expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("9");
-    expect(screen.getByText(/failed-model/)).toHaveTextContent("No valid score; excluded from synthesis");
+    expect(screen.getByText(/failed-model ·/)).toHaveTextContent("No valid score; excluded from synthesis");
   });
 
   it("preserves a precise maximum in the default, fallback hint, and validation", () => {
@@ -193,16 +347,17 @@ describe("one-click grading review", () => {
     expect(screen.getByText("2/2")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Confirm all" })).not.toBeInTheDocument();
   });
-  it("requires confirmation of a repaired missing score without suggesting another model retry", async () => {
+  it("releases a saved replacement score without suggesting another model retry", async () => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: 6, provisional_score: null, teacher_score: 6, review_status: "edited", confidence: 0.6 })] }];
-    state.finalization = { remaining_review_count: 1, ready_for_confirmation: false, workflow_revision: 5 };
+    state.finalization = { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 };
     show();
-    expect(screen.getByText("Check the corrected score and confirm")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Locked results" }));
-    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Retry failed items" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
+    expect(await screen.findByText("Current results page")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(state.retry).not.toHaveBeenCalled();
+    expect(state.update).not.toHaveBeenCalled();
   });
+
   it("keeps confirmation separate from the next stage when reopening completed results", async () => {
     state.task.status = "finalized";
     show();
@@ -212,6 +367,43 @@ describe("one-click grading review", () => {
     expect(state.bulk).toHaveBeenCalledTimes(1);
     expect(state.generate).not.toHaveBeenCalled();
   });
+  it.each([false, true])("lists each missing score separately without expert suggestions in detail=%s", async detail => {
+    state.result.results = [{ student_id: "S1", corrections: ["Q1", "Q2"].map(qId => correction(qId, {
+      score: null, provisional_score: null, review_status: "pending", expert_results: [
+        { provider: "low", score: 7, max_score: 10, confidence: .2, comment: "Advice", steps: [] },
+      ],
+    })) }];
+    state.finalization = { remaining_review_count: 2, ready_for_confirmation: false, workflow_revision: 5 };
+    show(detail);
+    await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
+    const dialog = screen.getByRole("alertdialog");
+    const items = within(dialog).getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("Question Q1 · Enter a valid score");
+    expect(items[1]).toHaveTextContent("Question Q2 · Enter a valid score");
+    expect(dialog).not.toHaveTextContent(/confidence|suggested|Advice/);
+    expect(state.update).not.toHaveBeenCalled();
+  });
+
+  it.each(["zh-CN", "en-US"])("reuses every saved red note when bulk confirmation encounters missing scores (%s)", async locale => {
+    state.locale = locale;
+    state.result.results = [{ student_id: "S1", corrections: ["Q1", "Q2"].map(qId => correction(qId, {
+      score: null, provisional_score: null, review_status: "pending", review_reasons: ["parse_failed", "low_confidence"],
+    })) }];
+    show(true);
+    await userEvent.click(screen.getByRole("button", { name: locale === "zh-CN" ? "全部确认" : "Confirm all" }));
+    const dialog = screen.getByRole("alertdialog");
+    const rows = within(dialog).getAllByRole("listitem");
+    expect(rows).toHaveLength(4);
+    for (const [index, id] of ["Q1", "Q2"].entries()) {
+      const label = locale === "zh-CN" ? `第 ${id} 题` : `Question ${id}`;
+      expect(rows[index * 2]).toHaveTextContent(`${label} · ${locale === "zh-CN" ? "缺少有效分数，请填写" : "Enter a valid score"}`);
+      expect(rows[index * 2 + 1]).toHaveTextContent(`${label} · ${locale === "zh-CN" ? "解析失败" : "Could not parse result"}`);
+    }
+    expect(dialog).not.toHaveTextContent(/置信度|confidence|建议|suggested/);
+    expect(state.update).not.toHaveBeenCalled();
+  });
+
   it("explicitly confirms automatically scored results including zero, without finalizing", async () => {
     show();
     await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
@@ -256,18 +448,16 @@ describe("one-click grading review", () => {
     expect(state.update).not.toHaveBeenCalled();
   });
 
-  it("keeps a corrected failed score blocked until explicit review confirmation", async () => {
-    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: null, provisional_score: null, teacher_score: 7, review_status: "edited" })] }];
-    state.finalization = { remaining_review_count: 1, ready_for_confirmation: false, workflow_revision: 5 };
-    show();
+  it.each([false, true])("allows a saved zero score without confirmation in detail=%s", async detail => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: null, provisional_score: null, teacher_score: 0, review_status: "edited" })] }];
+    state.finalization = { remaining_review_count: 0, ready_for_confirmation: true, workflow_revision: 5 };
+    show(detail);
     await userEvent.click(screen.getByRole("button", { name: "View Results & Analysis" }));
+    expect(await screen.findByText("Current results page")).toBeInTheDocument();
     expect(state.generate).not.toHaveBeenCalled();
-    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Stay here" }));
-    expect(screen.queryByRole("button", { name: "Confirm all" })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("link", { name: "View Grading Details" }));
-    await userEvent.click(screen.getByRole("button", { name: /Q1.*Confirm review/ }));
-    expect(state.update).toHaveBeenCalledWith(expect.objectContaining({ teacher_score: 7, confirm: true }));
+    expect(state.update).not.toHaveBeenCalled();
+    expect(state.bulk).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
   it("confirms every student result in one action while chaining workflow revisions", async () => {
@@ -280,12 +470,26 @@ describe("one-click grading review", () => {
   it("validates all drafts before saving and preserves the form on an invalid score", async () => {
     show(true);
     const inputs = screen.getAllByRole("textbox").filter((element) => element.tagName === "INPUT");
+    await userEvent.clear(inputs[0]);
+    await userEvent.type(inputs[0], "-1");
     await userEvent.clear(inputs[1]);
     await userEvent.type(inputs[1], "99");
     await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
     expect(state.update).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert")).toHaveTextContent("Correct the highlighted score first");
+    const dialog = screen.getByRole("alertdialog");
+    const rows = within(dialog).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("Q1 · Enter a score from 0 to 10.");
+    expect(rows[1]).toHaveTextContent("Q2 · Enter a score from 0 to 10.");
+    expect(dialog).not.toHaveTextContent(/confidence|suggested|Genuine blank/);
     expect(inputs[1]).toHaveValue("99");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Back" }));
+    await userEvent.clear(inputs[0]);
+    await userEvent.type(inputs[0], "7");
+    await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
+    expect(within(screen.getByRole("alertdialog")).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(screen.getByRole("alertdialog")).getByRole("listitem")).toHaveTextContent("Q2 · Enter a score from 0 to 10.");
+    expect(state.update).not.toHaveBeenCalled();
   });
   it("stops after a failed item and reports a truthful partial confirmation", async () => {
     state.update.mockResolvedValueOnce({ workflow_revision: 6, correction: correction("Q1", { teacher_score: 7 }) }).mockRejectedValueOnce(new Error("Unavailable"));

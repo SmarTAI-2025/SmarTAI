@@ -13,7 +13,7 @@ for (const stage of ["questions", "submissions", "grading"] as const) {
     });
     const taskId = "issue-navigation";
     const problem_data = Object.fromEntries([1, 2, 3].map(n => [`q${n}`, {
-      q_id: `q${n}`, number: String(n), type: "Proof", stem: `Synthetic question ${n}.\n\n${"A line of question context.\n\n".repeat(12)}`,
+      q_id: `q${n}`, number: String(n), type: "Reasoning", stem: `Synthetic question ${n}.\n\n${"A line of question context.\n\n".repeat(12)}`,
       criterion: stage === "questions" && n === 2 ? "" : "Award 10 points for valid reasoning.",
       reference_answer: "Complete reasoning.", max_score: 10, review_status: "pending", max_score_review_status: "pending",
     }]));

@@ -98,7 +98,7 @@ export function RegisterVerifyPage() {
         eyebrow={zh ? "链接已过期" : "Link expired"}
         helper={zh ? "30 分钟有效期已结束" : "The 30-minute validity period ended"}
         title={zh ? "需要新的验证链接" : "Request a new verification link"}
-        description={zh ? "请返回注册页重新申请；旧链接不会被再次使用。" : "Start registration again. The old link cannot be reused."}
+        description={zh ? "请返回注册页获取新的验证链接。" : "Return to registration to request a new verification link."}
         steps={steps}
         stepsLabel={zh ? "注册进度" : "Registration progress"}
         actionLabel={zh ? "重新注册" : "Start again"}

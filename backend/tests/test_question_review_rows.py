@@ -25,16 +25,16 @@ def test_add_edit_remove_questions_use_existing_editor_and_keep_empty_matrix():
     q_id = created["q_id"]
     assert after["problem_data"]["q1"] == before["problem_data"]["q1"]
     assert after["problem_data"][q_id]["stem"] == ""
-    assert after["problem_data"][q_id]["type"] == "other"
+    assert after["problem_data"][q_id]["type"] == ""
     assert "question_review_blocked" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
     with pytest.raises(DomainError):
         task_facade.update_problem(task_id=task, owner_id=owner, q_id=q_id, patch={"review_status": "confirmed"})
     task_facade.update_problem(task_id=task, owner_id=owner, q_id=q_id,
-        patch={"number": "2.4", "type": "proof", "stem": "Teacher question", "criterion": "Award 10 points for a correct solution."})
+        patch={"number": "2.4", "type": "reasoning", "stem": "Teacher question", "criterion": "Award 10 points for a correct solution."})
     task_facade.update_problem(task_id=task, owner_id=owner, q_id=q_id, patch={"review_status": "confirmed"})
     after = task_facade.get_task(task_id=task, owner_id=owner)
     assert after["problem_data"][q_id]["number"] == "2.4"
-    assert after["problem_data"][q_id]["type"] == "proof"
+    assert after["problem_data"][q_id]["type"] == "推理题"
     assert after["problem_data"][q_id]["review_status"] == "confirmed"
     for removed in ("q1", q_id):
         snapshot = task_facade.get_task(task_id=task, owner_id=owner)

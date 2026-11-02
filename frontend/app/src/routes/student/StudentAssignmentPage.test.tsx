@@ -40,7 +40,7 @@ const published: Assignment = {
 };
 const closed: Assignment = { ...published, status: "closed" };
 const questions: Question[] = [
-  { id: "q1", assignment_id: "a1", q_id: "q1", order_index: 0, number: "", type: "short",
+  { id: "q1", assignment_id: "a1", q_id: "q1", order_index: 0, number: "", type: "concept",
     stem: "1+1=?", criterion: "", max_score: 10, reference_answer: null, test_cases: null,
     source: null, version: 1, created_at: 1, updated_at: 1 },
 ];

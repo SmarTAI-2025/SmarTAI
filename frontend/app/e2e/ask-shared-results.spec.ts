@@ -5,7 +5,7 @@ const taskId = "asg_shared_ask";
 // Optional live bridge uses the same synthetic records with the actual configured model.
 const liveBridge = process.env.SMARTAI_ASK_LIVE_BRIDGE;
 const names = ["Alex Example", "Maya Example", "Jordan Example", "Taylor Example"];
-const problem_data = Object.fromEntries([1, 2, 3, 4].map(n => [`q${n}`, { q_id: `q${n}`, number: String(n), stem: `Synthetic question ${n}`, max_score: 10, type: "short_answer" }]));
+const problem_data = Object.fromEntries([1, 2, 3, 4].map(n => [`q${n}`, { q_id: `q${n}`, number: String(n), stem: `Synthetic question ${n}`, max_score: 10, type: "concept" }]));
 const student_data = Object.fromEntries(names.map((name, i) => [`S${i}`, { stu_id: `S${i}`, stu_name: name, identity_status: "matched", stu_ans: Object.keys(problem_data).map(q_id => ({ q_id, content: "Synthetic answer", review_status: "confirmed", flag: [] })) }]));
 const results = names.map((name, i) => ({ student_id: `S${i}`, student_name: name, corrections: Object.keys(problem_data).map(q_id => ({ q_id, score: [9, 6, 5, null][i], provisional_score: [9, 6, 5, null][i], max_score: 10, confidence: .9, review_status: "confirmed", comment: "Synthetic feedback" })) }));
 const task = { task_id: taskId, owner_id: "shared-owner", name: "Shared Ask fixture", status: "finalized", workflow_revision: 1, final_result_version: 1, problem_data, student_data, problem_count: 4, student_count: 4, created_at: 1, updated_at: 1, kb_docs: {}, kb_doc_count: 0 };

@@ -118,6 +118,49 @@ class RecordingProvider(BaseProvider):
 
 
 @pytest.mark.asyncio
+async def test_ocr_and_text_requests_share_byok_admission_without_fixed_two_call_gate(scheduler, clock, monkeypatch):
+    from backend.agents.recognition_agent import RecognitionAgent
+    from backend.recognition.models import RecognitionPolicyV1
+    from backend.recognition.runtime import RecognitionCapacity
+    from backend.skills.recognition_reader import LLMRecognitionEngine
+    from backend.tests.test_recognition_agent import pdf, request
+
+    monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
+    release, started = asyncio.Event(), asyncio.Event()
+    starts = []
+    class WaitingProvider(RecordingProvider):
+        def _build_client_sync(self):
+            async def invoke(messages, **kwargs):
+                starts.append(messages)
+                if len(starts) == 5:
+                    started.set()
+                await release.wait()
+                return SimpleNamespace(content="Literal source words.")
+            return SimpleNamespace(ainvoke=invoke)
+    provider = WaitingProvider(ProviderConfig(provider_type="openai", model="shared-ocr",
+        api_key="fake-key", rpm=0, scheduling_owner="same-teacher"), clock, starts)
+    engine = LLMRecognitionEngine(provider, route_id="selected", fingerprint="frozen")
+    capacity = RecognitionCapacity()
+    data = pdf([None])
+    req = request(data, policy=RecognitionPolicyV1(enable_repair=False))
+    jobs = [asyncio.create_task(RecognitionAgent(engine, capacity=capacity).read(
+        req, data, authorized_owner_id="owner")) for _ in range(4)]
+    jobs.append(asyncio.create_task(provider.ainvoke([HumanMessage(content="Extract or grade.")])))
+    try:
+        await asyncio.wait_for(started.wait(), 5)
+        assert scheduler.active == 5 and len(scheduler.budgets) == 1
+        release.set()
+        await asyncio.gather(*jobs)
+        assert scheduler.active == 0
+    finally:
+        release.set()
+        for job in jobs:
+            if not job.done():
+                job.cancel()
+        await asyncio.gather(*jobs, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_separate_task_provider_instances_share_actual_rpm(scheduler, clock, monkeypatch):
     monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
     starts = []

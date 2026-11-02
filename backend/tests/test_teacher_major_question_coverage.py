@@ -136,6 +136,7 @@ def test_prefix_matches_and_duplicates_are_not_valid_coverage(numbers):
 
 @pytest.mark.asyncio
 async def test_missing_extraction_can_retry_without_reupload_or_bad_cache(monkeypatch):
+    from backend.agents import incremental_question_preparation as incremental
     from backend.api import task_preparation
     from backend.db import workflow_repository
     from backend.services import task_facade
@@ -160,29 +161,31 @@ async def test_missing_extraction_can_retry_without_reupload_or_bad_cache(monkey
         registry=registry, allow_prepared_source_reuse=False,
     )
     extraction_calls = []
-    async def extract(text, provider, store, **kwargs):
+    async def extract(text, provider, **kwargs):
         extraction_calls.append(text)
-        store.update(questions(["1"] if len(extraction_calls) == 1 else ["1", "2", "3"]))
-        return store
+        return questions(["1"] if len(extraction_calls) <= 3 else ["1", "2", "3"])
     async def score(*args, **kwargs):
         return InterpretedQuestionScorePlan(scores=[
             InterpretedQuestionScore(q_id=f"q{i}", max_score=maximum)
             for i, maximum in enumerate([20, 30, 50], 1)
         ]), None
-    async def generate(**kwargs):
+    async def generate(data, requested_targets, *args, **kwargs):
         return [AICompletionCandidateOutput(**target, text_value="Complete answer.")
-                for target in kwargs["requested_targets"]]
+                for target in requested_targets]
     generator = AsyncMock(side_effect=generate)
-    monkeypatch.setattr(agent, "extract_problems", extract)
-    monkeypatch.setattr(agent, "generate_missing_question_materials", generator)
+    monkeypatch.setattr(incremental, "_extract_problems_call", extract)
+    monkeypatch.setattr(incremental, "generate_missing_question_materials", generator)
     monkeypatch.setattr("backend.skills.question_score.structured_llm_call", score)
     first = _claim(owner, response["job_id"], "first-worker")
     await task_preparation.run_durable_question_preparation(first)
     failed = workflow_repository.get_operation(first.operation_id, owner_id=owner)
-    assert failed.error_code == "question_structure_score_mismatch"
-    assert not failed.checkpoint.get("questions_extracted_artifact_id")
-    assert not failed.checkpoint.get("base_provider_inflight_stage")
-    generator.assert_not_awaited()
+    assert failed.error_code == "question_targets_incomplete"
+    assert failed.checkpoint.get("questions_extracted_artifact_id")
+    assert failed.checkpoint.get("incremental_incomplete_units")
+    assert not failed.checkpoint.get("incremental_inflight_units")
+    # The correctly extracted question and its answer survive the missing
+    # siblings; retry must fill the gap without regenerating that answer.
+    assert generator.await_count == 1
     workflow = workflow_repository.get_workflow(task, owner_id=owner)
     retried = await task_preparation.retry_question_preparation(
         task_id=task, job_id=first.operation_id,
@@ -196,7 +199,7 @@ async def test_missing_extraction_can_retry_without_reupload_or_bad_cache(monkey
     result = task_facade.get_task(task_id=task, owner_id=owner, full=True)
     assert finished.error_code is None
     assert second.attempt == first.attempt + 1
-    assert len(extraction_calls) == 2 and generator.await_count == 3
+    assert len(extraction_calls) == 4 and generator.await_count == 3
     assert [row["number"] for row in result["problem_data"].values()] == ["1", "2", "3"]
     assert sum(row["max_score"] for row in result["problem_data"].values()) == 100
 

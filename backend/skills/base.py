@@ -152,6 +152,8 @@ def build_system_prompt(
     role_description: str,
     language: str = "en",
     grading_setup: Optional[TaskGradingSetup] = None,
+    *,
+    output_instruction: str = "Return a single JSON object with scoring details.",
 ) -> str:
     """Compose the canonical system prompt: anti-jailbreak prefix + role description + language directive.
 
@@ -166,7 +168,7 @@ def build_system_prompt(
         + f"\n\nIMPORTANT: You MUST write your comment and step descriptions in {lang_instruction}. "
         "However, if the student's answer is in a different language, provide bilingual feedback "
         "(primary language + student's language). "
-        "Return a single JSON object with scoring details."
+        + output_instruction
     )
 
 
@@ -273,16 +275,16 @@ def register_skill(*problem_types: str):
 def get_skill_for_type(problem_type: str) -> Type["GradingSkill"]:
     """
     Look up the skill class for a problem type.
-    Falls back to ConceptSkill (for 其他) if exact type not registered.
+    English UI values and Chinese recognition values select the same skill.
     """
+    from backend.domain.question_types import normalize_question_type
+    # Preparation may select a strategy before GradingAgent has been imported.
+    from backend.skills import calculation, concept, programming, proof  # noqa: F401
+
+    problem_type = normalize_question_type(problem_type)
     if problem_type in _SKILL_REGISTRY:
         return _SKILL_REGISTRY[problem_type]
-    # Fallback chain
-    for fallback in ("其他", "概念题"):
-        if fallback in _SKILL_REGISTRY:
-            logger.warning(f"No skill registered for type {problem_type!r}, using {fallback!r}")
-            return _SKILL_REGISTRY[fallback]
-    raise ValueError(f"No skill registered for type {problem_type!r} and no fallback available")
+    raise ValueError("Select a supported question type before grading")
 
 
 def list_registered_skills() -> Dict[str, str]:
@@ -383,8 +385,11 @@ def classify_skill_error(e: Exception) -> tuple[str, str]:
     no status digits, so they need their own keywords.
     """
     s = str(e).lower()
-    from backend.llm.provider_limits import is_daily_quota_error
-    if is_daily_quota_error(e):
+    from backend.llm.provider_limits import exhausted_quota_code
+    quota_code = exhausted_quota_code(e)
+    if quota_code == "provider_zero_quota":
+        return ("zero_quota", "该题未完成：服务商明确返回该模型配额为0，当前无可用配额。请检查服务商项目与模型权限或更换模型；调整后可主动重试。")
+    if quota_code == "provider_daily_quota_exceeded":
         return ("daily_quota_exhausted", "该题未完成：服务商明确返回日额度耗尽。本轮已停止，不会自动跨天等待；请查看服务商用量或更换模型。")
     if s in {"host_code_execution_disabled", "programming_execution_unavailable"}:
         return (

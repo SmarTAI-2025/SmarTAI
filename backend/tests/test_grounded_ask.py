@@ -139,7 +139,7 @@ def test_teacher_score_overrides_ai_and_failed_score_stays_unknown():
     ({"confidence": .2, "teacher_score": 5, "review_status": "confirmed"}, 0, 1),
     ({"confidence": .2, "teacher_score": 0, "review_status": "confirmed"}, 0, 1),
     ({"confidence": .2, "teacher_score": 4, "review_status": "edited"}, 1, 0),
-    ({"score": None, "provisional_score": None, "teacher_score": 4, "review_status": "edited"}, 1, 0),
+    ({"score": None, "provisional_score": None, "teacher_score": 4, "review_status": "edited"}, 0, 0),
     ({"score": None, "provisional_score": None, "teacher_score": 4, "review_status": "confirmed"}, 0, 1),
     ({"synthesis_method": "all_failed"}, 1, 0),
 ])

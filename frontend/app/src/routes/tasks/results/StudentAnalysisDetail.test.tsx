@@ -9,7 +9,7 @@ it("preserves a precise maximum in original and applied result panels", () => {
   const model = buildResultsModel(undefined, {
     status: "completed", task_id: "task",
     results: [{ student_id: "S1", corrections: [{
-      q_id: "q1", type: "proof", score: 2.55, provisional_score: 2.55,
+      q_id: "q1", type: "reasoning", score: 2.55, provisional_score: 2.55,
       max_score: 2.55, confidence: .9, comment: "Original rationale", steps: [],
       expert_results: [], requires_human_review: false, review_reasons: [],
     }] }],

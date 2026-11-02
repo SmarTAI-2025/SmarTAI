@@ -11,7 +11,7 @@ from backend.services import task_facade
 from backend.services.task_execution import stop_task_run
 from backend.tests.test_task_background_workflows import _BackgroundTasks, _Registry, _seed_task
 from backend.tests.test_question_preparation_recovery import (
-    _RecoveryRegistry, _queue_question_preparation, _claim, _fake_preparer,
+    _RecoveryRegistry, _queue_question_preparation, _claim, _install_incremental_preparer,
 )
 
 
@@ -51,7 +51,7 @@ async def test_questions_stop_continue_twice_then_complete(monkeypatch, running,
         assert workflow.active_job_id == job and workflow.last_failed_job_id is None
     calls = []
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls, question_count=1))
+    _install_incremental_preparer(monkeypatch, calls, question_count=1)
     await task_preparation.run_durable_question_preparation(_claim(owner, job, "finish"))
     assert flows.get_operation(job, owner_id=owner).status == "done"
     assert calls == ["q1"]
@@ -133,9 +133,9 @@ async def test_questions_stop_preserves_saved_results_and_requires_inflight_ack(
     _, first, _ = await _queue_question_preparation(owner, task, source_text="1. First.\n2. Second.")
     calls = []
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: _RecoveryRegistry())
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls,
+    _install_incremental_preparer(monkeypatch, calls,
         question_count=2, cancel_after_question=None if inflight else "q1",
-        cancel_after_question_started="q2" if inflight else None))
+        cancel_after_question_started="q2" if inflight else None)
     with pytest.raises(asyncio.CancelledError):
         await task_preparation.run_durable_question_preparation(_claim(owner, first["job_id"], "first"))
     revision = stop(owner, task, first["job_id"])
@@ -150,7 +150,7 @@ async def test_questions_stop_preserves_saved_results_and_requires_inflight_ack(
         assert "provider_submit_uncertain" in rejected.body.decode()
         request.acknowledge_possible_duplicate_call = True
     job = assert_started(await retry())
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls, question_count=2))
+    _install_incremental_preparer(monkeypatch, calls, question_count=2)
     await task_preparation.run_durable_question_preparation(_claim(owner, job, "finish"))
     assert flows.get_operation(job, owner_id=owner).status == "done"
     assert calls == ["q1", "q2"]
@@ -192,8 +192,7 @@ async def test_stopped_questions_can_handoff_saved_results_to_manual_review(monk
     _, first, _ = await _queue_question_preparation(owner, task, source_text="1. First.\n2. Second.")
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: _RecoveryRegistry())
     calls = []
-    monkeypatch.setattr(task_preparation, "prepare_question_packages",
-        _fake_preparer(calls, question_count=2, cancel_after_question="q1"))
+    _install_incremental_preparer(monkeypatch, calls, question_count=2, cancel_after_question="q1")
     with pytest.raises(asyncio.CancelledError):
         await task_preparation.run_durable_question_preparation(_claim(owner, first["job_id"], "first"))
     revision = stop(owner, task, first["job_id"])

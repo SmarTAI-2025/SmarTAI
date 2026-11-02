@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SourceFileDescriptor } from "@/types/sourcePreview";
+import { EMPTY_FILTER_INTENT } from "@/lib/taskFilterIntent";
 import { StudentAnswerReviewPage } from "./StudentAnswerReviewPage";
 
 const sourcePreviewApi = vi.hoisted(() => ({
@@ -11,6 +12,8 @@ const sourcePreviewApi = vi.hoisted(() => ({
 }));
 const taskRefetch = vi.hoisted(() => vi.fn());
 const mutations = vi.hoisted(() => ({ answer: vi.fn(), identity: vi.fn() }));
+const interpretFilterIntent = vi.hoisted(() => vi.fn());
+vi.mock("@/api/analytics", () => ({ interpretFilterIntent }));
 const studentSource: SourceFileDescriptor = {
   source_id: "source-student-1",
   file_id: "file-student-1",
@@ -54,6 +57,7 @@ const taskData = vi.hoisted(() => ({
       identity_status: "matched",
       identity_match_method: "filename",
       stu_ans: [{
+        answer_id: undefined as string | undefined,
         q_id: "Q1",
         number: "1",
         type: "Calculation",
@@ -106,10 +110,13 @@ function renderPage(search = "?question=Q1") {
     { path: "/tasks/:taskId/grading-setup", element: <div>Grading setup</div> },
   ], { initialEntries: [`/tasks/task-1/students/S001${search}`] });
   render(<RouterProvider router={router} />);
+  return router;
 }
 
 beforeEach(() => {
   taskData.student_data.S001.stu_ans.splice(1);
+  taskData.student_data.S001.stu_ans[0].answer_id = undefined;
+  interpretFilterIntent.mockReset();
   taskData.student_data.S001.identity_status = "matched";
   taskData.student_data.S001.stu_ans[0].review_status = "pending";
   taskData.student_data.S001.stu_ans[0].flag = [];
@@ -152,6 +159,56 @@ beforeEach(() => {
 });
 
 describe("StudentAnswerReviewPage review shortcuts", () => {
+  it("keeps both same-question answers independently editable after an Ask selection", async () => {
+    const first = taskData.student_data.S001.stu_ans[0];
+    first.answer_id = "answer-one";
+    first.flag = ["answer_assignment_conflict"];
+    taskData.student_data.S001.stu_ans.push({ ...first, answer_id: "answer-two", content: "Student answer two" });
+    interpretFilterIntent.mockResolvedValue({ ...EMPTY_FILTER_INTENT, execution: {
+      recognized: true, kind: "questions", explanation: "Selected question 1", data: { columns: ["q_id"], rows: [["Q1"]] },
+      selection: { kind: "questions", ids: ["Q1"] }, chart: null,
+    } });
+    const user = userEvent.setup();
+    const router = renderPage();
+    const card = (id: string) => document.querySelector(`[data-question-id="${id}"]`) as HTMLElement;
+    expect(card("answer-one")).toHaveTextContent("Student answer one");
+    expect(card("answer-two")).toHaveTextContent("Student answer two");
+    await user.type(screen.getByRole("textbox", { name: "Ask SmarTAI：当前学生的作答" }), "只看题号1{Enter}");
+    await waitFor(() => expect(interpretFilterIntent).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(new URLSearchParams(router.state.location.search).get("ask_order")).toBe("1"));
+    await waitFor(() => expect(screen.getByText("共 2 题 · 点击定位")).toBeInTheDocument());
+    expect(card("answer-one")).toHaveTextContent("Student answer one");
+    expect(card("answer-two")).toHaveTextContent("Student answer two");
+    await user.click(within(card("answer-one")).getByRole("button", { name: "修改" }));
+    await user.type(within(card("answer-one")).getByRole("textbox"), " first edit");
+    await user.click(within(card("answer-two")).getByRole("button", { name: "修改" }));
+    expect(within(card("answer-one")).getByRole("textbox")).toHaveValue("Student answer one first edit");
+    expect(within(card("answer-two")).getByRole("textbox")).toHaveValue("Student answer two");
+    await user.click(screen.getByRole("button", { name: "清空查询" }));
+    expect(within(card("answer-one")).getByRole("textbox")).toHaveValue("Student answer one first edit");
+    expect(within(card("answer-two")).getByRole("textbox")).toHaveValue("Student answer two");
+    expect(mutations.answer).not.toHaveBeenCalled();
+  });
+  it("does not label an invalid confidence field as a low confidence score", () => {
+    taskData.student_data.S001.stu_ans[0].flag = ["recognition_manual_pending", "recognition_invalid_fields:recognition_confidence"];
+    renderPage();
+    expect(screen.getByText("待核对：识别置信度")).toBeInTheDocument();
+    expect(screen.queryByText("低置信", { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByText(/recognition_invalid_fields/)).not.toBeInTheDocument();
+  });
+  it.each([false, true])("confirms metadata-only failures without changing verified content (editing=%s)", async editing => {
+    const user = userEvent.setup();
+    taskData.student_data.S001.stu_ans[0].flag = ["recognition_manual_pending", "recognition_failed", "recognition_invalid_fields:type", "recognition_metadata_review"];
+    renderPage();
+    expect(screen.queryByText("recognition_metadata_review")).not.toBeInTheDocument();
+    expect(screen.queryByText("识别失败，请修正并确认")).not.toBeInTheDocument();
+    expect(screen.getByText("待核对：题型")).toBeInTheDocument();
+    if (editing) await user.click(screen.getByRole("button", { name: "修改" }));
+    await user.click(screen.getByRole("button", { name: editing ? /第 1 题 · 保存并确认/ : /第 1 题 · 待确认/ }));
+    expect(mutations.answer).toHaveBeenCalledWith(expect.objectContaining({ qId: "Q1", reviewStatus: "confirmed" }));
+    if (editing) expect(mutations.answer).toHaveBeenCalledWith(expect.objectContaining({ content: "Student answer one" }));
+    expect(mutations.answer.mock.calls[0][0].flag).toBeUndefined();
+  });
   it.each([false, true])("uses individual confirmation for a pending blank (editing=%s), never bulk confirmation", async editing => {
     const user = userEvent.setup();
     taskData.student_data.S001.stu_ans[0].content = "";
@@ -201,6 +258,24 @@ describe("StudentAnswerReviewPage review shortcuts", () => {
     expect(screen.queryByRole("textbox", { name: "学号" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "确认身份 · 待确认" }));
     expect(mutations.identity).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the same concrete blocking notes for individual and next-step answer dialogs", async () => {
+    taskData.student_data.S001.stu_ans[0].flag = ["answer_assignment_conflict", "parse_failed", "authorship_uncertain"];
+    const user = userEvent.setup();
+    renderPage();
+    expect(screen.queryByRole("button", { name: "全部确认" })).not.toBeInTheDocument();
+    for (const name of [/1.*待确认/, /^进入批改设置$/]) {
+      await user.click(screen.getByRole("button", { name }));
+      const dialog = screen.getByRole("alertdialog");
+      const rows = within(dialog).getAllByRole("listitem");
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toHaveTextContent("同一题号");
+      expect(rows[1]).toHaveTextContent("解析失败");
+      expect(dialog).not.toHaveTextContent(/笔迹|建议|请先修正本题识别结果|学生实际留白/);
+      await user.click(within(dialog).getByRole("button", { name: "返回" }));
+    }
+    expect(mutations.answer).not.toHaveBeenCalled();
   });
 
   it("allows confirming recognized unflagged answers without editing their text", async () => {

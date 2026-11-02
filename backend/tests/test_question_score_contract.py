@@ -69,6 +69,7 @@ async def test_failed_question_preparation_reuses_sources_with_frozen_model(
         error_code="provider_timeout",
         checkpoint={},
         payload={
+            "question_preparation_version": 2,
             "source_tokens": ["prepared-source-1"],
             "base_workflow_revision": 7,
             "requested_workflow_revision": 7,
@@ -226,7 +227,7 @@ def _seed_question_task(owner_id: str, task_id: str):
         assignment_id=task_id,
         teacher_id=owner_id,
         q_id="q1",
-        order_index=0,
+        order_index=0, number="1",
         type="概念题",
         stem="Question",
         criterion="Reasoning 100%",
@@ -278,7 +279,7 @@ def test_task_problem_contract_serializes_and_edits_authoritative_max_score():
     ]
 
 
-def test_question_preparation_capabilities_restrict_teacher_ocr_by_role():
+def test_question_preparation_capabilities_keep_teacher_images_but_ocr_default_off():
     owner_id = "score-capability-owner"
     task_id = "score-capability-task"
     _seed_question_task(owner_id, task_id)
@@ -292,10 +293,12 @@ def test_question_preparation_capabilities_restrict_teacher_ocr_by_role():
     )
 
     assert ".jpg" in capabilities["source_roles"]["problem"]["accepted_extensions"]
-    assert capabilities["source_roles"]["rubric"]["accepted_extensions"] == [".md", ".pdf", ".txt"]
-    assert capabilities["source_roles"]["programming_tests"]["accepted_extensions"] == [".json", ".md", ".pdf", ".txt"]
+    assert ".webp" in capabilities["source_roles"]["rubric"]["accepted_extensions"]
+    assert ".jpg" in capabilities["source_roles"]["programming_tests"]["accepted_extensions"]
     assert capabilities["source_roles"]["rubric"]["allow_vision"] is False
     assert capabilities["source_roles"]["programming_tests"]["allow_vision"] is False
+    assert capabilities["reader"]["material_ocr_opt_in_supported"] is True
+    assert capabilities["reader"]["material_ocr_default_enabled"] is False
     assert capabilities["reader"]["images"] is True
 
 
@@ -312,10 +315,8 @@ def test_question_preparation_capabilities_keep_images_selectable_without_vision
         registry=registry,
     )
 
-    for role in ("problem", "reference_answer"):
+    for role in ("problem", "reference_answer", "rubric", "programming_tests"):
         assert ".png" in capabilities["source_roles"][role]["accepted_extensions"]
-    for role in ("rubric", "programming_tests"):
-        assert ".png" not in capabilities["source_roles"][role]["accepted_extensions"]
     assert ".json" in capabilities["source_roles"]["programming_tests"]["accepted_extensions"]
     assert capabilities["reader"]["ocr"] is False
     assert capabilities["reader"]["images"] is False
@@ -326,11 +327,11 @@ def test_question_preparation_capabilities_keep_images_selectable_without_vision
     ("role", "filename", "content_type", "has_vision", "error_code"),
     [
         ("problem", "questions.png", "image/png", True, None),
-        ("reference_answer", "answers.webp", "image/webp", True, "source_type_not_allowed"),
+        ("reference_answer", "answers.webp", "image/webp", True, None),
         ("reference_answer", "answers.png", "image/png", True, None),
-        ("rubric", "rubric.jpg", "image/jpeg", True, "source_type_not_allowed"),
+        ("rubric", "rubric.jpg", "image/jpeg", True, None),
         ("problem", "questions.png", "image/png", False, None),
-        ("programming_tests", "cases.png", "image/png", True, "source_type_not_allowed"),
+        ("programming_tests", "cases.png", "image/png", True, None),
         ("programming_tests", "cases.json", "application/json", False, None),
         ("rubric", "rubric.json", "application/json", True, "source_type_not_allowed"),
     ],

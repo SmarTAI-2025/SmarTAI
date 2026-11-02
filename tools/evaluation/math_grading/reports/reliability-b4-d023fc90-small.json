@@ -1,0 +1,82 @@
+{
+  "kind": "B4_fixed_candidate_recheck",
+  "status": "passed",
+  "candidate": "d023fc9012078496785a28f6adc2692f6110beca",
+  "recorded_at": "2026-10-23T14:33:07.544393+00:00",
+  "suites": [
+    {
+      "name": "contract",
+      "selected": 68,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 23.355,
+      "log": "/private/tmp/math-b4-contract-d023fc90.log",
+      "junit": "/private/tmp/math-b4-contract-d023fc90.xml",
+      "junit_sha256": "7dda3b30b5593f8313f3849d1310a99d462a78cc87d309b1ecafaffc1b31bb3a"
+    },
+    {
+      "name": "safety",
+      "selected": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 6.356,
+      "log": "/private/tmp/math-b4-safety-d023fc90.log",
+      "junit": "/private/tmp/math-b4-safety-d023fc90.xml",
+      "junit_sha256": "079ed35d6983841eaaf68efc5a91c990cb31253afedc043f301a432fa27f7df7"
+    },
+    {
+      "name": "increment",
+      "selected": 31,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 6.102,
+      "log": "/private/tmp/math-b4-increment-d023fc90.log",
+      "junit": "/private/tmp/math-b4-increment-d023fc90.xml",
+      "junit_sha256": "224bb1b46ea2ace83851db3b006dd56dc588e2441ee9475d1a1e932ea5810e5c"
+    }
+  ],
+  "scope_results": [
+    {
+      "quote": "不能推出以下等式：\n7+8=16。",
+      "automatic_checks": [],
+      "binding_error": "student_expression_not_bound"
+    },
+    {
+      "quote": "假设如下等式成立：\n7+8=16。",
+      "automatic_checks": [],
+      "binding_error": "student_expression_not_bound"
+    },
+    {
+      "quote": "7+8=16\n不成立。",
+      "automatic_checks": [],
+      "binding_error": "student_expression_not_bound"
+    },
+    {
+      "quote": "Assume\n7+8=16.",
+      "automatic_checks": [],
+      "binding_error": "student_expression_not_bound"
+    }
+  ],
+  "source_sha256": {
+    "backend/tests/math_grading_evaluation/acceptance_reliability.py": "c413b9a8ffd6fe58f535f4853265d56ea55f20410e86208feb8962d6b4097e5f",
+    "backend/tests/math_grading_evaluation/acceptance_reliability_safety.py": "1f381f2de2a1451139492235d29f9c8026324c88b88589c71fb83957976e3335",
+    "backend/tests/math_grading_evaluation/acceptance_reliability_b4.py": "7e14c0938b9b30bbd478203203c341251418465999ba1c4f40e9fb2f471020e5",
+    "tools/evaluation/math_grading/reliability_cases.py": "57034388c5761327159598378e551de24b25112d5b95c81f7cba6a8a49e0cc79",
+    "tools/evaluation/math_grading/corpus.py": "58a993d3179a29a53dfbb912a1366d8e0a15a25ae2b55fd3698c2460f90e3084"
+  },
+  "original_28": "Unchanged inputs and expectations; appended two negative cases and one multiline positive control.",
+  "prior_failed_candidate": "abf6da1f24a560e3f160e01cd33b45889e535b09",
+  "prior_failure_commit": "29d792d286281577ac74c4dc6dc61aa8595f0bb9",
+  "prior_reports": "Preserved byte-for-byte from prior failure commit.",
+  "production_changes": 0,
+  "paid_model_calls": 0,
+  "subagents": 0,
+  "limits": [
+    "Selected offline program contracts; no real model accuracy conclusion.",
+    "Disposable SQLite; no PostgreSQL, browser, live credentials or deployment.",
+    "No acceptance of the separately evolving combined main/PR candidate."
+  ]
+}

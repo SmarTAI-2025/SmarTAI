@@ -27,11 +27,22 @@ beforeEach(() => {
   calls.grading.mockResolvedValue({ status: "manual_review" });
 });
 describe("manual recovery entry", () => {
-  it.each(["questions", "submissions"] as const)("uses existing progress while saved %s are already being organized", async stage => {
+  it.each(["questions", "submissions", "grading"] as const)("shows immediate feedback for a slow %s handoff", async stage => {
+    calls[stage].mockImplementationOnce(() => new Promise(() => {}));
+    show({ ...task, [stage === "questions" ? "extract_job_id" : stage === "submissions" ? "parse_job_id" : "grading_job_id"]: "failed" });
+    await userEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    expect(screen.getByText("正在打开人工复核")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "人工继续处理" })).not.toBeInTheDocument();
+    expect(calls[stage]).toHaveBeenCalledTimes(1);
+  });
+  it.each(["questions", "submissions"] as const)("rejects implicit saved-text %s organization", async stage => {
     calls[stage].mockResolvedValue({ status: "already_running", job_id: "saved-text" });
     show({ ...task, [stage === "questions" ? "extract_job_id" : "parse_job_id"]: "failed" });
     await userEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
-    expect(await screen.findByText(stage === "questions" ? "Organizing saved questions" : "Organizing saved answers")).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent("新建任务");
+    expect(screen.queryByRole("button", { name: "人工继续处理" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建任务" })).toBeEnabled();
+    expect(screen.queryByText(stage === "questions" ? "Organizing saved questions" : "Organizing saved answers")).not.toBeInTheDocument();
   });
   it.each([false, true])("hands off failed/paused questions without a model call (paused=%s)", async paused => {
     const invalidate = show({ ...task, status: paused ? "problems_paused" : "error", extract_job_id: "failed" });

@@ -247,7 +247,7 @@ def test_old_blocking_low_confidence_and_missing_answer_are_advisory_but_empty_r
     assert task_facade.grading_readiness(**args)["ready"]
     confirmed = task_facade.update_problem(**args, q_id="q1", patch={"review_status": "confirmed", "review_fields": ["stem"]}, expected_revision=before["workflow_revision"])
     assert confirmed["problem"]["review_status"] == "confirmed"
-    assert all(issue["status"] == "acknowledged" for issue in confirmed["problem"]["preparation_issues"])
+    assert {issue["issue_id"]: issue["status"] for issue in confirmed["problem"]["preparation_issues"]} == {"low": "acknowledged", "answer": "acknowledged", "answer-partial": "acknowledged", "manual": "resolved"}
     with session_scope() as session:
         question = session.scalar(select(AssignmentQuestionRecord))
         question.criterion = ""
@@ -298,3 +298,50 @@ def test_historical_missing_answer_row_cannot_bypass_grading_gate():
         patch={"content": "Teacher transcribed q2", "review_status": "confirmed"},
         expected_revision=current["workflow_revision"])
     assert task_facade.grading_readiness(**args)["ready"]
+
+
+def test_explicit_partial_evidence_survives_reference_answer_projection():
+    from backend.agents.question_preparation_agent import _issue
+    from backend.services.task_facade import _effective_question_issues
+    for field in ("stem", "rubric", "answer"):
+        issue = _issue("q1", field, "recognition_partial", "blocking", ["source-1"])
+        projected = _effective_question_issues({"preparation_issues": [issue]})[0]
+        assert projected["details"]["incomplete"] is True
+        assert projected["severity"] == ("warning" if field == "answer" else "blocking")
+        resolved = _effective_question_issues({"preparation_issues": [{**projected, "status": "resolved"}]})[0]
+        assert resolved["status"] == "resolved"
+
+
+@pytest.mark.parametrize("missing", [[], ["criterion"], ["type", "criterion"]])
+def test_required_material_repairs_allow_confirmation_without_reference_answer(missing):
+    _seeded, args = _case(flags=[])
+    with session_scope() as session:
+        question = session.scalar(select(AssignmentQuestionRecord))
+        question.reference_answer = ""
+        for field in missing:
+            setattr(question, field, "")
+        issues = [{"issue_id": "answer", "field": "answer", "code": "generation_failed", "status": "open", "severity": "warning"}]
+        if "criterion" in missing:
+            issues.append({"issue_id": "rubric", "field": "rubric", "code": "generation_failed", "status": "open", "severity": "blocking"})
+        question.source = {**(question.source or {}), "presentation": {
+            **((question.source or {}).get("presentation") or {}),
+            "review_status": "needs_review", "preparation_issues": issues}}
+    current = task_facade.get_task(**args, full=True)
+    if missing:
+        with pytest.raises(ValidationError, match="required material"):
+            task_facade.update_problem(**args, q_id="q1", patch={"review_status": "confirmed"},
+                expected_revision=current["workflow_revision"])
+        repaired = task_facade.update_problem(**args, q_id="q1",
+            patch={field: "概念题" if field == "type" else "Full credit for a correct explanation." for field in missing},
+            expected_revision=current["workflow_revision"])
+        current = task_facade.get_task(**args, full=True)
+        assert repaired["problem"]["reference_answer"] == ""
+        assert not any(i["field"] == "rubric" and i["status"] == "open" for i in repaired["problem"]["preparation_issues"])
+    confirmed = task_facade.update_problem(**args, q_id="q1", patch={"review_status": "confirmed"},
+        expected_revision=current["workflow_revision"])
+    assert confirmed["problem"]["review_status"] == "confirmed"
+    assert confirmed["problem"]["reference_answer"] == ""
+    readiness = task_facade.grading_readiness(**args)
+    # Editing question content invalidates the fixture's prior submissions.
+    # No question/answer-material gate may remain after confirmation.
+    assert readiness["blocking_issues"] == (["submissions_required"] if missing else [])

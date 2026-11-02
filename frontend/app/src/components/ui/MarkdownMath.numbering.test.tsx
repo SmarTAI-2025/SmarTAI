@@ -26,3 +26,38 @@ After: $x+y=3$.`}</MarkdownMath>);
   expect(screen.getByText(/After:/).tagName).toBe("P");
   expect(container.querySelectorAll(".katex")).toHaveLength(2);
 });
+
+it("repairs a mismatched display opener without swallowing later proof paragraphs", () => {
+  const { container } = render(<MarkdownMath>{String.raw`Proof:
+$$ (x * y) * z = x + y + z - [x + y + z]$（说明 $x * (y * z)$）。
+
+**Identity:** $0 * x = x$.
+
+**Inverse:** $x+y=1$.`}</MarkdownMath>);
+  expect(container.querySelector(".katex-error")).toBeNull();
+  expect(screen.getByText("Identity:").tagName).toBe("STRONG");
+  expect(screen.getByText("Inverse:").tagName).toBe("STRONG");
+  expect(container.querySelectorAll(".katex")).toHaveLength(4);
+});
+
+it("renders standard TeX delimiters while keeping code examples literal", () => {
+  const { container } = render(<MarkdownMath>{String.raw`Inline \(x^2=1\).
+
+\[\frac{1}{2}\]
+
+Code: ` + '`\\(x=1\\)`'}</MarkdownMath>);
+  expect(container.querySelectorAll(".katex")).toHaveLength(2);
+  expect(container.querySelector(".katex-error")).toBeNull();
+  expect(container.querySelector("code")?.textContent).toBe(String.raw`\(x=1\)`);
+});
+
+it.each([String.raw`\unknowncommand{x}`, String.raw`\frac{1}{`, String.raw`\left(x`, String.raw`\begin{matrix}a\end{cases}`])(
+  "keeps invalid or unsupported TeX readable without a blocking warning: %s", tex => {
+  const { container } = render(<MarkdownMath>{`Before $${tex}$.\n\nAfter the formula.`}</MarkdownMath>);
+  expect(screen.getByText("After the formula.")).toBeVisible();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(container.textContent).toContain(tex);
+  const fallback = container.querySelector<HTMLElement>(".katex-error, .katex [style*='color']");
+  expect(fallback).not.toBeNull();
+  expect(fallback?.style.color).toBe("inherit");
+});

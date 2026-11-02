@@ -53,6 +53,37 @@ async function fixture(page: Page, stage: "problems" | "submissions" | "grading"
   return { calls, errors };
 }
 
+for (const locale of ["zh-CN", "en-US"]) {
+  test(`each preparation material has one replaceable source: ${locale}`, async ({ page }) => {
+    const { calls, errors } = await fixture(page, "problems", undefined, false, undefined, locale);
+    const zh = locale === "zh-CN";
+    await page.goto("/tasks/recovery-task/upload/problems");
+    await expect(page.getByRole("button", { name: zh ? "添加题目" : "Add Question Source", exact: true })).toHaveCount(0);
+    for (const [tab, add] of (zh ? [
+      [/2\. 标答/, "添加标答"], [/3\. 评分标准/, "添加评分标准"], [/4\. 测试样例/, "添加测试资料"],
+    ] : [
+      [/2\. Reference Answers/, "Add Reference Answer Source"], [/3\. Rubrics/, "Add Rubric Source"], [/4\. Test Cases/, "Add Programming Tests"],
+    ]) as Array<[RegExp, string]>) {
+      await page.getByRole("button", { name: tab }).click();
+      await page.getByRole("button", { name: add, exact: true }).click();
+      await expect(page.getByRole("button", { name: add, exact: true })).toHaveCount(0);
+      await expect(page.locator('input[type="file"]')).toHaveCount(1);
+      await page.getByRole("button", { name: zh ? "课程资料库" : "Course Library", exact: true }).click();
+      await expect(page.getByRole("button", { name: add, exact: true })).toHaveCount(0);
+      if (add === "添加评分标准" || add === "Add Rubric Source") {
+        await page.getByRole("button", { name: zh ? "自然语言描述" : "Describe", exact: true }).click();
+        await expect(page.getByRole("button", { name: add, exact: true })).toHaveCount(0);
+      }
+      await page.getByRole("button", { name: zh ? "删除这份资料" : "Remove this source", exact: true }).click();
+      await expect(page.getByRole("button", { name: add, exact: true })).toBeVisible();
+      await page.getByRole("button", { name: add, exact: true }).click();
+      await expect(page.locator('input[type="file"]')).toHaveCount(1);
+    }
+    expect(calls).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+}
+
 for (const stage of ["problems", "submissions"] as const) {
   for (const locale of ["zh-CN", "en-US"]) {
     for (const width of [390, 1440]) {
@@ -112,7 +143,7 @@ for (const width of [1280, 390]) {
       ],
     } } }));
     await page.goto("/tasks/recovery-task/upload/problems");
-    await expect(page.getByText("资料库文件可直接使用，无需重新上传。")).toBeVisible();
+    await expect(page.getByText("资料库文件已就绪。")).toBeVisible();
     await page.getByRole("button", { name: "上传新文件", exact: true }).click();
     await expect(page.getByText("待重新选择：saved.pdf")).toBeVisible();
     const start = page.getByRole("button", { name: "重新识别全部资料", exact: true });
@@ -139,6 +170,7 @@ test("upload guidance explains a missing supplemental material without starting 
   await page.goto("/tasks/recovery-task/questions/import");
   const start = page.getByRole("button", { name: "开始导入并匹配到题目" });
   await expect(start).toBeEnabled();
+  await expect(page.locator("#material-import-action-message")).toHaveText("请选择课程资料或上传新文件。");
   const dialog = page.waitForEvent("dialog");
   await start.click();
   expect((await dialog).message()).toBe("请选择课程资料或上传新文件。");
@@ -148,10 +180,16 @@ test("upload guidance explains a missing supplemental material without starting 
 
 test("restored question inputs can start a new job only after manual continuation", async ({ page }) => {
   const { calls, errors } = await fixture(page, "problems", "provider_timeout", true);
+  // Form fields can restore before the saved-file availability check finishes.
+  await page.route((url) => url.pathname.endsWith("/draft-reference"), async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await route.fulfill({ json: { available: true, prepared: false, filename: "saved.pdf" } });
+  });
   await page.goto("/tasks/recovery-task/problems/progress");
   await page.getByRole("link", { name: "返回修改配置" }).click();
   await expect(page.getByLabel("页码（选填）")).toHaveValue("3, 4, 5");
   expect(calls).toHaveLength(0);
+  await expect(page.getByText("已上传文件可继续使用。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "重新识别全部资料" }).click();
   await expect(page).toHaveURL(/\/problems\/progress$/);
   await expect(page.getByRole("heading", { name: "题目资料准备进度" })).toBeVisible();
@@ -175,6 +213,7 @@ test("question failure → model change → restored original form → manual co
   await expect(page.getByLabel("目标题号（选填）")).toHaveValue("1.1.5");
   await expect(page.getByLabel("补充说明（选填）")).toHaveValue("保留图表");
   expect(calls).toHaveLength(0);
+  await expect(page.getByText("已上传文件可继续使用。", { exact: true })).toBeVisible();
   await page.screenshot({ path: "output/playwright/workflow-question-restored.png", fullPage: true });
   await page.getByRole("button", { name: "重新识别全部资料" }).click();
   await expect(page.getByRole("button", { name: "重新识别全部资料", exact: true })).toHaveCount(2);
@@ -228,6 +267,56 @@ for (const code of ["provider_rate_limited", "provider_timeout", "source_empty",
     await page.getByRole("button", { name: "重试失败项", exact: true }).dblclick();
     await expect.poll(() => calls.length).toBeGreaterThan(0);
     expect(calls[0].body).toContain('"use_current_configuration":true');
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const stage of ["problems", "submissions", "grading"] as const) {
+  for (const width of [390, 1440]) {
+    test(`daily quota allows a new manual retry every round: ${stage} ${width}`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      const { calls, errors } = await fixture(page, stage, "provider_daily_quota_exceeded");
+      await page.goto(`/tasks/recovery-task/${stage === "grading" ? "grading" : stage}/progress`);
+      const retry = page.getByRole("button", { name: "重试失败项", exact: true });
+      await expect(retry).toBeEnabled();
+      await expect(page.getByText(/自动重试已停止/)).toBeVisible();
+      await page.reload();
+      await expect(retry).toBeEnabled();
+      expect(calls).toHaveLength(0);
+      for (let round = 1; round <= 2; round++) {
+        await retry.click();
+        await expect.poll(() => calls.length).toBe(round);
+        await expect(retry).toBeEnabled();
+      }
+      if (stage === "grading") {
+        const bodies = calls.map(call => JSON.parse(call.body));
+        expect(bodies.every(body => body.retry_scope === "failed_only")).toBe(true);
+        expect(bodies[0].request_id).not.toBe(bodies[1].request_id);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath("daily-quota-retry.png"), fullPage: true });
+      expect(errors).toEqual([]);
+    });
+  }
+}
+
+
+for (const stage of ["problems", "submissions", "grading"] as const) {
+  test(`zero quota remains truthful and manually retryable: ${stage}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 900 });
+    const { calls, errors } = await fixture(page, stage, "provider_zero_quota");
+    await page.goto(`/tasks/recovery-task/${stage}/progress`);
+    await expect(page.getByRole("heading", { name: "该模型当前无可用配额" })).toBeVisible();
+    await expect(page.getByText(/服务商明确返回配额为0，本轮自动重试已停止/)).toBeVisible();
+    await expect(page.getByText("模型日额度已用完", { exact: true })).toHaveCount(0);
+    const retry = page.getByRole("button", { name: "重试失败项", exact: true });
+    for (let round = 1; round <= 2; round++) {
+      await retry.click();
+      await expect.poll(() => calls.length).toBe(round);
+      await expect(retry).toBeEnabled();
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("zero-quota-retry.png"), fullPage: true });
     expect(errors).toEqual([]);
   });
 }

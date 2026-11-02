@@ -205,9 +205,10 @@ class _GuardedCalls(RecognitionCallService):
 
     async def lookup(self, *args, **kwargs):
         found = await super().lookup(*args, **kwargs)
-        if found.status == "not_success" and (self.context.row.payload or {}).get("retry_origin_id"):
-            # An explicit retry may replace a failed model response. Corrupt or
-            # unavailable evidence remains an error; successful leaves stay hits.
+        if found.status in {"not_success", "corrupt", "unavailable"} and (self.context.row.payload or {}).get("retry_origin_id"):
+            # Only verified successful results survive a user retry. Missing or
+            # invalid derived evidence can be regenerated from the live source;
+            # source authorization/unavailability still fails closed.
             return RecognitionCallLookup("miss")
         return found
 
@@ -255,6 +256,54 @@ class RecognitionRunService:
         self.progress, self.clock = progress, clock
         self.repository, self.binding_resolver = operation_repository, binding_resolver
 
+    async def saved_page_extras(self, requests, *, engine, prompt_version, authorized_owner_id,
+                                binding=None, retry_key=None):
+        """Seed the shared window allowance from persisted dispatches, including pending calls."""
+        first = requests[0]
+        if any(request.source != first.source for request in requests) or first.source.owner_id != authorized_owner_id:
+            raise RecognitionError("recognition_source_mismatch")
+        binding = binding or RecognitionArtifactBindingV1(link="assignment", business_id=first.source.business_id)
+        assignment_id = await run_in_threadpool(self.binding_resolver, binding, authorized_owner_id)
+        caps = engine.capabilities if engine is not None else None
+        hashes = [final_cache_identity(request, capabilities=caps, prompt_version=prompt_version,
+                                      workflow_version=2).key for request in requests]
+        retries = {key: hashlib.sha256(f"{key}:explicit-retry:{retry_key}".encode()).hexdigest()
+                   for key in hashes} if retry_key is not None else {}
+        rows = await run_in_threadpool(self.repository.find_operations_by_hashes,
+            assignment_id=assignment_id, owner_id=authorized_owner_id, operation_type=OPERATION_TYPE,
+            input_hashes=hashes + list(retries.values()))
+        counts = {"patch": 0, "empty_recovery": 0}
+        for key in hashes:
+            row = rows.get(key)
+            if row is not None and retry_key is not None and row.status not in {"pending", "running", "completed"}:
+                row = rows.get(retries[key])
+            if row is None or not row.checkpoint:
+                continue
+            checkpoint = RecognitionRunCheckpointV1.model_validate(row.checkpoint)
+            for call in checkpoint.calls:
+                if call.kind in counts:
+                    counts[call.kind] += 1
+        return counts
+
+    async def native_page_window(self, request, source_bytes, *, engine, authorized_owner_id, binding=None):
+        """Keep the native-text fast path batched; inspection itself never invokes a model."""
+        from backend.recognition.planner import RecognitionPlanRequestV1, plan_recognition
+        from backend.tools.pdf_evidence import PdfIndexRequest
+
+        if request.purpose == "submissions":
+            return False
+        binding = binding or RecognitionArtifactBindingV1(link="assignment", business_id=request.source.business_id)
+        reader = RecognitionLocalEvidenceReader(store=self.store, cache=self.cache, source=request.source,
+            binding=binding, authorized_owner_id=authorized_owner_id, progress=self.progress)
+        start = min(request.pages)
+        index = (await reader.read(source_bytes, PdfIndexRequest(start_page=start,
+            window_pages=min(request.search_window_pages, max(request.pages) - start + 1)))).evidence
+        plan = plan_recognition(RecognitionPlanRequestV1(purpose=request.purpose, scope="pages",
+            total_pages=index.total_pages, requested_pages=request.pages,
+            observations=[page.observation for page in index.pages]),
+            engine=engine.capabilities, policy=request.policy)
+        return all(page.action in {"native", "blank"} for page in plan.decisions)
+
     async def _restored(self, row, request, identity, *, status):
         try:
             checkpoint = RecognitionRunCheckpointV1.model_validate(row.checkpoint)
@@ -284,7 +333,7 @@ class RecognitionRunService:
                                               and exc.code == "recognition_artifact_unavailable" else "recognition_artifact_invalid"))
 
     async def run(self, request, source_bytes, *, engine, prompt_version, authorized_owner_id, binding=None,
-                  retry_key=None, acknowledge_pending_retry=False):
+                  retry_key=None, acknowledge_pending_retry=False, repair_admission=None):
         # Only the business worker supplies this key after its explicit retry
         # endpoint has checked authorization and any duplicate-call acknowledgement.
         if retry_key is not None and (not isinstance(retry_key, str) or not 1 <= len(retry_key) <= 160):
@@ -316,7 +365,11 @@ class RecognitionRunService:
             operation_type=OPERATION_TYPE, input_hash=identity.key, retry_existing=False,
             payload=dict(identity_key=identity.key, binding=binding.model_dump()),
         ), response_only=response_only)
-        if retry_key is not None and row.status not in {"pending", "running", "completed"}:
+        if retry_key is not None and row.status == "completed":
+            restored = await self._restored(row, request, identity, status="already_done")
+            if restored.safe_error_code is None and restored.assembly is not None:
+                return restored
+        if retry_key is not None and row.status not in {"pending", "running"}:
             # Preserve the failed checkpoint and its uncertain-call evidence.
             # A stable parent attempt gives one retry child; successful leaf
             # artifacts keep their original identity and can still be reused.
@@ -385,7 +438,8 @@ class RecognitionRunService:
                     # immediately; never replay an uncertain retry child itself.
                     return await self.run(request, source_bytes, engine=engine,
                         prompt_version=prompt_version, authorized_owner_id=authorized_owner_id,
-                        binding=binding, retry_key=retry_key, acknowledge_pending_retry=True)
+                        binding=binding, retry_key=retry_key, acknowledge_pending_retry=True,
+                        repair_admission=repair_admission)
                 return await self._restored(context.row, request, identity, status="needs_review")
             if checkpoint.final_artifact_id:
                 await context.write(checkpoint, status="completed")
@@ -408,6 +462,7 @@ class RecognitionRunService:
             async with asyncio.timeout(remaining):
                 assembly = await RecognitionAgent(engine, capacity=self.capacity, progress=progress,
                                                    local_reader=local, call_service=calls,
+                                                   repair_admission=repair_admission,
                                                    elapsed_seconds=max(0, self.clock() - checkpoint.started_at)).recognize(
                     request, source_bytes, authorized_owner_id=authorized_owner_id, prompt_version=prompt_version,
                 )
@@ -444,29 +499,43 @@ class RecognitionRunService:
                                           usage, tuple(context.row.artifact_refs or []), code)
         finally:
             try:
-                if heartbeat is not None:
-                    await heartbeat.stop()
                 try:
-                    release = run_in_threadpool(self.repository.release_operation, row.id,
-                                                owner_id=authorized_owner_id, worker_id=worker,
-                                                lease_token=row.lease_token)
-                    if heartbeat is None:
-                        await asyncio.shield(release)
-                    else:
-                        release = asyncio.create_task(release)
-                        try:
-                            done, _ = await asyncio.wait({release}, timeout=_RENEWABLE_HEARTBEAT_SECONDS)
-                            if done:
-                                release.result()
-                        finally:
-                            heartbeat._discard(release)
-                except DomainError:
-                    pass
-                except Exception:
-                    # A cleanup DB outage must not replace the original fencing,
-                    # cancellation or saved result. The short lease still expires.
-                    if heartbeat is None:
-                        raise
+                    if heartbeat is not None:
+                        await heartbeat.stop()
+                finally:
+                    try:
+                        release = run_in_threadpool(self.repository.release_operation, row.id,
+                                                    owner_id=authorized_owner_id, worker_id=worker,
+                                                    lease_token=row.lease_token)
+                        if heartbeat is None:
+                            await asyncio.shield(release)
+                        else:
+                            release = asyncio.create_task(release)
+                            waiter = asyncio.create_task(asyncio.wait(
+                                {release}, timeout=_RENEWABLE_HEARTBEAT_SECONDS))
+                            cancelled = False
+                            try:
+                                # Parent cleanup and the stop watcher can cancel
+                                # us again. Finish bounded, token-fenced release
+                                # before returning; never cancel it with the run.
+                                while not waiter.done():
+                                    try:
+                                        await asyncio.shield(waiter)
+                                    except asyncio.CancelledError:
+                                        cancelled = True
+                                if waiter.result()[0]:
+                                    release.result()
+                            finally:
+                                heartbeat._discard(release)
+                                if cancelled:
+                                    raise asyncio.CancelledError
+                    except DomainError:
+                        pass
+                    except Exception:
+                        # A cleanup DB outage must not replace the original fencing,
+                        # cancellation or saved result. The short lease still expires.
+                        if heartbeat is None:
+                            raise
             finally:
                 # Include cancellation during error handling and cleanup, not
                 # only the main try body. Remove only our own cancellation.

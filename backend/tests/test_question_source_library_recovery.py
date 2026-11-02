@@ -12,7 +12,7 @@ from backend.db import workflow_repository
 from backend.models import QuestionScorePolicy
 from backend.services import task_facade
 from backend.tests.test_question_preparation_recovery import (
-    _RecoveryRegistry, _claim, _fake_preparer,
+    _RecoveryRegistry, _claim, _install_incremental_preparer,
 )
 from backend.tests.test_task_background_workflows import _BackgroundTasks, _seed_task
 
@@ -45,7 +45,7 @@ async def test_uploaded_source_runs_after_optional_library_save(monkeypatch, sav
     )
     calls = []
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
-    monkeypatch.setattr(task_preparation, "prepare_question_packages", _fake_preparer(calls, question_count=1))
+    _install_incremental_preparer(monkeypatch, calls, question_count=1)
     if retry_existing:
         # Persist the old failure without modifying the prepared source or hash.
         claimed = _claim(owner_id, queued["job_id"], "old-worker")

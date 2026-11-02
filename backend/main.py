@@ -23,6 +23,7 @@ from backend.config import (
 configure_provider_proxy_environment(_settings)
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 def create_app() -> FastAPI:
     app = FastAPI(title="SmarTAI")
+    from backend.api.errors import request_validation_error_response
+    app.add_exception_handler(RequestValidationError, request_validation_error_response)
     from backend.services.demo_logging import DemoLoggingMiddleware, install_demo_log_redaction
     install_demo_log_redaction()
     app.add_middleware(DemoLoggingMiddleware)

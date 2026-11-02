@@ -62,7 +62,7 @@ def setup_assignment():
     )
     assignment_repository.add_question(
         assignment_id=asg.id, teacher_id=teacher_id, q_id="q1", order_index=0,
-        type="short", stem="1+1?", max_score=10.0,
+        type="concept", stem="1+1?", max_score=10.0,
     )
     assignment_repository.publish(assignment_id=asg.id, teacher_id=teacher_id, expected_version=1)
     sub = submission_repository.create_submission(assignment_id=asg.id, student_id=student_id)
@@ -133,7 +133,7 @@ def test_adapter_maps_successful_correction_to_graded_result(setup_assignment):
     corrections = {
         setup_assignment["student_id"]: [
             Correction(
-                q_id="q1", type="short", score=8.0, max_score=10.0, confidence=0.9,
+                q_id="q1", type="concept", score=8.0, max_score=10.0, confidence=0.9,
                 comment="good", steps=[StepScore(step_no=1, desc="s1", is_correct=True, score=8.0)],
             )
         ]
@@ -166,7 +166,7 @@ def test_adapter_marks_hard_failure_as_failed_not_zero(setup_assignment):
     corrections = {
         setup_assignment["student_id"]: [
             Correction(
-                q_id="q1", type="short", score=0.0, max_score=10.0, confidence=0.0,
+                q_id="q1", type="concept", score=0.0, max_score=10.0, confidence=0.0,
                 comment="all_failed", steps=[], synthesis_method="all_failed",
             )
         ]
@@ -194,7 +194,7 @@ def test_adapter_preserves_human_review_signal_and_question_max(setup_assignment
     from backend.models import Correction
 
     correction = Correction(
-        q_id="q1", type="short", score=8.0, max_score=10.0, confidence=0.9,
+        q_id="q1", type="concept", score=8.0, max_score=10.0, confidence=0.9,
         comment="check", steps=[], requires_human_review=True,
         review_reasons=["high_indecisiveness", "minority_veto"],
     )
@@ -311,7 +311,7 @@ def test_adapter_normalizes_untrusted_model_scale(setup_assignment):
     from backend.models import Correction, StepScore
 
     correction = Correction(
-        q_id="q1", type="short", score=80.0, max_score=100.0, confidence=0.9,
+        q_id="q1", type="concept", score=80.0, max_score=100.0, confidence=0.9,
         comment="scaled", steps=[
             StepScore(step_no=1, desc="reasoning", is_correct=True, score=60.0),
             StepScore(step_no=2, desc="answer", is_correct=True, score=20.0),
@@ -338,7 +338,7 @@ def test_adapter_keeps_high_confidence_degraded_single_graded(setup_assignment):
     from backend.models import Correction
 
     correction = Correction(
-        q_id="q1", type="short", score=7.0, max_score=10.0, confidence=0.85,
+        q_id="q1", type="concept", score=7.0, max_score=10.0, confidence=0.85,
         comment="one expert succeeded", steps=[], synthesis_method="degraded_to_single",
     )
     result = grading_adapter.correction_to_result(
@@ -360,7 +360,7 @@ def test_adapter_flags_low_confidence_degraded_single_for_review(setup_assignmen
     from backend.models import Correction
 
     correction = Correction(
-        q_id="q1", type="short", score=7.0, max_score=10.0, confidence=0.4,
+        q_id="q1", type="concept", score=7.0, max_score=10.0, confidence=0.4,
         comment="one expert succeeded", steps=[], synthesis_method="degraded_to_single",
         requires_human_review=True, review_reasons=["degraded_to_single"],
     )
@@ -381,7 +381,7 @@ def test_adapter_preserves_real_zero_during_soft_review(setup_assignment):
     from backend.models import Correction
 
     correction = Correction(
-        q_id="q1", type="short", score=0.0, max_score=10.0, confidence=0.4,
+        q_id="q1", type="concept", score=0.0, max_score=10.0, confidence=0.4,
         comment="review", steps=[], requires_human_review=True,
         review_reasons=["low_confidence"],
     )
@@ -654,7 +654,7 @@ def test_student_visibility_only_after_release(setup_assignment):
         answers=[{
             "question_id": setup_assignment["question_id"],
             "q_id": setup_assignment["q_id"],
-            "type": "short",
+            "type": "concept",
             "content": "updated after release",
         }],
     )
@@ -1423,7 +1423,7 @@ def test_student_results_use_only_latest_released_run(setup_assignment):
             run_id=run.id, revision_id=revision.id, question=question,
             student_id=setup_assignment["student_id"],
             correction=__import__("backend.models", fromlist=["Correction"]).Correction(
-                q_id="q1", type="short", score=score, max_score=10, confidence=1,
+                q_id="q1", type="concept", score=score, max_score=10, confidence=1,
                 comment=str(score), steps=[],
             ),
         )

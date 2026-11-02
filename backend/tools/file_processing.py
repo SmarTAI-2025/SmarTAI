@@ -113,6 +113,8 @@ class ContentInspection:
 
 _MIME_ALIASES = {
     "application/x-zip-compressed": "application/zip",
+    "application/rar": "application/vnd.rar",
+    "application/x-rar": "application/vnd.rar",
     "application/x-rar-compressed": "application/vnd.rar",
     "application/x-7z-compressed": "application/x-7z-compressed",
     "application/x-gzip": "application/gzip",
@@ -636,10 +638,6 @@ async def extract_text_from_upload(
 
         scanned = _is_likely_scanned_pdf(text, page_count)
         fragmented_math = _is_likely_fragmented_math_pdf(text, purpose)
-        if role in {"rubric", "programming_tests"}:
-            if scanned:
-                raise HTTPException(422, detail={"code": "material_ocr_not_allowed_for_role"})
-            return text
         if not scanned and not (fragmented_math and ocr_skill is not None):
             return text
 

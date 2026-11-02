@@ -19,7 +19,6 @@ import type {
   TaskMutationResponse,
   TaskResultResponse,
   TaskStateSnapshot,
-  TeacherCommentResponse,
   TeacherCommentsResponse,
 } from "@/types";
 import type { SourceStorageUsage } from "@/types/sourcePreview";
@@ -132,6 +131,7 @@ export interface ParseSubmissionsInput extends UploadOptions {
   taskId: string;
   file: File | null;
   storedFileId?: string | null;
+  reuseInputFromJobId?: string | null;
   reuseRosterFromJobId?: string | null;
   expectedWorkflowRevision?: number;
   acknowledgePossibleDuplicateCall?: boolean;
@@ -149,6 +149,7 @@ export function parseSubmissions({
   recognitionProviderId,
   replaceConfirmed = false,
   storedFileId,
+  reuseInputFromJobId,
   reuseRosterFromJobId,
   expectedWorkflowRevision,
   acknowledgePossibleDuplicateCall,
@@ -162,6 +163,7 @@ export function parseSubmissions({
       recognition_provider_id: recognitionProviderId,
       replace_confirmed: replaceConfirmed,
       stored_file_id: file ? undefined : storedFileId,
+      reuse_input_from_job_id: file || storedFileId ? undefined : reuseInputFromJobId,
       reuse_roster_from_job_id: rosterFile ? undefined : reuseRosterFromJobId,
       expected_workflow_revision: expectedWorkflowRevision,
       acknowledge_possible_duplicate_call: acknowledgePossibleDuplicateCall || undefined,
@@ -229,7 +231,7 @@ export function retryQuestionPreparation(input: {
 export function manuallyCompleteQuestionPreparation(input: {
   taskId: string; jobId: string; expectedWorkflowRevision: number;
   questionCount?: number;
-}): Promise<{ status: "ready_for_review" | "started" | "already_running"; task_id: string; workflow_revision: number; first_question_id?: string | null }> {
+}): Promise<{ status: "ready_for_review"; task_id: string; workflow_revision: number; first_question_id?: string | null }> {
   return postJSON(`/tasks/${encodeURIComponent(input.taskId)}/question-preparation/${encodeURIComponent(input.jobId)}/manual-review`,
     { expected_workflow_revision: input.expectedWorkflowRevision,
       ...(input.questionCount !== undefined ? { question_count: input.questionCount } : {}) });
@@ -314,8 +316,8 @@ export function updateStudentAnswer(
   taskId: string,
   studentId: string,
   qId: string,
-  patch: Pick<Partial<StudentAnswerInfo>, "content" | "flag" | "review_status"> & { expected_workflow_revision?: number },
-): Promise<{ status: "ok"; stu_id: string; q_id: string; answer: StudentAnswerInfo; workflow_revision: number }> {
+  patch: Pick<Partial<StudentAnswerInfo>, "content" | "flag" | "review_status" | "answer_id"> & { expected_workflow_revision?: number; target_q_id?: string },
+): Promise<{ status: "ok"; stu_id: string; q_id: string; answer: StudentAnswerInfo; answers?: StudentAnswerInfo[]; workflow_revision: number }> {
   return putJSON(`/tasks/${taskId}/students/${studentId}/answers/${qId}`, patch);
 }
 
@@ -329,19 +331,6 @@ export function updateStudentIdentity(
   },
 ): Promise<StudentIdentityUpdateResponse> {
   return putJSON(`/tasks/${taskId}/students/${currentStudentId}/identity`, input);
-}
-
-export function setTeacherComment(
-  taskId: string,
-  studentId: string,
-  qId: string,
-  comment: string,
-): Promise<TeacherCommentResponse> {
-  return postJSON<TeacherCommentResponse>(`/tasks/${taskId}/teacher_comment`, {
-    student_id: studentId,
-    q_id: qId,
-    comment,
-  });
 }
 
 export function listTeacherComments(taskId: string): Promise<TeacherCommentsResponse> {

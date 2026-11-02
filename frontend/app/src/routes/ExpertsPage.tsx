@@ -1324,8 +1324,8 @@ function ExpertEditorDialog({
         {provider === "qwen" ? (
           <p className="text-xs leading-5 text-muted-foreground">
             {zh
-              ? "默认地址适用于百炼北京区，官网确认仍可使用。其他地域或业务空间专属域名，请从百炼控制台复制与 API Key 匹配的地址。"
-              : "The default Beijing endpoint remains supported. For another region or a workspace endpoint, copy the address matching your API key from the Bailian console."}
+              ? "默认地址适用于百炼北京区。其他地域或业务空间，请从百炼控制台复制与 API Key 匹配的地址。"
+              : "The default endpoint is for Beijing. For another region or workspace, copy the address matching your API key from the Bailian console."}
           </p>
         ) : null}
         {hasBaseUrl ? (
@@ -1389,8 +1389,8 @@ function ExpertEditorDialog({
             </span>
             <p className="text-xs leading-5 text-muted-foreground">
               {zh
-                ? "并发自动调节，无需设置。"
-                : "Concurrency adjusts automatically; no setup is needed."}
+                ? "并发数会自动调节。"
+                : "Concurrency adjusts automatically."}
             </p>
           </div>
         </div>
@@ -1457,8 +1457,8 @@ function ConfirmationDialog({
               ? "将用一张示例图片进行测试，会消耗模型额度并可能产生费用。"
               : "A sample image will be sent for testing. This uses model quota and may incur charges."
             : zh
-            ? "系统将发送一次可选的最小文本请求。这不是启用配置的前置条件，实际任务也可以直接测试。"
-            : "SmarTAI will send one optional minimal text request. This is not required before using the configuration in a real task."}
+            ? "将发送一条测试文本，会消耗模型额度并可能产生费用。"
+            : "A test message will be sent. This uses model quota and may incur charges."}
         </div>
       ) : (
         <div className="flex items-start gap-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-900 dark:border-rose-900 dark:bg-rose-950/35 dark:text-rose-100">
@@ -1649,10 +1649,10 @@ function verificationReasonSummary(reason: string, zh: boolean) {
 function imageReasonLabel(reason: string, zh: boolean) {
   const labels: Record<string, string[]> = {
     image_probe_answer_correct: ["测试图片答案正确", "Test image answer was correct"],
-    image_probe_answer_incorrect: ["测试答案不正确，不能据此判定不支持图片", "Incorrect test answer; image support remains uncertain"],
+    image_probe_answer_incorrect: ["测试答案不正确，图片能力待确认", "Incorrect test answer; image support remains uncertain"],
     image_probe_response_truncated: ["模型达到本次测试的输出上限，答案尚未完成；图片能力仍未确认，可稍后重试。", "The model reached the test output limit before completing its answer. Image support remains unconfirmed; try again later."],
     provider_vision_not_supported: ["不支持图片，仍可处理文字资料", "Images unsupported; text sources can still be used"],
-    expert_verification_timeout: ["图像测试请求超时，本次未能确认是否支持图片。请稍后重试。", "The image test timed out. Image support remains unconfirmed. Try again later."],
+    expert_verification_timeout: ["图像测试超时，图片能力待确认。请稍后重试。", "Image test timed out; support is unconfirmed. Retry later."],
     expert_verification_rate_limited: ["上游限流，请稍后再试", "Upstream rate limit"],
     expert_verification_auth_failed: ["请求被拒绝，请检查密钥或该模型的调用权限。", "The request was denied. Check the key or access to this model."],
     expert_verification_connection_failed: ["网络连接失败", "Network connection failed"],
@@ -1661,5 +1661,5 @@ function imageReasonLabel(reason: string, zh: boolean) {
     shared_pool_disabled: ["平台共享模型当前关闭", "The shared model pool is disabled"],
   };
   return labels[reason]?.[zh ? 0 : 1] ?? expertErrorMessage(reason, zh ? "zh-CN" : "en-US")
-    ?? (zh ? "图像测试未能完成，本次未能确认是否支持图片。请稍后重试。" : "The image test could not complete. Image support remains unconfirmed. Try again later.");
+    ?? (zh ? "图像测试未完成，图片能力待确认。请稍后重试。" : "Image test incomplete; support is unconfirmed. Retry later.");
 }

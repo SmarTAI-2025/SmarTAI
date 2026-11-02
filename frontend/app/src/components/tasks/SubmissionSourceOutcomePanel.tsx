@@ -159,7 +159,7 @@ function SourceOutcomeRow({ source, locale }: { source: SubmissionSourceOutcome;
                 {tx(locale, "诊断信息", "Diagnostic details")}
               </summary>
               <dl className="mt-1.5 grid gap-x-4 gap-y-1 rounded-md bg-slate-50 px-2.5 py-2 text-[10px] dark:bg-slate-950/40 sm:grid-cols-2">
-                <TechnicalRow label={tx(locale, "处理结果", "Resolution")} value={source.resolution_status === "identity_resolved" ? tx(locale, "教师已确认身份", "Identity confirmed by teacher") : source.resolution_status === "manual_review" ? tx(locale, "等待人工处理", "Awaiting manual review") : source.resolution_status === "manual_resolved" ? tx(locale, "教师已补齐确认", "Completed by teacher") : null} />
+                <TechnicalRow label={tx(locale, "处理结果", "Resolution")} value={source.resolution_status === "identity_resolved" ? tx(locale, "教师已确认身份", "Identity confirmed by teacher") : source.resolution_status === "manual_review" ? tx(locale, "等待人工处理", "Awaiting manual review") : source.resolution_status === "manual_resolved" ? tx(locale, "教师已完成处理", "Resolved by the teacher") : null} />
                 <TechnicalRow label={tx(locale, "可直接重试", "Retryable")} value={source.retryable ? tx(locale, "是", "Yes") : tx(locale, "否", "No")} />
               </dl>
             </details>

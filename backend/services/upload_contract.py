@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import math
+import struct
 from pathlib import PurePosixPath
 from types import MappingProxyType
 import zipfile
@@ -21,14 +22,15 @@ COURSE_MATERIAL_FILENAME_MAX_CHARACTERS = 240
 
 ROLE_EXTENSIONS = MappingProxyType({
     "course_knowledge": frozenset({"pdf", "txt", "md", "markdown"}),
-    "problem_reference": frozenset({"pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png"}),
-    "rubric": frozenset({"pdf", "txt", "md"}),
-    "programming_tests": frozenset({"pdf", "txt", "md", "json"}),
-    "student_submission": frozenset({"pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "py", "c", "cc", "cpp"}),
+    "problem_reference": frozenset({"pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"}),
+    "rubric": frozenset({"pdf", "txt", "md", "markdown", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"}),
+    "programming_tests": frozenset({"pdf", "txt", "md", "markdown", "json", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"}),
+    "student_submission": frozenset({"pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp", "py", "c", "cc", "cpp", "csv", "tsv", "rst"}),
 })
 _BINARY_MEDIA = {
     "pdf": "application/pdf", "png": "image/png",
     "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "bmp": "image/bmp", "tif": "image/tiff", "tiff": "image/tiff", "webp": "image/webp",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 _OFFICE_MEMBERS = frozenset({"[Content_Types].xml", "_rels/.rels", "word/document.xml"})
@@ -108,6 +110,8 @@ def get_upload_contract() -> dict:
                 "extensions": sorted(extensions),
                 "max_file_bytes": _role_max_bytes(role, limits),
                 "allow_vision": role not in {"rubric", "programming_tests"},
+                "allow_vision_opt_in": role in {"rubric", "programming_tests"},
+                "allow_native_text": role == "student_submission",
             }
             for role, extensions in ROLE_EXTENSIONS.items()
         },
@@ -178,16 +182,15 @@ def validate_upload(role: str, file_name: str, data: bytes) -> ValidatedUpload:
     if extensions is None:
         raise UploadContractError("invalid_source_role")
     extension = PurePosixPath(file_name).suffix.lower().lstrip(".")
-    if extension not in extensions:
-        code = "submission_source_type_not_allowed" if role == "student_submission" else "source_type_not_allowed"
-        raise UploadContractError(code, role=role)
+    if extension not in extensions and role != "student_submission":
+        raise UploadContractError("source_type_not_allowed", role=role)
     limits = _limits()
     if len(file_name) > limits["source_filename_max_characters"]:
         raise UploadContractError("source_filename_too_long")
     if not data:
         raise UploadContractError("submission_source_empty" if role == "student_submission" else "source_empty")
     max_bytes = _role_max_bytes(role, limits)
-    if extension in {"png", "jpg", "jpeg"}:
+    if extension in {"png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"}:
         max_bytes = min(max_bytes, limits["image_max_bytes"])
     if len(data) > max_bytes:
         raise UploadContractError("submission_source_too_large" if role == "student_submission" else "source_too_large", max_bytes=max_bytes)
@@ -195,7 +198,14 @@ def validate_upload(role: str, file_name: str, data: bytes) -> ValidatedUpload:
     if extension == "docx":
         _validate_docx(data, limits)
     from backend.tools.file_processing import inspect_upload_content
-    media_type = inspect_upload_content(data, file_name).content_type
+    inspection = inspect_upload_content(data, file_name)
+    # Keep main's native-text student input without decoding an over-limit body.
+    # This grants reading, never code execution or another business role.
+    native_student_text = (role == "student_submission" and not inspection.mismatch
+                           and inspection.content_type.startswith("text/"))
+    if extension not in extensions and not native_student_text:
+        raise UploadContractError("submission_source_type_not_allowed", role=role)
+    media_type = inspection.content_type
     expected_binary = _BINARY_MEDIA.get(extension)
     if (expected_binary and media_type != expected_binary) or (not expected_binary and not media_type.startswith("text/")):
         raise UploadContractError("submission_source_content_type_mismatch")
@@ -206,8 +216,9 @@ def validate_upload(role: str, file_name: str, data: bytes) -> ValidatedUpload:
 
 
 def validate_submission_upload(file_name: str, data: bytes) -> None:
-    """Validate the outer business upload, keeping ZIP separate from sources."""
-    if PurePosixPath(file_name).suffix.lower() != ".zip":
+    """Validate supported legacy archives separately from ordinary sources."""
+    from backend.tools.file_processing import ARCHIVE_EXTENSIONS, inspect_upload_content
+    if not file_name.lower().endswith(ARCHIVE_EXTENSIONS):
         validate_upload("student_submission", file_name, data)
         return
     limits = _limits()
@@ -217,7 +228,41 @@ def validate_submission_upload(file_name: str, data: bytes) -> None:
         raise UploadContractError("submission_source_empty")
     if len(data) > limits["submission_upload_max_bytes"]:
         raise UploadContractError("submission_source_too_large", max_bytes=limits["submission_upload_max_bytes"])
-    from backend.tools.file_processing import inspect_upload_content
-    if (inspect_upload_content(data, file_name).content_type != "application/zip"
-            or not zipfile.is_zipfile(io.BytesIO(data))):
+    inspection = inspect_upload_content(data, file_name)
+    if inspection.mismatch or inspection.content_type not in {
+        "application/zip", "application/vnd.rar", "application/x-7z-compressed",
+        "application/x-tar", "application/gzip", "application/x-bzip2",
+    } or (file_name.lower().endswith(".zip") and not zipfile.is_zipfile(io.BytesIO(data))):
         raise UploadContractError("submission_archive_invalid")
+    # Only fixed framing/CRC here. Opening 7z or compressed TAR containers can
+    # decompress their metadata before member limits are applied. Full parsing
+    # remains in the existing bounded member pipeline, never this preflight.
+    try:
+        if inspection.content_type == "application/x-7z-compressed":
+            crc, offset, size, next_crc = struct.unpack("<IQQI", data[8:32])
+            start = 32 + offset
+            if (zlib.crc32(data[12:32]) != crc or start > len(data)
+                    or size > len(data) - start or zlib.crc32(memoryview(data)[start:start + size]) != next_crc):
+                raise ValueError("invalid fixed header")
+        elif inspection.content_type == "application/vnd.rar":
+            if data.startswith(b"Rar!\x1a\x07\x00"):
+                crc, kind, _flags, size = struct.unpack_from("<HBHH", data, 7)
+                if (kind != 0x73 or size < 13 or size > len(data) - 7
+                        or zlib.crc32(memoryview(data)[9:7 + size]) & 0xFFFF != crc):
+                    raise ValueError("invalid main header")
+            else:
+                crc = struct.unpack_from("<I", data, 8)[0]
+                size, position = 0, 12
+                for shift in range(0, 70, 7):
+                    byte = data[position]
+                    position += 1
+                    size |= (byte & 0x7F) << shift
+                    if not byte & 0x80:
+                        break
+                else:
+                    raise ValueError("invalid header length")
+                if (size > len(data) - position
+                        or zlib.crc32(memoryview(data)[12:position + size]) != crc):
+                    raise ValueError("invalid main header")
+    except (ValueError, IndexError, struct.error):
+        raise UploadContractError("submission_archive_invalid") from None

@@ -19,7 +19,7 @@ import {
 function correction(patch: Partial<Correction> = {}): Correction {
   return {
     q_id: "q1",
-    type: "short_answer",
+    type: "concept",
     score: null,
     provisional_score: 7,
     max_score: 10,
@@ -154,7 +154,7 @@ describe("formal result statistics", () => {
         q1: {
           q_id: "q1",
           number: "1",
-          type: "short_answer",
+          type: "concept",
           stem: "Question 1",
           criterion: "Rubric 1",
           max_score: 10,
@@ -162,7 +162,7 @@ describe("formal result statistics", () => {
         q2: {
           q_id: "q2",
           number: "2",
-          type: "short_answer",
+          type: "concept",
           stem: "Question 2",
           criterion: "Rubric 2",
           max_score: 20,

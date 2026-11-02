@@ -20,7 +20,7 @@ from backend.tests.test_task_background_workflows import _seed_task
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role,purpose", [("rubric", "rubric"), ("programming_tests", "test_cases"), ("reference_answer", "reference")])
-async def test_material_image_keeps_allowed_role_ocr_but_cannot_opt_in_restricted_roles(tmp_path, monkeypatch, role, purpose):
+async def test_material_image_ocr_is_default_off_for_teacher_roles_and_explicitly_opted_in(tmp_path, monkeypatch, role, purpose):
     _agent, request, data, results = setup(tmp_path)
     provider, _ = llm(text="Literal -2, including the stated source error.")
     registry = SimpleNamespace(list_configs=lambda: [dict(provider_id=provider.provider_id, enabled=True)],
@@ -31,12 +31,11 @@ async def test_material_image_keeps_allowed_role_ocr_but_cannot_opt_in_restricte
                   filename="source.png", route=route, registry=registry, stored_file_id=request.source.stored_file_id,
                   purpose=purpose)
     if role != "reference_answer":
-        for allow_vision in (False, True):
-            with pytest.raises(RecognitionError, match="source_type_not_allowed"):
+        for allow_vision in (False, None):
+            with pytest.raises(RecognitionError, match="material_ocr_confirmation_required"):
                 await question_sources.read_question_source(**kwargs, allow_vision=allow_vision)
         provider.ainvoke_vision.assert_not_awaited()
         assert api._source_role_ocr_purpose(role) == purpose
-        return
     result = await question_sources.read_question_source(**kwargs, allow_vision=True)
     assert "-2" in result.text and result.recognition["requires_review"]
     assert ("expected output" if purpose == "test_cases" else purpose) in provider.ainvoke_vision.call_args.args[0]
@@ -60,6 +59,7 @@ async def test_material_preflight_freezes_parser_and_never_applies_or_runs(tmp_p
     assert response["status"] == "ready" and response["recognition"] is None
     source = workflow_repository.get_operation(response["source_token"], owner_id=owner)
     assert source.payload["parser_provider_id"] == "test-provider"
+    assert source.payload["enable_material_ocr"] is False
     route = StageProviderRoute(route_id="test-provider", kind="llm", provider=registry.provider)
     api._validate_material_parser_route(source.payload, route, registry, owner)
     with pytest.raises(RecognitionError, match="recognition_route_changed"):

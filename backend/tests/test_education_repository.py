@@ -219,7 +219,7 @@ def test_add_questions_preserves_order(teacher, assignment):
         teacher_id=teacher,
         q_id="q1",
         order_index=0,
-        type="short",
+        type="concept",
         stem="What is 1+1?",
     )
     q2 = assignment_repository.add_question(
@@ -227,7 +227,7 @@ def test_add_questions_preserves_order(teacher, assignment):
         teacher_id=teacher,
         q_id="q2",
         order_index=1,
-        type="short",
+        type="concept",
         stem="What is 2+2?",
     )
     assert [q.q_id for q in assignment_repository.list_questions(assignment.id, teacher_id=teacher)] == ["q1", "q2"]
@@ -241,7 +241,7 @@ def test_add_question_is_owner_scoped(assignment, other_teacher):
             teacher_id=other_teacher,
             q_id="x",
             order_index=0,
-            type="short",
+            type="concept",
             stem="?",
         )
 
@@ -255,7 +255,7 @@ def test_publish_requires_at_least_one_question(teacher, assignment):
 def test_publish_after_questions_succeeds(teacher, assignment):
     assignment_repository.add_question(
         assignment_id=assignment.id, teacher_id=teacher, q_id="q1", order_index=0,
-        type="short", stem="?",
+        type="concept", stem="?",
     )
     published = assignment_repository.publish(assignment.id, teacher_id=teacher, expected_version=1)
     assert published.status == education.AssignmentStatus.PUBLISHED.value
@@ -266,7 +266,7 @@ def test_publish_after_questions_succeeds(teacher, assignment):
 def test_publish_with_stale_version_is_conflict(teacher, assignment):
     assignment_repository.add_question(
         assignment_id=assignment.id, teacher_id=teacher, q_id="q1", order_index=0,
-        type="short", stem="?",
+        type="concept", stem="?",
     )
     # Someone else (or a stale client) published first, bumping version to 2.
     assignment_repository.publish(assignment.id, teacher_id=teacher, expected_version=1)
@@ -277,7 +277,7 @@ def test_publish_with_stale_version_is_conflict(teacher, assignment):
 def test_published_questions_are_immutable(teacher, assignment):
     assignment_repository.add_question(
         assignment_id=assignment.id, teacher_id=teacher, q_id="q1", order_index=0,
-        type="short", stem="?",
+        type="concept", stem="?",
     )
     assignment_repository.publish(assignment.id, teacher_id=teacher, expected_version=1)
     # After publish the question set is frozen: editing is an invalid transition.
@@ -343,7 +343,7 @@ def published_assignment(teacher, course, student):
     course_repository.enroll(course_id=course.id, student_id=student)
     assignment_repository.add_question(
         assignment_id=assignment.id, teacher_id=teacher, q_id="q1", order_index=0,
-        type="short", stem="?", max_score=10.0,
+        type="concept", stem="?", max_score=10.0,
     )
     assignment_repository.publish(assignment.id, teacher_id=teacher, expected_version=1)
     return assignment

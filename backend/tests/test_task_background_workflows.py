@@ -57,8 +57,8 @@ def _seed_task(*, with_question: bool = False, criterion: str = "Award up to 10 
     )
     if with_question:
         assignment_repository.add_question(
-            task_id, teacher_id=owner_id, q_id="q1", order_index=0,
-            type="short", stem="Original", criterion=criterion, max_score=10,
+            task_id, teacher_id=owner_id, q_id="q1", order_index=0, number="1",
+            type="concept", stem="Original", criterion=criterion, max_score=10,
         )
     return owner_id, task_id
 
@@ -96,7 +96,7 @@ class _BackgroundTasks:
 def _problem(stem: str) -> dict[str, dict]:
     return {
         "q1": {
-            "q_id": "q1", "number": "1", "type": "short",
+            "q_id": "q1", "number": "1", "type": "concept",
             "stem": stem, "criterion": "", "max_score": 10,
         }
     }
@@ -370,7 +370,7 @@ def test_confirming_one_answer_does_not_reset_sibling_answers():
     owner_id, task_id = _seed_task(with_question=True)
     assignment_repository.add_question(
         task_id, teacher_id=owner_id, q_id="q2", order_index=1,
-        type="short", stem="Second", criterion="", max_score=10,
+        type="concept", stem="Second", criterion="", max_score=10,
     )
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
     task_facade._commit_imported_submissions(

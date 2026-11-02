@@ -517,14 +517,14 @@ def test_checkpoint_owner_and_artifact_predicates_hide_other_owners(tmp_path):
         ({"checkpoint": []}, "invalid_operation_checkpoint"),
         ({"checkpoint": {"value": math.nan}}, "invalid_operation_checkpoint"),
         (
-            {"checkpoint": {"value": "x" * (64 * 1024 + 1)}},
+            {"checkpoint": {"value": "x" * (workflow_repository.MAX_OPERATION_CHECKPOINT_BYTES + 1)}},
             "operation_checkpoint_too_large",
         ),
         ({"artifact_refs": "not-a-list"}, "invalid_operation_artifact_refs"),
         ({"artifact_refs": [""]}, "invalid_operation_artifact_refs"),
         ({"artifact_refs": ["x" * 65]}, "invalid_operation_artifact_refs"),
         (
-            {"artifact_refs": [f"artifact-{index}" for index in range(257)]},
+            {"artifact_refs": [f"artifact-{index}" for index in range(workflow_repository.MAX_OPERATION_ARTIFACT_REFS + 1)]},
             "operation_artifact_refs_too_large",
         ),
         ({"terminal_summary": []}, "invalid_operation_terminal_summary"),

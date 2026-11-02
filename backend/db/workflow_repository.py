@@ -67,11 +67,11 @@ from backend.domain.source_storage import (
 
 MAX_OPERATION_PAYLOAD_BYTES = 4 * 1024 * 1024
 MAX_OPERATION_PROGRESS_BYTES = 64 * 1024
-MAX_OPERATION_CHECKPOINT_BYTES = 64 * 1024
+MAX_OPERATION_CHECKPOINT_BYTES = 512 * 1024
 MAX_OPERATION_TERMINAL_SUMMARY_BYTES = 16 * 1024
-MAX_OPERATION_ARTIFACT_REFS = 256
+MAX_OPERATION_ARTIFACT_REFS = 2048
 MAX_OPERATION_ARTIFACT_REF_LENGTH = 64
-MAX_OPERATION_ARTIFACT_REFS_BYTES = 24 * 1024
+MAX_OPERATION_ARTIFACT_REFS_BYTES = 128 * 1024
 MAX_OPERATION_CLAIM_BATCH = 100
 MAX_LEASE_OWNER_LENGTH = 128
 MAX_LEASE_TOKEN_LENGTH = 64
@@ -1288,6 +1288,21 @@ def get_operation(operation_id: str, *, owner_id: str) -> WorkflowOperationRecor
         if row is None:
             raise NotFound("workflow_operation")
         return _detach_operation(row)
+
+
+def find_operations_by_hashes(*, assignment_id: str, owner_id: str,
+                              operation_type: str, input_hashes: list[str]):
+    """Read a bounded group of source operations without creating or claiming it."""
+    if len(input_hashes) > 24:
+        raise ValueError("operation lookup exceeds one source window")
+    with session_scope() as session:
+        rows = session.scalars(select(WorkflowOperationRecord).where(
+            WorkflowOperationRecord.assignment_id == assignment_id,
+            WorkflowOperationRecord.owner_id == owner_id,
+            WorkflowOperationRecord.operation_type == operation_type,
+            WorkflowOperationRecord.input_hash.in_(input_hashes),
+        ))
+        return {row.input_hash: _detach_operation(row) for row in rows}
 
 
 def update_operation(

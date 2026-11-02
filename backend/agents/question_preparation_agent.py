@@ -916,6 +916,8 @@ async def prepare_question_packages(
                 )
                 continue
             problem[candidate.target] = value
+            if candidate.rubric_draft:
+                problem["rubric_draft"] = candidate.rubric_draft
             provenance = dict(problem.get("ai_completion_provenance") or {})
             provenance[candidate.target] = {
                 "job_id": reporter.job_id,
@@ -1211,6 +1213,6 @@ def _issue(q_id: str, field: str, code: str, severity: str, source_ids: List[str
         "code": code,
         "severity": severity,
         "source_ids": list(dict.fromkeys(source_ids)),
-        "details": {},
+        "details": {"incomplete": True} if code == "recognition_partial" and severity == "blocking" else {},
         "status": "open",
     }

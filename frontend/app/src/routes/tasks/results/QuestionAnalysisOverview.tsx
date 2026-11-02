@@ -391,7 +391,7 @@ export function parseSemanticQuestionQuery(rawQuery: string, locale: Locale): Se
     addCondition(tx(locale, `题号：Q${match[1]}`, `Question: Q${match[1]}`), match[0]);
   }
 
-  const typeAliases = ["计算题", "编程题", "证明题", "概念题", "选择题", "填空题", "问答题"];
+  const typeAliases = ["计算题", "概念题", "推理题", "编程题", "其他"];
   for (const type of typeAliases) {
     if (normalizeText(query).includes(normalizeText(type))) {
       plan.types.push(type);

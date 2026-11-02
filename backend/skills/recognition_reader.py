@@ -19,7 +19,7 @@ from backend.recognition.engine import EngineLocateInputV1, EngineReadInputV1, E
 from backend.recognition.models import Purpose, RecognitionCandidateV1
 from backend.recognition.planner import EngineCapabilitiesV1
 from backend.recognition.repair_response import REPAIR_PROMPT_VERSION
-from backend.services.background_errors import classify_background_error
+from backend.services.background_errors import classify_background_error, provider_failure_diagnostic
 from backend.tools.baidu_unlimited_ocr import BaiduUnlimitedOCRClient, BaiduUnlimitedOCRError
 
 PROMPT_VERSION = "faithful-reader-v2"
@@ -207,11 +207,15 @@ class LLMRecognitionEngine:
             }, upstream_status_code=exc.status_code) from None
         except Exception as exc:
             code = classify_background_error(exc, "provider_request_failed")
+            try:
+                diagnostic = provider_failure_diagnostic(exc)
+            except Exception:
+                diagnostic = None  # Diagnostics cannot replace the recovery decision.
             raise RecognitionError(code, submission_may_exist=code not in {
-                "provider_auth_failed", "provider_permission_denied", "provider_region_unsupported", "provider_quota_exceeded",
+                "provider_auth_failed", "provider_permission_denied", "provider_region_unsupported", "provider_quota_exceeded", "provider_zero_quota",
                 "provider_rate_limited", "provider_daily_quota_exceeded", "provider_model_not_found", "provider_request_rejected",
                 "provider_vision_not_supported",
-            }) from None
+            }, upstream_status_code=diagnostic.http_status if diagnostic else None) from None
         if _private_identity(self.provider, _LLM_IDENTITY) != self._identity:
             raise RecognitionError("recognition_route_changed", submission_may_exist=True)
         if not isinstance(getattr(response, "content", None), str) or getattr(response, "provider", None) != self._provider_id:

@@ -107,13 +107,18 @@ def _seed_legacy_imports(monkeypatch):
 
 
 def _business_snapshot(engine):
+    from sqlalchemy import inspect
     tables = (
         "assignments", "assignment_questions", "submissions", "submission_revisions",
         "submission_answers", "grading_runs", "grading_run_submissions", "grade_results",
         "teacher_reviews", "assignment_student_presentations",
     )
     with engine.connect() as connection:
-        return {table: connection.execute(text(f"SELECT * FROM {table} ORDER BY id")).all() for table in tables}
+        # Compare every legacy business column across schema versions. The new
+        # answer identity is checked separately after its migration/backfill.
+        columns = {table: ", ".join(column["name"] for column in inspect(engine).get_columns(table)
+                                  if column["name"] != "answer_key") for table in tables}
+        return {table: connection.execute(text(f"SELECT {columns[table]} FROM {table} ORDER BY id")).all() for table in tables}
 
 
 def test_upgrade_preserves_existing_work_and_only_removes_safe_placeholders(tmp_path, monkeypatch):
@@ -124,9 +129,11 @@ def test_upgrade_preserves_existing_work_and_only_removes_safe_placeholders(tmp_
     monkeypatch.setattr(settings, "database_heavy", False)
     config = Config("alembic.ini")
     config.attributes.update(database_url=url, database_heavy=False)
-    command.upgrade(config, "0026_image_capability")
+    command.upgrade(config, "head")
     engine = configure_database(url)
     seeded = _seed_legacy_imports(monkeypatch)
+    # Seed with the current ORM, then exercise the same populated 0026 schema.
+    command.downgrade(config, "0026_image_capability")
     before = _business_snapshot(engine)
     command.upgrade(config, "head")
     assert _business_snapshot(engine) == before
@@ -139,6 +146,7 @@ def test_upgrade_preserves_existing_work_and_only_removes_safe_placeholders(tmp_
         assert session.get(CourseRecord, "protected-course") is not None
     with engine.connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+        assert connection.exec_driver_sql("SELECT COUNT(*) FROM submission_answers WHERE answer_key != id OR answer_key IS NULL").scalar_one() == 0
     command.downgrade(config, "0026_image_capability")
     assert _business_snapshot(engine) == before
     with session_scope() as session:

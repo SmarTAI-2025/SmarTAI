@@ -130,9 +130,9 @@ def test_add_questions_reorder_publish_flow():
     course = _course(c, tok)
     a = c.post("/assignments", headers=_headers(tok), json={"course_id": course["id"], "name": "HW"}).json()
     q1 = c.post(f"/assignments/{a['id']}/questions", headers=_headers(tok),
-                json={"q_id": "q1", "order_index": 0, "type": "short", "stem": "1+1?"}).json()
+                json={"q_id": "q1", "order_index": 0, "type": "concept", "stem": "1+1?"}).json()
     q2 = c.post(f"/assignments/{a['id']}/questions", headers=_headers(tok),
-                json={"q_id": "q2", "order_index": 1, "type": "short", "stem": "2+2?"}).json()
+                json={"q_id": "q2", "order_index": 1, "type": "concept", "stem": "2+2?"}).json()
     listed = c.get(f"/assignments/{a['id']}/questions", headers=_headers(tok)).json()
     assert [q["q_id"] for q in listed] == ["q1", "q2"]
 
@@ -153,7 +153,7 @@ def test_publish_with_stale_version_is_409_version_conflict():
     course = _course(c, tok)
     a = c.post("/assignments", headers=_headers(tok), json={"course_id": course["id"], "name": "HW"}).json()
     c.post(f"/assignments/{a['id']}/questions", headers=_headers(tok),
-           json={"q_id": "q1", "order_index": 0, "type": "short", "stem": "?"})
+           json={"q_id": "q1", "order_index": 0, "type": "concept", "stem": "?"})
     # First publish bumps version to 2.
     c.post(f"/assignments/{a['id']}/publish", headers=_headers(tok), json={"expected_version": 1})
     # A stale client tries to publish with version 1 again.
@@ -170,7 +170,7 @@ def test_student_sees_only_enrolled_published_assignments():
     course = _course(c, tok)
     a = c.post("/assignments", headers=_headers(tok), json={"course_id": course["id"], "name": "HW"}).json()
     c.post(f"/assignments/{a['id']}/questions", headers=_headers(tok),
-           json={"q_id": "q1", "order_index": 0, "type": "short", "stem": "?"})
+           json={"q_id": "q1", "order_index": 0, "type": "concept", "stem": "?"})
     c.post(f"/assignments/{a['id']}/publish", headers=_headers(tok), json={"expected_version": 1})
 
     stu_uid = _seed("s_see", "student")
@@ -198,7 +198,7 @@ def test_student_global_assignment_list_includes_closed_results():
     stu_uid = _seed("s_closed_list", "student")
     c.post(f"/courses/{course['id']}/enroll", headers=_headers(tok), json={"student_ids": [stu_uid]})
     a = c.post("/assignments", headers=_headers(tok), json={"course_id": course["id"], "name": "Closed HW"}).json()
-    c.post(f"/assignments/{a['id']}/questions", headers=_headers(tok), json={"q_id": "q1", "order_index": 0, "type": "short", "stem": "?"})
+    c.post(f"/assignments/{a['id']}/questions", headers=_headers(tok), json={"q_id": "q1", "order_index": 0, "type": "concept", "stem": "?"})
     c.post(f"/assignments/{a['id']}/publish", headers=_headers(tok), json={"expected_version": 1})
     c.post(f"/assignments/{a['id']}/close", headers=_headers(tok), json={"expected_version": 2})
     student = TestClient(app)
@@ -214,7 +214,7 @@ def test_student_cannot_add_questions():
     a = c.post("/assignments", headers=_headers(tok), json={"course_id": course["id"], "name": "HW"}).json()
     cs, stok = _student_client()
     resp = cs.post(f"/assignments/{a['id']}/questions", headers=_headers(stok),
-                   json={"q_id": "q1", "order_index": 0, "type": "short", "stem": "?"})
+                   json={"q_id": "q1", "order_index": 0, "type": "concept", "stem": "?"})
     assert resp.status_code == 403
 
 
@@ -246,7 +246,7 @@ def test_student_question_payload_excludes_teacher_only_fields():
             "q_id": "q_sensitive",
             "order_index": 0,
             "number": "1",
-            "type": "short",
+            "type": "concept",
             "stem": "What is 1+1?",
             "criterion": "Must show work",
             "max_score": 10,
@@ -303,7 +303,7 @@ def _published_assignment_with_student():
     c.post(f"/courses/{course['id']}/enroll", headers=_headers(tok), json={"student_ids": [f"u_s_sub"]})
     a = c.post("/assignments", headers=_headers(tok), json={"course_id": course["id"], "name": "A"}).json()
     c.post(f"/assignments/{a['id']}/questions", headers=_headers(tok),
-           json={"q_id": "q1", "order_index": 0, "type": "short", "stem": "1+1?"})
+           json={"q_id": "q1", "order_index": 0, "type": "concept", "stem": "1+1?"})
     c.post(f"/assignments/{a['id']}/publish", headers=_headers(tok), json={"expected_version": 1})
     return c, tok, stok, a["id"], f"u_s_sub"
 
@@ -336,7 +336,7 @@ def test_student_not_enrolled_cannot_submit():
     course = c.post("/courses", headers=_headers(tok), json={"name": "C"}).json()
     a = c.post("/assignments", headers=_headers(tok), json={"course_id": course["id"], "name": "A"}).json()
     c.post(f"/assignments/{a['id']}/questions", headers=_headers(tok),
-           json={"q_id": "q1", "order_index": 0, "type": "short", "stem": "?"})
+           json={"q_id": "q1", "order_index": 0, "type": "concept", "stem": "?"})
     c.post(f"/assignments/{a['id']}/publish", headers=_headers(tok), json={"expected_version": 1})
     resp = c.post("/submissions/submit", headers=_headers(stok),
                   json={"assignment_id": a["id"], "answers": [{"q_id": "q1", "content": "x"}]})

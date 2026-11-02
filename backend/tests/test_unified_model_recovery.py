@@ -68,7 +68,7 @@ def test_daily_exhaustion_prevents_whole_item_retry_even_with_transient_failures
     failures = [ExpertResult(provider=kind, score=0, confidence=0, comment="", error_kind=kind)
                 for kind in ("transient_llm", "quota_exhausted", "daily_quota_exhausted")]
     assert dominant_error_kind(failures) == "daily_quota_exhausted"
-    correction = Correction(q_id="q1", type="proof", score=0, max_score=10, confidence=0,
+    correction = Correction(q_id="q1", type="reasoning", score=0, max_score=10, confidence=0,
                             comment="", steps=[], expert_results=failures)
     assert not _is_retryable_full_failure(correction)
     assert not _is_successful_expert(failures[-1].model_copy(update={"confidence": 0.9}))

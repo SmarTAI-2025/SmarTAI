@@ -3,11 +3,11 @@ import { test, expect } from "@playwright/test";
 for (const edit of [false, true]) test(`confirm a required blank answer through the existing ${edit ? "save" : "confirm"} button`, async ({ page }) => {
   const errors: string[] = [], mutations: unknown[] = [];
   page.on("pageerror", error => errors.push(error.message));
-  const answer = { q_id: "q1", number: "1", type: "short", content: "", review_status: "pending",
+  const answer = { q_id: "q1", number: "1", type: "concept", content: "", review_status: "pending",
     flag: [edit ? "recognition_failed" : "recognition_manual_pending"] };
   const task = { task_id: "blank-answer", name: "Blank answer review", status: "submissions_ready", workflow_revision: 3,
     problem_count: 1, student_count: 1, created_at: 1, updated_at: 1, kb_docs: {}, kb_doc_count: 0,
-    problem_data: { q1: { q_id: "q1", number: "1", type: "short", stem: "What is 2 + 2?", criterion: "Award 10 points for 4.", max_score: 10, review_status: "confirmed" } },
+    problem_data: { q1: { q_id: "q1", number: "1", type: "concept", stem: "What is 2 + 2?", criterion: "Award 10 points for 4.", max_score: 10, review_status: "confirmed" } },
     student_data: { S001: { stu_id: "S001", stu_name: "Lin", identity_status: "matched", stu_ans: [answer] } } };
   await page.addInitScript(() => { localStorage.setItem("smartai_token", "synthetic-blank"); localStorage.setItem("smartai_locale", "zh-CN"); });
   const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";

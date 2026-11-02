@@ -15,7 +15,7 @@ const question = (id: string, percent: number, type: string): QuestionSummary =>
   maxObservedScore: 10, lowConfidenceCount: 0, reviewCount: 0,
 });
 const model: ResultsModel = {
-  problems: [], students: [], questions: [question("Q1", 70, "计算题"), question("Q2", 40, "calculation"), question("Q11", 90, "proof")],
+  problems: [], students: [], questions: [question("Q1", 70, "计算题"), question("Q2", 40, "calculation"), question("Q11", 90, "reasoning")],
   classAverageScore: 6, classAverageMax: 10, classAveragePercent: 60, lowConfidenceCount: 0, reviewCount: 0,
 };
 function intent(overrides: Partial<FilterIntentResult> = {}): FilterIntentResult {

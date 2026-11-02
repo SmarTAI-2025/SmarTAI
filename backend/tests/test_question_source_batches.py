@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,6 +12,134 @@ from backend.services.question_source_batches import read_question_pdf_batches
 from backend.services.stage_provider_routing import StageProviderRoute
 from backend.tests.test_recognition_agent import pdf, request
 from backend.tests.test_recognition_v2_artifacts import setup
+
+
+@pytest.mark.asyncio
+async def test_stopped_parallel_pages_restart_without_stale_lease_or_replaying_success(tmp_path, monkeypatch):
+    from backend.db import workflow_repository
+    from backend.llm.request_timeouts import current_response_scope
+    from backend.services import recognition_runs
+    from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE
+
+    agent, req, data, results = setup(tmp_path, pdf=True, pages=2, initial=["literal 1 + 1 = 3"])
+    service = recognition_runs.RecognitionRunService(store=results.store, capacity=agent.capacity)
+    saved, pending, stopping, proceed = (asyncio.Event() for _ in range(4))
+    original_read = agent.engine.recognize
+    original_stop = recognition_runs._RecognitionLeaseHeartbeat.stop
+    calls = []
+    block = True
+    stopped_rows = []
+
+    async def read(unit):
+        async def send():
+            calls.append(unit.page_number)
+            if unit.page_number == 2 and block:
+                pending.set()
+                await asyncio.Event().wait()
+            return await original_read(unit)
+        return await current_response_scope().run_response(send)
+
+    async def stop(self):
+        await original_stop(self)
+        if self.context.checkpoint.final_artifact_id is None:
+            stopped_rows.append(self.row)
+            stopping.set()
+            await proceed.wait()
+
+    async def on_pages(pages):
+        if any(page["page_number"] == 1 for page in pages):
+            saved.set()
+
+    agent.engine.recognize = read
+    monkeypatch.setattr(recognition_runs._RecognitionLeaseHeartbeat, "stop", stop)
+    args = dict(service=service, request=req, content=data, engine=agent.engine,
+        total_pages=2, reporter=ProgressReporter("stop-restart"), on_pages=on_pages,
+        allow_partial=True, timeout_profile=SOURCE_TIMEOUT_PROFILE)
+    task = asyncio.create_task(read_question_pdf_batches(**args))
+    try:
+        await asyncio.wait_for(asyncio.gather(saved.wait(), pending.wait()), 10)
+        task.cancel()
+        await asyncio.wait_for(stopping.wait(), 10)
+        task.cancel()  # Repeated cancellation propagates through the real page gather.
+        await asyncio.sleep(0)
+        proceed.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 10)
+        assert stopped_rows
+        for row in stopped_rows:
+            assert workflow_repository.get_operation(row.id, owner_id=req.source.owner_id).lease_token is None
+        _, uncertain = await read_question_pdf_batches(**args)
+        assert uncertain["error_code"] == "provider_submit_uncertain"
+        assert uncertain["coverage"]["processed_pages"] == [1]
+        assert sorted(calls) == [1, 2]
+
+        block = False
+        retry_args = dict(**args, retry_key="acknowledged-restart:1", acknowledge_pending_retry=True)
+        _, restarted = await read_question_pdf_batches(**retry_args)
+        assert restarted["status"] == "completed"
+        assert restarted["coverage"]["processed_pages"] == [1, 2]
+        assert calls.count(1) == 1 and calls.count(2) == 2
+        _, reused = await read_question_pdf_batches(**retry_args)
+        assert reused["status"] == "already_done" and len(calls) == 3
+    finally:
+        proceed.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_native_pdf_with_selected_model_keeps_one_window_and_indexes_pages_once(tmp_path, monkeypatch):
+    import hashlib
+    from backend.db import file_repository
+    from backend.recognition.models import RecognitionPolicyV1
+    from backend.services import recognition_local_evidence as local
+    from backend.services.recognition_runs import RecognitionRunService
+    from backend.tools.pdf_evidence import PdfIndexRequest
+
+    agent, original, _, results = setup(tmp_path)
+    data = pdf([f"Question {n}. Explain the independent statement in words." for n in range(1, 13)])
+    stored = file_repository.save_file(storage=results.store.storage, owner_id=original.source.owner_id,
+        assignment_id=original.source.business_id, kind="problem_source", original_name="native.pdf",
+        content=data, content_type="application/pdf")
+    req = original.model_copy(update={"source": original.source.model_copy(update={
+        "stored_file_id": stored.id, "content_type": "application/pdf", "input_sha256": hashlib.sha256(data).hexdigest()}),
+        "policy": RecognitionPolicyV1()})
+    service = RecognitionRunService(store=results.store, capacity=agent.capacity)
+    indexed = []
+    original_read = local.read_pdf_evidence
+    async def observed(content, command, **kwargs):
+        result = await original_read(content, command, **kwargs)
+        if isinstance(command, PdfIndexRequest):
+            indexed.extend(page.page_number for page in result.pages)
+        return result
+    monkeypatch.setattr(local, "read_pdf_evidence", observed)
+    saved = []
+    async def on_pages(pages):
+        saved.extend(pages)
+    _, summary = await read_question_pdf_batches(service=service, request=req, content=data,
+        engine=agent.engine, total_pages=12, reporter=ProgressReporter("native-window"), on_pages=on_pages)
+    assert indexed == list(range(1, 13))
+    assert len(summary["operation_ids"]) == 1
+    assert len(saved) == 12 and not agent.engine.reads
+
+
+@pytest.mark.asyncio
+async def test_real_saved_page_runs_cap_rechecks_and_reuse_without_new_calls(tmp_path):
+    from backend.services.recognition_runs import RecognitionRunService
+
+    agent, req, data, results = setup(tmp_path, pdf=True, pages=6, initial=["[unclear] + 1 = 3"] * 6)
+    service = RecognitionRunService(store=results.store, capacity=agent.capacity)
+    async def on_pages(pages):
+        pass
+    args = dict(service=service, request=req, content=data, engine=agent.engine,
+        total_pages=6, reporter=ProgressReporter("actual-window"), on_pages=on_pages, allow_partial=True)
+    _, first = await read_question_pdf_batches(**args)
+    assert len(agent.engine.reads) == 6 and len(agent.engine.repairs) == 4
+    _, second = await read_question_pdf_batches(**args)
+    assert len(agent.engine.reads) == 6 and len(agent.engine.repairs) == 4
+    assert sorted(second["operation_ids"]) == sorted(first["operation_ids"])
+    assert second["usage"]["initial_calls"] == 0 and second["usage"]["patch_calls"] == 0
 
 
 @pytest.mark.asyncio
@@ -64,6 +193,30 @@ def fake_result(pages, *, deferred=(), error=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("purpose", ["reference", "rubric", "test_cases", "submissions"])
+async def test_non_question_pdf_sources_enumerate_every_page_and_emit_saved_pages(tmp_path, monkeypatch, purpose):
+    from backend.db import file_repository
+
+    _agent, original, _data, results = setup(tmp_path)
+    data = pdf([f"Material page {page}. Describe the independent source." for page in range(1, 26)])
+    stored = file_repository.save_file(storage=results.store.storage, owner_id=original.source.owner_id,
+        assignment_id=original.source.business_id, kind="problem_source", original_name=f"{purpose}.pdf",
+        content=data, content_type="application/pdf")
+    monkeypatch.setattr(question_sources, "get_storage", lambda: results.store.storage)
+    emitted = []
+    async def on_pages(pages):
+        emitted.extend(pages)
+    read = await question_sources.read_question_source(owner_id=original.source.owner_id,
+        task_id=original.source.business_id, content=data, filename=stored.original_name,
+        stored_file_id=stored.id, registry=None, purpose=purpose, on_pages=on_pages,
+        route=StageProviderRoute(route_id="no-model-needed", kind="llm", provider=None))
+    assert read.recognition["coverage"]["processed_pages"] == list(range(1, 26))
+    assert len(read.recognition["operation_ids"]) == 3
+    assert [page["page_number"] for page in emitted] == list(range(1, 26))
+    assert "Material page 25." in emitted[-1]["text"]
+
+
+@pytest.mark.asyncio
 async def test_deferred_pages_get_smaller_batches_without_repeating_processed_pages():
     calls = []
     async def run(scoped, *_args, **_kwargs):
@@ -79,13 +232,74 @@ async def test_deferred_pages_get_smaller_batches_without_repeating_processed_pa
 
 
 @pytest.mark.asyncio
-async def test_uncertain_batch_stops_without_replaying_or_starting_next_batch():
-    run = AsyncMock(return_value=fake_result(list(range(1, 13)), error="provider_submit_uncertain"))
+@pytest.mark.parametrize("allow_partial", [False, True])
+async def test_uncertain_page_does_not_replay_but_later_untouched_pages_and_batches_continue(allow_partial):
+    calls, callbacks = [], []
+    async def run(scoped, *_args, **_kwargs):
+        calls.append(scoped.pages)
+        if len(calls) == 1:
+            result = fake_result(scoped.pages, deferred=list(range(2, 13)), error="provider_submit_uncertain")
+            result.assembly.document.coverage.failed_pages = [2]
+            result.assembly.document.coverage.unprocessed_pages = list(range(3, 13))
+            result.assembly.raw.read_batch.plan.decisions = []
+            result.assembly.raw.read_batch.units = [SimpleNamespace(page_numbers=[1], candidate=SimpleNamespace(status="ok")),
+                SimpleNamespace(page_numbers=[2], candidate=SimpleNamespace(status="error",
+                    safe_error_code="provider_submit_uncertain", upstream_status_code=503))]
+            return result
+        return fake_result(scoped.pages)
+    async def on_pages(pages):
+        callbacks.extend(page["page_number"] for page in pages)
+    args = dict(service=SimpleNamespace(run=run), request=request(b"pdf"), content=b"pdf", engine=None,
+        total_pages=25, reporter=ProgressReporter("batches"), allow_partial=allow_partial, on_pages=on_pages)
+    if allow_partial:
+        text, summary = await read_question_pdf_batches(**args)
+        assert "Question 25" in text and "Question 2\n" not in text
+        assert summary["status"] == "failed" and summary["error_code"] == "provider_submit_uncertain"
+        assert summary["coverage"]["failed_pages"] == [2]
+        assert summary["page_diagnostics"]["page_errors"] == [dict(page=2, error_code="provider_submit_uncertain", status_code=503)]
+    else:
+        with pytest.raises(RecognitionError) as caught:
+            await read_question_pdf_batches(**args)
+        assert caught.value.code == "provider_submit_uncertain"
+        assert caught.value.details["failed_pages"] == [2]
+        assert 25 in caught.value.details["processed_pages"]
+    assert calls == [list(range(1, 13)), *[[page] for page in range(3, 13)], list(range(13, 25)), [25]]
+    assert sorted(callbacks) == [page for page in range(1, 26) if page != 2]
+
+
+@pytest.mark.asyncio
+async def test_failed_batch_without_any_document_still_attempts_later_batch():
+    calls = []
+    async def run(scoped, *_args, **_kwargs):
+        calls.append(scoped.pages)
+        if len(calls) == 1:
+            raise RecognitionError("provider_submit_uncertain")
+        return fake_result(scoped.pages)
     with pytest.raises(RecognitionError) as caught:
         await read_question_pdf_batches(service=SimpleNamespace(run=run), request=request(b"pdf"),
-            content=b"pdf", engine=None, total_pages=200, reporter=ProgressReporter("batches"))
+            content=b"pdf", engine=None, total_pages=13, reporter=ProgressReporter("batches"))
     assert caught.value.code == "provider_submit_uncertain"
-    assert run.await_count == 1
+    assert calls == [list(range(1, 13)), [13]]
+    assert caught.value.details["processed_pages"] == [13]
+
+
+@pytest.mark.asyncio
+async def test_active_page_eight_failure_keeps_pages_nine_and_ten_independent():
+    calls, saved = [], []
+    async def run(scoped, *_args, **_kwargs):
+        calls.append(scoped.pages)
+        if scoped.pages == [8]:
+            raise RecognitionError("provider_submit_uncertain")
+        return fake_result(scoped.pages)
+    async def on_pages(pages):
+        saved.extend(page["page_number"] for page in pages)
+    text, summary = await read_question_pdf_batches(service=SimpleNamespace(run=run), request=request(b"pdf"),
+        content=b"pdf", engine=SimpleNamespace(), total_pages=10, reporter=ProgressReporter("page-eight"),
+        allow_partial=True, on_pages=on_pages)
+    assert calls == [[page] for page in range(1, 11)]
+    assert saved == [1, 2, 3, 4, 5, 6, 7, 9, 10]
+    assert summary["status"] == "failed" and summary["coverage"]["failed_pages"] == [8]
+    assert "Question 9" in text and "Question 10" in text
 
 
 @pytest.mark.asyncio

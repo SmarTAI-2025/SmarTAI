@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import type { SubmissionSourceOutcome } from "@/types";
@@ -59,6 +60,24 @@ const sources: SubmissionSourceOutcome[] = [
 ];
 
 describe("SubmissionSourceOutcomePanel", () => {
+  it.each(["zh-CN", "en-US"] as const)("describes save-only manual resolution accurately in expanded diagnostics (%s)", async (locale) => {
+    // The backend can resolve a paused source after saving valid answers and
+    // repairing identity, without confirming the answer review.
+    render(<MemoryRouter><SubmissionSourceOutcomePanel locale={locale} sources={[{
+      ...sources[1], status: "parsed", reason_code: "operation_cancelled", recognition_reason_code: "operation_cancelled",
+      resolution_status: "manual_resolved", failure_phase: "recognition", matched_answer_count: 1,
+    }]} /></MemoryRouter>);
+    const zh = locale === "zh-CN";
+    const user = userEvent.setup();
+    await user.click(screen.getByText(zh ? "查看每份文件" : "Review every file"));
+    const diagnosticToggle = screen.getByText(zh ? "诊断信息" : "Diagnostic details");
+    const diagnostics = diagnosticToggle.closest("details")!;
+    expect(diagnostics).not.toHaveAttribute("open");
+    await user.click(diagnosticToggle);
+    expect(diagnostics).toHaveAttribute("open");
+    expect(within(diagnostics).getByText(zh ? "教师已完成处理" : "Resolved by the teacher")).toBeVisible();
+    expect(within(diagnostics).queryByText(/确认|confirmed/i)).not.toBeInTheDocument();
+  });
   it("keeps manually pending sources expanded and distinguishes a stop from a provider failure", () => {
     render(<MemoryRouter><SubmissionSourceOutcomePanel locale="zh-CN" taskId="task" sources={[{
       ...sources[1], status: "manual_review", reason_code: "operation_cancelled", recognition_reason_code: "operation_cancelled",

@@ -80,6 +80,11 @@ def _normalize_number(number: Any) -> str:
 def _explicit_major_number(value: Any) -> Optional[str]:
     """Read a numeric major label, never a parenthesized subpart label."""
     label = unicodedata.normalize("NFKC", str(value or "")).strip()
+    qualified = re.fullmatch(r"(.+?)\s+/\s+(\d+(?:\.\d+)*[.、:：]?)", label)
+    if qualified:
+        # Literal chapter/section labels are part of the identity. Identical
+        # wording in two different source sections is not a duplicate.
+        return _normalize_number(qualified.group(1)) + "/" + _normalize_number(qualified.group(2))
     match = re.fullmatch(
         r"(?:(?:Question|Problem|Q|第)\s*)?(\d+(?:\.\d+)*)(?:\s*题)?[.、:：]?",
         label,
@@ -219,6 +224,7 @@ def _apply_merge(
 
 def dedupe_extracted_problems(
     problems: Dict[str, Dict[str, Any]],
+    *, preserve_repeated_numbers: bool = False,
 ) -> Dict[str, Dict[str, Any]]:
     """Collapse duplicate extraction rows into one row per real question.
 
@@ -240,6 +246,16 @@ def dedupe_extracted_problems(
             i = live[i_pos]
             for j_pos in range(i_pos + 1, len(live)):
                 j = live[j_pos]
+                if (preserve_repeated_numbers and _explicit_major_number(items[i].get("number"))
+                        and _explicit_major_number(items[i].get("number")) == _explicit_major_number(items[j].get("number"))
+                        and str(items[i].get("stem") or "").strip() != str(items[j].get("stem") or "").strip()
+                        and not any(issue.get("code") == "recognition_partial"
+                                    for item in (items[i], items[j]) for issue in item.get("preparation_issues", []))):
+                    # Complete exercises from unknown chapters may be very
+                    # similar. A repeated display label is not their identity.
+                    # Identical stems still collapse (e.g. chunk overlap); do
+                    # not casefold this comparison: A and a may differ in math.
+                    continue
                 decision = _merge_decision(items[i], items[j], norms[i], norms[j])
                 if decision is not None:
                     action = (i, j, decision)
