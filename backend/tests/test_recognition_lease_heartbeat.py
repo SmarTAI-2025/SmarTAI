@@ -313,7 +313,8 @@ async def test_heartbeat_failure_during_error_checkpoint_is_not_user_cancellatio
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["completed", "needs_review", "cancelled"])
 async def test_heartbeat_cleans_up_on_every_exit(tmp_path, monkeypatch, heartbeats, claims, outcome):
-    monkeypatch.setattr(recognition_runs, "_RENEWABLE_HEARTBEAT_SECONDS", 0.2)
+    # This tests shutdown, not renewal speed. Keep the real DB wait budget:
+    # shortening it to 0.2s turns ordinary CI IO latency into false lease loss.
     service, request, data, engine = extended(tmp_path)
     entered = asyncio.Event()
     original_read = engine.recognize
@@ -345,7 +346,6 @@ async def test_heartbeat_cleans_up_on_every_exit(tmp_path, monkeypatch, heartbea
 async def test_terminal_commit_heartbeat_race_keeps_success_and_explicit_retry(
     tmp_path, monkeypatch, heartbeats, retry,
 ):
-    monkeypatch.setattr(recognition_runs, "_RENEWABLE_HEARTBEAT_SECONDS", 0.3)
     service, request, data, engine = extended(tmp_path)
     if retry:
         entered = asyncio.Event()
@@ -368,12 +368,26 @@ async def test_terminal_commit_heartbeat_race_keeps_success_and_explicit_retry(
     original_heartbeat = workflow_repository.heartbeat_operation
     terminal_status = "needs_review" if retry else "completed"
     blocked_operation = []
+    terminal_tick = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    original_sleep = asyncio.sleep
+
+    async def sleep_until_terminal_commit(delay):
+        current = asyncio.current_task()
+        if any(item.task is current for item in heartbeats):
+            # Force the actual commit/renewal race without shrinking the DB
+            # timeout to 0.3s. Other operations and sleeps keep their budget.
+            await terminal_tick.wait()
+            if any(item.task is current and item.row.id in blocked_operation for item in heartbeats):
+                return
+        await original_sleep(delay)
 
     def save(operation_id, **kwargs):
         result = original_save(operation_id, **kwargs)
         if kwargs.get("terminal_status") == terminal_status and not blocked_operation:
             blocked_operation.append(operation_id)
             committed.set()
+            loop.call_soon_threadsafe(terminal_tick.set)
             assert heartbeat_observed.wait(5)
         return result
 
@@ -386,6 +400,7 @@ async def test_terminal_commit_heartbeat_race_keeps_success_and_explicit_retry(
 
     monkeypatch.setattr(workflow_repository, "save_operation_checkpoint", save)
     monkeypatch.setattr(workflow_repository, "heartbeat_operation", heartbeat)
+    monkeypatch.setattr(asyncio, "sleep", sleep_until_terminal_commit)
     try:
         result = await asyncio.wait_for(service.run(
             request, data, engine=engine, prompt_version="faithful-reader-v1",
