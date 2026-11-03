@@ -4,7 +4,8 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { APIError } from "@/api/client";
 import { I18nProvider } from "@/i18n/I18nProvider";
-import { PENDING_REGISTRATION_STORAGE_KEY } from "@/lib/registrationFlow";
+import * as draftProtection from "@/hooks/useDraftProtection";
+import { createPendingRegistrationFlow, PENDING_REGISTRATION_STORAGE_KEY, savePendingRegistrationFlow } from "@/lib/registrationFlow";
 import { RegisterPage } from "@/routes/RegisterPage";
 
 vi.mock("@/api/hooks", () => ({ useRequestRegistration: vi.fn() }));
@@ -27,6 +28,7 @@ function renderPage() {
         <Routes>
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/register/check-email" element={<LocationProbe />} />
+          <Route path="/" element={<h1>首页</h1>} />
         </Routes>
       </MemoryRouter>
     </I18nProvider></StrictMode>,
@@ -59,7 +61,7 @@ describe("RegisterPage", () => {
     });
   });
 
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it("submits only the frozen fields, clears secret mutation state, and navigates with safe metadata", async () => {
     mutateAsync.mockResolvedValue({
@@ -245,5 +247,38 @@ describe("RegisterPage", () => {
     await screen.findByText(/暂时无法检查用户名/);
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "发送验证链接" })));
     expect(await screen.findByTestId("location")).toHaveTextContent("/register/check-email");
+  });
+
+  it.each([true, false])("does not redirect after async draft cleanup when the operation is no longer current (left=%s)", async (leave) => {
+    let finishCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
+    const clear = vi.fn(() => cleanup);
+    vi.spyOn(draftProtection, "useDraftProtection").mockReturnValue({ clear } as unknown as ReturnType<typeof draftProtection.useDraftProtection>);
+    mutateAsync.mockResolvedValue({ status: "verification_required", request_id: "old-flow", expires_in_seconds: 1800, resend_after_seconds: 0 });
+    renderPage();
+    fillRegistration();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "发送验证链接" })));
+    expect(clear).toHaveBeenCalledTimes(1);
+    if (leave) fireEvent.click(screen.getByRole("link", { name: "SmarTAI 首页" }));
+    savePendingRegistrationFlow(createPendingRegistrationFlow("new@ustc.edu.cn", { status: "verification_required", request_id: "new-flow", expires_in_seconds: 1800, resend_after_seconds: 0 }));
+    const stored = window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY);
+    await act(async () => finishCleanup());
+    expect(screen.queryByTestId("location")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: leave ? "首页" : "创建教师账号" })).toBeInTheDocument();
+    expect(window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY)).toBe(stored);
+  });
+
+  it("still reaches the recovery page when the browser cannot save pending metadata", async () => {
+    const setItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
+      if (this === window.sessionStorage && key === PENDING_REGISTRATION_STORAGE_KEY) throw new Error("storage unavailable");
+      setItem.call(this, key, value);
+    });
+    mutateAsync.mockResolvedValue({ status: "verification_required", request_id: "request-1", expires_in_seconds: 1800, resend_after_seconds: 60 });
+    renderPage();
+    fillRegistration();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "发送验证链接" })));
+    expect(screen.getByTestId("location")).toHaveTextContent("/register/check-email");
+    expect(window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY)).toBeNull();
   });
 });

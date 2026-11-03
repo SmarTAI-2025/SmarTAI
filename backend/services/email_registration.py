@@ -528,7 +528,7 @@ def _verify_registration_locked(
             if row is None or row.delivery_status == "failed":
                 raise RegistrationError("verification_link_invalid")
             if row.verified_at is not None:
-                return {"status": "already_verified"}
+                return {"status": "already_verified", "request_id": row.id}
             if row.superseded_at is not None:
                 raise RegistrationError("verification_link_already_used")
             if row.expires_at <= now:
@@ -589,7 +589,7 @@ def _verify_registration_locked(
         raise RegistrationError("registration_unavailable", status_code=409) from exc
     if identity_exists:
         raise RegistrationError("registration_unavailable", status_code=409)
-    return {"status": "registered"}
+    return {"status": "registered", "request_id": row.id}
 
 
 def _supersede_other_flows(

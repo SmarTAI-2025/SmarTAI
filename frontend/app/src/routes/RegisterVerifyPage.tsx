@@ -9,16 +9,22 @@ import { Button } from "@/components/ui/Button";
 import { InlineNotice } from "@/components/ui/InlineNotice";
 import { useI18n } from "@/i18n/I18nProvider";
 import { formatCooldown, rateLimitDelay, useRetryCooldown } from "@/hooks/useRetryCooldown";
+import { useEmailLinkSessionKey } from "@/hooks/useEmailLinkSessionKey";
 import {
   localizedRegistrationVerifyError,
   registrationLinkFailure,
   type LinkFailure,
 } from "@/lib/authErrors";
-import { clearPendingRegistrationFlow } from "@/lib/registrationFlow";
+import { clearPendingRegistrationFlow, isCurrentPendingRegistrationFlow } from "@/lib/registrationFlow";
 
 type VerifyState = "ready" | "success" | LinkFailure;
 
 export function RegisterVerifyPage() {
+  const sessionKey = useEmailLinkSessionKey();
+  return <RegisterVerifySession key={sessionKey} />;
+}
+
+function RegisterVerifySession() {
   const location = useLocation();
   const navigate = useNavigate();
   const { locale } = useI18n();
@@ -28,11 +34,17 @@ export function RegisterVerifyPage() {
   const tokenRef = useRef<string | null | undefined>(undefined);
   if (tokenRef.current === undefined) tokenRef.current = verificationTokenFromHash(location.hash);
   const submitting = useRef(false);
+  const active = useRef(false);
   const [state, setState] = useState<VerifyState>(tokenRef.current ? "ready" : "invalid");
   const [retryError, setRetryError] = useState<string | null>(null);
   const [alreadyVerified, setAlreadyVerified] = useState(false);
   const [inviteUnavailable, setInviteUnavailable] = useState(false);
   const steps = zh ? ["填写信息", "验证邮箱", "登录使用"] : ["Account details", "Verify email", "Sign in"];
+
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
 
   useLayoutEffect(() => {
     if (!location.hash) return;
@@ -50,18 +62,24 @@ export function RegisterVerifyPage() {
   }, []); // Extract once, then remove the fragment before the user interacts.
 
   async function handleVerify() {
-    if (!tokenRef.current || submitting.current || verifyRegistration.isPending || cooldown.active) return;
+    if (!active.current || !tokenRef.current || submitting.current || verifyRegistration.isPending || cooldown.active) return;
     submitting.current = true;
     setRetryError(null);
     const token = tokenRef.current;
     tokenRef.current = null;
     try {
       const response = await verifyRegistration.mutateAsync(token);
+      if (!active.current) return;
       verifyRegistration.reset();
-      clearPendingRegistrationFlow();
+      // Only the server can associate the email token with a pending request.
+      // Older backends omit this identity, so preserve any unrelated local flow.
+      if (response.request_id && isCurrentPendingRegistrationFlow(response.request_id)) {
+        clearPendingRegistrationFlow();
+      }
       setAlreadyVerified(response.status === "already_verified");
       setState("success");
     } catch (error) {
+      if (!active.current) return;
       verifyRegistration.reset();
       const code = getAPIErrorCode(error);
       setInviteUnavailable(code === "registration_invite_required" || code === "registration_invite_invalid");

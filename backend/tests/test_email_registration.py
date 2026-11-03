@@ -137,8 +137,8 @@ def test_request_and_verify_creates_teacher_only_after_email_confirmation(monkey
     assert result["status"] == "verification_required"
     assert sender.messages and "#token=" in sender.messages[0]["text"]
     token = sender.messages[0]["text"].split("#token=", 1)[1].split()[0]
-    assert verify_registration(token) == {"status": "registered"}
-    assert verify_registration(token) == {"status": "already_verified"}
+    assert verify_registration(token) == {"status": "registered", "request_id": result["request_id"]}
+    assert verify_registration(token) == {"status": "already_verified", "request_id": result["request_id"]}
 
 
 def test_failed_delivery_records_internal_failure_and_allows_a_clean_retry(monkeypatch):
@@ -306,7 +306,7 @@ def test_pending_delivery_token_recovers_after_sender_commit_uncertainty(monkeyp
             )
         )
 
-    assert verify_registration(raw_token) == {"status": "registered"}
+    assert verify_registration(raw_token) == {"status": "registered", "request_id": "pending-delivery-recovery"}
 
 
 def test_late_older_delivery_cannot_supersede_a_newer_active_token():
@@ -528,7 +528,7 @@ def test_resend_replaces_token_and_preserves_pending_password(monkeypatch):
     new_token = sender.messages[-1]["text"].split("#token=", 1)[1].split()[0]
     with pytest.raises(RegistrationError):
         verify_registration(old_token)
-    assert verify_registration(new_token) == {"status": "registered"}
+    assert verify_registration(new_token) == {"status": "registered", "request_id": second["request_id"]}
 
 
 def test_concurrent_registration_double_click_sends_once(monkeypatch):
@@ -580,7 +580,7 @@ def test_concurrent_verify_creates_one_user(monkeypatch):
 def test_concurrent_verify_for_same_username_across_emails_is_stable(monkeypatch):
     sender = _FakeSender()
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
-    request_registration(
+    first = request_registration(
         invite_code=invite_code(),
         username="shared-username",
         email="first-owner@ustc.edu.cn",
@@ -588,7 +588,7 @@ def test_concurrent_verify_for_same_username_across_emails_is_stable(monkeypatch
         source_ip="198.51.100.61",
         sender=sender,
     )
-    request_registration(
+    second = request_registration(
         invite_code=invite_code(),
         username="shared-username",
         email="second-owner@ustc.edu.cn",
@@ -607,7 +607,10 @@ def test_concurrent_verify_for_same_username_across_emails_is_stable(monkeypatch
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(verify_once, tokens))
 
-    assert sum(outcome == {"status": "registered"} for outcome in outcomes) == 1
+    assert sum(
+        outcome == {"status": "registered", "request_id": pending["request_id"]}
+        for outcome, pending in zip(outcomes, [first, second])
+    ) == 1
     assert sum(
         outcome in {"registration_unavailable", "verification_link_already_used"}
         for outcome in outcomes

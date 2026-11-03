@@ -31,6 +31,7 @@ export interface EmailRegistrationResponse {
 
 export interface EmailRegistrationVerifyResponse {
   status: "registered" | "already_verified";
+  request_id?: string;
 }
 
 export interface PasswordResetRequest {

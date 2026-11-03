@@ -77,4 +77,22 @@ describe("public mail auth API contract", () => {
     await expect(verifyRegistration("verification-secret"))
       .rejects.toMatchObject({ status: 502, message: "public_auth_response_invalid" });
   });
+
+  it.each(["registered", "already_verified"])("preserves the request identity for %s", async (status) => {
+    const post = vi.spyOn(client, "postJSON").mockResolvedValue({ status, request_id: "verified-request" });
+    await expect(verifyRegistration("verification-secret")).resolves.toEqual({ status, request_id: "verified-request" });
+    expect(post).toHaveBeenCalledWith("/auth/register/verify", { token: "verification-secret" }, expect.objectContaining({ params: { include_request_id: true }, _skipAuthHeader: true, _skipAuthRefresh: true }));
+  });
+
+  it.each(["", " ", "x".repeat(513), 123, null])("rejects malformed verification request identity %s", async (requestId) => {
+    vi.spyOn(client, "postJSON").mockResolvedValue({ status: "registered", request_id: requestId });
+    await expect(verifyRegistration("verification-secret"))
+      .rejects.toMatchObject({ status: 502, message: "public_auth_response_invalid" });
+  });
+
+  it("still rejects credentials in an identity-bearing verification response", async () => {
+    vi.spyOn(client, "postJSON").mockResolvedValue({ status: "registered", request_id: "verified-request", token: "must-not-be-accepted" });
+    await expect(verifyRegistration("verification-secret"))
+      .rejects.toMatchObject({ status: 502, message: "public_auth_response_invalid" });
+  });
 });

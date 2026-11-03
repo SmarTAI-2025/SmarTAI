@@ -79,7 +79,7 @@ export async function verifyRegistration(token: string): Promise<EmailRegistrati
   const response = await postJSON<unknown, { token: string }>(
     "/auth/register/verify",
     { token },
-    PUBLIC_AUTH_REQUEST_CONFIG,
+    { ...PUBLIC_AUTH_REQUEST_CONFIG, params: { include_request_id: true } },
   );
   return parseRegistrationVerifyResponse(response);
 }
@@ -155,11 +155,17 @@ function parseRegistrationResponse(value: unknown): EmailRegistrationResponse {
 }
 
 function parseRegistrationVerifyResponse(value: unknown): EmailRegistrationVerifyResponse {
-  const response = exactRecord(value, ["status"]);
-  if (!response || (response.status !== "registered" && response.status !== "already_verified")) {
+  const response = exactRecord(value, ["status", "request_id"]) ?? exactRecord(value, ["status"]);
+  if (
+    !response
+    || (response.status !== "registered" && response.status !== "already_verified")
+    || ("request_id" in response && (
+      typeof response.request_id !== "string" || !response.request_id.trim() || response.request_id.length > 512
+    ))
+  ) {
     throw invalidPublicAuthResponse();
   }
-  return { status: response.status };
+  return { status: response.status, ...(typeof response.request_id === "string" ? { request_id: response.request_id } : {}) };
 }
 
 function parsePasswordResetRequestResponse(value: unknown): PasswordResetRequestResponse {

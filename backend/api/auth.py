@@ -223,9 +223,14 @@ def resend_email_registration(req: EmailRegistrationResendRequest, request: Requ
 
 
 @router.post("/register/verify")
-def verify_email_registration(req: EmailRegistrationVerifyRequest, request: Request):
+def verify_email_registration(
+    req: EmailRegistrationVerifyRequest, request: Request, include_request_id: bool = False,
+):
     try:
-        return verify_registration(req.token, request.client.host if request.client else None)
+        result = verify_registration(req.token, request.client.host if request.client else None)
+        # Older clients validate the exact status-only response. New clients
+        # opt in to the token's identity before clearing a pending flow.
+        return result if include_request_id else {"status": result["status"]}
     except RegistrationError as exc:
         raise _registration_error(exc) from exc
 

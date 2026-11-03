@@ -1,6 +1,6 @@
 import { useDraftProtection } from "@/hooks/useDraftProtection";
 import { Loader2, MailCheck } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useRequestRegistration } from "@/api/hooks";
 import { checkRegistrationUsername } from "@/api/auth";
@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/Input";
 import { useI18n } from "@/i18n/I18nProvider";
 import { formatCooldown, rateLimitDelay, useRetryCooldown } from "@/hooks/useRetryCooldown";
 import { localizedRegistrationRequestError } from "@/lib/authErrors";
-import { createPendingRegistrationFlow, savePendingRegistrationFlow } from "@/lib/registrationFlow";
+import { createPendingRegistrationFlow, getPendingRegistrationFlowRequestId, savePendingRegistrationFlow } from "@/lib/registrationFlow";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -25,6 +25,7 @@ export function RegisterPage() {
   const requestRegistration = useRequestRegistration();
   const cooldown = useRetryCooldown();
   const submitting = useRef(false);
+  const active = useRef(false);
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -38,6 +39,10 @@ export function RegisterPage() {
   const checkAbort = useRef<AbortController | null>(null);
   const checkedUsername = useRef("");
   const checkRetryAt = useRef(0);
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
   useEffect(() => () => {
     checkVersion.current += 1;
     checkAbort.current?.abort();
@@ -66,7 +71,7 @@ export function RegisterPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (submitting.current || requestRegistration.isPending || cooldown.active) return;
+    if (!active.current || submitting.current || requestRegistration.isPending || cooldown.active) return;
     setFormError(null);
 
     const normalizedUsername = username.trim();
@@ -95,6 +100,7 @@ export function RegisterPage() {
         password,
         invite_code: inviteCode.trim(),
       });
+      if (!active.current) return;
       const flow = createPendingRegistrationFlow(normalizedEmail, response);
       requestRegistration.reset();
       setPassword("");
@@ -103,9 +109,12 @@ export function RegisterPage() {
       setEmail("");
       setInviteCode("");
       savePendingRegistrationFlow(flow);
+      const pendingRequestId = getPendingRegistrationFlowRequestId();
       await inputProtection.clear();
+      if (!active.current || getPendingRegistrationFlowRequestId() !== pendingRequestId) return;
       navigate("/register/check-email", { replace: true });
     } catch (error) {
+      if (!active.current) return;
       requestRegistration.reset();
       cooldown.start(rateLimitDelay(error, "registration_rate_limited"));
       setPassword("");

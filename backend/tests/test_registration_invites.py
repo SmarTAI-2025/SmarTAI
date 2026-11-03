@@ -66,8 +66,8 @@ def test_code_is_spent_only_on_registration_and_replay_does_not_spend_again():
         assert code not in vars(row).values()
         assert session.query(RegistrationInviteRecord).count() == 0
         assert session.query(UserRecord).count() == 0
-    assert registration.verify_registration(sender.tokens[0]) == {"status": "registered"}
-    assert registration.verify_registration(sender.tokens[0]) == {"status": "already_verified"}
+    assert registration.verify_registration(sender.tokens[0]) == {"status": "registered", "request_id": pending["request_id"]}
+    assert registration.verify_registration(sender.tokens[0]) == {"status": "already_verified", "request_id": pending["request_id"]}
     with pytest.raises(registration.RegistrationError, match="registration_invite_invalid"):
         request(code, username="other-teacher")
     with session_scope() as session:
@@ -91,7 +91,51 @@ def test_resend_preserves_code_and_only_latest_link_can_consume_it():
         assert session.get(EmailVerificationRequestRecord, resent["request_id"]).registration_invite_digest == registration.digest_registration_invite(code)
     with pytest.raises(registration.RegistrationError, match="verification_link_already_used"):
         registration.verify_registration(sender.tokens[0])
-    assert registration.verify_registration(sender.tokens[1])["status"] == "registered"
+    assert registration.verify_registration(sender.tokens[1]) == {"status": "registered", "request_id": resent["request_id"]}
+
+
+@pytest.mark.parametrize("include_request_id", [None, False, True])
+def test_verify_api_identity_opt_in_matches_each_token_and_preserves_other_flow(include_request_id):
+    first_sender, second_sender = Sender(), Sender()
+    first = request(invite_code(), username="identity-first", sender=first_sender)
+    second = request(invite_code(), username="identity-second", sender=second_sender)
+    assert first["request_id"] != second["request_id"]
+    client = TestClient(app)
+    params = {} if include_request_id is None else {"include_request_id": str(include_request_id).lower()}
+    for pending, sender in [(first, first_sender), (second, second_sender)]:
+        for status in ["registered", "already_verified"]:
+            response = client.post("/auth/register/verify", params=params, json={"token": sender.tokens[0]})
+            expected = {"status": status}
+            if include_request_id:
+                expected["request_id"] = pending["request_id"]
+            assert response.status_code == 200
+            assert response.json() == expected
+            assert client.cookies.get("smartai_refresh") is None
+        if pending is first:
+            with session_scope() as session:
+                assert session.get(EmailVerificationRequestRecord, second["request_id"]).verified_at is None
+                assert session.query(UserRecord).count() == 1
+                assert session.query(RegistrationInviteRecord).count() == 1
+
+
+def test_verify_api_identity_follows_resent_token_and_does_not_disclose_it_for_old_link(monkeypatch):
+    sender = Sender()
+    first = request(invite_code(), sender=sender)
+    with session_scope() as session:
+        session.get(EmailVerificationRequestRecord, first["request_id"]).resend_available_at = 0
+    monkeypatch.setattr("backend.api.auth.get_email_sender", lambda: sender)
+    client = TestClient(app)
+    resent = client.post("/auth/register/resend", json={"request_id": first["request_id"]})
+    assert resent.status_code == 202
+    current_id = resent.json()["request_id"]
+    assert current_id != first["request_id"]
+    old = client.post("/auth/register/verify?include_request_id=true", json={"token": sender.tokens[0]})
+    assert old.status_code == 400
+    assert old.json() == {"detail": {"code": "verification_link_already_used"}}
+    for status in ["registered", "already_verified"]:
+        current = client.post("/auth/register/verify?include_request_id=true", json={"token": sender.tokens[1]})
+        assert current.status_code == 200
+        assert current.json() == {"status": status, "request_id": current_id}
 
 
 @pytest.mark.parametrize("reason", ["missing", "used", "revoked"])

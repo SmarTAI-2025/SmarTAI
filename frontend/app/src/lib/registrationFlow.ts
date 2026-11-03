@@ -75,11 +75,16 @@ export function clearPendingRegistrationFlow(): void {
 
 /** Read-only identity check: a late response must not clear/replace a newer flow. */
 export function isCurrentPendingRegistrationFlow(requestId: string): boolean {
+  return getPendingRegistrationFlowRequestId() === requestId;
+}
+
+export function getPendingRegistrationFlowRequestId(): string | null {
   try {
     const raw = window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY);
-    return raw !== null && JSON.parse(raw)?.requestId === requestId;
+    const requestId = raw === null ? null : JSON.parse(raw)?.requestId;
+    return typeof requestId === "string" ? requestId : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
