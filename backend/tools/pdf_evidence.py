@@ -487,7 +487,7 @@ async def _read_evidence(
             raise PdfEvidenceError("image_invalid")
         if len(pdf_bytes) > MAX_IMAGE_INPUT_BYTES:
             raise PdfEvidenceError("image_input_too_large")
-    elif not isinstance(pdf_bytes, bytes) or not pdf_bytes or b"%PDF-" not in pdf_bytes[:1024]:
+    elif not isinstance(pdf_bytes, bytes) or not pdf_bytes or file_processing.infer_upload_content_type("source.pdf", content=pdf_bytes[:1024]) != "application/pdf":
         raise PdfEvidenceError("pdf_invalid")
     if len(pdf_bytes) > MAX_INPUT_BYTES:
         raise PdfEvidenceError("pdf_input_too_large")

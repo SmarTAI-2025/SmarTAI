@@ -14,6 +14,7 @@ import weakref
 from contextlib import asynccontextmanager
 from typing import Annotated
 
+from fastapi import HTTPException
 from pydantic import Field, ValidationError, model_validator
 from starlette.concurrency import run_in_threadpool
 
@@ -164,6 +165,8 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     allow_vision = purpose not in {"rubric", "test_cases"} if allow_vision is None else allow_vision is True
     reporter = reporter or ProgressReporter(f"recognition-{task_id}")
     inspection = inspect_upload_content(content, filename, content_type)
+    if inspection.mismatch:
+        raise HTTPException(415, detail={"code": "submission_source_content_type_mismatch"})
     media_type = inspection.content_type
     if media_type not in _VISUAL_TYPES:
         text = await (text_reader or extract_text_from_upload)(content, filename, purpose=purpose, reporter=reporter)

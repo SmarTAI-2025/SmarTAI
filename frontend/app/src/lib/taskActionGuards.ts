@@ -272,6 +272,8 @@ const FILE_CODES = new Set([
   "submission_source_empty",
   "submission_source_too_large",
   "submission_archive_empty",
+  "submission_archive_directories_only",
+  "submission_archive_nested_unsupported",
   "submission_archive_invalid",
   "submission_archive_limit_exceeded",
   "submission_archive_member_too_large",
@@ -1469,6 +1471,12 @@ function fileErrorDescription(
   }
   if (code === "submission_archive_invalid") {
     return tx(locale, "压缩包损坏或包含不安全的文件路径。请重新打包为正常 ZIP 后上传。", "The archive is damaged or contains unsafe paths. Create a clean ZIP archive and upload it again.");
+  }
+  if (code === "submission_archive_directories_only") {
+    return tx(locale, "压缩包中只找到目录，没有学生文件。普通多层文件夹可以读取；请确认文件夹中包含 PDF 等受支持文件后重新打包上传。", "The archive contains folders but no student files. Ordinary nested folders are supported. Include supported files such as PDFs inside the folders, then repack and upload.");
+  }
+  if (code === "submission_archive_nested_unsupported") {
+    return tx(locale, "压缩包内发现另一个压缩包，暂不支持继续解压。请先解压内层压缩包，再将其中的 PDF 等受支持文件重新打包上传；可以保留普通文件夹。", "Another archive was found inside the upload and cannot be unpacked. Unpack it first, then repack its supported files, such as PDFs, and upload again. Ordinary folders can be retained.");
   }
   if (code === "submission_archive_limit_exceeded") {
     return tx(locale, "压缩包中的文件数量、单文件大小或解压后总大小超过安全上限。请拆分压缩包后重新上传。", "The archive exceeds the safe file-count, per-file, or expanded-size limit. Split it into smaller archives and upload again.");

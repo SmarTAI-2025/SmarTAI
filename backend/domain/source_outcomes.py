@@ -82,6 +82,8 @@ SAFE_SOURCE_REASON_CODES = RECOGNITION_ERROR_CODES | frozenset({
     "pdf_processing_unavailable",
     "ocr_empty_result",
     "submission_archive_empty",
+    "submission_archive_directories_only",
+    "submission_archive_nested_unsupported",
     "submission_archive_invalid",
     "submission_archive_limit_exceeded",
     "submission_archive_member_too_large",
