@@ -305,7 +305,7 @@ def test_capabilities_explicitly_deny_restricted_ocr_without_disabling_other_rol
     assert roles["programming_tests"]["allow_vision"] is False
     assert roles["problem"]["allow_vision"] is True
     assert roles["reference_answer"]["allow_vision"] is True
-    assert response.json()["reader"]["docx"] is False
+    assert response.json()["reader"]["docx"] is True
 
 
 @pytest.mark.asyncio

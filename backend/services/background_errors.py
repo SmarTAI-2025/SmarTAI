@@ -129,6 +129,8 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
 }) | SAFE_SOURCE_REASON_CODES | RECOGNITION_ERROR_CODES
 
 RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
+    "source_docx_busy",
+    "source_docx_timeout",
     "provider_capacity_unavailable",
     "provider_overloaded",
     "provider_timeout",

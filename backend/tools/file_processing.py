@@ -53,6 +53,9 @@ PDF_EXTRACTION_TIMEOUT_SECONDS = 10.0
 PDF_EXTRACTION_MAX_WORKERS = 2
 _PDF_EXTRACTION_SLOTS = threading.BoundedSemaphore(PDF_EXTRACTION_MAX_WORKERS)
 _PDF_WORKER_PATH = Path(__file__).with_name("_pdf_worker.py")
+_NATIVE_OFFICE_WORKER_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "native_worker.py"
+DOCX_MAX_CHARACTERS = 500_000
+DOCX_EXTRACTION_TIMEOUT_SECONDS = 10.0
 BAIDU_OCR_MAX_PDF_PAGES = 500
 BAIDU_OCR_MAX_IMAGE_SIDE = 8192
 SUBMISSION_ARCHIVE_MAX_FILES = 500
@@ -628,6 +631,9 @@ async def extract_text_from_upload(
     if media_type.startswith("text/"):
         return await decode_text_bytes(file_bytes)
 
+    if validated.extension == "docx":
+        return await _extract_docx_text(file_bytes)
+
     if media_type == "application/pdf":
         if fitz is None:
             raise HTTPException(
@@ -671,6 +677,44 @@ async def extract_text_from_upload(
         status_code=415,
         detail={"code": "submission_source_unsupported"},
     )
+
+
+async def _extract_docx_text(body: bytes) -> str:
+    """Read data through the existing bounded Office worker, never run source."""
+    # Share the existing native document process budget and cancellation-safe
+    # reaper rather than open unrestricted Office parsers in the web process.
+    if not _PDF_EXTRACTION_SLOTS.acquire(blocking=False):
+        raise HTTPException(429, detail={"code": "source_docx_busy"})
+    launch_task = None
+    try:
+        launch_task = asyncio.create_task(asyncio.create_subprocess_exec(
+            sys.executable, "-B", str(_NATIVE_OFFICE_WORKER_PATH), ".docx", "--preserve-docx-layout",
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL))
+        process = await asyncio.shield(launch_task)
+        try:
+            output, _ = await asyncio.wait_for(process.communicate(body), timeout=DOCX_EXTRACTION_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            raise HTTPException(408, detail={"code": "source_docx_timeout"}) from None
+        if process.returncode or len(output) > 64 * 1024 * 1024:
+            raise HTTPException(422, detail={"code": "source_docx_invalid"})
+        try:
+            payload = json.loads(output)
+            units = payload["units"]
+            if not isinstance(units, list) or any(not isinstance(unit, str) for unit in units):
+                raise ValueError("native payload")
+            text = "".join(units)
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(422, detail={"code": "source_docx_invalid"}) from None
+        if payload.get("warning_codes"):
+            raise HTTPException(422, detail={"code": "source_docx_incomplete"})
+        if len(text) > DOCX_MAX_CHARACTERS:
+            raise HTTPException(413, detail={"code": "source_text_too_large", "max_characters": DOCX_MAX_CHARACTERS})
+        return text
+    finally:
+        try:
+            await reap_pdf_worker(launch_task)
+        finally:
+            _PDF_EXTRACTION_SLOTS.release()
 
 
 def _is_valid_file(name: str) -> bool:

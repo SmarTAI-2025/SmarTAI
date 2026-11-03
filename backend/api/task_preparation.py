@@ -438,7 +438,7 @@ def question_preparation_capabilities(
             "vision": has_vision,
             "scanned_pdf": has_vision,
             "images": has_vision,
-            "docx": False,
+            "docx": True,
         },
         "limits": {
             "max_file_bytes": upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES),

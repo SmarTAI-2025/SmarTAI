@@ -186,6 +186,7 @@ RECOGNITION_ERROR_CODES = frozenset({
     "source_filename_too_long", "source_empty", "submission_source_empty",
     "source_too_large", "submission_source_too_large", "submission_source_content_type_mismatch",
     "source_docx_invalid", "programming_tests_json_invalid", "material_ocr_not_allowed_for_role",
+    "source_docx_incomplete", "source_docx_busy", "source_docx_timeout",
     "question_source_pages_out_of_range", "question_source_incomplete",
     "material_ocr_confirmation_required", "material_recognition_review_required", "material_parser_provider_required",
     "recognition_request_invalid", "recognition_source_mismatch", "recognition_plan_changed",

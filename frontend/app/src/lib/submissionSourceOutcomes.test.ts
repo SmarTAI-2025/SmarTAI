@@ -24,6 +24,19 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 }
 
 describe("submission source reason copy", () => {
+  it.each([
+    ["source_docx_incomplete", "DOCX 内容尚未完整读取", "DOCX reading is incomplete"],
+    ["source_docx_busy", "DOCX 读取正忙", "DOCX extraction is busy"],
+    ["source_docx_timeout", "DOCX 读取超时", "DOCX extraction timed out"],
+  ])("routes %s to actionable DOCX guidance instead of generic failure", (code, zhTitle, enTitle) => {
+    for (const [locale, title] of [["zh-CN", zhTitle], ["en-US", enTitle]] as const) {
+      const copy = getSubmissionSourceReasonCopy(source({ reason_code: code, failure_phase: "source_read" }), locale);
+      expect(copy.title).toBe(title);
+      expect(copy.description).toContain(locale === "zh-CN" ? "不是学生答错" : "not a student mistake");
+      expect(copy.nextStep?.trim().length).toBeGreaterThan(0);
+    }
+  });
+
   it("describes incomplete pages in the submission workflow", () => {
     const item = source({ reason_code: "question_source_incomplete" });
     const zh = getSubmissionSourceReasonCopy(item, "zh-CN");

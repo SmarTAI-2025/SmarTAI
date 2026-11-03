@@ -76,6 +76,21 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     description: tx(locale, "文件未通过 Office 容器结构检查；普通 ZIP 改名不能成为 DOCX。", "The file failed Office container checks; renaming an ordinary ZIP does not make it a DOCX."),
     nextStep: tx(locale, "从原应用重新导出完整、未损坏的文件；也可改用当前用途支持的文字 PDF 或 TXT。", "Export an intact file again from its source application, or use a text-based PDF or TXT supported for this purpose."),
   }),
+  source_docx_incomplete: (locale) => ({
+    title: tx(locale, "DOCX 内容尚未完整读取", "DOCX reading is incomplete"),
+    description: tx(locale, "原件已保存，但包含当前原生读取无法完整处理的内容；这不是学生答错。", "The original is saved, but some content cannot be read completely by the native reader; this is not a student mistake."),
+    nextStep: tx(locale, "保留完整原件，改用可核对的 PDF／图片或人工复核；不要把缺失编号、图片、域或批注的部分文本当作完整作答。", "Keep the complete original and use a verifiable PDF/image or manual review. Do not treat text missing numbering, images, fields or comments as a complete answer."),
+  }),
+  source_docx_busy: (locale) => ({
+    title: tx(locale, "DOCX 读取正忙", "DOCX extraction is busy"),
+    description: tx(locale, "本次 DOCX 尚未完成读取；这不是学生答错。", "This DOCX has not finished reading; this is not a student mistake."),
+    nextStep: tx(locale, "稍后通过现有重试入口继续读取，不需要为此开启学生代码执行。", "Retry reading later through the existing retry action; student-code execution does not need to be enabled."),
+  }),
+  source_docx_timeout: (locale) => ({
+    title: tx(locale, "DOCX 读取超时", "DOCX extraction timed out"),
+    description: tx(locale, "DOCX 未在读取时限内完成处理；这不是学生答错。", "DOCX reading did not finish within its time limit; this is not a student mistake."),
+    nextStep: tx(locale, "可重试读取；持续失败时保留原件，改用文字 PDF／TXT 或联系管理员。", "Retry reading. If it keeps failing, preserve the original and use a text-based PDF/TXT or contact an administrator."),
+  }),
   source_empty: (locale) => ({
     title: tx(locale, "文件为空", "The file is empty"),
     description: tx(locale, "上传原件没有内容，无法开始读取。", "The uploaded original has no content, so reading cannot start."),
