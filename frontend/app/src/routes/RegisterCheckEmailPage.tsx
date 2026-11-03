@@ -1,5 +1,5 @@
 import { Check, Clock3, Inbox, Loader2, RotateCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useResendRegistration } from "@/api/hooks";
@@ -11,6 +11,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { localizedRegistrationRequestError } from "@/lib/authErrors";
 import {
   clearPendingRegistrationFlow,
+  isCurrentPendingRegistrationFlow,
   readPendingRegistrationFlow,
   savePendingRegistrationFlow,
   updatePendingRegistrationFlow,
@@ -23,12 +24,19 @@ export function RegisterCheckEmailPage() {
   const zh = locale === "zh-CN";
   const resendRegistration = useResendRegistration();
   const submitting = useRef(false);
+  const active = useRef(false);
   const [flow, setFlow] = useState<PendingRegistrationFlow | null>(() => readPendingRegistrationFlow());
   const [now, setNow] = useState(Date.now());
   const [error, setError] = useState<string | null>(null);
   const [resent, setResent] = useState(false);
   const [recoveryReason, setRecoveryReason] = useState<"expired" | "invalid" | null>(null);
+  const [inviteFailure, setInviteFailure] = useState<"required" | "invalid" | null>(null);
   const steps = zh ? ["填写信息", "验证邮箱", "登录使用"] : ["Account details", "Verify email", "Sign in"];
+
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
 
   useEffect(() => {
     if (!flow) return undefined;
@@ -71,12 +79,16 @@ export function RegisterCheckEmailPage() {
   const secondsUntilResend = Math.max(0, Math.ceil((flow.resendAvailableAt - now) / 1000));
 
   async function handleResend() {
-    if (!flow || secondsUntilResend > 0 || submitting.current || resendRegistration.isPending) return;
+    if (!active.current || !flow || inviteFailure || secondsUntilResend > 0 || submitting.current || resendRegistration.isPending) return;
+    const requestId = flow.requestId;
+    const isCurrent = () => active.current && isCurrentPendingRegistrationFlow(requestId);
+    if (!isCurrent()) return;
     submitting.current = true;
     setError(null);
     setResent(false);
     try {
-      const response = await resendRegistration.mutateAsync(flow.requestId);
+      const response = await resendRegistration.mutateAsync(requestId);
+      if (!isCurrent()) return;
       const updated = updatePendingRegistrationFlow(flow, response);
       resendRegistration.reset();
       savePendingRegistrationFlow(updated);
@@ -84,8 +96,14 @@ export function RegisterCheckEmailPage() {
       setNow(Date.now());
       setResent(true);
     } catch (nextError) {
+      if (!isCurrent()) return;
       resendRegistration.reset();
       const code = getAPIErrorCode(nextError);
+      if (code === "registration_invite_required" || code === "registration_invite_invalid") {
+        clearPendingRegistrationFlow();
+        setInviteFailure(code === "registration_invite_required" ? "required" : "invalid");
+        return;
+      }
       if (
         code === "verification_link_expired"
         || code === "verification_link_invalid"
@@ -112,7 +130,8 @@ export function RegisterCheckEmailPage() {
   }
 
   function restartRegistration() {
-    clearPendingRegistrationFlow();
+    active.current = false;
+    if (flow && isCurrentPendingRegistrationFlow(flow.requestId)) clearPendingRegistrationFlow();
     navigate("/register", { replace: true });
   }
 
@@ -166,7 +185,7 @@ export function RegisterCheckEmailPage() {
           <Button
             className="h-11 w-full"
             variant="secondary"
-            disabled={secondsUntilResend > 0 || resendRegistration.isPending}
+            disabled={Boolean(inviteFailure) || secondsUntilResend > 0 || resendRegistration.isPending}
             onClick={handleResend}
           >
             {resendRegistration.isPending
@@ -183,7 +202,48 @@ export function RegisterCheckEmailPage() {
           </Button>
         </div>
       </AuthCard>
+      {inviteFailure ? (
+        <RegistrationInviteRecoveryDialog reason={inviteFailure} zh={zh} onReturn={restartRegistration} />
+      ) : null}
     </AuthFrame>
+  );
+}
+
+function RegistrationInviteRecoveryDialog({ reason, zh, onReturn }: {
+  reason: "required" | "invalid";
+  zh: boolean;
+  onReturn: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const element = dialog.current;
+    element?.showModal();
+    return () => element?.close();
+  }, []);
+
+  return (
+    <dialog
+      ref={dialog}
+      role="alertdialog"
+      aria-labelledby="registration-invite-title"
+      aria-describedby="registration-invite-description"
+      onCancel={(event) => { event.preventDefault(); onReturn(); }}
+      className="fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-md rounded-xl border bg-card p-6 text-foreground shadow-2xl backdrop:bg-slate-950/40"
+    >
+      <h2 id="registration-invite-title" className="text-lg font-semibold">
+        {reason === "required"
+          ? (zh ? "需要填写邀请码" : "Invitation code required")
+          : (zh ? "邀请码已使用或已失效" : "Invitation code already used or no longer valid")}
+      </h2>
+      <p id="registration-invite-description" className="mt-3 text-sm leading-6 text-muted-foreground">
+        {reason === "required"
+          ? (zh ? "此注册请求缺少邀请码。请返回注册页填写邀请码，再获取新的验证邮件。" : "This registration request has no invitation code. Return to registration and enter one to request a new verification email.")
+          : (zh ? "此邀请码已被使用或已失效，无法重新发送验证邮件。请返回注册页更换有效且未使用的邀请码。" : "This invitation code has already been used or is no longer valid, so the email cannot be resent. Return to registration and use a valid, unused code.")}
+      </p>
+      <div className="mt-5 flex justify-end">
+        <Button autoFocus onClick={onReturn}>{zh ? "返回注册页" : "Return to registration"}</Button>
+      </div>
+    </dialog>
   );
 }
 

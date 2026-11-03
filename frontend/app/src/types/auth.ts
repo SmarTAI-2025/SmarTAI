@@ -19,6 +19,7 @@ export interface EmailRegistrationRequest {
   username: string;
   email: string;
   password: string;
+  invite_code: string;
 }
 
 export interface EmailRegistrationResponse {
@@ -30,6 +31,7 @@ export interface EmailRegistrationResponse {
 
 export interface EmailRegistrationVerifyResponse {
   status: "registered" | "already_verified";
+  request_id?: string;
 }
 
 export interface PasswordResetRequest {

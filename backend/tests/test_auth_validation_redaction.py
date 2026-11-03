@@ -11,6 +11,12 @@ from backend.main import app
     [
         (
             "/auth/register/request",
+            {"username": "validation-user", "email": "validation@ustc.edu.cn",
+             "password": "synthetic-password", "invite_code": "private-invite-" + "x" * 128},
+            "private-invite-" + "x" * 128,
+        ),
+        (
+            "/auth/register/request",
             {
                 "username": "validation-user",
                 "email": "validation@ustc.edu.cn",
@@ -29,7 +35,7 @@ from backend.main import app
             "n" * 129,
         ),
     ],
-    ids=["registration-password", "registration-token", "reset-password"],
+    ids=["registration-invite", "registration-password", "registration-token", "reset-password"],
 )
 def test_auth_validation_errors_never_echo_sensitive_input(
     path: str,

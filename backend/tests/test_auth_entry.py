@@ -1,4 +1,5 @@
 """Public auth entry contracts; all mail and identities are isolated fixtures."""
+from backend.tests.registration_invite_helpers import invite_code, invite_digest
 import hashlib
 from collections import deque
 
@@ -151,7 +152,7 @@ def test_username_check_is_advisory_and_submit_rechecks_before_sending(monkeypat
             sent.append(args)
 
     monkeypatch.setattr("backend.api.auth.get_email_sender", Sender)
-    response = client.post("/auth/register/request", json={"username": "Teacher", "email": "new@ustc.edu.cn", "password": "test-password"})
+    response = client.post("/auth/register/request", json={"invite_code": invite_code(), "username": "Teacher", "email": "new@ustc.edu.cn", "password": "test-password"})
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "registration_username_taken"
     assert not sent
@@ -185,7 +186,7 @@ def test_username_taken_after_request_keeps_final_protections(monkeypatch, phase
         def send(self, *args):
             messages.append(args)
 
-    flow = registration.request_registration(username="teacher", email="new@ustc.edu.cn", password="test-password", source_ip=None, sender=Sender())
+    flow = registration.request_registration(invite_code=invite_code(), username="teacher", email="new@ustc.edu.cn", password="test-password", source_ip=None, sender=Sender())
     token = messages[0][2].split("#token=", 1)[1].split()[0]
     if phase == "integrity_race":
         def raced(**kwargs):

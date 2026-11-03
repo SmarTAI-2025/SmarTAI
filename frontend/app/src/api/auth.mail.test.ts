@@ -30,7 +30,7 @@ describe("public mail auth API contract", () => {
       .mockResolvedValueOnce({ status: "password_reset" })
       .mockResolvedValueOnce({ available: true });
 
-    await requestRegistration({ username: "teacher", email: "teacher@ustc.edu.cn", password: "safe-password" });
+    await requestRegistration({ username: "teacher", email: "teacher@ustc.edu.cn", password: "safe-password", invite_code: "test-invite" });
     await resendRegistration("request-1");
     await verifyRegistration("verification-secret");
     await requestPasswordReset({ email: "teacher@ustc.edu.cn" });
@@ -54,7 +54,7 @@ describe("public mail auth API contract", () => {
       ...validRegistration,
       request_id: "",
     });
-    await expect(requestRegistration({ username: "teacher", email: "teacher@ustc.edu.cn", password: "safe-password" }))
+    await expect(requestRegistration({ username: "teacher", email: "teacher@ustc.edu.cn", password: "safe-password", invite_code: "test-invite" }))
       .rejects.toMatchObject({ status: 502, message: "public_auth_response_invalid" });
   });
 
@@ -74,6 +74,24 @@ describe("public mail auth API contract", () => {
       .mockResolvedValueOnce({ status: "already_verified" })
       .mockResolvedValueOnce({ status: "success" });
     await expect(verifyRegistration("verification-secret")).resolves.toEqual({ status: "already_verified" });
+    await expect(verifyRegistration("verification-secret"))
+      .rejects.toMatchObject({ status: 502, message: "public_auth_response_invalid" });
+  });
+
+  it.each(["registered", "already_verified"])("preserves the request identity for %s", async (status) => {
+    const post = vi.spyOn(client, "postJSON").mockResolvedValue({ status, request_id: "verified-request" });
+    await expect(verifyRegistration("verification-secret")).resolves.toEqual({ status, request_id: "verified-request" });
+    expect(post).toHaveBeenCalledWith("/auth/register/verify", { token: "verification-secret" }, expect.objectContaining({ params: { include_request_id: true }, _skipAuthHeader: true, _skipAuthRefresh: true }));
+  });
+
+  it.each(["", " ", "x".repeat(513), 123, null])("rejects malformed verification request identity %s", async (requestId) => {
+    vi.spyOn(client, "postJSON").mockResolvedValue({ status: "registered", request_id: requestId });
+    await expect(verifyRegistration("verification-secret"))
+      .rejects.toMatchObject({ status: 502, message: "public_auth_response_invalid" });
+  });
+
+  it("still rejects credentials in an identity-bearing verification response", async () => {
+    vi.spyOn(client, "postJSON").mockResolvedValue({ status: "registered", request_id: "verified-request", token: "must-not-be-accepted" });
     await expect(verifyRegistration("verification-secret"))
       .rejects.toMatchObject({ status: 502, message: "public_auth_response_invalid" });
   });

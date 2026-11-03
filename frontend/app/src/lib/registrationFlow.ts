@@ -73,6 +73,21 @@ export function clearPendingRegistrationFlow(): void {
   }
 }
 
+/** Read-only identity check: a late response must not clear/replace a newer flow. */
+export function isCurrentPendingRegistrationFlow(requestId: string): boolean {
+  return getPendingRegistrationFlowRequestId() === requestId;
+}
+
+export function getPendingRegistrationFlowRequestId(): string | null {
+  try {
+    const raw = window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY);
+    const requestId = raw === null ? null : JSON.parse(raw)?.requestId;
+    return typeof requestId === "string" ? requestId : null;
+  } catch {
+    return null;
+  }
+}
+
 export function maskEmail(email: string): string {
   const normalized = email.trim().toLowerCase();
   const at = normalized.lastIndexOf("@");
