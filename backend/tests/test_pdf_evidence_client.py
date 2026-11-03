@@ -113,6 +113,77 @@ async def test_worker_client_refuses_busy_shared_pool_without_launching(monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("count", [31, 200])
+async def test_queued_pdf_reads_get_their_own_processing_deadline(monkeypatch, count):
+    slots = threading.BoundedSemaphore(2)
+    monkeypatch.setattr(file_processing, "_PDF_EXTRACTION_SLOTS", slots)
+    active = peak = 0
+
+    async def launch(*args, **kwargs):
+        return Process(json.dumps(index_payload()).encode())
+
+    original_exchange = pdf_evidence._exchange
+
+    async def exchange(*args):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        try:
+            await asyncio.sleep(0.02)
+            return await original_exchange(*args)
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(pdf_evidence.asyncio, "create_subprocess_exec", launch)
+    monkeypatch.setattr(pdf_evidence, "_exchange", exchange)
+    # Later files wait much longer than 50ms, but each execution takes 20ms.
+    results = await asyncio.wait_for(asyncio.gather(*[
+        read_pdf_evidence(b"%PDF-synthetic", PdfIndexRequest(),
+                         timeout_seconds=0.05, wait_for_slot=True)
+        for _ in range(count)
+    ]), 15)
+    assert len(results) == count and all(result.total_pages == 1 for result in results)
+    assert peak == 2 and active == 0
+    assert slots.acquire(blocking=False) and slots.acquire(blocking=False)
+    slots.release()
+    slots.release()
+
+
+@pytest.mark.asyncio
+async def test_work_cap_drains_pdf_worker_and_rejects_queued_read_without_leaking_slot(monkeypatch):
+    from contextvars import ContextVar
+    from backend.domain.errors import RecognitionError
+    from backend.services import submission_work_budget as clocks
+
+    process, launch = install_process(monkeypatch, json.dumps(index_payload()).encode())
+    budget = clocks.SubmissionWorkBudget("synthetic", limit_seconds=0.02)
+    monkeypatch.setattr(clocks, "_current", ContextVar("test_pdf_work_budget", default=budget))
+    original_exchange = pdf_evidence._exchange
+    entered, finish = asyncio.Event(), asyncio.Event()
+
+    async def exchange(*args):
+        entered.set()
+        await finish.wait()
+        return await original_exchange(*args)
+
+    monkeypatch.setattr(pdf_evidence, "_exchange", exchange)
+    running = asyncio.create_task(read_pdf_evidence(b"%PDF-synthetic", PdfIndexRequest(), wait_for_slot=True))
+    await entered.wait()
+    queued = asyncio.create_task(read_pdf_evidence(b"%PDF-synthetic", PdfIndexRequest(), wait_for_slot=True))
+    await budget.exhausted.wait()
+    with pytest.raises(RecognitionError, match=clocks.CODE):
+        await asyncio.wait_for(queued, 1)
+    assert not running.done()
+    finish.set()
+    assert (await running).total_pages == 1
+    launch.assert_awaited_once()
+    assert process.reaped and budget.active == 0
+    assert file_processing._PDF_EXTRACTION_SLOTS.acquire(blocking=False)
+    file_processing._PDF_EXTRACTION_SLOTS.release()
+    budget.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_pipeline_waits_for_local_worker_without_stealing_or_leaking_slot(monkeypatch, cancel):
     _, launch = install_process(monkeypatch, json.dumps(index_payload()).encode())

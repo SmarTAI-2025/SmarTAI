@@ -440,6 +440,81 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("manual", [False, True])
+async def test_work_limit_drains_and_preserves_structured_answer_for_retry_or_manual(monkeypatch, manual):
+    import json
+    from types import SimpleNamespace
+    from backend.db import assignment_repository
+    from backend.llm.request_timeouts import current_response_scope
+    from backend.services import submission_work_budget as clocks
+    from backend.services.submission_manual_review import continue_manually
+
+    monkeypatch.setattr(clocks, "LIMIT_SECONDS", 0.02)
+    owner, task = _seed_task(with_question=True)
+    assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1, number="2",
+        type="concept", stem="Second question", criterion="Correct method: 10 points", max_score=10)
+    first_sent, gate = asyncio.Event(), asyncio.Semaphore(1)
+    sent, round_number = [], 0
+
+    async def invoke(messages):
+        prompt = messages[-1].content
+        questions = json.loads(prompt.split("**[Question Data (JSON)]**:\n", 1)[1].split("\n\n**[Student Submission Content]**:", 1)[0])
+        ids = [q["q_id"] for q in questions]
+        scope = current_response_scope()
+        if round_number == 0 and ids == ["q2"]:
+            await scope.wait_local(first_sent.wait())
+        async with scope.local_admission(gate):
+            async def dispatch():
+                sent.append(ids)
+                if round_number == 0:
+                    first_sent.set()
+                    await clocks.current_budget().exhausted.wait()
+                    await asyncio.sleep(0.01)  # A sent response can finish after the cap.
+                return SimpleNamespace(content=json.dumps({"stu_id": "S1", "stu_name": "Synthetic student",
+                    "stu_ans": [{"q_id": q, "number": q[1:], "type": "concept",
+                                 "content": f"Saved {q} answer", "flag": []} for q in ids]}))
+            return await scope.run_response(dispatch)
+
+    registry = _Registry()
+    registry.provider = SimpleNamespace(provider_id="test-provider", supports_vision=False, ainvoke=invoke)
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
+    first = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="S1.txt", content=b"Question 1: first answer\nQuestion 2: second answer",
+        content_type="text/plain", registry=registry)
+
+    async def finish(job):
+        row = workflow_repository.claim_operation(job, owner_id=owner, worker_id="test", lease_seconds=60)
+        await task_facade.run_durable_submission_recognition(LeasedOperation(row, worker_id="test", lease_seconds=60))
+
+    await asyncio.wait_for(finish(first["job_id"]), 5)
+    failed = workflow_repository.get_operation(first["job_id"], owner_id=owner)
+    assert failed.error_code == clocks.CODE
+    assert failed.checkpoint[clocks.CHECKPOINT_KEY]["draining"] is True
+    assert sent == [["q1"]]
+    current = task_facade.get_task(task_id=task, owner_id=owner)
+    if manual:
+        await continue_manually(task_id=task, owner_id=owner, job_id=first["job_id"],
+            expected_revision=current["workflow_revision"])
+    else:
+        round_number = 1
+        retried = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=first["job_id"],
+            request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=current["workflow_revision"]),
+            background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
+        await finish(retried["job_id"])
+        assert sent == [["q1"], ["q2"]]
+    after = task_facade.get_task(task_id=task, owner_id=owner, full=True)
+    assert after["status"] == "submissions_ready"
+    answers = {answer["q_id"]: answer for answer in after["student_data"]["S1"]["stu_ans"]}
+    assert answers["q1"]["content"] == "Saved q1 answer"
+    assert "recognition_manual_pending" not in answers["q1"]["flag"]
+    if manual:
+        assert "recognition_manual_pending" in answers["q2"]["flag"]
+        assert sent == [["q1"]]
+    else:
+        assert answers["q2"]["content"] == "Saved q2 answer"
+
+
+@pytest.mark.asyncio
 async def test_submission_queue_persists_archive_and_has_no_request_task():
     owner_id, task_id = _seed_task(with_question=True)
     background = _BackgroundTasks()
@@ -677,6 +752,71 @@ async def test_submission_worker_reuses_result_artifact_without_provider_call(mo
         task = task_facade.get_task(task_id=task_id, owner_id=owner_id)
         assert task["submission_source_summary"]["failed"] == 1
         assert task["status"] == "error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("assembly_error", ["source_extent_unavailable", "recognition_assembly_limit"])
+async def test_saved_31_file_batch_retains_each_outcome_after_assembly_error(monkeypatch, assembly_error):
+    """Replay only safe shapes of the incident; no real PDFs or model calls."""
+    owner_id, task_id = _seed_task(with_question=True)
+    queued = task_facade.queue_task_submission_parsing(
+        task_id=task_id, owner_id=owner_id, filename="student.txt",
+        content=b"answer", content_type="text/plain", registry=_Registry(),
+    )
+    operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
+    first = source_outcome_repository.list_sources(
+        operation_id=operation.id, owner_id=owner_id, attempt=operation.attempt)[0]
+    codes = ["pdf_evidence_busy"] * 21 + ["recognition_response_invalid"] * 3 + [None] * 4 + ["recognition_timeout"] * 2
+    # The sixth outcome used to abort persistence of the remaining 26 files.
+    codes.insert(5, assembly_error)
+    results = []
+    for index, code in enumerate(codes):
+        if index == 0:
+            source = first
+        else:
+            stored = file_repository.save_file(storage=get_storage(), owner_id=owner_id,
+                assignment_id=task_id, kind="submission_source", original_name=f"synthetic-{index}.txt",
+                content=b"answer", content_type="text/plain")
+            source, _ = source_outcome_repository.register_source(owner_id=owner_id,
+                assignment_id=task_id, operation_id=operation.id, expected_attempt=operation.attempt,
+                order_index=index, stored_file_id=stored.id)
+        student = None if code else {
+            "stu_id": f"synthetic-{index}", "stu_name": "Synthetic student",
+            "stu_ans": [{"q_id": "q1", "content": "answer", "flag": []}],
+            "source_filename": source.original_name, "source_id": source.id,
+            "stored_file_id": source.stored_file_id, "identity_status": "matched",
+        }
+        results.append(SubmissionSourceParseResult(source.id, source.stored_file_id, source.original_name,
+            "parse_failed" if code else "parsed", student, None if code else f"synthetic-{index}",
+            0 if code else 1, (), code, "source_read" if code == "pdf_evidence_busy" else "recognition" if code else None,
+            bool(code)))
+    artifact = file_repository.save_file(storage=get_storage(), owner_id=owner_id,
+        assignment_id=task_id, kind="submission_recognition_result",
+        original_name=f"{operation.id}-attempt-{operation.attempt}-parsed.json",
+        content=task_facade._serialize_submission_results(results), content_type="application/json")
+    workflow_repository.save_operation_checkpoint(operation.id, owner_id=owner_id,
+        expected_attempt=operation.attempt, expected_checkpoint_revision=operation.checkpoint_revision,
+        stage="submissions_parsed", checkpoint={"parsed_artifact_id": artifact.id},
+        artifact_refs=[*operation.artifact_refs, artifact.id])
+
+    async def no_model(*args, **kwargs):
+        pytest.fail("saved results must not invoke recognition again")
+
+    monkeypatch.setattr(task_facade, "prepare_submission_sources", no_model)
+    monkeypatch.setattr(task_facade, "parse_student_answer_sources", no_model)
+    claimed = workflow_repository.claim_operation(operation.id, owner_id=owner_id,
+        worker_id="incident-replay", lease_seconds=60)
+    await task_facade.run_durable_submission_recognition(LeasedOperation(
+        claimed, worker_id="incident-replay", lease_seconds=60))
+    saved = source_outcome_repository.list_sources(operation_id=operation.id,
+        owner_id=owner_id, attempt=operation.attempt)
+    assert len(saved) == 31
+    assert [source_outcome_repository.get_outcome(item.id, owner_id=owner_id).stable_error_code
+            for item in saved] == codes
+    task = task_facade.get_task(task_id=task_id, owner_id=owner_id)
+    assert task["submission_source_summary"]["parsed"] == 4
+    assert task["submission_source_summary"]["failed"] == 27
+    assert workflow_repository.get_operation(operation.id, owner_id=owner_id).error_code != "submission_outcome_persistence_failed"
 
 
 @pytest.mark.asyncio

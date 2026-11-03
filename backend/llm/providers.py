@@ -519,7 +519,15 @@ class BaseProvider(ABC):
     async def _invoke_response(self, invoke, *, timeout_seconds=None):
         scope = current_response_scope()
         if scope is None:
-            return await invoke()
+            from backend.services.submission_work_budget import current_budget
+            budget = current_budget()
+            if budget is not None:
+                budget.start()
+            try:
+                return await invoke()
+            finally:
+                if budget is not None:
+                    budget.finish()
         from backend.progress.recognition_activity import report_provider_state
 
         async def ready():

@@ -42,6 +42,29 @@ async def test_final_reuse_no_new_cost_and_content_free_checkpoint(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cause", ["pdf_evidence_busy", "recognition_timeout", "submission_time_limit_reached"])
+async def test_missing_extent_preserves_local_cause_for_fresh_and_restored_run(tmp_path, monkeypatch, cause):
+    from backend.services.recognition_local_evidence import RecognitionLocalEvidenceReader
+    from backend.domain.errors import PdfEvidenceError
+    service, request, data, engine = runner(tmp_path, pdf=True, pages=2)
+
+    async def unreadable(*args, **kwargs):
+        if cause == "pdf_evidence_busy":
+            raise PdfEvidenceError(cause)
+        raise RecognitionError(cause)
+
+    monkeypatch.setattr(RecognitionLocalEvidenceReader, "read", unreadable)
+    first = await run(service, request, data, engine)
+    assert first.safe_error_code == cause
+    assert first.assembly.safe_error_code == "source_extent_unavailable"
+    assert first.assembly.raw.stop_codes == [cause]
+    second = await run(service, request, None, engine)
+    assert second.safe_error_code == cause
+    assert second.assembly == first.assembly
+    assert not engine.reads
+
+
+@pytest.mark.asyncio
 async def test_pending_before_provider_cancel_never_replays(tmp_path):
     service, request, data, engine = runner(tmp_path)
     entered = asyncio.Event()

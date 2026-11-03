@@ -15,6 +15,7 @@ export function recognitionEventText(event: ProgressEvent | undefined, zh: boole
     activity_completed: zh ? "本次识别已完成" : "Recognition completed",
     activity_failed: zh ? "一项内容未完成，请查看失败提示" : "An item did not finish; see the failure details",
     activity_stopped: zh ? "本次识别已停止" : "Recognition stopped",
+    submission_time_limit_reached: zh ? "已达到 3 小时有效处理时限，正在等待已发出请求完成并保存结果" : "The 3-hour active processing limit was reached; finishing sent requests and saving results",
     operation_cancelled: zh ? "本次识别已停止" : "Recognition stopped",
     activity_queued: zh ? "等待请求名额" : "Waiting for request capacity",
     activity_responding: zh ? "请求已发出，等待模型响应" : "Request sent; awaiting model response",
