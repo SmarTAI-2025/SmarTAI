@@ -1,6 +1,8 @@
-"""Admission, execution budgets and cleanup of real fixed math workers."""
+"""Admission budgets and real-worker cleanup, with controlled short-clock probes."""
 import asyncio
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -44,17 +46,21 @@ async def test_queued_real_math_worker_gets_full_execution_window(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_slow_process_creation_does_not_spend_calculation_window(monkeypatch):
-    original = asyncio.create_subprocess_exec
     payload = json.dumps({"status": "supported", "method": "fixture", "reason": "ready"})
+    child = SimpleNamespace(returncode=0,
+        communicate=AsyncMock(return_value=(payload.encode(), b"")),
+        wait=AsyncMock(return_value=0))
 
     async def launch(*args, **kwargs):
+        # Delay only creation; real process startup cannot fit a portable 0.1s test.
         await asyncio.sleep(.15)
-        return await original(args[0], "-I", "-c", f"print({payload!r})", **kwargs)
+        return child
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
     monkeypatch.setattr(mv, "WALL_SECONDS", .1)
     result = await mv.verify_math(request())
     assert result.status == "supported", result
+    child.wait.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -290,11 +296,12 @@ async def test_parallel_checks_respect_shared_capacity_and_independent_budgets(m
         return child
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
-    budgets = [mv.VerificationBudget(1) for _ in range(8)]
+    # Real processes use production budgets; tiny deadlines belong to controlled probes.
+    budgets = [mv.VerificationBudget(mv.CALL_WALL_SECONDS) for _ in range(8)]
     results = await asyncio.wait_for(asyncio.gather(*(
         mv.verify_math(request(), budget=budget) for budget in budgets
-    )), 5)
-    assert all(result.status == "supported" for result in results)
+    )), len(budgets) * mv.CALL_WALL_SECONDS)
+    assert all(result.status == "supported" for result in results), results
     assert peak == 2 and slots._value == 2
     assert all(child.returncode == 0 for child in children)
-    assert all(0 < budget.remaining_seconds < 1 for budget in budgets)
+    assert all(0 < budget.remaining_seconds < mv.CALL_WALL_SECONDS for budget in budgets)

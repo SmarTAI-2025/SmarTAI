@@ -515,12 +515,14 @@ async def test_verification_queue_does_not_exhaust_call_or_group_budget(monkeypa
     monkeypatch.setattr(grading, "VERIFICATION_BUDGET_SECONDS", .5)
     monkeypatch.setattr(math_verification, "CALL_WALL_SECONDS", .25, raising=False)
     await slots.acquire()
-    original = asyncio.create_subprocess_exec
     children = []
     payload = json.dumps({"status": "refuted", "method": "fixture", "reason": "41 != 42"})
 
     async def launch(*args, **kwargs):
-        child = await original(args[0], "-I", "-c", f"print({payload!r})", **kwargs)
+        # The shortened budgets test admission accounting, not host/Python speed.
+        child = SimpleNamespace(returncode=0,
+            communicate=AsyncMock(return_value=(payload.encode(), b"")),
+            wait=AsyncMock(return_value=0))
         children.append(child)
         return child
 
@@ -539,6 +541,8 @@ async def test_verification_queue_does_not_exhaust_call_or_group_budget(monkeypa
     assert queued, evidence
     assert [entry["status"] for entry in evidence] == ["refuted", "refuted"]
     assert len(children) == 2 and all(child.returncode == 0 for child in children)
+    for child in children:
+        child.wait.assert_awaited_once()
     assert slots._value == 1
 
 
