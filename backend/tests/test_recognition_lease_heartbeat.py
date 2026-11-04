@@ -2,6 +2,7 @@
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import update
@@ -26,6 +27,30 @@ def expire(operation_id):
         session.execute(update(workflow_repository.WorkflowOperationRecord).where(
             workflow_repository.WorkflowOperationRecord.id == operation_id,
         ).values(lease_expires_at=time.time() - 1))
+
+
+@pytest.fixture
+def heartbeat_control(monkeypatch):
+    """Drive heartbeat cadence without shortening real database wait budgets."""
+    sleeping = asyncio.Queue()
+    wakeups = {}
+
+    async def sleep(seconds):
+        assert 0 <= seconds <= recognition_runs._RENEWABLE_HEARTBEAT_SECONDS
+        wakeup = wakeups.setdefault(asyncio.current_task(), asyncio.Event())
+        sleeping.put_nowait(None)
+        await wakeup.wait()
+        wakeup.clear()
+
+    def wake(task=None):
+        # Keep a wake sent during renewal for the next sleep, too.
+        targets = wakeups.values() if task is None else [wakeups.setdefault(task, asyncio.Event())]
+        for wakeup in tuple(targets):
+            wakeup.set()
+
+    # Patch this module's dependency, never asyncio.sleep process-wide.
+    monkeypatch.setattr(recognition_runs, "asyncio", SimpleNamespace(**{**vars(asyncio), "sleep": sleep}))
+    return SimpleNamespace(sleeping=sleeping, wake=wake)
 
 
 @pytest.fixture
@@ -58,16 +83,15 @@ def claims(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_long_work_renews_beyond_original_lease_without_duplicate_dispatch(
-    tmp_path, monkeypatch, heartbeats, claims,
+    tmp_path, monkeypatch, heartbeats, claims, heartbeat_control,
 ):
-    monkeypatch.setattr(recognition_runs, "_RENEWABLE_LEASE_SECONDS", 1.5)
-    monkeypatch.setattr(recognition_runs, "_RENEWABLE_HEARTBEAT_SECONDS", 0.2)
+    lease_time = [time.time()]
+    lease_clock = SimpleNamespace(time=lambda: lease_time[0])
+    monkeypatch.setattr(workflow_repository, "time", lease_clock)
+    monkeypatch.setattr(recognition_runs, "time", lease_clock)
     service, request, data, engine = extended(tmp_path)
     entered, release = asyncio.Event(), asyncio.Event()
-    ticks = asyncio.Queue()
-    loop = asyncio.get_running_loop()
     original_read = engine.recognize
-    original_heartbeat = workflow_repository.heartbeat_operation
     calls = 0
 
     async def slow_read(unit):
@@ -77,23 +101,20 @@ async def test_long_work_renews_beyond_original_lease_without_duplicate_dispatch
         await release.wait()
         return await original_read(unit)
 
-    def heartbeat(*args, **kwargs):
-        result = original_heartbeat(*args, **kwargs)
-        loop.call_soon_threadsafe(ticks.put_nowait, time.time())
-        return result
-
     engine.recognize = slow_read
-    monkeypatch.setattr(workflow_repository, "heartbeat_operation", heartbeat)
     task = asyncio.create_task(run(service, request, data, engine))
     try:
         await asyncio.wait_for(entered.wait(), 10)
         first, seconds = claims[0]
-        assert seconds == 1.5
-        # Let two original lease windows pass while one request remains active.
-        while await asyncio.wait_for(ticks.get(), 5) < first.lease_expires_at + 1.5:
-            pass
+        assert seconds == 300
+        await asyncio.wait_for(heartbeat_control.sleeping.get(), 10)
+        # Cross two original lease windows while the same request stays active.
+        for _ in range(4):
+            lease_time[0] += 200
+            heartbeat_control.wake()
+            await asyncio.wait_for(heartbeat_control.sleeping.get(), 10)
         current = workflow_repository.get_operation(first.id, owner_id=request.source.owner_id)
-        assert current.lease_expires_at > first.lease_expires_at + 1.5
+        assert current.lease_expires_at > lease_time[0] > first.lease_expires_at + seconds
         assert current.checkpoint_revision >= first.checkpoint_revision
         concurrent = await run(service, request, data, engine)
         assert concurrent.status == "already_running" and calls == 1
@@ -155,9 +176,12 @@ async def test_hard_crash_lease_is_300_seconds_and_pending_never_replays(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["fenced", "foreign_terminal", "database_error", "database_hung", "release_hung"])
 async def test_heartbeat_failure_stops_provider_and_preserves_pending(
-    tmp_path, monkeypatch, heartbeats, claims, failure,
+    tmp_path, monkeypatch, heartbeats, claims, failure, heartbeat_control,
 ):
-    monkeypatch.setattr(recognition_runs, "_RENEWABLE_HEARTBEAT_SECONDS", 0.2)
+    # Only deliberate hangs need a short deadline. Other failures keep the
+    # production DB budget, and no heartbeat runs before provider entry.
+    if failure in {"database_hung", "release_hung"}:
+        monkeypatch.setattr(recognition_runs, "_RENEWABLE_HEARTBEAT_SECONDS", 1)
     service, request, data, engine = extended(tmp_path)
     entered = threading.Event()
     delayed_release, delayed_finished = threading.Event(), threading.Event()
@@ -220,6 +244,9 @@ async def test_heartbeat_failure_stops_provider_and_preserves_pending(
         monkeypatch.setattr(workflow_repository, "release_operation", failing_release)
     task = asyncio.create_task(run(service, request, data, engine))
     try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        await asyncio.wait_for(heartbeat_control.sleeping.get(), 10)
+        heartbeat_control.wake()
         with pytest.raises(LeaseLost):
             await asyncio.wait_for(task, 10)
         assert cancelled.is_set() and calls == 1
@@ -259,9 +286,10 @@ async def test_heartbeat_failure_stops_provider_and_preserves_pending(
 
 @pytest.mark.asyncio
 async def test_heartbeat_failure_during_error_checkpoint_is_not_user_cancellation(
-    tmp_path, monkeypatch, heartbeats, claims,
+    tmp_path, monkeypatch, heartbeats, claims, heartbeat_control,
 ):
-    monkeypatch.setattr(recognition_runs, "_RENEWABLE_HEARTBEAT_SECONDS", 0.2)
+    # The deliberately blocked terminal write must time out, not real setup DB work.
+    monkeypatch.setattr(recognition_runs, "_RENEWABLE_HEARTBEAT_SECONDS", 1)
     service, request, data, engine = extended(tmp_path)
     saving, release_save, late_finished = threading.Event(), threading.Event(), threading.Event()
     original_save = workflow_repository.save_operation_checkpoint
@@ -294,6 +322,9 @@ async def test_heartbeat_failure_during_error_checkpoint_is_not_user_cancellatio
     monkeypatch.setattr(workflow_repository, "heartbeat_operation", heartbeat)
     task = asyncio.create_task(run(service, request, data, engine))
     try:
+        assert await asyncio.to_thread(saving.wait, 10)
+        await asyncio.wait_for(heartbeat_control.sleeping.get(), 10)
+        heartbeat_control.wake()
         with pytest.raises(LeaseLost):
             await asyncio.wait_for(task, 10)
         assert task.cancelling() == 0 and saving.is_set()
@@ -313,7 +344,6 @@ async def test_heartbeat_failure_during_error_checkpoint_is_not_user_cancellatio
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["completed", "needs_review", "cancelled"])
 async def test_heartbeat_cleans_up_on_every_exit(tmp_path, monkeypatch, heartbeats, claims, outcome):
-    monkeypatch.setattr(recognition_runs, "_RENEWABLE_HEARTBEAT_SECONDS", 0.2)
     service, request, data, engine = extended(tmp_path)
     entered = asyncio.Event()
     original_read = engine.recognize
@@ -410,9 +440,8 @@ async def test_repeated_stop_releases_pending_run_before_immediate_restart(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retry", [False, True])
 async def test_terminal_commit_heartbeat_race_keeps_success_and_explicit_retry(
-    tmp_path, monkeypatch, heartbeats, retry,
+    tmp_path, monkeypatch, heartbeats, retry, heartbeat_control,
 ):
-    monkeypatch.setattr(recognition_runs, "_RENEWABLE_HEARTBEAT_SECONDS", 0.3)
     service, request, data, engine = extended(tmp_path)
     if retry:
         entered = asyncio.Event()
@@ -431,6 +460,9 @@ async def test_terminal_commit_heartbeat_race_keeps_success_and_explicit_retry(
         engine.recognize = original_read
 
     committed, heartbeat_observed = threading.Event(), threading.Event()
+    release_terminal = threading.Event()
+    terminal_waits = []
+    loop = asyncio.get_running_loop()
     original_save = workflow_repository.save_operation_checkpoint
     original_heartbeat = workflow_repository.heartbeat_operation
     terminal_status = "needs_review" if retry else "completed"
@@ -441,7 +473,8 @@ async def test_terminal_commit_heartbeat_race_keeps_success_and_explicit_retry(
         if kwargs.get("terminal_status") == terminal_status and not blocked_operation:
             blocked_operation.append(operation_id)
             committed.set()
-            assert heartbeat_observed.wait(5)
+            loop.call_soon_threadsafe(heartbeat_control.wake)
+            assert release_terminal.wait(10)
         return result
 
     def heartbeat(operation_id, **kwargs):
@@ -451,6 +484,15 @@ async def test_terminal_commit_heartbeat_race_keeps_success_and_explicit_retry(
             if committed.is_set() and operation_id in blocked_operation:
                 heartbeat_observed.set()
 
+    async def wait_for_terminal(awaitables, **kwargs):
+        for item in heartbeats:
+            terminal = item.context.terminal_write
+            if terminal is not None and terminal in awaitables:
+                terminal_waits.append(item.row.id)
+                release_terminal.set()
+        return await asyncio.wait(awaitables, **kwargs)
+
+    monkeypatch.setattr(recognition_runs.asyncio, "wait", wait_for_terminal)
     monkeypatch.setattr(workflow_repository, "save_operation_checkpoint", save)
     monkeypatch.setattr(workflow_repository, "heartbeat_operation", heartbeat)
     try:
@@ -461,11 +503,12 @@ async def test_terminal_commit_heartbeat_race_keeps_success_and_explicit_retry(
             acknowledge_pending_retry=retry,
         ), 10)
         assert committed.is_set() and heartbeat_observed.is_set()
+        assert terminal_waits == blocked_operation
         assert result.status == "completed", result.safe_error_code
         assert all(item.failure is None for item in heartbeats)
         assert (await run(service, request, None, engine)).status == ("needs_review" if retry else "already_done")
     finally:
-        heartbeat_observed.set()
+        release_terminal.set()
 
 
 @pytest.mark.asyncio

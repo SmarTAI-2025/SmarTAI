@@ -24,6 +24,7 @@ from backend.skills.recognition_reader import LLMRecognitionEngine
 from backend.tests.test_provider_response_deadlines import MESSAGES, ROUTES, provider_for, scheduler
 from backend.tests.test_recognition_budget import context
 from backend.tests.test_recognition_reader import request
+from backend.tests.test_recognition_lease_heartbeat import heartbeat_control
 from backend.tests.test_task_background_workflows import _Registry, _seed_task
 
 
@@ -192,8 +193,14 @@ async def test_legacy_native_failure_always_releases_active_work(route, failure,
 @pytest.mark.asyncio
 @pytest.mark.parametrize("terminal_race", [False, True])
 async def test_real_worker_saves_parallel_structure_results_after_original_lease_window(
-    terminal_race, scheduler, monkeypatch,
+    terminal_race, scheduler, monkeypatch, heartbeat_control,
 ):
+    # Advance lease wall time explicitly; provider/DB deadlines keep their real
+    # production budgets instead of inheriting a 100 ms heartbeat deadline.
+    lease_time = [time.time()]
+    lease_clock = SimpleNamespace(time=lambda: lease_time[0])
+    monkeypatch.setattr(workflow_repository, "time", lease_clock)
+    monkeypatch.setattr(recognition_runs, "time", lease_clock)
     owner, task_id = _seed_task(with_question=True)
     claims, calls, cancelled = [], [], []
     both_claimed = asyncio.Event()
@@ -203,7 +210,7 @@ async def test_real_worker_saves_parallel_structure_results_after_original_lease
     def claim(operation_id, **kwargs):
         row = workflow_repository.get_operation(operation_id, owner_id=kwargs["owner_id"])
         if row.operation_type == "submission_structure_v1":
-            kwargs["lease_seconds"] = 1.2
+            kwargs["lease_seconds"] = 300
         claimed = original_claim(operation_id, **kwargs)
         if row.operation_type == "submission_structure_v1":
             claims.append(claimed)
@@ -212,8 +219,6 @@ async def test_real_worker_saves_parallel_structure_results_after_original_lease
         return claimed
 
     monkeypatch.setattr(workflow_repository, "claim_operation", claim)
-    monkeypatch.setattr(recognition_runs, "_RENEWABLE_LEASE_SECONDS", 1.2)
-    monkeypatch.setattr(recognition_runs, "_RENEWABLE_HEARTBEAT_SECONDS", 0.1)
     heartbeats = []
     original_start = recognition_runs._RecognitionLeaseHeartbeat.start
 
@@ -222,7 +227,7 @@ async def test_real_worker_saves_parallel_structure_results_after_original_lease
         original_start(self)
 
     monkeypatch.setattr(recognition_runs._RecognitionLeaseHeartbeat, "start", start_heartbeat)
-    terminal_commits, releases, raced = set(), {}, []
+    terminal_commits, releases, raced, terminal_waits = set(), {}, [], []
     original_checkpoint = workflow_repository.save_operation_checkpoint
     original_heartbeat = workflow_repository.heartbeat_operation
 
@@ -232,7 +237,10 @@ async def test_real_worker_saves_parallel_structure_results_after_original_lease
             releases[saved.id] = threading.Event()
             terminal_commits.add(saved.id)
             # Commit succeeded, but its async caller has not received the row.
-            assert releases[saved.id].wait(3)
+            # Do not wake the other child before its commit callback returns.
+            target = next(item.task for item in heartbeats if item.row.id == saved.id)
+            loop.call_soon_threadsafe(heartbeat_control.wake, target)
+            assert releases[saved.id].wait(10)
         return saved
 
     def heartbeat(operation_id, **kwargs):
@@ -241,20 +249,28 @@ async def test_real_worker_saves_parallel_structure_results_after_original_lease
         finally:
             if operation_id in terminal_commits:
                 raced.append(operation_id)
-                releases[operation_id].set()
 
+    async def wait_for_terminal(awaitables, **kwargs):
+        for item in heartbeats:
+            terminal = item.context.terminal_write
+            if terminal is not None and terminal in awaitables:
+                terminal_waits.append(item.row.id)
+                releases[item.row.id].set()
+        return await asyncio.wait(awaitables, **kwargs)
+
+    monkeypatch.setattr(recognition_runs.asyncio, "wait", wait_for_terminal)
     monkeypatch.setattr(workflow_repository, "save_operation_checkpoint", checkpoint)
     monkeypatch.setattr(workflow_repository, "heartbeat_operation", heartbeat)
-    original_scope = request_timeouts.response_timeout_scope
-    monkeypatch.setattr(request_timeouts, "response_timeout_scope", lambda seconds, **kwargs:
-        original_scope(1 if seconds == 900 else seconds, local_wait_seconds=1, **kwargs))
     scheduler.host_capacity.capacity = 0
+    both_started, finish_responses = asyncio.Event(), asyncio.Event()
 
     async def invoke(_options):
         number = len(calls) + 1
         calls.append(number)
+        if len(calls) == 2:
+            both_started.set()
         try:
-            await asyncio.sleep(0.65 if number == 1 else 0.8)
+            await finish_responses.wait()
         except asyncio.CancelledError:
             cancelled.append(number)
             raise
@@ -274,20 +290,43 @@ async def test_real_worker_saves_parallel_structure_results_after_original_lease
             filename="answers.zip", content=archive.getvalue(), content_type="application/zip", registry=registry)
         operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
         worker = WorkflowWorker(handlers={operation.operation_type: task_facade.run_durable_submission_recognition},
-            worker_id="scaled-real-worker", lease_seconds=10, heartbeat_seconds=0.05,
+            worker_id="controlled-real-worker", lease_seconds=1200, heartbeat_seconds=60,
             poll_seconds=60, claim_batch_size=1, max_in_flight=1, shutdown_seconds=1)
         try:
             assert await worker.poll_once() == 1
-            await asyncio.wait_for(both_claimed.wait(), 5)
-            await asyncio.sleep(0.75)  # Queue < 1s; response < 1s; their sum > original 1.2s lease.
+            await asyncio.wait_for(both_claimed.wait(), 10)
+            for _ in claims:
+                await asyncio.wait_for(heartbeat_control.sleeping.get(), 10)
+            async with asyncio.timeout(10):
+                while len(scheduler.pending) != 2:
+                    await asyncio.sleep(0.01)
+            assert calls == [] and scheduler.active == 0 and len(heartbeats) == 2
+            # Both requests are queued. Renew before the initial 300s lease.
+            lease_time[0] += 200
+            heartbeat_control.wake()
+            for _ in claims:
+                await asyncio.wait_for(heartbeat_control.sleeping.get(), 10)
             scheduler.host_capacity.capacity = 50
             scheduler.wake.set()
-            async with asyncio.timeout(8):
+            await asyncio.wait_for(both_started.wait(), 10)
+            # Queue + response crosses the original lease, with both responses
+            # still in flight. Each phase remains below its respective queue/response budget.
+            lease_time[0] += 200
+            heartbeat_control.wake()
+            for _ in claims:
+                await asyncio.wait_for(heartbeat_control.sleeping.get(), 10)
+            for row in claims:
+                renewed = workflow_repository.get_operation(row.id, owner_id=owner)
+                assert renewed.lease_expires_at == lease_time[0] + 300
+                assert lease_time[0] > row.lease_expires_at
+            finish_responses.set()
+            async with asyncio.timeout(15):
                 while worker.in_flight_count:
                     await asyncio.sleep(0.01)
-            assert time.time() > max(row.lease_expires_at for row in claims)
+            assert lease_time[0] > max(row.lease_expires_at for row in claims)
             after = task_facade.get_task(task_id=task_id, owner_id=owner)
-            assert after["status"] == "submissions_ready", (after["status"], after.get("error"), cancelled)
+            assert after["status"] == "submissions_ready", (
+                after["status"], after.get("error"), calls, cancelled, [h.failure for h in heartbeats])
             assert len(after["student_data"]) == 2 and calls == [1, 2] and cancelled == []
             assert {s["stu_ans"][0]["content"] for s in after["student_data"].values()} == {"saved answer 1", "saved answer 2"}
             for row in claims:
@@ -296,8 +335,9 @@ async def test_real_worker_saves_parallel_structure_results_after_original_lease
             assert await worker.poll_once() == 0 and calls == [1, 2]
             assert len(heartbeats) == 2 and all(h.task.done() and h.failure is None for h in heartbeats)
             if terminal_race:
-                assert set(raced) == {row.id for row in claims}
+                assert set(raced) == set(terminal_waits) == {row.id for row in claims}
         finally:
+            finish_responses.set()
             for release in releases.values():
                 release.set()
             await worker.shutdown()
