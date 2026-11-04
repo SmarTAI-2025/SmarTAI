@@ -207,8 +207,12 @@ async def _dispatch(
                 ) else nullcontext()
                 with scope:
                     from backend.llm.providers import BaseProvider
+                    from backend.llm.registry import _GuardedSharedProvider
                     from backend.services.submission_work_budget import current_budget
-                    work_clock = current_budget() if not isinstance(getattr(engine, "provider", None), BaseProvider) else None
+                    # Shared-pool wrappers delegate to the same timed provider;
+                    # wrapping their whole dispatch would also charge its queue.
+                    work_clock = current_budget() if not isinstance(
+                        getattr(engine, "provider", None), (BaseProvider, _GuardedSharedProvider)) else None
                     if work_clock is not None:
                         work_clock.start()
                     try:

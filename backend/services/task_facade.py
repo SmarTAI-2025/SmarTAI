@@ -19,6 +19,7 @@ import uuid
 from collections import Counter, defaultdict
 from copy import deepcopy
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 
 from pydantic import ValidationError as PydanticValidationError
@@ -3298,8 +3299,14 @@ async def run_task_submission_parsing(
                         await report_saved_answers(result)
                         return result
                     worker = "submission-parser-" + uuid.uuid4().hex
+                    from backend.services import recognition_runs
                     child = await run_in_threadpool(workflow_repository.claim_operation, child.id,
-                        owner_id=owner_id, worker_id=worker, lease_seconds=960)
+                        owner_id=owner_id, worker_id=worker, lease_seconds=recognition_runs._RENEWABLE_LEASE_SECONDS)
+                    # A legal queue wait plus response can exceed a fixed lease.
+                    # Reuse recognition's bounded renewal and terminal-write fence.
+                    lease_context = SimpleNamespace(row=child, repository=workflow_repository, terminal_write=None)
+                    heartbeat = recognition_runs._RecognitionLeaseHeartbeat(lease_context, worker=worker)
+                    heartbeat.start()
                     try:
                         if child.checkpoint:
                             return SubmissionSourceParseResult(
@@ -3339,11 +3346,19 @@ async def run_task_submission_parsing(
                             original_name=name, content=_serialize_submission_results([result]),
                             content_type="application/json", fence_operation_id=job_id,
                             fence_operation_attempt=job_attempt, fence_lease_token=leased_operation.lease_token)
-                        await run_in_threadpool(workflow_repository.save_operation_checkpoint, child.id,
-                            owner_id=owner_id, expected_attempt=child.attempt,
-                            expected_checkpoint_revision=child.checkpoint_revision,
-                            expected_lease_token=child.lease_token, stage="parser_saved", checkpoint={"artifact_id": saved.id},
-                            artifact_refs=[saved.id], terminal_status="completed", terminal_summary={"artifact_id": saved.id})
+                        terminal = asyncio.get_running_loop().create_future()
+                        lease_context.terminal_write = terminal
+                        try:
+                            lease_context.row = await run_in_threadpool(workflow_repository.save_operation_checkpoint, child.id,
+                                owner_id=owner_id, expected_attempt=child.attempt,
+                                expected_checkpoint_revision=child.checkpoint_revision,
+                                expected_lease_token=child.lease_token, stage="parser_saved", checkpoint={"artifact_id": saved.id},
+                                artifact_refs=[saved.id], terminal_status="completed", terminal_summary={"artifact_id": saved.id})
+                            terminal.set_result(True)
+                        finally:
+                            if not terminal.done():
+                                terminal.set_result(False)
+                            lease_context.terminal_write = None
                         checkpoint = dict(leased_operation.checkpoint_data)
                         pending = dict(checkpoint.get("structure_inflight", {}))
                         pending.pop(child.id, None)
@@ -3356,6 +3371,7 @@ async def run_task_submission_parsing(
                         await report_saved_answers(result)
                         return result
                     finally:
+                        await heartbeat.stop()
                         try:
                             await asyncio.shield(run_in_threadpool(workflow_repository.release_operation, child.id,
                                 owner_id=owner_id, worker_id=worker, lease_token=child.lease_token))
