@@ -60,10 +60,10 @@ export function SubmissionRecognitionProgressPage() {
   const providerId = providerChoice && providerChoice.jobId === failedJobId ? providerChoice.id : taskState?.submission_recognition_provider_id ?? "";
   const uncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryError) === "provider_submit_uncertain";
   const unfinishedSources = (taskState?.submission_sources ?? []).filter(source => source.status === "failed" || source.status === "processing");
-  // Match the retry endpoint: immutable archive failures need another upload;
+  // Use the retry endpoint's classification of errors that need another upload;
   // mixed batches may still recover other files, including with another model.
   const requiresReupload = getAPIErrorCode(retryError) === "submission_retry_requires_reupload"
-    || (unfinishedSources.length > 0 && unfinishedSources.every(source => source.status === "failed" && source.failure_phase === "archive" && !source.retryable));
+    || (unfinishedSources.length > 0 && unfinishedSources.every(source => source.status === "failed" && source.requires_reupload === true));
   async function continueManually() {
     if (!taskId || !failedJobId || !taskState || openingManual || manualRecognition.isPending) return;
     setRetryError(null);

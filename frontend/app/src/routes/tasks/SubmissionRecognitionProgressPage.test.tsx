@@ -141,7 +141,7 @@ describe("submission recognition completion", () => {
   });
   const archiveFailure = (reason = "submission_archive_nested_unsupported"): SubmissionSourceOutcome => ({
     ...source("failed"), internal_status: "parse_failed", file_name: "inner.zip",
-    reason_code: reason, failure_phase: "archive", retryable: false,
+    reason_code: reason, failure_phase: "archive", retryable: false, requires_reupload: true,
   });
   it.each(["submission_archive_nested_unsupported", "submission_archive_directories_only", "submission_archive_invalid"])("requires another upload for %s while retaining manual review", async reason => {
     snapshot = { ...detail, status: "error", last_failed_job_id: "new-job", error: reason,
@@ -195,5 +195,31 @@ describe("submission recognition completion", () => {
       submission_sources: [archiveFailure(), { ...source("processing"), source_id: "pending-source" }] };
     show();
     expect(screen.getByRole("button", { name: "继续识别" })).toBeEnabled();
+  });
+  it.each(["submission_source_empty", "submission_source_content_type_mismatch", "submission_source_unsupported"])("requires reupload for an inner ZIP mixed with %s", async reason => {
+    snapshot = { ...detail, status: "error", last_failed_job_id: "new-job", error: "submission_archive_nested_unsupported",
+      submission_recognition_provider_id: "test-provider", submission_sources: [
+        { ...archiveFailure(), requires_reupload: true },
+        { ...source("failed"), source_id: "invalid-file", reason_code: reason, failure_phase: "source_read", retryable: false, requires_reupload: true },
+      ] };
+    show();
+    expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回修改配置" })).toHaveAttribute("href", "/tasks/T/submissions/upload");
+    fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    expect(await screen.findByRole("heading", { name: "作答校对页面" })).toBeVisible();
+    expect(retryRecognition).not.toHaveBeenCalled();
+  });
+  it("keeps uncertain mixed-batch retry behind explicit acknowledgement", () => {
+    snapshot = { ...detail, status: "error", last_failed_job_id: "new-job", error: "provider_submit_uncertain",
+      submission_recognition_provider_id: "test-provider", submission_sources: [archiveFailure(), {
+        ...source("failed"), source_id: "uncertain-source", reason_code: "provider_submit_uncertain",
+        failure_phase: "ocr", retryable: false, requires_reupload: false,
+      }] };
+    show();
+    expect(screen.getByRole("button", { name: "重试失败项" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "重试失败项" }));
+    expect(retryRecognition).toHaveBeenCalledWith(expect.objectContaining({ acknowledgePossibleDuplicateCall: true }));
   });
 });

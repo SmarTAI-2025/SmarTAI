@@ -119,6 +119,35 @@ NO_MATCH_DIAGNOSTICS = frozenset({
 NO_MATCH_REASON_CODES = frozenset(reason for reason, _phase in NO_MATCH_DIAGNOSTICS)
 
 
+# These diagnostics establish a problem in the immutable upload itself. Do
+# not infer this from a failure phase or from automatic retryability: provider
+# uncertainty, credentials, worker failures and unknown errors can recover.
+SOURCE_REUPLOAD_REASON_CODES = frozenset({
+    "submission_archive_empty",
+    "submission_archive_directories_only",
+    "submission_archive_nested_unsupported",
+    "submission_archive_invalid",
+    "submission_archive_limit_exceeded",
+    "submission_archive_member_too_large",
+    "submission_archive_member_unreadable",
+    "submission_archive_member_unsafe_path",
+    "submission_source_empty",
+    "submission_source_content_type_mismatch",
+    "submission_source_unsupported",
+    "submission_source_too_large",
+    "source_decode_failed",
+    "pdf_invalid",
+    "pdf_encrypted",
+    "image_invalid",
+    "image_format_mismatch",
+})
+
+
+def source_requires_reupload(reason_code: str | None, retryable: bool) -> bool:
+    """Shared by the retry guard and its public per-source projection."""
+    return not retryable and reason_code in SOURCE_REUPLOAD_REASON_CODES
+
+
 def source_diagnostic_is_valid(
     status: str,
     reason_code: str | None,

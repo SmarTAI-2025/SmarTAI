@@ -209,6 +209,8 @@ export interface SubmissionSourceOutcome {
   resolution_status?: "identity_resolved" | "manual_review" | "manual_resolved" | null;
   failure_phase?: string | null;
   retryable: boolean;
+  /** Backend classification of immutable file errors; absent on older snapshots. */
+  requires_reupload?: boolean;
   student_candidate?: string | null;
   matched_answer_count: number;
   unknown_question_ids: string[];
