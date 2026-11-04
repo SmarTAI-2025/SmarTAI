@@ -12,6 +12,7 @@ import { useManuallyCompleteSubmissionRecognition, useRetrySubmissionRecognition
 import { useStageProviders } from "@/api/hooks";
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { getAPIErrorCode } from "@/api/client";
+import { submissionRequiresReupload } from "@/lib/submissionSourceOutcomes";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { SubmissionSourceOutcomePanel } from "@/components/tasks/SubmissionSourceOutcomePanel";
@@ -59,11 +60,10 @@ export function SubmissionRecognitionProgressPage() {
   const failedJobId = taskState?.last_failed_job_id ?? (incomplete ? taskState?.parse_job_id : null);
   const providerId = providerChoice && providerChoice.jobId === failedJobId ? providerChoice.id : taskState?.submission_recognition_provider_id ?? "";
   const uncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryError) === "provider_submit_uncertain";
-  const unfinishedSources = (taskState?.submission_sources ?? []).filter(source => source.status === "failed" || source.status === "processing");
   // Use the retry endpoint's classification of errors that need another upload;
   // mixed batches may still recover other files, including with another model.
   const requiresReupload = getAPIErrorCode(retryError) === "submission_retry_requires_reupload"
-    || (unfinishedSources.length > 0 && unfinishedSources.every(source => source.status === "failed" && source.requires_reupload === true));
+    || submissionRequiresReupload(taskState?.submission_sources);
   async function continueManually() {
     if (!taskId || !failedJobId || !taskState || openingManual || manualRecognition.isPending) return;
     setRetryError(null);

@@ -1,4 +1,5 @@
 import { userFacingError } from "@/lib/taskActionGuards";
+import { submissionRequiresReupload } from "@/lib/submissionSourceOutcomes";
 import { ManualReviewButton } from "@/components/tasks/ManualReviewButton";
 import { DemoSourceUpload } from "@/components/tasks/DemoSourceUpload";
 import { useFrontierWorkspace } from "@/lib/frontierContext";
@@ -91,6 +92,9 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
   const [missingUpload, setMissingUpload] = useState<"submission" | "roster" | null>(null);
 
   const task = taskQuery.data;
+  const requiresReupload = !selectedFile && (submissionRequiresReupload(task?.submission_sources)
+    || getAPIErrorCode(recognitionError) === "submission_retry_requires_reupload");
+  const reuploadMessage = userFacingError("submission_retry_requires_reupload", locale);
   const enabledExperts = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
   const hasExistingSubmissions = Boolean(
     task?.submission_file_name
@@ -156,6 +160,8 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
           ? task.status === "grading"
             ? t("submissionUploadGradingLocked")
             : t("submissionUploadBusy")
+          : requiresReupload
+            ? reuploadMessage
           : !enabledExperts.some((expert) => expert.provider_id === recognitionProviderId)
             ? localText(locale, "需要先添加或选择一个已启用模型。", "Add or select an enabled model first.")
           : !selectedFile && !hasStoredFile && !canRetryOriginal
@@ -233,7 +239,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       if (!recognitionProviderId) {
         setNeedsModel(true);
         window.requestAnimationFrame(() => focusUploadControl(byokLinkRef.current));
-      } else if (!selectedFile && !hasStoredFile && !canRetryOriginal) {
+      } else if (requiresReupload || (!selectedFile && !hasStoredFile && !canRetryOriginal)) {
         setMissingUpload("submission");
         focusUploadControl(submissionChooseRef.current);
       } else if (needsRosterUpload) {
@@ -307,7 +313,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       <div data-draft-width="900" className="mx-auto mt-[45px] w-full max-w-[900px]">
         {task?.submission_sources?.some(source => source.status === "failed" || source.status === "processing") ? <SubmissionSourceOutcomePanel sources={task.submission_sources} locale={locale} className="mb-6" /> : null}
         {!selectedFile && !hasStoredFile && draft.value.selectedFileName && !canRetryOriginal ? <p role="alert" className="mb-4 text-sm text-warning">{missingSubmissionMessage}</p> : null}
-        {hasStoredFile && !selectedFile ? <p role="status" className="mb-4 text-sm text-muted-foreground">{localText(locale, "原文件与设置已恢复，可直接重试。", "Your file and settings are restored. You can retry.")}</p> : null}
+        {hasStoredFile && !selectedFile ? <p role="status" className="mb-4 text-sm text-muted-foreground">{requiresReupload ? reuploadMessage : localText(locale, "原文件与设置已恢复，可直接重试。", "Your file and settings are restored. You can retry.")}</p> : null}
         <div
           ref={submissionChooseRef}
           className={cn(
@@ -352,7 +358,8 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
             {selectedFile
               ? `${formatFileSize(selectedFile.size)} · ${localText(locale, "文件已就绪", "File ready")} · ${t("submissionUploadOcrLimit")}`
               : canRetryOriginal || hasStoredFile
-                ? localText(locale, "原文件已保留，无需重新选择。", "The original file is saved. No need to select it again.")
+                ? requiresReupload ? localText(locale, "原文件已保留，请修正文件后重新上传。", "The original file is saved. Correct the files and upload again.")
+                  : localText(locale, "原文件已保留，无需重新选择。", "The original file is saved. No need to select it again.")
               : t("submissionUploadFormats")}
           </p>
           <span className="mt-[17px] inline-flex h-10 min-w-[130px] items-center justify-center rounded-[8px] border bg-card px-4 text-[14px] font-semibold text-foreground">
@@ -485,7 +492,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
           <button
             type="button"
             className="inline-flex h-10 w-full shrink-0 items-center justify-center rounded-[8px] bg-primary px-4 text-[14px] font-semibold leading-[18px] text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:w-[180px]"
-            disabled={isPending}
+            disabled={isPending || requiresReupload}
             title={uploadDisabledReason ?? undefined}
             aria-describedby={actionError || hasExistingSubmissions || uploadDisabledReason ? "submission-upload-action-message" : undefined}
             onClick={() => void handleStart()}
@@ -549,6 +556,7 @@ function localizeSubmissionError(
 ) {
   const normalized = normalizeAPIError(error);
   const code = submissionErrorCode(error);
+  if (code === "submission_retry_requires_reupload") return userFacingError(error, locale);
   if (["submission_source_unsupported", "submission_source_empty", "submission_archive_empty", "submission_archive_invalid"].includes(code)) {
     return t("submissionUploadErrorInvalid");
   }

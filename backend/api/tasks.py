@@ -497,6 +497,12 @@ async def parse_submissions_endpoint(
         if stored_file_id is not None:
             if expected_workflow_revision is None:
                 raise ValidationError("Confirm the current task revision.", code="stale_revision")
+            if workflow.parse_job_id:
+                original = workflow_repository.get_operation(workflow.parse_job_id, owner_id=current.id)
+                if (original.assignment_id == task_id and original.operation_type == "submission_recognition"
+                        and original.status in {"error", "done"}
+                        and (original.payload or {}).get("input_file_id") == stored_file_id):
+                    task_facade.require_submission_retryable_sources(operation=original, owner_id=current.id)
             stored, body = load_submission_input(task_id=task_id, owner_id=current.id, stored_file_id=stored_file_id)
             filename, content_type = stored.original_name, stored.content_type
         if workflow.last_failed_job_id == workflow.parse_job_id and workflow.parse_job_id:

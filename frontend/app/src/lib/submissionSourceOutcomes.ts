@@ -1,6 +1,11 @@
 import type { Locale } from "@/i18n/messages";
 import type { SubmissionPageError, SubmissionSourceOutcome } from "@/types";
 
+export function submissionRequiresReupload(sources: SubmissionSourceOutcome[] | undefined): boolean {
+  const unfinished = (sources ?? []).filter(source => source.status === "failed" || source.status === "processing");
+  return unfinished.length > 0 && unfinished.every(source => source.status === "failed" && source.requires_reupload === true);
+}
+
 export interface SubmissionSourceReasonCopy {
   title: string;
   description: string;

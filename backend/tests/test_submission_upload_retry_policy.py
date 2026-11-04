@@ -31,6 +31,47 @@ async def retry(task, owner, snapshot, *, acknowledge=False):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source_field", ["stored_file_id", "reuse_input_from_job_id"])
+async def test_configuration_restart_cannot_reopen_immutable_failed_upload(monkeypatch, source_field):
+    from backend.services import workflow_inputs
+
+    owner, task = _seed_task(with_question=True)
+    body, filename = archive_bytes("zip", {"fake.pdf": b"ordinary text"})
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: _Registry())
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename=filename, content=body, content_type="application/zip", registry=_Registry())
+    await finish(queued["job_id"], owner)
+    before = task_facade.get_task(task_id=task, owner_id=owner)
+    saved = workflow_inputs.submission_inputs(task_id=task, owner_id=owner)["input"]
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Configuration restart must reject immutable input before reading or requeueing")
+
+    with monkeypatch.context() as guard:
+        guard.setattr(workflow_inputs, "get_storage", forbidden)
+        guard.setattr(task_facade, "queue_task_submission_parsing", forbidden)
+        response = await tasks.parse_submissions_endpoint(task_id=task, background_tasks=_BackgroundTasks(),
+            file=None, **{source_field: saved["stored_file_id"] if source_field == "stored_file_id" else queued["job_id"]},
+            identity_mode="filename", roster_file=None, recognition_provider_id="test-provider",
+            replace_confirmed=False, expected_workflow_revision=before["workflow_revision"],
+            current=SimpleNamespace(id=owner), registry=_Registry())
+    assert response.status_code == 409
+    assert json.loads(response.body)["error"]["code"] == "submission_retry_requires_reupload"
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    assert {key: after[key] for key in ("workflow_revision", "parse_job_id", "submission_sources")} == {
+        key: before[key] for key in ("workflow_revision", "parse_job_id", "submission_sources")}
+    # A genuinely selected replacement is a new input, not a blocked replay.
+    import io
+    from fastapi import UploadFile
+    replacement = await tasks.parse_submissions_endpoint(task_id=task, background_tasks=_BackgroundTasks(),
+        file=UploadFile(file=io.BytesIO(b"Question 1: corrected answer"), filename="fixed.txt"),
+        identity_mode="filename", roster_file=None, recognition_provider_id="test-provider",
+        replace_confirmed=False, expected_workflow_revision=after["workflow_revision"],
+        current=SimpleNamespace(id=owner), registry=_Registry())
+    assert isinstance(replacement, dict) and replacement["status"] == "started"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("name,content", BAD_FILES)
 @pytest.mark.parametrize("nested", [False, True])
 async def test_immutable_file_failures_require_reupload_before_original_read_or_queue(monkeypatch, name, content, nested):
