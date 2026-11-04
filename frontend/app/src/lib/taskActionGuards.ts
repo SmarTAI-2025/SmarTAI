@@ -274,6 +274,7 @@ const FILE_CODES = new Set([
   "submission_archive_empty",
   "submission_archive_directories_only",
   "submission_archive_nested_unsupported",
+  "submission_retry_requires_reupload",
   "submission_archive_invalid",
   "submission_archive_limit_exceeded",
   "submission_archive_member_too_large",
@@ -1477,6 +1478,9 @@ function fileErrorDescription(
   }
   if (code === "submission_archive_nested_unsupported") {
     return tx(locale, "压缩包内发现另一个压缩包，暂不支持继续解压。请先解压内层压缩包，再将其中的 PDF 等受支持文件重新打包上传；可以保留普通文件夹。", "Another archive was found inside the upload and cannot be unpacked. Unpack it first, then repack its supported files, such as PDFs, and upload again. Ordinary folders can be retained.");
+  }
+  if (code === "submission_retry_requires_reupload") {
+    return tx(locale, "剩余失败项需要重新整理文件，无法使用原压缩包重试。请返回修改配置，重新打包上传，或人工继续处理。", "The remaining failures require corrected files. Repack and upload them from settings, or continue manually.");
   }
   if (code === "submission_archive_limit_exceeded") {
     return tx(locale, "压缩包中的文件数量、单文件大小或解压后总大小超过安全上限。请拆分压缩包后重新上传。", "The archive exceeds the safe file-count, per-file, or expanded-size limit. Split it into smaller archives and upload again.");

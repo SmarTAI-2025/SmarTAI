@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import bz2
 import struct
 import tarfile
 import zipfile
@@ -14,6 +15,38 @@ from backend.tools import file_processing as files
 
 PDF = b"%PDF-1.7\nsynthetic archive member\n%%EOF\n"
 FORMATS = ("zip", "zip-deflate", "rar", "7z", "tar", "tar.gz", "tgz", "tar.bz2", "tbz2")
+
+
+@pytest.mark.parametrize("level", range(1, 10))
+@pytest.mark.parametrize("suffix", [b"", b" is plain text\n", b"1AY&SY describes a block header\n"])
+def test_submission_bzip_header_text_remains_a_single_text_source(level, suffix):
+    body = f"BZh{level}".encode() + suffix
+    sources = files.extract_raw_files_from_archive(body, "answer.txt", content_type="text/plain")
+    assert len(sources) == 1
+    assert sources[0].content_type == "text/plain"
+    assert sources[0].content == body
+    assert sources[0].pre_error_code is None
+
+
+@pytest.mark.parametrize("level", range(1, 10))
+@pytest.mark.parametrize("body", [b"", b"answer" * 1000])
+def test_real_bzip_streams_are_detected_even_with_misleading_names(level, body):
+    compressed = bz2.compress(body, compresslevel=level)
+    assert files.inspect_upload_content(compressed, "upload.tar.bz2").content_type == "application/x-bzip2"
+    disguised = files.inspect_upload_content(compressed, "answer.txt", "text/plain")
+    assert disguised.content_type == "application/x-bzip2" and disguised.mismatch
+
+
+def test_large_bzip_stream_is_detected_from_a_partial_probe():
+    import random
+    compressed = bz2.compress(random.Random(282).randbytes(100_000))
+    assert len(compressed) > 4096
+    assert files.inspect_upload_content(compressed, "upload.tbz2").content_type == "application/x-bzip2"
+
+
+def test_invalid_bzip_binary_prefix_does_not_count_as_a_valid_signature():
+    inspection = files.inspect_upload_content(b"BZh9\0invalid compressed stream", "upload.tbz2")
+    assert inspection.content_type == "application/octet-stream" and inspection.mismatch
 
 
 def archive_bytes(kind, entries):
@@ -134,7 +167,7 @@ def test_existing_archive_safety_limits_still_apply_with_directories(kind, monke
     (b"II*\0", "image.tif", "image/tiff"),
     (b"RIFF\0\0\0\0WEBP", "image.webp", "image/webp"),
     (b"\x1f\x8b", "bundle.tgz", "application/gzip"),
-    (b"BZh9", "bundle.tbz2", "application/x-bzip2"),
+    (bz2.compress(b"synthetic archive data"), "bundle.tbz2", "application/x-bzip2"),
 ])
 def test_other_fixed_signatures_win_over_embedded_pdf_markers(header, filename, mime):
     inspection = files.inspect_upload_content(header + b"metadata %PDF-1.7\n", filename)

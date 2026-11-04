@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
+import { APIError } from "@/api/client";
 import type { Task, TaskStateSnapshot, SubmissionSourceOutcome, JobProgress } from "@/types";
 import { SubmissionRecognitionProgressPage } from "./SubmissionRecognitionProgressPage";
 
@@ -9,9 +10,10 @@ let detail: Partial<Task>;
 let snapshot: Partial<TaskStateSnapshot> | undefined;
 let progress: Partial<JobProgress> | null;
 const manuallyComplete = vi.fn();
+const retryRecognition = vi.fn();
 vi.mock("@/api/hooks/tasks", () => ({
   useTask: () => ({ data: detail, refetch: vi.fn() }),
-  useRetrySubmissionRecognition: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useRetrySubmissionRecognition: () => ({ isPending: false, mutateAsync: retryRecognition }),
   useManuallyCompleteSubmissionRecognition: () => ({ isPending: false, mutateAsync: manuallyComplete }),
 }));
 vi.mock("@/api/hooks", () => ({ useStageProviders: () => ({ data: [] }) }));
@@ -30,10 +32,13 @@ function show() {
   render(<I18nProvider><MemoryRouter initialEntries={["/tasks/T/submissions/progress"]}><Routes>
     <Route path="/tasks/:taskId/submissions/progress" element={<SubmissionRecognitionProgressPage />} />
     <Route path="/tasks/:taskId/submissions" element={<h1>作答校对页面</h1>} />
+    <Route path="/tasks/:taskId/submissions/upload" element={<h1>作答上传页面</h1>} />
   </Routes></MemoryRouter></I18nProvider>);
 }
 beforeEach(() => {
+  window.localStorage.setItem("smartai_locale", "zh-CN");
   manuallyComplete.mockReset().mockResolvedValue({ status: "ready_for_review" });
+  retryRecognition.mockReset().mockResolvedValue({ status: "started" });
   progress = null;
   detail = { task_id: "T", status: "parsing_submissions", parse_job_id: "new-job", workflow_revision: 1,
     submission_sources: [source("processing")],
@@ -133,5 +138,62 @@ describe("submission recognition completion", () => {
     detail = { ...snapshot }; snapshot = undefined;
     show();
     expect(await screen.findByRole("heading", { name: "作答校对页面" })).toBeInTheDocument();
+  });
+  const archiveFailure = (reason = "submission_archive_nested_unsupported"): SubmissionSourceOutcome => ({
+    ...source("failed"), internal_status: "parse_failed", file_name: "inner.zip",
+    reason_code: reason, failure_phase: "archive", retryable: false,
+  });
+  it.each(["submission_archive_nested_unsupported", "submission_archive_directories_only", "submission_archive_invalid"])("requires another upload for %s while retaining manual review", async reason => {
+    snapshot = { ...detail, status: "error", last_failed_job_id: "new-job", error: reason,
+      submission_recognition_provider_id: "test-provider", submission_sources: [archiveFailure(reason)] };
+    show();
+    expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "人工继续处理" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("link", { name: "返回修改配置" }));
+    expect(await screen.findByRole("heading", { name: "作答上传页面" })).toBeVisible();
+    expect(retryRecognition).not.toHaveBeenCalled();
+  });
+  it("does not retry healthy siblings when only the nested archive failed", async () => {
+    snapshot = { ...detail, status: "submissions_ready", parse_job_id: "new-job",
+      submission_sources: [source("parsed"), { ...archiveFailure(), source_id: "nested-source" }],
+      submission_source_summary: { uploaded: 2, parsed: 1, failed: 1, pending: 0, identity_needs_review: 0 } };
+    show();
+    expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    expect(await screen.findByRole("heading", { name: "作答校对页面" })).toBeVisible();
+  });
+  it.each(["provider_timeout", "provider_auth_failed"])("still retries mixed failures after %s, including when switching a model is needed", async reason => {
+    snapshot = { ...detail, status: "error", last_failed_job_id: "new-job", error: "submission_archive_nested_unsupported",
+      submission_recognition_provider_id: "test-provider", submission_sources: [archiveFailure(), {
+        ...source("failed"), source_id: "model-source", reason_code: reason, failure_phase: "recognition",
+        retryable: reason === "provider_timeout",
+      }] };
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "重试失败项" }));
+    expect(retryRecognition).toHaveBeenCalledOnce();
+    expect(retryRecognition).toHaveBeenCalledWith(expect.objectContaining({ taskId: "T", jobId: "new-job" }));
+  });
+  it.each(["zh-CN", "en-US"])("handles the backend reupload guard with a stale snapshot in %s", async locale => {
+    window.localStorage.setItem("smartai_locale", locale);
+    snapshot = { ...detail, status: "error", last_failed_job_id: "new-job", error: "submission_parse_failed",
+      submission_recognition_provider_id: "test-provider" };
+    retryRecognition.mockRejectedValueOnce(new APIError(409, "Repack and upload", {
+      error: { code: "submission_retry_requires_reupload" },
+    }));
+    show();
+    const retryLabel = locale === "zh-CN" ? "重试失败项" : "Retry failed items";
+    fireEvent.click(screen.getByRole("button", { name: retryLabel }));
+    expect(await screen.findByText(locale === "zh-CN" ? /剩余失败项需要重新整理文件/ : /The remaining failures require corrected files/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: retryLabel })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: locale === "zh-CN" ? "人工继续处理" : "Continue manually" })).toBeEnabled();
+    expect(retryRecognition).toHaveBeenCalledOnce();
+  });
+  it("keeps pending sibling recovery available instead of inferring failure from the archive error alone", () => {
+    snapshot = { ...detail, status: "submissions_paused", last_failed_job_id: "new-job", error: "operation_cancelled",
+      submission_recognition_provider_id: "test-provider",
+      submission_sources: [archiveFailure(), { ...source("processing"), source_id: "pending-source" }] };
+    show();
+    expect(screen.getByRole("button", { name: "继续识别" })).toBeEnabled();
   });
 });

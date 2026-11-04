@@ -12,6 +12,7 @@ from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
 
 
 ROLES = ("problem", "reference_answer", "rubric", "programming_tests")
+TEXT_HEADERS = [f"BZh{level}" for level in range(1, 10)] + ["BZh91AY&SY"]
 
 
 def upload(body, name, mime):
@@ -31,6 +32,22 @@ async def test_all_teacher_material_readers_preserve_text_quoting_pdf(role, name
     )
     assert text == body.decode()
     assert descriptor["content_type"].startswith("text/")
+    assert descriptor["recognition"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("header", TEXT_HEADERS)
+async def test_teacher_material_readers_preserve_bzip_header_text(role, header):
+    body = f"{header} is an example header, not compressed data.\n".encode()
+    registry = _RecoveryRegistry()
+    text, descriptor = await task_preparation._read_source(
+        file=upload(body, "material.txt", "text/plain"), library_material_id=None, inline_text=None,
+        owner_id="synthetic-owner", task_id="synthetic-task", registry=registry, role=role,
+        route=StageProviderRoute(route_id="test-provider", kind="llm", provider=registry.provider),
+    )
+    assert text == body.decode()
+    assert descriptor["content_type"] == "text/plain"
     assert descriptor["recognition"] is None
 
 
@@ -78,11 +95,12 @@ async def test_png_metadata_cannot_route_teacher_images_to_pdf(role):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name", ["book.txt", "book.md", "book.markdown"])
-async def test_knowledge_text_is_stored_and_chunked_without_pdf_recognition(name):
+@pytest.mark.parametrize("header", ["%PDF-1.7", *TEXT_HEADERS])
+async def test_knowledge_text_is_stored_and_chunked_without_pdf_recognition(name, header):
     from backend.db.knowledge_repository import list_chunks
     from backend.knowledge.service import ingest_document
     from backend.tests.test_knowledge_ingestion import owner, Registry
-    text = "File format notes: %PDF-1.7 is a header.\n"
+    text = f"{'File format notes: ' if header.startswith('%PDF') else ''}{header} is an example file header.\n"
     document = await ingest_document(owner_id=owner(), original_name=name, content=text.encode(),
                                      content_type="text/plain", registry=Registry())
     assert document.status == "ready"
@@ -140,10 +158,13 @@ async def test_compatibility_question_reader_checks_filename_and_mime_before_vis
 @pytest.mark.asyncio
 @pytest.mark.parametrize("nested", [False, True])
 async def test_archive_diagnostics_survive_durable_submission_processing(monkeypatch, nested):
+    import json
+    from types import SimpleNamespace
+    from backend.api import tasks
     from backend.db import source_outcome_repository, workflow_repository
     from backend.services import task_facade
     from backend.services.workflow_worker import LeasedOperation
-    from backend.tests.test_task_background_workflows import _Registry, _seed_task
+    from backend.tests.test_task_background_workflows import _BackgroundTasks, _Registry, _seed_task
     owner, task = _seed_task(with_question=True)
     inner, _ = archive_bytes("zip", {"answer.txt": b"synthetic"})
     entries = {"folder/inner.zip": inner} if nested else {"folder/": b""}
@@ -162,3 +183,18 @@ async def test_archive_diagnostics_survive_durable_submission_processing(monkeyp
     assert operation.status == "error"
     assert outcome.stable_error_code == expected
     assert outcome.failure_phase == "archive" and outcome.retryable is False
+    before = task_facade.get_task(task_id=task, owner_id=owner)
+    def forbidden(**kwargs):
+        pytest.fail("An unchanged non-retryable archive must not queue another operation")
+    monkeypatch.setattr(task_facade, "queue_task_submission_parsing", forbidden)
+    response = await tasks.retry_submission_recognition_endpoint(
+        task_id=task, job_id=operation.id,
+        request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=before["workflow_revision"]),
+        background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=_Registry(),
+    )
+    assert response.status_code == 409
+    assert json.loads(response.body)["error"]["code"] == "submission_retry_requires_reupload"
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    assert after["workflow_revision"] == before["workflow_revision"]
+    assert after["parse_job_id"] == before["parse_job_id"]
+    assert after["submission_sources"] == before["submission_sources"]

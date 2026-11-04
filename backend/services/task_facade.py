@@ -2777,6 +2777,19 @@ def load_submission_retry_upload(
             "Only a failed recognition operation can reuse its originals.",
             code="submission_retry_not_available",
         )
+    results = source_outcome_repository.list_source_results(
+        operation_id=operation.id, owner_id=owner_id, attempt=operation.attempt,
+    )
+    unfinished = [result.outcome for result in results
+                  if result.outcome is None or result.outcome.status not in {"parsed", "identity_conflict"}]
+    # A model change cannot repair archive structure. Preserve mixed batches'
+    # recoverable work, but do not reopen/requeue an unchanged, unusable upload.
+    if unfinished and all(outcome is not None and outcome.failure_phase == "archive"
+                          and not outcome.retryable for outcome in unfinished):
+        raise InvalidTransition(
+            "Repack and upload the files before restarting recognition.",
+            code="submission_retry_requires_reupload",
+        )
     payload = dict(operation.payload or {})
     stored = None
     for file_id in operation.artifact_refs:

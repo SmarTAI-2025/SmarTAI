@@ -8,6 +8,7 @@ the tools/ namespace so it's discoverable as a "predefined tool" per docs §4.2.
 from __future__ import annotations
 
 import asyncio
+import bz2
 import hashlib
 import io
 import json
@@ -174,7 +175,17 @@ def _content_signature_type(data: bytes, filename: str) -> str:
     if data.startswith(b"\x1f\x8b"):
         return "application/gzip"
     if len(data) >= 4 and data.startswith(b"BZh") and data[3] in b"123456789":
-        return "application/x-bzip2"
+        # This ASCII prefix also occurs in ordinary text. Check a bounded
+        # binary probe with the actual decoder before routing to an archive.
+        # Neither input nor expanded output may grow with the uploaded file.
+        probe = data[:4096]
+        if not _looks_like_text(probe):
+            try:
+                bz2.BZ2Decompressor().decompress(probe, max_length=1)
+            except OSError:
+                pass
+            else:
+                return "application/x-bzip2"
     if len(data) >= 512 and data[257:262] == b"ustar":
         try:
             tarfile.TarInfo.frombuf(data[:512], "utf-8", "surrogateescape")
