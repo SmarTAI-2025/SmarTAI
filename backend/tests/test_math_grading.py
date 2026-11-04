@@ -495,13 +495,51 @@ async def test_late_tool_timeout_keeps_earlier_completed_evidence(monkeypatch, p
                 status="supported", method="exact", reason="First check completed.")
         await asyncio.sleep(60)
 
-    monkeypatch.setattr(math_verification, "verify_math", verify)
+    # Exercise the real admission/budget wrapper while controlling worker time.
+    monkeypatch.setattr(math_verification, "_run_worker", verify)
     p, a, plan = problem(), answer(), plan_for()
     draft = assessment(checks=[grading.Verification(claim_id="s1", context_quote=p.stem,
         request={"student_expression": "41", "reference_expression": "42"}) for _ in range(3)])
     evidence = await CalculationSkill(provider)._verify(draft, p, a, plan)
     assert [entry["status"] for entry in evidence] == ["supported", "unknown", "unknown"]
     assert calls == 2  # No third launch after the total budget expires.
+
+
+@pytest.mark.asyncio
+async def test_verification_queue_does_not_exhaust_call_or_group_budget(monkeypatch, provider):
+    import asyncio
+    from backend.tools import math_verification, sandbox_runtime
+
+    slots = asyncio.Semaphore(1)
+    monkeypatch.setattr(sandbox_runtime, "_SEMAPHORE", slots)
+    monkeypatch.setattr(grading, "VERIFICATION_BUDGET_SECONDS", .5)
+    monkeypatch.setattr(math_verification, "CALL_WALL_SECONDS", .25, raising=False)
+    await slots.acquire()
+    original = asyncio.create_subprocess_exec
+    children = []
+    payload = json.dumps({"status": "refuted", "method": "fixture", "reason": "41 != 42"})
+
+    async def launch(*args, **kwargs):
+        child = await original(args[0], "-I", "-c", f"print({payload!r})", **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+    p, a, plan = problem(), answer(), plan_for()
+    draft = assessment(checks=[grading.Verification(claim_id="s1", context_quote=p.stem,
+        request={"student_expression": "41", "reference_expression": "42"}) for _ in range(2)])
+    task = asyncio.create_task(CalculationSkill(provider)._verify(draft, p, a, plan))
+    try:
+        await asyncio.sleep(.75)
+        queued = not task.done()
+        assert not children
+    finally:
+        slots.release()
+    evidence = await asyncio.wait_for(task, 3)
+    assert queued, evidence
+    assert [entry["status"] for entry in evidence] == ["refuted", "refuted"]
+    assert len(children) == 2 and all(child.returncode == 0 for child in children)
+    assert slots._value == 1
 
 
 def test_rounding_preserves_item_total():

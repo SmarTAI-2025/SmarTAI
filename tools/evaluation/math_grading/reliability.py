@@ -144,12 +144,12 @@ async def evaluate(case):
             events.append(dict(stage="plan_ready", plan_id=plan.plan_id, sequence=len(events)))
         return result
 
-    async def observe_tool(request):
+    async def observe_tool(request, **kwargs):
         call = dict(request=request.model_dump(mode="json"))
         tool_calls.append(call)
         started = time.perf_counter()
         try:
-            result = await actual_verify(request)
+            result = await actual_verify(request, **kwargs)
             call["evidence"] = result.model_dump(mode="json")
             return result
         finally:
