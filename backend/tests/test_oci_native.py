@@ -187,7 +187,7 @@ async def test_ambiguous_missing_header_cannot_count_as_student_zero():
 @pytest.mark.parametrize("filename,source,marker", [
     ("solve.py", "print(1 // int(input()))", "ZeroDivisionError"),
     ("solve.c", "#include <signal.h>\nint main(void){raise(SIGSEGV);}", "SIGSEGV"),
-    ("solve.c", '#include <stdio.h>\nint main(void){fputs("ZeroDivisionError\\n",stderr);return 1;}', None),
+    ("solve.c", '#include <stdio.h>\nint main(void){fputs("Traceback (most recent call last):\\nZeroDivisionError\\n",stderr);return 1;}', None),
 ])
 async def test_runtime_feedback_follows_observed_failure(filename, source, marker):
     problem = ProblemInfo(q_id="q1", number="1", type="programming", stem="Read one integer from stdin.",

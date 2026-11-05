@@ -85,7 +85,7 @@ def _short(value: str, limit=140):
     return value if len(value) <= limit else value[:limit - 1] + "…"
 
 
-def _case_detail(case_id, case_label, case, result, reason):
+def _case_detail(case_id, case_label, case, result, reason, *, python_trace=False):
     detail = {"case_id": case_id, "case_label": case_label, "source": case.source, "outcome": reason}
     if not result.passed:
         expected = case.expected_return if case.function_name else case.expected_output
@@ -105,7 +105,7 @@ def _case_detail(case_id, case_label, case, result, reason):
                 detail.update(diagnostic=location[1], line=int(location[2]))
         elif reason == "link_error" and result.error in {"unresolved_symbol", "duplicate_symbol"}:
             detail["diagnostic"] = result.error
-        if result.error:
+        if python_trace and result.error:
             last_line = result.error.strip().splitlines()[-1:]
             match = re.match(r"([A-Za-z]{1,32}(?:Error|Exception))\b", last_line[0]) if last_line else None
             if match:
@@ -214,7 +214,8 @@ def describe_run(run, language, problem: ProblemInfo):
             return invalid, []
         failure_counts[reason] += 1
         key = (reason, case.source)
-        detail = _case_detail(case_id, case_label, case, row, reason)
+        detail = _case_detail(case_id, case_label, case, row, reason,
+                              python_trace=getattr(run, "source_language", None) == "python")
         detail["case_number"] = index + 1
         (repeated if key in seen else representatives).append(detail)
         seen.add(key)
