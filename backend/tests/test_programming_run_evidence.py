@@ -141,7 +141,7 @@ async def test_leased_checkpoint_reclaim_retry_fresh_and_corruption(monkeypatch)
     assert "value" not in broken[record_key]
     broken[record_key]["digest"] = "wrong evidence"
     cp.manifest = {"programming_artifacts":broken}
-    with runs.programming_run(NS(), None), pytest.raises(CheckpointWriteError):
+    with pytest.raises(CheckpointWriteError, match="programming_retry_evidence_missing"), runs.programming_run(NS(), None):
         await grade(question(), "s", generate, execute)
     cp.run_id, cp.manifest = "fresh", {}
     with runs.programming_run(NS(), None):
