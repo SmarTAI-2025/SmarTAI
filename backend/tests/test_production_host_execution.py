@@ -29,6 +29,7 @@ async def test_programming_unavailable_is_a_failed_expert_not_student_test_failu
     result = await ProgrammingSkill(provider).grade(problem, _make_answer("print(sum(map(int, input().split())))"))
     assert result.confidence == 0
     assert result.error_kind == "programming_execution_unavailable"
-    assert "未执行" in result.comment
+    assert result.programming_evidence.execution_status == "not_executed"
+    assert result.programming_evidence.score_status == "unavailable"
     assert "0/" not in result.comment
     provider.ainvoke.assert_not_called()

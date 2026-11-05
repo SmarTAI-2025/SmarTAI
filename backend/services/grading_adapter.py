@@ -150,6 +150,8 @@ def correction_to_result(
     needs_review = hard_failure or soft_review
     if invalid_scale:
         primary_reasons = ["invalid_score_scale"]
+    elif hard_failure and review_reasons and any(e.programming_evidence for e in correction.expert_results):
+        primary_reasons = []  # Keep the actual programming failure (e.g. a bad mapping or runner).
     elif hard_failure:
         primary_reasons = [
             "grading_paused" if method == "paused" else "quota_exhausted" if method == "quota_exhausted" else "llm_failed"
@@ -182,7 +184,7 @@ def correction_to_result(
     public_experts = []
     for expert in normalized_experts:
         payload = expert.model_dump()
-        if read_math_trace(expert) is not None:
+        if expert.programming_evidence or read_math_trace(expert) is not None:
             # The full graph stays in private checkpoints. Keep the existing
             # public field and all scored evidence without mutating the vote.
             payload["raw_output"] = None

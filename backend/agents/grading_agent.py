@@ -390,6 +390,12 @@ async def _grade_single_answer(
             else:
                 synthesis_method = "all_failed"
             comment = _grading_failure_feedback(e.dominant_kind, grading_setup)
+            reasons = []
+            for failure in e.failures:
+                if failure.programming_evidence and failure.error_kind == e.dominant_kind:
+                    comment = failure.comment
+                    reasons = [failure.programming_evidence.primary_reason]
+                    break
             if reporter:
                 await reporter.increment_completed()
             return _apply_low_confidence_policy(Correction(
@@ -401,6 +407,7 @@ async def _grade_single_answer(
                 comment=comment,
                 steps=[],
                 expert_results=e.failures,
+                requires_human_review=bool(reasons), review_reasons=reasons,
                 synthesis_method=synthesis_method,
             ), grading_setup)
         except Exception as e:
