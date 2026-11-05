@@ -198,6 +198,26 @@ def _reference(problem):
     return None
 
 
+def _reference_language(problem, source):
+    # The teacher's reference can be written in a different language from the
+    # student answer. Prefer its explicit fence to any language in the stem.
+    first = (problem.solution_code or problem.reference_answer or "").lstrip().splitlines()[0].strip().lower()
+    fenced = {"```c": "c", "```cpp": "cpp", "```c++": "cpp", "```python": "python", "```py": "python"}
+    if first in fenced:
+        return fenced[first]
+    if not has_native_main(source):
+        return "python"
+    try:
+        ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError):
+        if re.search(r"c\+\+", problem.stem, re.I):
+            return "cpp"
+        if re.search(r"(?<![A-Za-z])C(?:11|17|语言|单文件|\b)", problem.stem, re.I):
+            return "c"
+        raise ValueError("programming_case_configuration_invalid") from None
+    return "python"
+
+
 def _reference_execution_identity(problem):
     runtime = runtime_identity()
     try:
@@ -270,15 +290,7 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
             reference = _reference(problem)
             if reference:
                 from backend.services.programming_test_contract import bind_programming_cases
-                language = "python"
-                if has_native_main(reference):
-                    declaration = (problem.solution_code or problem.reference_answer or "").lstrip().splitlines()[0]
-                    if declaration.lower() in {"```cpp", "```c++"} or re.search(r"c\+\+", problem.stem, re.I):
-                        language = "cpp"
-                    elif declaration.lower() == "```c" or re.search(r"(?<![A-Za-z])C(?:11|17|语言|单文件|\b)", problem.stem, re.I):
-                        language = "c"
-                    else:
-                        raise ValueError("programming_case_configuration_invalid")
+                language = _reference_language(problem, reference)
                 executable = python_execution_source(reference) if language == "python" else reference
                 ref_cases = (bind_programming_cases(problem.stem, cases, executable) if language == "python"
                              else bind_stdin_cases(problem.stem, cases))

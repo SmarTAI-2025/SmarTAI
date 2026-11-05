@@ -208,3 +208,10 @@ async def test_uploaded_c_family_skips_generation_and_python_execution(name, cod
     assert result.status == "unavailable" and result.reason == "native_main_required"
     generate.assert_not_awaited()
     execute.assert_not_awaited()
+
+
+def test_teacher_reference_language_is_independent_of_student_language():
+    problem = question().model_copy(update={"stem": "C++17 stdin", "solution_code": "```c\nint main(void) {}\n```"})
+    assert runs._reference_language(problem, runs._reference(problem)) == "c"
+    problem.solution_code = "def main():\n    values = {1: 2}\n    print(values[1])\nmain()"
+    assert runs._reference_language(problem, runs._reference(problem)) == "python"
