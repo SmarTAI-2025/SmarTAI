@@ -223,6 +223,8 @@ async def exercise_review_and_release(monkeypatch, scenario, *, native=False):
             if scenario == "platform" else
             ("programming_conflicting_expectations", "同一输入有不同的预期结果", "same input has different expected results")
         )
+        if native and scenario == "platform":
+            reason, zh, en = "native_runner_unavailable", "检查隔离运行时和镜像", "check the OCI runtime and image"
         assert evidence["primary_reason"] == reason and reason not in public["comment"]
         assert zh in public["comment"] or en in public["comment"]
         assert public["expert_results"][0]["comment"] == public["comment"]
