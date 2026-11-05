@@ -181,10 +181,11 @@ def test_pdf_header_and_supported_preamble_still_detected(prefix):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("name,mime", [("notes.txt", "text/plain"), ("notes.md", "text/plain"), ("notes.markdown", "text/markdown"), ("answers.csv", "text/plain")])
-async def test_text_quoting_pdf_marker_is_read_as_text(name, mime):
+@pytest.mark.parametrize("name,mime,purpose", [("notes.txt", "text/plain", "submissions"), ("notes.md", "text/plain", "submissions"), ("notes.markdown", "text/markdown", "submissions"), ("tests.csv", "text/plain", "test_cases")])
+async def test_text_quoting_pdf_marker_is_read_as_text(name, mime, purpose):
+    # CSV remains a supported test material, but is no longer a submission format.
     body = b"Example: %PDF-1.7 is a PDF header.\n"
-    assert await files.extract_text_from_upload(body, name, content_type=mime) == body.decode()
+    assert await files.extract_text_from_upload(body, name, content_type=mime, purpose=purpose) == body.decode()
 
 
 @pytest.mark.asyncio
