@@ -37,6 +37,9 @@ from backend.services.background_errors import (
     classify_background_error,
     is_retryable_background_error,
 )
+from backend.services.programming_test_contract import (
+    ProgrammingCaseError, adapt_programming_cases, literal_programming_case_groups,
+)
 from backend.services.question_structure import annotate_major_question_structures
 from backend.services.programming_test_contract import required_function_name
 from backend.services.programming_submission_mapping import may_contain_source, source_answers
@@ -477,7 +480,8 @@ async def _extract_problems_call(
                 try:
                     cases.append(_PartialTestCase.model_validate(case))
                 except ValueError:
-                    continue
+                    if is_programming_question_type(fields["type"]):
+                        fields["source_incomplete"] = dropped_items = True
             fields["test_cases"] = cases or None
             retained.append(_PartialProblem.model_validate(fields))
         parsed = _PartialProblemSet(problems=retained)
@@ -490,6 +494,11 @@ async def _extract_problems_call(
         raise ValueError("LLM did not extract any problems from the text.")
 
     prob_dict = {q.q_id: q.model_dump() for q in parsed.problems}
+    for q in parsed.problems:
+        if is_programming_question_type(q.type) and q.test_cases:
+            # Preserve absence vs explicit empty values until validation. A
+            # full model_dump would fill missing expected_output with "".
+            prob_dict[q.q_id]["test_cases"] = [case.model_dump(exclude_unset=True) for case in q.test_cases]
     # A parser-generated rubric is not an uploaded teacher instruction.
     for problem in prob_dict.values():
         for field in (("criterion", "reference_answer") if partial_source else ("criterion",)):
@@ -503,6 +512,14 @@ async def _extract_problems_call(
                 excerpt = case.pop("source_excerpt", "")
                 case["source"] = "teacher" if _saved_test_case_supported(case, excerpt, text,
                     question_number=problem.get("number")) else "llm_generated"
+        if is_programming_question_type(problem.get("type")) and problem.get("test_cases"):
+            try:
+                problem["test_cases"] = [case.model_dump(exclude_unset=True) for case in
+                    adapt_programming_cases(problem.get("stem") or "", problem["test_cases"])]
+            except ProgrammingCaseError:
+                if not partial_source:
+                    raise
+                problem["source_incomplete"] = dropped_items = True
     logger.info(f"extract_problems: stored {len(prob_dict)} problems")
     if partial_source and dropped_items:
         raise PartialQuestionExtractionError(prob_dict)
@@ -519,6 +536,13 @@ def _saved_test_case_supported(case, excerpt, text, *, question_number=None):
     evidence = excerpt or text
     if question_number:
         from backend.services.source_question_units import question_headings
+        headings = question_headings(text)
+        if headings and len({heading["number"] for heading in headings}) > 1:
+            sections = [text[h.start():headings[i + 1].start() if i + 1 < len(headings) else len(text)]
+                        for i, h in enumerate(headings) if h["number"] == str(question_number)]
+            return any((not excerpt or excerpt in section) and
+                       _saved_test_case_supported(case, excerpt, section, question_number=question_number)
+                       for section in sections)
         headings = question_headings(evidence)
         if headings and all(heading.group("number") == str(question_number) for heading in headings):
             # Standalone running labels can occur between a cross-page input
@@ -532,15 +556,39 @@ def _saved_test_case_supported(case, excerpt, text, *, question_number=None):
     decoder = json.JSONDecoder()
     fields = (("function_name", "function_args", "expected_return") if case.get("function_name")
               else ("input", "expected_output"))
+    if case.get("function_name") and case.get("function_kwargs") is not None and case.get("function_args") is None:
+        fields = ("function_name", "expected_return")
     for match in re.finditer(r"\{", evidence):
         try:
             supplied, _ = decoder.raw_decode(evidence[match.start():])
         except ValueError:
             continue
-        if isinstance(supplied, dict) and all(key in supplied and supplied[key] == case.get(key) for key in fields):
+        if (isinstance(supplied, dict)
+                and json.dumps(supplied.get("function_kwargs") or {}, sort_keys=True)
+                == json.dumps(case.get("function_kwargs") or {}, sort_keys=True)
+                and (not case.get("function_name") or supplied.get("function_args") == case.get("function_args"))
+                and all(key in supplied and json.dumps(supplied[key], sort_keys=True) ==
+                        json.dumps(case.get(key), sort_keys=True) for key in fields)):
             return True
 
     if case.get("function_name"):
+        # Actual call notation distinguishes add(2, 3), solve([2, 3]) and
+        # solve(a=2, b=3). The older explicit vector syntax is handled below.
+        for line in evidence.splitlines():
+            call = re.fullmatch(r"(?:Example\s*:\s*)?" + re.escape(case["function_name"])
+                + r"\((.*)\)\s*(?:(?i:returns?)\b|返回|→|->|=>)\s*(.+?)\s*", line.strip())
+            if call and call[2] == case.get("expected_return"):
+                try:
+                    source_case = adapt_programming_cases("", [dict(io_mode="function",
+                        input=call[1], expected_output=call[2])])[0]
+                except ProgrammingCaseError:
+                    continue
+                if (json.dumps(source_case.function_args) == json.dumps(case.get("function_args") or [])
+                        and json.dumps(source_case.function_kwargs or {}, sort_keys=True)
+                        == json.dumps(case.get("function_kwargs") or {}, sort_keys=True)):
+                    return True
+        if case.get("function_kwargs"):
+            return False
         if case.get("function_args") is None or case.get("expected_return") is None:
             return False
         pattern = (re.escape(case["function_name"]) + r"\(\s*"
@@ -548,6 +596,25 @@ def _saved_test_case_supported(case, excerpt, text, *, question_number=None):
                    + r"\s*\)\s*(?:(?i:returns?)\b|返回|→|->|=>)\s*"
                    + re.escape(normalized(case["expected_return"])))
     else:
+        table_order = None
+        for line in evidence.splitlines():
+            pair = re.fullmatch(r"\s*输入\s*[:：]?\s*(.+?)\s*[,，;；]\s*(?:预期|期望)(?:结果|输出)?\s*[:：]?\s*(.*?)\s*", line)
+            if pair and pair.groups() == (case.get("input"), case.get("expected_output")):
+                return True
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if len(cells) != 2:
+                table_order = None
+                continue
+            labels = [cell.casefold().replace("_", " ") for cell in cells]
+            for order in ((0, 1), (1, 0)):
+                if labels[order[0]] in {"input", "输入"} and labels[order[1]] in {
+                    "output", "expected", "expected output", "输出", "预期", "预期输出",
+                }:
+                    table_order = order
+                    break
+            else:
+                if table_order and [cells[i] for i in table_order] == [case.get("input"), case.get("expected_output")]:
+                    return True
         if not case.get("input") or not case.get("expected_output"):
             return False
         input_value, output_value = (re.escape(normalized(case[key])) for key in ("input", "expected_output"))
@@ -1830,16 +1897,9 @@ async def parse_test_cases_to_per_question(
     for qid, cases in parsed.mapping.items():
         if qid not in valid_qids:
             continue
-        normalized = [
-            TestCase(
-                input=tc.input,
-                expected_output=tc.expected_output,
-                description=tc.description,
-                source="teacher",
-                sandbox_feasible=tc.sandbox_feasible,
-            )
-            for tc in cases
-        ]
+        normalized = adapt_programming_cases(problems_data[qid].get("stem", ""), [
+            case.model_copy(update={"source": "teacher"}) for case in cases
+        ])
         if normalized:
             mapping[qid] = normalized
 
@@ -1886,7 +1946,7 @@ Rules:
   replace the teacher's policy with a stricter reference-solution checklist. For choice or blank
   response forms, emit a result-based rule only when the source supports it,
   otherwise omit. The known max_score is context, not permission to rewrite source rules.
-- For test_cases, only emit candidates for programming questions and use test_cases.
+- For test_cases, copy each literal input and expected output from the teacher into test_cases. Preserve separators, empty values and difficult cases. For explicitly supplied calls preserve args and kwargs. Only emit candidates for programming questions.
 - confidence is match confidence, not grading confidence.
 - exact is allowed only when the source has an explicit matching question number or title.
 - possible is required for semantic/fuzzy location or whenever explicit evidence is absent.
@@ -1974,8 +2034,25 @@ async def parse_material_import_to_candidates(
             "[Teacher material ends]"
         )),
     ]
-    response = await ainvoke_with_retry(provider, messages)
-    raw = response.content or ""
+    # A complete labelled sheet needs only a question-number lookup. Read
+    # every example from the original document, including repeated/hard cases.
+    literal_groups = literal_programming_case_groups(text) if allowed_targets == {"test_cases"} else None
+    by_number = defaultdict(list)
+    for row in problem_context:
+        if is_programming_question_type(row["type"]):
+            by_number[row["number"]].append(row["q_id"])
+    literal_sheet = literal_groups and all(number and len(by_number[number]) == 1 for number, _ in literal_groups)
+    if literal_sheet:
+        by_question = defaultdict(list)
+        for number, cases in literal_groups:
+            by_question[by_number[number][0]].extend(cases)
+        candidates = [MaterialImportCandidateOutput(q_id=q_id, target="test_cases",
+            match_status="exact", confidence=1, test_cases=cases,
+            source_location=problems_data[q_id].get("number", "")) for q_id, cases in by_question.items()]
+    else:
+        response = await ainvoke_with_retry(provider, messages)
+        parsed = extract_and_parse_json(response.content or "", MaterialImportOutput)
+        candidates = parsed.candidates[:200]
 
     if reporter and manage_progress_lifecycle:
         await reporter.set_stage_progress(
@@ -1985,8 +2062,17 @@ async def parse_material_import_to_candidates(
             message="Validating matched material fields",
         )
 
-    parsed = extract_and_parse_json(raw, MaterialImportOutput)
-    candidates = parsed.candidates[:200]
+    for candidate in candidates:
+        if candidate.target == "test_cases" and candidate.q_id in problems_data:
+            cases = candidate.test_cases or []
+            if not literal_sheet and any(not _saved_test_case_supported(case.model_dump(exclude_unset=True),
+                    candidate.source_excerpt, text, question_number=problems_data[candidate.q_id].get("number"))
+                    for case in cases):
+                raise ProgrammingCaseError("An imported test does not match its teacher-supplied input and expectation.")
+            candidate.test_cases = adapt_programming_cases(
+                problems_data[candidate.q_id].get("stem") or "",
+                [case.model_copy(update={"source": "teacher"}) for case in cases],
+            )
     if reporter and manage_progress_lifecycle:
         await reporter.set_stage_progress(
             "plan_ready",
@@ -2101,7 +2187,8 @@ Rules:
 - solution_code: only for programming questions; return reference implementation text, never run it.
 - test_cases: only for programming questions; return structured cases, at most the requested count.
 - Match the question's required interface. For a function implementation, use io_mode="function",
-  function_name (the exact required name), function_args (a JSON array of positional arguments),
+  function_name (only when the teacher specifies the name), function_args (a JSON array of positional arguments),
+  function_kwargs (keyword arguments where needed),
   and expected_return (Python repr of the return value). Leave input/expected_output empty.
   Example for stable_softmax(xs): {"io_mode":"function","function_name":"stable_softmax",
   "function_args":[[0,0]],"expected_return":"[0.5, 0.5]","source":"llm_generated"}.
@@ -2204,6 +2291,11 @@ async def generate_missing_question_materials(
             ),
         })
 
+    # Give the generator the same explicit entry that will validate its output.
+    test_questions = {target["q_id"] for target in target_rows if target["target"] == "test_cases"}
+    for row in problem_context:
+        if row["q_id"] in test_questions:
+            row["required_function_name"] = required_function_name(row["stem"])
     request_context = {
         "requested_targets": target_rows,
         "test_case_count": max(1, min(12, int(test_case_count))),
@@ -2277,18 +2369,15 @@ async def generate_missing_question_materials(
                 raise StructuredOutputInvalidError("Generated material targets were missing, duplicated or invalid.")
             seen.add(candidate.target_id)
             if candidate.target == "test_cases":
-                entry_point = required_function_name(str(problems_data[candidate.q_id].get("stem") or ""))
-                for case in candidate.test_cases or []:
-                    case.source = "llm_generated"
-                    if entry_point and case.sandbox_feasible and (
-                        case.function_name != entry_point
-                        or case.function_args is None or case.expected_return is None
-                    ):
-                        raise StructuredOutputInvalidError(
-                            "Function tests must match the required signature and include function_args and expected_return."
-                        )
-                    if case.function_name:
-                        case.io_mode = "function"
+                if len(candidate.test_cases) > request_context["test_case_count"]:
+                    raise StructuredOutputInvalidError("Too many generated test cases.")
+                try:
+                    candidate.test_cases = adapt_programming_cases(
+                        problems_data[candidate.q_id].get("stem") or "",
+                        [case.model_copy(update={"source": "llm_generated"}) for case in candidate.test_cases],
+                    )
+                except ProgrammingCaseError as exc:
+                    raise StructuredOutputInvalidError(str(exc)) from exc
         if not allow_partial and seen != set(expected_targets):
             raise StructuredOutputInvalidError("The generated materials omitted requested targets.")
         if validate_candidates is not None:

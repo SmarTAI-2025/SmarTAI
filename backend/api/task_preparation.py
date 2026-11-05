@@ -3096,7 +3096,7 @@ async def _run_material_import(
                 "q_id": candidate.q_id, "target": candidate.target,
                 "match_status": candidate.match_status,
                 "text_value": candidate.text_value,
-                "test_cases": [case.model_dump(mode="json") for case in (candidate.test_cases or [])] or None,
+                "test_cases": [case.model_dump(mode="json", exclude_unset=True) for case in (candidate.test_cases or [])] or None,
                 "confidence": candidate.confidence,
                 "source_excerpt": candidate.source_excerpt[:600],
                 "source_location": candidate.source_location[:160],
@@ -3383,7 +3383,7 @@ def apply_material_import(
         patch_map: dict[str, dict[str, Any]] = {}
         for candidate_id in request.accepted_candidate_ids:
             candidate = candidate_map[candidate_id]
-            if candidate_id not in accepted:
+            if candidate.get("target") == "test_cases" and candidate_id in applied:
                 continue
             if candidate.get("would_overwrite") and candidate_id not in overwrite:
                 continue
@@ -3424,8 +3424,13 @@ def apply_material_import(
                 "q_id": q_id, "fields": {},
                 "presentation": {"material_provenance": {}},
             })
-            patch["fields"][target] = value
-            patch["presentation"]["material_provenance"][target] = provenance
+            if target == "test_cases" and target in patch["fields"]:
+                patch["fields"][target].extend(value)
+                first = patch["presentation"]["material_provenance"][target]
+                first.setdefault("candidate_ids", [first["candidate_id"]]).append(candidate_id)
+            else:
+                patch["fields"][target] = list(value) if target == "test_cases" else value
+                patch["presentation"]["material_provenance"][target] = provenance
             applied.append(candidate_id)
         payload["applied_candidate_ids"] = applied
         revised_revision = task_facade.apply_question_patches_atomic(
@@ -3668,7 +3673,8 @@ async def _run_ai_completion(
                     code="unknown_ai_completion_target",
                 )
             seen_target_ids.add(candidate.target_id)
-            value = [case.model_dump(mode="json") for case in (candidate.test_cases or [])] if candidate.target == "test_cases" else candidate.text_value
+            value = ([{**case.model_dump(mode="json", exclude_unset=True), "source": "llm_generated"}
+                      for case in (candidate.test_cases or [])] if candidate.target == "test_cases" else candidate.text_value)
             if not value:
                 continue
             candidate_id = f"ai_{job_id}_{index}"

@@ -96,6 +96,7 @@ from backend.services.background_errors import (
     is_retryable_background_error,
     safe_background_error_code,
 )
+from backend.services.programming_test_contract import ProgrammingCaseError, adapt_programming_cases
 from backend.services.result_artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     artifact_download_filename,
@@ -925,6 +926,16 @@ def _math_rubric_advisory(question, plan, language: str) -> list[dict]:
     }]
 
 
+def _validated_test_cases(stem, question_type, cases, *, edited=False):
+    if cases is None or not is_programming_question_type(question_type):
+        return cases
+    try:
+        return [case.model_dump(mode="json", exclude_unset=True) for case in
+                adapt_programming_cases(stem or "", cases, edited=edited)]
+    except ProgrammingCaseError as exc:
+        raise ValidationError(str(exc), code="invalid_programming_test_cases") from exc
+
+
 def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> dict:
     presentation = dict((question.source or {}).get("presentation") or {})
     # Older manually entered drafts used a value outside the public contract.
@@ -945,6 +956,13 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     rubric_summary = summarize_rubric_points(
         question.criterion or "", max_score, structure
     ).model_dump()
+    # Give the editor valid old function-only rows in its existing text fields.
+    # Invalid legacy data must remain visible so the teacher can correct it.
+    cases = question.test_cases
+    try:
+        cases = _validated_test_cases(question.stem, question.type, cases)
+    except ValidationError:
+        pass
     return {
         "q_id": question.q_id,
         "number": question.number,
@@ -964,7 +982,7 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         "review_status": presentation.get("review_status", "needs_review"),
         "reference_answer": question.reference_answer,
         "solution_code": presentation.get("solution_code"),
-        "test_cases": question.test_cases,
+        "test_cases": cases,
         "material_provenance": presentation.get("material_provenance", {}),
         "ai_completion_provenance": presentation.get("ai_completion_provenance", {}),
         "preparation_issues": [
@@ -2482,7 +2500,7 @@ def _replace_draft_questions(
                 criterion=str(raw.get("criterion") or ""),
                 max_score=float(raw.get("max_score") or 10),
                 reference_answer=raw.get("reference_answer"),
-                test_cases=raw.get("test_cases"), source=source,
+                test_cases=_validated_test_cases(raw.get("stem"), raw.get("type"), raw.get("test_cases")), source=source,
                 version=retained_versions.get(str(raw.get("q_id") or q_id), 0) + 1, created_at=now, updated_at=now,
             ))
         assignment.status = education.AssignmentStatus.READY.value
@@ -3973,6 +3991,10 @@ def apply_question_patches_atomic(
                 presentation_updates
             ).issubset(allowed_presentation):
                 raise ValidationError("Unsupported question patch.")
+            if "test_cases" in fields:
+                fields["test_cases"] = _validated_test_cases(
+                    fields.get("stem", question.stem), question.type, fields["test_cases"]
+                )
             if "max_score" in fields:
                 max_score = float(fields["max_score"])
                 if not math.isfinite(max_score) or not 0 < max_score <= 10_000:
@@ -5437,6 +5459,13 @@ def update_problem(
         source = dict(question.source or {})
         presentation = dict(source.get("presentation") or {})
         presentation["preparation_issues"] = _effective_question_issues(presentation)
+        if "test_cases" in patch or (question.test_cases and {"stem", "type"}.intersection(patch)):
+            patch = {**patch, "test_cases": _validated_test_cases(
+                patch.get("stem", question.stem), patch.get("type", question.type),
+                patch.get("test_cases", question.test_cases), edited="test_cases" in patch,
+            )}
+        elif patch.get("review_status") == "confirmed" and question.test_cases:
+            _validated_test_cases(question.stem, question.type, question.test_cases)
         original_problem = _serialize_problem(question)
         manual_markers = [issue for issue in presentation.get("preparation_issues", [])
                           if issue.get("code") == "manual_completion_required"]

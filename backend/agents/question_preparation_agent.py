@@ -30,10 +30,10 @@ from backend.config import settings
 from backend.llm.endpoint_policy import ProviderEndpointError
 from backend.llm.providers import BaseProvider
 from backend.domain.errors import ValidationError
+from backend.services.programming_test_contract import adapt_programming_cases
 from backend.models import (
     ProblemSourceDraft,
     QuestionScorePolicy,
-    TestCase,
     is_programming_question_type,
 )
 from backend.progress.tracker import ProgressReporter
@@ -974,8 +974,7 @@ async def prepare_question_packages(
             problem.pop("solution_code", None)
             continue
         normalized_cases = []
-        for index, raw_case in enumerate(problem.get("test_cases") or [], start=1):
-            case = TestCase.model_validate(raw_case)
+        for index, case in enumerate(adapt_programming_cases(problem.get("stem") or "", problem.get("test_cases") or []), start=1):
             payload = case.model_dump()
             payload["title"] = case.title or f"样例 {index}"
             payload["io_mode"] = "function" if case.function_name else case.io_mode
