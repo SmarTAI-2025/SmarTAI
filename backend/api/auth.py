@@ -118,6 +118,7 @@ class EmailRegistrationRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=8, max_length=128)
+    invite_code: str = Field(default="", max_length=128)
 
     @field_validator("username", "email", mode="before")
     @classmethod
@@ -191,6 +192,7 @@ def request_email_registration(req: EmailRegistrationRequest, request: Request):
             username=req.username,
             email=req.email,
             password=req.password,
+            invite_code=req.invite_code,
             source_ip=request.client.host if request.client else None,
             sender=get_email_sender(),
         )
@@ -221,9 +223,14 @@ def resend_email_registration(req: EmailRegistrationResendRequest, request: Requ
 
 
 @router.post("/register/verify")
-def verify_email_registration(req: EmailRegistrationVerifyRequest, request: Request):
+def verify_email_registration(
+    req: EmailRegistrationVerifyRequest, request: Request, include_request_id: bool = False,
+):
     try:
-        return verify_registration(req.token, request.client.host if request.client else None)
+        result = verify_registration(req.token, request.client.host if request.client else None)
+        # Older clients validate the exact status-only response. New clients
+        # opt in to the token's identity before clearing a pending flow.
+        return result if include_request_id else {"status": result["status"]}
     except RegistrationError as exc:
         raise _registration_error(exc) from exc
 

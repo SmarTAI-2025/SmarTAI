@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   PENDING_REGISTRATION_STORAGE_KEY,
   createPendingRegistrationFlow,
+  getPendingRegistrationFlowRequestId,
+  isCurrentPendingRegistrationFlow,
   maskEmail,
   readPendingRegistrationFlow,
   savePendingRegistrationFlow,
@@ -50,5 +52,21 @@ describe("pending registration metadata", () => {
     expect(maskEmail("a@ustc.edu.cn")).toBe("*@ustc.edu.cn");
     expect(maskEmail("ab@ustc.edu.cn")).toBe("a*@ustc.edu.cn");
     expect(maskEmail("teacher@ustc.edu.cn")).toBe("t*****r@ustc.edu.cn");
+  });
+
+  it("checks identity without discarding expired metadata", () => {
+    savePendingRegistrationFlow(createPendingRegistrationFlow("teacher@ustc.edu.cn", response, 1_000_000));
+    const raw = window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY);
+    expect(getPendingRegistrationFlowRequestId()).toBe("request-1");
+    expect(isCurrentPendingRegistrationFlow("request-1")).toBe(true);
+    expect(isCurrentPendingRegistrationFlow("another-request")).toBe(false);
+    expect(window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY)).toBe(raw);
+  });
+
+  it("does not mutate malformed storage during an identity check", () => {
+    window.sessionStorage.setItem(PENDING_REGISTRATION_STORAGE_KEY, "malformed-json");
+    expect(getPendingRegistrationFlowRequestId()).toBeNull();
+    expect(isCurrentPendingRegistrationFlow("request-1")).toBe(false);
+    expect(window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY)).toBe("malformed-json");
   });
 });

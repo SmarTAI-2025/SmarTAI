@@ -1,4 +1,5 @@
 from __future__ import annotations
+from backend.tests.registration_invite_helpers import invite_code, invite_digest
 
 import hashlib
 import threading
@@ -90,6 +91,7 @@ def test_verification_message_greets_user_and_escapes_html_username():
 def test_verification_request_persists_digest_and_identity_fields_only():
     create_schema()
     request = EmailVerificationRequestRecord(
+        registration_invite_digest=invite_digest(),
         id="req-test-primitive",
         normalized_username="teacher-test",
         normalized_email="teacher@mail.ustc.edu.cn",
@@ -125,6 +127,7 @@ def test_request_and_verify_creates_teacher_only_after_email_confirmation(monkey
     sender = _FakeSender()
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
     result = request_registration(
+        invite_code=invite_code(),
         username="new-teacher",
         email="Teacher@MAIL.USTC.EDU.CN",
         password="long-enough-password",
@@ -134,8 +137,8 @@ def test_request_and_verify_creates_teacher_only_after_email_confirmation(monkey
     assert result["status"] == "verification_required"
     assert sender.messages and "#token=" in sender.messages[0]["text"]
     token = sender.messages[0]["text"].split("#token=", 1)[1].split()[0]
-    assert verify_registration(token) == {"status": "registered"}
-    assert verify_registration(token) == {"status": "already_verified"}
+    assert verify_registration(token) == {"status": "registered", "request_id": result["request_id"]}
+    assert verify_registration(token) == {"status": "already_verified", "request_id": result["request_id"]}
 
 
 def test_failed_delivery_records_internal_failure_and_allows_a_clean_retry(monkeypatch):
@@ -143,6 +146,7 @@ def test_failed_delivery_records_internal_failure_and_allows_a_clean_retry(monke
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
     with pytest.raises(RegistrationError) as exc_info:
         request_registration(
+            invite_code=invite_code(),
             username="delivery-failure",
             email="failure@ustc.edu.cn",
             password="long-enough-password",
@@ -159,6 +163,7 @@ def test_failed_delivery_records_internal_failure_and_allows_a_clean_retry(monke
         assert stored.superseded_at is not None
     retry_sender = _FakeSender()
     result = request_registration(
+        invite_code=invite_code(),
         username="delivery-failure",
         email="failure@ustc.edu.cn",
         password="long-enough-password",
@@ -200,6 +205,7 @@ def test_request_rejects_existing_username_before_sending_mail(monkeypatch):
     existing = client.post(
         "/auth/register/request",
         json={
+            "invite_code": invite_code(),
             "username": "already-taken",
             "email": "new-owner@ustc.edu.cn",
             "password": "long-enough-password",
@@ -213,6 +219,7 @@ def test_request_rejects_existing_username_before_sending_mail(monkeypatch):
     available = client.post(
         "/auth/register/request",
         json={
+            "invite_code": invite_code(),
             "username": "available-name",
             "email": "available@ustc.edu.cn",
             "password": "long-enough-password",
@@ -238,6 +245,7 @@ def test_request_canonicalizes_existing_email_and_only_rejects_after_proof(monke
     response = client.post(
         "/auth/register/request",
         json={
+            "invite_code": invite_code(),
             "username": "new-name-for-existing-email",
             "email": " taken@mail.ustc.edu.cn. ",
             "password": "long-enough-password",
@@ -263,6 +271,7 @@ def test_verify_detects_a_legacy_email_with_whitespace_and_trailing_dot(monkeypa
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
 
     request_registration(
+        invite_code=invite_code(),
         username="new-name-for-legacy-email",
         email="legacy@mail.ustc.edu.cn",
         password="long-enough-password",
@@ -283,6 +292,7 @@ def test_pending_delivery_token_recovers_after_sender_commit_uncertainty(monkeyp
     with session_scope() as session:
         session.add(
             EmailVerificationRequestRecord(
+                registration_invite_digest=invite_digest(),
                 id="pending-delivery-recovery",
                 normalized_username="pending-delivery-user",
                 normalized_email="pending-delivery@ustc.edu.cn",
@@ -296,7 +306,7 @@ def test_pending_delivery_token_recovers_after_sender_commit_uncertainty(monkeyp
             )
         )
 
-    assert verify_registration(raw_token) == {"status": "registered"}
+    assert verify_registration(raw_token) == {"status": "registered", "request_id": "pending-delivery-recovery"}
 
 
 def test_late_older_delivery_cannot_supersede_a_newer_active_token():
@@ -308,6 +318,7 @@ def test_late_older_delivery_cannot_supersede_a_newer_active_token():
         session.add_all(
             [
                 EmailVerificationRequestRecord(
+                    registration_invite_digest=invite_digest(),
                     id="older-delivery",
                     normalized_username="late-delivery-user",
                     normalized_email=email,
@@ -321,6 +332,7 @@ def test_late_older_delivery_cannot_supersede_a_newer_active_token():
                     source_ip="198.51.100.71",
                 ),
                 EmailVerificationRequestRecord(
+                    registration_invite_digest=invite_digest(),
                     id="newer-delivery",
                     normalized_username="late-delivery-user",
                     normalized_email=email,
@@ -359,6 +371,7 @@ def test_older_delivery_finishing_first_preserves_newer_pending_winner():
         session.add_all(
             [
                 EmailVerificationRequestRecord(
+                    registration_invite_digest=invite_digest(),
                     id="delivery-order-older",
                     normalized_username="delivery-order-user",
                     normalized_email=email,
@@ -371,6 +384,7 @@ def test_older_delivery_finishing_first_preserves_newer_pending_winner():
                     source_ip="198.51.100.73",
                 ),
                 EmailVerificationRequestRecord(
+                    registration_invite_digest=invite_digest(),
                     id="delivery-order-newer",
                     normalized_username="delivery-order-user",
                     normalized_email=email,
@@ -425,6 +439,7 @@ def test_middle_delivery_supersedes_older_while_newer_pending_may_fail():
             (0, "three-newer", "pending"),
         ):
             session.add(EmailVerificationRequestRecord(
+                registration_invite_digest=invite_digest(),
                 id=request_id,
                 normalized_username="three-deliveries-user",
                 normalized_email=email,
@@ -465,6 +480,7 @@ def test_new_request_supersedes_previous_token(monkeypatch):
     sender = _FakeSender()
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
     request_registration(
+        invite_code=invite_code(),
         username="first-teacher",
         email="supersede@ustc.edu.cn",
         password="long-enough-password",
@@ -478,6 +494,7 @@ def test_new_request_supersedes_previous_token(monkeypatch):
         ).one()
         first_row.resend_available_at = 0
     second = request_registration(
+        invite_code=invite_code(),
         username="second-teacher",
         email="supersede@ustc.edu.cn",
         password="long-enough-password",
@@ -494,6 +511,7 @@ def test_resend_replaces_token_and_preserves_pending_password(monkeypatch):
     sender = _FakeSender()
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
     first = request_registration(
+        invite_code=invite_code(),
         username="resend-teacher",
         email="resend@ustc.edu.cn",
         password="long-enough-password",
@@ -510,7 +528,7 @@ def test_resend_replaces_token_and_preserves_pending_password(monkeypatch):
     new_token = sender.messages[-1]["text"].split("#token=", 1)[1].split()[0]
     with pytest.raises(RegistrationError):
         verify_registration(old_token)
-    assert verify_registration(new_token) == {"status": "registered"}
+    assert verify_registration(new_token) == {"status": "registered", "request_id": second["request_id"]}
 
 
 def test_concurrent_registration_double_click_sends_once(monkeypatch):
@@ -520,6 +538,7 @@ def test_concurrent_registration_double_click_sends_once(monkeypatch):
     def request_once():
         try:
             return request_registration(
+                invite_code=invite_code(),
                 username="double-click",
                 email="double-click@ustc.edu.cn",
                 password="long-enough-password",
@@ -541,6 +560,7 @@ def test_concurrent_verify_creates_one_user(monkeypatch):
     sender = _FakeSender()
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
     request_registration(
+        invite_code=invite_code(),
         username="double-confirm",
         email="double-confirm@ustc.edu.cn",
         password="long-enough-password",
@@ -560,14 +580,16 @@ def test_concurrent_verify_creates_one_user(monkeypatch):
 def test_concurrent_verify_for_same_username_across_emails_is_stable(monkeypatch):
     sender = _FakeSender()
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
-    request_registration(
+    first = request_registration(
+        invite_code=invite_code(),
         username="shared-username",
         email="first-owner@ustc.edu.cn",
         password="long-enough-password",
         source_ip="198.51.100.61",
         sender=sender,
     )
-    request_registration(
+    second = request_registration(
+        invite_code=invite_code(),
         username="shared-username",
         email="second-owner@ustc.edu.cn",
         password="long-enough-password",
@@ -585,7 +607,10 @@ def test_concurrent_verify_for_same_username_across_emails_is_stable(monkeypatch
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(verify_once, tokens))
 
-    assert sum(outcome == {"status": "registered"} for outcome in outcomes) == 1
+    assert sum(
+        outcome == {"status": "registered", "request_id": pending["request_id"]}
+        for outcome, pending in zip(outcomes, [first, second])
+    ) == 1
     assert sum(
         outcome in {"registration_unavailable", "verification_link_already_used"}
         for outcome in outcomes
@@ -602,7 +627,7 @@ def test_registration_api_requires_email_verification_and_never_returns_session(
     client = TestClient(app)
     response = client.post(
         "/auth/register/request",
-        json={"username": "api-teacher", "email": "api@ustc.edu.cn", "password": "long-enough-password"},
+        json={"invite_code": invite_code(), "username": "api-teacher", "email": "api@ustc.edu.cn", "password": "long-enough-password"},
     )
     assert response.status_code == 202, response.text
     assert response.json()["status"] == "verification_required"
@@ -616,16 +641,16 @@ def test_registration_api_requires_email_verification_and_never_returns_session(
     assert login.status_code == 200, login.text
 
 
-def test_registration_api_rejects_role_and_invite_fields(monkeypatch):
+def test_registration_api_rejects_role_with_valid_admission_code(monkeypatch):
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
     response = TestClient(app).post(
         "/auth/register/request",
         json={
+            "invite_code": invite_code(),
             "username": "api-extra-fields",
             "email": "api-extra@ustc.edu.cn",
             "password": "long-enough-password",
             "role": "admin",
-            "invite_code": "BYPASS",
         },
     )
     assert response.status_code == 422
@@ -636,6 +661,7 @@ def test_registration_api_projects_malformed_email_as_stable_unavailable(monkeyp
     response = TestClient(app, raise_server_exceptions=False).post(
         "/auth/register/request",
         json={
+            "invite_code": invite_code(),
             "username": "malformed-email",
             "email": "teacher@.ustc.edu.cn",
             "password": "long-enough-password",
@@ -683,6 +709,7 @@ def test_resend_enforces_hourly_email_limit(monkeypatch):
         for index in range(10):
             session.add(
                 EmailVerificationRequestRecord(
+                    registration_invite_digest=invite_digest(),
                     id=f"resend-limit-{index}",
                     normalized_username="resend-limit",
                     normalized_email=email,
@@ -719,6 +746,7 @@ def test_missing_source_ip_is_not_counted_as_one_shared_ip(monkeypatch):
         for index in range(20):
             session.add(
                 EmailVerificationRequestRecord(
+                    registration_invite_digest=invite_digest(),
                     id=f"no-ip-{index}",
                     normalized_username=f"no-ip-{index}",
                     normalized_email=f"no-ip-{index}@ustc.edu.cn",
@@ -734,6 +762,7 @@ def test_missing_source_ip_is_not_counted_as_one_shared_ip(monkeypatch):
             )
 
     result = request_registration(
+        invite_code=invite_code(),
         username="no-ip-new",
         email="no-ip-new@ustc.edu.cn",
         password="long-enough-password",
@@ -755,6 +784,7 @@ def test_resend_enforces_hourly_ip_limit(monkeypatch):
         for index in range(20):
             session.add(
                 EmailVerificationRequestRecord(
+                    registration_invite_digest=invite_digest(),
                     id=f"ip-limit-{index}",
                     normalized_username=f"ip-limit-{index}",
                     normalized_email=f"ip-limit-{index}@ustc.edu.cn",
@@ -780,6 +810,7 @@ def test_failed_resend_keeps_original_request_retryable(monkeypatch):
     sender = _FakeSender()
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
     first = request_registration(
+        invite_code=invite_code(),
         username="retry-resend",
         email="retry-resend@ustc.edu.cn",
         password="long-enough-password",
@@ -820,6 +851,7 @@ def test_concurrent_resend_only_one_sender_call_succeeds(monkeypatch):
     sender = BlockingSender()
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
     first = request_registration(
+        invite_code=invite_code(),
         username="concurrent-resend",
         email="concurrent-resend@ustc.edu.cn",
         password="long-enough-password",
@@ -853,6 +885,7 @@ def test_request_and_resend_for_same_email_share_one_flow_lock(monkeypatch):
     sender = _FakeSender()
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
     first = request_registration(
+        invite_code=invite_code(),
         username="shared-flow",
         email="shared-flow@ustc.edu.cn",
         password="long-enough-password",
@@ -878,6 +911,7 @@ def test_request_and_resend_for_same_email_share_one_flow_lock(monkeypatch):
     def new_request():
         try:
             return request_registration(
+                invite_code=invite_code(),
                 username="shared-flow-new",
                 email="shared-flow@ustc.edu.cn",
                 password="long-enough-password",
@@ -917,6 +951,7 @@ def test_verify_waits_for_same_email_request_before_creating_user(monkeypatch):
     sender = _FakeSender()
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
     first = request_registration(
+        invite_code=invite_code(),
         username="verify-race",
         email="verify-race@ustc.edu.cn",
         password="long-enough-password",
@@ -942,6 +977,7 @@ def test_verify_waits_for_same_email_request_before_creating_user(monkeypatch):
 
     def new_request():
         return request_registration(
+            invite_code=invite_code(),
             username="verify-race-new",
             email="verify-race@ustc.edu.cn",
             password="long-enough-password",
@@ -978,6 +1014,7 @@ def test_resend_uses_same_email_flow_key_as_request(monkeypatch):
     email = "same-key@ustc.edu.cn"
     monkeypatch.setattr(email_registration.settings, "allowed_email_domains", "ustc.edu.cn")
     first = request_registration(
+        invite_code=invite_code(),
         username="same-key",
         email=email,
         password="long-enough-password",
@@ -1013,6 +1050,7 @@ def test_concurrent_requests_cannot_exceed_hourly_ip_limit(monkeypatch):
         for index in range(19):
             session.add(
                 EmailVerificationRequestRecord(
+                    registration_invite_digest=invite_digest(),
                     id=f"concurrent-ip-{index}",
                     normalized_username=f"concurrent-ip-{index}",
                     normalized_email=f"concurrent-ip-{index}@ustc.edu.cn",
@@ -1030,6 +1068,7 @@ def test_concurrent_requests_cannot_exceed_hourly_ip_limit(monkeypatch):
     def request(index: int):
         try:
             return request_registration(
+                invite_code=invite_code(),
                 username=f"concurrent-ip-new-{index}",
                 email=f"concurrent-ip-new-{index}@ustc.edu.cn",
                 password="long-enough-password",
@@ -1114,6 +1153,7 @@ def test_resend_cooldown_retry_after_rounds_up(monkeypatch):
     with session_scope() as session:
         session.add(
             EmailVerificationRequestRecord(
+                registration_invite_digest=invite_digest(),
                 id="ceil-cooldown",
                 normalized_username="ceil-cooldown",
                 normalized_email="ceil-cooldown@ustc.edu.cn",
@@ -1147,6 +1187,7 @@ def test_registration_request_api_maps_message_construction_failure(monkeypatch)
     response = TestClient(app, raise_server_exceptions=False).post(
         "/auth/register/request",
         json={
+            "invite_code": invite_code(),
             "username": "bad-origin-request",
             "email": "bad-origin-request@ustc.edu.cn",
             "password": "long-enough-password",
@@ -1161,6 +1202,7 @@ def test_registration_resend_api_maps_message_construction_failure(monkeypatch):
     sender = _FakeSender()
     monkeypatch.setattr("backend.services.email_registration.settings.allowed_email_domains", "ustc.edu.cn")
     first = request_registration(
+        invite_code=invite_code(),
         username="bad-origin-resend",
         email="bad-origin-resend@ustc.edu.cn",
         password="long-enough-password",

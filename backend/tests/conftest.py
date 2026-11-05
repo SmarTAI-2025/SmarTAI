@@ -16,6 +16,7 @@ os.environ["SMARTAI_PROVIDER_ENCRYPTION_KEY"] = (
     "test-suite-provider-master-key-0123456789abcdef"
 )
 os.environ["SMARTAI_JWT_SECRET"] = "test-suite-jwt-secret-0123456789abcdef"
+os.environ["SMARTAI_REGISTRATION_INVITE_DIGESTS"] = ""
 
 import pytest  # noqa: E402
 from sqlalchemy import create_engine  # noqa: E402
@@ -59,6 +60,12 @@ def sqlite_schema_template(tmp_path_factory):
     finally:
         engine.dispose()
     return template
+
+
+@pytest.fixture(autouse=True)
+def isolated_registration_invites(monkeypatch):
+    from backend.config import settings
+    monkeypatch.setattr(settings, "registration_invite_digests", "")
 
 
 @pytest.fixture(autouse=True)

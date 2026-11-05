@@ -10,17 +10,22 @@ import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
 import { useI18n } from "@/i18n/I18nProvider";
 import { formatCooldown, rateLimitDelay, useRetryCooldown } from "@/hooks/useRetryCooldown";
+import { useEmailLinkSessionKey } from "@/hooks/useEmailLinkSessionKey";
 import {
   localizedPasswordResetError,
   passwordResetLinkFailure,
   type LinkFailure,
 } from "@/lib/authErrors";
-import { clearPendingRegistrationFlow } from "@/lib/registrationFlow";
 import { clearPasswordResetRequestMarker } from "@/lib/passwordResetRequestFlow";
 
 type ResetState = "ready" | "success" | LinkFailure;
 
 export function ResetPasswordPage() {
+  const sessionKey = useEmailLinkSessionKey();
+  return <ResetPasswordSession key={sessionKey} />;
+}
+
+function ResetPasswordSession() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -31,11 +36,17 @@ export function ResetPasswordPage() {
   const tokenRef = useRef<string | null | undefined>(undefined);
   if (tokenRef.current === undefined) tokenRef.current = resetTokenFromHash(location.hash);
   const submitting = useRef(false);
+  const active = useRef(false);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const inputProtection = useDraftProtection({ scope: "credential:ResetPasswordPage", value: { password, confirmation }, baseline: { password: "", confirmation: "" }, secret: true, onRestore: (draft) => { setPassword(draft.password); setConfirmation(draft.confirmation); } });
   const [state, setState] = useState<ResetState>(tokenRef.current ? "ready" : "invalid");
+
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
 
   useLayoutEffect(() => {
     if (!location.hash) return;
@@ -54,7 +65,7 @@ export function ResetPasswordPage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!tokenRef.current || submitting.current || confirmReset.isPending || cooldown.active) return;
+    if (!active.current || !tokenRef.current || submitting.current || confirmReset.isPending || cooldown.active) return;
     setFormError(null);
     if (password.length < 8 || password.length > 128) {
       setFormError(zh ? "新密码需为 8–128 个字符。" : "The new password must contain 8–128 characters.");
@@ -75,12 +86,14 @@ export function ResetPasswordPage() {
       await confirmReset.mutateAsync({ token, newPassword: nextPassword });
       confirmReset.reset();
       clearAuthToken();
-      clearPendingRegistrationFlow();
       clearPasswordResetRequestMarker();
       queryClient.clear();
+      if (!active.current) return;
       await inputProtection.clear();
+      if (!active.current) return;
       setState("success");
     } catch (error) {
+      if (!active.current) return;
       confirmReset.reset();
       const failure = passwordResetLinkFailure(error);
       if (failure === "retry") tokenRef.current = token;

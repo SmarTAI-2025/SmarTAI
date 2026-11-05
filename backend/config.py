@@ -378,6 +378,8 @@ class Settings(BaseSettings):
     mail_from_name: str = "SmarTAI"
     public_frontend_url: str = "http://localhost:5173"
     allowed_email_domains: str = ""
+    # SHA-256 digests only; plaintext invitation codes never enter app config.
+    registration_invite_digests: str = ""
     smtp_timeout_seconds: float = 10.0
     email_verification_expiry_seconds: int = 1800
     email_verification_resend_seconds: int = 60
