@@ -134,3 +134,46 @@ async def test_lease_loss_cancels_queued_admission_without_launching_worker(monk
         await task
     assert not slots.acquire(blocking=False)
     slots.release()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_reader", [False, True])
+@pytest.mark.parametrize("slot_timeout", [None, 10])
+async def test_text_quoting_pdf_preserves_admission_policy_on_repeated_validation(monkeypatch, explicit_reader, slot_timeout):
+    from backend.services import question_sources
+    from backend.services.stage_provider_routing import StageProviderRoute
+    from backend.tools import media_validation
+
+    body = b"A file format example: %PDF-1.7\nThis is ordinary teaching text."
+    timeouts = []
+
+    async def inspect(content, content_type, **kwargs):
+        assert content == body and content_type == "application/pdf"
+        timeouts.append(kwargs["slot_timeout_seconds"])
+        raise HTTPException(400, detail={"code": "pdf_invalid"})
+
+    monkeypatch.setattr(media_validation, "validate_media_content", inspect)
+    read = await question_sources.read_question_source(
+        owner_id="owner", task_id="task", content=body, filename="notes.txt",
+        route=StageProviderRoute(route_id="unused", kind="llm", provider=None), registry=None,
+        text_reader=file_processing.extract_text_from_upload if explicit_reader else None,
+        media_slot_timeout_seconds=slot_timeout,
+    )
+    assert read.text == body.decode() and timeouts == [slot_timeout, slot_timeout]
+
+
+@pytest.mark.asyncio
+async def test_custom_text_reader_keeps_legacy_callback_signature():
+    from backend.services import question_sources
+    from backend.services.stage_provider_routing import StageProviderRoute
+
+    async def legacy_reader(content, filename, *, purpose, reporter):
+        assert content == b"ordinary text" and filename == "notes.txt"
+        return "Legacy reader output"
+
+    read = await question_sources.read_question_source(
+        owner_id="owner", task_id="task", content=b"ordinary text", filename="notes.txt",
+        route=StageProviderRoute(route_id="unused", kind="llm", provider=None), registry=None,
+        text_reader=legacy_reader, media_slot_timeout_seconds=None,
+    )
+    assert read.text == "Legacy reader output"

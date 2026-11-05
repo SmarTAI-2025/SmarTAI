@@ -171,7 +171,16 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     )
     media_type = inspection.content_type
     if media_type not in _VISUAL_TYPES:
-        text = await (text_reader or extract_text_from_upload)(content, filename, purpose=purpose, reporter=reporter)
+        if text_reader is None or text_reader is extract_text_from_upload:
+            # Text may quote a PDF header, so the built-in reader can repeat
+            # the bounded format check. Preserve this caller's admission policy.
+            text = await extract_text_from_upload(
+                content, filename, purpose=purpose, reporter=reporter,
+                media_slot_timeout_seconds=media_slot_timeout_seconds,
+            )
+        else:
+            # Legacy/custom readers retain their existing callback contract.
+            text = await text_reader(content, filename, purpose=purpose, reporter=reporter)
         return QuestionSourceRead(text, stored_file_id=stored_file_id)
     total_pages = None
     if media_type == "application/pdf":

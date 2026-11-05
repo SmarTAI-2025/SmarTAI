@@ -695,6 +695,7 @@ async def extract_text_from_upload(
     purpose: OCRPurpose = "submissions",
     reporter=None,
     content_type: str | None = None,
+    media_slot_timeout_seconds: float | None = 10,
 ) -> str:
     """Convert a supported upload into text.
 
@@ -703,7 +704,10 @@ async def extract_text_from_upload(
     ingest skill when one is available.
     """
     safe_name = filename or "upload"
-    inspection = await validate_upload_content(file_bytes, safe_name, content_type=content_type, purpose=purpose)
+    inspection = await validate_upload_content(
+        file_bytes, safe_name, content_type=content_type, purpose=purpose,
+        media_slot_timeout_seconds=media_slot_timeout_seconds,
+    )
     media_type = inspection.content_type
     if reporter:
         await reporter._emit_message(f"Reading {safe_name}...")
