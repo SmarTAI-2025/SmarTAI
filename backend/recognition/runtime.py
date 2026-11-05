@@ -237,19 +237,15 @@ async def _dispatch(
     except TimeoutError as exc:
         if ticket is None:
             raise RecognitionError("recognition_timeout") from None
-        from backend.services.execution_control import current_execution, provider_key
+        from backend.services.execution_control import current_execution
         control = current_execution()
         provider = getattr(engine, "provider", None)
-        wait = control.waits.get(provider_key(provider)) if control is not None and provider is not None else None
         # An outer OCR deadline can expire during backoff after an explicit
         # rejection. No request is in flight then; do not turn it into an
         # uncertain paid submission or give the next phase a fresh budget.
-        import time
-        rejected_wait = bool(wait and wait["retry_at"] > time.time())
+        rejected_wait = control is not None and provider is not None and await control.finish_wait(provider)
         uncertain = not rejected_wait
-        if rejected_wait:
-            control.block(provider, "provider_rate_limited")
-        elif progress:
+        if uncertain and progress:
             await progress.record_provider_failure(exc, pages=failure_pages)
         candidate = RecognitionCandidateV1(
             kind=capabilities.candidate_kind, status="error", provider_route_id=capabilities.route_id,

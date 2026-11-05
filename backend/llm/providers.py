@@ -22,7 +22,7 @@ import ssl
 import time
 from abc import ABC, abstractmethod
 from collections import deque
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from typing import List, Optional, Dict, Any, Deque, Callable
 from dataclasses import dataclass
 
@@ -465,7 +465,10 @@ class BaseProvider(ABC):
             if control is not None:
                 await provider_local_step(control.check(self))
             scheduler = get_scheduler()
-            async with deadline:
+            interrupt = control.interruptible_call(
+                self, lambda: scope.submission_may_exist if scope is not None else admitted,
+            ) if control is not None else nullcontext()
+            async with deadline, interrupt:
                 lease = scheduler.lease(
                     key=quota_key(self.config, endpoint_key(self.config)),
                     rpm=max(0, int(self.config.rpm or 0)),
@@ -495,9 +498,6 @@ class BaseProvider(ABC):
                         if control is not None and code:
                             control.block(self, code)
                         raise
-                    else:
-                        if control is not None:
-                            await provider_local_step(control.succeeded(self), best_effort=scope is not None)
             await provider_local_step(report_provider_state(self, "processing"), best_effort=scope is not None)
         except TimeoutError as exc:
             if not deadline.expired():

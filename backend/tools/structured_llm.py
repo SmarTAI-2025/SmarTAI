@@ -11,6 +11,7 @@ All modules (skills, agents) should call this — never duplicate JSON parsing.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import random
@@ -208,7 +209,7 @@ def _classify_exception(e: Exception) -> Exception:
     if quota_code and quota_code != "provider_rate_limited":
         return DailyQuotaError() if quota_code == "provider_daily_quota_exceeded" else PermanentLLMError(quota_code)
     if getattr(e, "retryable", True) is False:
-        return PermanentLLMError("non_retryable_provider_limit")
+        return PermanentLLMError(quota_code or "non_retryable_provider_limit")
     if quota_code == "provider_rate_limited":
         return RateLimitError(quota_code, retry_after=_provider_retry_after(e))
     if isinstance(e, ProviderRequestError) and e.code in {"provider_recitation_blocked", "provider_content_blocked"}:
@@ -965,8 +966,11 @@ def _retry_provider(retry_state):
     return getattr(first, "__self__", None) or first
 
 
+_MAX_ATTEMPTS = 3
+
+
 def _retry_limit() -> int:
-    return min(3, max(1, int(settings.llm_max_retries)))
+    return min(_MAX_ATTEMPTS, max(1, int(settings.llm_max_retries)))
 
 
 def _retry_stop(retry_state) -> bool:
@@ -983,15 +987,16 @@ def _retry_stop(retry_state) -> bool:
             and delay > float(settings.llm_rate_limit_max_wait))
     )
     if isinstance(exc, RateLimitError):
-        from backend.services.execution_control import current_execution, provider_key
+        from backend.services.background_errors import provider_failure_diagnostic
+        from backend.services.execution_control import current_execution
         control = current_execution()
-        if control is not None:
-            provider = _retry_provider(retry_state)
-            key = provider_key(provider)
-            control.rate_failures[key] = control.rate_failures.get(key, 0) + 1
-            stop = stop or control.rate_failures[key] >= _retry_limit()
-            if stop:
-                control.block(provider, "provider_rate_limited")
+        failure = provider_failure_diagnostic(exc) if control is not None else None
+        if failure is not None and failure.http_status == 429:
+            # A fresh Tenacity state belongs to one invocation. Three sibling
+            # first refusals or a text-only quota hint cannot trip the batch.
+            retry_state.rate_limit_failures = getattr(retry_state, "rate_limit_failures", 0) + 1
+            if retry_state.rate_limit_failures == _MAX_ATTEMPTS:
+                control.block(_retry_provider(retry_state), "provider_rate_limited")
     return stop
 
 
@@ -1031,12 +1036,18 @@ async def _before_retry_sleep(retry_state) -> None:
     from backend.services.execution_control import current_execution
     control = current_execution()
     if control is not None:
-        from backend.services.execution_control import provider_key
         provider = _retry_provider(retry_state)
         await provider_local_step(control.waiting(
-            provider, max(next_attempt, control.rate_failures.get(provider_key(provider), 0) + 1),
-            _retry_limit(), seconds,
+            provider, next_attempt, _retry_limit(), seconds,
         ))
+
+
+async def _sleep_before_retry(seconds: float) -> None:
+    from backend.services.execution_control import current_execution
+    if (control := current_execution()) is not None:
+        await control.sleep_before_retry(seconds)
+    else:
+        await asyncio.sleep(seconds)
 
 
 @retry(
@@ -1045,6 +1056,7 @@ async def _before_retry_sleep(retry_state) -> None:
     retry=retry_if_exception_type(TransientLLMError),  # RateLimitError subclasses this
     before=_before_retry_attempt,
     before_sleep=_before_retry_sleep,
+    sleep=_sleep_before_retry,
     reraise=True,
 )
 async def _ainvoke_with_retry(provider: BaseProvider, messages: List[BaseMessage]) -> LLMResponse:
@@ -1067,12 +1079,14 @@ ainvoke_with_retry = _ainvoke_with_retry
 
 
 @retry(stop=_retry_stop, wait=_retry_wait, retry=retry_if_exception_type(RateLimitError),
-       before=_before_retry_attempt, before_sleep=_before_retry_sleep, reraise=True)
+       before=_before_retry_attempt, before_sleep=_before_retry_sleep, sleep=_sleep_before_retry, reraise=True)
 async def _invoke_with_rate_retry(invoke, *args, **kwargs):
     """Retry explicit rejected 429s only; never replay an uncertain vision call."""
     try:
         return await invoke(*args, **kwargs)
     except Exception as exc:
+        if getattr(exc, "retryable", True) is False:
+            raise
         if (scope := current_response_scope()) is not None and scope.submission_may_exist:
             # A previous 429 in an SDK exception context cannot authorize even
             # another local retry cycle while this request remains unknown.

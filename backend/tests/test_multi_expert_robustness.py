@@ -179,6 +179,46 @@ async def test_grading_agent_handles_all_failed(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_exhausted_model_stops_for_later_students_but_peer_still_grades(monkeypatch):
+    from backend.agents import multi_expert
+    from backend.llm.providers import ProviderRequestError
+    from backend.services.execution_control import run_controlled
+    from backend.skills.base import classify_skill_error
+    from backend.tools import structured_llm as llm
+
+    limited, healthy = _FakeProvider("openai:a"), _FakeProvider("openai:b")
+    limited.ainvoke = AsyncMock(side_effect=ProviderRequestError("provider_rate_limited", status_code=429))
+    healthy.ainvoke = AsyncMock(return_value="correct")
+    monkeypatch.setattr(llm._ainvoke_with_retry.retry, "sleep", AsyncMock())
+
+    class TestSkill:
+        name = "retry-test"
+
+        def __init__(self, provider, **kwargs):
+            self.provider = provider
+
+        async def grade(self, problem, answer, *, student_id):
+            try:
+                comment = await llm.ainvoke_with_retry(self.provider, [])
+            except Exception as exc:
+                kind, comment = classify_skill_error(exc)
+                return ExpertResult(provider=self.provider.provider_id, score=0, confidence=0,
+                                   comment=comment, error_kind=kind)
+            return _expert_result(self.provider.provider_id, 8.5, .9, comment)
+    monkeypatch.setattr(multi_expert, "get_skill_for_type", lambda _: TestSkill)
+    registry = _FakeRegistry([limited, healthy])
+
+    async def grade_batch():
+        for student in ("S1", "S2"):
+            result = await run_multi_expert(problem=_problem(), answer=_answer(), student_id=student, registry=registry)
+            assert result.synthesis_method == "degraded_to_single" and result.score == 8.5
+            assert {r.provider: r.error_kind for r in result.expert_results} == {
+                limited.provider_id: "quota_exhausted", healthy.provider_id: None}
+    await run_controlled("grading-model-isolation", lambda: False, grade_batch())
+    assert limited.ainvoke.await_count == 3 and healthy.ainvoke.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_partial_failure_degrades_to_single(monkeypatch):
     p1 = _FakeProvider("zhipu:glm-4.5-air")
     p2 = _FakeProvider("gemini:gemini-3-flash-preview")
