@@ -33,7 +33,8 @@ SIGN = (
 )
 BASIC = r"(?:integers?|ints?|浮点数|实数|整数|strings?|str|字符串|numbers?|floats?|数值|数)"
 TYPE = rf"(?:lists?\s+of\s+(?:{SIGN}\s*)?{BASIC}|(?:{SIGN}\s*)?{BASIC}\s*(?:列表|数组)|lists?|列表|数组|(?:{SIGN}\s*)?{BASIC})"
-DECL = r"(?:is(?:\s+guaranteed\s+to\s+be)?|are|must\s+be|can\s+be|为|是|均为|必须(?:是|为)|保证(?:是|为)|属于|取值为|只能取)"
+DECL = r"(?:is(?:\s+guaranteed\s+to\s+be)?|are|must\s+be|can\s+be|为|是|均为|可(?:以)?(?:为|是)|必须(?:是|为)|保证(?:是|为)|属于|取值为|只能取)"
+ARTICLE = r"(?:(?:an?|any)\s+|任意(?:一个)?)?"
 _CONDITIONAL = re.compile(r"^(?:if\b|when\b|unless\b|otherwise\b|若|当|如果|否则)", re.I)
 _UNSUPPORTED = re.compile(
     r"\b(?:sorted|distinct|unique|prime|even|odd|nonempty|non-empty|matrix|graph|tree|permutation|"
@@ -114,8 +115,14 @@ def _typed(value, spec, stdin):
     }[label]
 
 
-def _input_clauses(text):
+def _input_clauses(text, *, rubric=False):
     for sentence in _clauses(text, commas=False):
+        if rubric and re.fullmatch(
+            r"(?:award\s+)?full (?:credit|marks) (?:if|when) all (?:teacher )?(?:tests?|test cases?|examples?) pass"
+            r"|(?:所有|全部)(?:教师)?(?:测试)?(?:用例|样例)(?:全部|均)?通过(?:时)?(?:给|得|记)满分",
+            sentence, re.I,
+        ):
+            continue  # An award based solely on test outcomes adds no input constraint.
         conditional = re.search(r"\b(?:if|when|unless)\b|如果|若|当", sentence, re.I)
         if conditional:
             # In "if a > 0 then return …" the condition is part of the algorithm.
@@ -155,7 +162,7 @@ def _declarations(stem, criterion):
     )
     result = []
     for clause, rubric in [(s, False) for s in annotations + list(_input_clauses(text))] + [
-        (s, True) for s in _input_clauses(_normal(criterion))
+        (s, True) for s in _input_clauses(_normal(criterion), rubric=True)
     ]:
         if not _CONDITIONAL.match(clause) and not re.match(r"^(?:return|print|output|返回|输出)", clause, re.I):
             pieces = re.split(
@@ -281,7 +288,7 @@ def input_domain(problem, case):
         part = part.strip(" :：")
         if len(values) == 1 and next(iter(values)) in {"_arg0", "_input"}:
             alias = re.fullmatch(
-                rf"(?:(?:the )?(?:input|argument|parameter)\s+|(?:参数|输入)\s*)?({IDENT})\s*{DECL}\s*(?:(?:an?|any)\s+)?(?:{TYPE}|{SIGN})",
+                rf"(?:(?:the )?(?:input|argument|parameter)\s+|(?:参数|输入)\s*)?({IDENT})\s*{DECL}\s*{ARTICLE}(?:{TYPE}|{SIGN})",
                 part,
                 re.I,
             )
@@ -313,7 +320,7 @@ def input_domain(problem, case):
         # Named, scalar declarations; grouped names may have one shared type.
         named = re.fullmatch(
             rf"(?:(?:the\s+)?(?:input|parameter|argument)\s+|(?:输入|参数)\s*)?"
-            rf"(?P<names>(?:{names})(?:(?:\s+and\s+|、)(?:{names}))*)\s*{DECL}\s*(?:(?:a|an|any)\s+)?(?P<type>{TYPE}|{SIGN})",
+            rf"(?P<names>(?:{names})(?:(?:\s+and\s+|、)(?:{names}))*)\s*{DECL}\s*{ARTICLE}(?P<type>{TYPE}|{SIGN})",
             part,
             re.I,
         )

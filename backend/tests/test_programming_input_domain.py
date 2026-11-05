@@ -27,6 +27,8 @@ def call(args, kwargs=None):
         ("the input n is guaranteed to be a strictly positive integer", 1, 0),
         ("n must be a non-negative integer", 0, -1),
         ("参数 n 为负整数", -1, 0),
+        ("输入 n 可以为任意整数", -5, 1.25),
+        ("参数 n 可为任意字符串", "", 10),
         ("n 是非正整数", 0, 1),
         ("n is an integer in [0, 4)", 0, 4),
         ("n 是整数，n ∈ (-2, 4]", 4, -2),
@@ -344,3 +346,11 @@ async def test_original_numbers_survive_quarantine_of_saved_ai_case_in_front_of_
     item = SimpleNamespace(step_no=1, max_points=10, score=5, desc="Teacher case 1 failed.", deduction_basis=None)
     record_deduction_basis(vote, [item], run, p)
     assert not vote.programming_evidence.partial_check
+
+
+def test_conditional_score_and_conditional_input_limit_remain_separate():
+    p = problem("Implement f(n): n is an integer. Return its square.",
+                criterion="Award full marks if all teacher tests pass.")
+    assert input_domain(p, call([-2])) == "allowed"
+    p.criterion += " If n is positive, it must be prime."
+    assert input_domain(p, call([4])) == "unknown"
