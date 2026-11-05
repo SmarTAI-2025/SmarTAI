@@ -318,6 +318,64 @@ describe("AddSubmissionsPage OCR uploads", () => {
     expect(await screen.findByText("progress page")).toBeInTheDocument();
   });
 
+  it("offers DOCX in the student submission file picker", () => {
+    const { container } = renderPage();
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input.accept.split(",")).toContain(".docx");
+  });
+
+  it.each([
+    ["picker", "S001_Alice.docx"],
+    ["picker", "S001_Alice.DOCX"],
+    ["drop", "S001_Alice.docx"],
+    ["drop", "S001_Alice.DOCX"],
+  ])("keeps a DOCX selected through %s and submits its original file (%s)", async (method, filename) => {
+    const { container } = renderPage();
+    const file = new File(["opaque document bytes"], filename, {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    if (method === "picker") {
+      fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } });
+    } else {
+      fireEvent.drop(screen.getByRole("button", { name: "submissionUploadChoose" }), {
+        dataTransfer: { files: [file] },
+      });
+    }
+    expect(screen.getByText(filename)).toBeInTheDocument();
+    expect(screen.queryByText("submissionUploadUnsupported")).not.toBeInTheDocument();
+    expect(mutateAsync).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: "task-1", file, identityMode: "filename", recognitionProviderId: "provider-default",
+    })));
+    expect(await screen.findByText("progress page")).toBeInTheDocument();
+  });
+
+  it("rejects an empty DOCX before recognition", async () => {
+    const { container } = renderPage();
+    fireEvent.change(container.querySelector('input[type="file"]')!, {
+      target: { files: [new File([], "S001_Alice.docx")] },
+    });
+    expect(screen.getByText(/所选作答文件为空/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a DOCX-looking executable filename", async () => {
+    const { container } = renderPage();
+    const filename = "S001_Alice.docx.exe";
+    fireEvent.change(container.querySelector('input[type="file"]')!, {
+      target: { files: [new File(["not a document"], filename)] },
+    });
+    expect(screen.getByText("submissionUploadUnsupported")).toBeInTheDocument();
+    expect(screen.queryByText(filename)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
   it("accepts a student image and sends it through the submission parsing mutation", async () => {
     const { container } = renderPage();
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;

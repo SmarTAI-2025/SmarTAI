@@ -32,7 +32,7 @@ import type { SubmissionIdentityMode } from "@/types";
 
 const SUBMISSION_SUFFIXES = [
   ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
-  ".txt", ".md", ".rst", ".csv", ".pdf", ".jpg", ".jpeg", ".png",
+  ".txt", ".md", ".rst", ".csv", ".pdf", ".docx", ".jpg", ".jpeg", ".png",
   ".bmp", ".tif", ".tiff", ".webp",
 ] as const;
 const ROSTER_SUFFIXES = [".csv", ".tsv", ".txt"] as const;
