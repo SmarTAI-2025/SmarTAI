@@ -175,3 +175,11 @@ actual service account, unit and delegation, architecture/kernel, LSM and seccom
 profiles, subordinate ID ranges, rootless storage, release image and installed
 worker identity. The QA VM had both AppArmor and SELinux disabled. The recorded
 local image ID belongs to this build.
+
+To check the candidate using the service user's own environment, run
+`python -m backend.tools.programming_readiness`. The command checks stdin and
+a keyword-only function through the configured production adapter. Its JSON
+reports disabled, unavailable, or ready, the runtime name, the pinned digest,
+the contract version and verified Python modes. Run this command in a
+disposable acceptance deployment first and record the candidate SHA with
+its output.
