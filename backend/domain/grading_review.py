@@ -30,7 +30,7 @@ def number(value: Any) -> float | None:
 
 
 TEACHER_CASE_SCORE_REASONS = ("programming_teacher_tests_passed_deduction", "programming_teacher_tests_failed_full_credit")
-PROGRAMMING_REVIEW_REASONS = (*TEACHER_CASE_SCORE_REASONS, "programming_ai_only", "programming_code_review_only", "programming_interface_only")
+PROGRAMMING_REVIEW_REASONS = ("programming_partial_evidence_conflict", *TEACHER_CASE_SCORE_REASONS, "programming_ai_only", "programming_code_review_only", "programming_interface_only")
 
 
 def teacher_case_score_review_reason(evidence, score, maximum) -> str | None:
@@ -56,6 +56,8 @@ def teacher_case_score_review_reason(evidence, score, maximum) -> str | None:
 
 
 def programming_evidence_review_reason(evidence: dict) -> str:
+    if (evidence.get("partial_check") or {}).get("status") == "confirmed":
+        return "programming_partial_evidence_conflict"
     if evidence.get("score_review_reason") in TEACHER_CASE_SCORE_REASONS:
         return evidence["score_review_reason"]
     if evidence.get("execution_status") != "executed":
@@ -145,7 +147,7 @@ def review_state(correction: dict) -> tuple[bool, bool]:
                                             or disagreement or partial or bool(reasons & {
                                                 "partial_experts", "degraded_to_single", "math_scoring_uncertainty",
                                                 "math_expert_disagreement", "math_verification_conflict",
-                                                "math_proof_concern", "math_model_review",
+                                                "math_proof_concern", "math_model_review", "programming_extra_boundary",
                                             })))
     return pending, reviewed
 

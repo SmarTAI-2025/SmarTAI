@@ -233,6 +233,8 @@ export interface ExpertResult {
     score_status: string;
     execution_status: string;
     primary_reason?: string;
+    partial_check?: { status: string } | null;
+    boundary_note?: string | null;
     score_review_reason?: string;
     teacher_tests?: { total: number; passed: number };
   } | null;

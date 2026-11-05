@@ -1078,6 +1078,7 @@ def record_event(run_id: str, *, level: str, message: str, payload: dict | None 
         )
 
 
+PROGRAMMING_AUXILIARY_CHECK = "programming_auxiliary_check"
 PROGRAMMING_CASES_PREPARED = "programming_cases_prepared"
 PROGRAMMING_PREPARATION_STARTED = "programming_preparation_started"
 PROGRAMMING_EXECUTION_PARTIAL = "programming_execution_partial"
@@ -1105,7 +1106,7 @@ def list_events(run_id: str, *, actor_id: str | None = None,
             # Exclude those rows before pagination or progress polling loads a class of results.
             query = query.where(GradingRunEventRecord.message.not_in((
                 PROGRAMMING_CASES_PREPARED, PROGRAMMING_PREPARATION_STARTED,
-                PROGRAMMING_EXECUTION_PARTIAL, PROGRAMMING_EXECUTION_COMPLETED,
+                PROGRAMMING_EXECUTION_PARTIAL, PROGRAMMING_EXECUTION_COMPLETED, PROGRAMMING_AUXILIARY_CHECK,
             )))
         if limit is not None:
             query = query.limit(limit)

@@ -683,7 +683,7 @@ function ReviewQuestionCard({ locale, student, question, correction, primaryProv
   const programmingReview = correction && pendingProgrammingReview(correction);
   // A later expert may disagree with the shared execution. The synthesized
   // note starts with this evidence even if the selected expert does not.
-  const disputedScore = programmingReview === "programming_teacher_tests_passed_deduction" || programmingReview === "programming_teacher_tests_failed_full_credit";
+  const disputedScore = programmingReview === "programming_teacher_tests_passed_deduction" || programmingReview === "programming_teacher_tests_failed_full_credit" || programmingReview === "programming_partial_evidence_conflict";
   const scoreSource = correction ? correctionScoreSource(correction) : null;
   const answer = student.answerByQuestion.get(question.id);
   const alreadyConfirmed = (scoreSource === "teacher_confirmed_same" || scoreSource === "teacher_changed")

@@ -6,12 +6,13 @@ import logging
 from decimal import Decimal
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from backend.llm.providers import BaseProvider
 from backend.models import ExpertResult, GradingConfidence, ProblemInfo, StepScore, StudentAnswerInfo, TestCase
 from backend.services.grading_scores import round_ai_score
-from backend.services.programming_test_contract import required_function_name
+from backend.services.programming_reference_inputs import NewTestInput
+from backend.services.programming_test_contract import has_single_required_argument, required_function_name
 from backend.skills.base import (
     GradingSkill, build_system_prompt, classify_skill_error,
     format_deterministic_feedback, normalize_expert_result, normalize_score_scale, register_skill,
@@ -33,6 +34,8 @@ def _sum_step_awards(validated):
 
 
 class ProgrammingAward(StepScore):
+    # Optional evidence is validated separately so a malformed citation cannot discard a valid score.
+    deduction_basis: object = None
     max_points: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
@@ -44,13 +47,27 @@ class ProgrammingGradingOutput(BaseModel):
     confidence: GradingConfidence = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
     comment: str = ""
     logs: str | None = ""
+    boundary_case: object = None  # Optional diagnostic; malformed proposals never invalidate a score.
 
 
 MAX_LLM_GENERATED_CASES = 8
 
 
 class TestCaseList(BaseModel):
-    cases: list[TestCase] = Field(max_length=MAX_LLM_GENERATED_CASES)
+    cases: list[TestCase] = Field(default_factory=list, max_length=MAX_LLM_GENERATED_CASES)
+    inputs: list[NewTestInput] | None = Field(default=None, max_length=MAX_LLM_GENERATED_CASES)
+    single_arguments: list[object] | None = Field(default=None, max_length=MAX_LLM_GENERATED_CASES)
+
+    @model_validator(mode="after")
+    def one_collection(self):
+        if len(self.model_fields_set & {"cases", "inputs", "single_arguments"}) != 1:
+            raise ValueError("Supply one collection of tests.")
+        return self
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_case_list(cls, value):
+        return {"cases": value} if isinstance(value, list) else value
 
 
 # Hints in the frozen question for workloads outside the configured sandbox.
@@ -196,27 +213,70 @@ async def _generate_test_cases(
         "Create at most eight concise programming test cases from the frozen teacher material. "
         "Cover representative inputs, boundaries and likely mistakes within the stated input domain. "
         "Preserve teacher expectations, use the independent reference to determine expected values, "
-        "and never invent a new requirement. Return JSON with a cases array; return an empty array "
-        "if no reliable tests can be derived. Supply only test data, never harness code. "
+        "and never invent a new requirement. Return a JSON object with one key, cases, containing "
+        "the list of tests. If none can be derived, return {\"cases\":[]}. Use quoted JSON strings "
+        "for expected_output or expected_return. Supply only data, never harness code. "
         "Use stdin/input and expected_output for programs; explicitly set expected_output even when empty. "
         "For function problems use io_mode=function, function_args (positional JSON array), "
         "function_kwargs for keyword arguments when needed, and expected_return as Python repr text. "
+        "In function_args each slot is one positional argument. One list argument [2, 5] is "
+        "encoded as [[2, 5]], one empty list as [[]], and two scalar arguments as [2, 5]. "
+        "Keep fixed-shape tests within the problem domain. "
         "Use the specified function_name when the teacher requires one. When no name is specified, "
         "leave the name unset; do not impose an identifier. Mark infeasible tests sandbox_feasible=false."
     )
+    from backend.services.programming_runs import _reference
+    reference_available = bool(_reference(problem))
+    if reference_available:
+        interface = ('Use {"args":[...]} for positional function arguments, plus optional kwargs. '
+                     if entry else 'For a function use {"args":[...]}; for a complete program use {"input":"literal stdin"}. ')
+        envelope = '{"inputs":[...]}'
+        if has_single_required_argument(problem.stem):
+            envelope = '{"single_arguments":[...]}'
+            interface = ('Each element is the actual value of the single parameter, in its real JSON type. '
+                         'A list value is a JSON array, an integer is a JSON number, and text is a JSON string. '
+                         'Do not wrap these values in objects, strings encoding arrays, or an extra argument vector. ')
+        system = (
+            'Choose up to eight distinct, legal test inputs from the frozen question and teacher rubric. '
+            'Include ordinary and boundary cases that can expose plausible errors. '
+            'Return exactly one JSON object ' + envelope + '. ' + interface +
+            'Preserve spaces and line endings inside literal input. Do not predict or supply output: '
+            'the grader runs the independently provided reference to determine the expected values. '
+            'Never use student code, modify the problem domain, or generate a script.'
+        )
     prompt = json.dumps({**_teacher_material(problem, for_generation=True), "required_function_name": entry}, ensure_ascii=False)
 
     def validate(generated):
-        for case in generated.cases:
-            if not case.sandbox_feasible:
-                continue
-            if entry and case.function_name != entry:
-                raise _format_error("Use the frozen required_function_name for every function test.")
-            if entry or case.io_mode == "function" or case.function_name:
-                if case.expected_return is None or case.function_args is None:
-                    raise _format_error("A function test requires function_args and a textual expected_return.")
-            elif "expected_output" not in case.model_fields_set:
-                raise _format_error("Include the expected_output field for every standard I/O test.")
+        from backend.services.programming_test_contract import ProgrammingCaseError, adapt_programming_cases
+        input_rows = generated.inputs
+        if generated.single_arguments is not None:
+            if not has_single_required_argument(problem.stem):
+                raise _format_error("This question requires a full argument vector or a literal stdin input.")
+            input_rows = [NewTestInput(args=[value]) for value in generated.single_arguments]
+        if input_rows is not None:
+            if not reference_available:
+                raise _format_error("Supply explicit expectations when there is no independent reference program.")
+            drafts = [item.draft() for item in input_rows]
+            try:
+                adapt_programming_cases(problem.stem, [draft.comparison_probe() for draft in drafts])
+            except ProgrammingCaseError as exc:
+                raise _format_error("Use exactly one complete value per function argument. For a single list parameter, put the list inside args.") from exc
+            generated.cases = drafts
+            return
+        if entry and any(c.function_name and c.function_name != entry for c in generated.cases):
+            raise _format_error("Use the frozen required_function_name for every function test.")
+        try:
+            # Feed structural mistakes back to the existing single format repair
+            # before the shared class preparation is frozen. Never alter an expectation.
+            generated.cases = adapt_programming_cases(problem.stem, [
+                case.model_copy(update={"source": "llm_generated"}) for case in generated.cases
+            ])
+        except ProgrammingCaseError as exc:
+            raise _format_error(
+                "The test inputs, expected values, or argument shapes do not match the question. "
+                "Supply one function_args slot per parameter, with a list inside that slot for a list input. "
+                "Use a textual expected_return for functions or an explicit expected_output for stdin."
+            ) from exc
 
     try:
         result, _ = await structured_llm_call(
@@ -304,12 +364,19 @@ class ProgrammingSkill(GradingSkill):
                         "按本题评分标准，各项均获满分。" if self.language == "zh"
                         else "All rubric criteria received full credit."
                     )
+                from backend.services.programming_boundary_checks import boundary_feedback, verified_boundary
+                boundary = await verified_boundary(problem, run, evidence, getattr(result, "boundary_case", None), run_sandbox, self.reporter)
+                if boundary:
+                    evidence.boundary_note = boundary_feedback(boundary, self.language)
+                    evidence.safe_summary += "\n" + evidence.boundary_note
                 vote = normalize_expert_result(ExpertResult(
                     provider=self.provider.provider_id, score=result.score, max_score=result.max_score,
                     confidence=confidence, comment=f"{comment}\n\n{evidence.safe_summary}",
                     steps=result.steps, raw_output=raw.content, duration_ms=raw.duration_ms,
                     programming_evidence=evidence, knowledge_citations=kb_tool.citations(chunks),
                 ), problem.max_score)
+                from backend.services.programming_partial_review import record_deduction_basis
+                record_deduction_basis(vote, result.steps, run, problem)
                 mark_teacher_case_score_review(vote, self.language)
                 if evidence.execution_status == "unsupported" and round_ai_score(vote.score, vote.max_score) == 0:
                     # Without a run, code review alone cannot establish a publishable student zero.

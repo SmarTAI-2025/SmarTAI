@@ -24,14 +24,16 @@ from backend.db import grading_repository
 from backend.models import ProblemInfo, StudentAnswerInfo, TestCase, is_programming_question_type
 from pydantic import ValidationError
 from backend.services.grading_checkpoints import CheckpointWriteError, current_checkpoints
+from backend.services.programming_reference_inputs import ReferenceInputCase, expectations_from_reference
 from backend.services.programming_submission_mapping import C_FAMILY_FLAG, NATIVE_LANGUAGES, PYTHON_FLAG, has_markup_fence
-from backend.services.programming_test_contract import native_standard_supported
+from backend.services.programming_test_contract import has_function_only_contract, native_standard_supported
 from backend.services.python_source_encoding import PythonSourceEncodingError, python_execution_source
 from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCodeExecutionDisabled
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable, NativeBuildUnavailable
 
 VERSION = "programming_run_v1"
 PREPARED = grading_repository.PROGRAMMING_CASES_PREPARED
+AUXILIARY = grading_repository.PROGRAMMING_AUXILIARY_CHECK
 STARTED = grading_repository.PROGRAMMING_PREPARATION_STARTED
 PARTIAL = grading_repository.PROGRAMMING_EXECUTION_PARTIAL
 COMPLETED = grading_repository.PROGRAMMING_EXECUTION_COMPLETED
@@ -59,14 +61,18 @@ class ProgrammingEvidence:
     source_language: str | None = None
 
 
-def _saved(run_id, manifest, owner):
+def _saved(run_id, manifest, owner, *, auxiliary_events=None):
     # Failed-only manifests carry small source references. Keep large output
     # and every case observation exactly once, in the originating run.
     records = {}
     references = manifest.get("programming_artifacts") or {}
+    kinds = (PREPARED, PARTIAL, COMPLETED, AUXILIARY)
+    if auxiliary_events is not None:
+        kinds = (AUXILIARY,)
+        references = {key: ref for key, ref in references.items() if ref.get("kind") == AUXILIARY}
     source_runs = {ref["origin_run"] for ref in references.values()}
     for source in source_runs:
-        for event in grading_repository.list_events(source, actor_id=owner, messages=(PREPARED, PARTIAL, COMPLETED)):
+        for event in grading_repository.list_events(source, actor_id=owner, messages=kinds):
             row = event["payload"]
             ref = references.get(row.get("key"), {})
             if (row.get("owner") == owner and row.get("version") == VERSION
@@ -75,18 +81,31 @@ def _saved(run_id, manifest, owner):
                 records[row["key"]] = row
     if references.keys() - records.keys():
         raise CheckpointWriteError("programming_retry_evidence_missing")
-    for event in grading_repository.list_events(run_id, actor_id=owner, messages=(PREPARED, PARTIAL, COMPLETED, STARTED)):
+    current = (auxiliary_events if auxiliary_events is not None else
+               grading_repository.list_events(run_id, actor_id=owner, messages=(*kinds, STARTED)))
+    for event in current:
         row = event["payload"]
         if row.get("version") == VERSION and row.get("owner") == owner:
             records[row["key"]] = row
     return records
 
 
+def auxiliary_for_handoff(run, manifest, events):
+    """Read completed or uncertain checks under the existing stop transaction."""
+    current = [{"payload": event.payload} for event in events if event.message == AUXILIARY]
+    records = _saved(run.id, manifest, run.teacher_id, auxiliary_events=current)
+    for key, record in records.items():
+        if (record.get("kind") != AUXILIARY or record.get("assignment") != run.assignment_id
+                or record.get("key") != key or record.get("digest") != digest(record.get("value"))):
+            raise CheckpointWriteError("programming_checkpoint_identity_invalid")
+    return {key: record["value"] for key, record in records.items()}
+
+
 def artifacts_for_retry(run_id, manifest, owner):
     # An interrupted preparation has unknown submission status and is never
     # inherited as a success. Only an explicit retry may start it again.
     return {k: {field: row[field] for field in ("origin_run", "kind", "digest")}
-            for k, row in _saved(run_id, manifest, owner).items() if row.get("kind") in {PREPARED, PARTIAL, COMPLETED}}
+            for k, row in _saved(run_id, manifest, owner).items() if row.get("kind") in {PREPARED, PARTIAL, COMPLETED, AUXILIARY}}
 
 
 def runtime_identity():
@@ -135,6 +154,10 @@ class ProgrammingRun:
                 or row.get("digest") != digest(row.get("value"))):
             raise CheckpointWriteError("programming_checkpoint_identity_invalid")
         return deepcopy(row["value"])
+
+
+def current_programming_run():
+    return _current.get()
 
 
 @contextmanager
@@ -224,7 +247,7 @@ def _reference_execution_identity(problem):
     runtime = runtime_identity()
     try:
         source = _reference(problem)
-        if source:
+        if source and not has_function_only_contract(problem.stem, problem.test_cases):
             # Prior validations may have run a rewritten numeric stdin payload.
             runtime["reference_stdin_binding_version"] = 2
         copied = python_execution_source(source) if source else source
@@ -286,13 +309,18 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
                 state.failures[key] = error or "programming_no_cases"
                 return key, [], state.failures[key]
         try:
+            derive_expectations = not problem.test_cases and any(isinstance(case, ReferenceInputCase) for case in cases)
+            reference = _reference(problem)
+            if derive_expectations:
+                if not reference or not all(isinstance(case, ReferenceInputCase) for case in cases):
+                    raise ValueError("programming_cases_unavailable")
+                cases = [case.comparison_probe() for case in cases]
             cases = adapt_programming_cases(problem.stem, cases)
             if not cases or len(cases) > 50 or any(not c.sandbox_feasible for c in cases):
                 raise ValueError("programming_cases_unavailable")
             data = [c.model_dump(mode="json") for c in cases]
             if len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode()) > 256 * 1024:
                 raise ValueError("programming_cases_unavailable")
-            reference = _reference(problem)
             if reference:
                 from backend.services.programming_test_contract import bind_programming_cases
                 language = _reference_language(problem, reference)
@@ -304,7 +332,12 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
                 await _notify(reporter, "validate_programming_reference")
                 report = await execute(executable, ref_cases, language=language, per_case_timeout=10.0)
                 _validate_report(report, ref_cases)
-                if report.passed_count != len(cases):
+                if derive_expectations:
+                    cases = adapt_programming_cases(problem.stem, expectations_from_reference(cases, ref_cases, report))
+                    data = [case.model_dump(mode="json") for case in cases]
+                    if len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode()) > 256 * 1024:
+                        raise ValueError("programming_cases_unavailable")
+                elif report.passed_count != len(cases):
                     raise ValueError("programming_reference_conflict")
         except ProgrammingCaseError as exc:
             state.failures[key] = ("programming_conflicting_expectations" if exc.issue == "conflicting_expectations"
@@ -320,7 +353,7 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
             state.failures[key] = exc.reason if isinstance(exc, NativeBuildUnavailable) else "programming_execution_unavailable"
             return key, [], state.failures[key]
         state.store(PREPARED, key, {"q_id": problem.q_id, "cases": data, "suite_hash": digest(data),
-                                    "reference_checked": bool(reference)})
+                                    "reference_checked": bool(reference), "reference_derived_expectations": derive_expectations})
         return key, cases, ""
 
 

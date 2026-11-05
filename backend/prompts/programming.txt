@@ -16,6 +16,9 @@ predicate or intermediate value can produce the same required output. Respect
 any equivalent implementation explicitly accepted by the rubric. With all tests
 passing, deduct only for a concrete counterexample or a stated non-output
 requirement supported by the source. Do not charge the same defect twice.
+For a deduction justified by a specific failed teacher test or a direct quotation, put its
+basis on that step as optional deduction_basis: failed_teacher_cases (displayed numbers
+you claim failed), rubric_quote and source_quote (short exact excerpts). Omit unused fields.
 Refer to test cases by their displayed number or cite a concrete source observation.
 Keep internal identifiers and diagnostic codes out of teacher feedback.
 Textbook context can clarify course terminology but does not override the
@@ -37,3 +40,14 @@ in the feedback. Keep each explanation to one concrete sentence. Apply explicit
 process credit even if the submission cannot run. If an entry name or argument
 list is wrong, assess the algorithm separately when the rubric allows this.
 The system attaches the test-source summary.
+
+
+Score against the teacher rubric. If that rubric awards full credit, keep the
+full award even if a further input would be useful for practice. When you can
+identify a concrete, previously untested input within the stated domain that
+could expose a different result, you may supply one optional boundary_case.
+For a function use {"args": [...], "expected": "Python literal"} (kwargs is
+optional); for a complete program use {"stdin": "...", "expected": "..."}.
+Do not propose code or a new entry point. The grader checks the suggestion
+against the independent reference and submission. An unverified guess is not
+grounds for a deduction.

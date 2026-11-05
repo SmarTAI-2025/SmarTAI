@@ -58,10 +58,12 @@ class ProgrammingEvidence(BaseModel):
     generated_tests: ProgrammingTestCounts = Field(default_factory=ProgrammingTestCounts)
     failure_counts: dict[str, int] = Field(default_factory=dict)
     primary_reason: str
+    partial_check: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
     # Keep score concerns separate from the observed reason a test failed.
     score_review_reason: Literal["programming_teacher_tests_passed_deduction", "programming_teacher_tests_failed_full_credit"] | None = Field(default=None, exclude_if=lambda value: value is None)
     requires_human_review: bool
     safe_summary: str
+    boundary_note: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class ExpertResult(BaseModel):

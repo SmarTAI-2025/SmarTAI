@@ -310,6 +310,20 @@ describe("one-click grading review", () => {
     expect(details).not.toHaveTextContent(/模型出错|Model error|0\/10|programming_execution_unavailable/);
   });
 
+  it("shows a full-credit boundary note in yellow and a disputed deduction in red", async () => {
+    state.locale = "zh-CN";
+    state.result.results = [{student_id: "S1", corrections: [
+      correction("Q1", {type: "programming", confidence: .95, score: 10, provisional_score: 10, review_reasons: ["programming_extra_boundary"]}),
+      correction("Q2", {score: 8, provisional_score: 8, review_reasons: ["programming_extra_boundary", "programming_teacher_tests_passed_deduction"]}),
+    ]}];
+    show();
+    const required = screen.getByRole("tabpanel", {name: "需要处理 (1)"});
+    expect(within(required).getByText(/教师用例全部通过/)).toHaveClass("text-red-700");
+    await userEvent.click(screen.getByRole("tab", {name: "建议处理 (1)"}));
+    const advisory = screen.getByRole("tabpanel", {name: "建议处理 (1)"});
+    expect(within(advisory).getByText(/额外输入/)).toHaveClass("text-amber-700");
+  });
+
   it("puts both teacher-test score conflicts in the existing red required queue", () => {
     state.locale = "zh-CN";
     state.result.results = [{student_id: "S1", corrections: [

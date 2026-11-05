@@ -151,9 +151,13 @@ async def run_multi_expert(**kwargs) -> Correction:
     from backend.models import is_programming_question_type
     if is_programming_question_type(kwargs["problem"].type):
         from backend.services.programming_runs import programming_run
-        with programming_run(kwargs["registry"], kwargs.get("grading_setup")):
-            correction = await _run_multi_expert(**kwargs)
-        return _project_programming_result(correction, kwargs.get("language", "en"))
+        from backend.services.programming_partial_review import review_partial_score
+        with programming_run(kwargs["registry"], kwargs.get("grading_setup")) as state:
+            language = kwargs.get("language", "en")
+            correction = _project_programming_result(await _run_multi_expert(**kwargs), language)
+            await review_partial_score(correction, state=state, problem=kwargs["problem"], answer=kwargs["answer"],
+                                       student_id=kwargs["student_id"], language=language, reporter=kwargs.get("reporter"))
+            return correction
     with math_review_scope():
         return _apply_math_review_advisory(await _run_multi_expert(**kwargs))
 
@@ -186,6 +190,12 @@ def _project_programming_result(correction: Correction, language: str) -> Correc
             correction.comment = f"{disputed.safe_summary}\n\n{label} · {correction.comment}"
     elif correction.synthesis_method == "judge_agent":
         correction.comment += "\n\n" + evidence.safe_summary
+    boundary = next((v.programming_evidence.boundary_note for v in votes
+                     if v.programming_evidence and v.programming_evidence.boundary_note), None)
+    if boundary:
+        correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, "programming_extra_boundary"]))
+        if boundary not in correction.comment:
+            correction.comment += "\n" + boundary
     for vote in votes:
         facts = vote.programming_evidence
         if facts and facts.requires_human_review:
