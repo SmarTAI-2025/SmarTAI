@@ -319,3 +319,71 @@ def test_photo_of_code_can_be_reviewed_and_then_executed(client_registry, monkey
     assert reviewed["content"] == correct and "recognition_manual_pending" not in reviewed["flag"]
     case = TestCase(io_mode="function", function_name="sum_positive", function_args=[[-2, 3, 4]], expected_return="7")
     assert asyncio.run(run_sandbox(reviewed["content"], [case])).passed_count == 1
+
+
+def _run_public_source_upload(monkeypatch, filename, body, media_type):
+    import asyncio
+    from fastapi.testclient import TestClient
+    from backend.db import source_outcome_repository
+    from backend.llm.registry import get_scoped_expert_registry
+    from backend.main import create_app
+    from backend.tests.test_ocr_mounted_routes import headers
+
+    owner, task = seed("Implement the Python function:\ndef solve(x):")
+    registry = _registry(monkeypatch, AssertionError("Native source reached a model"))
+    app = create_app()
+    app.dependency_overrides[get_scoped_expert_registry] = lambda: registry
+    client = TestClient(app)
+    upload = client.post(f"/tasks/{task}/parse_submissions", headers=headers(owner),
+                         files={"file": (filename, body, media_type)})
+    assert upload.status_code == 200, upload.text
+    job = upload.json()["job_id"]
+    asyncio.run(task_facade.run_durable_submission_recognition(_claim(owner, job)))
+    snapshot = client.get(f"/tasks/{task}", headers=headers(owner))
+    assert snapshot.status_code == 200
+    attempt = workflow_repository.get_operation(job, owner_id=owner).attempt
+    results = source_outcome_repository.list_source_results(operation_id=job, owner_id=owner, attempt=attempt)
+    registry.provider.ainvoke.assert_not_awaited()
+    return snapshot.json(), {item.source.original_name: item for item in results}
+
+
+@pytest.mark.parametrize("archived", [False, True], ids=["direct", "zip-member"])
+def test_encoded_submission_keeps_validated_mime_and_original_in_worker(monkeypatch, archived):
+    import hashlib
+    from backend.storage import get_storage
+    from backend.tests.test_submission_format_policy import archive
+
+    name = "S1_Alice.py"
+    source = "# coding: latin-1\r\nTAG = '%PDF-1.7 café'\r\ndef solve(x): return TAG + x\r\n"
+    original = source.encode("latin-1")
+    upload = ("class.zip", archive({name: original}), "application/zip") if archived else (name, original, "text/x-python")
+
+    snapshot, results = _run_public_source_upload(monkeypatch, *upload)
+    answer, = snapshot["student_data"]["S1"]["stu_ans"]
+    assert answer["q_id"] == "q2" and answer["content"] == source
+    leaf = results[name]
+    assert leaf.outcome.status == "parsed" and leaf.source.content_type == "text/plain"
+    assert leaf.source.sha256 == hashlib.sha256(original).hexdigest()
+    with get_storage().open(leaf.source.storage_key) as stream:
+        assert stream.read() == original
+
+
+def test_real_pdf_disguised_as_source_fails_only_its_own_archive_member(monkeypatch):
+    import fitz
+    from backend.services.python_source_encoding import decode_python_submission
+    from backend.tests.test_media_upload_validation import pdf_bytes
+    from backend.tests.test_submission_format_policy import archive
+
+    # Both items decode as Python source text. Only one is a real PDF.
+    disguised = b"# coding: latin-1\n" + pdf_bytes()
+    assert "%PDF-" in decode_python_submission(disguised)
+    with fitz.open(stream=disguised, filetype="pdf") as document:
+        assert document.page_count == 1
+    package = archive({"S2_Bob.py": disguised, "S1_Alice.py": b"def solve(x): return x\n"})
+    _, results = _run_public_source_upload(monkeypatch, "class.zip", package, "application/zip")
+
+    assert set(results) == {"S1_Alice.py", "S2_Bob.py"}
+    assert results["S1_Alice.py"].outcome.status == "parsed"
+    assert results["S1_Alice.py"].outcome.matched_answer_count == 1
+    assert results["S2_Bob.py"].outcome.stable_error_code == "submission_source_content_type_mismatch"
+    assert results["S2_Bob.py"].outcome.matched_answer_count == 0
