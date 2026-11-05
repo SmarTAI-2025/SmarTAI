@@ -22,7 +22,7 @@ from typing import Any
 from backend.agents.grading_agent import grade_batch
 from backend.domain import education
 from backend.domain.errors import DomainError
-from backend.models import Correction, TaskGradingSetup
+from backend.models import Correction, TaskGradingSetup, is_programming_question_type
 from backend.config import settings
 from backend.services.grading_scores import round_ai_score
 from backend.skills.base import (
@@ -69,7 +69,6 @@ def build_problem_store(questions: list[education.QuestionDTO]) -> dict[str, dic
             "stem": q.stem,
             "criterion": q.criterion,
             "reference_answer": q.reference_answer,
-            "solution_code": (q.source or {}).get("presentation", {}).get("solution_code"),
             "test_cases": q.test_cases,
             "max_score": q.max_score,
             # Private orchestration metadata, consumed before public DTO
@@ -78,6 +77,8 @@ def build_problem_store(questions: list[education.QuestionDTO]) -> dict[str, dic
             "_math_question_id": q.id,
             "_math_question_version": q.version,
         }
+        if is_programming_question_type(q.type):
+            store[q.q_id]["solution_code"] = ((q.source or {}).get("presentation") or {}).get("solution_code")
     return store
 
 

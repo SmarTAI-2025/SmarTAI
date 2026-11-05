@@ -84,7 +84,7 @@ def artifacts_for_retry(run_id, manifest, owner):
             for k, row in _saved(run_id, manifest, owner).items() if row.get("kind") in {PREPARED, COMPLETED}}
 
 
-def _runtime():
+def runtime_identity():
     return {"mode": settings.program_runner_mode, "image": settings.program_runner_image,
             "runtime": settings.program_runner_runtime, "version": VERSION}
 
@@ -206,8 +206,8 @@ def _question_key(state, problem):
         "solution": problem.solution_code, "generated_reference_fields": sorted(
             ((problem._math_rubric_source or {}).get("presentation") or {}).get("ai_completion_provenance") or {}),
         "cases": [case.model_dump(mode="json") for case in problem.test_cases or ()],
-        "config": cp.manifest.get("provider_configuration_fingerprint") if cp else None,
-        "runtime": _runtime()})
+        "config": cp.manifest.get("programming_preparation_config", cp.manifest.get("provider_configuration_fingerprint")) if cp else None,
+        "runtime": runtime_identity()})
 
 
 async def _notify(reporter, step):
@@ -341,7 +341,7 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
     identity = {"plan": plan_key, "assignment": state.assignment or task_id, "student": student_id,
                 "revision": cp.revisions[student_id] if cp else None, "source_sha256": source_hash(code),
                 "q_id": problem.q_id, "cases_sha256": digest([c.model_dump(mode="json") for c in cases]),
-                "runtime": _runtime()}
+                "runtime": runtime_identity()}
     key = digest(identity)
     async with state.lock(key):
         if key in state.failures:

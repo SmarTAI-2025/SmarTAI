@@ -5176,10 +5176,11 @@ def start_task_grading(
             for question in questions if question.q_id in math_qids
         }
     from backend.models import is_programming_question_type
-    from backend.services.programming_runs import VERSION as programming_version, artifacts_for_retry
+    from backend.services.programming_runs import VERSION as programming_version, artifacts_for_retry, runtime_identity
     programming_qids = {q.q_id for q in questions if is_programming_question_type(q.type)}
     if programming_qids:
         input_manifest["programming_grading_version"] = programming_version
+        input_manifest["programming_runtime"] = runtime_identity()
     fingerprint_manifest = deepcopy(input_manifest)
     for row in fingerprint_manifest["questions"]:
         # Semantic input already has its own fingerprint. Persisting an internal
@@ -5228,6 +5229,12 @@ def start_task_grading(
         plans = saved_math_plans(latest.id, questions=questions) if math_qids else {}
         compatible_programming = old.get("programming_grading_version") == programming_version
         if programming_qids and compatible_programming:
+            if old.get("programming_runtime") != input_manifest["programming_runtime"]:
+                raise VersionConflict("Programming runtime changed; start a new run.", code="grading_inputs_changed")
+            # Retain the class's accepted test basis even when a provider
+            # credential was rotated between the failed item and its retry.
+            input_manifest["programming_preparation_config"] = old.get(
+                "programming_preparation_config", old.get("provider_configuration_fingerprint"))
             input_manifest["programming_artifacts"] = artifacts_for_retry(latest.id, old, owner_id)
         previous_results = grading_repository.list_results_for_run(latest.id)
         reusable = [result.model_dump(mode="json") for result in previous_results
