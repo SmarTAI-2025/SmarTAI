@@ -1,0 +1,213 @@
+[
+  {
+    "key": "H1",
+    "stem": "实现 energy(samples)，返回所有整数读数的平方和。读数可以为负、正或零。",
+    "criterion": "数值语义正确 8 分，空列表和函数接口 2 分。不限制等价写法。",
+    "reference": "def energy(samples): return sum(x*x for x in samples)",
+    "cases": [
+      [
+        [
+          []
+        ],
+        0
+      ],
+      [
+        [
+          [
+            -3,
+            2
+          ]
+        ],
+        13
+      ],
+      [
+        [
+          [
+            0,
+            1,
+            1
+          ]
+        ],
+        2
+      ],
+      [
+        [
+          [
+            -2
+          ]
+        ],
+        4
+      ]
+    ],
+    "answers": [
+      {
+        "id": "H1-A",
+        "code": "def energy(samples): return sum(abs(v)**2 for v in samples)",
+        "decision": "正确：对整数，绝对值的平方与原数的平方相等，负数也成立。"
+      },
+      {
+        "id": "H1-B",
+        "code": "def energy(samples): return sum(abs(v) for v in samples)",
+        "decision": "错误：计算绝对值之和，丢掉平方。[-3,2] 应得 13，程序得到 5。空序列和接口正确。"
+      }
+    ]
+  },
+  {
+    "key": "H2",
+    "stem": "实现 locate_even(values)，从左到右返回首个偶数；没有偶数返回 None。0 是有效偶数。",
+    "criterion": "正确选择首个匹配 6 分，没有匹配时返回 None 2 分，按指定函数接口返回 2 分。",
+    "reference": "def locate_even(values): return next((x for x in values if x%2==0), None)",
+    "cases": [
+      [
+        [
+          [
+            3,
+            0,
+            4
+          ]
+        ],
+        0
+      ],
+      [
+        [
+          [
+            7,
+            -2,
+            2
+          ]
+        ],
+        -2
+      ],
+      [
+        [
+          [
+            3,
+            1
+          ]
+        ],
+        null
+      ],
+      [
+        [
+          []
+        ],
+        null
+      ]
+    ],
+    "answers": [
+      {
+        "id": "H2-A",
+        "code": "def locate_even(values):\n for x in values:\n  if x % 2 == 0: return x\n return None",
+        "decision": "正确：首个偶数含 0、负数；没有匹配才返回 None。"
+      },
+      {
+        "id": "H2-B",
+        "code": "def locate_even(values):\n for x in values:\n  if x and x%2==0: return x\n return None",
+        "decision": "错误：真假判断跳过 0，在 [3,0,4] 返回 4；负偶数和没有匹配的处理正确。"
+      }
+    ]
+  },
+  {
+    "key": "H3",
+    "stem": "实现 contains(items, target)，判断升序整数数组中是否存在 target。必须 O(log n)，可使用标准库二分查找。",
+    "criterion": "布尔结果正确 6 分，对数时间查找 4 分。允许标准库。即使所有输出正确，也需要核查方法。",
+    "reference": "from bisect import bisect_left\ndef contains(items,target):\n i=bisect_left(items,target)\n return i<len(items) and items[i]==target",
+    "cases": [
+      [
+        [
+          [],
+          3
+        ],
+        false
+      ],
+      [
+        [
+          [
+            2,
+            3,
+            3,
+            9
+          ],
+          3
+        ],
+        true
+      ],
+      [
+        [
+          [
+            -4,
+            0,
+            8
+          ],
+          -3
+        ],
+        false
+      ],
+      [
+        [
+          [
+            7
+          ],
+          7
+        ],
+        true
+      ]
+    ],
+    "answers": [
+      {
+        "id": "H3-A",
+        "code": "from bisect import bisect_left\ndef contains(items,target):\n k=bisect_left(items,target)\n return k!=len(items) and items[k]==target",
+        "decision": "正确：二分查找加一次边界检查，含重复值与空数组，满足对数时间。"
+      },
+      {
+        "id": "H3-B",
+        "code": "def contains(items,target): return target in items",
+        "decision": "错误：Python 列表成员查询为线性时间，但所有判断结果正确；只能扣方法分。"
+      }
+    ]
+  },
+  {
+    "key": "H4",
+    "stem": "实现 unmark(s)，只移除一个结尾的 ASCII 感叹号；保留字符串其余字符及尾部空格。",
+    "criterion": "严格按题意转换 8 分，返回字符串和接口 2 分；无须处理非字符串。",
+    "reference": "def unmark(s): return s[:-1] if s.endswith(\"!\") else s",
+    "cases": [
+      [
+        [
+          "!!"
+        ],
+        "!"
+      ],
+      [
+        [
+          " x! "
+        ],
+        " x! "
+      ],
+      [
+        [
+          "abc!"
+        ],
+        "abc"
+      ],
+      [
+        [
+          ""
+        ],
+        ""
+      ]
+    ],
+    "answers": [
+      {
+        "id": "H4-A",
+        "code": "def unmark(s): return s.removesuffix(\"!\")",
+        "decision": "正确：removesuffix 只移除一个后缀，保留其余标点和空白。"
+      },
+      {
+        "id": "H4-B",
+        "code": "def unmark(s): return s.rstrip(\"!\")",
+        "decision": "错误：rstrip 会移除结尾所有感叹号，例如 !! 应保留一个。输入末尾的空格正确保留。"
+      }
+    ]
+  }
+]
