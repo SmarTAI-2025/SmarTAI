@@ -240,3 +240,44 @@ async def test_durable_retry_reuses_word_original_then_requires_replacement_for_
     registry.provider.ainvoke.assert_awaited_once()
     blocked = await retry(task, owner, after)
     assert blocked.status_code == 409 and "submission_retry_requires_reupload" in blocked.body.decode()
+
+
+@pytest.mark.parametrize("hint", ["application/zip", "application/octet-stream", "application/pdf"])
+def test_legacy_question_file_checks_docx_mime_before_queue_and_preserves_verified_type(client_registry, word, hint):
+    client, _ = client_registry
+    owner, task = _seed_task()
+    result = client.post(f"/tasks/{task}/extract_problems", headers=headers(owner),
+                         files={"file": ("questions.DOCX", word, hint)})
+    originals = file_repository.list_files(owner_id=owner, assignment_id=task)
+    if hint == "application/pdf":
+        assert result.status_code in {415, 422} and not originals
+    else:
+        assert result.status_code == 200, result.text
+        assert len(originals) == 1
+        assert_original(owner, originals[0].id, word)
+
+
+@pytest.mark.parametrize("alias", ["upload_reference", "upload_test_cases"])
+def test_focused_material_alias_queues_the_review_plan_with_word_original(client_registry, word, alias):
+    client, _ = client_registry
+    owner, task = _seed_task(with_question=True)
+    response = client.post(f"/tasks/{task}/{alias}", headers=headers(owner),
+                           files={"file": ("focused.DOCX", word, DOCX_MIME)})
+    assert response.status_code == 200, response.text
+    job = workflow_repository.get_operation(response.json()["job_id"], owner_id=owner)
+    source = workflow_repository.get_operation(job.payload["source_token"], owner_id=owner)
+    assert_original(owner, source.payload["original_stored_file_id"], word)
+
+
+def test_submission_route_accepts_word_and_rejects_same_file_as_roster(client_registry, word):
+    client, _ = client_registry
+    owner, task = _seed_task(with_question=True)
+    url = f"/tasks/{task}/parse_submissions"
+    part = ("S1.DOCX", word, "application/zip")
+    invalid = client.post(url, headers=headers(owner), data={"identity_mode": "roster"},
+                          files={"file": part, "roster_file": part})
+    assert invalid.status_code == 422 and invalid.json()["error"]["code"] == "submission_roster_unsupported"
+    response = client.post(url, headers=headers(owner), files={"file": part})
+    assert response.status_code == 200, response.text
+    job = workflow_repository.get_operation(response.json()["job_id"], owner_id=owner)
+    assert_original(owner, job.payload["input_file_id"], word)

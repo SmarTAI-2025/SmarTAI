@@ -234,7 +234,8 @@ def _validate_json(data: bytes) -> None:
         raise UploadContractError("programming_tests_json_invalid") from None
 
 
-def validate_upload(role: str, file_name: str, data: bytes, *, from_library: bool = False) -> ValidatedUpload:
+def validate_upload(role: str, file_name: str, data: bytes, *, from_library: bool = False,
+                    content_type: str | None = None) -> ValidatedUpload:
     """Validate one ordinary file. ZIP container handling is a separate boundary."""
     extensions = ROLE_EXTENSIONS.get(role)
     if role == "legacy_problem":
@@ -258,7 +259,10 @@ def validate_upload(role: str, file_name: str, data: bytes, *, from_library: boo
     if extension == "docx":
         validate_docx_package(data)
     from backend.tools.file_processing import inspect_upload_content
-    inspection = inspect_upload_content(data, file_name)
+    inspection = inspect_upload_content(data, file_name, content_type)
+    if extension == "docx" and inspection.mismatch:
+        raise UploadContractError("submission_source_content_type_mismatch" if role == "student_submission"
+                                  else "source_content_type_not_allowed")
     media_type = inspection.content_type
     if media_type == "application/pdf" and extension in {"txt", "md", "markdown", "csv", "rst", "json"}:
         from backend.tools.file_processing import _looks_like_text
