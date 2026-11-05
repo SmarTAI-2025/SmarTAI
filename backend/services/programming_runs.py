@@ -20,7 +20,8 @@ from typing import Literal
 
 from backend.config import settings
 from backend.db import grading_repository
-from backend.models import ProblemInfo, StudentAnswerInfo, TestCase
+from backend.models import ProblemInfo, StudentAnswerInfo, TestCase, is_programming_question_type
+from pydantic import ValidationError
 from backend.services.grading_checkpoints import CheckpointWriteError, current_checkpoints
 from backend.tools.code_interpreter import ExecutionReport, TestResult
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
@@ -165,6 +166,19 @@ def _validate_report(report, cases):
             ids.add(eid)
 
 
+def _reference(problem):
+    source = (problem._math_rubric_source or {}).get("presentation") or {}
+    provenance = source.get("ai_completion_provenance") or {}
+    # A generated solution is supplementary text for the scorer. Its output
+    # cannot override a teacher's examples or certify another model's tests.
+    if problem.solution_code and "solution_code" not in provenance:
+        return _source(problem.solution_code)
+    reference = (problem.reference_answer or "").strip()
+    if "reference_answer" not in provenance and reference.startswith(("```python\n", "```py\n")):
+        return _source(reference)
+    return None
+
+
 def _question_key(state, problem):
     cp = state.checkpoints
     question = cp.questions.get(problem.q_id) if cp else None
@@ -172,7 +186,8 @@ def _question_key(state, problem):
         "question": question.id if question else problem.q_id, "q_id": problem.q_id,
         "version": question.version if question else None, "stem": problem.stem,
         "rubric": problem.criterion, "max_score": problem.max_score, "reference": problem.reference_answer,
-        "solution": problem.solution_code,
+        "solution": problem.solution_code, "generated_reference_fields": sorted(
+            (problem._math_rubric_source or {}).get("presentation", {}).get("ai_completion_provenance") or {}),
         "cases": [case.model_dump(mode="json") for case in problem.test_cases or ()],
         "config": cp.manifest.get("provider_configuration_fingerprint") if cp else None,
         "runtime": _runtime()})
@@ -216,17 +231,12 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
             cases = adapt_programming_cases(problem.stem, cases)
             if not cases or len(cases) > 50 or any(not c.sandbox_feasible for c in cases):
                 raise ValueError("programming_cases_unavailable")
-            distinct = {}
-            for case in cases:
-                identity = digest([case.function_name, case.function_args, getattr(case, "function_kwargs", None)]
-                                  if case.io_mode == "function" else ["stdin", case.input])
-                expected = case.expected_return if case.io_mode == "function" else case.expected_output
-                if identity in distinct and distinct[identity] != expected:
-                    raise ValueError("programming_conflicting_expectations")
-                distinct[identity] = expected
-            if problem.solution_code and problem.solution_code.strip():
+            data = [c.model_dump(mode="json") for c in cases]
+            if len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode()) > 256 * 1024:
+                raise ValueError("programming_cases_unavailable")
+            reference = _reference(problem)
+            if reference:
                 from backend.services.programming_test_contract import bind_programming_cases
-                reference = _source(problem.solution_code)
                 ref_cases = bind_programming_cases(problem.stem, cases, reference)
                 await _notify(reporter, "validate_programming_reference")
                 report = await execute(reference, ref_cases, language="python", per_case_timeout=10.0)
@@ -242,10 +252,36 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
         except IsolatedRunnerUnavailable:
             state.failures[key] = "programming_execution_unavailable"
             return key, [], state.failures[key]
-        data = [case.model_dump(mode="json") for case in cases]
         state.store(PREPARED, key, {"q_id": problem.q_id, "cases": data, "suite_hash": digest(data),
-                                    "reference_checked": bool(problem.solution_code)})
+                                    "reference_checked": bool(reference)})
         return key, cases, ""
+
+
+async def prepare_pending(state, problems, students, selection, reporter):
+    """Prepare before expert fan-out, only for questions with work to grade."""
+    if state.provider is None:
+        return
+    from backend.skills.programming import _generate_test_cases, _detect_language, run_sandbox
+    pending = set()
+    for student in students.values():
+        sid = student.get("stu_id")
+        for answer in student.get("stu_ans", ()):
+            qid = answer.get("q_id")
+            if not sid or qid not in problems or (selection is not None and qid not in selection.get(sid, ())):
+                continue
+            content = answer.get("content") or ""
+            if content.strip() and "recognition_manual_pending" not in (answer.get("flag") or ()) and _detect_language(content) not in {"cpp", "java"}:
+                pending.add(qid)
+    for qid, raw in problems.items():
+        if qid not in pending or not is_programming_question_type(raw.get("type") if isinstance(raw, dict) else raw.type):
+            continue
+        try:
+            problem = ProblemInfo.model_validate(raw)
+        except ValidationError:
+            continue  # The grading adapter already projects invalid question inputs as unscored.
+        if isinstance(raw, dict):
+            problem._math_rubric_source = raw.get("_math_rubric_source") or {}
+        await _prepare(state, problem, state.provider, _generate_test_cases, run_sandbox, reporter)
 
 
 async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo, student_id: str,

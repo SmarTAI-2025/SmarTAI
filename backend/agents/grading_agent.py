@@ -450,11 +450,13 @@ async def grade_batch(
     )
     from contextlib import nullcontext
     from backend.models import is_programming_question_type
-    from backend.services.programming_runs import programming_run
+    from backend.services.programming_runs import prepare_pending, programming_run
     has_programming = any(is_programming_question_type(raw.get("type") if isinstance(raw, dict) else raw.type)
                           for raw in pending_store.values())
     context = programming_run(kwargs["registry"], kwargs.get("grading_setup")) if has_programming else nullcontext()
-    with math_plans_context(plans), context:
+    with math_plans_context(plans), context as programming_state:
+        if has_programming:
+            await prepare_pending(programming_state, pending_store, student_store, question_ids_by_student, kwargs.get("reporter"))
         return await _grade_batch_frozen(question_ids_by_student, **kwargs)
 
 
