@@ -1079,7 +1079,8 @@ def record_event(run_id: str, *, level: str, message: str, payload: dict | None 
 
 
 def list_events(run_id: str, *, actor_id: str | None = None,
-                after_sequence: int = 0, limit: int | None = None) -> list[dict]:
+                after_sequence: int = 0, limit: int | None = None,
+                messages: tuple[str, ...] | None = None) -> list[dict]:
     with session_scope() as session:
         if _active_assignment_for_run(
             session, run_id, actor_id=actor_id
@@ -1091,6 +1092,8 @@ def list_events(run_id: str, *, actor_id: str | None = None,
                    GradingRunEventRecord.sequence > after_sequence)
             .order_by(GradingRunEventRecord.sequence)
         )
+        if messages is not None:
+            query = query.where(GradingRunEventRecord.message.in_(messages))
         if limit is not None:
             query = query.limit(limit)
         rows = session.scalars(query).all()

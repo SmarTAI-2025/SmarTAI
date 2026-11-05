@@ -69,6 +69,7 @@ def build_problem_store(questions: list[education.QuestionDTO]) -> dict[str, dic
             "stem": q.stem,
             "criterion": q.criterion,
             "reference_answer": q.reference_answer,
+            "solution_code": (q.source or {}).get("presentation", {}).get("solution_code"),
             "test_cases": q.test_cases,
             "max_score": q.max_score,
             # Private orchestration metadata, consumed before public DTO

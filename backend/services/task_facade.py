@@ -5109,6 +5109,11 @@ def start_task_grading(
             question.q_id: math_rubric_fingerprint(problem_from_question(question))
             for question in questions if question.q_id in math_qids
         }
+    from backend.models import is_programming_question_type
+    from backend.services.programming_runs import VERSION as programming_version, artifacts_for_retry
+    programming_qids = {q.q_id for q in questions if is_programming_question_type(q.type)}
+    if programming_qids:
+        input_manifest["programming_grading_version"] = programming_version
     fingerprint_manifest = deepcopy(input_manifest)
     for row in fingerprint_manifest["questions"]:
         # Semantic input already has its own fingerprint. Persisting an internal
@@ -5155,10 +5160,14 @@ def start_task_grading(
         # a model to redistribute the same question's points. Old-engine or
         # missing-plan mathematical results are rerun in this new run.
         plans = saved_math_plans(latest.id, questions=questions) if math_qids else {}
+        compatible_programming = old.get("programming_grading_version") == programming_version
+        if programming_qids and compatible_programming:
+            input_manifest["programming_artifacts"] = artifacts_for_retry(latest.id, old, owner_id)
         previous_results = grading_repository.list_results_for_run(latest.id)
         reusable = [result.model_dump(mode="json") for result in previous_results
                     if result.effective_score is not None and math.isfinite(result.effective_score)
                     and (result.q_id not in math_qids or result.q_id in plans)
+                    and (result.q_id not in programming_qids or compatible_programming or result.teacher_review)
                     and ("grading_paused" not in result.initial_review_reasons or result.teacher_review)]
         if len(reusable) == len(questions) * len(frozen_revision_ids):
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
@@ -5173,6 +5182,9 @@ def start_task_grading(
         # but partial expert votes from its previous configuration cannot mix in.
         input_manifest["reused_experts"] = (saved_experts(latest.id)
             if old.get("provider_configuration_fingerprint") == input_manifest.get("provider_configuration_fingerprint") else [])
+        if programming_qids and not compatible_programming:
+            input_manifest["reused_experts"] = [item for item in input_manifest["reused_experts"]
+                                                  if item.get("q_id") not in programming_qids]
         if math_qids:
             from backend.services.math_grading_context import expert_matches_plan
             input_manifest["reused_experts"] = [
