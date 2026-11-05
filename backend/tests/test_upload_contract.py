@@ -16,10 +16,10 @@ from PIL import Image
 
 # Independent expected values, not imported from the policy being tested.
 ROLE_EXTENSIONS = {
-    "course_knowledge": ("pdf", "txt", "md", "markdown", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
+    "course_knowledge": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
     "problem_reference": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
-    "rubric": ("pdf", "txt", "md", "markdown", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
-    "programming_tests": ("pdf", "txt", "md", "markdown", "json", "csv", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
+    "rubric": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
+    "programming_tests": ("pdf", "txt", "md", "markdown", "docx", "json", "csv", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
     "student_submission": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
 }
 OTHER_EXTENSIONS = ("py", "c", "cc", "cpp", "csv", "tsv", "rst", "pptx", "bmp", "tif", "tiff", "webp", "exe", "zip", "rar", "7z", "tar")
@@ -207,7 +207,7 @@ def test_contract_distinguishes_effective_entrypoint_limits_and_does_not_leak_mu
     json.dumps(contract, allow_nan=False)
     contract["roles"]["rubric"]["extensions"].append("png")
     assert module.get_upload_contract()["roles"]["rubric"]["extensions"] == [
-        "bmp", "jpeg", "jpg", "markdown", "md", "pdf", "png", "tif", "tiff", "txt", "webp"]
+        "bmp", "docx", "jpeg", "jpg", "markdown", "md", "pdf", "png", "tif", "tiff", "txt", "webp"]
 
 
 def test_policy_module_import_does_not_start_application():

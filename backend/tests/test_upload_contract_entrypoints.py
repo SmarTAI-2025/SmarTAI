@@ -137,8 +137,8 @@ async def test_compatibility_pdf_reader_honors_provided_teacher_ocr_skill(purpos
 @pytest.mark.parametrize("role,extensions", [
     ("problem", {".pdf", ".txt", ".md", ".markdown", ".docx", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
     ("reference_answer", {".pdf", ".txt", ".md", ".markdown", ".docx", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
-    ("rubric", {".pdf", ".txt", ".md", ".markdown", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
-    ("programming_tests", {".pdf", ".txt", ".md", ".markdown", ".json", ".csv", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
+    ("rubric", {".pdf", ".txt", ".md", ".markdown", ".docx", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
+    ("programming_tests", {".pdf", ".txt", ".md", ".markdown", ".docx", ".json", ".csv", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
 ])
 def test_draft_selectable_types_match_the_business_role(role, extensions):
     from backend.api import task_preparation
