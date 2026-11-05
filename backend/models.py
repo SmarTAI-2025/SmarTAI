@@ -161,6 +161,12 @@ class TestCase(BaseModel):
         default=None,
         description="Positional arguments passed to function_name. JSON-serializable.",
     )
+    function_kwargs: dict[str, Any] | None = Field(
+        default=None, description="JSON keyword arguments passed to the function.",
+    )
+    comparison: Literal["default", "exact", "trimmed", "json", "tokens", "numeric"] = "default"
+    abs_tol: float = Field(default=1e-9, ge=0, allow_inf_nan=False, strict=True)
+    rel_tol: float = Field(default=0, ge=0, allow_inf_nan=False, strict=True)
     expected_return: Optional[str] = Field(
         default=None,
         description="repr() of expected return value; compared after ast.literal_eval normalization.",

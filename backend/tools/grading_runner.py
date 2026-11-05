@@ -29,6 +29,10 @@ class RunnerExitReason(str, Enum):
     RUNTIME_ERROR = "runtime_error"
     TIMEOUT = "timeout"
     OUTPUT_LIMIT = "output_limit"
+    TARGET_FUNCTION_MISSING = "target_function_missing"
+    SIGNATURE_MISMATCH = "signature_mismatch"
+    MEMORY_LIMIT = "memory_limit"
+    PID_LIMIT = "pid_limit"
     UNSUPPORTED_TASK = "unsupported_task"
     INTERNAL_ERROR = "internal_error"
 
@@ -38,6 +42,8 @@ class RunnerResourceStatus(str, Enum):
     NOT_EXECUTED = "not_executed"
     TIMEOUT = "timeout"
     OUTPUT_LIMIT = "output_limit"
+    MEMORY_LIMIT = "memory_limit_exceeded"
+    PID_LIMIT = "pid_limit_exceeded"
     UNKNOWN = "unknown"
 
 
@@ -78,7 +84,13 @@ class RunnerResult(BaseModel):
     stderr: str = ""
     stdout_truncated: bool = False
     stderr_truncated: bool = False
-    duration_ms: float = Field(default=0.0, ge=0)
+    duration_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    request_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    return_value: str | None = None
+    process_exit_code: int | None = Field(default=None, ge=0)
+    termination_signal: int | None = Field(default=None, gt=0)
+    cgroup_oom_kills: int | None = Field(default=None, ge=0)
+    cgroup_pid_denials: int | None = Field(default=None, ge=0)
     resource_status: RunnerResourceStatus = RunnerResourceStatus.UNKNOWN
     isolation_mode: Literal["host_subprocess", "oci_container"] = "host_subprocess"
 
