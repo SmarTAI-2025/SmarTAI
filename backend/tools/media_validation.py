@@ -28,11 +28,14 @@ async def validate_media_content(
     *,
     max_pdf_pages: int | None = None,
     timeout_seconds: float = 10,
+    wait_for_slot: bool = False,
 ) -> dict:
     """Verify actual decoding, not filename/MIME claims; never call a provider.
 
     Call only for a PDF/image candidate. Text and archives use their own
     decoders. The returned MIME is verified against the decoded media format.
+    Batch callers may wait for the bounded CPU pool instead of failing busy;
+    queue time and decoder execution each have their own timeout.
     """
     from backend.tools import file_processing
     from backend.tools.pdf_evidence import _exchange
@@ -46,13 +49,18 @@ async def validate_media_content(
         raise HTTPException(413, detail={"code": "image_input_too_large" if image else "pdf_input_too_large"})
     if (type(timeout_seconds) not in {float, int} or not math.isfinite(timeout_seconds)
             or not 0 < timeout_seconds <= 30 or
-            (max_pdf_pages is not None and (type(max_pdf_pages) is not int or max_pdf_pages < 1))):
+            (max_pdf_pages is not None and (type(max_pdf_pages) is not int or max_pdf_pages < 1))
+            or type(wait_for_slot) is not bool):
         raise ValueError("Invalid media validation limits")
     if file_processing.fitz is None:
         raise HTTPException(503, detail={"code": "media_inspection_unavailable"})
     slots = file_processing._PDF_EXTRACTION_SLOTS
-    if not slots.acquire(blocking=False):
-        raise HTTPException(429, detail={"code": "media_inspection_busy"})
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while not slots.acquire(blocking=False):
+        if not wait_for_slot or asyncio.get_running_loop().time() >= deadline:
+            raise HTTPException(429, detail={"code": "media_inspection_busy"})
+        # No slot is held while waiting, so cancellation needs no cleanup.
+        await asyncio.sleep(0.02)
     launch_task = None
     failure: BaseException | None = None
     try:

@@ -182,3 +182,69 @@ async def test_busy_and_missing_parser_are_clear_infrastructure_errors(monkeypat
         await validate_media_content(b"%PDF-1.7", "application/pdf")
     assert caught.value.status_code == 503
     assert caught.value.detail == {"code": "media_inspection_unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_twenty_concurrent_images_queue_through_two_decoder_slots(monkeypatch):
+    class TrackingSlots:
+        def __init__(self):
+            self.semaphore = threading.BoundedSemaphore(2)
+            self.active = self.peak = 0
+
+        def acquire(self, blocking=False):
+            acquired = self.semaphore.acquire(blocking=blocking)
+            if acquired:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+            return acquired
+
+        def release(self):
+            self.active -= 1
+            self.semaphore.release()
+
+    slots = TrackingSlots()
+    monkeypatch.setattr(file_processing, "_PDF_EXTRACTION_SLOTS", slots)
+    body = image_bytes()
+    results = await asyncio.gather(*(
+        validate_media_content(body, "image/png", wait_for_slot=True)
+        for _ in range(20)
+    ))
+    assert results == [{"content_type": "image/png", "width": 12, "height": 8}] * 20
+    assert slots.peak == 2 and slots.active == 0
+
+
+@pytest.mark.asyncio
+async def test_cancellation_while_queued_does_not_release_another_workers_slot(monkeypatch):
+    slots = threading.BoundedSemaphore(1)
+    slots.acquire()
+    monkeypatch.setattr(file_processing, "_PDF_EXTRACTION_SLOTS", slots)
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("queued validation must not launch a worker")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", forbidden)
+    task = asyncio.create_task(validate_media_content(b"%PDF-1.7", "application/pdf", wait_for_slot=True))
+    await asyncio.sleep(0.03)
+    assert not task.done()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not slots.acquire(blocking=False)
+    slots.release()
+    assert slots.acquire(blocking=False)
+    assert not slots.acquire(blocking=False)
+    slots.release()
+
+
+@pytest.mark.asyncio
+async def test_queue_timeout_does_not_launch_or_release_another_workers_slot(monkeypatch):
+    slots = threading.BoundedSemaphore(1)
+    slots.acquire()
+    monkeypatch.setattr(file_processing, "_PDF_EXTRACTION_SLOTS", slots)
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("queued validation must not launch a worker")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", forbidden)
+    with pytest.raises(HTTPException) as caught:
+        await validate_media_content(b"%PDF-1.7", "application/pdf", wait_for_slot=True, timeout_seconds=0.01)
+    assert caught.value.status_code == 429
+    assert caught.value.detail == {"code": "media_inspection_busy"}
+    assert not slots.acquire(blocking=False)
+    slots.release()
