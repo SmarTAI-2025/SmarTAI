@@ -787,6 +787,26 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "submission_time_limit_reached") {
+    return {
+      title: tx(locale, "本次识别已达到处理时限", "This recognition run reached its processing limit"),
+      description: tx(locale, "本次有效处理时间已达到 3 小时，排队不计时。已完成的识别和结构化作答已保留；可重试失败项继续补充，也可人工继续处理，只补齐未完成内容。", "This run reached 3 hours of active processing, excluding queue time. Completed recognition and structured answers are retained. Retry failed files to continue, or fill unfinished content manually."),
+      actionLabel: tx(locale, "重试失败项", "Retry failed files"),
+      actionKind: "retry", tone: "warning", technicalDetails,
+    };
+  }
+
+  if (code === "pdf_evidence_busy" || code === "source_extent_unavailable") {
+    return {
+      title: code === "pdf_evidence_busy"
+        ? tx(locale, "PDF 读取队列繁忙", "The PDF reading queue is busy")
+        : tx(locale, "PDF 页面范围未读取完成", "The PDF page range could not be read"),
+      description: tx(locale, "本次 PDF 本地读取未完成，不是模型服务报错。请稍后重试失败项；原文件和已保存结果会保留，无需重新打包。", "Local PDF reading did not complete. This is not a model-service error. Retry failed files later; originals and saved results are retained, with no need to repack."),
+      actionLabel: tx(locale, "重试失败项", "Retry failed files"),
+      actionKind: "retry", tone: "warning", technicalDetails,
+    };
+  }
+
   if (code === "recognition_response_invalid") {
     const observed = Array.isArray(context.providerFailures) ? context.providerFailures.at(-1) : undefined;
     const pages = safeFailurePages(observed?.code === code ? observed.pages : undefined);
@@ -864,7 +884,7 @@ export function classifyRecoverableError(
       actionKind: "retry", tone: "warning", technicalDetails,
     };
   }
-  if (["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_timeout"].includes(code ?? "")) {
+  if (["target_location_needs_hint", "target_selection_limit_exceeded", "recognition_budget_exhausted", "recognition_assembly_limit", "recognition_timeout"].includes(code ?? "")) {
     return {
       title: tx(locale, "本次识别范围尚未完成", "Recognition coverage is incomplete"),
       description: tx(locale, "已保存的识别结果仍然保留。请缩小页码范围或补充目标题号；系统不会自动增加付费调用。", "Saved evidence is retained. Narrow the page range or specify question numbers; no extra paid calls are started automatically."),

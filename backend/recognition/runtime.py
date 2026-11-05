@@ -206,7 +206,20 @@ async def _dispatch(
                     and source.scope != "knowledge_document" and request.purpose != "knowledge"
                 ) else nullcontext()
                 with scope:
-                    candidate = await dispatch(request)
+                    from backend.llm.providers import BaseProvider
+                    from backend.llm.registry import _GuardedSharedProvider
+                    from backend.services.submission_work_budget import current_budget
+                    # Shared-pool wrappers delegate to the same timed provider;
+                    # wrapping their whole dispatch would also charge its queue.
+                    work_clock = current_budget() if not isinstance(
+                        getattr(engine, "provider", None), (BaseProvider, _GuardedSharedProvider)) else None
+                    if work_clock is not None:
+                        work_clock.start()
+                    try:
+                        candidate = await dispatch(request)
+                    finally:
+                        if work_clock is not None:
+                            work_clock.finish()
             candidate = RecognitionCandidateV1.model_validate(candidate.model_dump(warnings=False))
             if engine.capabilities != capabilities:
                 raise RecognitionError("recognition_route_changed", submission_may_exist=True)

@@ -14,11 +14,11 @@ import json
 import math
 import struct
 import sys
-from typing import Annotated, Literal, TYPE_CHECKING
+from typing import Annotated, Callable, Literal, TYPE_CHECKING
 
 from pydantic import Field, TypeAdapter, ValidationError, model_validator
 
-from backend.domain.errors import PDF_EVIDENCE_STATUS_CODES, PdfEvidenceError
+from backend.domain.errors import PDF_EVIDENCE_STATUS_CODES, PdfEvidenceError, RecognitionError
 from backend.recognition.models import EvidenceModel, NormalizedRegionV1
 from backend.recognition.planner import PageObservationV1
 from backend.tools import file_processing
@@ -450,12 +450,13 @@ async def read_pdf_evidence(
     timeout_seconds: float = 10,
     progress: ProgressReporter | None = None,
     wait_for_slot: bool = False,
+    on_admitted: Callable[[], None] | None = None,
 ) -> PdfResult:
     """Inspect a bounded range without parsing PDFs in the parent process."""
     if not isinstance(request, (PdfIndexRequest, PdfPagesRequest, PdfRenderRequest, PdfContactSheetRequest)):
         raise PdfEvidenceError("pdf_invalid_request")
     return await _read_evidence(pdf_bytes, request, timeout_seconds=timeout_seconds, progress=progress,
-                                wait_for_slot=wait_for_slot)
+                                wait_for_slot=wait_for_slot, on_admitted=on_admitted)
 
 
 async def read_image_evidence(
@@ -465,12 +466,13 @@ async def read_image_evidence(
     timeout_seconds: float = 10,
     progress: ProgressReporter | None = None,
     wait_for_slot: bool = False,
+    on_admitted: Callable[[], None] | None = None,
 ) -> ImagePreparedResult:
     """Prepare authorized image bytes in the shared isolated worker, not the parent."""
     if not isinstance(request, ImagePrepareRequest):
         raise PdfEvidenceError("pdf_invalid_request")
     return await _read_evidence(image_bytes, request, timeout_seconds=timeout_seconds, progress=progress,
-                                wait_for_slot=wait_for_slot)
+                                wait_for_slot=wait_for_slot, on_admitted=on_admitted)
 
 
 async def _read_evidence(
@@ -480,6 +482,7 @@ async def _read_evidence(
     timeout_seconds: float,
     progress: ProgressReporter | None,
     wait_for_slot: bool = False,
+    on_admitted: Callable[[], None] | None = None,
 ) -> PdfResult | ImagePreparedResult:
     image = isinstance(request, ImagePrepareRequest)
     if image:
@@ -501,17 +504,28 @@ async def _read_evidence(
     if file_processing.fitz is None:
         raise PdfEvidenceError("pdf_processing_unavailable")
     slots = file_processing._PDF_EXTRACTION_SLOTS
+    from backend.services.submission_work_budget import current_budget
+    budget = current_budget()
+    if budget is not None:
+        budget.check()
     # Model calls may run concurrently while local PDF workers remain bounded.
     # Task pipelines wait only for this short CPU step, never hold its slot
     # throughout a model response. Other callers retain fail-fast admission.
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
     while not slots.acquire(blocking=False):
-        if not wait_for_slot or asyncio.get_running_loop().time() >= deadline:
+        if budget is not None:
+            budget.check()
+        if not wait_for_slot:
             raise PdfEvidenceError("pdf_evidence_busy")
         await asyncio.sleep(0.02)
     launch_task = None
     failure: BaseException | None = None
+    work_started = False
     try:
+        if budget is not None:
+            budget.start()
+            work_started = True
+        if on_admitted is not None:
+            on_admitted()
         async with asyncio.timeout(timeout_seconds):
             if progress:
                 await progress.set_current_step("image_prepare" if image else "pdf_" + request.operation,
@@ -540,7 +554,7 @@ async def _read_evidence(
     except TimeoutError:
         failure = PdfEvidenceError("pdf_evidence_timeout")
         raise failure from None
-    except (PdfEvidenceError, asyncio.CancelledError) as exc:
+    except (PdfEvidenceError, RecognitionError, asyncio.CancelledError) as exc:
         failure = exc
         raise
     except Exception:
@@ -558,4 +572,6 @@ async def _read_evidence(
             if failure is None:
                 raise PdfEvidenceError("pdf_processing_failed") from None
         finally:
+            if work_started:
+                budget.finish()
             slots.release()

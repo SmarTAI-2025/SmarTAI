@@ -5,7 +5,6 @@ verify individual relations; only the frozen rubric determines point budgets.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -30,7 +29,6 @@ from backend.services.math_strictness import Adjustment, LEDGER_INSTRUCTION
 from backend.services.binary_scoring import frozen_binary_rule
 
 TRACE_VERSION = "math_evidence_v2"
-VERIFICATION_BUDGET_SECONDS = 20.0
 _review_budget = ContextVar("math_review_budget", default=None)
 
 
@@ -888,7 +886,6 @@ class MathGradingSkill(GradingSkill):
         from backend.services.math_tool_planning import binding_error
         claims = _claim_map(draft, answer.content or "", plan, problem_text=problem.stem)
         evidence = []
-        deadline = asyncio.get_running_loop().time() + VERIFICATION_BUDGET_SECONDS
         for index, check in enumerate(draft.checks):
             base = {"evidence_id": f"v{index + 1}", "claim_id": check.claim_id,
                     "context_quote": check.context_quote, "request": check.request}
@@ -902,10 +899,7 @@ class MathGradingSkill(GradingSkill):
                         "binding_issue": issue,
                         "reason": "The proposed relation or conditions could not be grounded in the submitted sources."})
                     continue
-                remaining = deadline - asyncio.get_running_loop().time()
-                if remaining <= 0:
-                    raise TimeoutError
-                result = await asyncio.wait_for(verify_math(request), timeout=min(12, remaining))
+                result = await verify_math(request)
                 evidence.append({**base, "source_binding": "explicit_syntax",
                                  "request": request.model_dump(mode="json"),
                                  **result.model_dump(mode="json")})
@@ -987,7 +981,7 @@ class MathGradingSkill(GradingSkill):
                 await self._substep(unit, "verify_result")
                 try:
                     # The verifier preserves completed evidence if later
-                    # checks exhaust the shared deadline.
+                    # checks exhaust the shared execution budget.
                     evidence = await self._verify(draft, problem, answer, plan)
                 except Exception as exc:
                     if _critical_failure(exc):

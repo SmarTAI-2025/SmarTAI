@@ -239,3 +239,34 @@ async def test_deadline_covers_cache_authorization_and_cancellation_propagates(t
     with pytest.raises(asyncio.CancelledError):
         await task
     assert reader.cache.entry_count == 0
+
+
+@pytest.mark.asyncio
+async def test_local_read_excludes_worker_queue_but_keeps_storage_deadline(tmp_path, monkeypatch):
+    reader, data, _, _, _ = setup(tmp_path)
+    command = PdfRenderRequest(page_number=1)
+    real_result = (await reader.read(data, command)).evidence
+    reader.cache = RecognitionByteCache()
+    async def queued(*args, **kwargs):
+        assert kwargs["wait_for_slot"] is True
+        await asyncio.sleep(0.08)
+        kwargs["on_admitted"]()
+        return real_result
+
+    monkeypatch.setattr(service, "read_pdf_evidence", queued)
+    result = await reader.read(data, command, timeout_seconds=0.04)
+    assert result.evidence == real_result
+    reader.cache = RecognitionByteCache()
+    active = reader._require_active
+    calls = 0
+
+    async def slow_after_worker(identity):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            await asyncio.Event().wait()
+        return await active(identity)
+
+    monkeypatch.setattr(reader, "_require_active", slow_after_worker)
+    with pytest.raises(RecognitionError, match="recognition_timeout"):
+        await asyncio.wait_for(reader.read(data, command, timeout_seconds=0.04), 1)
