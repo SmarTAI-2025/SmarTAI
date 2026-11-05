@@ -366,3 +366,16 @@ async def test_grading_model_failure_after_tests_keeps_localized_execution_evide
     assert result.error_kind == "parse_failed" and result.programming_evidence.score_status == "unavailable"
     assert detail in result.comment and summary in result.comment
     assert all(token not in result.comment for token in ("parse_failed", "wrong_answer", "private-run-id", "PRIVATE"))
+
+
+def test_programming_total_is_computed_from_valid_awards_without_model_arithmetic():
+    payload = award(4, maximum=20)
+    payload.pop("score")
+    payload["steps"].append({"step_no": 2, "desc": "Boundary case.", "is_correct": True, "score": 1.25})
+    result = programming.ProgrammingGradingOutput.model_validate(payload)
+    programming._validate_awards(result, 20)
+    assert result.score == 5.25
+    for invalid in ({**payload, "score": 0}, {**payload, "max_score": 10},
+                    {**payload, "steps": [{**payload["steps"][0], "score": 21}]}):
+        with pytest.raises(StructuredOutputInvalidError):
+            programming._validate_awards(programming.ProgrammingGradingOutput.model_validate(invalid), 20)
