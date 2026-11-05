@@ -626,3 +626,27 @@ it.each(["zh-CN", "en-US"] as const)("keeps raw unknown server details out of co
   expect(error.status).toBe(409);
   expect(error.message).toContain("SELECT");
 });
+
+
+describe("roster import validation", () => {
+  it.each(["zh-CN", "en-US"] as const)("gives roster-specific recovery guidance without leaking file contents (%s)", locale => {
+    const cases = [
+      ["submission_roster_unsupported", "CSV", "CSV"],
+      ["submission_roster_delimiter_mismatch", "制表符", "tabs"],
+      ["submission_roster_decode_failed", "UTF-8", "UTF-8"],
+      ["submission_roster_empty", "学生记录", "student records"],
+      ["submission_roster_too_large", "大小上限", "size limit"],
+      ["submission_roster_rows_invalid", "列数", "column count"],
+      ["submission_roster_invalid", "双引号", "quotes"],
+      ["submission_roster_headers_invalid", "学号列", "student-ID"],
+    ];
+    for (const [code, zh, en] of cases) {
+      const info = classifyRecoverableError(new APIError(422, "private roster cell contents", {
+        error: { code, message: "private roster cell contents" },
+      }), { locale });
+      expect(info.description).toContain(locale === "zh-CN" ? zh : en);
+      expect(info.description).not.toContain("private roster cell contents");
+      expect(info.actionKind).toBe("reupload");
+    }
+  });
+});

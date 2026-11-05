@@ -555,7 +555,7 @@ function localizeSubmissionError(
   if (["submission_source_too_large", "pdf_page_limit_exceeded", "pdf_character_limit_exceeded"].includes(code)) {
     return t("submissionUploadErrorTooLarge");
   }
-  if (code.startsWith("submission_roster_")) return t("submissionUploadErrorRoster");
+  if (code.startsWith("submission_roster_")) return userFacingError(error, locale);
   if (["no_provider_configured", "recognition_provider_not_enabled"].includes(code)) {
     return t("submissionUploadErrorProvider");
   }

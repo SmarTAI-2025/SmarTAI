@@ -282,6 +282,10 @@ const FILE_CODES = new Set([
   "submission_roster_too_large",
   "submission_roster_too_many_rows",
   "submission_roster_headers_invalid",
+  "submission_roster_delimiter_mismatch",
+  "submission_roster_decode_failed",
+  "submission_roster_invalid",
+  "submission_roster_rows_invalid",
 ]);
 
 const GRADING_CONFIGURATION_CODES = new Set([
@@ -1479,8 +1483,29 @@ function fileErrorDescription(
   if (["problem_source_character_limit_exceeded", "problem_source_token_limit_exceeded", "pdf_character_limit_exceeded"].includes(code ?? "")) {
     return tx(locale, "文件正文过长。请拆分内容，或通过“从原文提取”限定章节与题号。", "The document is too long. Split it, or use Extract from source to limit chapters and question numbers.");
   }
+  if (code === "submission_roster_unsupported") {
+    return tx(locale, "名单请使用 CSV、TSV 或 TXT 文件，并包含学号表头，姓名列可选。", "Use a CSV, TSV, or TXT roster with a student-ID header and an optional name column.");
+  }
+  if (code === "submission_roster_delimiter_mismatch") {
+    return tx(locale, "名单内容与扩展名不符：CSV 应使用逗号分隔，TSV 应使用制表符分隔。请重新导出后上传；TXT 可使用这两种分隔符。", "The roster delimiter does not match its extension: CSV uses commas and TSV uses tabs. Export the file in the matching format and upload it again; TXT accepts either delimiter.");
+  }
+  if (code === "submission_roster_decode_failed") {
+    return tx(locale, "名单文字编码无法读取。请另存为 UTF-8（推荐）或 GBK 编码的 CSV、TSV 或 TXT 后重新上传。", "The roster text encoding could not be read. Save it as UTF-8 (recommended) or GBK CSV, TSV, or TXT and upload it again.");
+  }
+  if (code === "submission_roster_empty") {
+    return tx(locale, "名单没有学生记录。请在学号表头下添加学生，再重新上传。", "The roster has no student records. Add students below the student-ID header, then upload it again.");
+  }
+  if (code === "submission_roster_too_large") {
+    return tx(locale, "名单文件超过上传大小上限，请拆分或导出更小的名单后重新上传。", "The roster exceeds the upload size limit. Split it or export a smaller roster and upload it again.");
+  }
+  if (code === "submission_roster_rows_invalid") {
+    return tx(locale, "名单存在缺少学号或列数与表头不一致的记录。请补齐学号，检查分隔符，并用双引号包住包含分隔符的单元格后重新上传。", "A roster record has no student ID or a different column count from the header. Fill in missing IDs, check the delimiters, and double-quote cells containing delimiters, then upload it again.");
+  }
+  if (code === "submission_roster_invalid") {
+    return tx(locale, "名单格式损坏或双引号未正确闭合。请从表格软件重新导出为 CSV、TSV 或 TXT 后上传。", "The roster is malformed or contains unclosed quotes. Export it again from your spreadsheet app as CSV, TSV, or TXT, then upload it.");
+  }
   if (code?.includes("roster_headers")) {
-    return tx(locale, "名单必须包含可识别的学号和姓名列。请修正表头后重新上传。", "The roster must contain recognizable student-ID and name columns. Fix the headers and upload it again.");
+    return tx(locale, "名单必须包含一个学号列，可选填一个姓名列，例如“学号,姓名”或“student_id,name”；不要重复身份列。CSV 使用逗号分隔，TSV 使用制表符，TXT 两者均可。请修正表头后重新上传。", "The roster must contain exactly one student-ID column and may include one name column, for example student_id,name; do not duplicate identity columns. CSV uses commas, TSV uses tabs, and TXT accepts either. Fix the headers and upload it again.");
   }
   return friendlyMessage(message, code, tx(locale, "请检查文件格式与内容后重新选择。", "Check the file format and content, then choose it again."));
 }

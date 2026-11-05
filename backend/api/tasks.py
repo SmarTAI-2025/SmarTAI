@@ -10,9 +10,7 @@ from backend.agents.history_query_agent import interpret_history_query
 from backend.progress.tracker import ProgressReporter
 
 import asyncio
-import csv
 import hashlib
-import io
 import json
 import logging
 import time
@@ -55,6 +53,7 @@ from backend.llm.registry import (
 from backend.models import TaskGradingSetup, User
 from backend.services import source_files as source_file_service
 from backend.services import task_facade
+from backend.services.roster_import import parse_roster as _parse_roster
 from backend.services.stage_provider_routing import (
     baidu_ocr_credential_id,
     list_stage_provider_options,
@@ -520,10 +519,14 @@ async def parse_submissions_endpoint(
         )
     roster_entries: list[dict[str, str]] = []
     roster_name = None
-    if roster_file is not None:
-        roster_name = roster_file.filename or "roster.csv"
-        roster_entries = _parse_roster(await roster_file.read())
     try:
+        if roster_file is not None:
+            roster_name = roster_file.filename or "roster.csv"
+            roster_body = await roster_file.read(SUBMISSION_UPLOAD_MAX_BYTES + 1)
+            if len(roster_body) > SUBMISSION_UPLOAD_MAX_BYTES:
+                raise ValidationError(code="submission_roster_too_large", status_code=413,
+                                      details={"max_bytes": SUBMISSION_UPLOAD_MAX_BYTES})
+            roster_entries = _parse_roster(roster_body, filename=roster_name)
         if roster_file is None and reuse_roster_from_job_id and identity_mode == "roster":
             roster_entries, roster_name = load_saved_roster(task_id=task_id, owner_id=current.id, job_id=reuse_roster_from_job_id)
         queued = task_facade.queue_task_submission_parsing(
@@ -664,22 +667,6 @@ async def manually_complete_submission_recognition(
                                        student_count=request.student_count)
     except DomainError as exc:
         return domain_error_response(exc)
-
-
-def _parse_roster(body: bytes) -> list[dict[str, str]]:
-    try:
-        text = body.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = body.decode("gbk")
-    reader = csv.DictReader(io.StringIO(text))
-    items = []
-    for row in reader:
-        normalized = {str(key or "").strip().casefold(): str(value or "").strip() for key, value in row.items()}
-        student_id = normalized.get("student_id") or normalized.get("stu_id") or normalized.get("学号") or ""
-        student_name = normalized.get("student_name") or normalized.get("stu_name") or normalized.get("name") or normalized.get("姓名") or ""
-        if student_id:
-            items.append({"stu_id": student_id, "stu_name": student_name})
-    return items
 
 
 @router.post("/{task_id}/grade")

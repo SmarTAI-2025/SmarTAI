@@ -78,6 +78,45 @@ function renderPage(taskId = "task-1", owner = "submission-teacher") {
 }
 
 describe("AddSubmissionsPage OCR uploads", () => {
+  it.each(["roster.csv", "roster.tsv", "roster.txt"])("keeps %s available only in the roster selector and sends its bytes", async filename => {
+    const { container } = renderPage();
+    const submissionInput = container.querySelector('input[type="file"]')!;
+    expect(submissionInput.getAttribute("accept")).not.toContain(".tsv");
+    fireEvent.change(submissionInput, { target: { files: [new File(["answer"], "S1_Alice.txt")] } });
+    fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
+    const rosterInput = container.querySelectorAll('input[type="file"]')[1]!;
+    expect(rosterInput).toHaveAttribute("accept", ".csv,.tsv,.txt");
+    const bytes = filename.endsWith("csv") ? "student_id,name\nS1,Alice\n" : "student_id\tname\nS1\tAlice\n";
+    fireEvent.change(rosterInput, { target: { files: [new File([bytes], filename)] } });
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledOnce());
+    expect(mutateAsync.mock.calls[0][0].rosterFile.name).toBe(filename);
+    expect(await mutateAsync.mock.calls[0][0].rosterFile.text()).toBe(bytes);
+  });
+
+  it.each(["zh-CN", "en-US"])("shows the actual roster error and permits replacement without losing answers (%s)", async locale => {
+    copy.locale = locale;
+    try {
+      const { container } = renderPage();
+      fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["answer"], "S1_Alice.txt")] } });
+      fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
+      const rosterInput = container.querySelectorAll('input[type="file"]')[1]!;
+      fireEvent.change(rosterInput, { target: { files: [new File(["student_id,name\nS1,Alice"], "bad.tsv")] } });
+      await waitFor(() => expect(screen.getByLabelText(locale === "zh-CN" ? "作答识别模型" : "Submission recognition model")).toHaveValue("provider-default"));
+      const error = new APIError(422, "submission_roster_delimiter_mismatch", { error: { code: "submission_roster_delimiter_mismatch" } });
+      mutateAsync.mockRejectedValueOnce(error);
+      fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+      await screen.findByText(userFacingError(error, locale), { selector: "p[role='alert']" });
+      expect(screen.getByText("S1_Alice.txt")).toBeInTheDocument();
+      fireEvent.change(rosterInput, { target: { files: [new File(["student_id\tname\nS1\tAlice"], "fixed.tsv")] } });
+      expect(screen.queryByText(userFacingError(error, locale), { selector: "p[role='alert']" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(2));
+      expect(mutateAsync.mock.calls[1][0].rosterFile.name).toBe("fixed.tsv");
+      expect(mutateAsync.mock.calls[1][0].file.name).toBe("S1_Alice.txt");
+    } finally { copy.locale = "zh-CN"; }
+  });
   it.each(["zh-CN", "en-US"])("localizes upload network errors and keeps selected input (%s)", async locale => {
     copy.locale = locale;
     try {
