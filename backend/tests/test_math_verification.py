@@ -83,6 +83,7 @@ def test_constants_and_precision(student, reference, kwargs, status):
 
 @pytest.mark.parametrize("student,reference,kwargs,status", [
     ("(x+1)^2", "x^2+2*x+1", {}, "supported"),
+    ("(a^2+b^2)*(c^2+d^2)-(a*c+b*d)^2", "(a*d-b*c)^2", {"domain": "real"}, "supported"),
     ("sin(x)^2+cos(x)^2", "1", {}, "supported"),
     ("sqrt(x^2)", "x", {"domain": "real"}, "refuted"),
     ("sqrt(x^2)", "x", {"assumptions": {"x": {"nonnegative": True}}}, "supported"),
@@ -166,6 +167,7 @@ def test_units(student, reference, kwargs, status):
 
 @pytest.mark.parametrize("student,reference,comparison,status", [
     ("Integral(sin(x), (x, 0, pi))", "2", "numeric", "supported"),
+    ("Integral(x^2*sin(x),(x,0,pi))", "pi^2-4", "numeric", "supported"),
     ("integrate(exp(x), (x, 0, 1))", "E-1", "numeric", "supported"),
     ("Integral(I*x, (x, 0, 2))", "2*I", "numeric", "supported"),
     ("Integral(x^2, (x, 1, 0))", "-1/3", "numeric", "supported"),
