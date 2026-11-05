@@ -180,3 +180,17 @@ async def test_identical_scoring_facts_produce_identical_model_input_across_inde
     assert votes[0].programming_evidence.evidence_id != votes[1].programming_evidence.evidence_id
     first, second = provider.ainvoke.await_args_list
     assert [m.content for m in first.args[0]] == [m.content for m in second.args[0]]
+
+
+@pytest.mark.asyncio
+async def test_class_shares_the_extra_reference_check_but_runs_each_student(monkeypatch):
+    problem, answer = setup()
+    execute = AsyncMock(wraps=programming.run_sandbox)
+    monkeypatch.setattr(programming, "run_sandbox", execute)
+    provider = fixed_provider(*(response({**award(10), "boundary_case": EXTRA}) for _ in range(3)))
+    with programming_run(None, None):
+        rows = await asyncio.gather(*(programming.ProgrammingSkill(provider).grade(problem, answer, student_id=sid)
+                                      for sid in ("a", "b", "c")))
+    assert all(row.programming_evidence.boundary_note for row in rows)
+    assert sum(call.args[0] == REFERENCE for call in execute.await_args_list) == 2  # official and additional
+    assert sum(call.args[0] == SOURCE for call in execute.await_args_list) == 6

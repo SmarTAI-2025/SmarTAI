@@ -89,6 +89,23 @@ def boundary_feedback(observation, language):
     return f"For the additional input {given}, the submission {observed}. The reference confirms the expected value {expected}. This input is outside the teacher tests. Credit follows the teacher rubric."
 
 
+async def _reference_matches(state, problem, ref_source, ref_case, language, execute, reporter):
+    # Every student keeps an independent execution, but a class needs only one
+    # reference run for the same question revision, input and proposed expectation.
+    ref_key = runs.digest(["boundary_reference_v1", runs._question_key(state, problem), language, ref_case.model_dump(mode="json")])
+    async with state.lock(ref_key):
+        saved = state.read(ref_key, runs.AUXILIARY)
+        if saved is not None:
+            return saved.get("matched") is True
+        state.store(runs.AUXILIARY, ref_key, {"status": "started"})
+        await runs._notify(reporter, "validate_programming_reference")
+        report = await execute(ref_source, [ref_case], language=language, per_case_timeout=10.0)
+        runs._validate_report(report, [ref_case])
+        matched = report.passed_count == 1
+        state.store(runs.AUXILIARY, ref_key, {"status": "done", "matched": matched})
+        return matched
+
+
 async def verified_boundary(problem, run, public, proposal, execute, reporter):
     if (run.status != "executed" or not run.cases or not public.teacher_tests.total
             or public.teacher_tests.passed != public.teacher_tests.total):
@@ -129,10 +146,7 @@ async def verified_boundary(problem, run, public, proposal, execute, reporter):
                     raise ValueError("unsupported_reference_interface")
                 raw = case.model_dump(exclude_unset=True, exclude={"function_name"})
                 ref_case, = bind_programming_cases(problem.stem, [raw], ref_source)
-            await runs._notify(reporter, "validate_programming_reference")
-            reference_report = await execute(ref_source, [ref_case], language=language, per_case_timeout=10.0)
-            runs._validate_report(reference_report, [ref_case])
-            if reference_report.passed_count == 1:
+            if await _reference_matches(state, problem, ref_source, ref_case, language, execute, reporter):
                 student_language = run.source_language or "python"
                 source = python_execution_source(run.code) if student_language == "python" else run.code
                 await runs._notify(reporter, "run_programming_test_cases")
