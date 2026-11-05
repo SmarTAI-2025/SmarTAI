@@ -13,7 +13,9 @@ FIXTURES = json.loads((Path(__file__).resolve().parents[2]
 @pytest.mark.parametrize("group", FIXTURES)
 def test_question_analysis_materials_match_backend_schema(group):
     for case in FIXTURES[group]:
-        assert TestCase.model_validate(case).model_dump() == case
+        assert TestCase.model_validate(case).model_dump() == {
+            "function_kwargs": None, "comparison": "default", "abs_tol": 1e-9, "rel_tol": 0, **case,
+        }
 
 
 def test_reported_function_returns_remain_repr_strings():
