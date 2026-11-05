@@ -80,15 +80,15 @@ def _short(value: str, limit=140):
 
 def _case_detail(case_id, case_label, case, result, reason):
     detail = {"case_id": case_id, "case_label": case_label, "source": case.source, "outcome": reason}
+    expected = case.expected_return if case.function_name else case.expected_output
+    if case.function_name:
+        arguments = {"args": case.function_args, "kwargs": getattr(case, "function_kwargs", None) or {}}
+        detail["call_arguments"] = _short(json.dumps(arguments, ensure_ascii=False))
+    else:
+        detail["input"] = _short(case.input)
+    detail["expected"] = _short(expected or "")
+    detail["actual"] = _short(result.actual_output)
     if not result.passed:
-        expected = case.expected_return if case.function_name else case.expected_output
-        if case.function_name:
-            arguments = {"args": case.function_args, "kwargs": getattr(case, "function_kwargs", None) or {}}
-            detail["call_arguments"] = _short(json.dumps(arguments, ensure_ascii=False))
-        else:
-            detail["input"] = _short(case.input)
-        detail["expected"] = _short(expected or "")
-        detail["actual"] = _short(result.actual_output)
         # A traceback, temporary path or arbitrary exception message is never
         # needed to explain a runtime error. Only keep a Python exception type.
         if result.error:

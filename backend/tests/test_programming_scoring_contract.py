@@ -128,6 +128,8 @@ async def test_mixed_sources_late_failures_and_bounded_distinct_reasons():
     assert examples[0]["actual"].strip() == "5" and examples[0]["expected"].startswith("wanted")
     assert len(examples) <= 6 and len(examples[0]["expected"]) <= 140
     assert examples[1]["error_type"] == "ValueError" and "PRIVATE_ERROR" not in json.dumps(examples)
+    passed = next(item for item in examples if item["outcome"] == "passed")
+    assert passed["input"] == passed["actual"].strip() == passed["expected"]
     assert all(r["case_id"] for r in examples)
     assert material["submitted_source"] == code and material["rubric"] == problem.criterion
 
