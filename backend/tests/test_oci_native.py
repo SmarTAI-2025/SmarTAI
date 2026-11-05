@@ -181,3 +181,26 @@ async def test_ambiguous_missing_header_cannot_count_as_student_zero():
     with pytest.raises(NativeBuildUnavailable) as failure:
         await run_program_oci('#include "course_fixture_missing.h"\nint main(void){return 0;}', language="c")
     assert failure.value.reason == "native_header_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filename,source,marker", [
+    ("solve.py", "print(1 // int(input()))", "ZeroDivisionError"),
+    ("solve.c", "#include <signal.h>\nint main(void){raise(SIGSEGV);}", "SIGSEGV"),
+    ("solve.c", '#include <stdio.h>\nint main(void){fputs("ZeroDivisionError\\n",stderr);return 1;}', None),
+])
+async def test_runtime_feedback_follows_observed_failure(filename, source, marker):
+    problem = ProblemInfo(q_id="q1", number="1", type="programming", stem="Read one integer from stdin.",
+                          criterion="Exact output.", test_cases=[Case(input="0", expected_output="1")])
+    raw, = source_answers(filename, source, {"q1": problem.model_dump()}, {"q1"})
+    run = await evidence_for_answer(problem=problem, answer=StudentAnswerInfo.model_validate(raw),
+        student_id="fixture", task_id="runtime-feedback", provider=None, reporter=None, generate=None, execute=run_sandbox)
+    for language, memory_hint in [("zh", "内存访问"), ("en", "memory accesses")]:
+        evidence, _ = describe_run(run, language, problem)
+        assert evidence.failure_counts == {"runtime_error": 1} and evidence.teacher_tests.passed == 0
+        assert evidence.score_status == "final"
+        assert (memory_hint in evidence.safe_summary) == (marker == "SIGSEGV")
+        if marker:
+            assert marker in evidence.safe_summary
+        else:
+            assert "ZeroDivisionError" not in evidence.safe_summary
