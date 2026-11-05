@@ -27,7 +27,7 @@ from backend.services.grading_checkpoints import CheckpointWriteError, current_c
 from backend.services.programming_submission_mapping import C_FAMILY_FLAG, NATIVE_LANGUAGES, PYTHON_FLAG, has_markup_fence
 from backend.services.python_source_encoding import PythonSourceEncodingError, python_execution_source
 from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCodeExecutionDisabled
-from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
+from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable, NativeBuildUnavailable
 
 VERSION = "programming_run_v1"
 PREPARED = grading_repository.PROGRAMMING_CASES_PREPARED
@@ -293,8 +293,8 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
                 "programming_cases_unavailable", "programming_execution_contract_invalid",
             } else "programming_case_configuration_invalid"
             return key, [], state.failures[key]
-        except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError):
-            state.failures[key] = "programming_execution_unavailable"
+        except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError) as exc:
+            state.failures[key] = exc.reason if isinstance(exc, NativeBuildUnavailable) else "programming_execution_unavailable"
             return key, [], state.failures[key]
         state.store(PREPARED, key, {"q_id": problem.q_id, "cases": data, "suite_hash": digest(data),
                                     "reference_checked": bool(reference)})
@@ -304,7 +304,21 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
 def has_native_main(code):
     # Ignore comments, literals and prototypes when identifying an entry.
     tokens = re.sub(r"""//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'""", " ", code, flags=re.S)
-    return bool(re.search(r"\b(?:int|signed|auto|[A-Za-z_]\w*_t)\s+main\s*\([^;{}]*\)[^;{}]*\{", tokens))
+    # A call to main inside a helper, or a prototype followed by a helper
+    # definition, does not establish an entry. The isolated linker is final.
+    depth = 0
+    candidate = False
+    for match in re.finditer(r"[{};]|\bmain\s*\(", tokens):
+        token = match[0]
+        if token == "{":
+            if depth == 0 and candidate:
+                return True
+            depth += 1
+        elif token == "}":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            candidate = token != ";"
+    return False
 
 
 async def prepare_pending(state, problems, students, selection, reporter):
@@ -483,8 +497,11 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
             await _notify(reporter, "run_programming_test_cases")
             try:
                 report = await _execute_remaining(state, key, identity, executable, cases, execute)
-            except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError, ValueError):
-                state.failures[key] = "native_runner_unavailable" if native else "programming_execution_unavailable"
+            except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError, ValueError) as exc:
+                if isinstance(exc, NativeBuildUnavailable):
+                    state.failures[key] = exc.reason
+                else:
+                    state.failures[key] = "native_runner_unavailable" if native else "programming_execution_unavailable"
                 return ProgrammingEvidence("unavailable", code, cases, reason=state.failures[key])
             saved = {"identity": identity,
                 "rows": [_persisted_row(row) for row in report.results],

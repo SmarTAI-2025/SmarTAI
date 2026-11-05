@@ -34,6 +34,12 @@ class IsolatedRunnerUnavailable(RuntimeError):
         super().__init__("programming_execution_unavailable")
 
 
+class NativeBuildUnavailable(IsolatedRunnerUnavailable):
+    def __init__(self, reason):
+        super().__init__()
+        self.reason = reason
+
+
 def launcher_environment() -> dict[str, str]:
     # Runtime discovery requires the service user's HOME/XDG path, not the
     # website's database credentials, provider keys or inherited proxy settings.
@@ -247,11 +253,18 @@ async def run_program_oci(code, test_input="", *, language, timeout=10.0, memory
                              "stdout", "stderr", "duration_ms", "resource_status", "isolation_mode"}
                 if not mandatory.issubset(result.model_fields_set):
                     raise IsolatedRunnerUnavailable()
+                if (native and not result.executed and result.execution_id == execution_id
+                        and result.isolation_mode == "oci_container" and result.request_digest == digest
+                        and result.exit_reason in {"toolchain_unavailable", "native_main_required"}
+                        and result.resource_status == "not_executed" and result.total_count == result.passed_count == 0):
+                    raise NativeBuildUnavailable(result.exit_reason.value)
                 if result.execution_id != execution_id or result.isolation_mode != "oci_container" or not result.executed:
                     raise IsolatedRunnerUnavailable()
-                allowed = {"success", "runtime_error", "timeout", "output_limit", "syntax_error"}
+                allowed = {"success", "runtime_error", "timeout", "output_limit"}
                 if native:
                     allowed.update({"compile_error", "link_error"})
+                else:
+                    allowed.add("syntax_error")
                 if bind_request:
                     allowed.update({"memory_limit", "pid_limit"})
                 if function_call is not None:
@@ -285,7 +298,7 @@ async def run_program_oci(code, test_input="", *, language, timeout=10.0, memory
                     execution_id=execution_id, request_digest=digest, error=result.stderr, duration_ms=result.duration_ms,
                     exit_reason=result.exit_reason.value, stdout_truncated=result.stdout_truncated,
                     stderr_truncated=result.stderr_truncated, isolation_mode="oci_container")
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, NativeBuildUnavailable):
         raise
     except Exception as exc:
         raise IsolatedRunnerUnavailable() from exc

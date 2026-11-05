@@ -58,6 +58,9 @@ def unavailable(reason, evidence_id, language, *, mapping="unknown", execution="
     if reason == "native_main_required":
         message = ("请教师复核函数片段，或提交含 main 的单文件标准输入程序。" if language == "zh" else
                    "Review the function fragment or submit one stdin program with main.")
+    if reason == "toolchain_unavailable":
+        message = ("未评分。请管理员修复镜像中的编译器、头文件或链接器，再重试。" if language == "zh" else
+                   "Ungraded. Ask the administrator to repair the compiler, headers or linker in the image, then retry.")
     if reason == "native_runner_unavailable":
         message = ("未评分。请管理员检查隔离运行时、镜像和编译器，再重试。" if language == "zh" else
                    "Ungraded. Ask the administrator to check the OCI runtime, image and compiler, then retry.")

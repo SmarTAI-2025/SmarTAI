@@ -52,6 +52,9 @@ jobs:
         run: |
           export SMARTAI_PROGRAM_RUNNER_IMAGE="$(docker image inspect --format '{{.Id}}' smartai-runner-spike:week1)"
           export SMARTAI_U1_NATIVE_EVIDENCE="$RUNNER_TEMP/u1-native-evidence.json"
+          printf 'FROM smartai-runner-spike:week1\nUSER root\nRUN rm /usr/bin/gcc\nUSER 65534:65534\n' |
+            docker build --network=none -t smartai-qa-without-gcc -
+          export SMARTAI_TEST_BROKEN_CC_IMAGE="$(docker image inspect --format '{{.Id}}' smartai-qa-without-gcc)"
           git fetch --depth=1 origin ab36293b5b00ea2dd20803cd89c727398671c835
           python -m pytest backend/tests/test_oci_real_runtime.py backend/tests/test_oci_native.py -q
       - name: Save synthetic U1 native evidence

@@ -99,6 +99,12 @@ async def test_native_failures_cancellation_and_isolation(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert (await run("int main(void){return 0;}")).passed
+    if broken := os.environ.get("SMARTAI_TEST_BROKEN_CC_IMAGE"):
+        from backend.tools.oci_grading_runner import NativeBuildUnavailable
+        monkeypatch.setattr(settings, "program_runner_image", broken)
+        with pytest.raises(NativeBuildUnavailable) as failure:
+            await run("int main(void){return 0;}")
+        assert failure.value.reason == "toolchain_unavailable"
     monkeypatch.setattr(settings, "program_runner_image", "smartai-intentionally-absent:missing")
     with pytest.raises(IsolatedRunnerUnavailable):
         await run("int main(void){return 0;}")

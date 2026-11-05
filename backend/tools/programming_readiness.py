@@ -4,7 +4,7 @@ import json
 import re
 
 from backend.config import settings
-from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable, run_python_oci
+from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable, run_program_oci, run_python_oci
 from tools.runner_spike.worker import SCHEMA_VERSION
 
 
@@ -27,6 +27,14 @@ async def capabilities():
     if (stdin.passed and stdin.stdout == "5\n" and function.passed and function.return_value == "5"
             and stdin.isolation_mode == function.isolation_mode == "oci_container"):
         result.update(status="ready", languages=["python"], modes=["stdin", "function"])
+        for language, source in (("c", '#include <stdio.h>\nint main(void){puts("5");}'),
+                                 ("cpp", '#include <iostream>\nint main(){std::cout << 5 << std::endl;}')):
+            try:
+                native = await run_program_oci(source, language=language, timeout=3)
+            except IsolatedRunnerUnavailable:
+                continue
+            if native.passed and native.stdout == "5\n" and native.isolation_mode == "oci_container":
+                result["languages"].append(language)
     return result
 
 

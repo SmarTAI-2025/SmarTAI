@@ -370,6 +370,11 @@ def _result(
     }
 
 
+class NativeBuildUnavailable(Exception):
+    def __init__(self, reason="toolchain_unavailable"):
+        self.reason = reason
+
+
 def _build_native(language, source, memory_mb):
     """Compile and link separately inside the disposable case container.
 
@@ -415,11 +420,11 @@ def _build_native(language, source, memory_mb):
                     confirm_toolchain()
                     return reason
             elif re.search(r"undefined reference to [`']main'", detail):
-                raise RuntimeError("no linked main definition")
+                raise NativeBuildUnavailable("native_main_required")
             elif "undefined reference to" in detail or "multiple definition of" in detail:
                 confirm_toolchain()
                 return reason
-        raise RuntimeError("toolchain failure")
+        raise NativeBuildUnavailable()
     return None
 
 
@@ -466,7 +471,10 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR, track_res
             if language == "python":
                 command = child_command(script_path, return_fd)
             else:
-                reason = _build_native(language, script_path, request["memory_mb"])
+                try:
+                    reason = _build_native(language, script_path, request["memory_mb"])
+                except (OSError, subprocess.SubprocessError) as exc:
+                    raise NativeBuildUnavailable() from exc
                 if reason:
                     return _result(request["execution_id"], executed=True, exit_reason=reason,
                                    duration_ms=(time.perf_counter() - started_at) * 1000)
@@ -575,6 +583,9 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR, track_res
             duration_ms=(time.perf_counter() - started_at) * 1000,
             resource_status="unknown",
         )
+    except NativeBuildUnavailable as exc:
+        return _result(request["execution_id"], executed=False, exit_reason=exc.reason,
+                       resource_status="not_executed")
     except Exception as exc:  # pragma: no cover - defensive container boundary
         return _result(
             request["execution_id"],
