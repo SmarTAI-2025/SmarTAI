@@ -394,3 +394,48 @@ async def test_function_failure_phase(source, args, kwargs, reason, record_prope
         assert result.passed and result.process_exit_code == 0 and result.return_value == "30"
     else:
         assert not result.passed and result.process_exit_code == 1 and result.return_value is None
+
+
+@pytest.mark.parametrize("io_mode", ["function", "stdin"])
+async def test_saved_teacher_edit_reaches_real_oci(monkeypatch, io_mode):
+    from backend.tests.test_programming_saved_grading_flow import exercise_saved_grading_flow
+
+    # The shared synchronous API test runs its own grading event loop.
+    row = await asyncio.to_thread(exercise_saved_grading_flow, monkeypatch, io_mode=io_mode)
+    assert (row["isolation_mode"], row["process_exit_code"]) == ("oci_container", 0)
+    assert (row["case_id"], row["case_index"]) == ("case-1", 0)
+    assert re.fullmatch(r"[0-9a-f]{32}", row["execution_id"])
+    assert re.fullmatch(r"[0-9a-f]{64}", row["request_digest"])
+
+
+async def test_real_oci_callbacks_follow_completion_order(monkeypatch):
+    from backend.tools import code_interpreter
+
+    cases = [Case(input="3 4", expected_output="7"), Case(input="1 2", expected_output="3")]
+    real_case = code_interpreter._run_case
+    second_checkpointed = asyncio.Event()
+    callbacks = []
+
+    async def finish_second_first(code, case, timeout, memory):
+        # Both results come from real containers. Only delivery of the first
+        # result is gated, so startup speed cannot decide callback order.
+        row = await real_case(code, case, timeout, memory)
+        if case is cases[0]:
+            await asyncio.wait_for(second_checkpointed.wait(), timeout=30)
+        return row
+
+    async def checkpoint(row):
+        callbacks.append((row.case_id, row.case_index, row.execution_id, row.actual_output))
+        if row.case_index == 1:
+            second_checkpointed.set()
+
+    monkeypatch.setattr(code_interpreter, "_run_case", finish_second_first)
+    report = await run_sandbox("print(sum(map(int, input().split())))", cases, on_case_complete=checkpoint)
+    assert (report.passed_count, report.total_count) == (2, 2)
+    first, second = report.results
+    assert first.isolation_mode == second.isolation_mode == "oci_container"
+    assert first.execution_id != second.execution_id
+    assert [(r.case_id, r.case_index, r.actual_output) for r in report.results] == [
+        ("case-1", 0, "7\n"), ("case-2", 1, "3\n")]
+    assert callbacks == [
+        ("case-2", 1, second.execution_id, "3\n"), ("case-1", 0, first.execution_id, "7\n")]

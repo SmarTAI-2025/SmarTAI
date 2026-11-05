@@ -17,15 +17,27 @@ from backend.tests.test_task_background_workflows import _seed_task
 
 
 def test_teacher_edit_is_used_by_every_expert_and_execution_is_durable(monkeypatch):
+    exercise_saved_grading_flow(monkeypatch, io_mode="function")
+
+
+def exercise_saved_grading_flow(monkeypatch, *, io_mode):
+    """Save a teacher edit, grade it and return the row read back from SQLite."""
     owner, task = _seed_task(with_question=True)
     client = TestClient(create_app())
     headers = {"Authorization": "Bearer " + create_token(owner, "teacher")}
     path = f"/tasks/{task}/problems/q1"
     def revision():
         return workflow_repository.get_live_workflow(task, owner_id=owner).workflow_revision
-    old = {"source":"teacher", "function_name":"add", "io_mode":"function", "input":"2、3",
-           "expected_output":"5", "function_args":[2,3], "expected_return":"5"}
-    save = client.put(path, headers=headers, json={"type":"编程题", "stem":"实现 def add(a,b):",
+    old = {"source": "teacher", "io_mode": io_mode, "input": "2、3", "expected_output": "5"}
+    if io_mode == "function":
+        old.update(function_name="add", function_args=[2, 3], expected_return="5")
+        stem = "实现 def add(a,b):"
+        source = "from operator import add as helper\ndef unrelated(x): return 17\ndef add(a,b): return helper(a,b)\n"
+    else:
+        assert io_mode == "stdin"
+        stem = "编写程序，从标准输入读入两个以空格分隔的整数，在标准输出打印和。"
+        source = "a, b = map(int, input().split())\nprint(a + b)\n"
+    save = client.put(path, headers=headers, json={"type":"编程题", "stem":stem,
         "criterion":"Return the sum of the two arguments (10 points).", "review_status":"edited",
         "test_cases":[old], "expected_workflow_revision":revision()})
     assert save.status_code == 200, save.text
@@ -33,8 +45,11 @@ def test_teacher_edit_is_used_by_every_expert_and_execution_is_durable(monkeypat
     edited = client.put(path, headers=headers, json={"test_cases":[edit],"expected_workflow_revision":revision()})
     assert edited.status_code == 200, edited.text
     stored = client.get(f"/tasks/{task}", headers=headers).json()["problem_data"]["q1"]["test_cases"][0]
-    assert stored["function_args"] == [3,4] and stored["expected_return"] == "7"
-    source = "from operator import add as helper\ndef unrelated(x): return 17\ndef add(a,b): return helper(a,b)\n"
+    assert (stored["input"], stored["expected_output"]) == ("3、4", "7")
+    if io_mode == "function":
+        assert stored["function_args"] == [3, 4] and stored["expected_return"] == "7"
+    else:
+        assert stored.get("function_name") is None
     task_facade._commit_imported_submissions(task_id=task, owner_id=owner,
         course_id=assignment_repository.get_assignment(task,actor_id=owner).course_id,
         students=[{"stu_id":"constructed","stu_name":"Constructed", "source_id":"","identity_status":"matched",
@@ -52,7 +67,18 @@ def test_teacher_edit_is_used_by_every_expert_and_execution_is_durable(monkeypat
     monkeypatch.setattr(grading_runs,"_registry_for",lambda _:registry)
     monkeypatch.setattr(grading_runs.settings,"e2e_fake_provider",False)
     monkeypatch.setattr(programming.kb_tool,"retrieve_for_grading",AsyncMock(return_value=[]))
-    executed = AsyncMock(wraps=programming.run_sandbox)
+    dispatch = programming.run_sandbox
+    checkpoints = []
+
+    async def observe_dispatch(code, cases, *, on_case_complete, **limits):
+        async def checkpoint(row):
+            await on_case_complete(row)
+            checkpoints.append((row.case_id, row.case_index, row.execution_id))
+
+        return await dispatch(code, cases, on_case_complete=checkpoint, **limits)
+
+    executed = AsyncMock(side_effect=observe_dispatch)
+    executed.supports_case_checkpoints = dispatch.supports_case_checkpoints
     monkeypatch.setattr(programming,"run_sandbox",executed)
     generation = AsyncMock(side_effect=AssertionError("saved cases must not be regenerated"))
     monkeypatch.setattr(programming,"_generate_test_cases",generation)
@@ -80,4 +106,12 @@ def test_teacher_edit_is_used_by_every_expert_and_execution_is_durable(monkeypat
     assert len(events) == 1
     evidence = events[0]["payload"]["value"]
     assert evidence["identity"]["source_sha256"] == programming_runs.source_hash(source)
-    assert evidence["rows"][0]["actual_output"] == "7" and evidence["rows"][0]["passed"]
+    row, = evidence["rows"]
+    assert checkpoints == [(row["case_id"], row["case_index"], row["execution_id"])]
+    assert row["passed"] and row["executed"]
+    if io_mode == "function":
+        assert (row["actual_output"], row["return_value"], row["stdout"]) == ("7", "7", "")
+    else:
+        assert executed.call_args.args[1][0].input == "3 4"
+        assert (row["actual_output"], row["return_value"], row["stdout"]) == ("7\n", None, "7\n")
+    return row

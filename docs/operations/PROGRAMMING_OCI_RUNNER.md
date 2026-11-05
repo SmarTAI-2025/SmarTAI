@@ -118,6 +118,17 @@ container listing. For individual failures, append the pytest selector
 `::test_08_kernel_oom_is_not_within_limits`, or
 `::test_08_pid_exhaustion_has_distinct_result` to the extra suite's filename.
 
+To rerun only the saved teacher edit and callback checks, use the same dedicated
+account, pinned image and venv. The mounted tests use disposable SQLite and
+fixed scoring responses. They verify both function and stdin modes after the
+teacher changes `2、3 → 5` to `3、4 → 7`. The callback test gates delivery of
+one real container result to check completion order and report order separately.
+
+```sh
+SMARTAI_OCI_ROOTLESS_QA=1 python -m pytest -q backend/tests/test_oci_rootless_acceptance.py \
+  -k 'saved_teacher_edit_reaches_real_oci or real_oci_callbacks_follow_completion_order'
+```
+
 ### 2026-11-05 candidate observations
 
 Runner candidate `edf264c38b4fe5525f153323c7032034a9b860c3` ran on a new
