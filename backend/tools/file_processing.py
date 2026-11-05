@@ -132,7 +132,6 @@ _MIME_ALIASES = {
     "text/json": "application/json",
     "image/jpg": "image/jpeg",
     "text/x-markdown": "text/markdown",
-    "text/json": "application/json",
 }
 
 
