@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.models import TestCase
 from backend.services import programming_runs as runs
+from backend.services.programming_input_domain import input_domain
 from backend.services.programming_test_contract import bind_programming_cases
 from backend.services.python_source_encoding import python_execution_source
 from backend.tools.code_interpreter import HostCodeExecutionDisabled
@@ -117,7 +118,8 @@ async def verified_boundary(problem, run, public, proposal, execute, reporter):
     # frozen cases. Use that result before considering any new sandbox work.
     teacher_inputs = {runs.digest(_input(c)) for c in run.cases if c.source == "teacher"}
     for case, result in zip(run.cases, run.report.results, strict=True):
-        if case.source == "llm_generated" and runs.digest(_input(case)) not in teacher_inputs:
+        if (case.source == "llm_generated" and runs.digest(_input(case)) not in teacher_inputs
+                and input_domain(problem, case) == "allowed"):
             observed = _observation(case, result)
             if observed:
                 return observed
@@ -125,13 +127,13 @@ async def verified_boundary(problem, run, public, proposal, execute, reporter):
     if state is None and proposal is None:
         return None
     state = state or runs.ProgrammingRun()
-    key = runs.digest(["boundary_check_v1", run.evidence_id])
+    key = runs.digest(["boundary_check_v2", run.evidence_id])
     async with state.lock(key):
         previous = state.read(key, runs.AUXILIARY)
         if previous is not None:
             return previous.get("observation")
         case = _proposed_case(proposal, run.cases)
-        if case is None:
+        if case is None or input_domain(problem, case) != "allowed":
             return None
         state.store(runs.AUXILIARY, key, {"status": "started"})
         observation = None

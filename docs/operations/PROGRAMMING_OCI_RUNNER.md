@@ -283,3 +283,9 @@ user with `python tools/runner_spike/harness.py probe --runtime podman --image
 `parent_readable=true`; the protected supervisor returned `false`. The child
 environment and sentinel checks showed no forbidden key. The frozen suite also
 verified the live container's configured environment via Podman inspection.
+
+### Input eligibility for AI test evidence
+
+A teacher reference supplies an expected result only after the proposed input has been checked against the frozen question and rubric. The same check applies to supplemental boundary observations. It reads declared argument names, simple scalar and list types, numeric comparisons and intervals, and finite integer/string choices. Function arguments bind to the teacher's signature. Standard input uses the declared scalar or record format. Output descriptions and conditional branches do not establish an input type or precondition.
+
+Unsupported requirements such as graph properties, permutations or implicit relationships require teacher confirmation. Extra inputs whose eligibility is unknown or contradicted do not produce a public boundary observation. For a fresh run, teacher-provided examples retain their exact inputs and expected results. If AI proposals are excluded, the private per-question audit records their original positions, inputs, supplied expectations and reasons. A mixed suite continues with the teacher examples and any verified AI inputs; feedback reports the omissions. An incomplete AI-only suite stays ungraded until the teacher confirms or supplies usable cases. Previous grade snapshots are preserved.

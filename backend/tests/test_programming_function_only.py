@@ -159,7 +159,7 @@ async def test_programming_skill_zero_pass_rate_caps_confidence():
 
     problem = ProblemInfo(
         q_id="q1", number="1", type="编程题",
-        stem="A program that prints 'hello'.", criterion="Correctness.",
+        stem="Read one integer from stdin and print 'hello'.", criterion="Correctness.",
     )
     # Student code that just prints something else — guarantees 0% pass rate
     # against any reasonable LLM-generated stdin/stdout test

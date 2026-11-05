@@ -21,7 +21,7 @@ def setup(*, independent=True, mixed=False):
     if mixed:
         cases.append(Case(io_mode="function", function_name="double", function_args=[-1],
                           expected_return="-2", source="llm_generated"))
-    problem = ProblemInfo(q_id="q1", number="1", type="编程题", stem="实现 double(n)，返回整数的两倍。",
+    problem = ProblemInfo(q_id="q1", number="1", type="编程题", stem="实现 double(n)，参数 n 为整数，返回它的两倍。",
                           max_score=10, criterion="教师用例全部通过得10分。", solution_code=REFERENCE, test_cases=cases)
     if not independent:
         problem._math_rubric_source = {"presentation":{"ai_completion_provenance":{"solution_code":{"source":"ai"}}}}
@@ -132,7 +132,7 @@ async def test_generated_argument_shape_is_repaired_before_the_class_suite_is_fr
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stem,proposal,reference,student,expected", [
-    ("实现 def keep(s): 返回原字符串。", {"args": [" x! "]}, "def keep(s): return s", "def keep(s): return s.strip()", repr(" x! ")),
+    ("实现 def keep(s): 参数 s 为字符串。返回原字符串。", {"args": [" x! "]}, "def keep(s): return s", "def keep(s): return s.strip()", repr(" x! ")),
     ("Read stdin and print it exactly.", {"input": " x! \n"}, "import sys\nsys.stdout.write(sys.stdin.read())", "print(input().strip())", " x! \n"),
 ])
 async def test_fresh_generated_inputs_obtain_expected_values_from_teacher_reference_once(monkeypatch, stem, proposal, reference, student, expected):

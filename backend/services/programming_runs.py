@@ -59,6 +59,7 @@ class ProgrammingEvidence:
     evidence_id: str = ""
     case_ids: tuple[str, ...] = ()
     source_language: str | None = None
+    domain_review: dict | None = None
 
 
 def _saved(run_id, manifest, owner, *, auxiliary_events=None):
@@ -130,6 +131,7 @@ class ProgrammingRun:
         # A shared unsuccessful attempt stops this batch's fan-out. It is never
         # persisted as a valid set of tests or a completed student execution.
         self.failures = {}
+        self.domain_reviews = {}
 
     def lock(self, key):
         return self.locks.setdefault(key, asyncio.Lock())
@@ -263,7 +265,8 @@ def _reference_execution_identity(problem):
 def _question_key(state, problem):
     cp = state.checkpoints
     question = cp.questions.get(problem.q_id) if cp else None
-    return digest({"engine": VERSION, "owner": state.owner, "assignment": state.assignment,
+    return digest({**({"generated_input_domain_version": 1} if not problem.test_cases or any(c.source == "llm_generated" for c in problem.test_cases) else {}),
+        "engine": VERSION, "owner": state.owner, "assignment": state.assignment,
         "question": question.id if question else problem.q_id, "q_id": problem.q_id,
         "version": question.version if question else None, "stem": problem.stem,
         "rubric": problem.criterion, "max_score": problem.max_score, "reference": problem.reference_answer,
@@ -278,6 +281,44 @@ async def _notify(reporter, step):
     if reporter:
         from backend.services.math_grading_context import report_math_progress
         await report_math_progress(reporter._emit_message, step)
+
+
+def _domain_review(state, plan_key):
+    if plan_key not in state.domain_reviews:
+        record = state.read(digest(["input_domain_audit_v1", plan_key]), AUXILIARY)
+        state.domain_reviews[plan_key] = record.get("summary") if record else None
+    return state.domain_reviews[plan_key]
+
+
+def _checked_case_inputs(state, plan_key, problem, originals, cases):
+    from backend.services.programming_input_domain import input_domain
+    candidates, kept, positions = [], [], []
+    for position, (original, case) in enumerate(zip(originals, cases, strict=True), 1):
+        if problem.test_cases and case.source == "teacher":
+            status = "teacher"
+        else:
+            status = input_domain(problem, case)
+            candidates.append({"position": position, "domain": status,
+                               "original": original.model_dump(mode="json", exclude_unset=True)})
+        if status in {"allowed", "teacher"}:
+            kept.append(case)
+            positions.append(position)
+    excluded = [item for item in candidates if item["domain"] != "allowed"]
+    if excluded or _domain_review(state, plan_key):
+        has_teacher = len(candidates) < len(cases)
+        withheld = bool(excluded) and not has_teacher
+        summary = {"ai_count": len(candidates), "withheld": withheld, "positions": positions,
+                   "excluded": [{"position": i["position"], "domain": i["domain"]} for i in excluded]}
+        # Keep raw input-only drafts (without the reference comparison placeholder)
+        # and any originally supplied expectation, once for the entire question.
+        body = {"q_id": problem.q_id, "summary": summary, "ai_candidates": candidates, "status": "done"}
+        if len(json.dumps(body, ensure_ascii=False, allow_nan=False).encode()) > 512 * 1024:
+            raise ValueError("programming_cases_unavailable")
+        state.store(AUXILIARY, digest(["input_domain_audit_v1", plan_key]), body)
+        state.domain_reviews[plan_key] = summary if excluded else None
+        if withheld:
+            raise ValueError("programming_input_domain_unverified")
+    return kept
 
 
 async def _prepare(state, problem, provider, generate, execute, reporter):
@@ -309,6 +350,7 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
                 state.failures[key] = error or "programming_no_cases"
                 return key, [], state.failures[key]
         try:
+            originals = cases
             derive_expectations = not problem.test_cases and any(isinstance(case, ReferenceInputCase) for case in cases)
             reference = _reference(problem)
             if derive_expectations:
@@ -318,6 +360,7 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
             cases = adapt_programming_cases(problem.stem, cases)
             if not cases or len(cases) > 50 or any(not c.sandbox_feasible for c in cases):
                 raise ValueError("programming_cases_unavailable")
+            cases = _checked_case_inputs(state, key, problem, originals, cases)
             data = [c.model_dump(mode="json") for c in cases]
             if len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode()) > 256 * 1024:
                 raise ValueError("programming_cases_unavailable")
@@ -346,7 +389,7 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
         except ValueError as exc:
             state.failures[key] = str(exc) if str(exc) in {
                 "programming_conflicting_expectations", "programming_reference_conflict",
-                "programming_cases_unavailable", "programming_execution_contract_invalid", "native_standard_unsupported",
+                "programming_cases_unavailable", "programming_input_domain_unverified", "programming_execution_contract_invalid", "native_standard_unsupported",
             } else "programming_case_configuration_invalid"
             return key, [], state.failures[key]
         except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError) as exc:
@@ -518,9 +561,10 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
     except PythonSourceEncodingError:
         return ProgrammingEvidence("unavailable", code, [], reason="programming_source_encoding_unavailable")
     plan_key, cases, reason = await _prepare(state, problem, provider, generate, execute, reporter)
+    domain_review = _domain_review(state, plan_key)
     if reason:
         return ProgrammingEvidence("unsupported" if reason == "programming_mode_unsupported" else "unavailable",
-                                   code, [], reason=reason)
+                                   code, [], reason=reason, domain_review=domain_review)
     case_ids = [digest([plan_key, index, c.model_dump(mode="json")]) for index, c in enumerate(cases)]
     try:
         hints = {f.removeprefix("programming_source_entry:") for f in answer.flag
@@ -576,4 +620,4 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
         if saved["case_ids"] != case_ids:
             raise CheckpointWriteError("programming_case_identity_invalid")
         return ProgrammingEvidence("executed", code, cases, report, evidence_id=saved["evidence_id"],
-                                   case_ids=tuple(case_ids), source_language=identity.get("language", "python"))
+                                   case_ids=tuple(case_ids), source_language=identity.get("language", "python"), domain_review=domain_review)
