@@ -76,15 +76,21 @@ def local_application(dist):
 
 def question(scenario):
     owner, task = _seed_task(with_question=True)
-    if scenario == "edit":
+    reference = None
+    if scenario.startswith("boundary_"):
+        stem = "实现 def double(n): 输入 n 可以为任意整数，返回两倍的值。"
+        case = dict(function_name="double", function_args=[3], expected_return="6", source="teacher")
+        reference = "```python\ndef double(n): return 2*n\n```"
+    elif scenario == "edit":
         stem = "实现 def fib(n): 返回第 n 项。"
         case = dict(function_name="fib", function_args=[0], expected_return="0", source="teacher")
     else:
         stem = "Read stdin and print the input."
         case = dict(input="4", expected_output="4", source="llm_generated" if scenario == "tentative" else "teacher")
     task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1", patch={
-        "type": "programming", "stem": stem, "criterion": "Award correctness and method.",
-        "review_status": "edited", "test_cases": [case]})
+        "type": "programming", "stem": stem,
+        "criterion": "Full credit when all teacher examples pass." if reference else "Award correctness and method.",
+        **({"reference_answer": reference} if reference else {}), "review_status": "edited", "test_cases": [case]})
     workflow_repository.update_workflow(task, owner_id=owner, presentation_status="problems_ready")
     return owner, task
 
@@ -94,6 +100,8 @@ async def grade(owner, task, scenario, api):
         return workflow_repository.get_live_workflow(task, owner_id=owner).workflow_revision
 
     source = FIB if scenario == "edit" else "print(0)"
+    if scenario.startswith("boundary_"):
+        source = "def double(n): return 0 if n == -1 else 2*n"
     # Submit a real .py multipart body through the mounted teacher API.
     registry = _Registry()
     registry.provider = SimpleNamespace(provider_id="test-provider", supports_vision=False,
@@ -114,8 +122,11 @@ async def grade(owner, task, scenario, api):
                              multi_sample_n=1, knowledge_scope="none")
     workflow_repository.update_workflow(task, owner_id=owner, grading_setup=setup.model_dump(mode="json"),
                                         grading_setup_fingerprint="confirmed")
-    score = {"edit": 10, "tentative": 6, "zero": 0, "platform": 0}[scenario]
-    invoke = AsyncMock(return_value=response(award(score)))
+    score = {"edit": 10, "tentative": 6, "zero": 0, "platform": 0, "boundary_full": 10, "boundary_deduction": 8}[scenario]
+    output = award(score)
+    if scenario.startswith("boundary_"):
+        output["boundary_case"] = {"args": [-1], "expected": "-2"}
+    invoke = AsyncMock(return_value=response(output))
     route = SimpleNamespace(provider_id=provider.id, model="fixture", ainvoke=invoke)
     registry = SimpleNamespace(count=lambda: 1, select=lambda *a, **kw: registry,
         list_available=lambda: [route], get=lambda _: route, pick_default=lambda: route)
@@ -135,11 +146,11 @@ async def grade(owner, task, scenario, api):
     assert actual["score"] == (None if scenario == "platform" else score)
 
 
-def verify_browser(candidate):
+def verify_browser(candidate, *, boundary=False):
     Base.metadata.create_all(get_engine())
     app_dir = candidate / "frontend/app"
     with local_application(app_dir / "dist") as (origin, api):
-        for scenario in ("edit", "platform", "tentative", "zero"):
+        for scenario in (("boundary_full", "boundary_deduction") if boundary else ("edit", "platform", "tentative", "zero")):
             owner, task = question(scenario)
             if scenario != "edit":
                 asyncio.run(grade(owner, task, scenario, api))

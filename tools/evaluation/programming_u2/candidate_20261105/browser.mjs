@@ -37,7 +37,24 @@ try {
     }, base + path);
   }
 
-  if (scenario === 'edit') {
+  if (scenario.startsWith('boundary_')) {
+    await page.goto(origin + base + '/review');
+    const full = scenario === 'boundary_full';
+    const tab = page.getByRole('tab', {name: full ? '建议处理 (1)' : '需要处理 (1)', exact: true});
+    await tab.click();
+    const note = page.getByRole('tabpanel').getByText(full ? /额外输入/ : /教师用例全部通过/);
+    await note.waitFor();
+    assert.ok(await note.evaluate((el, tone) => el.classList.contains(tone), full ? 'text-amber-700' : 'text-red-700'));
+    const result = (await api('/result')).results[0].corrections[0];
+    assert.equal(result.score, full ? 10 : 8);
+    assert.equal((await api('/finalization')).ready_for_confirmation, full);
+    await page.goto(origin + base + '/review/S1/q1');
+    const region = page.getByRole('region', {name:'SmarTAI 批改结果'});
+    await region.waitFor();
+    const text = await region.innerText();
+    assert.match(text, /-1/);
+    assert.match(text, /-2/);
+  } else if (scenario === 'edit') {
     await page.goto(origin + base + '/questions/q1/content');
     const panel = page.getByRole('heading', { name: '测试样例', exact: true }).locator('xpath=ancestor::section[1]');
     const edit = panel.getByRole('button', { name: '修改', exact: true });
