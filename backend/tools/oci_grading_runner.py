@@ -255,7 +255,7 @@ async def run_program_oci(code, test_input="", *, language, timeout=10.0, memory
                     raise IsolatedRunnerUnavailable()
                 if (native and not result.executed and result.execution_id == execution_id
                         and result.isolation_mode == "oci_container" and result.request_digest == digest
-                        and result.exit_reason in {"toolchain_unavailable", "native_main_required"}
+                        and result.exit_reason in {"toolchain_unavailable", "native_main_required", "native_header_unavailable"}
                         and result.resource_status == "not_executed" and result.total_count == result.passed_count == 0):
                     raise NativeBuildUnavailable(result.exit_reason.value)
                 if result.execution_id != execution_id or result.isolation_mode != "oci_container" or not result.executed:

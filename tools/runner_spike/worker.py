@@ -411,7 +411,7 @@ def _build_native(language, source, memory_mb):
         if process.returncode == 1:
             if reason == "compile_error":
                 try:
-                    diagnostics = json.loads(detail)
+                    diagnostics = json.loads(detail.rstrip().removesuffix("compilation terminated.").rstrip())
                 except ValueError:
                     diagnostics = []
                 for item in diagnostics:
@@ -429,8 +429,10 @@ def _build_native(language, source, memory_mb):
                     category = "source_error"
                     if re.search(r"expected [‘'];[’']", message):
                         category = "missing_semicolon"
-                    elif "No such file or directory" in message:
-                        category = "missing_header"
+                    elif item["kind"] == "fatal error" and message.endswith(": No such file or directory"):
+                        # A missing include can be a submission dependency or a
+                        # partially damaged image. Neither proves a student failure.
+                        raise NativeBuildUnavailable("native_header_unavailable")
                     elif "undeclared" in message or "not declared in this scope" in message:
                         category = "unknown_identifier"
                     return reason, f"{category} line {line}"

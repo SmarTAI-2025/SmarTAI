@@ -27,6 +27,7 @@ class RunnerExitReason(str, Enum):
     COMPILE_ERROR = "compile_error"
     LINK_ERROR = "link_error"
     TOOLCHAIN_UNAVAILABLE = "toolchain_unavailable"
+    NATIVE_HEADER_UNAVAILABLE = "native_header_unavailable"
     NATIVE_MAIN_REQUIRED = "native_main_required"
     STATIC_REJECTED = "static_rejected"
     SYNTAX_ERROR = "syntax_error"

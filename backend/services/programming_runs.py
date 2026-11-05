@@ -223,6 +223,9 @@ def _reference_execution_identity(problem):
     runtime = runtime_identity()
     try:
         source = _reference(problem)
+        if source:
+            # Prior validations may have run a rewritten numeric stdin payload.
+            runtime["reference_stdin_binding_version"] = 2
         copied = python_execution_source(source) if source else source
         if copied != source:
             runtime["execution_source_sha256"] = source_hash(copied)

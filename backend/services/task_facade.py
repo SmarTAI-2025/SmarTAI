@@ -841,7 +841,7 @@ def _grading_failure_code(run) -> str | None:
         "该题未执行：生产环境禁止宿主代码执行。隔离执行尚未接通，请人工复核。"
         for result in missing for expert in (result.ai_expert_results or []) if isinstance(expert, dict)
     )
-    infrastructure = {"programming_execution_unavailable", "native_runner_unavailable", "toolchain_unavailable"}
+    infrastructure = {"programming_execution_unavailable", "native_runner_unavailable", "toolchain_unavailable", "native_header_unavailable"}
     if infrastructure.intersection(kinds) or legacy_execution_unavailable:
         return "programming_execution_unavailable"
     material_errors = {"programming_case_configuration_invalid", "programming_conflicting_expectations",
