@@ -12,7 +12,7 @@ from backend.main import create_app
 from backend.models import ProblemInfo, TestCase
 from backend.services import grading_adapter, task_facade
 from backend.services.programming_test_contract import (
-    ProgrammingCaseError, adapt_programming_cases, bind_programming_cases, required_function_name,
+    ProgrammingCaseError, adapt_programming_cases, bind_programming_cases, literal_programming_case_groups, required_function_name,
 )
 from backend.tests.test_question_material_format_repair import Provider
 from backend.tests.test_task_background_workflows import _seed_task
@@ -278,3 +278,96 @@ def test_named_requirement_without_signature_is_not_renamed(stem):
     assert required_function_name(stem) == "add"
     case, = bind_programming_cases(stem, [dict(input="2、3", expected_output="5")], "def sum2(a,b):pass")
     assert case.function_name == "add" and case.function_args == [2, 3]
+
+
+@pytest.mark.parametrize("line,original,expected", [
+    ("2、3→5", "2、3", "5"), ("3、4 -> 7", "3、4", "7"),
+    ('"a->b" → " c→d "', '"a->b"', '" c→d "'), ('1 -> ""', "1", '""'),
+    ("input: left -> right, expected output: one → two", "left -> right", "one → two"),
+    ("输入 2、3，预期", "2、3", ""),
+])
+def test_literal_sheet_separators_preserve_the_source(line, original, expected):
+    groups = literal_programming_case_groups(line)
+    assert [(n, [(c.input, c.expected_output, c.source) for c in cases]) for n, cases in groups] == [
+        ("", [(original, expected, "teacher")])]
+    assert _saved_test_case_supported(dict(input=original, expected_output=expected), "", line)
+
+
+@pytest.mark.parametrize("text", [
+    "2 ->", "-> 5", "1 -> 2 -> 3", "source -> destination", "def add(a, b) -> int:",
+    '"a -> b"', '"unclosed -> 7', "sum(2, 3) → 5", "1 -> 2 # explanation",
+    "Section notes\n2、3→5", "Question 1\n2、3→5\nQuestion 2\nsee diagram → appendix",
+])
+def test_ambiguous_or_partial_sheet_is_not_guessed(text):
+    assert literal_programming_case_groups(text) is None
+
+
+def test_quoted_or_chained_arrows_are_not_alternative_teacher_expectations():
+    assert not _saved_test_case_supported(dict(input='"a', expected_output='b"'), "", '"a->b"')
+    assert not _saved_test_case_supported(dict(input='"a', expected_output='b" -> "x"'), "", '"a->b" -> "x"')
+    assert not _saved_test_case_supported(dict(input="1 -> 2", expected_output="3"), "", "1 -> 2 -> 3")
+
+
+@pytest.mark.asyncio
+async def test_numbered_arrow_sheet_routes_in_source_order_and_unnumbered_sheet_never_guesses():
+    problems = {"q1": dict(number="1", type="编程题", stem="Implement add(a,b)."),
+                "q2": dict(number="2", type="编程题", stem="Read two integers from stdin and print their sum.")}
+    provider = Provider([])
+    plan = await parse_material_import_to_candidates("Question 2\n3、4 -> 7\nQuestion 1\n2、3→5", problems,
+        ["test_cases"], "organized", "", provider)
+    assert not provider.calls
+    assert [(p.q_id, p.source_location, p.match_status) for p in plan] == [("q2", "2", "exact"), ("q1", "1", "exact")]
+    assert plan[0].test_cases[0].source == plan[1].test_cases[0].source == "teacher"
+    stdin, = bind_programming_cases(problems["q2"]["stem"], plan[0].test_cases, "")
+    assert (stdin.input, stdin.expected_output) == ("3 4", "7")
+    assert plan[1].test_cases[0].function_args == [2, 3]
+    for text, targets in [("2、3→5", ["test_cases"]), ("Question 3\n2、3→5", ["test_cases"]),
+                          ("Question 1\n2、3→5", ["criterion"]), ("Question 1\nroad → destination", ["test_cases"])]:
+        fallback = Provider([json.dumps({"candidates":[]})])
+        assert await parse_material_import_to_candidates(text, problems, targets, "organized", "", fallback) == []
+        assert len(fallback.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_unnumbered_arrow_txt_upload_apply_readback_and_execute(monkeypatch):
+    from unittest.mock import AsyncMock
+    from backend.api import task_preparation
+    from backend.llm.registry import get_scoped_expert_registry
+    from backend.tests.test_auxiliary_operation_recovery import _claim_auxiliary_operation
+    from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
+
+    app = create_app()
+    registry = _RecoveryRegistry()
+    app.dependency_overrides[get_scoped_expert_registry] = lambda: registry
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
+    forbidden = AsyncMock(side_effect=AssertionError("A literal test sheet made a model request"))
+    monkeypatch.setattr("backend.agents.ingest_agent.ainvoke_with_retry", forbidden)
+    owner, task = _seed_task(with_question=True)
+    client = TestClient(app, headers={"Authorization": "Bearer " + create_token(owner, "teacher")})
+    root = f"/tasks/{task}"
+    stem = "实现 add(a,b)。"
+    client.put(root + "/problems/q1", json={"type":"programming", "stem":stem}).raise_for_status()
+    body = "2、3→5\n3、4 -> 7\n输入 4、4，预期 99"
+    preflight = client.post(root + "/material-imports/preflight",
+        files={"file":("teacher.txt", body.encode(), "text/plain")}, data={"targets":'["test_cases"]'})
+    preflight.raise_for_status()
+    started = client.post(root + "/material-imports", json={"source_token":preflight.json()["source_token"]})
+    started.raise_for_status()
+    job = started.json()["job_id"]
+    await task_preparation.run_durable_material_import(_claim_auxiliary_operation(owner, job))
+    plan_url = root + "/material-imports/" + job
+    plan = client.get(plan_url).json()
+    assert plan["status"] == "ready", plan
+    candidate, = plan["candidates"]
+    assert candidate["match_status"] == "exact" and candidate["source_location"] == ""
+    applied = client.post(plan_url + "/apply", json={"accepted_candidate_ids":[candidate["candidate_id"]],
+        "expected_workflow_revision":plan["workflow_revision"]})
+    applied.raise_for_status()
+    saved = client.get(root).json()["problem_data"]["q1"]["test_cases"]
+    assert [(c["input"], c["expected_output"], c["source"]) for c in saved] == [
+        ("2、3", "5", "teacher"), ("3、4", "7", "teacher"), ("4、4", "99", "teacher")]
+    code = "def add(a,b): return a+b"
+    bound = bind_programming_cases(stem, saved, code)
+    execution = await run_sandbox(code, bound)
+    assert [row.passed for row in execution.results] == [True, True, False]
+    forbidden.assert_not_awaited()

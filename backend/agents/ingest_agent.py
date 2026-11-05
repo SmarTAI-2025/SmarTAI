@@ -38,7 +38,7 @@ from backend.services.background_errors import (
     is_retryable_background_error,
 )
 from backend.services.programming_test_contract import (
-    ProgrammingCaseError, adapt_programming_cases, literal_programming_case_groups,
+    ProgrammingCaseError, adapt_programming_cases, literal_programming_case_groups, literal_programming_case_pair,
 )
 from backend.services.question_structure import annotate_major_question_structures
 from backend.services.programming_test_contract import required_function_name
@@ -598,8 +598,8 @@ def _saved_test_case_supported(case, excerpt, text, *, question_number=None):
     else:
         table_order = None
         for line in evidence.splitlines():
-            pair = re.fullmatch(r"\s*输入\s*[:：]?\s*(.+?)\s*[,，;；]\s*(?:预期|期望)(?:结果|输出)?\s*[:：]?\s*(.*?)\s*", line)
-            if pair and pair.groups() == (case.get("input"), case.get("expected_output")):
+            pair = literal_programming_case_pair(line)
+            if pair == (case.get("input"), case.get("expected_output")):
                 return True
             cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
             if len(cells) != 2:
@@ -625,6 +625,13 @@ def _saved_test_case_supported(case, excerpt, text, *, question_number=None):
                     + r"[\"'`]*(?=\s*(?:$|[\n;；。]|\.(?=\s|$)))")
         if re.search(labelled, "\n".join(normalized(line) for line in evidence.splitlines())):
             return True
+        # A quoted arrow is data. Once a row has an unambiguous literal
+        # split, do not reinterpret another arrow as its separator.
+        raw_input = case["input"].strip()
+        if raw_input.startswith(('"', "'")) and (len(raw_input) < 2 or raw_input[-1] != raw_input[0]):
+            return False
+        evidence = "\n".join(line for line in evidence.splitlines()
+            if literal_programming_case_pair(line) is None and len(re.findall(r"→|->|=>", line)) == 1)
         pattern = input_value + r"\s*(?:→|->|=>)\s*" + output_value
     # Arrow/function forms must describe one complete example on a line.
     # Unrecognized layouts remain AI-sourced rather than guessing an association.
@@ -2040,15 +2047,20 @@ async def parse_material_import_to_candidates(
     by_number = defaultdict(list)
     for row in problem_context:
         if is_programming_question_type(row["type"]):
-            by_number[row["number"]].append(row["q_id"])
-    literal_sheet = literal_groups and all(number and len(by_number[number]) == 1 for number, _ in literal_groups)
+            if row["number"]:
+                by_number[row["number"]].append(row["q_id"])
+            if len(problems_data) == 1:
+                # With one known question, an unnumbered tests-only sheet
+                # has exactly one possible destination.
+                by_number[""].append(row["q_id"])
+    literal_sheet = literal_groups and all(len(by_number[number]) == 1 for number, _ in literal_groups)
     if literal_sheet:
-        by_question = defaultdict(list)
+        grouped = defaultdict(list)
         for number, cases in literal_groups:
-            by_question[by_number[number][0]].extend(cases)
-        candidates = [MaterialImportCandidateOutput(q_id=q_id, target="test_cases",
-            match_status="exact", confidence=1, test_cases=cases,
-            source_location=problems_data[q_id].get("number", "")) for q_id, cases in by_question.items()]
+            grouped[number].extend(cases)
+        candidates = [MaterialImportCandidateOutput(q_id=by_number[number][0], target="test_cases",
+            match_status="exact", confidence=1, test_cases=cases, source_location=number)
+            for number, cases in grouped.items()]
     else:
         response = await ainvoke_with_retry(provider, messages)
         parsed = extract_and_parse_json(response.content or "", MaterialImportOutput)

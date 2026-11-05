@@ -40,9 +40,22 @@ _NUMBER = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
 _NUMBERS = re.compile(rf"{_NUMBER}(?:[ \t]*[,，、][ \t]*{_NUMBER})+")
 _EXPECTED_PAIR = re.compile(r"\s*(?:输入|input)\s*[:：]?\s*(.+?)\s*[,，;；]\s*(?:预期(?:结果|输出)?|期望(?:结果|输出)?|expected(?: output)?)\s*[:：]?\s*(.*?)\s*", re.I | re.S)
 
+# Unlabelled arrows are also used in prose, code and diagrams. Only a whole
+# row of literal values qualifies; quoted contents are retained verbatim.
+_QUOTED = r"""(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')"""
+_SCALAR = rf"(?:{_NUMBER}|{_QUOTED}|True|False|None|true|false|null)"
+_ARROW_PAIR = re.compile(
+    rf"[ \t]*({_NUMBERS.pattern}|{_SCALAR})[ \t]*(?:→|->)[ \t]*({_SCALAR})[ \t]*"
+)
+
+
+def literal_programming_case_pair(line: str) -> tuple[str, str] | None:
+    pair = _EXPECTED_PAIR.fullmatch(line) or _ARROW_PAIR.fullmatch(line)
+    return (pair[1], pair[2]) if pair else None
+
 
 def literal_programming_case_groups(text: str) -> list[tuple[str, list[TestCase]]] | None:
-    """Read an entire labelled example sheet, or leave the whole sheet to the importer."""
+    """Read an entire literal example sheet, or leave the whole sheet to the importer."""
     from backend.services.source_question_units import question_headings
 
     headings = question_headings(text)
@@ -58,10 +71,10 @@ def literal_programming_case_groups(text: str) -> list[tuple[str, list[TestCase]
         for line in part.splitlines():
             if not line.strip():
                 continue
-            pair = _EXPECTED_PAIR.fullmatch(line)
+            pair = literal_programming_case_pair(line)
             if pair is None:
                 return None
-            cases.append(TestCase(input=pair[1], expected_output=pair[2], source="teacher"))
+            cases.append(TestCase(input=pair[0], expected_output=pair[1], source="teacher"))
         if not cases:
             return None
         groups.append((number, cases))
