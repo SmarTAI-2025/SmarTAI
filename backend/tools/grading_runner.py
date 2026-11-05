@@ -78,7 +78,9 @@ class RunnerResult(BaseModel):
     stderr: str = ""
     stdout_truncated: bool = False
     stderr_truncated: bool = False
-    duration_ms: float = Field(default=0.0, ge=0)
+    duration_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    request_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    return_value: str | None = None
     resource_status: RunnerResourceStatus = RunnerResourceStatus.UNKNOWN
     isolation_mode: Literal["host_subprocess", "oci_container"] = "host_subprocess"
 

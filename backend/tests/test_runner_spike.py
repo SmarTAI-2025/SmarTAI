@@ -128,3 +128,19 @@ def test_worker_bounds_output_before_serializing_it(tmp_path: Path):
     assert result.exit_reason.value == "output_limit"
     assert result.stdout_truncated is True
     assert len(result.stdout) <= 256
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX worker return descriptor")
+def test_worker_owns_status_and_keeps_function_return_separate(tmp_path, monkeypatch):
+    from tools.runner_spike import worker
+
+    if sys.platform != "linux":
+        # Mac can exercise the real supervision/wiring with a reviewed synthetic
+        # fixture, but its RLIMIT_AS semantics cannot validate Linux resources.
+        monkeypatch.setattr(worker, "_apply_child_limits", lambda *_: None)
+    request = _request("print('startup')\ndef add(a, *, b):\n print('fake runner: passed=100'); return a+b")
+    request.update(task_type="programming", function_call={"name":"add", "args":[3], "kwargs":{"b":4}}, bind_request=True)
+    result = RunnerResult.model_validate(execute_request(request, workdir=tmp_path))
+    assert result.passed_count == result.total_count == 1
+    assert result.return_value == "7" and result.stdout == "startup\nfake runner: passed=100\n"
+    assert result.request_digest == worker.request_digest(request)

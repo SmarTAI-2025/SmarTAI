@@ -7,6 +7,7 @@ the container image has no reason to contain application settings or secrets.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -15,6 +16,8 @@ import signal
 import subprocess
 import sys
 import time
+import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -46,17 +49,41 @@ _ABSOLUTE_PATH_RE = re.compile(
 )
 
 
+# Only this supervisor serializes runner status. The child can supply its
+# return value and stdout, but never receives an expected answer or verdict.
+_CALL_PROGRAM = """
+import json, os, runpy, sys
+source, target = sys.argv[1:3]
+call = json.loads(sys.stdin.read())
+namespace = runpy.run_path(source, run_name="__smartai_submission__")
+value = namespace[call["name"]](*call["args"], **call["kwargs"])
+with open(int(target) if target.isdecimal() else target, "wb") as channel:
+    # Use JSON to reject tensors, class instances, handles and non-finite
+    # floats before exposing the legacy repr-compatible comparison value.
+    encoded = json.dumps(value, ensure_ascii=True, allow_nan=False)
+    channel.write(repr(json.loads(encoded)).encode("utf-8"))
+"""
+
+
+def child_command(source, return_channel=None):
+    if return_channel is None:
+        return [sys.executable, "-I", "-B", str(source)]
+    return [sys.executable, "-I", "-B", "-c", _CALL_PROGRAM, str(source), str(return_channel)]
+
+
+def request_digest(payload):
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
 class InvalidRequest(ValueError):
     """Raised when the mounted request is outside the frozen spike contract."""
 
 
 def _bounded_int(value: Any, *, minimum: int, maximum: int, name: str) -> int:
-    if isinstance(value, bool):
+    if type(value) is not int:
         raise InvalidRequest(f"{name} must be an integer")
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise InvalidRequest(f"{name} must be an integer") from exc
+    parsed = value
     if not minimum <= parsed <= maximum:
         raise InvalidRequest(f"{name} is outside the allowed range")
     return parsed
@@ -69,10 +96,9 @@ def _bounded_float(
     maximum: float,
     name: str,
 ) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError) as exc:
-        raise InvalidRequest(f"{name} must be numeric") from exc
+    if type(value) not in (float, int):
+        raise InvalidRequest(f"{name} must be numeric")
+    parsed = value
     if not math.isfinite(parsed) or not minimum <= parsed <= maximum:
         raise InvalidRequest(f"{name} is outside the allowed range")
     return parsed
@@ -99,6 +125,14 @@ def _validate_request(payload: Any) -> dict[str, Any]:
     test_input = payload.get("test_input", "")
     if not isinstance(test_input, str) or len(test_input.encode("utf-8")) > 65536:
         raise InvalidRequest("test_input is invalid or too large")
+    call = payload.get("function_call")
+    if call is not None:
+        if (not isinstance(call, dict) or set(call) != {"name", "args", "kwargs"}
+                or not isinstance(call["name"], str) or not call["name"].isidentifier()
+                or not isinstance(call["args"], list) or not isinstance(call["kwargs"], dict)
+                or payload["task_type"] != "programming" or test_input):
+            raise InvalidRequest("invalid function invocation")
+        test_input = json.dumps(call, allow_nan=False)
     limits = payload.get("limits")
     if not isinstance(limits, dict):
         raise InvalidRequest("limits must be a JSON object")
@@ -124,6 +158,8 @@ def _validate_request(payload: Any) -> dict[str, Any]:
         "execution_id": execution_id,
         "code": code,
         "test_input": test_input,
+        "function_call": call is not None,
+        "bind_request": payload.get("bind_request") is True,
         "timeout_seconds": timeout_seconds,
         "memory_mb": memory_mb,
         "max_output_chars": max_output_chars,
@@ -156,16 +192,11 @@ def _truncate_text(value: str, limit: int) -> tuple[str, bool]:
     return value[: limit - len(marker)] + marker, True
 
 
-def _read_output(path: Path, limit: int) -> tuple[str, bool]:
-    byte_limit = limit * 4
-    try:
-        size = path.stat().st_size
-        data = path.read_bytes()[: byte_limit + 1]
-    except OSError:
-        return "", False
-    text = data.decode("utf-8", errors="replace")
-    text, chars_truncated = _truncate_text(text, limit)
-    return text, chars_truncated or size > byte_limit
+def _read_output(stream, limit):
+    stream.seek(0)
+    data = stream.read(limit * 4 + 1)
+    text, truncated = _truncate_text(data.decode("utf-8", errors="replace"), limit)
+    return text, truncated or len(data) > limit * 4
 
 
 def _sanitize(value: str, limit: int) -> tuple[str, bool]:
@@ -204,7 +235,7 @@ def _result(
     }
 
 
-def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[str, Any]:
+def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[str, Any]:
     """Execute one validated request; container teardown owns directory cleanup."""
 
     try:
@@ -224,8 +255,6 @@ def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[st
     workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
     script_path = workdir / "main.py"
     stdin_path = workdir / ".stdin"
-    stdout_path = workdir / ".stdout"
-    stderr_path = workdir / ".stderr"
     max_output = request["max_output_chars"]
     # UTF-8 needs at most four bytes per character. One extra byte lets the
     # worker distinguish exactly-at-limit output from RLIMIT_FSIZE truncation.
@@ -237,9 +266,15 @@ def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[st
     try:
         script_path.write_text(request["code"], encoding="utf-8", newline="\n")
         stdin_path.write_text(request["test_input"], encoding="utf-8")
-        with stdin_path.open("rb") as stdin_file, stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
+        with ExitStack() as stack:
+            stdin_file = stack.enter_context(stdin_path.open("rb"))
+            stdout_file = stack.enter_context(tempfile.TemporaryFile(dir=workdir))
+            stderr_file = stack.enter_context(tempfile.TemporaryFile(dir=workdir))
+            return_file = stack.enter_context(tempfile.TemporaryFile(dir=workdir)) if request["function_call"] else None
+            return_fd = return_file.fileno() if return_file is not None else None
             process = subprocess.Popen(
-                [sys.executable, "-I", "-B", str(script_path)],
+                child_command(script_path, return_fd),
+                pass_fds=(return_fd,) if return_fd is not None else (),
                 cwd=workdir,
                 stdin=stdin_file,
                 stdout=stdout_file,
@@ -262,11 +297,15 @@ def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[st
                     pass
                 returncode = process.wait()
 
-        stdout, stdout_truncated = _read_output(stdout_path, max_output)
-        stderr, stderr_truncated = _read_output(stderr_path, max_output)
-        stdout, sanitize_stdout_truncated = _sanitize(stdout, max_output)
+            stdout, stdout_truncated = _read_output(stdout_file, max_output)
+            stderr, stderr_truncated = _read_output(stderr_file, max_output)
+            return_value, return_truncated = _read_output(return_file, max_output) if return_file is not None else (None, False)
+        # Student stdout is comparison data; sanitizing path-like literals
+        # before comparison changes correct answers. Keep diagnostics separate.
+        if not request["bind_request"]:
+            stdout, sanitized = _sanitize(stdout, max_output)
+            stdout_truncated = stdout_truncated or sanitized
         stderr, sanitize_stderr_truncated = _sanitize(stderr, max_output)
-        stdout_truncated = stdout_truncated or sanitize_stdout_truncated
         stderr_truncated = stderr_truncated or sanitize_stderr_truncated
 
         if timed_out:
@@ -285,7 +324,7 @@ def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[st
                 duration_ms=(time.perf_counter() - started_at) * 1000,
                 resource_status="timeout",
             )
-        if stdout_truncated or stderr_truncated:
+        if stdout_truncated or stderr_truncated or return_truncated:
             return _result(
                 request["execution_id"],
                 executed=True,
@@ -297,8 +336,8 @@ def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[st
                 duration_ms=(time.perf_counter() - started_at) * 1000,
                 resource_status="output_limit",
             )
-        if returncode == 0:
-            return _result(
+        if returncode == 0 and return_value != "":
+            result = _result(
                 request["execution_id"],
                 executed=True,
                 exit_reason="success",
@@ -307,6 +346,9 @@ def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[st
                 duration_ms=(time.perf_counter() - started_at) * 1000,
                 resource_status="within_limits",
             )
+            if return_value is not None:
+                result["return_value"] = return_value
+            return result
         return _result(
             request["execution_id"],
             executed=True,
@@ -326,11 +368,18 @@ def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[st
             resource_status="not_executed",
         )
     finally:
-        for path in (script_path, stdin_path, stdout_path, stderr_path):
+        for path in (script_path, stdin_path):
             try:
                 path.unlink()
             except OSError:
                 pass
+
+
+def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[str, Any]:
+    result = _execute_request(payload, workdir=workdir)
+    if isinstance(payload, dict) and payload.get("bind_request") is True:
+        result["request_digest"] = request_digest(payload)
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -358,8 +407,16 @@ def main(argv: list[str] | None = None) -> int:
                 resource_status="not_executed",
             )
         else:
-            response = execute_request(payload)
-    sys.stdout.write(json.dumps(response, ensure_ascii=False, sort_keys=True) + "\n")
+            # The supervisor and untrusted child share an unprivileged uid.
+            # Disallow access via /proc/<supervisor>/fd/1 (the outer protocol
+            # stream), ptrace and process_vm_writev before starting the child.
+            import ctypes
+            if sys.platform == "linux" and ctypes.CDLL(None).prctl(4, 0, 0, 0, 0) == 0:
+                response = execute_request(payload)
+            else:
+                response = _result("unavailable", executed=False, exit_reason="internal_error",
+                                   stderr="supervisor protection unavailable", resource_status="not_executed")
+    sys.stdout.write(json.dumps(response, ensure_ascii=True, sort_keys=True, allow_nan=False) + "\n")
     return 0
 
 

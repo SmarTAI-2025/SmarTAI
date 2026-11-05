@@ -37,3 +37,14 @@ except OSError: print('isolated')
 else: raise AssertionError('network unexpectedly available')
 """)
     assert result.passed and result.actual_output.strip() == "isolated"
+
+
+@pytest.mark.asyncio
+async def test_child_cannot_access_supervisor_protocol_descriptor():
+    result = await run_python_oci(
+        "import os\n"
+        "try:\n fd=os.open('/proc/1/fd/1',os.O_WRONLY)\n"
+        "except (PermissionError, FileNotFoundError):\n print('protected')\n"
+        "else:\n os.close(fd); print('accessible')"
+    )
+    assert result.passed and result.actual_output.strip() == "protected"

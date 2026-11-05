@@ -8,6 +8,7 @@ import pytest
 from backend.tools import oci_grading_runner as runner
 from backend.tools import code_interpreter
 from backend.models import TestCase as Case
+from tools.runner_spike.worker import request_digest
 
 
 @pytest.fixture
@@ -21,9 +22,11 @@ def configured(monkeypatch, tmp_path):
 
 
 def worker_result(request, **changes):
+    reason = changes.get("exit_reason", "success")
     return json.dumps({"schema_version": 1, "execution_id": request["execution_id"], "executed": True,
-        "exit_reason": "success", "passed_count": 1, "total_count": 1, "stdout": "3\n", "stderr": "",
-        "duration_ms": 1, "resource_status": "within_limits", "isolation_mode": "oci_container", **changes}).encode()
+        "exit_reason": "success", "passed_count": int(reason == "success"), "total_count": 1, "stdout": "3\n", "stderr": "",
+        "duration_ms": 1, "resource_status": {"success":"within_limits", "timeout":"timeout", "output_limit":"output_limit"}.get(reason, "unknown"),
+        "request_digest": request_digest(request), "isolation_mode": "oci_container", **changes}).encode()
 
 
 def request_from(args):
@@ -55,12 +58,15 @@ async def test_explicit_function_mapping_and_args_remain_exact(configured, monke
     async def command(args, **kwargs):
         if args[1] == "rm": return b""
         request = request_from(args)
-        assert "print(repr(second(*__smartai_args)))" in request["code"]
-        assert request["test_input"] == "[2]"
-        return worker_result(request, stdout="4\n")
+        assert request["code"] == "def first(x): return 0\ndef second(x): return x*2"
+        assert request["function_call"] == {"name": "second", "args": [2], "kwargs": {}}
+        assert request["test_input"] == "" and "expected_return" not in json.dumps(request)
+        return worker_result(request, return_value="4", stdout="debug: 99\n")
     monkeypatch.setattr(runner, "_command", command)
     report = await code_interpreter.run_sandbox("def first(x): return 0\ndef second(x): return x*2", [Case(function_name="second", function_args=[2], expected_return="4")])
     assert report.passed_count == 1
+    assert report.results[0].stdout == "debug: 99\n"
+    assert report.results[0].return_value == "4"
 
 
 @pytest.mark.asyncio
@@ -147,3 +153,102 @@ async def test_production_podman_requires_delegated_resource_controllers(configu
     host["cgroupControllers"] = ["cpu", "pids"]
     with pytest.raises(runner.IsolatedRunnerUnavailable):
         await runner._check_runtime("/usr/bin/podman", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", [
+    {"duration_ms": float("inf")}, {"duration_ms": float("nan")},
+    {"passed_count": 0}, {"total_count": 2}, {"resource_status": "timeout"},
+    {"request_digest": "0" * 64}, {"return_value": "forged"},
+    {"executed": "true"}, {"stdout_truncated": True},
+])
+async def test_bound_result_rejects_nonfinite_inconsistent_and_mismatched_evidence(configured, monkeypatch, mutation):
+    async def command(args, **kwargs):
+        if args[1] == "rm":
+            return b""
+        return worker_result(request_from(args), **mutation)
+    monkeypatch.setattr(runner, "_command", command)
+    with pytest.raises(runner.IsolatedRunnerUnavailable):
+        await code_interpreter.run_sandbox("print(1)", [Case(input="", expected_output="1")])
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_cleanup_quarantines_slot_until_recovered(configured, monkeypatch):
+    monkeypatch.setattr(runner.settings, "program_runner_max_concurrent", 1)
+    launches = []
+    unavailable = True
+
+    async def command(args, **kwargs):
+        if args[1] == "rm":
+            if unavailable:
+                raise runner.IsolatedRunnerUnavailable()
+            return b""
+        if args[1] == "ps":
+            return launches[-1].encode()
+        launches.append(next(arg.split("=", 1)[1] for arg in args if arg.startswith("--name=")))
+        if unavailable:
+            raise asyncio.TimeoutError()
+        return worker_result(request_from(args))
+
+    monkeypatch.setattr(runner, "_command", command)
+    for _ in range(2):
+        with pytest.raises(runner.IsolatedRunnerUnavailable):
+            await runner.run_python_oci("print(3)")
+    assert len(launches) == 1
+    unavailable = False
+    assert (await runner.run_python_oci("print(3)")).passed
+    assert len(set(launches)) == 2
+
+
+@pytest.mark.asyncio
+async def test_exited_autoremoved_container_releases_slot_only_after_verified_absence(configured, monkeypatch):
+    calls = []
+    async def command(args, **kwargs):
+        calls.append(args[1])
+        if args[1] == "rm":
+            raise runner.IsolatedRunnerUnavailable()
+        if args[1] == "ps":
+            assert "--all" in args and any(str(item).startswith("name=smartai-oci-") for item in args)
+            return b""
+        return worker_result(request_from(args))
+    monkeypatch.setattr(runner, "_command", command)
+    assert (await runner.run_python_oci("print(3)")).passed
+    assert calls == ["run", "rm", "ps"]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_cleanup_keeps_capacity_until_removal(configured, monkeypatch):
+    monkeypatch.setattr(runner.settings, "program_runner_max_concurrent", 1)
+    deleting, removed = asyncio.Event(), asyncio.Event()
+    launches = []
+    async def command(args, **kwargs):
+        if args[1] == "rm":
+            deleting.set()
+            await removed.wait()
+            return b""
+        launches.append(request_from(args)["execution_id"])
+        return worker_result(request_from(args))
+    monkeypatch.setattr(runner, "_command", command)
+    first = asyncio.create_task(runner.run_python_oci("print(3)"))
+    await deleting.wait()
+    first.cancel()
+    second = asyncio.create_task(runner.run_python_oci("print(4)"))
+    await asyncio.sleep(.02)
+    assert len(launches) == 1
+    removed.set()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    await second
+    assert len(set(launches)) == 2
+
+
+@pytest.mark.asyncio
+async def test_repeated_wire_field_is_not_valid_evidence(configured, monkeypatch):
+    async def command(args, **kwargs):
+        if args[1] == "rm":
+            return b""
+        original = worker_result(request_from(args))
+        return b'{"executed":false,' + original[1:]
+    monkeypatch.setattr(runner, "_command", command)
+    with pytest.raises(runner.IsolatedRunnerUnavailable):
+        await runner.run_python_oci("print(3)")
