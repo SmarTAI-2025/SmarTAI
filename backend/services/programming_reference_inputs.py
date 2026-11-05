@@ -51,3 +51,31 @@ def expectations_from_reference(cases, reference_cases, report):
             update["expected_return"] = observed
         resolved.append(case.model_copy(update=update))
     return resolved
+
+
+def nearby_legal_integer_inputs(problem, drafts, adapted, domains):
+    """Replace only illegal, unfrozen scalar proposals using independently verified neighbors."""
+    from backend.services.programming_input_domain import input_domain
+
+    if not all(d.io_mode == "function" and not d.function_kwargs and len(d.function_args or []) == 1
+               and type(d.function_args[0]) is int for d in drafts):
+        return None
+    allowed = {d.function_args[0] for d, domain in zip(drafts, domains, strict=True) if domain == "allowed"}
+    if not allowed:
+        return None
+    # Try around known legal points. Keep the search bounded for huge integers
+    # and never infer a range from the reference implementation's output.
+    candidates = {n + offset for n in allowed for offset in range(-len(drafts), len(drafts) + 1)} - allowed
+    merged = drafts.copy()
+    for i, domain in enumerate(domains):
+        if domain != "outside":
+            continue
+        for value in sorted(candidates, key=lambda n: (abs(n - drafts[i].function_args[0]), n)):
+            update = {"function_args": [value]}
+            if input_domain(problem, adapted[i].model_copy(update=update)) == "allowed":
+                merged[i] = drafts[i].model_copy(update=update)
+                candidates.remove(value)
+                break
+        else:
+            return None
+    return merged

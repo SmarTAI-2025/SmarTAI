@@ -96,7 +96,7 @@ async def test_fresh_out_of_domain_inputs_never_become_student_failures(referenc
             "cases": [{"io_mode": "function", "function_name": "f", "function_args": [0], "expected_return": "0"}]
         }
     )
-    route = fixed_provider(response(ai_payload))
+    route = fixed_provider(response(ai_payload), response(ai_payload))
     execute = AsyncMock(wraps=programming.run_sandbox)
     with programming_run(None, None):
         for sid in ("first", "second"):
@@ -116,7 +116,7 @@ async def test_fresh_out_of_domain_inputs_never_become_student_failures(referenc
                 and not run.report
             )
     execute.assert_not_awaited()
-    assert route.ainvoke.await_count == 1
+    assert route.ainvoke.await_count == (2 if reference else 1)
 
 
 @pytest.mark.asyncio
@@ -354,3 +354,48 @@ def test_conditional_score_and_conditional_input_limit_remain_separate():
     assert input_domain(p, call([-2])) == "allowed"
     p.criterion += " If n is positive, it must be prime."
     assert input_domain(p, call([4])) == "unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement,usable", [([[2]], True), ([[1]], False), ([[-4]], False), ([[2], [3]], False)])
+async def test_only_new_outside_inputs_share_one_repair_and_retain_the_hard_legal_cases(replacement, usable):
+    from backend.services import programming_runs as runs
+
+    p = problem("Implement f(n): n is a list of nonnegative integers. Return n.",
+                solution_code="def f(n): return n")
+    provider = fixed_provider(response({"single_arguments": [[1], [-4], [9]]}),
+                              response({"single_arguments": replacement}))
+    with programming_run(None, None) as state:
+        for sid in ("first", "second"):
+            run = await evidence_for_answer(
+                problem=p, answer=StudentAnswerInfo(q_id="q1", number="1", type="programming",
+                                                     content="def f(n): return n if n != [9] else []"),
+                student_id=sid, task_id="batch", provider=provider, reporter=None,
+                generate=programming._generate_test_cases, execute=programming.run_sandbox)
+            if usable:
+                assert [c.function_args for c in run.cases] == [[[1]], [[2]], [[9]]]
+                assert run.report.passed_count == 2 and not run.report.results[2].passed
+            else:
+                assert run.report is None and run.reason == "programming_input_domain_unverified"
+        audit, = [r["value"] for r in state.records.values() if r["kind"] == runs.AUXILIARY
+                  and "original_inputs" in r["value"]]
+    assert [row["function_args"] for row in audit["original_inputs"]] == [[[1]], [[-4]], [[9]]]
+    assert audit["domains"] == ["allowed", "outside", "allowed"]
+    assert provider.ainvoke.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_scalar_outliers_get_distinct_in_domain_neighbors_before_reference_execution():
+    from backend.services import programming_runs as runs
+
+    p = problem("Implement f(n): n is an integer in [1, 12]. Return n.", solution_code="def f(n): return n")
+    provider = fixed_provider(response({"single_arguments": [0, 1, 2, 6, 11, 12, 100]}))
+    with programming_run(None, None) as state:
+        ev = await evidence_for_answer(
+            problem=p, answer=StudentAnswerInfo(q_id="q1", number="1", type="programming", content="def f(n): return 0"),
+            student_id="s", task_id="t", provider=provider, reporter=None,
+            generate=programming._generate_test_cases, execute=programming.run_sandbox)
+        audit, = [r["value"] for r in state.records.values() if r["kind"] == runs.AUXILIARY]
+    assert [c.function_args[0] for c in ev.cases] == [3, 1, 2, 6, 11, 12, 10]
+    assert audit["original_inputs"][0]["function_args"] == [0] and audit["original_inputs"][-1]["function_args"] == [100]
+    assert ev.report.total_count == 7 and ev.report.passed_count == 0 and provider.ainvoke.await_count == 1

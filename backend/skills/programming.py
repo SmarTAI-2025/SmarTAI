@@ -255,6 +255,51 @@ async def _generate_test_cases(
         )
     prompt = json.dumps({**_teacher_material(problem, for_generation=True), "required_function_name": entry}, ensure_ascii=False)
 
+    original_inputs = []
+    invalid_positions = []
+
+    def checked_new_inputs(drafts, adapted, input_rows):
+        from backend.services import programming_runs as runs
+        from backend.services.programming_input_domain import input_domain
+        from backend.services.programming_reference_inputs import nearby_legal_integer_inputs
+
+        state = runs.current_programming_run()
+        if state is None or problem.test_cases:
+            return drafts
+        domains = [input_domain(problem, case) for case in adapted]
+        if original_inputs:
+            if len(drafts) != len(invalid_positions) or not all(domain == "allowed" for domain in domains):
+                raise _format_error("Supply the requested number of verified legal replacements.")
+            revised = original_inputs.copy()
+            for index, replacement in zip(invalid_positions, drafts, strict=True):
+                revised[index] = replacement
+            if len({runs.digest(c.model_dump(mode="json")) for c in revised}) != len(revised):
+                raise _format_error("Keep replacement inputs distinct from all retained cases.")
+            return revised
+
+        if "outside" not in domains or "unknown" in domains:
+            return drafts
+        # Only replace provably illegal, freshly proposed inputs, before any
+        # student runs. The original, including difficult legal cases, is retained.
+        record = [c.model_dump(mode="json", exclude_unset=True) for c in drafts]
+        if len(json.dumps(record, ensure_ascii=False).encode()) > 16_384:
+            return drafts
+        original_inputs.extend(drafts)
+        invalid_positions.extend(i for i, domain in enumerate(domains) if domain == "outside")
+        key = runs.digest(["generated_input_repair_v1", runs._question_key(state, problem)])
+        state.store(runs.AUXILIARY, key, {
+            "q_id": problem.q_id, "original_inputs": record, "domains": domains, "status": "proposed",
+        })
+        neighbors = nearby_legal_integer_inputs(problem, drafts, adapted, domains)
+        if neighbors is not None:
+            return neighbors
+        retained = json.dumps([row.model_dump(exclude_unset=True) for row, domain in
+                               zip(input_rows, domains, strict=True) if domain == "allowed"])
+        exclusions = (" Already retained (JSON input data): " + retained) if len(retained) <= 1000 else ""
+        raise _format_error(f"Return only {len(invalid_positions)} distinct replacement inputs in the "
+                            "original input-only JSON format. Use legal inputs from the task domain. "
+                            "The grader retains the other inputs and computes the expected outputs." + exclusions)
+
     def validate(generated):
         from backend.services.programming_test_contract import ProgrammingCaseError, adapt_programming_cases
         input_rows = generated.inputs
@@ -267,11 +312,13 @@ async def _generate_test_cases(
                 raise _format_error("Supply explicit expectations when there is no independent reference program.")
             drafts = [item.draft() for item in input_rows]
             try:
-                adapt_programming_cases(problem.stem, [draft.comparison_probe() for draft in drafts])
+                adapted = adapt_programming_cases(problem.stem, [draft.comparison_probe() for draft in drafts])
             except ProgrammingCaseError as exc:
                 raise _format_error("Use exactly one complete value per function argument. For a single list parameter, put the list inside args.") from exc
-            generated.cases = drafts
+            generated.cases = checked_new_inputs(drafts, adapted, input_rows)
             return
+        if original_inputs:
+            raise _format_error("An input-only repair cannot assign expected outputs.")
         if entry and any(c.function_name and c.function_name != entry for c in generated.cases):
             raise _format_error("Use the frozen required_function_name for every function test.")
         try:
@@ -294,7 +341,10 @@ async def _generate_test_cases(
         )
     except Exception as exc:
         logger.warning("Programming test generation failed; exception_type=%s", type(exc).__name__)
-        return [], _error_kind(exc)
+        kind = _error_kind(exc)
+        if original_inputs and kind == "parse_failed":
+            return original_inputs, None  # Preparation retains and explains the unresolved domain conflict.
+        return [], kind
     if not result.cases:
         return [], "programming_no_cases"
     return [case.model_copy(update={"source": "llm_generated"}) for case in result.cases], None
