@@ -414,16 +414,31 @@ def _build_native(language, source, memory_mb):
                     diagnostics = json.loads(detail)
                 except ValueError:
                     diagnostics = []
-                if any(item.get("kind") in {"error", "fatal error"}
-                       and any(location.get("caret", {}).get("file") == str(source)
-                               for location in item.get("locations", [])) for item in diagnostics):
+                for item in diagnostics:
+                    if item.get("kind") not in {"error", "fatal error"}:
+                        continue
+                    caret = next((loc["caret"] for loc in item.get("locations", [])
+                                  if loc.get("caret", {}).get("file") == str(source)), {})
+                    line = caret.get("line", 0)
+                    if type(line) is not int or not 1 <= line <= MAX_CODE_CHARS:
+                        continue
                     confirm_toolchain()
-                    return reason
+                    # Keep only fixed categories and a bounded source line.
+                    # The diagnostic can contain student identifiers, directives and paths.
+                    message = item.get("message", "")
+                    category = "source_error"
+                    if re.search(r"expected [‘'];[’']", message):
+                        category = "missing_semicolon"
+                    elif "No such file or directory" in message:
+                        category = "missing_header"
+                    elif "undeclared" in message or "not declared in this scope" in message:
+                        category = "unknown_identifier"
+                    return reason, f"{category} line {line}"
             elif re.search(r"undefined reference to [`']main'", detail):
                 raise NativeBuildUnavailable("native_main_required")
             elif "undefined reference to" in detail or "multiple definition of" in detail:
                 confirm_toolchain()
-                return reason
+                return reason, "unresolved_symbol" if "undefined reference to" in detail else "duplicate_symbol"
         raise NativeBuildUnavailable()
     return None
 
@@ -472,11 +487,12 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR, track_res
                 command = child_command(script_path, return_fd)
             else:
                 try:
-                    reason = _build_native(language, script_path, request["memory_mb"])
+                    failure = _build_native(language, script_path, request["memory_mb"])
                 except (OSError, subprocess.SubprocessError) as exc:
                     raise NativeBuildUnavailable() from exc
-                if reason:
-                    return _result(request["execution_id"], executed=True, exit_reason=reason,
+                if failure:
+                    reason, diagnostic = failure
+                    return _result(request["execution_id"], executed=True, exit_reason=reason, stderr=diagnostic,
                                    duration_ms=(time.perf_counter() - started_at) * 1000)
                 command = ["/binary/submission"]
             process = subprocess.Popen(

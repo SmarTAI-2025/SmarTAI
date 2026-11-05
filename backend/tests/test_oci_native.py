@@ -61,9 +61,13 @@ async def test_u1_native_submissions():
                               "wrong_answer" if case["case_id"] in expected["failed_cases"] else "success")
                     assert result.exit_reason == reason
                     assert result.isolation_mode == "oci_container" and result.execution_id not in seen_ids
+                    if reason == "compile_error":
+                        assert result.error.startswith("missing_semicolon line "), result.error
+                        assert examples[0]["diagnostic"] == "missing_semicolon" and examples[0]["line"] > 0
                     seen_ids.add(result.execution_id)
                     cases.append({"case_id": case["case_id"], "input": case["input"], "expected": case["expected"],
                                   "actual": result.actual_output, "passed": result.passed, "outcome": result.exit_reason,
+                                  "diagnostic": result.error if reason == "compile_error" else None,
                                   "execution_id": result.execution_id, "request_digest": result.request_digest,
                                   "isolation_mode": result.isolation_mode, "duration_ms": result.duration_ms})
     assert len(observations) == 8

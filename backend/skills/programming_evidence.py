@@ -43,6 +43,13 @@ def _case_detail(case_id, case_label, case, result, reason):
         detail["actual"] = _short(result.actual_output)
         # A traceback, temporary path or arbitrary exception message is never
         # needed to explain a runtime error. Only keep a Python exception type.
+        if reason == "compile_error":
+            location = re.fullmatch(r"(missing_semicolon|missing_header|unknown_identifier|source_error) line ([1-9]\d{0,4})",
+                                    result.error or "")
+            if location:
+                detail.update(diagnostic=location[1], line=int(location[2]))
+        elif reason == "link_error" and result.error in {"unresolved_symbol", "duplicate_symbol"}:
+            detail["diagnostic"] = result.error
         if result.error:
             last_line = result.error.strip().splitlines()[-1:]
             match = re.match(r"([A-Za-z]{1,32}(?:Error|Exception))\b", last_line[0]) if last_line else None
@@ -177,6 +184,19 @@ def describe_run(run, language, problem: ProblemInfo):
             "runtime_error": ("程序异常退出，请检查内存访问和退出状态。", "The program exited abnormally. Check memory accesses and exit status."),
             "timeout": ("运行超时，请检查循环终止条件和复杂度。", "Execution timed out. Check loop termination and complexity."),
         }
+        for detail in representatives:
+            if detail.get("line"):
+                action = {
+                    "missing_semicolon": ("检查此处及上一行末尾的分号。", "Check for a missing semicolon here or on the preceding line."),
+                    "missing_header": ("检查头文件名及拼写。", "Check the included header name."),
+                    "unknown_identifier": ("检查变量或函数的声明和拼写。", "Check the name and declaration."),
+                    "source_error": ("检查该行附近的语法和类型。", "Check syntax and types near this line."),
+                }[detail["diagnostic"]]
+                hints["compile_error"] = (f"编译器报错位置为第 {detail['line']} 行。{action[0]}",
+                                          f"Compiler error at line {detail['line']}. {action[1]}")
+            if detail.get("diagnostic") == "duplicate_symbol":
+                hints["link_error"] = ("链接时发现重复定义，请为每个符号保留一份定义。",
+                                       "Linking found duplicate definitions. Keep one definition per symbol.")
         fragments.extend(hints[k][0 if language == "zh" else 1] for k in failure_counts if k in hints)
         fragments.append(("失败示例：" if language == "zh" else "Failed cases: ") + failures)
     ai_only = not teachers.total
