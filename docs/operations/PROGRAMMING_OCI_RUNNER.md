@@ -223,3 +223,29 @@ a positional-only argument passed by keyword, a TypeError inside a valid functio
 module failure before lookup, malformed source, and a valid variadic call.
 All counts above refer to local rootless Linux. Rerun both suites on a fixed
 candidate and retain the raw JUnit before qualifying the intended AWS identity.
+
+### Integrated candidate `1897b387ab166b154ee138d97b01c9eef48aacf3`
+
+On 2026-11-05 the same offline ARM64 VM and delegated UID 1108 rebuilt the
+exact worker (SHA-256 `35f8c5b329dc9add71096c967b6982434529865661ea0feec4d32bda6cdd1c9f`).
+Podman ran image ID `sha256:0be2ceccff9c3855c97241e7cf5c6aae5e48c8e9e916ec9cde9f2d7fce04f924`,
+local manifest `sha256:b1c3e6a687e1ac32d0e0569fa8f23fe8807f4c6a6f0da6007308d4d8b7859cb4`.
+Both test files matched the frozen suite byte for byte. All 25 passed in 29.77 s
+with zero skips. A separate rerun of the existing five real-runtime tests passed
+in 9.40 s. The deferred-annotation call now reports `signature_mismatch`, and the
+absent entry after `import random` reports `target_function_missing`.
+
+The service-user readiness CLI returned `ready` (exit 0, Python stdin and
+function), `unavailable` for a missing image (exit 1), and `disabled` (exit 0).
+Eleven output checks verified debug/return separation, NUL escaping, falsey
+values, Unicode return boundaries and error precedence. An import-error trace
+was 394 characters: at a 256-character cap the result was `output_limit` with
+truncated stderr; at 8192 it was `runtime_error`. Final Podman inventory was
+empty, including stopped containers, and both slot files were empty.
+
+The separate Week 1 probe still returns exit 1 (3/4). Reproduce as the same
+user with `python tools/runner_spike/harness.py probe --runtime podman --image
+"$SMARTAI_PROGRAM_RUNNER_IMAGE" --json`. Its environment predicate expects
+`parent_readable=true`; the protected supervisor returned `false`. The child
+environment and sentinel checks showed no forbidden key. The frozen suite also
+verified the live container's configured environment via Podman inspection.
