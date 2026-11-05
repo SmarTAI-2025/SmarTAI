@@ -318,6 +318,7 @@ async def validate_upload_content(content: bytes, filename: str, *, content_type
                 json.loads(text, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
             except (ValueError, RecursionError):
                 raise HTTPException(400, detail={"code": "source_json_invalid"}) from None
+            return ContentInspection("application/json", inspection.declared_content_type, False)
     else:
         raise HTTPException(415, detail={"code": "source_content_type_not_allowed"})
     return inspection

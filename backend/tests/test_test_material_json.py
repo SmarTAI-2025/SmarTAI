@@ -71,3 +71,11 @@ def test_json_remains_rejected_for_other_material_roles(role):
         task_preparation._validate_source_upload(file, role=role, has_vision=True)
     assert caught.value.status_code == 415
     assert caught.value.detail["code"] == "source_type_not_allowed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mime", ["application/json", "text/json", "text/plain", "application/octet-stream"])
+async def test_json_content_type_is_assigned_only_after_successful_parse(mime):
+    from backend.tools.file_processing import validate_upload_content
+    result = await validate_upload_content(b'{"input":"%PDF-1.7"}', "cases.json", content_type=mime, purpose="test_cases")
+    assert result.content_type == "application/json"
