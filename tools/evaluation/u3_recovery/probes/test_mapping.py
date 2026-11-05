@@ -13,6 +13,7 @@ import pytest
 from backend.agents import incremental_question_preparation as inc
 from backend.api import task_preparation as api
 from backend.db import workflow_repository
+from backend.domain.errors import InvalidTransition
 from backend.services import task_facade
 from backend.services.task_execution import stop_task_run
 from backend.tests.test_incremental_question_preparation import row, persisted, setup
@@ -123,21 +124,32 @@ async def test_ambiguous_number_material_remains_visible_as_unresolved_after_man
         api.ManualQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision), current=SimpleNamespace(id=owner))
     published = task_facade.get_task(task_id=task, owner_id=owner)['problem_data']
     readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)
-    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
-        filename='SYNTHETIC001_Example.txt', content=b'Question 7: Synthetic student work.',
-        content_type='text/plain', registry=_RecoveryRegistry())
+    manual_gate = 'question_manual_completion_required'
+    try:
+        queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+            filename='SYNTHETIC001_Example.txt', content=b'Question 7: Synthetic student work.',
+            content_type='text/plain', registry=_RecoveryRegistry())
+        upload_status = queued['status']
+    except InvalidTransition as exc:
+        if exc.code != manual_gate:
+            raise
+        upload_status = exc.code
     record('duplicate_number_material', {
         'problem_source': source_text, 'literal': literal, 'material_units': material_units, 'saved': saved, 'published': published,
         'manual_status': response.get('status'), 'generation_calls': forbidden.await_count,
         'checkpoint_source_plans': saved_op.checkpoint.get('incremental_source_plans'),
         'grading_readiness_before_student_upload': readiness,
-        'submission_upload_accepted_status': queued.get('status'),
+        'submission_upload_accepted_status': upload_status if upload_status == 'started' else None,
+        'submission_upload_outcome': upload_status,
     })
     assert_original_questions_unchanged(saved, material_token)
     assert_original_questions_unchanged(published, material_token)
     assert literal in json.dumps(material_units, ensure_ascii=False), 'The source unit itself must be retained'
     forbidden.assert_not_awaited()
     assert_ambiguous_projection(published, material_token)
+    # This fixture's recovered material row has no stem and requires manual completion.
+    assert manual_gate in readiness['blocking_issues']
+    assert upload_status == manual_gate
 
 
 @pytest.mark.asyncio

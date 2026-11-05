@@ -1,5 +1,18 @@
 # U3 本地验证记录
 
+## 2026-11-05 同一批样本对照
+
+M2 现在调用实际上传排队入口，记录成功排队或 `question_manual_completion_required` 后继续核对两道原题和未归属材料。该样本恢复出缺题干、待人工补全的独立材料行时，还须检查 readiness 和上传入口都给出对应阻断。其他拒绝原因会直接使探针失败。
+
+| 产品输入 | Mac 离线运行结果 | M2 上传入口 |
+| --- | --- | --- |
+| 冻结历史基线 `101352c8a7df4e628d2716a2731b702d5f294a8d` | 34 通过，M1、M2 两个原反例复现 | `started`，未归属行仍缺失 |
+| PR286 `062c3e7e2cfcb1f2954ca252b86f06022ad4af70` | 同一套 36 项全部通过 | `question_manual_completion_required`，材料及其未决归属可核查 |
+
+旧工具 `46850c3d` 在该 PR286 输入上会因正确的上传拒绝提前退出。修改后另对“错误放行”“错误拒绝原因”“隐藏 readiness 阻断”各注入一次故障，探针逐项检出。样本原文沿用前轮，外部网络尝试为 0。对应的产品回归保存在 [PR286 的重复题号材料用例](https://github.com/SmarTAI-2025/SmarTAI/blob/062c3e7e2cfcb1f2954ca252b86f06022ad4af70/backend/tests/test_incremental_question_materials.py#L653)。
+
+## 2026-10-28 原始核查
+
 基线 main：`101352c8a7df4e628d2716a2731b702d5f294a8d`。Mac 本地开发、代码审阅和执行测试；没有真实模型调用、生产访问或产品修改。
 
 | 层级 | 结果 | 说明 |
