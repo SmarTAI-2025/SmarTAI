@@ -98,6 +98,7 @@ from backend.domain.confidence_policy import confidence_needs_attention, confide
 from backend.tools.file_processing import (
     IMAGE_MEDIA_TYPES,
     extract_text_from_upload,
+    validate_upload_content,
     inspect_upload_content,
 )
 
@@ -116,7 +117,7 @@ _SOURCE_ROLE_EXTENSIONS = {
     "problem": _DOCUMENT_SOURCE_EXTENSIONS,
     "reference_answer": _DOCUMENT_SOURCE_EXTENSIONS,
     "rubric": _DOCUMENT_SOURCE_EXTENSIONS,
-    "programming_tests": (*_DOCUMENT_SOURCE_EXTENSIONS, ".json"),
+    "programming_tests": (*_DOCUMENT_SOURCE_EXTENSIONS, ".json", ".csv"),
 }
 _SOURCE_ROLE_OCR_PURPOSE = {
     "problem": "problems",
@@ -197,6 +198,7 @@ _SOURCE_MIME_TYPES = {
     ".md": frozenset({"text/markdown", "text/plain"}),
     ".markdown": frozenset({"text/markdown", "text/plain"}),
     ".json": frozenset({"application/json", "text/json", "text/plain"}),
+    ".csv": frozenset({"text/csv", "application/csv", "text/plain"}),
     ".jpg": frozenset({"image/jpeg"}),
     ".jpeg": frozenset({"image/jpeg"}),
     ".png": frozenset({"image/png"}),
@@ -696,7 +698,8 @@ async def preflight_problem_source(
             document_ocr_available=route.is_baidu_ocr,
             task_id=task_id,
         )
-        _validate_source_library_format(save=save_to_library, filename=descriptor["filename"])
+        if descriptor["kind"] == "upload":
+            _validate_source_library_format(save=save_to_library, filename=descriptor["filename"])
         provisional_payload = {
             "filename": descriptor["filename"],
             "content_type": descriptor.get("content_type"),
@@ -1173,15 +1176,10 @@ async def _select_source(
             source_upload.filename or "source"
         )
         extension = Path(filename.lower()).suffix
-        detected = (
-            source_file_service.detected_preview_mime(body[:4096], filename)
-            if extension in {".pdf", *_IMAGE_SOURCE_EXTENSIONS}
-            else inspect_upload_content(
-                body,
-                filename,
-                source_upload.content_type,
-            ).content_type
-        )
+        detected = (await validate_upload_content(
+            body, filename, content_type=source_upload.content_type,
+            purpose=_source_role_ocr_purpose(role),
+        )).content_type
         if detected not in _SOURCE_MIME_TYPES[extension]:
             raise HTTPException(
                 status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,

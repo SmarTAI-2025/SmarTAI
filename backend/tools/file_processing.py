@@ -63,7 +63,9 @@ SUBMISSION_ARCHIVE_MAX_MEMBER_BYTES = 5 * 1024 * 1024
 SUBMISSION_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
 MAX_SOURCE_FILENAME_CHARACTERS = 512
 
-TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".csv", ".rst"}
+DOCUMENT_TEXT_EXTENSIONS = frozenset({".txt", ".md", ".markdown"})
+# Retain the legacy problem-reader formats; submission policy is narrower.
+TEXT_EXTENSIONS = {*DOCUMENT_TEXT_EXTENSIONS, ".csv", ".rst"}
 IMAGE_MEDIA_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -73,6 +75,8 @@ IMAGE_MEDIA_TYPES = {
     ".tiff": "image/tiff",
     ".webp": "image/webp",
 }
+SUBMISSION_SOURCE_EXTENSIONS = frozenset({".pdf", *DOCUMENT_TEXT_EXTENSIONS, *IMAGE_MEDIA_TYPES})
+
 ARCHIVE_EXTENSIONS = (
     ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
 )
@@ -124,6 +128,8 @@ _MIME_ALIASES = {
     "application/x-rar-compressed": "application/vnd.rar",
     "application/x-7z-compressed": "application/x-7z-compressed",
     "application/x-gzip": "application/gzip",
+    "application/csv": "text/csv",
+    "text/json": "application/json",
     "image/jpg": "image/jpeg",
     "text/x-markdown": "text/markdown",
     "text/json": "application/json",
@@ -187,7 +193,7 @@ def _content_signature_type(data: bytes, filename: str) -> str:
                 pass
             else:
                 return "application/x-bzip2"
-    if len(data) >= 512 and data[257:262] == b"ustar":
+    if len(data) >= 512:
         try:
             tarfile.TarInfo.frombuf(data[:512], "utf-8", "surrogateescape")
         except tarfile.HeaderError:
@@ -199,12 +205,10 @@ def _content_signature_type(data: bytes, filename: str) -> str:
         return "application/x-tar"
     # A container, image or text document can quote a PDF marker. Only tolerate
     # a bounded whitespace/BOM preamble, not a marker anywhere in the payload.
-    if data[:1024].lstrip(b"\xef\xbb\xbf\x00\t\r\n\f ").startswith(b"%PDF-"):
+    if data[:1024].lstrip(b"\xef\xbb\xbf\x00\t\r\n\f ").startswith(b"%PDF-") or (filename.lower().endswith(".pdf") and b"%PDF-" in data[:1024]):
         return "application/pdf"
     if _looks_like_text(data):
-        guessed, _encoding = mimetypes.guess_type(filename)
-        guessed_type = _normalized_content_type(guessed)
-        return guessed_type if guessed_type.startswith("text/") or guessed_type == "application/json" else "text/plain"
+        return "text/plain"
     return "application/octet-stream"
 
 
@@ -237,13 +241,11 @@ def inspect_upload_content(
         for value in (supplied_type, filename_type)
         if value != "application/octet-stream"
     }
-    # Browsers may label Markdown/CSV/JSON as generic plain text. That label
-    # is compatible with detected text, but cannot excuse a binary mismatch.
-    text_content = detected.startswith("text/") or detected == "application/json"
-    mismatch = any(
-        value != detected and not (value == "text/plain" and text_content)
-        for value in declared_hints
-    )
+    # TXT and Markdown are both text. Their content cannot prove the intended
+    # suffix; validate readable bytes first and treat MIME only as a hint.
+    text_hints = {"text/plain", "text/markdown", "text/csv", "text/x-rst", "text/prs.fallenstein.rst", "application/json"}
+    mismatch = any(value != detected and not (detected == "text/plain" and value in text_hints)
+                   for value in declared_hints)
     return ContentInspection(
         content_type=detected,
         declared_content_type=declared,
@@ -262,6 +264,73 @@ def infer_upload_content_type(
         return _normalized_content_type(supplied)
     guessed, _encoding = mimetypes.guess_type(filename)
     return _normalized_content_type(guessed)
+
+
+def submission_source_error(filename: str, inspection: ContentInspection, content: bytes | None = None) -> str | None:
+    """One leaf-file policy for direct uploads, archive members and retries."""
+    if _ext(filename) not in SUBMISSION_SOURCE_EXTENSIONS:
+        return "submission_source_unsupported"
+    if inspection.mismatch:
+        if content is not None and inspection.content_type == "application/pdf" and _ext(filename) in DOCUMENT_TEXT_EXTENSIONS and _looks_like_text(content):
+            return None  # The bounded decoder will distinguish a real PDF from quoted text.
+        return "submission_source_content_type_mismatch"
+    return None
+
+
+async def validate_upload_content(content: bytes, filename: str, *, content_type: str | None = None,
+                                  purpose: OCRPurpose = "problems") -> ContentInspection:
+    """Validate the actual body before trusting MIME metadata or calling OCR."""
+    from backend.tools.media_validation import validate_media_content
+    if not content:
+        raise HTTPException(400, detail={"code": "source_empty"})
+    allowed_extensions = (SUBMISSION_SOURCE_EXTENSIONS if purpose == "submissions" else
+                          frozenset({".pdf", *IMAGE_MEDIA_TYPES, *DOCUMENT_TEXT_EXTENSIONS,
+                                     *({".csv", ".json"} if purpose == "test_cases" else {".csv", ".rst"} if purpose == "problems" else set())}))
+    if _ext(filename) not in allowed_extensions:
+        raise HTTPException(415, detail={"code": "submission_source_unsupported" if purpose == "submissions" else "source_type_not_allowed"})
+    inspection = inspect_upload_content(content, filename, content_type)
+    # A plain-text/Markdown lesson may quote a PDF header. Only an actual PDF
+    # parse can settle this ambiguous signature; a valid renamed PDF is rejected.
+    if inspection.content_type == "application/pdf" and _ext(filename) in DOCUMENT_TEXT_EXTENSIONS and _looks_like_text(content):
+        try:
+            await validate_media_content(content, "application/pdf", wait_for_slot=True)
+        except HTTPException as exc:
+            if isinstance(exc.detail, dict) and exc.detail.get("code") == "pdf_invalid":
+                inspection = ContentInspection("text/plain", inspection.declared_content_type, False)
+            else:
+                raise
+    if purpose == "submissions":
+        error = submission_source_error(filename, inspection)
+        if error:
+            raise HTTPException(415, detail={"code": error})
+    elif inspection.mismatch:
+        raise HTTPException(415, detail={"code": "source_content_type_not_allowed"})
+    suffix = _ext(filename)
+    if inspection.content_type in {"application/pdf", *IMAGE_MEDIA_TYPES.values()}:
+        await validate_media_content(content, inspection.content_type, wait_for_slot=True)
+    elif inspection.content_type == "text/plain":
+        allowed_text = TEXT_EXTENSIONS | ({".json"} if purpose == "test_cases" else set())
+        if suffix not in allowed_text:
+            raise HTTPException(415, detail={"code": "source_type_not_allowed"})
+        if suffix == ".json":
+            text = await decode_text_bytes(content)
+            try:
+                json.loads(text, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+            except (ValueError, RecursionError):
+                raise HTTPException(400, detail={"code": "source_json_invalid"}) from None
+    else:
+        raise HTTPException(415, detail={"code": "source_content_type_not_allowed"})
+    return inspection
+
+
+async def validate_submission_upload(content: bytes, filename: str, content_type: str | None = None) -> None:
+    if not content:
+        raise HTTPException(400, detail={"code": "submission_source_empty"})
+    if _ext(filename) in ARCHIVE_EXTENSIONS:
+        if inspect_upload_content(content, filename, content_type).mismatch:
+            raise HTTPException(415, detail={"code": "submission_source_content_type_mismatch"})
+        return  # Container/member structural validation runs in the bounded extractor.
+    await validate_upload_content(content, filename, content_type=content_type, purpose="submissions")
 
 
 async def decode_text_bytes(text_bytes: bytes) -> str:
@@ -631,12 +700,7 @@ async def extract_text_from_upload(
     ingest skill when one is available.
     """
     safe_name = filename or "upload"
-    inspection = inspect_upload_content(file_bytes, safe_name, content_type)
-    if inspection.mismatch:
-        raise HTTPException(
-            status_code=415,
-            detail={"code": "submission_source_content_type_mismatch"},
-        )
+    inspection = await validate_upload_content(file_bytes, safe_name, content_type=content_type, purpose=purpose)
     media_type = inspection.content_type
     if reporter:
         await reporter._emit_message(f"Reading {safe_name}...")
@@ -842,16 +906,16 @@ def _extract_raw_files_from_archive(
             return
         inspection = inspect_upload_content(data, clean)
         error_code = (
-            "submission_source_content_type_mismatch" if inspection.mismatch
-            else "submission_archive_nested_unsupported"
-            if inspection.content_type in ARCHIVE_CONTENT_TYPES else None
+            "submission_archive_nested_unsupported"
+            if not inspection.mismatch and inspection.content_type in ARCHIVE_CONTENT_TYPES
+            else submission_source_error(clean, inspection, data)
         )
         sources.append(RawUploadSource(
             filename=clean,
             content=data,
             content_type=inspection.content_type,
             pre_error_code=error_code,
-            failure_phase=("source_read" if inspection.mismatch else "archive") if error_code else None,
+            failure_phase=("archive" if error_code == "submission_archive_nested_unsupported" else "source_read") if error_code else None,
         ))
 
     def add_failure(raw_name: str, index: int, code: str) -> None:
@@ -1017,15 +1081,11 @@ def _extract_raw_files_from_archive(
                                 else "submission_archive_member_unreadable")
         return sources
 
+    error_code = submission_source_error(filename, container_inspection, file_bytes)
     return [RawUploadSource(
-        filename=_bounded_source_name(filename),
-        content=file_bytes,
-        content_type=container_inspection.content_type,
-        pre_error_code=(
-            "submission_source_content_type_mismatch"
-            if container_inspection.mismatch else None
-        ),
-        failure_phase="source_read" if container_inspection.mismatch else None,
+        filename=_bounded_source_name(filename), content=file_bytes,
+        content_type=container_inspection.content_type, pre_error_code=error_code,
+        failure_phase="source_read" if error_code else None,
     )]
 
 

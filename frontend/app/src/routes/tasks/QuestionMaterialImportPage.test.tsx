@@ -26,18 +26,18 @@ function openUpload() {
 beforeEach(() => { vi.clearAllMocks(); vi.spyOn(window, "alert").mockImplementation(() => {}); });
 
 describe("bulk material upload contracts", () => {
-  it("updates JSON acceptance by target and preserves a now-incompatible selection without submitting", () => {
+  it.each(["json", "csv"])("updates %s acceptance by target and preserves a now-incompatible selection without submitting", extension => {
     const input = openUpload();
-    expect(input.accept).not.toContain(".json");
+    expect(input.accept).not.toContain(`.${extension}`);
     expect(screen.getByText(/单个文件最大 5 MiB/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "编程题测试样例" }));
-    expect(input.accept).toContain(".json");
-    fireEvent.change(input, { target: { files: [new File(["{}"], "cases.json")] } });
-    expect(screen.getByText(/已选择：cases.json/)).toBeInTheDocument();
+    expect(input.accept).toContain(`.${extension}`);
+    fireEvent.change(input, { target: { files: [new File([extension === "json" ? "{}" : "input,expected\n1,2"], `cases.${extension}`)] } });
+    expect(screen.getByText(new RegExp(`已选择：cases\\.${extension}`))).toBeInTheDocument();
     expect(screen.getByLabelText("同时保存到课程资料库")).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "编程题测试样例" }));
-    expect(input.accept).not.toContain(".json");
-    expect(screen.getByText(/已选择：cases.json/)).toBeInTheDocument();
+    expect(input.accept).not.toContain(`.${extension}`);
+    expect(screen.getByText(new RegExp(`已选择：cases\\.${extension}`))).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("当前资料类型不支持");
     fireEvent.click(screen.getByRole("button", { name: "开始导入并匹配到题目" }));
     expect(preflight).not.toHaveBeenCalled();

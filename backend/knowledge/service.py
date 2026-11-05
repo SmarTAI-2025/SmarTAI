@@ -9,9 +9,8 @@ from backend.db.knowledge_repository import KnowledgeDocument, get_document, req
 from backend.rag.chunker import MAX_FILE_BYTES
 from backend.services.knowledge_storage import persist_knowledge_upload
 from backend.storage import get_storage
-from backend.tools.file_processing import IMAGE_MEDIA_TYPES, inspect_upload_content
+from backend.tools.file_processing import IMAGE_MEDIA_TYPES, validate_upload_content
 from backend.tools.pdf_evidence import MAX_IMAGE_INPUT_BYTES
-from backend.tools.media_validation import validate_media_content
 
 KNOWLEDGE_UPLOAD_EXTENSIONS = {".pdf", ".txt", ".md", ".markdown", *IMAGE_MEDIA_TYPES}
 
@@ -32,17 +31,15 @@ async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
     if Path(safe_name).suffix.lower() not in KNOWLEDGE_UPLOAD_EXTENSIONS:
         raise HTTPException(415, detail={"code": "source_type_not_allowed",
                                          "accepted_extensions": sorted(KNOWLEDGE_UPLOAD_EXTENSIONS)})
-    media_type = inspect_upload_content(content, safe_name, content_type).content_type
     extension = Path(safe_name).suffix.lower()
     image = extension in IMAGE_MEDIA_TYPES
+    if image and len(content) > MAX_IMAGE_INPUT_BYTES:
+        raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": MAX_IMAGE_INPUT_BYTES})
+    media_type = (await validate_upload_content(content, safe_name, content_type=content_type)).content_type
     visual = media_type == "application/pdf" or image
     expected_type = IMAGE_MEDIA_TYPES.get(extension) or ("application/pdf" if extension == ".pdf" else None)
     if (expected_type and media_type != expected_type) or (not expected_type and not media_type.startswith("text/")):
         raise HTTPException(415, detail={"code": "source_content_type_not_allowed"})
-    if image and len(content) > MAX_IMAGE_INPUT_BYTES:
-        raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": MAX_IMAGE_INPUT_BYTES})
-    if visual:
-        await validate_media_content(content, media_type)
     if image and native_only:
         raise HTTPException(422, detail={"code": "knowledge_image_requires_ocr"})
     if registry is None and not native_only:

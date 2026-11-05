@@ -33,7 +33,7 @@ from backend.services.stage_provider_routing import (
 )
 from backend.skills.recognition_reader import BaiduRecognitionEngine, LLMRecognitionEngine, PROMPT_VERSION
 from backend.storage import get_storage
-from backend.tools.file_processing import extract_text_from_upload, inspect_upload_content
+from backend.tools.file_processing import extract_text_from_upload, inspect_upload_content, validate_upload_content
 from backend.tools.pdf_evidence import PdfIndexRequest, read_pdf_evidence
 
 _CAPACITIES = weakref.WeakKeyDictionary()
@@ -164,9 +164,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
     allow_vision = purpose not in {"rubric", "test_cases"} if allow_vision is None else allow_vision is True
     reporter = reporter or ProgressReporter(f"recognition-{task_id}")
-    inspection = inspect_upload_content(content, filename, content_type)
-    if inspection.mismatch:
-        raise HTTPException(415, detail={"code": "submission_source_content_type_mismatch"})
+    inspection = await validate_upload_content(content, filename, content_type=content_type, purpose=purpose)
     media_type = inspection.content_type
     if media_type not in _VISUAL_TYPES:
         text = await (text_reader or extract_text_from_upload)(content, filename, purpose=purpose, reporter=reporter)

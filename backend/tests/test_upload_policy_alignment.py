@@ -2,7 +2,9 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
+from starlette.datastructures import Headers
+import io
 
 from backend.api import task_preparation
 from backend.knowledge import service
@@ -36,6 +38,7 @@ async def test_library_save_rejects_before_ingestion(monkeypatch):
 def test_bulk_material_json_policy_follows_selected_targets(targets, accepted):
     role = task_preparation._material_import_source_role(targets)
     assert (".json" in task_preparation._accepted_source_extensions(role, has_vision=False)) is accepted
+    assert (".csv" in task_preparation._accepted_source_extensions(role, has_vision=False)) is accepted
     assert ".png" in task_preparation._accepted_source_extensions(role, has_vision=False)
 
 
@@ -60,3 +63,25 @@ async def test_knowledge_size_limit_is_structured_before_storage(monkeypatch):
         await service.ingest_document(owner_id="o", original_name="notes.txt", content=b"four")
     assert caught.value.status_code == 413
     assert caught.value.detail == {"code": "source_too_large", "max_bytes": 3}
+
+
+@pytest.mark.parametrize("mime", ["text/csv", "application/csv", "text/plain"])
+def test_csv_test_material_accepts_normal_declared_mimes(mime):
+    file = UploadFile(file=io.BytesIO(b"input,expected\n1,2\n"), filename="cases.csv", headers=Headers({"content-type": mime}))
+    assert task_preparation._validate_source_upload(file, role="programming_tests", has_vision=False) == ".csv"
+    for role in ("problem", "reference_answer", "rubric"):
+        with pytest.raises(HTTPException) as caught:
+            task_preparation._validate_source_upload(file, role=role, has_vision=False)
+        assert caught.value.detail["code"] == "source_type_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_csv_test_material_is_read_as_text_without_conversion_claim():
+    from backend.services.question_sources import read_question_source
+    from backend.services.stage_provider_routing import StageProviderRoute
+    content = b'q_id,input,expected\n1,"1,2","3"\n'
+    result = await read_question_source(owner_id="owner", task_id="task", content=content,
+        filename="cases.csv", content_type="text/csv", purpose="test_cases", registry=None,
+        route=StageProviderRoute(route_id="unused", kind="llm", provider=None))
+    assert result.text == content.decode("utf-8")
+    assert result.recognition is None

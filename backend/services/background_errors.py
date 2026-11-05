@@ -104,6 +104,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "workflow_revision_conflict",
     "source_decode_failed",
     "source_empty",
+    "source_json_invalid",
     "source_mime_type_not_allowed",
     "source_text_too_large",
     "source_too_large",

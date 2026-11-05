@@ -59,7 +59,7 @@ from backend.services.stage_provider_routing import (
     list_stage_provider_options,
 )
 from backend.storage import get_storage
-from backend.tools.file_processing import SUBMISSION_UPLOAD_MAX_BYTES
+from backend.tools.file_processing import SUBMISSION_UPLOAD_MAX_BYTES, validate_submission_upload
 from backend.services.task_history_progress import enrich_history_progress, progress_fields
 
 
@@ -533,6 +533,7 @@ async def parse_submissions_endpoint(
             status.HTTP_413_CONTENT_TOO_LARGE,
             detail={"code": "submission_source_too_large"},
         )
+    await validate_submission_upload(body, filename, content_type)
     roster_entries: list[dict[str, str]] = []
     roster_name = None
     try:
@@ -643,6 +644,7 @@ async def retry_submission_recognition_endpoint(
             owner_id=current.id,
             job_id=job_id,
         )
+        await validate_submission_upload(retry["content"], retry["filename"], retry["content_type"])
         queued = task_facade.queue_task_submission_parsing(
             task_id=task_id,
             owner_id=current.id,

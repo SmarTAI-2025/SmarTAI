@@ -249,6 +249,7 @@ const FILE_CODES = new Set([
   "pdf_processing_unavailable",
   "source_decode_failed",
   "source_empty",
+  "source_json_invalid",
   "source_text_too_large",
   "source_too_large",
   "source_type_not_allowed",
@@ -267,6 +268,7 @@ const FILE_CODES = new Set([
   "media_inspection_busy",
   "media_inspection_timeout",
   "media_inspection_failed",
+  "media_inspection_resource_limit",
   "submission_source_unsupported",
   "submission_source_content_type_mismatch",
   "submission_source_empty",
@@ -1486,6 +1488,12 @@ function fileErrorDescription(
   if (["source_empty", "submission_source_empty"].includes(code ?? "") || /file is empty/i.test(message)) {
     return tx(locale, "文件为空，请确认内容后重新保存并上传。", "The file is empty. Check its contents, save it, and upload again.");
   }
+  if (code === "media_inspection_resource_limit") {
+    return tx(locale, "文件解码所需资源超过安全上限。请缩小图片或拆分 PDF 后重试；持续失败时联系管理员。", "Decoding this file exceeds the safe resource limit. Reduce the image or split the PDF, then retry. Contact an administrator if it persists.");
+  }
+  if (code === "source_json_invalid") {
+    return tx(locale, "JSON 测试材料语法无效。请检查括号、引号和逗号后重新导出为有效 JSON；只修改扩展名无法转换文件。", "The JSON test material has invalid syntax. Check brackets, quotes and commas, then export valid JSON; renaming the extension does not convert the file.");
+  }
   if (code === "source_type_not_allowed") {
     const extensions = Array.isArray(detail?.accepted_extensions)
       ? detail.accepted_extensions.filter((item): item is string => typeof item === "string" && /^\.[a-z0-9.]{1,16}$/i.test(item)).slice(0, 24) : [];
@@ -1498,7 +1506,7 @@ function fileErrorDescription(
     return tx(locale, "文件声明的类型与扩展名不一致。请从原应用重新导出，并按上传区域支持的格式保存后再上传。", "The file's declared type does not match its extension. Export it again from the original app in a format supported by this upload area.");
   }
   if (code === "submission_source_unsupported") {
-    return tx(locale, "作答支持 PDF、TXT、Markdown、CSV、RST、JPG、JPEG、PNG、WebP、BMP、TIF、TIFF；压缩包内部也须使用这些格式。", "Responses support PDF, TXT, Markdown, CSV, RST, JPG, JPEG, PNG, WebP, BMP, TIF and TIFF. Files inside archives must also use these formats.");
+    return tx(locale, "作答支持 PDF、TXT、MD、MARKDOWN、JPG、JPEG、PNG、WebP、BMP、TIF、TIFF；压缩包内部也须使用这些格式。", "Responses support PDF, TXT, MD, MARKDOWN, JPG, JPEG, PNG, WebP, BMP, TIF and TIFF. Files inside archives must also use these formats.");
   }
   if (code === "source_content_type_not_allowed" || code === "submission_source_content_type_mismatch") {
     return tx(locale, "文件内容与扩展名不符，或文件已损坏。请确认能在本地打开，并重新导出为上传区域支持的格式；只修改文件后缀无效。", "The file contents do not match its extension, or the file is damaged. Check that it opens locally and export it in a format supported by this upload area; renaming the extension does not convert it.");

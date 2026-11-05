@@ -40,11 +40,25 @@ from backend.storage.base import (
 from backend.storage.local import LocalStorage
 
 
-PDF = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF"
-PDF_TWO = b"%PDF-1.5\n2 0 obj<</Type/Catalog>>endobj\n%%EOF"
-JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00preview\xff\xd9"
-PNG = b"\x89PNG\r\n\x1a\npreview"
-WEBP = b"RIFF\x08\x00\x00\x00WEBPVP8 preview"
+def _real_pdf(text):
+    import pymupdf
+    with pymupdf.open() as doc:
+        doc.new_page().insert_text((40, 40), text)
+        return doc.tobytes()
+
+
+def _real_image(format):
+    from PIL import Image
+    output = io.BytesIO()
+    Image.new("RGB", (2, 2), "white").save(output, format)
+    return output.getvalue()
+
+
+PDF = _real_pdf("preview")
+PDF_TWO = _real_pdf("other preview")
+JPEG = _real_image("JPEG")
+PNG = _real_image("PNG")
+WEBP = _real_image("WEBP")
 
 
 class _Registry:
@@ -628,8 +642,8 @@ async def test_formal_preflight_rejects_disguised_pdf_before_persistence():
             registry=_Registry(),
         )
 
-    assert failure.value.status_code == 415
-    assert failure.value.detail["code"] == "source_content_type_not_allowed"
+    assert failure.value.status_code == 400
+    assert failure.value.detail["code"] == "pdf_invalid"
     assert not _operations(owner_id)
 
 

@@ -319,7 +319,7 @@ async def test_extract_text_upload_image_uses_ocr():
     ocr = FakeOCRSkill("OCR from image")
 
     text = await extract_text_from_upload(
-        b"\x89PNG\r\n\x1a\nfake-image-payload",
+        _valid_png_1x1(),
         "student.png",
         ocr_skill=ocr,
         purpose="submissions",
@@ -337,7 +337,7 @@ async def test_extract_archive_mixed_text_and_image_uses_same_pipeline():
     ocr = FakeOCRSkill("OCR page")
     archive = _zip_bytes({
         "student_001/answer.txt": "plain answer".encode("utf-8"),
-        "student_001/page.png": b"\x89PNG\r\n\x1a\nfake-image-payload",
+        "student_001/page.png": _valid_png_1x1(),
     })
 
     files = await extract_files_from_archive(
@@ -358,7 +358,7 @@ async def test_extract_archive_mixed_text_and_image_uses_same_pipeline():
 async def test_image_without_ocr_skill_returns_clear_error():
     with pytest.raises(HTTPException) as exc:
         await extract_text_from_upload(
-            b"\x89PNG\r\n\x1a\nfake-image-payload",
+            _valid_png_1x1(),
             "student.png",
         )
 
@@ -372,7 +372,7 @@ async def test_unsupported_single_file_returns_clear_error():
         await extract_files_from_archive(b"binary", "answers.xlsx")
 
     assert exc.value.status_code == 415
-    assert exc.value.detail == {"code": "submission_source_content_type_mismatch"}
+    assert exc.value.detail == {"code": "submission_source_unsupported"}
 
 
 @pytest.mark.asyncio
@@ -503,7 +503,7 @@ def test_raw_archive_preserves_healthy_member_when_sibling_read_fails(monkeypatc
     ("body", "filename", "content_type"),
     [
         (b"plain text pretending to be an image", "student.png", "image/png"),
-        (b"%PDF-1.4\n", "answer.txt", "text/plain"),
+        (_blank_pdf(), "answer.txt", "text/plain"),
         (_valid_png_1x1(), "student.jpg", "image/png"),
     ],
 )
@@ -533,7 +533,7 @@ async def test_octet_stream_with_real_png_uses_detected_image_type():
 
     text = await extract_text_from_upload(
         _valid_png_1x1(),
-        "upload.bin",
+        "upload.png",
         content_type="application/octet-stream",
         ocr_skill=ocr,
     )
@@ -541,7 +541,7 @@ async def test_octet_stream_with_real_png_uses_detected_image_type():
     assert text == "OCR from content-sniffed image"
     assert len(ocr.calls) == 1
     assert ocr.calls[0]["images"][0].media_type == "image/png"
-    assert ocr.calls[0]["images"][0].label == "upload.bin"
+    assert ocr.calls[0]["images"][0].label == "upload.png"
 
 
 def test_empty_archive_member_is_empty_not_mismatch():
@@ -584,7 +584,8 @@ def test_missing_rar_executable_preserves_healthy_member(monkeypatch):
                 raise rarfile.RarCannotExec("missing executable")
             return io.BytesIO(b"ok")
     monkeypatch.setattr(rarfile, "RarFile", FakeRar)
-    monkeypatch.setattr(file_processing, "inspect_upload_content", lambda *a, **k: SimpleNamespace(content_type="application/vnd.rar", mismatch=False))
+    inspect = file_processing.inspect_upload_content
+    monkeypatch.setattr(file_processing, "inspect_upload_content", lambda data, name, *a, **k: SimpleNamespace(content_type="application/vnd.rar", mismatch=False) if name.endswith(".rar") else inspect(data, name, *a, **k))
     sources = extract_raw_files_from_archive(b"RAR", "answers.rar")
     assert sources[0].content == b"ok"
     assert sources[0].pre_error_code is None

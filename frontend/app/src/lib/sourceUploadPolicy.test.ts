@@ -14,6 +14,7 @@ describe("source upload contracts", () => {
   it.each(["problem", "reference_answer", "rubric", "programming_tests"] as const)("keeps all supported images selectable for %s", role => {
     expect(sourceUploadExtensions(role)).toEqual(expect.arrayContaining([".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"]));
     expect(sourceUploadExtensions(role).includes(".json")).toBe(role === "programming_tests");
+    expect(sourceUploadExtensions(role).includes(".csv")).toBe(role === "programming_tests");
   });
   it("allows JSON only when importing test cases and never stores it in the library", () => {
     const file = new File(["{}"], "cases.JSON");
@@ -30,4 +31,14 @@ describe("source upload contracts", () => {
     Object.defineProperty(file, "size", { value: MAX_SOURCE_UPLOAD_BYTES + 1 });
     expect(sourceUploadValidationError(file, accepted, MAX_SOURCE_UPLOAD_BYTES, locale)).toContain("5 MiB");
   });
+});
+
+
+it("allows CSV only as programming-test material and never as a library original", () => {
+  const file = new File(["input,expected\n1,2\n"], "tests.CSV");
+  expect(sourceUploadValidationError(file, sourceUploadExtensions("programming_tests"), MAX_SOURCE_UPLOAD_BYTES, "zh-CN")).toBeNull();
+  for (const role of ["problem", "rubric", "reference_answer"] as const) {
+    expect(sourceUploadValidationError(file, sourceUploadExtensions(role), MAX_SOURCE_UPLOAD_BYTES, "zh-CN")).toContain("不支持");
+  }
+  expect(canSaveSourceToLibrary(file.name)).toBe(false);
 });
