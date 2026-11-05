@@ -194,3 +194,12 @@ async def test_class_shares_the_extra_reference_check_but_runs_each_student(monk
     assert all(row.programming_evidence.boundary_note for row in rows)
     assert sum(call.args[0] == REFERENCE for call in execute.await_args_list) == 2  # official and additional
     assert sum(call.args[0] == SOURCE for call in execute.await_args_list) == 6
+
+
+@pytest.mark.asyncio
+async def test_missing_award_list_remains_a_repairable_schema_error():
+    problem, answer = setup()
+    malformed = response({"step_1": {"step_no": 1, "score": 10, "is_correct": True, "desc": "Collected points."}})
+    provider = fixed_provider(malformed, response(award(10)))
+    result = await programming.ProgrammingSkill(provider).grade(problem, answer)
+    assert provider.ainvoke.await_count == 2 and result.score == 10 and not result.error_kind

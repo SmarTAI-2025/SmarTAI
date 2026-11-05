@@ -30,7 +30,7 @@ _TEMPLATE = (Path(__file__).resolve().parents[1] / "prompts" / "programming.txt"
 
 
 def _sum_step_awards(validated):
-    return float(sum((Decimal(str(step.score)) for step in validated["steps"]), Decimal(0)))
+    return float(sum((Decimal(str(step.score)) for step in validated.get("steps", ())), Decimal(0)))
 
 
 class ProgrammingAward(StepScore):
