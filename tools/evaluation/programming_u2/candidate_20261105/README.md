@@ -36,3 +36,8 @@ PR286 已有下列回归。表中链接固定到核查时已推送的 [d36b3f07]
 PR286 分别测试了[调度器完成回调](https://github.com/SmarTAI-2025/SmarTAI/blob/d36b3f073413112f62475ebdabf61d6be97b7b0a/backend/tests/test_programming_runner_dispatch.py)和传入替身执行器时的[部分结果恢复](https://github.com/SmarTAI-2025/SmarTAI/blob/d36b3f073413112f62475ebdabf61d6be97b7b0a/backend/tests/test_programming_run_evidence.py)。本目录把批改服务接到真实调度器，直接断言重试时实际运行的输入。浏览器的保存与确认也直接写入挂载的产品 API。
 
 Mac 本地在候选 `062c3e7e2cfcb1f2954ca252b86f06022ad4af70` 首次完成6/6，自审后在 `00c98a5ebc55df82a19a9da9d9616e72b4e619fc` 再次完成6/6，包含学生源码 `.py` 上传。Fibonacci 源码与 U1 `c1c36025` 的 `S01_fib_correct.py` 逐字节相同。旧候选 `0e7f451ec42f83b0c9148844df6f7f336dd8efff` 的负例仍能触发断言：重试重复运行了已通过的 `[2,3]`。更早版本的格式结果及模拟页面证据保留在当时的记录中。实际模型调用和真实 OCI 调用均为0。
+
+
+## 额外边界的红黄复核
+
+对包含 #301 的候选可选运行 `python "$U2/accept.py" "$CANDIDATE" --only boundary`。同一份学生源码通过教师用例，额外输入 -1 经教师标答和学生程序复跑产生差异。给满分时检查实际 Chromium 中的黄色队列、教师可发布；模型扣分时检查红色队列、后台禁止发布。两者都从真实作答上传口经过 SQLite，详情中核对同一额外输入和预期值。默认命令仍复测原有六个场景。

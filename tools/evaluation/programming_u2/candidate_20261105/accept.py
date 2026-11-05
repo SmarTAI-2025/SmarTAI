@@ -12,7 +12,7 @@ import tempfile
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("candidate", type=Path)
-    parser.add_argument("--only", choices=("retry", "browser"))
+    parser.add_argument("--only", choices=("retry", "browser", "boundary"))
     args = parser.parse_args()
     if not __debug__:
         parser.error("run with Python assertions enabled")
@@ -48,14 +48,14 @@ def main():
                 raise RuntimeError("U2 denied external DNS")
 
         sys.addaudithook(local_only)
-        if args.only != "browser":
+        if args.only in (None, "retry"):
             from retry_cases import verify_retry
             for interruption in ("second_case_failure", "cancel_after_last"):
                 asyncio.run(verify_retry(interruption))
                 print(f"PASS retry/{interruption}", flush=True)
         if args.only != "retry":
             from browser_flow import verify_browser
-            verify_browser(candidate)
+            verify_browser(candidate, boundary=args.only == "boundary")
         assert not denied, denied
 
 
