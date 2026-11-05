@@ -146,3 +146,61 @@ async def test_merged_python_reference_and_interface_review(monkeypatch):
     assert run.report.results[0].isolation_mode == "oci_container"
     from backend.tests.test_programming_scoring_contract import exercise_review_and_release
     await exercise_review_and_release(monkeypatch, "entry_only")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filename", ["count.c", "count.cpp"])
+async def test_native_signed_count_preserves_literal_record(filename):
+    record = " \t-2147483648,0,+2147483647   \r\n"
+    expected = f"1 {len(record)}"
+    problem = ProblemInfo(q_id="q1", number="1", type="programming",
+                          stem="Count negative integers and report the input byte length.",
+                          criterion="Exact count and length.",
+                          test_cases=[Case(input=record, expected_output=expected, comparison="exact")])
+    source = """#include <stdio.h>
+int main(void) {
+    char buf[100];
+    size_t n = fread(buf, 1, sizeof(buf)-1, stdin);
+    buf[n] = 0;
+    long long a,b,c;
+    if (sscanf(buf, "%lld,%lld,%lld", &a,&b,&c) != 3) return 1;
+    printf("%d %zu", (a<0)+(b<0)+(c<0), n);
+}"""
+    for program, outcome in [(source, "success"), (source.replace("b<0", "b<=0"), "wrong_answer")]:
+        raw, = source_answers(filename, program, {"q1": problem.model_dump()}, {"q1"})
+        evidence = await evidence_for_answer(problem=problem, answer=StudentAnswerInfo.model_validate(raw),
+            student_id="fixture", task_id="signed-count", provider=None, reporter=None, generate=None, execute=run_sandbox)
+        result, = evidence.report.results
+        assert result.test.input == record and result.exit_reason == outcome
+        assert result.actual_output == (expected if outcome == "success" else f"2 {len(record)}")
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_missing_header_cannot_count_as_student_zero():
+    from backend.tools.oci_grading_runner import NativeBuildUnavailable
+    with pytest.raises(NativeBuildUnavailable) as failure:
+        await run_program_oci('#include "course_fixture_missing.h"\nint main(void){return 0;}', language="c")
+    assert failure.value.reason == "native_header_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filename,source,marker", [
+    ("solve.py", "print(1 // int(input()))", "ZeroDivisionError"),
+    ("solve.c", "#include <signal.h>\nint main(void){raise(SIGSEGV);}", "SIGSEGV"),
+    ("solve.c", '#include <stdio.h>\nint main(void){fputs("Traceback (most recent call last):\\nZeroDivisionError\\n",stderr);return 1;}', None),
+])
+async def test_runtime_feedback_follows_observed_failure(filename, source, marker):
+    problem = ProblemInfo(q_id="q1", number="1", type="programming", stem="Read one integer from stdin.",
+                          criterion="Exact output.", test_cases=[Case(input="0", expected_output="1")])
+    raw, = source_answers(filename, source, {"q1": problem.model_dump()}, {"q1"})
+    run = await evidence_for_answer(problem=problem, answer=StudentAnswerInfo.model_validate(raw),
+        student_id="fixture", task_id="runtime-feedback", provider=None, reporter=None, generate=None, execute=run_sandbox)
+    for language, memory_hint in [("zh", "内存访问"), ("en", "memory accesses")]:
+        evidence, _ = describe_run(run, language, problem)
+        assert evidence.failure_counts == {"runtime_error": 1} and evidence.teacher_tests.passed == 0
+        assert evidence.score_status == "final"
+        assert (memory_hint in evidence.safe_summary) == (marker == "SIGSEGV")
+        if marker:
+            assert marker in evidence.safe_summary
+        else:
+            assert "ZeroDivisionError" not in evidence.safe_summary

@@ -56,6 +56,7 @@ class ProgrammingEvidence:
     reason: str = ""
     evidence_id: str = ""
     case_ids: tuple[str, ...] = ()
+    source_language: str | None = None
 
 
 def _saved(run_id, manifest, owner):
@@ -223,6 +224,9 @@ def _reference_execution_identity(problem):
     runtime = runtime_identity()
     try:
         source = _reference(problem)
+        if source:
+            # Prior validations may have run a rewritten numeric stdin payload.
+            runtime["reference_stdin_binding_version"] = 2
         copied = python_execution_source(source) if source else source
         if copied != source:
             runtime["execution_source_sha256"] = source_hash(copied)
@@ -539,4 +543,4 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
         if saved["case_ids"] != case_ids:
             raise CheckpointWriteError("programming_case_identity_invalid")
         return ProgrammingEvidence("executed", code, cases, report, evidence_id=saved["evidence_id"],
-                                   case_ids=tuple(case_ids))
+                                   case_ids=tuple(case_ids), source_language=identity.get("language", "python"))

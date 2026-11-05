@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import signal
 from collections import Counter
 
 from backend.models import ProblemInfo, ProgrammingEvidence, ProgrammingTestCounts
@@ -26,6 +27,7 @@ _STUDENT_FAILURES = {
 # and exception strings stay out of public text.
 _UNGRADED_REASONS = {
     "native_standard_unsupported": ("本题要求的语言标准超出 C11 / C++17 支持范围，请按题目要求人工复核。", "The requested standard is outside C11 / C++17. Review the submission using the required standard."),
+    "native_header_unavailable": ("找不到所需头文件，请核对源码依赖及运行镜像后重试。", "A required header is missing. Check the submission dependencies and runner image, then retry."),
     "native_main_required": ("请教师复核函数片段，或提交含 main 的单文件标准输入程序。", "Review the function fragment or submit one stdin program with main."),
     "toolchain_unavailable": ("请管理员修复镜像中的编译器、头文件或链接器，再重试。", "Ask the administrator to repair the compiler, headers or linker in the image, then retry."),
     "native_runner_unavailable": ("请管理员检查隔离运行时和镜像，再重试。", "Ask the administrator to check the OCI runtime and image, then retry."),
@@ -83,7 +85,7 @@ def _short(value: str, limit=140):
     return value if len(value) <= limit else value[:limit - 1] + "…"
 
 
-def _case_detail(case_id, case_label, case, result, reason):
+def _case_detail(case_id, case_label, case, result, reason, *, python_trace=False):
     detail = {"case_id": case_id, "case_label": case_label, "source": case.source, "outcome": reason}
     expected = case.expected_return if case.function_name else case.expected_output
     if case.function_name:
@@ -103,11 +105,20 @@ def _case_detail(case_id, case_label, case, result, reason):
                 detail.update(diagnostic=location[1], line=int(location[2]))
         elif reason == "link_error" and result.error in {"unresolved_symbol", "duplicate_symbol"}:
             detail["diagnostic"] = result.error
-        if result.error:
+        if python_trace and result.error:
             last_line = result.error.strip().splitlines()[-1:]
             match = re.match(r"([A-Za-z]{1,32}(?:Error|Exception))\b", last_line[0]) if last_line else None
             if match:
                 detail["error_type"] = match[1]
+        if reason == "runtime_error":
+            if result.termination_signal == signal.SIGSEGV:
+                detail["diagnostic"] = "sigsegv"
+            elif (result.process_exit_code == 1 and not result.stderr_truncated
+                  and (result.error or "").startswith("Traceback (most recent call last):")
+                  and detail.get("error_type") == "ZeroDivisionError"):
+                # Child stderr identifies what was reported; it is not a
+                # trusted exception channel and cannot change the verdict.
+                detail["diagnostic"] = "reported_zero_division"
     return detail
 
 
@@ -203,7 +214,8 @@ def describe_run(run, language, problem: ProblemInfo):
             return invalid, []
         failure_counts[reason] += 1
         key = (reason, case.source)
-        detail = _case_detail(case_id, case_label, case, row, reason)
+        detail = _case_detail(case_id, case_label, case, row, reason,
+                              python_trace=getattr(run, "source_language", None) == "python")
         detail["case_number"] = index + 1
         (repeated if key in seen else representatives).append(detail)
         seen.add(key)
@@ -222,10 +234,16 @@ def describe_run(run, language, problem: ProblemInfo):
             "compile_error": ("编译失败，请检查语法、类型和头文件。", "Compilation failed. Check syntax, types and headers."),
             "link_error": ("链接失败，请在同一文件中定义引用的函数。", "Linking failed. Define the referenced symbols in this file."),
             "wrong_answer": ("输出不符，请对照该用例的预期值。", "Output differs. Compare it with the expected value for this case."),
-            "runtime_error": ("程序异常退出，请检查内存访问和退出状态。", "The program exited abnormally. Check memory accesses and exit status."),
+            "runtime_error": ("程序异常退出，请用此用例的输入复现错误。", "The program exited abnormally. Reproduce the error with this test input."),
             "timeout": ("运行超时，请检查循环终止条件和复杂度。", "Execution timed out. Check loop termination and complexity."),
         }
         for detail in representatives:
+            if detail.get("diagnostic") == "sigsegv":
+                hints["runtime_error"] = ("进程收到 SIGSEGV，请用此输入检查内存访问。",
+                                          "The process received SIGSEGV. Check memory accesses with this input.")
+            elif detail.get("diagnostic") == "reported_zero_division":
+                hints["runtime_error"] = ("错误输出报告 ZeroDivisionError，请用此输入检查除数。",
+                                          "The error output reported ZeroDivisionError. Check the divisor with this input.")
             if detail.get("line"):
                 action = {
                     "missing_semicolon": ("检查此处及上一行末尾的分号。", "Check for a missing semicolon here or on the preceding line."),

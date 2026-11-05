@@ -388,3 +388,14 @@ def test_syntax_error_uses_only_an_independently_validated_stdin_interface():
     for reference in (None, "def add(x): return x"):
         with pytest.raises(ValueError):
             bind_programming_cases(stem, cases, student, validated_reference=reference)
+
+
+@pytest.mark.parametrize("stem,value", [
+    ("Count the integer fields on stdin.", "-2,0,+3"),
+    ("Read space-separated integers from stdin.", "\t-2,0,+3 \r\n"),
+    ("Hash every byte, including whitespace, in a list of integers.", "-2,0,+3"),
+])
+def test_stdin_literal_separators_survive_binding(stem, value):
+    from backend.services.programming_test_contract import bind_stdin_cases
+    row, = bind_stdin_cases(stem, [TestCase(input=value, expected_output="x")])
+    assert row.input == value
