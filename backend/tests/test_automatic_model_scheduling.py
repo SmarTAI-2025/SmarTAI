@@ -723,10 +723,32 @@ async def test_admission_wait_does_not_consume_network_timeout(scheduler, clock,
     from backend.config import settings
     from backend.services.execution_control import run_controlled
     monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
-    monkeypatch.setattr(settings, "llm_timeout", 0.4 if grading else 0.12)
+    admission_timeout, response_timeout = (60 if grading else 30), 30
+    monkeypatch.setattr(settings, "llm_timeout", admission_timeout)
+    # Advance the real event loop's timers without wall-clock sleeps. Generous
+    # margins keep machine load out of the assertion, while the simulated queue
+    # plus response still exceeds the original admission deadline.
+    loop = asyncio.get_running_loop()
+    real_time, elapsed = loop.time, 0
+    monkeypatch.setattr(loop, "time", lambda: real_time() + elapsed)
+    deadlines = []
+    real_timeout = asyncio.timeout
+    def timeout(delay):
+        deadline = real_timeout(delay)
+        if delay == admission_timeout:
+            deadlines.append(deadline)
+        return deadline
+    monkeypatch.setattr(asyncio, "timeout", timeout)
+    queued, responding, finish_response = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    try_acquire = host.try_acquire
+    def acquire(limit):
+        queued.set()
+        return try_acquire(limit)
+    monkeypatch.setattr(host, "try_acquire", acquire)
     host.capacity = 0
     async def invoke(*args, **kwargs):
-        await asyncio.sleep(0.075)
+        responding.set()
+        await finish_response.wait()
         return SimpleNamespace(content="ok")
     if grading:
         provider = SafeRelayProvider(ProviderConfig(provider_type="openai", model="paced", api_key="fake",
@@ -744,13 +766,36 @@ async def test_admission_wait_does_not_consume_network_timeout(scheduler, clock,
         provider._client = SimpleNamespace(ainvoke=invoke)
     request = provider.ainvoke([HumanMessage(content="test")])
     if grading:
-        request = run_controlled("grading-queue", lambda: False, request, response_timeout_seconds=0.12)
+        request = run_controlled("grading-queue", lambda: False, request,
+                                 response_timeout_seconds=response_timeout)
     task = asyncio.create_task(request)
-    await asyncio.sleep(0.075)
-    host.capacity = 1
-    scheduler.wake.set()
-    assert (await task).content == "ok"
-    assert host.active == 0
+    try:
+        await asyncio.wait_for(queued.wait(), timeout=5)
+        assert scheduler.pending and host.active == 0 and not responding.is_set()
+        assert len(deadlines) == 1
+        deadline = deadlines[0]
+        admission_deadline = deadline.when()
+        elapsed += admission_timeout - 10
+        clock.advance(admission_timeout - 10, scheduler)
+        assert 0 < admission_deadline - loop.time() < response_timeout
+        host.capacity = 1
+        scheduler.wake.set()
+        await asyncio.wait_for(responding.wait(), timeout=5)
+        # The response gets its own full budget, including the grading override.
+        assert response_timeout - 5 < deadline.when() - loop.time() <= response_timeout
+        elapsed += 20
+        clock.advance(20, scheduler)
+        await turns()
+        assert loop.time() > admission_deadline
+        assert loop.time() < deadline.when() and not task.done()
+        finish_response.set()
+        assert (await asyncio.wait_for(task, timeout=5)).content == "ok"
+        assert scheduler.active == scheduler.memory_active == host.active == 0
+    finally:
+        finish_response.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 def test_grading_response_timeout_defaults_to_300_and_is_configurable(monkeypatch):
