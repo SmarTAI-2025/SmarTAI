@@ -601,7 +601,54 @@ def _verify_equations(sp, req, symbols, constraints, real, trees):
     return result("unknown", "The candidate root sets could not be compared exactly.")
 
 
+_NO_UNITS = "No physical units were asserted or checked."
+_SMALL_INTEGER = r"(0|[1-9][0-9]{0,8})"
+_SMALL_ARITHMETIC = re.compile(_SMALL_INTEGER + r"(?: *([+*-]) *" + _SMALL_INTEGER + r")?")
+
+
+def _expression_conditions():
+    return [
+        "Evidence applies only to this requested relation and supplied conditions.",
+        "The caller must check the conditions against the original problem.",
+        "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+    ]
+
+
+def _exact_constant(equal, conditions, details):
+    return MathVerificationEvidence(
+        status="supported" if equal else "refuted", method="exact",
+        reason=("The finite constant expressions are exactly equal." if equal else
+                "The constants are not exactly equal; approximation was not permitted."),
+        conditions=conditions, details=details,
+    )
+
+
+def _small_integer_value(text: str) -> int | None:
+    """Evaluate a literal or one bounded integer operation inside the worker."""
+    match = _SMALL_ARITHMETIC.fullmatch(text)
+    if match is None:
+        return None
+    first, operator, second = match.groups()
+    left = int(first)
+    if operator is None:
+        return left
+    right = int(second)
+    if operator == "+":
+        return left + right
+    if operator == "-":
+        return left - right
+    return left * right
+
+
 def _verify_sync(req):
+    # Only default exact comparisons can skip symbolic context and unit checks.
+    if not req.model_dump(exclude={"student_expression", "reference_expression"}, exclude_defaults=True):
+        left = _small_integer_value(req.student_expression)
+        right = _small_integer_value(req.reference_expression)
+        if left is not None and right is not None:
+            return _exact_constant(left == right, [*_expression_conditions(), _NO_UNITS], {
+                "comparison": "equivalence", "student_domain_requirements": [], "reference_domain_requirements": [],
+            })
     import sympy as sp
 
     symbols, constraints, real = _make_context(sp, req)
@@ -613,11 +660,7 @@ def _verify_sync(req):
         parsers, (req.student_expression, req.reference_expression)
     )]
     guards = [p.guards for p in parsers]
-    conditions = [
-        "Evidence applies only to this requested relation and supplied conditions.",
-        "The caller must check the conditions against the original problem.",
-        "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
-    ]
+    conditions = _expression_conditions()
     if req.domain:
         conditions.append("Requested domain: " + req.domain)
     conditions.extend(f"{name}: {key}={value}" for name, flags in req.assumptions.items() for key, value in flags.items())
@@ -659,7 +702,7 @@ def _verify_sync(req):
         left = (a / b) * left
         conditions.append("Student magnitude converted to the reference unit; absolute tolerance is in that reference unit.")
     else:
-        conditions.append("No physical units were asserted or checked.")
+        conditions.append(_NO_UNITS)
 
     free = left.free_symbols | right.free_symbols
     # Do not erase a syntactically present unbound variable by cancellation.
@@ -674,7 +717,7 @@ def _verify_sync(req):
             return result("unknown", "domain", "The constant expressions are not both real on the requested real domain.")
         difference = sp.simplify(left - right)
         if difference == 0:
-            return result("supported", "exact", "The finite constant expressions are exactly equal.")
+            return _exact_constant(True, conditions, details)
         if req.allow_approximation:
             if req.absolute_tolerance is None and req.relative_tolerance is None:
                 return result("unknown", "numeric", "Approximation needs an explicitly supplied tolerance.")
@@ -693,7 +736,7 @@ def _verify_sync(req):
             return result("supported" if within else "refuted", "numeric",
                           "The constants meet the supplied tolerance." if within else "The constants exceed the supplied tolerance.")
         if difference.is_zero is False:
-            return result("refuted", "exact", "The constants are not exactly equal; approximation was not permitted.")
+            return _exact_constant(False, conditions, details)
         return result("unknown", "symbolic", "Exact equality could not be established.")
 
     if req.comparison == "antiderivative":
