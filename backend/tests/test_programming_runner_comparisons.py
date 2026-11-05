@@ -66,3 +66,16 @@ async def test_return_transport_preserves_python_literal_types():
     cases = [Case(function_name="pair", function_args=[], expected_return=v) for v in ("[1, 2]", "(1, 2)")]
     report = await runner.run_sandbox(code, cases)
     assert [r.passed for r in report.results] == [False, True]
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("source","arguments","reason"), [
+    ("import random\ndef helper(): return 2", [], "target_function_missing"),
+    ("from __future__ import annotations\ndef solve(xs: list[int]) -> int: return len(xs)",
+     [], "signature_mismatch"),
+    ("from random import nonexistent_u3_symbol\ndef helper(): return 2", [], "runtime_error"),
+    ("def solve(x): raise TypeError('signature_mismatch')", [1], "runtime_error"),
+    ("def solve():\n import os; os._exit(0)", [], "runtime_error"),
+])
+async def test_development_call_diagnosis_tracks_module_load(source, arguments, reason):
+    case = Case(function_name="solve", function_args=arguments, expected_return="2")
+    observed = (await runner.run_sandbox(source, [case])).results[0]
+    assert not observed.passed and observed.exit_reason == reason

@@ -10,7 +10,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import inspect
-import importlib
+import __future__
 import json
 import math
 import os
@@ -59,8 +59,12 @@ import json, os, runpy, sys
 source, target = sys.argv[1:3]
 call = json.loads(sys.stdin.read())
 namespace = runpy.run_path(source, run_name="__smartai_submission__")
-value = namespace[call["name"]](*call["args"], **call["kwargs"])
 with open(int(target) if target.isdecimal() else target, "wb") as channel:
+    # A NUL byte cannot occur unescaped in repr() of the supported values.
+    # Record lookup phase after a successful module load, before invocation.
+    channel.write(bytes([0]))
+    channel.flush()
+    value = namespace[call["name"]](*call["args"], **call["kwargs"])
     # Use JSON to reject tensors, class instances, handles and non-finite
     # floats before exposing the legacy repr-compatible comparison value.
     json.dumps(value, ensure_ascii=True, allow_nan=False)
@@ -75,38 +79,35 @@ def child_command(source, return_channel=None):
     return [sys.executable, "-I", "-B", "-c", _CALL_PROGRAM, str(source), str(return_channel)]
 
 
-def _static_failure_reason(code, call):
+def _static_failure_reason(code, call, module_loaded):
     """Inspect only the original source. Never import or evaluate a submission."""
     try:
         tree = ast.parse(code, "<submission>")
-        compile(tree, "<submission>", "exec", dont_inherit=True)
+        compiled = compile(tree, "<submission>", "exec", dont_inherit=True)
     except SyntaxError:
         return "syntax_error"
-    if call is None:
+    if call is None or not module_loaded:
         return "runtime_error"
+    annotations_deferred = bool(compiled.co_flags & __future__.annotations.compiler_flag)
 
     # Dynamic bindings, decorator side effects, imports or executable module
     # statements can change the target or fail before invocation. A phase we
     # cannot prove must not be blamed on the student's declared signature.
     functions = {}
-    safe_modules = {"sys", "math", "operator", "itertools", "functools", "collections", "bisect",
-                    "heapq", "re", "string", "typing", "fractions", "decimal", "statistics"}
     for stmt in tree.body:
         if isinstance(stmt, ast.ImportFrom) and stmt.module == "__future__" and not stmt.level:
             continue
         if isinstance(stmt, (ast.Import, ast.ImportFrom)):
-            # Verify only known standard-library imports in this isolated
-            # inspector. An unavailable import can precede the function call.
+            # The actual harness advanced past module initialization. Check
+            # static name bindings without re-importing any student-selected
+            # module. Unknown/wildcard bindings cannot prove a missing target.
             for alias in stmt.names:
                 module = alias.name if isinstance(stmt, ast.Import) else stmt.module
-                if (module not in safe_modules or getattr(stmt, "level", 0)
-                        or alias.name == "*" or (alias.asname or alias.name) == call["name"]):
+                if (not module or module.split(".", 1)[0] not in sys.stdlib_module_names
+                        or getattr(stmt, "level", 0) or alias.name == "*"):
                     return "runtime_error"
-                try:
-                    imported = importlib.import_module(module)
-                    if isinstance(stmt, ast.ImportFrom) and not hasattr(imported, alias.name):
-                        return "runtime_error"
-                except ImportError:
+                bound = alias.asname or (module.split(".", 1)[0] if isinstance(stmt, ast.Import) else alias.name)
+                if bound == call["name"]:
                     return "runtime_error"
             continue
         if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
@@ -122,7 +123,7 @@ def _static_failure_reason(code, call):
         declared += [arg for arg in (args.vararg, args.kwarg) if arg]
         annotations = [stmt.returns, *(arg.annotation for arg in declared)]
         builtins = {"int", "float", "complex", "str", "bool", "list", "tuple", "dict", "set", "bytes"}
-        if any(annotation is not None and not isinstance(annotation, ast.Constant)
+        if not annotations_deferred and any(annotation is not None and not isinstance(annotation, ast.Constant)
                and not (isinstance(annotation, ast.Name) and annotation.id in builtins) for annotation in annotations):
             return "runtime_error"
         if any(not isinstance(value, ast.Constant) for value in (*args.defaults, *args.kw_defaults) if value is not None):
@@ -154,7 +155,7 @@ def _static_failure_reason(code, call):
 _DIAGNOSES = {"syntax_error", "target_function_missing", "signature_mismatch", "runtime_error"}
 
 
-def _diagnose_failure(code, call):
+def _diagnose_failure(code, call, module_loaded=False):
     # Only failed programming cases pay for this bounded compiler check. A
     # separate trusted process receives the original request through stdin,
     # never stdout, traceback or a path writable by the student's process.
@@ -162,7 +163,7 @@ def _diagnose_failure(code, call):
         return "runtime_error"
     try:
         check = subprocess.run([sys.executable, "-I", "-B", __file__, "--diagnose"],
-                               input=json.dumps([code, call]).encode(), capture_output=True,
+                               input=json.dumps([code, call, module_loaded]).encode(), capture_output=True,
                                timeout=1.5, env=_SAFE_CHILD_ENV)
         reason = check.stdout.decode("ascii")
     except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -321,6 +322,15 @@ def _read_output(stream, limit):
     return text, truncated or len(data) > limit * 4
 
 
+def split_function_result(value):
+    # A marker alone (e.g. os._exit(0) inside a function) is not a return.
+    # Student code can write the private value channel: phase alone is never
+    # proof. The separate inspector must independently verify a declarative
+    # source and an incompatible binding before reporting an entry error.
+    loaded = value is not None and value.startswith("\0")
+    return loaded, value[1:] if loaded else None
+
+
 def _sanitize(value: str, limit: int) -> tuple[str, bool]:
     value = value.replace("/work/main.py", "<runner>/main.py")
     value = value.replace("/input/request.json", "<runner>/request.json")
@@ -423,7 +433,8 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR, track_res
             after = _cgroup_events() if track_resources else (None, None)
             stdout, stdout_truncated = _read_output(stdout_file, max_output)
             stderr, stderr_truncated = _read_output(stderr_file, max_output)
-            return_value, return_truncated = _read_output(return_file, max_output) if return_file is not None else (None, False)
+            returned, return_truncated = _read_output(return_file, max_output + 1) if return_file is not None else (None, False)
+            module_loaded, return_value = split_function_result(returned)
         # Student stdout is comparison data; sanitizing path-like literals
         # before comparison changes correct answers. Keep diagnostics separate.
         if not request["bind_request"]:
@@ -473,7 +484,7 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR, track_res
             return case_result(exit_reason=resource_failure, resource_status=resource_failure + "_exceeded",
                                stdout=stdout, stderr=stderr, stdout_truncated=stdout_truncated,
                                stderr_truncated=stderr_truncated, duration_ms=(time.perf_counter() - started_at) * 1000)
-        if returncode == 0 and return_value != "":
+        if returncode == 0 and (not request["function_call"] or return_value):
             result = case_result(
                 exit_reason="success",
                 stdout=stdout,
@@ -489,7 +500,7 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR, track_res
                                stderr="The process was killed; resource attribution is unavailable.",
                                duration_ms=(time.perf_counter() - started_at) * 1000)
         reason = (
-            _diagnose_failure(request["code"], payload.get("function_call"))
+            _diagnose_failure(request["code"], payload.get("function_call"), module_loaded)
             if request["bind_request"] and returncode is not None and returncode > 0 else "runtime_error"
         )
         return case_result(
@@ -532,8 +543,8 @@ def main(argv: list[str] | None = None) -> int:
             if ctypes.CDLL(None).prctl(4, 0, 0, 0, 0) != 0:
                 return 1
             _apply_child_limits(128, 1, 8192)
-        code, call = json.loads(sys.stdin.buffer.read(MAX_REQUEST_BYTES * 6 + 1))
-        sys.stdout.write(_static_failure_reason(code, call))
+        code, call, module_loaded = json.loads(sys.stdin.buffer.read(MAX_REQUEST_BYTES * 6 + 1))
+        sys.stdout.write(_static_failure_reason(code, call, module_loaded))
         return 0
     if len(argv) != 1:
         response = _result(

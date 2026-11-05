@@ -53,7 +53,7 @@ from backend.config import settings
 from backend.models import TestCase
 from backend.tools.sandbox_runtime import get_sandbox_semaphore
 
-from tools.runner_spike.worker import child_command, request_digest, _diagnose_failure
+from tools.runner_spike.worker import child_command, request_digest, _diagnose_failure, split_function_result
 
 logger = logging.getLogger(__name__)
 
@@ -209,12 +209,14 @@ async def run_python_subprocess(
                     max_output_chars,
                 )
             return_value = None
+            module_loaded = False
             return_truncated = False
-            if return_path and proc.returncode == 0 and os.path.isfile(return_path):
+            if return_path and os.path.isfile(return_path):
                 limit = max_output_chars or 8192
                 with open(return_path, "rb") as returned:
-                    value = returned.read(limit * 4 + 1).decode(errors="replace")
-                return_value, return_truncated = _truncate_output(value, limit)
+                    value = returned.read((limit + 1) * 4 + 1).decode(errors="replace")
+                value, return_truncated = _truncate_output(value, limit + 1)
+                module_loaded, return_value = split_function_result(value)
             output_limited = stdout_truncated or stderr_truncated or return_truncated
             if output_limited:
                 limit_error = f"Output limit exceeded ({max_output_chars} chars)"
@@ -228,7 +230,7 @@ async def run_python_subprocess(
             if output_limited:
                 reason = "output_limit"
             elif proc.returncode or missing_return:
-                reason = (await asyncio.to_thread(_diagnose_failure, code, function_call)
+                reason = (await asyncio.to_thread(_diagnose_failure, code, function_call, module_loaded)
                           if bind_request and proc.returncode > 0 else "runtime_error")
 
             return TestResult(
