@@ -482,34 +482,53 @@ async def test_actual_math_tool_evidence_is_consumed_before_final_ledger(
 
 
 @pytest.mark.asyncio
-async def test_late_tool_timeout_keeps_earlier_completed_evidence(monkeypatch, provider):
+async def test_middle_timeout_retains_grade_and_evidence_from_earlier_and_later_checks(monkeypatch, provider):
     import asyncio
     from backend.tools import math_verification
-    monkeypatch.setattr(grading, "VERIFICATION_BUDGET_SECONDS", .03)
-    calls = 0
 
-    async def verify(_):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return math_verification.MathVerificationEvidence(
-                status="supported", method="exact", reason="First check completed.")
-        await asyncio.sleep(60)
-
-    # Exercise the real admission/budget wrapper while controlling worker time.
-    monkeypatch.setattr(math_verification, "_run_worker", verify)
     p, a, plan = problem(), answer(), plan_for()
     draft = assessment(checks=[grading.Verification(claim_id="s1", context_quote=p.stem,
-        request={"student_expression": "41", "reference_expression": "42"}) for _ in range(3)])
-    evidence = await CalculationSkill(provider)._verify(draft, p, a, plan)
-    assert [entry["status"] for entry in evidence] == ["supported", "unknown", "unknown"]
-    assert calls == 2  # No third launch after the total budget expires.
+        request={"student_expression": "41", "reference_expression": "42", "comparison": mode})
+        for mode in ("equivalence", "numeric")])
+    # The scheduler also checks the student's own multiplication against their result.
+    reviewed = draft.model_copy(update={"evidence_judgments": [
+        grading.EvidenceJudgment(evidence_id=eid, applicability="applies", reason="Incorrect product.")
+        for eid in ("v1", "v3")
+    ]})
+    model = AsyncMock(side_effect=[(draft, response()), (reviewed, response())])
+    monkeypatch.setattr(grading, "structured_llm_call", model)
+
+    with manual_clock(monkeypatch) as clock:
+        calls = 0
+
+        async def verify(_):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                clock.now += 31  # One second past the independent execution deadline.
+                await asyncio.Event().wait()  # The real per-check timeout cancels this call.
+            return math_verification.MathVerificationEvidence(
+                status="refuted", method="exact", reason=f"Completed check {calls}.")
+
+        monkeypatch.setattr(math_verification, "_run_worker", verify)
+        with math_plans_context({"q1": plan}), grading.math_review_scope():
+            result = await CalculationSkill(provider).grade(p, a)
+
+    assert result.score == 8 and not result.error_kind
+    assert result.comment == draft.comment
+    assert sum(step.score for step in result.steps) == result.score
+    assert model.await_count == 2
+    evidence = grading.read_math_trace(result)["evidence"]
+
+    assert [entry["method"] for entry in evidence] == ["exact", "timeout", "exact"]
+    assert [entry["status"] for entry in evidence] == ["refuted", "unknown", "refuted"]
+    assert [evidence[i]["reason"] for i in (0, 2)] == ["Completed check 1.", "Completed check 3."]
 
 
 @pytest.mark.asyncio
-async def test_verification_queue_does_not_exhaust_call_or_group_budget(monkeypatch, provider):
+async def test_verification_queue_does_not_consume_check_deadline(monkeypatch, provider):
     import asyncio
-    from backend.tools import sandbox_runtime
+    from backend.tools import math_verification, sandbox_runtime
 
     loop = asyncio.get_running_loop()
     # Only explicit clock advances spend budget, never host scheduling latency.
@@ -546,8 +565,8 @@ async def test_verification_queue_does_not_exhaust_call_or_group_budget(monkeypa
             try:
                 done, _ = await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
                 assert waiter in done, "Verification returned without waiting for admission"
-                # Cross all production deadlines while admission is still blocked.
-                clock.now += grading.VERIFICATION_BUDGET_SECONDS + 1
+                # Cross the production deadline while admission is still blocked.
+                clock.now += math_verification.WALL_SECONDS + 1
                 checkpoint = asyncio.Event()
                 loop.call_later(0, checkpoint.set)
                 await checkpoint.wait()  # Dispatch any incorrectly armed queue timeout.

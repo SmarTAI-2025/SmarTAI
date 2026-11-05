@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-from dataclasses import dataclass
 import math
 import os
 from pathlib import Path
@@ -26,9 +25,8 @@ MAX_AST_NODES = 256
 MAX_AST_DEPTH = 32
 MAX_SYMBOLS = 8
 MAX_POWER = 128
-WALL_SECONDS = 5.0
-CALL_WALL_SECONDS = 12.0
-CPU_SECONDS = 4
+WALL_SECONDS = 30.0
+CPU_SECONDS = 16
 MAX_OUTPUT_BYTES = 32768
 _CONSTANT_NAMES = {"pi", "E", "e", "I", "i"}
 _INTEGRATION_CONSTANTS = {"C", "c", "C1", "C2", "c1", "c2"}
@@ -74,16 +72,7 @@ def _unknown(reason: str, *, method: str = "unavailable") -> MathVerificationEvi
     return MathVerificationEvidence(status="unknown", method=method, reason=reason)
 
 
-@dataclass
-class VerificationBudget:
-    """Active wall time shared by sequential checks, excluding slot waiting."""
-
-    remaining_seconds: float
-
-
-async def verify_math(
-    request: MathVerificationRequest, *, budget: VerificationBudget | None = None,
-) -> MathVerificationEvidence:
+async def verify_math(request: MathVerificationRequest) -> MathVerificationEvidence:
     """Wait for capacity, then run a bounded fixed worker and reap it.
 
     No shell, eval, sympify(string), generated program, or model is involved.
@@ -97,24 +86,12 @@ async def verify_math(
         request = MathVerificationRequest.model_validate(request.model_dump())
     except Exception:
         return _unknown("Invalid mathematical verification request.", method="input")
-    if budget is None:
-        budget = VerificationBudget(CALL_WALL_SECONDS)
     try:
-        if budget.remaining_seconds <= 0:
-            raise TimeoutError
-        # Admission is cancellable, but consumes neither the per-call nor the
-        # group execution budget. Hold the slot until cleanup has completed.
+        # Each admitted check gets its own deadline, including worker startup.
+        # Keep the slot until the child has been reaped, including on cancellation.
         async with get_sandbox_semaphore():
-            started = asyncio.get_running_loop().time()
-            try:
-                if budget.remaining_seconds <= 0:
-                    raise TimeoutError
-                async with asyncio.timeout(min(CALL_WALL_SECONDS, budget.remaining_seconds)):
-                    return await _run_worker(request)
-            finally:
-                budget.remaining_seconds = max(
-                    0.0, budget.remaining_seconds - (asyncio.get_running_loop().time() - started),
-                )
+            async with asyncio.timeout(WALL_SECONDS):
+                return await _run_worker(request)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -139,8 +116,7 @@ async def _run_worker(request: MathVerificationRequest) -> MathVerificationEvide
     ))
     try:
         process = await asyncio.shield(launch)
-        async with asyncio.timeout(WALL_SECONDS):
-            output, _ = await process.communicate(request.model_dump_json().encode())
+        output, _ = await process.communicate(request.model_dump_json().encode())
         if process.returncode != 0 or len(output) > MAX_OUTPUT_BYTES:
             return _unknown("Worker failed or exceeded its resource limit.", method="resource_limit")
         return MathVerificationEvidence.model_validate_json(output)

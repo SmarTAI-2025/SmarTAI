@@ -1,4 +1,4 @@
-"""Admission budgets and real-worker cleanup, with controlled short-clock probes."""
+"""Admission, per-check deadlines and real-worker cleanup, with controlled short-clock probes."""
 import asyncio
 import json
 from types import SimpleNamespace
@@ -29,16 +29,23 @@ async def test_queued_real_math_worker_gets_full_execution_window(monkeypatch):
         return child
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+    waiting = asyncio.Event()
+    acquire = slots.acquire
+
+    async def observed_acquire():
+        waiting.set()
+        return await acquire()
+
+    monkeypatch.setattr(slots, "acquire", observed_acquire)
     task = asyncio.create_task(mv.verify_math(request()))
     try:
-        # Actual default 5s limit, actual 8-slot gate, actual arithmetic worker.
-        await asyncio.sleep(6)
+        await asyncio.wait_for(waiting.wait(), 5)
         queued = not task.done()
         assert not children
     finally:
         for _ in range(sandbox_runtime.DEFAULT_SANDBOX_CONCURRENCY):
             slots.release()
-    result = await asyncio.wait_for(task, 10)
+    result = await asyncio.wait_for(task, mv.WALL_SECONDS + 5)
     assert queued, result
     assert result.status == "supported", result
     assert len(children) == 1 and children[0].returncode == 0
@@ -46,25 +53,31 @@ async def test_queued_real_math_worker_gets_full_execution_window(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_slow_process_creation_does_not_spend_calculation_window(monkeypatch):
+@pytest.mark.parametrize(("result_seconds", "expected"), [(13, "supported"), (15, "unknown")])
+async def test_startup_and_result_share_one_deadline(monkeypatch, result_seconds, expected):
     loop = asyncio.get_running_loop()
     with manual_clock(monkeypatch) as clock:
         payload = json.dumps({"status": "supported", "method": "fixture", "reason": "ready"})
-        child = SimpleNamespace(returncode=0,
-            communicate=AsyncMock(return_value=(payload.encode(), b"")),
-            wait=AsyncMock(return_value=0))
+
+        async def communicate(data=None):
+            if data is not None:
+                clock.now += result_seconds
+                checkpoint = asyncio.Event()
+                loop.call_later(0, checkpoint.set)
+                await checkpoint.wait()
+            return payload.encode(), b""
+
+        child = SimpleNamespace(returncode=0, communicate=communicate, wait=AsyncMock(return_value=0))
 
         async def launch(*args, **kwargs):
-            # Exceed the production calculation window without real-time sleeps.
-            clock.now += mv.WALL_SECONDS + 1
-            checkpoint = asyncio.Event()
-            loop.call_later(0, checkpoint.set)
-            await checkpoint.wait()
+            clock.now += 16
             return child
 
         monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
         result = await mv.verify_math(request())
-        assert result.status == "supported", result
+        assert result.status == expected
+        if expected == "unknown":
+            assert result.method == "timeout"
         child.wait.assert_awaited_once()
 
 
@@ -161,31 +174,30 @@ async def test_slot_is_retained_through_reaping_and_repeated_cancel(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_cancel_while_queued_never_launches_or_spends_budget(monkeypatch):
+async def test_cancel_while_queued_never_launches(monkeypatch):
     slots = asyncio.Semaphore(0)
     monkeypatch.setattr(sandbox_runtime, "_SEMAPHORE", slots)
-    budget = mv.VerificationBudget(20)
 
     async def forbidden(*args, **kwargs):
         pytest.fail("Cancelled queue entry must not launch a worker")
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", forbidden)
-    task = asyncio.create_task(mv.verify_math(request(), budget=budget))
+    task = asyncio.create_task(mv.verify_math(request()))
     await asyncio.sleep(0)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert budget.remaining_seconds == 20 and slots._value == 0
+    assert slots._value == 0
     assert not slots._waiters
 
 
 @pytest.mark.asyncio
-async def test_startup_timeout_reaps_late_child_and_exhausted_budget_never_queues(monkeypatch):
+async def test_startup_timeout_reaps_late_child(monkeypatch):
     slots = asyncio.Semaphore(1)
     monkeypatch.setattr(sandbox_runtime, "_SEMAPHORE", slots)
     original = asyncio.create_subprocess_exec
     children = []
-    budget = mv.VerificationBudget(.05)
+    monkeypatch.setattr(mv, "WALL_SECONDS", .05)
 
     async def launch(*args, **kwargs):
         child = await original(args[0], "-I", "-c", "import time; time.sleep(60)", **kwargs)
@@ -194,25 +206,16 @@ async def test_startup_timeout_reaps_late_child_and_exhausted_budget_never_queue
         return child
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
-    result = await asyncio.wait_for(mv.verify_math(request(), budget=budget), 3)
+    result = await asyncio.wait_for(mv.verify_math(request()), 3)
     assert result.status == "unknown" and result.method == "timeout"
     assert children[0].returncode is not None and slots._value == 1
-    assert budget.remaining_seconds == 0
-    await slots.acquire()
-    try:
-        result = await asyncio.wait_for(mv.verify_math(request(), budget=budget), .5)
-    finally:
-        slots.release()
-    assert result.status == "unknown" and result.method == "timeout"
-    assert len(children) == 1
 
 
 @pytest.mark.asyncio
-async def test_per_call_guard_stops_hang_without_spending_next_calls_budget(monkeypatch):
+async def test_timed_out_workers_are_reaped_before_the_next_call(monkeypatch):
     slots = asyncio.Semaphore(1)
     monkeypatch.setattr(sandbox_runtime, "_SEMAPHORE", slots)
-    monkeypatch.setattr(mv, "CALL_WALL_SECONDS", .1)
-    monkeypatch.setattr(mv, "WALL_SECONDS", 5)
+    monkeypatch.setattr(mv, "WALL_SECONDS", .1)
     original = asyncio.create_subprocess_exec
     children = []
 
@@ -222,11 +225,9 @@ async def test_per_call_guard_stops_hang_without_spending_next_calls_budget(monk
         return child
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
-    budget = mv.VerificationBudget(2)
     for _ in range(2):
-        result = await asyncio.wait_for(mv.verify_math(request(), budget=budget), 3)
+        result = await asyncio.wait_for(mv.verify_math(request()), 3)
         assert result.status == "unknown" and result.method == "timeout"
-    assert 0 < budget.remaining_seconds < 1.9
     assert len(children) == 2 and all(child.returncode is not None for child in children)
     assert slots._value == 1
 
@@ -279,7 +280,7 @@ async def test_cleanup_failure_does_not_swallow_parent_cancellation(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_parallel_checks_respect_shared_capacity_and_independent_budgets(monkeypatch):
+async def test_parallel_checks_respect_shared_capacity(monkeypatch):
     slots = asyncio.Semaphore(2)
     monkeypatch.setattr(sandbox_runtime, "_SEMAPHORE", slots)
     original = asyncio.create_subprocess_exec
@@ -301,12 +302,9 @@ async def test_parallel_checks_respect_shared_capacity_and_independent_budgets(m
         return child
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
-    # Real processes use production budgets; tiny deadlines belong to controlled probes.
-    budgets = [mv.VerificationBudget(mv.CALL_WALL_SECONDS) for _ in range(8)]
     results = await asyncio.wait_for(asyncio.gather(*(
-        mv.verify_math(request(), budget=budget) for budget in budgets
-    )), len(budgets) * mv.CALL_WALL_SECONDS)
+        mv.verify_math(request()) for _ in range(8)
+    )), 8 * mv.WALL_SECONDS)
     assert all(result.status == "supported" for result in results), results
     assert peak == 2 and slots._value == 2
     assert all(child.returncode == 0 for child in children)
-    assert all(0 < budget.remaining_seconds < mv.CALL_WALL_SECONDS for budget in budgets)
