@@ -151,9 +151,13 @@ async def run_multi_expert(**kwargs) -> Correction:
     from backend.models import is_programming_question_type
     if is_programming_question_type(kwargs["problem"].type):
         from backend.services.programming_runs import programming_run
-        with programming_run(kwargs["registry"], kwargs.get("grading_setup")):
-            correction = await _run_multi_expert(**kwargs)
-        return _project_programming_result(correction, kwargs.get("language", "en"))
+        from backend.services.programming_partial_review import review_partial_score
+        with programming_run(kwargs["registry"], kwargs.get("grading_setup")) as state:
+            language = kwargs.get("language", "en")
+            correction = _project_programming_result(await _run_multi_expert(**kwargs), language)
+            await review_partial_score(correction, state=state, problem=kwargs["problem"], answer=kwargs["answer"],
+                                       student_id=kwargs["student_id"], language=language, reporter=kwargs.get("reporter"))
+            return correction
     with math_review_scope():
         return _apply_math_review_advisory(await _run_multi_expert(**kwargs))
 

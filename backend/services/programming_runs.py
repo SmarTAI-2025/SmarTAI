@@ -61,14 +61,18 @@ class ProgrammingEvidence:
     source_language: str | None = None
 
 
-def _saved(run_id, manifest, owner):
+def _saved(run_id, manifest, owner, *, auxiliary_events=None):
     # Failed-only manifests carry small source references. Keep large output
     # and every case observation exactly once, in the originating run.
     records = {}
     references = manifest.get("programming_artifacts") or {}
+    kinds = (PREPARED, PARTIAL, COMPLETED, AUXILIARY)
+    if auxiliary_events is not None:
+        kinds = (AUXILIARY,)
+        references = {key: ref for key, ref in references.items() if ref.get("kind") == AUXILIARY}
     source_runs = {ref["origin_run"] for ref in references.values()}
     for source in source_runs:
-        for event in grading_repository.list_events(source, actor_id=owner, messages=(PREPARED, PARTIAL, COMPLETED, AUXILIARY)):
+        for event in grading_repository.list_events(source, actor_id=owner, messages=kinds):
             row = event["payload"]
             ref = references.get(row.get("key"), {})
             if (row.get("owner") == owner and row.get("version") == VERSION
@@ -77,11 +81,24 @@ def _saved(run_id, manifest, owner):
                 records[row["key"]] = row
     if references.keys() - records.keys():
         raise CheckpointWriteError("programming_retry_evidence_missing")
-    for event in grading_repository.list_events(run_id, actor_id=owner, messages=(PREPARED, PARTIAL, COMPLETED, STARTED, AUXILIARY)):
+    current = (auxiliary_events if auxiliary_events is not None else
+               grading_repository.list_events(run_id, actor_id=owner, messages=(*kinds, STARTED)))
+    for event in current:
         row = event["payload"]
         if row.get("version") == VERSION and row.get("owner") == owner:
             records[row["key"]] = row
     return records
+
+
+def auxiliary_for_handoff(run, manifest, events):
+    """Read completed or uncertain checks under the existing stop transaction."""
+    current = [{"payload": event.payload} for event in events if event.message == AUXILIARY]
+    records = _saved(run.id, manifest, run.teacher_id, auxiliary_events=current)
+    for key, record in records.items():
+        if (record.get("kind") != AUXILIARY or record.get("assignment") != run.assignment_id
+                or record.get("key") != key or record.get("digest") != digest(record.get("value"))):
+            raise CheckpointWriteError("programming_checkpoint_identity_invalid")
+    return {key: record["value"] for key, record in records.items()}
 
 
 def artifacts_for_retry(run_id, manifest, owner):

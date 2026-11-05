@@ -34,6 +34,8 @@ def _sum_step_awards(validated):
 
 
 class ProgrammingAward(StepScore):
+    # Optional evidence is validated separately so a malformed citation cannot discard a valid score.
+    deduction_basis: object = None
     max_points: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
@@ -362,6 +364,8 @@ class ProgrammingSkill(GradingSkill):
                     steps=result.steps, raw_output=raw.content, duration_ms=raw.duration_ms,
                     programming_evidence=evidence, knowledge_citations=kb_tool.citations(chunks),
                 ), problem.max_score)
+                from backend.services.programming_partial_review import record_deduction_basis
+                record_deduction_basis(vote, result.steps, run, problem)
                 mark_teacher_case_score_review(vote, self.language)
                 if evidence.execution_status == "unsupported" and round_ai_score(vote.score, vote.max_score) == 0:
                     # Without a run, code review alone cannot establish a publishable student zero.

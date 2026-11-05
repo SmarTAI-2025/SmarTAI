@@ -283,7 +283,10 @@ def persist_paused_results(session, run):
         _expert_to_correction, _is_successful_expert, _project_programming_result, _weighted_average_fallback,
     )
     from backend.services.grading_adapter import correction_to_result
+    from backend.services.programming_partial_review import apply_partial_review, review_inputs
+    from backend.services.programming_runs import auxiliary_for_handoff
 
+    auxiliary = None
     setup = session.get(GradingRunSetupRecord, run.id)
     if setup is None:
         return
@@ -359,6 +362,11 @@ def persist_paused_results(session, run):
             correction.expert_results = experts
             if successes and is_programming_question_type(question.type):
                 correction = _project_programming_result(correction, config.feedback_language)
+                inputs = review_inputs(correction, frozen.student_id)
+                if inputs:
+                    if auxiliary is None:
+                        auxiliary = auxiliary_for_handoff(run, manifest, events)
+                    apply_partial_review(correction, inputs, auxiliary.get(inputs[0]), config.feedback_language)
             correction.requires_human_review = True
             correction.review_reasons = list(dict.fromkeys([*correction.review_reasons,
                 "grading_paused" if run.status not in {"failed", "partial_failed"} else "grading_incomplete",

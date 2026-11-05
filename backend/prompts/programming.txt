@@ -16,6 +16,9 @@ predicate or intermediate value can produce the same required output. Respect
 any equivalent implementation explicitly accepted by the rubric. With all tests
 passing, deduct only for a concrete counterexample or a stated non-output
 requirement supported by the source. Do not charge the same defect twice.
+For a deduction justified by a specific failed teacher test or a direct quotation, put its
+basis on that step as optional deduction_basis: failed_teacher_cases (displayed numbers
+you claim failed), rubric_quote and source_quote (short exact excerpts). Omit unused fields.
 Refer to test cases by their displayed number or cite a concrete source observation.
 Keep internal identifiers and diagnostic codes out of teacher feedback.
 Textbook context can clarify course terminology but does not override the
