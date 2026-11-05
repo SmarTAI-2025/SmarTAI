@@ -15,7 +15,9 @@ No rootful socket or privileged container is needed. Build the image as that use
 
 ```sh
 podman build -t localhost/smartai-program-runner:release tools/runner_spike
-podman image inspect localhost/smartai-program-runner:release --format '{{.Id}}'
+raw_id=$(podman image inspect localhost/smartai-program-runner:release --format '{{.Id}}')
+export SMARTAI_PROGRAM_RUNNER_IMAGE="sha256:${raw_id#sha256:}"
+printf '%s\n' "$SMARTAI_PROGRAM_RUNNER_IMAGE"
 ```
 
 Use the returned immutable `sha256:...` ID, not the mutable tag, in the service
@@ -51,11 +53,12 @@ allows **Retry failed items** on the original task without repeating recognition
 - Each container has 0.5 CPU, bounded memory/swap, 16 PIDs, a 16 MiB temporary work
   directory, file/output limits, and an inner deadline. Default service-wide
   concurrency is two, enforced with per-user file locks across API workers.
-- Return, failure and cancellation all remove the named container before releasing
-  capacity. `--rm` and the inner deadline also cover a disconnected launcher;
-  after host/runtime crashes inspect containers labelled `smartai.isolated-runner`
-  and remove only stale containers from this application. Do not prune unrelated
-  containers or images.
+- The adapter attempts to remove the named container on return, failure and
+  cancellation. A failed cleanup retains the name in its slot file. A later
+  request has to confirm removal before reusing that slot. On the tested Podman
+  version, a cancelled container could outlive the request until the bounded
+  program exited. After a host/runtime crash, inspect containers labelled
+  `smartai.isolated-runner` and remove only confirmed stale application containers.
 - Infrastructure/protocol/runtime availability errors remain unscored and expose
   `programming_execution_unavailable`. Student timeout/runtime/output failures are
   normal per-case results. Raw daemon errors are not exposed to teachers.
@@ -81,3 +84,94 @@ runtime pytest suite uses the repository's isolated test environment. AWS candid
 acceptance must additionally run with `runtime_environment=production` under the
 actual service user. The PR workflow exercises a real Docker runtime on Linux;
 that workflow alone is not evidence of production rootless setup.
+
+## Independent task 08 acceptance under a Linux service identity
+
+Use an empty, dedicated rootless Podman account on a disposable Linux machine. Run
+the commands as that user from a checkout containing the candidate and the acceptance
+tests. Install this checkout's pinned test dependencies in a venv. Resolve the
+release image ID as above. For an exact rerun, retain the built image in the user's
+image store. A fresh build of the Dockerfile's base tag can resolve different bytes.
+
+The extra suite exercises the application's production-mode OCI checks. Other
+application settings and SQLite are test fixtures. It launches bounded synthetic
+programs, polls the real runtime, and checks cleanup before another case can reuse
+a slot. Its opt-in is independent of the ordinary Docker CI smoke.
+
+```sh
+qa_status=0
+qa_python=$(python -c 'import sys; print(sys.executable)')
+systemd-run --user --wait --pipe --collect -p Delegate=yes -p "WorkingDirectory=$PWD" \
+  --setenv=SMARTAI_OCI_ROOTLESS_QA=1 --setenv=SMARTAI_OCI_REAL_TEST=1 \
+  --setenv=SMARTAI_PROGRAM_RUNNER_RUNTIME=podman \
+  --setenv="SMARTAI_PROGRAM_RUNNER_IMAGE=$SMARTAI_PROGRAM_RUNNER_IMAGE" \
+  "$qa_python" -m pytest -p no:cacheprovider -v -o junit_family=legacy \
+  --junitxml="$HOME/oci-acceptance.xml" \
+  backend/tests/test_oci_real_runtime.py backend/tests/test_oci_rootless_acceptance.py || qa_status=$?
+podman ps -a --filter label=smartai.isolated-runner=true
+(exit "$qa_status")
+```
+
+Preserve pytest's exit status and the JUnit report independently of the final
+container listing. For individual failures, append the pytest selector
+`::test_cancel_a_live_child_and_reuse_only_slot`,
+`::test_08_kernel_oom_is_not_within_limits`, or
+`::test_08_pid_exhaustion_has_distinct_result` to the extra suite's filename.
+
+### 2026-11-05 candidate observations
+
+Runner candidate `edf264c38b4fe5525f153323c7032034a9b860c3` ran on a new
+ARM64 VM with an independent ext4 disk, Ubuntu 24.04.4 userspace, kernel
+`6.12.114-0-virt`, two vCPUs and 4 GiB RAM. Guest service user `ociqa` (UID
+1108) ran a transient delegated systemd 255 user unit. Podman 4.9.3 and crun
+1.14.1 reported rootless, seccomp, cgroup v2, and delegated CPU, memory and PID
+controllers. The guest had no network adapter. The network test established a
+reachable loopback listener on the guest, then verified a distinct container
+network namespace, loopback-only interfaces and failure to connect to that listener.
+
+The build used the candidate Dockerfile and worker, the official Python ARM64
+base manifest `sha256:df540bfd30bd380e89a349611ce42aa67bcb542d58c047706616eb6ba2f86a1b`,
+and an offline wheel directory during the build. The runner image had Python
+3.12.16, SymPy 1.14.0 and the following verified identities.
+
+| Identity | SHA-256 |
+| --- | --- |
+| Local runner image ID supplied to every case | `293e4556f4fb75117b992aa03767617ed4516bdef94058f4acb53f47048b7446` |
+| Runner image manifest | `d08096a55e692f08f7214f7432faa9147efe179ee9a277db4687dd6c11c9fcc1` |
+| Worker inside the image and in the candidate | `080afd15bb6ec32f515cb900f46e97754d2b88ae76805104580fcadcf1028e17` |
+
+The existing real-runtime suite passed all 4 tests. The additional suite passed
+8 of 11. Leave the following three failed assertions visible when qualifying a fix.
+
+| Failed requirement | Reproduced behavior |
+| --- | --- |
+| Live cancellation removes the container before returning | After the student appeared in `podman top`, cancelling returned `IsolatedRunnerUnavailable`. The container remained in `Stopping` and its name remained in the slot file. In a separate timed trial with a 40-second student, cancellation returned at 5.53 s from launch and an immediate next request failed at 10.65 s. The container disappeared by 41.81 s. A later request succeeded and cleared the slot at 42.29 s. The run did preserve the occupied slot. |
+| Memory exhaustion reaches the case result | The 128 MiB control finished. At 64 MiB, `memory.events:oom_kill` increased by one and the student's subprocess returned `-9`. Its parent exited normally. The adapter reported `passed=true, success/within_limits`. A single-process over-allocation separately raised `MemoryError` and yielded `runtime_error/unknown`. |
+| PID exhaustion reaches the case result | `pids.max=16` allowed 14 additional simultaneous children, then `fork()` returned `EAGAIN`. An uncaught failure yielded `runtime_error/unknown`; original 08 requires `pid_limit/pid_limit_exceeded`. |
+
+Successful probes covered stdin and multiple function entries, debug stdout separate
+from return values, keyword-only invocation at the transport, wrong answers, case
+continuation, wall timeout and both output streams. Container evidence showed UID
+65534, zero effective capabilities, no-new-privileges, seccomp mode 2, read-only
+root and input, a 16 MiB restricted work mount, 0.5 CPU, zero swap and 64 file
+descriptors. A synthetic guest file and environment canary were absent. Four requests
+peaked at two containers with separate stdin, files and result IDs. Two independent
+backend processes shared one slot with disjoint execution intervals. A missing
+runtime or pinned image produced an infrastructure error and left the host marker
+absent. The final inventory was empty after the bounded programs exited.
+
+The separate legacy `harness.py probe` reported 3/4. Its environment predicate
+requires `/proc/1/environ` to be readable, while the candidate supervisor deliberately
+disables that access. The child had no forbidden environment keys, the rootless
+suite checked the synthetic key against the live container's configured environment,
+and the legacy directory, network and PID probes passed. Preserve this discrepancy
+when interpreting that command's exit code.
+
+Synthetic C and C++ requests both returned zero cases and an unsupported-language summary.
+This evidence covers local Linux Python execution. X2 C/C++ compilation, the
+complete versioned 08 result ABI, the integrated grading service and the final AWS
+candidate require separate acceptance. AWS verification should establish the
+actual service account, unit and delegation, architecture/kernel, LSM and seccomp
+profiles, subordinate ID ranges, rootless storage, release image and installed
+worker identity. The QA VM had both AppArmor and SELinux disabled. The recorded
+local image ID belongs to this build.
