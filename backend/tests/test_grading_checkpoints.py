@@ -159,6 +159,37 @@ def test_handoff_recovers_expert_checkpoint_before_question_aggregation(case, st
             "operation_cancelled" if status == "cancelled" else "not_completed"] * 2
 
 
+def test_stopping_restores_later_disputed_programming_sample_before_publication(case):
+    from backend.db.models import AssignmentQuestionRecord
+    from backend.db.session import session_scope
+    from backend.models import ProgrammingEvidence, ProgrammingTestCounts
+    from sqlalchemy import select
+    with session_scope() as session:
+        question = session.scalar(select(AssignmentQuestionRecord).where(
+            AssignmentQuestionRecord.assignment_id == case[0], AssignmentQuestionRecord.q_id == "q1"))
+        question.type = "programming"
+    flow = workflows.get_live_workflow(case[0], owner_id=case[1])
+    workflows.update_workflow(case[0], owner_id=case[1], grading_setup={
+        **flow.grading_setup, "multi_sample_n": 2, "aggregation_method": "weighted_average"})
+    run_id = start(case, "stop-disputed-programming")["job_id"]
+    checkpoints, _, revisions, setup = prepare(case, run_id)
+    provider = setup.setup["selected_provider_ids"][0]
+    for index, score in [(1, 10), (2, 8)]:
+        facts = ProgrammingEvidence(score_status="final", execution_status="executed", mapping_status="valid",
+            teacher_tests=ProgrammingTestCounts(passed=5, total=5), primary_reason="none", requires_human_review=False,
+            safe_summary="教师用例通过 5/5", evidence_id="frozen-run")
+        checkpoints.save_expert(revisions[0][1], "q1", provider, index, ExpertResult(
+            provider=provider, provider_id=provider, score=score, max_score=10, confidence=.9,
+            comment="Checkpoint opinion", programming_evidence=facts))
+    stop(case, run_id)
+    rows = {r.q_id: r for r in grades.list_results_for_run(run_id)}
+    disputed = rows["q1"]
+    assert disputed.ai_score == 9 and disputed.ai_comment.startswith("教师用例通过 5/5")
+    assert "programming_teacher_tests_passed_deduction" in disputed.initial_review_reasons
+    assert [e["programming_evidence"]["score_status"] for e in disputed.ai_expert_results] == ["final", "provisional"]
+    assert task_facade._correction_review_blocks_finalization(disputed)
+
+
 def test_changed_model_config_does_not_mix_old_partial_votes(case, monkeypatch):
     run_id = start(case, "before-config-change")["job_id"]
     checkpoints, _, revisions, setup = prepare(case, run_id)

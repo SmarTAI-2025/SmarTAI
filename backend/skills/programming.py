@@ -13,10 +13,10 @@ from backend.models import ExpertResult, GradingConfidence, ProblemInfo, StepSco
 from backend.services.grading_scores import round_ai_score
 from backend.services.programming_test_contract import required_function_name
 from backend.skills.base import (
-    GradingSkill, authoritative_score_instruction, build_system_prompt, classify_skill_error,
+    GradingSkill, build_system_prompt, classify_skill_error,
     format_deterministic_feedback, normalize_expert_result, normalize_score_scale, register_skill,
 )
-from backend.skills.programming_evidence import describe_run, unavailable, ungraded_message
+from backend.skills.programming_evidence import describe_run, mark_teacher_case_score_review, unavailable, ungraded_message
 from backend.tools import knowledge as kb_tool
 from backend.tools.code_interpreter import run_sandbox
 from backend.tools.structured_llm import (
@@ -28,12 +28,21 @@ logger = logging.getLogger(__name__)
 _TEMPLATE = (Path(__file__).resolve().parents[1] / "prompts" / "programming.txt").read_text(encoding="utf-8")
 
 
+def _sum_step_awards(validated):
+    return float(sum((Decimal(str(step.score)) for step in validated["steps"]), Decimal(0)))
+
+
+class ProgrammingAward(StepScore):
+    max_points: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+
 class ProgrammingGradingOutput(BaseModel):
-    score: float = Field(ge=0, allow_inf_nan=False)
+    steps: list[ProgrammingAward]
+    # Keep explicitly supplied legacy totals subject to the consistency check.
+    score: float = Field(default_factory=_sum_step_awards, ge=0, allow_inf_nan=False, validate_default=True)
     max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False)
     confidence: GradingConfidence = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
-    comment: str
-    steps: list[StepScore]
+    comment: str = ""
     logs: str | None = ""
 
 
@@ -108,6 +117,17 @@ def _format_error(message):
 
 
 def _validate_awards(result, maximum):
+    if "score" not in result.model_fields_set or any(step.max_points is not None for step in result.steps):
+        if "max_score" not in result.model_fields_set or result.max_score != maximum:
+            raise _format_error("Use the question's stated maximum for the rubric.")
+        for step in result.steps:
+            if (step.max_points is None or step.score > step.max_points
+                    or step.is_correct != (step.score == step.max_points)):
+                raise _format_error("Distinguish available points from earned points. Mark full credit correct; partial or zero credit is not full credit.")
+        if sum(Decimal(str(step.max_points)) for step in result.steps) != Decimal(str(maximum)):
+            raise _format_error("The available points across distinct rubric criteria must add up to the question maximum.")
+    elif "comment" not in result.model_fields_set:
+        raise _format_error("Include a comment or explain each award with its available points.")
     total = Decimal(str(result.score))
     steps = sum((Decimal(str(step.score)) for step in result.steps), Decimal(0))
     difference = abs(steps - total)
@@ -262,7 +282,9 @@ class ProgrammingSkill(GradingSkill):
                     await self.reporter.substep(unit, "llm_grade")
                 result, raw = await structured_llm_call(
                     self.provider, system_prompt=build_system_prompt(
-                        _TEMPLATE + authoritative_score_instruction(problem.max_score), self.language, self.grading_setup,
+                        _TEMPLATE + f"\nThe authoritative maximum for this question is {problem.max_score:g}. "
+                        "Set max_score to that maximum. All step awards must fit within it.",
+                        self.language, self.grading_setup,
                     ),
                     user_prompt=json.dumps(data, ensure_ascii=False),
                     output_model=ProgrammingGradingOutput,
@@ -272,12 +294,23 @@ class ProgrammingSkill(GradingSkill):
                 if (not evidence.teacher_tests.total and evidence.generated_tests.total >= 3
                         and evidence.generated_tests.passed == 0):
                     confidence = min(confidence, 0.5)
+                # A second, freely generated summary can contradict a validated
+                # award and the executed cases. Present the same rubric judgments
+                # in the summary and detail views when the provider supplied them.
+                comment = result.comment
+                if isinstance(result, ProgrammingGradingOutput) and all(step.max_points is not None for step in result.steps):
+                    deductions = [step.desc for step in result.steps if not step.is_correct]
+                    comment = "\n".join(deductions) if deductions else (
+                        "按本题评分标准，各项均获满分。" if self.language == "zh"
+                        else "All rubric criteria received full credit."
+                    )
                 vote = normalize_expert_result(ExpertResult(
                     provider=self.provider.provider_id, score=result.score, max_score=result.max_score,
-                    confidence=confidence, comment=f"{result.comment}\n\n{evidence.safe_summary}",
+                    confidence=confidence, comment=f"{comment}\n\n{evidence.safe_summary}",
                     steps=result.steps, raw_output=raw.content, duration_ms=raw.duration_ms,
                     programming_evidence=evidence, knowledge_citations=kb_tool.citations(chunks),
                 ), problem.max_score)
+                mark_teacher_case_score_review(vote, self.language)
                 if evidence.execution_status == "unsupported" and round_ai_score(vote.score, vote.max_score) == 0:
                     # Without a run, code review alone cannot establish a publishable student zero.
                     vote.error_kind = "programming_unverified_zero"

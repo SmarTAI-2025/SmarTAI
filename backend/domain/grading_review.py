@@ -29,10 +29,35 @@ def number(value: Any) -> float | None:
     return float(value) if math.isfinite(value) else None
 
 
-PROGRAMMING_REVIEW_REASONS = ("programming_ai_only", "programming_code_review_only", "programming_interface_only")
+TEACHER_CASE_SCORE_REASONS = ("programming_teacher_tests_passed_deduction", "programming_teacher_tests_failed_full_credit")
+PROGRAMMING_REVIEW_REASONS = (*TEACHER_CASE_SCORE_REASONS, "programming_ai_only", "programming_code_review_only", "programming_interface_only")
+
+
+def teacher_case_score_review_reason(evidence, score, maximum) -> str | None:
+    """Compare an actual teacher-run observation with a normalized, publishable vote."""
+    if (not isinstance(evidence, dict) or evidence.get("contract") != "smartai.programming_evidence"
+            or evidence.get("score_status") not in {"final", "provisional"}
+            or evidence.get("execution_status") != "executed" or evidence.get("mapping_status") != "valid"):
+        return None
+    tests = evidence.get("teacher_tests")
+    if not isinstance(tests, dict):
+        return None
+    total, passed = tests.get("total"), tests.get("passed")
+    score, maximum = number(score), number(maximum)
+    if (type(total) is not int or type(passed) is not int or not 0 <= passed <= total or total == 0
+            or score is None or maximum is None or not 0 <= score <= maximum or maximum <= 0):
+        return None
+    published = round_ai_score(score, maximum)
+    if passed == total and score < maximum and not math.isclose(score, maximum, rel_tol=1e-12):
+        return "programming_teacher_tests_passed_deduction"
+    if passed < total and (score == maximum or published == maximum):
+        return "programming_teacher_tests_failed_full_credit"
+    return None
 
 
 def programming_evidence_review_reason(evidence: dict) -> str:
+    if evidence.get("score_review_reason") in TEACHER_CASE_SCORE_REASONS:
+        return evidence["score_review_reason"]
     if evidence.get("execution_status") != "executed":
         return "programming_code_review_only"
     if ((evidence.get("teacher_tests") or {}).get("total", 0) > 0
@@ -43,16 +68,14 @@ def programming_evidence_review_reason(evidence: dict) -> str:
 
 def programming_review_reason(reasons, experts) -> str | None:
     """Read the frozen programming review requirement, including restored expert votes."""
-    for reason in PROGRAMMING_REVIEW_REASONS:
-        if reason in reasons:
-            return reason
+    restored = set(reasons or ())
     for expert in experts or ():
         evidence = expert.get("programming_evidence") if isinstance(expert, dict) else None
         if (isinstance(evidence, dict) and not expert.get("error_kind")
                 and evidence.get("contract") == "smartai.programming_evidence"
                 and evidence.get("score_status") == "provisional"):
-            return programming_evidence_review_reason(evidence)
-    return None
+            restored.add(programming_evidence_review_reason(evidence))
+    return next((reason for reason in PROGRAMMING_REVIEW_REASONS if reason in restored), None)
 
 
 def teacher_resolved_programming_score(ai_score, teacher_score, maximum, confirmed) -> bool:
