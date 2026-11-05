@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from backend.tools.grading_runner import RunnerResult
+from tools.runner_spike import harness
 from tools.runner_spike.harness import (
     DEFAULT_PIDS_LIMIT,
     build_container_command,
@@ -81,6 +83,63 @@ def test_podman_command_disables_implicit_writable_tmpfs_and_proxy_env(
     assert "--security-opt=no-new-privileges" in command
     mount = next(item for item in command if item.startswith("--mount="))
     assert mount.endswith(",readonly,relabel=private")
+
+
+@pytest.mark.parametrize("runtime", ["docker", "podman"])
+def test_env_probe_inspects_the_same_container_before_start(monkeypatch, runtime):
+    name = "spike-test-name"
+    env = {harness._SECRET_ENV_NAME: "test-canary"}
+    command = [runtime, "run", "--network=none", f"--name={name}", "image-id"]
+    calls = []
+    entries = [f"{k}={v}" for k, v in harness._PROBE_CHILD_ENV.items()]
+
+    container_id = "d" * 64
+
+    def runtime_output(args, **options):
+        calls.append(args)
+        assert options["env"] is env
+        if args[1] == "create":
+            return container_id + "\n"
+        if args[1] == "container":
+            return "sha256:" + "b" * 64 + " " + json.dumps(entries)
+        return json.dumps(entries)
+
+    monkeypatch.setattr(harness.subprocess, "check_output", runtime_output)
+    start = harness._verified_env_probe_start(command, env)
+    assert calls == [[runtime, "create", *command[2:]],
+                     [runtime, "container", "inspect", "--format", "{{.Image}} {{json .Config.Env}}", container_id],
+                     [runtime, "image", "inspect", "--format", "{{json .Config.Env}}", "sha256:" + "b" * 64]]
+    assert start == [runtime, "start", "--attach", container_id]
+
+
+@pytest.mark.parametrize("change", [
+    lambda entries: None, lambda entries: [], lambda entries: entries + [123],
+    lambda entries: entries + ["AWS_SECRET_ACCESS_KEY=private-value"],
+    lambda entries: entries + ["HOME=/work"], lambda entries: entries + ["MALFORMED"],
+    # Even a legitimate-looking public fingerprint must not contain the canary.
+    lambda entries: entries + ["GPG_KEY=deadbeef" + "a" * 32],
+    lambda entries: entries + ["PYTHON_SHA256=" + "9" * 64],
+    lambda entries: [s if not s.startswith("PATH=") else "PATH=/tmp:/bin" for s in entries],
+])
+def test_env_probe_rejects_unverified_config_without_printing_values(monkeypatch, change):
+    entries = [f"{k}={v}" for k, v in harness._PROBE_CHILD_ENV.items()]
+    outputs = iter(["d" * 64, "b" * 64 + " " + json.dumps(change(entries)), json.dumps(entries)])
+    monkeypatch.setattr(harness.subprocess, "check_output", lambda *a, **kw: next(outputs))
+    with pytest.raises(harness.RunnerSpikeError) as exc:
+        harness._verified_env_probe_start(["podman", "run"], {harness._SECRET_ENV_NAME: "a" * 32})
+    assert "private-value" not in str(exc.value) and "a" * 32 not in str(exc.value)
+
+
+@pytest.mark.parametrize("replies", [
+    ["some-container-name"],
+    ["d" * 64, "mutable-tag []"],
+    ["d" * 64, "b" * 64 + " invalid-json"],
+])
+def test_env_probe_requires_concrete_ids_and_parseable_inspection(monkeypatch, replies):
+    outputs = iter(replies)
+    monkeypatch.setattr(harness.subprocess, "check_output", lambda *a, **kw: next(outputs))
+    with pytest.raises(harness.RunnerSpikeError):
+        harness._verified_env_probe_start(["podman", "run"], {harness._SECRET_ENV_NAME: "test-canary"})
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux container worker uses Linux resource-limit semantics; OCI command tests remain cross-platform")
