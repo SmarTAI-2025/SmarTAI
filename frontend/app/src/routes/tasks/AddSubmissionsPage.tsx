@@ -32,9 +32,10 @@ import type { SubmissionIdentityMode } from "@/types";
 
 const SUBMISSION_SUFFIXES = [
   ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
-  ".txt", ".md", ".rst", ".csv", ".pdf", ".jpg", ".jpeg", ".png",
+  ".txt", ".md", ".markdown", ".rst", ".csv", ".pdf", ".jpg", ".jpeg", ".png",
   ".bmp", ".tif", ".tiff", ".webp",
 ] as const;
+const SUBMISSION_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
 const ROSTER_SUFFIXES = [".csv", ".tsv", ".txt"] as const;
 
 const IDENTITY_OPTIONS: Array<{ mode: SubmissionIdentityMode; label: MessageKey }> = [
@@ -172,6 +173,10 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
     }
     if (file.size === 0) {
       setFormError(localText(locale, "所选作答文件为空（0 字节），请打开文件确认有内容后重新上传。", "The selected submission is empty (0 bytes). Check that it contains content before uploading again."));
+      return;
+    }
+    if (file.size > SUBMISSION_UPLOAD_MAX_BYTES) {
+      setFormError(localText(locale, "所选作答文件超过 100 MiB 上传上限。请拆分或压缩后重新选择。", "The selected submission exceeds the 100 MiB upload limit. Split or compress it before selecting it again."));
       return;
     }
     setSelectedFile(file);

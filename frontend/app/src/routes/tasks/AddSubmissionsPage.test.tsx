@@ -78,6 +78,34 @@ function renderPage(taskId = "task-1", owner = "submission-teacher") {
 }
 
 describe("AddSubmissionsPage OCR uploads", () => {
+  it.each(["answer.markdown", "answer.rst", "answer.bmp", "answer.tif", "answer.tiff", "answer.jpeg"])("accepts the existing backend-supported submission suffix %s", async filename => {
+    const { container } = renderPage();
+    const input = container.querySelector('input[type="file"]')!;
+    expect(input.getAttribute("accept")).toContain(filename.slice(filename.lastIndexOf(".")));
+    fireEvent.change(input, { target: { files: [new File(["synthetic frontend selection"], filename)] } });
+    expect(screen.getByText(filename)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledOnce());
+    expect(mutateAsync.mock.calls[0][0].file.name).toBe(filename);
+  });
+
+  it.each(["choose", "drop"])("rejects files over 100 MiB via %s while keeping the previous selection", async method => {
+    const { container } = renderPage();
+    const input = container.querySelector('input[type="file"]')!;
+    const allowed = new File(["small fixture, reported boundary size"], "limit.txt");
+    Object.defineProperty(allowed, "size", { value: 100 * 1024 * 1024 });
+    fireEvent.change(input, { target: { files: [allowed] } });
+    expect(screen.getByText("limit.txt")).toBeInTheDocument();
+    const oversized = new File(["small fixture, reported oversize"], "oversized.txt");
+    Object.defineProperty(oversized, "size", { value: 100 * 1024 * 1024 + 1 });
+    if (method === "drop") fireEvent.drop(screen.getByRole("button", { name: "submissionUploadChoose" }), { dataTransfer: { files: [oversized] } });
+    else fireEvent.change(input, { target: { files: [oversized] } });
+    expect(screen.getByRole("alert")).toHaveTextContent("100 MiB");
+    expect(screen.getByText("limit.txt")).toBeInTheDocument();
+    expect(screen.queryByText("oversized.txt")).not.toBeInTheDocument();
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
   it.each(["roster.csv", "roster.tsv", "roster.txt"])("keeps %s available only in the roster selector and sends its bytes", async filename => {
     const { container } = renderPage();
     const submissionInput = container.querySelector('input[type="file"]')!;
