@@ -205,6 +205,6 @@ async def test_uploaded_c_family_skips_generation_and_python_execution(name, cod
     source, = source_answers(name, code, {"q7": problem.model_dump()}, {"q7"})
     generate, execute = AsyncMock(), AsyncMock()
     result = await grade(problem, "s", generate, execute, answer=StudentAnswerInfo.model_validate(source))
-    assert result.status == "unsupported" and result.reason == "programming_language_unsupported"
+    assert result.status == "unavailable" and result.reason == "native_main_required"
     generate.assert_not_awaited()
     execute.assert_not_awaited()

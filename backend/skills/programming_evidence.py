@@ -10,7 +10,7 @@ from backend.services.programming_test_contract import required_function_name
 
 # Only student outcomes may vote. An unknown runner status must fail closed.
 _STUDENT_FAILURES = {
-    "wrong_answer", "compile_error", "syntax_error", "runtime_error", "timeout",
+    "wrong_answer", "compile_error", "link_error", "syntax_error", "runtime_error", "timeout",
     "output_limit", "memory_limit", "pid_limit", "target_function_missing", "signature_mismatch",
 }
 _MAX_CASE_EXAMPLES = 6
@@ -55,6 +55,12 @@ def unavailable(reason, evidence_id, language, *, mapping="unknown", execution="
     message = (f"未评分，未取得有效执行证据（{reason}）。请检查后重试或人工复核。"
                if language == "zh" else
                f"Ungraded. Execution evidence is unavailable ({reason}). Check the configuration or review this item.")
+    if reason == "native_main_required":
+        message = ("请教师复核函数片段，或提交含 main 的单文件标准输入程序。" if language == "zh" else
+                   "Review the function fragment or submit one stdin program with main.")
+    if reason == "native_runner_unavailable":
+        message = ("未评分。请管理员检查隔离运行时、镜像和编译器，再重试。" if language == "zh" else
+                   "Ungraded. Ask the administrator to check the OCI runtime, image and compiler, then retry.")
     return ProgrammingEvidence(
         evidence_id=evidence_id, execution_status=execution, mapping_status=mapping,
         score_status="unavailable", primary_reason=reason,
@@ -161,6 +167,14 @@ def describe_run(run, language, problem: ProblemInfo):
                              else f"{en}: passed {stat.passed}/{stat.total}")
     if representatives:
         failures = ", ".join(f"{d['case_label']} ({d['outcome']})" for d in representatives[:_MAX_CASE_EXAMPLES])
+        hints = {
+            "compile_error": ("编译失败，请检查语法、类型和头文件。", "Compilation failed. Check syntax, types and headers."),
+            "link_error": ("链接失败，请在同一文件中定义引用的函数。", "Linking failed. Define the referenced symbols in this file."),
+            "wrong_answer": ("输出不符，请对照该用例的预期值。", "Output differs. Compare it with the expected value for this case."),
+            "runtime_error": ("程序异常退出，请检查内存访问和退出状态。", "The program exited abnormally. Check memory accesses and exit status."),
+            "timeout": ("运行超时，请检查循环终止条件和复杂度。", "Execution timed out. Check loop termination and complexity."),
+        }
+        fragments.extend(hints[k][0 if language == "zh" else 1] for k in failure_counts if k in hints)
         fragments.append(("失败示例：" if language == "zh" else "Failed cases: ") + failures)
     ai_only = not teachers.total
     if ai_only:

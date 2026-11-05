@@ -17,10 +17,11 @@ from backend.services.upload_contract import PROGRAMMING_SOURCE_SUFFIXES
 from backend.services.programming_test_contract import required_function_names
 from backend.services.question_matching import question_number_candidates
 
-NATIVE_SOURCE_MAPPING_VERSION = 3
+NATIVE_SOURCE_MAPPING_VERSION = 4
 PYTHON_FLAG = "programming_source_language:python"
 C_FAMILY_FLAG = "programming_source_language:c_family"
-SOURCE_LANGUAGE_FLAGS = frozenset({PYTHON_FLAG, C_FAMILY_FLAG})
+NATIVE_LANGUAGES = {"programming_source_language:c": "c", "programming_source_language:cpp": "cpp"}
+SOURCE_LANGUAGE_FLAGS = frozenset({PYTHON_FLAG, C_FAMILY_FLAG, *NATIVE_LANGUAGES})
 
 
 def is_source_file(filename):
@@ -223,7 +224,8 @@ def source_answers(filename, text, problems, target_ids):
             if ambiguous:
                 flags = ["recognition_manual_pending"]
             if not python:
-                flags.append(C_FAMILY_FLAG)
+                flags.append(("programming_source_language:c" if suffix == ".c" else "programming_source_language:cpp")
+                             if is_source_file(filename) else C_FAMILY_FLAG)
             elif PurePath(filename).suffix.lower() == ".py":
                 flags.append(PYTHON_FLAG)
         answers.append(dict(q_id=qid, number=str(problem.get("number") or ""),

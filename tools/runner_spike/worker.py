@@ -236,8 +236,10 @@ def _validate_request(payload: Any) -> dict[str, Any]:
     execution_id = payload.get("execution_id")
     if not isinstance(execution_id, str) or not 1 <= len(execution_id) <= 128:
         raise InvalidRequest("execution_id is invalid")
-    if payload.get("language") != "python":
-        raise InvalidRequest("only python is supported by this spike")
+    language = payload.get("language")
+    if language != "python" and not (language in ("c", "cpp") and payload.get("task_type") == "programming"
+                                     and payload.get("bind_request") is True and payload.get("function_call") is None):
+        raise InvalidRequest("unsupported language or execution mode")
     if payload.get("task_type") not in {"sympy", "programming"}:
         raise InvalidRequest("task_type is invalid")
 
@@ -280,6 +282,7 @@ def _validate_request(payload: Any) -> dict[str, Any]:
     return {
         "execution_id": execution_id,
         "code": code,
+        "language": language,
         "test_input": test_input,
         "function_call": call is not None,
         "bind_request": payload.get("bind_request") is True,
@@ -367,6 +370,57 @@ def _result(
     }
 
 
+def _build_native(language, source, memory_mb):
+    """Compile and link separately inside the disposable case container.
+
+    Only recognized source diagnostics vote. Missing tools, exhausted compiler
+    resources, abnormal exits and ambiguous linker failures stay ungraded.
+    """
+    compiler = "/usr/bin/gcc" if language == "c" else "/usr/bin/g++"
+    standard = "-std=c17" if language == "c" else "-std=c++17"
+    obj = source.with_suffix(".o")
+    stages = [
+        ([compiler, standard, "-fdiagnostics-format=json", "-fmax-errors=2", "-c", str(source), "-o", str(obj)], "compile_error"),
+        ([compiler, str(obj), "-o", "/binary/submission", "-lm"], "link_error"),
+    ]
+    def confirm_toolchain():
+        # A damaged image must not turn its missing headers/startup libraries
+        # into a student error. Verify a known-good build and run in this case.
+        header = "iostream" if language == "cpp" else "stdio.h"
+        probe = source.with_name("probe" + source.suffix)
+        probe.write_text(f"#include <{header}>\nint main(void) {{return 0;}}", encoding="ascii")
+        for args in ([compiler, standard, str(probe), "-o", "/binary/probe", "-lm"], ["/binary/probe"]):
+            subprocess.run(args, check=True, timeout=6, env=_SAFE_CHILD_ENV, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           preexec_fn=lambda: _apply_child_limits(memory_mb, 6, 4 * 1024 * 1024))
+
+    for command, reason in stages:
+        with tempfile.TemporaryFile(dir=source.parent) as diagnostic:
+            process = subprocess.run(command, cwd=source.parent, env=_SAFE_CHILD_ENV, timeout=12,
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=diagnostic,
+                                     preexec_fn=lambda: _apply_child_limits(memory_mb, 12, 4 * 1024 * 1024))
+            if process.returncode == 0:
+                continue
+            diagnostic.seek(0)
+            detail = diagnostic.read(32768).decode("utf-8", errors="replace")
+        if process.returncode == 1:
+            if reason == "compile_error":
+                try:
+                    diagnostics = json.loads(detail)
+                except ValueError:
+                    diagnostics = []
+                if any(item.get("kind") in {"error", "fatal error"}
+                       and any(location.get("caret", {}).get("file") == str(source)
+                               for location in item.get("locations", [])) for item in diagnostics):
+                    confirm_toolchain()
+                    return reason
+            elif "undefined reference to" in detail or "multiple definition of" in detail:
+                confirm_toolchain()
+                return reason
+        raise RuntimeError("toolchain failure")
+    return None
+
+
 def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR, track_resources=False) -> dict[str, Any]:
     """Execute one validated request; container teardown owns directory cleanup."""
 
@@ -385,7 +439,9 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR, track_res
         )
 
     workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    script_path = workdir / "main.py"
+    language = request["language"]
+    extension = {"python": "py", "c": "c", "cpp": "cpp"}[language]
+    script_path = workdir / f"main.{extension}"
     stdin_path = workdir / ".stdin"
     max_output = request["max_output_chars"]
     # UTF-8 needs at most four bytes per character. One extra byte lets the
@@ -405,8 +461,16 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR, track_res
             return_file = stack.enter_context(tempfile.TemporaryFile(dir=workdir)) if request["function_call"] else None
             return_fd = return_file.fileno() if return_file is not None else None
             before = _cgroup_events() if track_resources else (None, None)
+            if language == "python":
+                command = child_command(script_path, return_fd)
+            else:
+                reason = _build_native(language, script_path, request["memory_mb"])
+                if reason:
+                    return _result(request["execution_id"], executed=True, exit_reason=reason,
+                                   duration_ms=(time.perf_counter() - started_at) * 1000)
+                command = ["/binary/submission"]
             process = subprocess.Popen(
-                child_command(script_path, return_fd),
+                command,
                 pass_fds=(return_fd,) if return_fd is not None else (),
                 cwd=workdir,
                 stdin=stdin_file,
@@ -501,7 +565,7 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR, track_res
                                duration_ms=(time.perf_counter() - started_at) * 1000)
         reason = (
             _diagnose_failure(request["code"], payload.get("function_call"), module_loaded)
-            if request["bind_request"] and returncode is not None and returncode > 0 else "runtime_error"
+            if language == "python" and request["bind_request"] and returncode is not None and returncode > 0 else "runtime_error"
         )
         return case_result(
             exit_reason=reason, stdout=stdout, stderr=stderr,

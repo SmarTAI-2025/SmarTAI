@@ -20,7 +20,7 @@ def test_teacher_edit_is_used_by_every_expert_and_execution_is_durable(monkeypat
     exercise_saved_grading_flow(monkeypatch, io_mode="function")
 
 
-def exercise_saved_grading_flow(monkeypatch, *, io_mode):
+def exercise_saved_grading_flow(monkeypatch, *, io_mode, native_filename=None):
     """Save a teacher edit, grade it and return the row read back from SQLite."""
     owner, task = _seed_task(with_question=True)
     client = TestClient(create_app())
@@ -37,6 +37,14 @@ def exercise_saved_grading_flow(monkeypatch, *, io_mode):
         assert io_mode == "stdin"
         stem = "编写程序，从标准输入读入两个以空格分隔的整数，在标准输出打印和。"
         source = "a, b = map(int, input().split())\nprint(a + b)\n"
+    flags = []
+    if native_filename:
+        from backend.services.programming_submission_mapping import source_answers
+        source = ('#include <cstdio>\nint main(){int a,b; if(std::scanf("%d%d",&a,&b)==2) std::printf("%d\\n",a+b);}'
+                  if native_filename.endswith(".cc") else
+                  '#include <stdio.h>\nint main(void){int a,b; if(scanf("%d%d",&a,&b)==2) printf("%d\\n",a+b);}')
+        answer, = source_answers(native_filename, source, {"q1":{"type":"编程题","stem":stem}}, {"q1"})
+        flags = answer["flag"]
     save = client.put(path, headers=headers, json={"type":"编程题", "stem":stem,
         "criterion":"Return the sum of the two arguments (10 points).", "review_status":"edited",
         "test_cases":[old], "expected_workflow_revision":revision()})
@@ -54,7 +62,7 @@ def exercise_saved_grading_flow(monkeypatch, *, io_mode):
         course_id=assignment_repository.get_assignment(task,actor_id=owner).course_id,
         students=[{"stu_id":"constructed","stu_name":"Constructed", "source_id":"","identity_status":"matched",
             "identity_match_method":"filename","stu_ans":[{"q_id":"q1","number":"1","type":"编程题",
-            "content":source,"flag":[]}]}], expected_workflow_revision=revision(),submission_file_name="constructed.txt")
+            "content":source,"flag":flags}]}], expected_workflow_revision=revision(),submission_file_name="constructed.txt")
     provider = upsert_provider_config(owner, ProviderConfig(provider_type="openai", model="fixture",
         api_key="test-no-network"),master_key=os.environ["SMARTAI_PROVIDER_ENCRYPTION_KEY"])
     setup = TaskGradingSetup(selected_provider_ids=[provider.id],primary_provider_id=provider.id,

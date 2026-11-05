@@ -49,7 +49,9 @@ jobs:
           SMARTAI_OCI_REAL_TEST: "1"
           SMARTAI_RUNTIME_ENVIRONMENT: test
           SMARTAI_PROGRAM_RUNNER_IMAGE: smartai-runner-spike:week1
-        run: python -m pytest backend/tests/test_oci_real_runtime.py -q
+        run: |
+          git fetch --depth=1 origin ab36293b5b00ea2dd20803cd89c727398671c835
+          python -m pytest backend/tests/test_oci_real_runtime.py backend/tests/test_oci_native.py -q
       - name: Check container cleanup
         if: always()
         run: test -z "$(docker ps -aq --filter label=smartai.isolated-runner=true)"

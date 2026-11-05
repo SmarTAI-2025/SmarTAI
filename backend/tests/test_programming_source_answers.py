@@ -174,7 +174,7 @@ async def test_old_mapping_checkpoint_recovers_original_bytes_and_previous_ident
         student_candidate="prior-identity")
     restored = await task_facade._restore_legacy_native_result(old, questions(SUM, COUNT), task, owner)
     assert all(not a["flag"] for a in restored.student["stu_ans"])
-    assert restored.student["recognition"]["native_source_mapping_version"] == 3
+    assert restored.student["recognition"]["native_source_mapping_version"] == 4
     assert restored.student["stu_id"] == "prior-identity" and restored.student["identity_status"] == "matched"
     assert {a["q_id"]: a["content"] for a in restored.student["stu_ans"]} == {"q2": SOURCE, "q3": SOURCE}
     registry.provider.ainvoke.assert_not_awaited()

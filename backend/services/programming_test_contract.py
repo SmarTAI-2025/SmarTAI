@@ -377,7 +377,7 @@ def adapt_programming_cases(stem: str, cases, *, edited=False) -> list[TestCase]
     return result
 
 
-def _stdin_cases(stem, cases):
+def bind_stdin_cases(stem, cases):
     # Existing stdin payloads (including spaces, line endings and CSV) are
     # literal. Only translate a natural numeric enumeration for a stated
     # numeric, whitespace-based input protocol.
@@ -416,7 +416,7 @@ def bind_programming_cases(stem: str, cases, code: str, *, entry_hint: str | Non
         return prepared
     function_mode = any(c.io_mode == "function" for c in prepared) or bool(_FUNCTION.search(stem))
     if not function_mode and _STDIN.search(stem):
-        return _stdin_cases(stem, prepared)
+        return bind_stdin_cases(stem, prepared)
     # A named teacher test is itself an explicit entry requirement.
     teacher_names = {c.function_name for c in prepared if c.source == "teacher" and c.function_name}
     if teacher_names and not _FREE_NAME.search(stem):
@@ -429,7 +429,7 @@ def bind_programming_cases(stem: str, cases, code: str, *, entry_hint: str | Non
     candidates = [node for node in body if isinstance(node, ast.FunctionDef)]
     script_io = _script_io(body)
     if not function_mode and script_io and not candidates:
-        return _stdin_cases(stem, prepared)
+        return bind_stdin_cases(stem, prepared)
     if entry_hint is not None and (function_mode or not script_io):
         candidates = [node for node in candidates if node.name == entry_hint]
         if len(candidates) != 1:
@@ -451,7 +451,7 @@ def bind_programming_cases(stem: str, cases, code: str, *, entry_hint: str | Non
     if not function_mode and script_io:
         if matches:
             raise ProgrammingCaseError("Both stdin and function interfaces are possible.")
-        return _stdin_cases(stem, prepared)
+        return bind_stdin_cases(stem, prepared)
     if len(matches) != 1:
         raise ProgrammingCaseError("Cannot bind the tests to a unique compatible top-level function.")
     return matches[0]

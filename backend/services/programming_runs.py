@@ -24,7 +24,7 @@ from backend.db import grading_repository
 from backend.models import ProblemInfo, StudentAnswerInfo, TestCase, is_programming_question_type
 from pydantic import ValidationError
 from backend.services.grading_checkpoints import CheckpointWriteError, current_checkpoints
-from backend.services.programming_submission_mapping import C_FAMILY_FLAG, PYTHON_FLAG, has_markup_fence
+from backend.services.programming_submission_mapping import C_FAMILY_FLAG, NATIVE_LANGUAGES, PYTHON_FLAG, has_markup_fence
 from backend.services.python_source_encoding import PythonSourceEncodingError, python_execution_source
 from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCodeExecutionDisabled
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
@@ -193,7 +193,7 @@ def _reference(problem):
     if problem.solution_code and "solution_code" not in provenance:
         return _source(problem.solution_code)
     reference = (problem.reference_answer or "").strip()
-    if "reference_answer" not in provenance and reference.startswith(("```python\n", "```py\n")):
+    if "reference_answer" not in provenance and reference.lower().startswith(("```python\n", "```py\n", "```cpp\n", "```c++\n", "```c\n")):
         return _source(reference)
     return None
 
@@ -233,7 +233,7 @@ async def _notify(reporter, step):
 
 
 async def _prepare(state, problem, provider, generate, execute, reporter):
-    from backend.services.programming_test_contract import adapt_programming_cases, required_function_name
+    from backend.services.programming_test_contract import adapt_programming_cases, bind_stdin_cases, required_function_name
     from backend.skills.programming import _scan_complexity_keywords
     key = _question_key(state, problem)
     async with state.lock(key):
@@ -270,10 +270,20 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
             reference = _reference(problem)
             if reference:
                 from backend.services.programming_test_contract import bind_programming_cases
-                executable = python_execution_source(reference)
-                ref_cases = bind_programming_cases(problem.stem, cases, executable)
+                language = "python"
+                if has_native_main(reference):
+                    declaration = (problem.solution_code or problem.reference_answer or "").lstrip().splitlines()[0]
+                    if declaration.lower() in {"```cpp", "```c++"} or re.search(r"c\+\+", problem.stem, re.I):
+                        language = "cpp"
+                    elif declaration.lower() == "```c" or re.search(r"(?<![A-Za-z])C(?:11|17|语言|单文件|\b)", problem.stem, re.I):
+                        language = "c"
+                    else:
+                        raise ValueError("programming_case_configuration_invalid")
+                executable = python_execution_source(reference) if language == "python" else reference
+                ref_cases = (bind_programming_cases(problem.stem, cases, executable) if language == "python"
+                             else bind_stdin_cases(problem.stem, cases))
                 await _notify(reporter, "validate_programming_reference")
-                report = await execute(executable, ref_cases, language="python", per_case_timeout=10.0)
+                report = await execute(executable, ref_cases, language=language, per_case_timeout=10.0)
                 _validate_report(report, ref_cases)
                 if report.passed_count != len(cases):
                     raise ValueError("programming_reference_conflict")
@@ -291,6 +301,12 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
         return key, cases, ""
 
 
+def has_native_main(code):
+    # Ignore comments, literals and prototypes when identifying an entry.
+    tokens = re.sub(r"""//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'""", " ", code, flags=re.S)
+    return bool(re.search(r"\bmain\s*\([^;{}]*\)[^;{}]*\{", tokens))
+
+
 async def prepare_pending(state, problems, students, selection, reporter):
     """Prepare before expert fan-out, only for questions with work to grade."""
     if state.provider is None:
@@ -305,9 +321,13 @@ async def prepare_pending(state, problems, students, selection, reporter):
                 continue
             content = answer.get("content") or ""
             flags = answer.get("flag") or ()
-            if (content.strip() and "recognition_manual_pending" not in flags
-                    and C_FAMILY_FLAG not in flags
-                    and (PYTHON_FLAG in flags or _detect_language(content) not in {"cpp", "java"})):
+            if not content.strip() or "recognition_manual_pending" in flags or C_FAMILY_FLAG in flags:
+                continue
+            if any(f in NATIVE_LANGUAGES for f in flags):
+                eligible = has_native_main(content)
+            else:
+                eligible = PYTHON_FLAG in flags or _detect_language(content) not in {"cpp", "java"}
+            if eligible:
                 pending.add(qid)
     for qid, raw in problems.items():
         if qid not in pending or not is_programming_question_type(raw.get("type") if isinstance(raw, dict) else raw.type):
@@ -369,7 +389,7 @@ async def _execute_remaining(state, key, identity, code, cases, execute):
         _validate_report(_report_from_rows([local_row]), [subset[local]])
         rows[missing[local]] = restore_index(row, local)
 
-    options = {"language": "python", "per_case_timeout": 10.0}
+    options = {"language": identity.get("language", "python"), "per_case_timeout": 10.0}
     if getattr(execute, "supports_case_checkpoints", False) is True:
         options["on_case_complete"] = completed
     try:
@@ -391,7 +411,7 @@ async def _execute_remaining(state, key, identity, code, cases, execute):
 
 async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo, student_id: str,
                               task_id, provider, reporter, generate, execute) -> ProgrammingEvidence:
-    from backend.services.programming_test_contract import bind_programming_cases
+    from backend.services.programming_test_contract import bind_programming_cases, bind_stdin_cases
     from backend.skills.programming import _detect_language
     state = _current.get() or ProgrammingRun(provider)
     try:
@@ -404,15 +424,20 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
         return ProgrammingEvidence("unavailable", code, [], reason="programming_source_too_large")
     if not code.strip():
         return ProgrammingEvidence("no_submission", code, [])
+    native = [NATIVE_LANGUAGES[flag] for flag in answer.flag if flag in NATIVE_LANGUAGES]
+    if native and (len(native) != 1 or PYTHON_FLAG in answer.flag or C_FAMILY_FLAG in answer.flag):
+        return ProgrammingEvidence("unavailable", code, [], reason="programming_mapping_invalid")
+    if native and not has_native_main(code):
+        return ProgrammingEvidence("unavailable", code, [], reason="native_main_required")
     if C_FAMILY_FLAG in answer.flag:
         return ProgrammingEvidence("unsupported", code, [], reason="programming_language_unsupported")
-    if PYTHON_FLAG not in answer.flag and _detect_language(code) in {"cpp", "java"}:
+    if not native and PYTHON_FLAG not in answer.flag and _detect_language(code) in {"cpp", "java"}:
         try:
             ast.parse(code)  # A Python string or comment may contain a C/Java example.
         except (ValueError, SyntaxError, RecursionError):
             return ProgrammingEvidence("unsupported", code, [], reason="programming_language_unsupported")
     try:
-        executable = python_execution_source(code)
+        executable = code if native else python_execution_source(code)
     except PythonSourceEncodingError:
         return ProgrammingEvidence("unavailable", code, [], reason="programming_source_encoding_unavailable")
     plan_key, cases, reason = await _prepare(state, problem, provider, generate, execute, reporter)
@@ -425,7 +450,11 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
                  if f.startswith("programming_source_entry:")}
         if len(hints) > 1:
             raise ValueError("programming_mapping_invalid")
-        if hints:
+        if native:
+            if hints or any(case.io_mode != "stdin" for case in cases):
+                return ProgrammingEvidence("unavailable", code, [], reason="native_main_required")
+            cases = bind_stdin_cases(problem.stem, cases)
+        elif hints:
             cases = bind_programming_cases(problem.stem, cases, executable, entry_hint=hints.pop())
         else:
             cases = bind_programming_cases(problem.stem, cases, executable)
@@ -436,6 +465,8 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
                 "revision": cp.revisions[student_id] if cp else None, "source_sha256": source_hash(code),
                 "q_id": problem.q_id, "cases_sha256": digest([c.model_dump(mode="json") for c in cases]),
                 "runtime": runtime_identity()}
+    if native:
+        identity["language"] = native[0]
     if executable != code:
         identity["execution_source_sha256"] = source_hash(executable)
     key = digest(identity)
@@ -453,7 +484,7 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
             try:
                 report = await _execute_remaining(state, key, identity, executable, cases, execute)
             except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError, ValueError):
-                state.failures[key] = "programming_execution_unavailable"
+                state.failures[key] = "native_runner_unavailable" if native else "programming_execution_unavailable"
                 return ProgrammingEvidence("unavailable", code, cases, reason=state.failures[key])
             saved = {"identity": identity,
                 "rows": [_persisted_row(row) for row in report.results],

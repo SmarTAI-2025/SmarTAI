@@ -189,10 +189,19 @@ async def _host_slot(runtime, env, name):
 
 async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, max_output_chars=8192,
                          function_call=None, bind_request=True):
+    return await run_program_oci(code, test_input, language="python", timeout=timeout, memory_mb=memory_mb,
+                                 max_output_chars=max_output_chars, function_call=function_call, bind_request=bind_request)
+
+
+async def run_program_oci(code, test_input="", *, language, timeout=10.0, memory_mb=256,
+                          max_output_chars=8192, function_call=None, bind_request=True):
     from backend.models import TestCase
     from backend.tools.code_interpreter import TestResult
     from backend.tools.grading_runner import RunnerResult
     if settings.program_runner_mode != "oci":
+        raise IsolatedRunnerUnavailable()
+    native = language in {"c", "cpp"}
+    if language != "python" and (not native or function_call is not None or not bind_request):
         raise IsolatedRunnerUnavailable()
     runtime = shutil.which(settings.program_runner_runtime)
     if not runtime or not settings.program_runner_image:
@@ -202,7 +211,7 @@ async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, ma
     execution_id = uuid.uuid4().hex
     name = f"smartai-oci-{execution_id}"
     payload = {"schema_version": 1, "execution_id": execution_id, "task_type": "programming",
-               "language": "python", "code": code, "test_input": test_input, "test_cases": [],
+               "language": language, "code": code, "test_input": test_input, "test_cases": [],
                "limits": {"timeout_seconds": timeout, "memory_mb": memory_mb, "max_output_chars": max_output_chars}}
     if function_call is not None:
         payload["function_call"] = function_call
@@ -223,9 +232,11 @@ async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, ma
                 args = build_container_command(runtime=runtime, image=settings.program_runner_image,
                     request_file=request, container_name=name, memory_mb=memory_mb)
                 args[2:2] = ["--pull=never", "--log-driver=none", f"--memory-swap={memory_mb}m", "--label=smartai.isolated-runner=true"]
+                if native:
+                    args.insert(2, "--tmpfs=/binary:rw,exec,nosuid,nodev,size=8m,mode=1777")
                 if bind_request:
                     args.insert(2, "--cgroupns=private")
-                raw = await _command(args, timeout=timeout + 12, env=env)
+                raw = await _command(args, timeout=timeout + (45 if native else 12), env=env)
                 # Strict model; do not accept a trailing forged result after
                 # malformed output, a different execution ID, or host mode.
                 # Pydantic accepts repeated keys by choosing the last. Reject
@@ -239,6 +250,8 @@ async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, ma
                 if result.execution_id != execution_id or result.isolation_mode != "oci_container" or not result.executed:
                     raise IsolatedRunnerUnavailable()
                 allowed = {"success", "runtime_error", "timeout", "output_limit", "syntax_error"}
+                if native:
+                    allowed.update({"compile_error", "link_error"})
                 if bind_request:
                     allowed.update({"memory_limit", "pid_limit"})
                 if function_call is not None:
@@ -252,7 +265,7 @@ async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, ma
                         or ((function_call is not None and success) != (result.return_value is not None))
                         or (result.return_value is not None and len(result.return_value) > max_output_chars)):
                     raise IsolatedRunnerUnavailable()
-                expected_status = {"success": "within_limits", "runtime_error": "unknown", "syntax_error": "unknown",
+                expected_status = {"compile_error": "unknown", "link_error": "unknown", "success": "within_limits", "runtime_error": "unknown", "syntax_error": "unknown",
                                    "timeout": "timeout", "output_limit": "output_limit",
                                    "target_function_missing": "unknown", "signature_mismatch": "unknown",
                                    "memory_limit": "memory_limit_exceeded", "pid_limit": "pid_limit_exceeded"}

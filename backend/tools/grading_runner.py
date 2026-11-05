@@ -24,6 +24,8 @@ MAX_SYMPY_CODE_CHARS = 16 * 1024
 
 class RunnerExitReason(str, Enum):
     SUCCESS = "success"
+    COMPILE_ERROR = "compile_error"
+    LINK_ERROR = "link_error"
     STATIC_REJECTED = "static_rejected"
     SYNTAX_ERROR = "syntax_error"
     RUNTIME_ERROR = "runtime_error"

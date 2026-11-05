@@ -309,7 +309,7 @@ async def run_sandbox(
     call mode is used (LeetCode style — wrap student code, call fn(*args),
     print repr); otherwise stdin/stdout mode.
     """
-    if language != "python":
+    if language not in {"python", "c", "cpp"}:
         logger.warning(f"Language {language!r} not yet supported; returning skip result")
         return ExecutionReport(summary=f"Language {language} not supported in sandbox")
 
@@ -326,6 +326,8 @@ async def run_sandbox(
         for tol in (getattr(tc, "abs_tol", 1e-9), getattr(tc, "rel_tol", 0.0)):
             if not isinstance(tol, (int, float)) or not math.isfinite(tol) or tol < 0:
                 raise ValueError("Invalid numeric tolerance")
+        if language != "python" and (tc.io_mode != "stdin" or tc.function_name):
+            raise ValueError("Native execution requires stdin cases")
         if tc.function_name:
             if tc.function_args is None and getattr(tc, "function_kwargs", None) is None:
                 raise ValueError("Missing function invocation arguments")
@@ -340,11 +342,13 @@ async def run_sandbox(
 
     # Only the executable copy receives a transport-encoding change. The
     # confirmed source/answer hash used by the grading evidence stays intact.
-    code = python_execution_source(code)
+    if language == "python":
+        code = python_execution_source(code)
     case_ids = [getattr(tc, "case_id", None) or f"case-{i + 1}" for i, tc in enumerate(test_cases)]
     if len(set(case_ids)) != len(case_ids):
         raise ValueError("Duplicate test case ID")
     dispatch, parallelism = _programming_dispatch()
+    native_options = {"language": language} if language != "python" else {}
     remaining = iter(enumerate(test_cases))
     results = {}
     notifications = []
@@ -362,7 +366,7 @@ async def run_sandbox(
                 async with dispatch:
                     if stopped:
                         return
-                    result = await _run_case(code, case, per_case_timeout, memory_mb)
+                    result = await _run_case(code, case, per_case_timeout, memory_mb, **native_options)
                 result.case_index = index
                 result.case_id = case_ids[index]
                 results[index] = result
@@ -411,12 +415,16 @@ async def run_sandbox(
 run_sandbox.supports_case_checkpoints = True
 
 
-async def _run_case(code: str, tc: TestCase, timeout: float, memory_mb: int) -> TestResult:
+async def _run_case(code: str, tc: TestCase, timeout: float, memory_mb: int, *, language="python") -> TestResult:
     call = None
     if tc.function_name:
         call = {"name": tc.function_name, "args": tc.function_args or [], "kwargs": getattr(tc, "function_kwargs", None) or {}}
-    raw = await run_python_subprocess(code, "" if call else tc.input, timeout=timeout, memory_mb=memory_mb,
-                                      max_output_chars=8192, function_call=call, bind_request=True)
+    if language == "python":
+        raw = await run_python_subprocess(code, "" if call else tc.input, timeout=timeout, memory_mb=memory_mb,
+                                          max_output_chars=8192, function_call=call, bind_request=True)
+    else:
+        from backend.tools.oci_grading_runner import run_program_oci
+        raw = await run_program_oci(code, tc.input, language=language, timeout=timeout, memory_mb=memory_mb)
     raw.test = tc
     raw.stdout = raw.actual_output
     if not raw.passed:
