@@ -1,3 +1,4 @@
+import { canSaveSourceToLibrary, librarySourceFormatHint, MAX_SOURCE_UPLOAD_BYTES, sourceUploadExtensions, sourceUploadFormatHint, sourceUploadValidationError } from "@/lib/sourceUploadPolicy";
 import { userFacingError } from "@/lib/taskActionGuards";
 import { taskInputVersion } from "@/lib/editorVersions";
 import { useProblemDraftReferences } from "@/hooks/useProblemDraftReferences";
@@ -43,7 +44,6 @@ type ImportTarget = "rubric" | "answer" | "tests";
 type SourceMode = "library" | "upload";
 type StructureMode = "organized" | "extract_from_source";
 
-const ACCEPTED_EXTENSIONS = [".pdf", ".txt", ".md", ".markdown", ".json", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"] as const;
 
 export function QuestionMaterialImportPage() { const { taskId, jobId } = useParams(); return <QuestionMaterialImportPageForm key={`${taskId}:${jobId ?? ""}`} />; }
 function QuestionMaterialImportPageForm() {
@@ -120,6 +120,10 @@ function QuestionMaterialImportPageForm() {
       ? (locale === "zh-CN" ? "暂时无法核对资料，请重试检查，暂时无需重传。" : "The material could not be checked. Retry validation; no new upload is needed yet.")
       : (locale === "zh-CN" ? "正在检查资料引用，请稍候，暂时无需重传。" : "Checking the material reference. Please wait; no new upload is needed yet.");
   const taskReady = taskQuery.data?.status === "problems_ready";
+  const acceptedExtensions = sourceUploadExtensions(targets.includes("tests") ? "programming_tests" : "rubric");
+  const selectedFileError = sourceMode === "upload" && selectedFile
+    ? sourceUploadValidationError(selectedFile, acceptedExtensions, MAX_SOURCE_UPLOAD_BYTES, locale) : null;
+  const canSaveToLibrary = !selectedFile || canSaveSourceToLibrary(selectedFile.name);
   const hasSource = sourceMode === "library" ? Boolean(selectedMaterial) : Boolean(selectedFile);
   const gateMessage = taskQuery.isError
     ? materialImportText(locale, "taskUnavailable")
@@ -136,8 +140,10 @@ function QuestionMaterialImportPageForm() {
     || preparedStatus !== "ready"
     || Boolean(localDraft.conflict)
     || targets.length === 0
-    || !hasSource;
+    || !hasSource
+    || Boolean(selectedFileError);
   const actionMessage = formError
+    ?? selectedFileError
     ?? (taskQuery.isLoading || expertsQuery.isLoading || preparedStatus === "checking" ? (locale === "zh-CN" ? "正在检查任务、模型或文件，请稍候，暂时无需重传。" : "Checking the task, model or file. Please wait; no new upload is needed yet.") : null)
     ?? (localDraft.conflict ? (locale === "zh-CN" ? "任务已有更新，请先处理下方草稿冲突提示。" : "The task has changed. Resolve the draft conflict below first.") : null)
     ?? referenceError
@@ -168,8 +174,9 @@ function QuestionMaterialImportPageForm() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    if (!isAcceptedFile(file.name)) {
-      setFormError(materialImportText(locale, "unsupportedFile"));
+    const fileError = sourceUploadValidationError(file, acceptedExtensions, MAX_SOURCE_UPLOAD_BYTES, locale);
+    if (fileError) {
+      setFormError(fileError);
       return;
     }
     setSelectedFile(file);
@@ -203,7 +210,7 @@ function QuestionMaterialImportPageForm() {
         targets: targets.map(toApiTarget),
         structureMode,
         extractionHint: structureMode === "extract_from_source" ? extractionHint : "",
-        saveToLibrary: sourceMode === "upload" && saveToLibrary,
+        saveToLibrary: sourceMode === "upload" && saveToLibrary && canSaveToLibrary,
         enableMaterialOcr,
       });
       if (!localDraft.isCurrent()) return;
@@ -307,6 +314,7 @@ function QuestionMaterialImportPageForm() {
                 locale={locale}
                 file={selectedFile}
                 inputRef={fileInputRef}
+                acceptedExtensions={acceptedExtensions}
                 saveToLibrary={saveToLibrary}
                 onChoose={() => fileInputRef.current?.click()}
                 onFileChange={chooseFile}
@@ -367,9 +375,9 @@ function QuestionMaterialImportPageForm() {
               {locale === "zh-CN" ? "启用该资料的视觉 OCR" : "Enable visual OCR for this material"}
             </label>
           ) : null}
-          <p id="material-import-action-message" role={formError ? "alert" : undefined} className={cn(
+          <p id="material-import-action-message" role={formError || selectedFileError ? "alert" : undefined} className={cn(
             "min-w-0 text-[13px] leading-5",
-            formError ? "text-danger" : "text-muted-foreground",
+            formError || selectedFileError ? "text-danger" : "text-muted-foreground",
           )}>
             {actionMessage ?? ""}
             {formError && taskId ? <> {" "}<Link to={`/tasks/${taskId}/questions`} className="font-semibold text-primary hover:underline">{locale === "zh-CN" ? "人工继续处理" : "Continue manually"}</Link></> : null}
@@ -531,10 +539,11 @@ function LibrarySourcePicker({
   );
 }
 
-function UploadSourcePicker({ locale, file, inputRef, saveToLibrary, onChoose, onFileChange, onSaveChange }: {
+function UploadSourcePicker({ locale, file, inputRef, acceptedExtensions, saveToLibrary, onChoose, onFileChange, onSaveChange }: {
   locale: "zh-CN" | "en-US";
   file: File | null;
   inputRef: React.RefObject<HTMLInputElement | null>;
+  acceptedExtensions: string[];
   saveToLibrary: boolean;
   onChoose: () => void;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -549,13 +558,14 @@ function UploadSourcePicker({ locale, file, inputRef, saveToLibrary, onChoose, o
         <button type="button" className="h-[30px] min-w-[90px] rounded-full bg-[#DBE8FF] px-4 text-[13px] font-semibold text-primary" onClick={onChoose}>
           {file ? materialImportText(locale, "change") : materialImportText(locale, "chooseFile")}
         </button>
-        <input ref={inputRef} type="file" className="sr-only" accept={ACCEPTED_EXTENSIONS.join(",")} onChange={onFileChange} />
+        <input ref={inputRef} type="file" className="sr-only" accept={acceptedExtensions.join(",")} onChange={onFileChange} />
       </div>
-      {file ? <p className="mt-2 text-xs text-muted-foreground">{locale === "zh-CN" ? "文件已就绪。" : "File ready."}</p> : null}
+      <p className="mt-2 text-xs text-muted-foreground">{sourceUploadFormatHint(acceptedExtensions, MAX_SOURCE_UPLOAD_BYTES, locale)}</p>
       <label className="mt-3 inline-flex items-center gap-2 text-[12px] text-muted-foreground">
-        <input type="checkbox" checked={saveToLibrary} onChange={(event) => onSaveChange(event.target.checked)} className="h-4 w-4 rounded border-border accent-primary" />
+        <input type="checkbox" checked={saveToLibrary && (!file || canSaveSourceToLibrary(file.name))} disabled={Boolean(file && !canSaveSourceToLibrary(file.name))} onChange={(event) => onSaveChange(event.target.checked)} className="h-4 w-4 rounded border-border accent-primary" />
         {materialImportText(locale, "saveToLibrary")}
       </label>
+      {file && (saveToLibrary || !canSaveSourceToLibrary(file.name)) ? <p className="mt-2 text-xs text-muted-foreground">{librarySourceFormatHint(locale)}</p> : null}
     </div>
   );
 }
@@ -594,14 +604,8 @@ function localizeImportError(error: unknown, locale: "zh-CN" | "en-US") {
     different_material_import_running: ["当前已有另一项资料导入正在进行。", "Another material import is already running."],
   };
   if (code && known[code]) return locale === "zh-CN" ? known[code][0] : known[code][1];
-  if (normalized.status === 503) return materialImportText(locale, "modelRequired");
   if (normalized.status === 0) return materialImportText(locale, "genericError");
   return userFacingError(normalized, locale) || materialImportText(locale, "genericError");
-}
-
-function isAcceptedFile(filename: string) {
-  const normalized = filename.trim().toLowerCase();
-  return ACCEPTED_EXTENSIONS.some((extension) => normalized.endsWith(extension));
 }
 
 function formatFileSize(value: number) {

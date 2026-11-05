@@ -14,6 +14,7 @@ import weakref
 from contextlib import asynccontextmanager
 from typing import Annotated
 
+from fastapi import HTTPException
 from pydantic import Field, ValidationError, model_validator
 from starlette.concurrency import run_in_threadpool
 
@@ -32,7 +33,7 @@ from backend.services.stage_provider_routing import (
 )
 from backend.skills.recognition_reader import BaiduRecognitionEngine, LLMRecognitionEngine, PROMPT_VERSION
 from backend.storage import get_storage
-from backend.tools.file_processing import extract_text_from_upload, inspect_upload_content
+from backend.tools.file_processing import extract_text_from_upload, inspect_upload_content, validate_upload_content
 from backend.tools.pdf_evidence import PdfIndexRequest, read_pdf_evidence
 
 _CAPACITIES = weakref.WeakKeyDictionary()
@@ -157,16 +158,29 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                                route: StageProviderRoute, registry, stored_file_id=None,
                                extraction_hint="", options=None, purpose="problems", reporter=None, text_reader=None,
                                allow_vision=None, binding=None, retry_key=None, acknowledge_pending_retry=False,
-                               timeout_profile=None, execution_scope=None, allow_partial=False, on_pages=None):
+                               timeout_profile=None, execution_scope=None, allow_partial=False, on_pages=None,
+                               media_slot_timeout_seconds: float | None = 10):
     from backend.services.source_files import persist_problem_source
 
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
     allow_vision = purpose not in {"rubric", "test_cases"} if allow_vision is None else allow_vision is True
     reporter = reporter or ProgressReporter(f"recognition-{task_id}")
-    inspection = inspect_upload_content(content, filename, content_type)
+    inspection = await validate_upload_content(
+        content, filename, content_type=content_type, purpose=purpose,
+        media_slot_timeout_seconds=media_slot_timeout_seconds,
+    )
     media_type = inspection.content_type
     if media_type not in _VISUAL_TYPES:
-        text = await (text_reader or extract_text_from_upload)(content, filename, purpose=purpose, reporter=reporter)
+        if text_reader is None or text_reader is extract_text_from_upload:
+            # Text may quote a PDF header, so the built-in reader can repeat
+            # the bounded format check. Preserve this caller's admission policy.
+            text = await extract_text_from_upload(
+                content, filename, purpose=purpose, reporter=reporter,
+                media_slot_timeout_seconds=media_slot_timeout_seconds,
+            )
+        else:
+            # Legacy/custom readers retain their existing callback contract.
+            text = await text_reader(content, filename, purpose=purpose, reporter=reporter)
         return QuestionSourceRead(text, stored_file_id=stored_file_id)
     total_pages = None
     if media_type == "application/pdf":

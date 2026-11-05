@@ -105,3 +105,12 @@ def test_wrapped_provider_server_error_retains_specific_outage_reason():
 
 def test_unstructured_image_claim_is_not_capability_evidence():
     assert classify_background_error(RuntimeError("This model does not support image input"), "submission_parse_failed") == "submission_parse_failed"
+
+
+@pytest.mark.parametrize("status,code", [
+    (415, "source_content_type_not_allowed"),
+    (400, "source_json_invalid"),
+    (413, "media_inspection_resource_limit"),
+])
+def test_actual_upload_validation_errors_keep_their_actionable_codes(status, code):
+    assert classify_background_error(HTTPException(status, detail={"code": code}), "problem_extraction_failed") == code

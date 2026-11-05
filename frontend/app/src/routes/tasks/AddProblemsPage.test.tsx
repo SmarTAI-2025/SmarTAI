@@ -302,7 +302,7 @@ describe("AddProblemsPage score configuration", () => {
 describe("AddProblemsPage upload capability contract", () => {
   it("shows and enforces the backend file-size limit before preflight", () => {
     renderPage();
-    expect(screen.getByText(/单个文件最大 5\.0 MB/)).toBeInTheDocument();
+    expect(screen.getByText(/单个文件最大 5 MiB/)).toBeInTheDocument();
 
     const oversized = new File(["x"], "oversized.pdf", { type: "application/pdf" });
     Object.defineProperty(oversized, "size", { value: 5 * 1024 * 1024 + 1 });
@@ -310,7 +310,7 @@ describe("AddProblemsPage upload capability contract", () => {
       target: { files: [oversized] },
     });
 
-    expect(screen.getByRole("alert")).toHaveTextContent("超过单个文件 5.0 MB 的上传上限");
+    expect(screen.getByRole("alert")).toHaveTextContent("超过单个文件 5 MiB 的上传上限");
     expect(preflightMutateAsync).not.toHaveBeenCalled();
   });
 
@@ -355,7 +355,7 @@ describe("AddProblemsPage upload capability contract", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("keeps programming-test images blocked even when question OCR is available", async () => {
+  it("allows programming-test images and offers explicit OCR", async () => {
     const user = userEvent.setup();
     renderPage();
     await user.click(screen.getByRole("button", { name: /4\. 测试样例/ }));
@@ -367,7 +367,10 @@ describe("AddProblemsPage upload capability contract", () => {
       },
     });
 
-    expect(screen.getByRole("alert")).toHaveTextContent("编程题测试资料不接受图片");
+    expect(screen.getAllByText("cases.png")).toHaveLength(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("启用该资料的视觉 OCR")).toBeInTheDocument();
+    expect(screen.getByLabelText(/同时保存到课程资料库/)).not.toBeDisabled();
   });
 });
 

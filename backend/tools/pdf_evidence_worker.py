@@ -432,7 +432,7 @@ def response_bytes(request: object, body: bytes) -> bytes:
     except image_evidence_worker.ImageFailure as exc:
         payload = _base(operation, code=exc.code)
     except (MemoryError, OverflowError, RecursionError):
-        payload = _base(operation, code="image_pixel_limit_exceeded" if operation == "image_prepare" else "pdf_structure_limit_exceeded")
+        payload = _base(operation, code="image_processing_failed" if operation == "image_prepare" else "pdf_structure_limit_exceeded")
     except Exception:
         payload = _base(operation, code="image_processing_failed" if operation == "image_prepare" else "pdf_processing_failed")
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")

@@ -230,7 +230,9 @@ async def retry_document(document_id: str, recognition_route_id: str | None = Fo
         # Authorize before loading provider credentials or creating a job.
         await run_in_threadpool(manifest, document_id, current.id, limit=1)
         registry = await run_in_threadpool(_registry_for_owner, current.id)
-        configuration = frozen_configuration(current.id, registry, recognition_route_id)
+        document = await run_in_threadpool(get_document, document_id, current.id)
+        configuration = frozen_configuration(current.id, registry, recognition_route_id,
+            require_visual=bool(document and (document.content_type or "").startswith("image/")))
         job_id = await run_in_threadpool(queue_document, document_id, current.id, configuration,
                                         new_version=True, resubmit_uncertain=accept_uncertain_resubmission,
                                         retry_failed_only=True)

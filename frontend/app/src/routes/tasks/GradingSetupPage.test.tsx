@@ -134,3 +134,15 @@ describe("GradingSetupPage task-material picker", () => {
     expect(screen.getByRole("alert")).not.toHaveTextContent("knowledge_storage_quota_exceeded");
   });
 });
+
+describe("task material upload validation", () => {
+  it.each([["empty.txt", "", "0 字节"], ["notes.zip", "zip", "不支持"]])("rejects %s before calling the upload API", async (name, contents, message) => {
+    const { container } = render(<MemoryRouter><KnowledgeSection locale="zh-CN" taskId="task-1" value="none" onChange={vi.fn()} /></MemoryRouter>);
+    const user = userEvent.setup({ applyAccept: false });
+    attachMaterial.mockClear();
+    await user.upload(container.querySelector<HTMLInputElement>('input[type="file"]')!, new File([contents], name));
+    expect(screen.getByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByText(/64 MiB/)).toBeInTheDocument();
+    expect(attachMaterial).not.toHaveBeenCalled();
+  });
+});

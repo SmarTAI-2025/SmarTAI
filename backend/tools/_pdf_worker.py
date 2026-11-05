@@ -16,8 +16,63 @@ def _write(payload: dict) -> None:
     sys.stdout.buffer.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
 
+def _limit_inspection_address_space() -> None:
+    # Darwin exposes RLIMIT_AS but rejects the decoder ceiling at setrlimit().
+    if sys.platform == "darwin":
+        return
+    try:
+        import resource
+        ceiling = 1024 * 1024 * 1024
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        limits = [ceiling] + [value for value in (soft, hard) if value >= 0]
+        resource.setrlimit(resource.RLIMIT_AS, (min(limits), hard))
+    except (ImportError, AttributeError):
+        pass  # Non-POSIX platforms retain the parent's killable deadline.
+
+
+def _inspect_upload(content_type: str, max_pdf_pages: int) -> dict:
+    """Identify and parse media in a bounded process, without OCR or rendering."""
+    import image_evidence_worker
+
+    _limit_inspection_address_space()
+    limit = 100 * 1024 * 1024 if content_type == "application/pdf" else image_evidence_worker.MAX_INPUT_BYTES
+    body = sys.stdin.buffer.read(limit + 1)
+    if len(body) > limit:
+        return {"status": "error", "code": "pdf_input_too_large" if content_type == "application/pdf" else "image_input_too_large"}
+    if content_type in image_evidence_worker.FORMATS:
+        try:
+            return {"status": "ok", **image_evidence_worker.inspect_image(body, content_type)}
+        except image_evidence_worker.ImageFailure as exc:
+            return {"status": "error", "code": exc.code}
+        except (MemoryError, OverflowError, RecursionError):
+            return {"status": "error", "code": "media_inspection_resource_limit"}
+    if content_type != "application/pdf":
+        return {"status": "error", "code": "media_inspection_failed"}
+    fitz.TOOLS.mupdf_display_errors(False)
+    fitz.TOOLS.mupdf_display_warnings(False)
+    try:
+        with fitz.open(stream=body, filetype="pdf") as document:
+            # PyMuPDF auto-detects PNG/JPEG even with filetype="pdf".
+            if not document.is_pdf:
+                return {"status": "error", "code": "pdf_invalid"}
+            if document.needs_pass:
+                return {"status": "error", "code": "pdf_encrypted"}
+            if document.page_count < 1:
+                return {"status": "error", "code": "pdf_invalid"}
+            if max_pdf_pages and document.page_count > max_pdf_pages:
+                return {"status": "error", "code": "pdf_page_limit_exceeded"}
+            return {"status": "ok", "content_type": "application/pdf", "page_count": document.page_count}
+    except (MemoryError, OverflowError):
+        return {"status": "error", "code": "media_inspection_resource_limit"}
+    except Exception:
+        return {"status": "error", "code": "pdf_invalid"}
+
+
 def main() -> int:
     try:
+        if sys.argv[1] == "inspect-upload":
+            _write(_inspect_upload(sys.argv[2], int(sys.argv[3])))
+            return 0
         if sys.argv[1] == "evidence-v1":
             from pdf_evidence_worker import run_cli
 
