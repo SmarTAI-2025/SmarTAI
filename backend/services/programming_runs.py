@@ -25,6 +25,7 @@ from backend.models import ProblemInfo, StudentAnswerInfo, TestCase, is_programm
 from pydantic import ValidationError
 from backend.services.grading_checkpoints import CheckpointWriteError, current_checkpoints
 from backend.services.programming_submission_mapping import C_FAMILY_FLAG, PYTHON_FLAG, has_markup_fence
+from backend.services.python_source_encoding import PythonSourceEncodingError, python_execution_source
 from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCodeExecutionDisabled
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
 
@@ -197,6 +198,20 @@ def _reference(problem):
     return None
 
 
+def _reference_execution_identity(problem):
+    runtime = runtime_identity()
+    try:
+        source = _reference(problem)
+        copied = python_execution_source(source) if source else source
+        if copied != source:
+            runtime["execution_source_sha256"] = source_hash(copied)
+    except ValueError:
+        # Keep unverified material out of a prior successful preparation.
+        # The regular preparation path reports the specific conflict.
+        runtime["reference_execution_unavailable"] = True
+    return runtime
+
+
 def _question_key(state, problem):
     cp = state.checkpoints
     question = cp.questions.get(problem.q_id) if cp else None
@@ -208,7 +223,7 @@ def _question_key(state, problem):
             ((problem._math_rubric_source or {}).get("presentation") or {}).get("ai_completion_provenance") or {}),
         "cases": [case.model_dump(mode="json") for case in problem.test_cases or ()],
         "config": cp.manifest.get("programming_preparation_config", cp.manifest.get("provider_configuration_fingerprint")) if cp else None,
-        "runtime": runtime_identity()})
+        "runtime": _reference_execution_identity(problem)})
 
 
 async def _notify(reporter, step):
@@ -255,9 +270,10 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
             reference = _reference(problem)
             if reference:
                 from backend.services.programming_test_contract import bind_programming_cases
-                ref_cases = bind_programming_cases(problem.stem, cases, reference)
+                executable = python_execution_source(reference)
+                ref_cases = bind_programming_cases(problem.stem, cases, executable)
                 await _notify(reporter, "validate_programming_reference")
-                report = await execute(reference, ref_cases, language="python", per_case_timeout=10.0)
+                report = await execute(executable, ref_cases, language="python", per_case_timeout=10.0)
                 _validate_report(report, ref_cases)
                 if report.passed_count != len(cases):
                     raise ValueError("programming_reference_conflict")
@@ -395,6 +411,10 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
             ast.parse(code)  # A Python string or comment may contain a C/Java example.
         except (ValueError, SyntaxError, RecursionError):
             return ProgrammingEvidence("unsupported", code, [], reason="programming_language_unsupported")
+    try:
+        executable = python_execution_source(code)
+    except PythonSourceEncodingError:
+        return ProgrammingEvidence("unavailable", code, [], reason="programming_source_encoding_unavailable")
     plan_key, cases, reason = await _prepare(state, problem, provider, generate, execute, reporter)
     if reason:
         return ProgrammingEvidence("unsupported" if reason == "programming_mode_unsupported" else "unavailable",
@@ -406,9 +426,9 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
         if len(hints) > 1:
             raise ValueError("programming_mapping_invalid")
         if hints:
-            cases = bind_programming_cases(problem.stem, cases, code, entry_hint=hints.pop())
+            cases = bind_programming_cases(problem.stem, cases, executable, entry_hint=hints.pop())
         else:
-            cases = bind_programming_cases(problem.stem, cases, code)
+            cases = bind_programming_cases(problem.stem, cases, executable)
     except ValueError:
         return ProgrammingEvidence("unavailable", code, [], reason="programming_mapping_invalid")
     cp = state.checkpoints
@@ -416,6 +436,8 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
                 "revision": cp.revisions[student_id] if cp else None, "source_sha256": source_hash(code),
                 "q_id": problem.q_id, "cases_sha256": digest([c.model_dump(mode="json") for c in cases]),
                 "runtime": runtime_identity()}
+    if executable != code:
+        identity["execution_source_sha256"] = source_hash(executable)
     key = digest(identity)
     async with state.lock(key):
         if key in state.failures:
@@ -429,7 +451,7 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
         else:
             await _notify(reporter, "run_programming_test_cases")
             try:
-                report = await _execute_remaining(state, key, identity, code, cases, execute)
+                report = await _execute_remaining(state, key, identity, executable, cases, execute)
             except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError, ValueError):
                 state.failures[key] = "programming_execution_unavailable"
                 return ProgrammingEvidence("unavailable", code, cases, reason=state.failures[key])

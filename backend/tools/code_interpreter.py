@@ -54,6 +54,7 @@ from typing import List, Optional
 # working.
 from backend.config import settings
 from backend.models import TestCase
+from backend.services.python_source_encoding import python_execution_source
 from backend.tools.sandbox_runtime import get_sandbox_limit, get_sandbox_semaphore
 
 from tools.runner_spike.worker import child_command, request_digest, _diagnose_failure, split_function_result
@@ -337,6 +338,9 @@ async def run_sandbox(
         elif "expected_output" not in tc.model_fields_set:
             raise ValueError("Missing expected standard output")
 
+    # Only the executable copy receives a transport-encoding change. The
+    # confirmed source/answer hash used by the grading evidence stays intact.
+    code = python_execution_source(code)
     case_ids = [getattr(tc, "case_id", None) or f"case-{i + 1}" for i, tc in enumerate(test_cases)]
     if len(set(case_ids)) != len(case_ids):
         raise ValueError("Duplicate test case ID")
