@@ -166,7 +166,13 @@ finally:
         os.kill(pid, signal.SIGKILL)
         os.waitpid(pid, 0)
 """)
-    assert pids.passed and pids.stdout.startswith("pid-limit ")
+    # The script catches EAGAIN and exits normally. The trusted cgroup counter
+    # must still override that outcome while preserving the child's stdout.
+    assert not pids.passed and pids.process_exit_code == 0
+    assert (pids.exit_reason, pids.resource_status) == ("pid_limit", "pid_limit_exceeded")
+    assert pids.cgroup_pid_denials > 0 and pids.cgroup_oom_kills == 0
+    assert pids.stdout.startswith("pid-limit ")
+    record_property("caught_pid_denials", pids.cgroup_pid_denials)
     assert 0 < int(pids.stdout.split()[1]) <= 14
     record_property("pid_children", int(pids.stdout.split()[1]))
     timeout = await run_python_oci("while True: pass", timeout=.25)
@@ -294,10 +300,11 @@ print(json.dumps([child.returncode, oom_kills() - before]))
     control = await run_python_oci(code, memory_mb=128)
     assert control.passed and json.loads(control.stdout) == [0, 0]
     limited = await run_python_oci(code, memory_mb=64)
-    if limited.passed:
-        witness = json.loads(limited.stdout)
-        assert witness == [-signal.SIGKILL, 1]
-        record_property("oom_witness_child_rc_and_kills", json.dumps(witness))
+    witness = json.loads(limited.stdout)
+    assert witness == [-signal.SIGKILL, 1]
+    record_property("oom_witness_child_rc_and_kills", json.dumps(witness))
+    assert limited.process_exit_code == 0 and limited.cgroup_oom_kills == witness[1]
+    record_property("supervisor_oom_kills", limited.cgroup_oom_kills)
     record_property("oom_projection", f"{limited.exit_reason}/{limited.resource_status}")
     assert (limited.passed, limited.exit_reason, limited.resource_status) == (
         False, "memory_limit", "memory_limit_exceeded")
@@ -319,6 +326,8 @@ finally:
         os.waitpid(pid, 0)
 """
     result = await run_python_oci(code)
+    assert result.process_exit_code > 0 and result.cgroup_pid_denials > 0
+    record_property("uncaught_pid_denials", result.cgroup_pid_denials)
     record_property("pid_projection", f"{result.exit_reason}/{result.resource_status}")
     assert (result.passed, result.exit_reason, result.resource_status) == (
         False, "pid_limit", "pid_limit_exceeded")
@@ -354,3 +363,34 @@ async def test_cancel_a_live_child_and_reuse_only_slot(monkeypatch, record_prope
             await asyncio.sleep(.3)
     assert (await run_python_oci("print('slot reused')")).stdout == "slot reused\n"
     assert at_return == (True, False, True)
+
+
+@pytest.mark.parametrize(("source", "args", "kwargs", "reason"), [
+    pytest.param("def helper(x): return x", [], {}, "target_function_missing", id="absent-entry"),
+    pytest.param("def solve(x, /, *, shift): return x+shift", [4], {}, "signature_mismatch",
+                 id="missing-keyword-only"),
+    pytest.param("def solve(x, /): return x", [], {"x": 3}, "signature_mismatch",
+                 id="positional-only-by-keyword"),
+    pytest.param("def solve(x): raise TypeError('missing required positional argument')",
+                 [1], {}, "runtime_error", id="body-typeerror"),
+    pytest.param("raise KeyError('solve')\ndef helper(): return 0", [], {}, "runtime_error",
+                 id="module-fails-before-lookup"),
+    pytest.param("def solve(:", [], {}, "syntax_error", id="malformed-source"),
+    pytest.param("from __future__ import annotations\ndef solve(xs: list[int]) -> int: return len(xs)",
+                 [], {}, "signature_mismatch", id="deferred-annotation-missing-argument"),
+    pytest.param("def solve(x, /, *tail, scale=2, **kw): return (x+sum(tail)+kw['extra'])*scale",
+                 [1, 2, 3], {"extra": 4, "scale": 3}, "success", id="variadic-success"),
+    pytest.param("import random\ndef helper(): return 2", [], {}, "target_function_missing",
+                 id="stdlib-import-absent-entry"),
+])
+async def test_function_failure_phase(source, args, kwargs, reason, record_property):
+    result = await run_python_oci(source, function_call={"name": "solve", "args": args, "kwargs": kwargs})
+    record_property("observed_reason", result.exit_reason)
+    assert result.executed and result.isolation_mode == "oci_container"
+    assert result.cgroup_oom_kills == result.cgroup_pid_denials == 0
+    assert result.termination_signal is None
+    assert result.exit_reason == reason
+    if reason == "success":
+        assert result.passed and result.process_exit_code == 0 and result.return_value == "30"
+    else:
+        assert not result.passed and result.process_exit_code == 1 and result.return_value is None

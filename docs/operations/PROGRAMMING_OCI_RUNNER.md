@@ -183,3 +183,43 @@ reports disabled, unavailable, or ready, the runtime name, the pinned digest,
 the contract version and verified Python modes. Run this command in a
 disposable acceptance deployment first and record the candidate SHA with
 its output.
+
+### Retest against `bb6108cec139b894f5a5bda657d244b6919ca2ff`
+
+On the same disposable Linux disk and service identity, the Podman
+`rm --force --time=0` change returned `CancelledError` within 0.16–0.25 s of
+three cancellations witnessed after the student process started. These three
+controlled trials held the initial image constant. The name and slot were empty
+on return, and every immediate follow-up passed. The cancellation test also passed
+with the rebuilt intermediate worker and again with the exact candidate below.
+
+The final local image ID was
+`sha256:dfc18d58b2ea232327342a1ec7123e60f8203198d9696b998b975aae7f51f412`,
+its local manifest was
+`sha256:f7773b8da300a17fac5d365470f52d41a06dad074871bbf0dfe10beb314819e2`,
+and its worker SHA-256 matched the candidate
+(`89f3cd16d6b4634ee73f5b1370c4b83a4fe4ee33401ff39a45c9220c2e8f4b0d`).
+All three earlier failures passed. The 64 MiB case's parent exited 0, a child
+was killed, and the adapter reported `memory_limit/memory_limit_exceeded` with
+one kernel OOM kill. Caught and uncaught PID denials reported
+`pid_limit/pid_limit_exceeded` with a positive kernel denial counter and
+different process exit codes. An unattributed SIGKILL yielded an infrastructure error.
+
+The pristine candidate's CLI run yielded 15 passes and one failed assertion.
+That assertion had required a caught PID denial to produce success. The updated
+acceptance test requires a resource failure despite the student's zero exit, a
+trusted denial counter and the same bounded diagnostic stdout. With this
+correction the original 15 plus the candidate's new SIGKILL/PID test passed.
+Nine additional function-diagnosis tests yielded seven passes and two failures
+(23/25 overall). The remaining cases both report `runtime_error`.
+
+| Input and requested call | Required case result | Observed boundary |
+| --- | --- | --- |
+| `from __future__ import annotations`, followed by `def solve(xs: list[int]) -> int: return len(xs)`, call `solve()` | `signature_mismatch` | The static inspector rejects the subscript annotation even though annotation evaluation is deferred. The control call `solve([1,2])` returned 2. |
+| `import random`, followed by `def helper(): return 2`, call `solve()` | `target_function_missing` | The inspector exits when it encounters a module outside its standard-library allowlist, before looking up the target. The control call `helper()` returned 2 in the same image. |
+
+The matrix distinguishes a plain missing function, missing keyword-only arguments,
+a positional-only argument passed by keyword, a TypeError inside a valid function,
+module failure before lookup, malformed source, and a valid variadic call.
+All counts above refer to local rootless Linux. Rerun both suites on a fixed
+candidate and retain the raw JUnit before qualifying the intended AWS identity.
