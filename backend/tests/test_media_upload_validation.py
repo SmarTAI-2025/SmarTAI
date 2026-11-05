@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import io
 import struct
+import sys
 import threading
 import zlib
 
@@ -12,7 +13,7 @@ from PIL import Image
 import pymupdf as fitz
 import pytest
 
-from backend.tools import file_processing, image_evidence_worker
+from backend.tools import _pdf_worker, file_processing, image_evidence_worker
 from backend.tools.media_validation import validate_media_content
 
 
@@ -27,6 +28,21 @@ def pdf_bytes(pages=1, encrypted=False):
         for _ in range(pages):
             document.new_page()
         return document.tobytes(**({"encryption": fitz.PDF_ENCRYPT_AES_256, "owner_pw": "owner", "user_pw": "user"} if encrypted else {}))
+
+
+@pytest.mark.parametrize(("platform", "inherited", "expected"), [
+    ("darwin", (-1, -1), None),
+    ("linux", (-1, -1), (1 << 30, -1)),
+    ("linux", (64 << 20, 128 << 20), (64 << 20, 128 << 20)),
+])
+def test_inspection_address_space_limit(monkeypatch, platform, inherited, expected):
+    resource = pytest.importorskip("resource")
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(resource, "getrlimit", lambda key: inherited)
+    calls = []
+    monkeypatch.setattr(resource, "setrlimit", lambda key, limits: calls.append((key, limits)))
+    _pdf_worker._limit_inspection_address_space()
+    assert calls == ([] if expected is None else [(resource.RLIMIT_AS, expected)])
 
 
 @pytest.mark.asyncio

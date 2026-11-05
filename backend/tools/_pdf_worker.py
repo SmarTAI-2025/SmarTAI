@@ -16,12 +16,10 @@ def _write(payload: dict) -> None:
     sys.stdout.buffer.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
 
-def _inspect_upload(content_type: str, max_pdf_pages: int) -> dict:
-    """Identify and parse media in a bounded process, without OCR or rendering."""
-    import image_evidence_worker
-
-    # Parent deadlines/concurrency bound execution. Also cap decoder allocations
-    # before opening hostile files; this limit applies only to this worker mode.
+def _limit_inspection_address_space() -> None:
+    # Darwin exposes RLIMIT_AS but rejects the decoder ceiling at setrlimit().
+    if sys.platform == "darwin":
+        return
     try:
         import resource
         ceiling = 1024 * 1024 * 1024
@@ -30,6 +28,13 @@ def _inspect_upload(content_type: str, max_pdf_pages: int) -> dict:
         resource.setrlimit(resource.RLIMIT_AS, (min(limits), hard))
     except (ImportError, AttributeError):
         pass  # Non-POSIX platforms retain the parent's killable deadline.
+
+
+def _inspect_upload(content_type: str, max_pdf_pages: int) -> dict:
+    """Identify and parse media in a bounded process, without OCR or rendering."""
+    import image_evidence_worker
+
+    _limit_inspection_address_space()
     limit = 100 * 1024 * 1024 if content_type == "application/pdf" else image_evidence_worker.MAX_INPUT_BYTES
     body = sys.stdin.buffer.read(limit + 1)
     if len(body) > limit:
