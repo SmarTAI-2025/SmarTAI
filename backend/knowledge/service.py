@@ -18,8 +18,13 @@ KNOWLEDGE_UPLOAD_EXTENSIONS = {".pdf", ".txt", ".md", ".markdown", *IMAGE_MEDIA_
 async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
                           content_type: str | None = None, title: str | None = None,
                           retention_policy: str = "retained", origin_assignment_id: str | None = None,
-                          registry=None, recognition_route_id=None, native_only: bool = False) -> KnowledgeDocument:
-    """Persist before queueing. Upload completion is not whole-book completion."""
+                          registry=None, recognition_route_id=None, native_only: bool = False,
+                          media_slot_timeout_seconds: float | None = 10) -> KnowledgeDocument:
+    """Persist before queueing. Upload completion is not whole-book completion.
+
+    Queued callers may wait for a slot under their owning task's lifetime;
+    this does not change the isolated decoder's execution timeout.
+    """
     from backend.db.knowledge_ingestion_repository import queue_document
     from backend.knowledge.ingestion import frozen_configuration, KnowledgeIngestionWorker
 
@@ -35,7 +40,10 @@ async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
     image = extension in IMAGE_MEDIA_TYPES
     if image and len(content) > MAX_IMAGE_INPUT_BYTES:
         raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": MAX_IMAGE_INPUT_BYTES})
-    media_type = (await validate_upload_content(content, safe_name, content_type=content_type)).content_type
+    media_type = (await validate_upload_content(
+        content, safe_name, content_type=content_type,
+        media_slot_timeout_seconds=media_slot_timeout_seconds,
+    )).content_type
     visual = media_type == "application/pdf" or image
     expected_type = IMAGE_MEDIA_TYPES.get(extension) or ("application/pdf" if extension == ".pdf" else None)
     if (expected_type and media_type != expected_type) or (not expected_type and not media_type.startswith("text/")):

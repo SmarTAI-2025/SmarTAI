@@ -1321,6 +1321,7 @@ async def _save_source_to_library(
     *, save: bool, descriptor: dict, owner_id: str, task_id: str,
     role: str, existing_material_id: str | None,
     registry=None, recognition_route_id: str | None = None,
+    media_slot_timeout_seconds: float | None = 10,
 ) -> dict | None:
     if not save:
         return None
@@ -1347,6 +1348,7 @@ async def _save_source_to_library(
         title=Path(filename).stem,
         retention_policy="retained",
         registry=registry, recognition_route_id=recognition_route_id,
+        media_slot_timeout_seconds=media_slot_timeout_seconds,
     )
     if document.status not in {"ready", "partial", "processing", "failed"}:
         raise InvalidTransition("knowledge_document_not_ready")
@@ -2411,6 +2413,7 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
             owner_id=operation.owner_id, task_id=operation.assignment_id,
             role=draft.role, existing_material_id=draft.library_material_id,
             registry=registry, recognition_route_id=route.route_id,
+            media_slot_timeout_seconds=None,
         )
         updated = {**payload, "recognition": result.recognition, "saved_material": saved}
         updated.pop("source_error", None)
