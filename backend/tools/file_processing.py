@@ -8,6 +8,7 @@ the tools/ namespace so it's discoverable as a "predefined tool" per docs §4.2.
 from __future__ import annotations
 
 import asyncio
+import bz2
 import errno
 import hashlib
 import io
@@ -75,6 +76,10 @@ IMAGE_MEDIA_TYPES = {
 ARCHIVE_EXTENSIONS = (
     ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
 )
+ARCHIVE_CONTENT_TYPES = frozenset({
+    "application/zip", "application/vnd.rar", "application/x-7z-compressed",
+    "application/x-tar", "application/gzip", "application/x-bzip2",
+})
 
 
 class _ArchiveLimitExceeded(RuntimeError):
@@ -113,12 +118,15 @@ class ContentInspection:
 
 
 _MIME_ALIASES = {
+    "application/x-pdf": "application/pdf",
     "application/x-zip-compressed": "application/zip",
+    "application/x-rar": "application/vnd.rar",
     "application/x-rar-compressed": "application/vnd.rar",
     "application/x-7z-compressed": "application/x-7z-compressed",
     "application/x-gzip": "application/gzip",
     "image/jpg": "image/jpeg",
     "text/x-markdown": "text/markdown",
+    "text/json": "application/json",
 }
 
 
@@ -145,13 +153,15 @@ def _looks_like_text(data: bytes) -> bool:
 def _content_signature_type(data: bytes, filename: str) -> str:
     if not data:
         return "application/octet-stream"
-    if b"%PDF-" in data[:1024]:
+    if data.startswith(b"%PDF-"):
         return "application/pdf"
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
     if data.startswith(b"\xff\xd8\xff"):
         return "image/jpeg"
-    if data.startswith(b"BM"):
+    # "BM" alone also prefixes ordinary words such as "BMP". A bitmap file
+    # header includes two zero reserved fields before the pixel-data offset.
+    if len(data) >= 26 and data.startswith(b"BM") and data[6:10] == b"\0" * 4:
         return "image/bmp"
     if data.startswith((b"II*\x00", b"MM\x00*")):
         return "image/tiff"
@@ -165,14 +175,36 @@ def _content_signature_type(data: bytes, filename: str) -> str:
         return "application/x-7z-compressed"
     if data.startswith(b"\x1f\x8b"):
         return "application/gzip"
-    if data.startswith(b"BZh"):
-        return "application/x-bzip2"
-    if len(data) > 262 and data[257:262] == b"ustar":
+    if len(data) >= 4 and data.startswith(b"BZh") and data[3] in b"123456789":
+        # This ASCII prefix also occurs in ordinary text. Check a bounded
+        # binary probe with the actual decoder before routing to an archive.
+        # Neither input nor expanded output may grow with the uploaded file.
+        probe = data[:4096]
+        if not _looks_like_text(probe):
+            try:
+                bz2.BZ2Decompressor().decompress(probe, max_length=1)
+            except OSError:
+                pass
+            else:
+                return "application/x-bzip2"
+    if len(data) >= 512 and data[257:262] == b"ustar":
+        try:
+            tarfile.TarInfo.frombuf(data[:512], "utf-8", "surrogateescape")
+        except tarfile.HeaderError:
+            pass
+        else:
+            return "application/x-tar"
+    # An empty TAR has only zero end blocks, with no USTAR member header.
+    if filename.lower().endswith(".tar") and len(data) >= 1024 and not any(data):
         return "application/x-tar"
+    # A container, image or text document can quote a PDF marker. Only tolerate
+    # a bounded whitespace/BOM preamble, not a marker anywhere in the payload.
+    if data[:1024].lstrip(b"\xef\xbb\xbf\x00\t\r\n\f ").startswith(b"%PDF-"):
+        return "application/pdf"
     if _looks_like_text(data):
         guessed, _encoding = mimetypes.guess_type(filename)
         guessed_type = _normalized_content_type(guessed)
-        return guessed_type if guessed_type.startswith("text/") else "text/plain"
+        return guessed_type if guessed_type.startswith("text/") or guessed_type == "application/json" else "text/plain"
     return "application/octet-stream"
 
 
@@ -205,7 +237,13 @@ def inspect_upload_content(
         for value in (supplied_type, filename_type)
         if value != "application/octet-stream"
     }
-    mismatch = any(value != detected for value in declared_hints)
+    # Browsers may label Markdown/CSV/JSON as generic plain text. That label
+    # is compatible with detected text, but cannot excuse a binary mismatch.
+    text_content = detected.startswith("text/") or detected == "application/json"
+    mismatch = any(
+        value != detected and not (value == "text/plain" and text_content)
+        for value in declared_hints
+    )
     return ContentInspection(
         content_type=detected,
         declared_content_type=declared,
@@ -603,7 +641,7 @@ async def extract_text_from_upload(
     if reporter:
         await reporter._emit_message(f"Reading {safe_name}...")
 
-    if media_type.startswith("text/"):
+    if media_type.startswith("text/") or (media_type == "application/json" and purpose == "test_cases"):
         return await decode_text_bytes(file_bytes)
 
     if media_type == "application/pdf":
@@ -803,15 +841,17 @@ def _extract_raw_files_from_archive(
             ))
             return
         inspection = inspect_upload_content(data, clean)
+        error_code = (
+            "submission_source_content_type_mismatch" if inspection.mismatch
+            else "submission_archive_nested_unsupported"
+            if inspection.content_type in ARCHIVE_CONTENT_TYPES else None
+        )
         sources.append(RawUploadSource(
             filename=clean,
             content=data,
             content_type=inspection.content_type,
-            pre_error_code=(
-                "submission_source_content_type_mismatch"
-                if inspection.mismatch else None
-            ),
-            failure_phase="source_read" if inspection.mismatch else None,
+            pre_error_code=error_code,
+            failure_phase=("source_read" if inspection.mismatch else "archive") if error_code else None,
         ))
 
     def add_failure(raw_name: str, index: int, code: str) -> None:
@@ -836,10 +876,13 @@ def _extract_raw_files_from_archive(
 
     if lower.endswith(".zip"):
         with zipfile.ZipFile(file_in_memory, "r") as archive:
+            entries = archive.infolist()
             members = [
-                item for item in archive.infolist()
+                item for item in entries
                 if not item.is_dir() and _is_valid_file(item.filename)
             ]
+            if not members and any(item.is_dir() and _is_valid_file(item.filename) for item in entries):
+                raise RuntimeError("submission_archive_directories_only")
             _validate_archive_members([item.file_size for item in members])
             for index, item in enumerate(members):
                 repaired_name = _repair_zip_member_name(item)
@@ -867,10 +910,13 @@ def _extract_raw_files_from_archive(
             raise RuntimeError("submission_archive_processing_unavailable")
         try:
             with rarfile.RarFile(file_in_memory, "r") as archive:
+                entries = archive.infolist()
                 members = [
-                    item for item in archive.infolist()
+                    item for item in entries
                     if not item.is_dir() and _is_valid_file(item.filename)
                 ]
+                if not members and any(item.is_dir() and _is_valid_file(item.filename) for item in entries):
+                    raise RuntimeError("submission_archive_directories_only")
                 _validate_archive_members([item.file_size for item in members])
                 for index, item in enumerate(members):
                     try:
@@ -893,6 +939,7 @@ def _extract_raw_files_from_archive(
         except rarfile.Error as exc:
             if _archive_infrastructure_error(exc):
                 raise RuntimeError("submission_archive_processing_unavailable") from exc
+
             raise RuntimeError("submission_archive_invalid") from exc
         return sources
 
@@ -900,10 +947,13 @@ def _extract_raw_files_from_archive(
         if py7zr is None:
             raise RuntimeError("submission_archive_processing_unavailable")
         with py7zr.SevenZipFile(file_in_memory, "r") as archive:
+            entries = archive.list()
             members = [
-                item for item in archive.list()
+                item for item in entries
                 if item.is_file and not item.is_symlink and _is_valid_file(item.filename)
             ]
+            if not members and any(item.is_directory and _is_valid_file(item.filename) for item in entries):
+                raise RuntimeError("submission_archive_directories_only")
         _validate_archive_members([int(item.uncompressed) for item in members])
         with tempfile.TemporaryDirectory(prefix="smartai-submissions-") as temp_dir:
             root = Path(temp_dir).resolve()
@@ -936,10 +986,13 @@ def _extract_raw_files_from_archive(
 
     if lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2")):
         with tarfile.open(fileobj=file_in_memory, mode="r:*") as archive:
+            entries = archive.getmembers()
             members = [
-                item for item in archive.getmembers()
+                item for item in entries
                 if item.isfile() and _is_valid_file(item.name)
             ]
+            if not members and any(item.isdir() and _is_valid_file(item.name) for item in entries):
+                raise RuntimeError("submission_archive_directories_only")
             _validate_archive_members([item.size for item in members])
             for index, item in enumerate(members):
                 try:
@@ -1033,7 +1086,7 @@ async def extract_files_from_archive(
                     return {"filename": clean, "content": content}
 
                 files_data.extend(await _gather_limited([process(i) for i in valid]))
-        except rarfile.UNRARError as e:
+        except rarfile.Error as e:
             raise RuntimeError(
                 f"RAR extraction failed: {e}. Ensure 'unrar' CLI is installed on the server."
             )

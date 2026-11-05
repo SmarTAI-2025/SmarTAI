@@ -71,7 +71,7 @@ from backend.domain.errors import (
     ValidationError,
     VersionConflict,
 )
-from backend.domain.source_outcomes import safe_source_diagnostic
+from backend.domain.source_outcomes import safe_source_diagnostic, source_requires_reupload
 from backend.domain.source_storage import (
     DELAYED_SOURCE_OPERATION_TYPES,
     TASK_DELETE_OPERATION,
@@ -664,6 +664,10 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
                 else None
             ),
             "failure_phase": safe_phase,
+            "requires_reupload": (
+                external_status == "failed" and outcome is not None
+                and source_requires_reupload(outcome.stable_error_code, outcome.retryable)
+            ),
             "retryable": (
                 outcome.retryable
                 if outcome
@@ -2758,11 +2762,28 @@ def queue_task_submission_parsing(
     }
 
 
+def require_submission_retryable_sources(*, operation, owner_id: str) -> None:
+    """Reject unchanged, unusable originals at every automatic restart entry."""
+    results = source_outcome_repository.list_source_results(
+        operation_id=operation.id, owner_id=owner_id, attempt=operation.attempt,
+    )
+    unfinished = [result.outcome for result in results
+                  if result.outcome is None or result.outcome.status not in {"parsed", "identity_conflict"}]
+    if unfinished and all(outcome is not None
+                          and source_requires_reupload(outcome.stable_error_code, outcome.retryable)
+                          for outcome in unfinished):
+        raise InvalidTransition(
+            "Correct or replace the files before restarting recognition.",
+            code="submission_retry_requires_reupload",
+        )
+
+
 def load_submission_retry_upload(
     *,
     task_id: str,
     owner_id: str,
     job_id: str,
+    for_manual_review: bool = False,
 ) -> dict[str, Any]:
     """Load a failed submission upload from owner-scoped durable storage."""
     operation = workflow_repository.get_operation(job_id, owner_id=owner_id)
@@ -2777,6 +2798,10 @@ def load_submission_retry_upload(
             "Only a failed recognition operation can reuse its originals.",
             code="submission_retry_not_available",
         )
+    # A model change cannot repair immutable file errors. Preserve mixed batches'
+    # recoverable work, but do not reopen/requeue an unchanged, unusable upload.
+    if not for_manual_review:
+        require_submission_retryable_sources(operation=operation, owner_id=owner_id)
     payload = dict(operation.payload or {})
     stored = None
     for file_id in operation.artifact_refs:

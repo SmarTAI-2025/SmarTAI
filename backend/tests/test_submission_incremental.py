@@ -168,7 +168,7 @@ async def test_parallel_submission_progress_preserves_saved_counts_and_counts_fi
             await asyncio.wait_for(asyncio.shield(first_task), 3)
             snapshots["first_finished"] = await reporter.snapshot()
             if second_fails:
-                raise ValidationError("Unread second source", code="submission_source_empty")
+                raise ValidationError("Temporary read timeout", code="provider_timeout")
         return SimpleNamespace(text=kwargs["content"].decode(), recognition=None)
 
     monkeypatch.setattr(task_facade, "read_question_source", read)

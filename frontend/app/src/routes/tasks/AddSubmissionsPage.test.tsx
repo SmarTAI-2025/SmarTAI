@@ -11,6 +11,7 @@ import { APIError } from "@/api/client";
 import { userFacingError } from "@/lib/taskActionGuards";
 import { rememberImageReturn } from "@/lib/imageRecoveryNavigation";
 import { AddSubmissionsPage } from "./AddSubmissionsPage";
+import type { SubmissionSourceOutcome } from "@/types";
 
 const mutateAsync = vi.fn();
 const retryMutateAsync = vi.fn();
@@ -27,6 +28,7 @@ const taskState = vi.hoisted(() => ({
     pending_submission_file_name: null as string | null,
     last_failed_job_id: null as string | null,
     error: null as string | null,
+    submission_sources: [] as SubmissionSourceOutcome[],
   },
 }));
 
@@ -180,7 +182,51 @@ describe("AddSubmissionsPage OCR uploads", () => {
       pending_submission_file_name: null,
       last_failed_job_id: null,
       error: null,
+      submission_sources: [],
     };
+  });
+
+  it.each(["zh-CN", "en-US"])("requires a replacement file after returning from immutable failures (%s)", async locale => {
+    copy.locale = locale;
+    try {
+      Object.assign(taskState.data, { status: "error", last_failed_job_id: "failed-job",
+        pending_submission_file_name: "bad.zip", submission_sources: [{
+          source_id: "bad", file_id: "bad-file", file_name: "bad.pdf", content_type: "text/plain",
+          size_bytes: 8, status: "failed", internal_status: "source_read_failed", reason_code: "submission_source_content_type_mismatch",
+          retryable: false, requires_reupload: true, matched_answer_count: 0, unknown_question_ids: [],
+          job_id: "failed-job", attempt: 1, created_at: 1,
+        }] });
+      inputState.input = { job_id: "failed-job", stored_file_id: "saved-upload", filename: "bad.zip",
+        available: true, identity_mode: "filename", roster_count: 0, recognition_provider_id: "provider-default" };
+      const { container } = renderPage();
+      await screen.findByText("bad.zip");
+      expect(screen.queryByText(locale === "zh-CN" ? "原文件与设置已恢复，可直接重试。" : "Your file and settings are restored. You can retry.")).not.toBeInTheDocument();
+      const start = screen.getByRole("button", { name: locale === "zh-CN" ? "重新识别全部作答" : "Recognize All Submissions Again" });
+      expect(start).toBeDisabled();
+      fireEvent.click(start);
+      expect(mutateAsync).not.toHaveBeenCalled();
+      fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["Question 1: answer"], "fixed.txt", { type: "text/plain" })] } });
+      await waitFor(() => expect(screen.getByRole("button", { name: "submissionUploadStart" })).toBeEnabled());
+      fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalledOnce());
+      expect(mutateAsync.mock.calls[0][0].file.name).toBe("fixed.txt");
+    } finally { copy.locale = "zh-CN"; }
+  });
+
+  it("blocks a stale restored input after the server requires reupload, then accepts a replacement", async () => {
+    Object.assign(taskState.data, { status: "error", last_failed_job_id: "failed-job", pending_submission_file_name: "bad.zip" });
+    inputState.input = { job_id: "failed-job", stored_file_id: "saved-upload", filename: "bad.zip",
+      available: true, identity_mode: "filename", roster_count: 0, recognition_provider_id: "provider-default" };
+    mutateAsync.mockRejectedValueOnce(new APIError(409, "submission_retry_requires_reupload", { error: { code: "submission_retry_requires_reupload" } }));
+    const { container } = renderPage();
+    await screen.findByText("bad.zip");
+    const start = screen.getByRole("button", { name: "重新识别全部作答" });
+    fireEvent.click(start);
+    await waitFor(() => expect(start).toBeDisabled());
+    expect(screen.queryByText("submissionUploadErrorGeneric")).not.toBeInTheDocument();
+    expect(mutateAsync).toHaveBeenCalledOnce();
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["fixed"], "fixed.txt", { type: "text/plain" })] } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "submissionUploadStart" })).toBeEnabled());
   });
 
   it("saves both answer and roster bytes before recovery and keeps the new model on browser back", async () => {

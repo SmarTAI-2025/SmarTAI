@@ -1,6 +1,11 @@
 import type { Locale } from "@/i18n/messages";
 import type { SubmissionPageError, SubmissionSourceOutcome } from "@/types";
 
+export function submissionRequiresReupload(sources: SubmissionSourceOutcome[] | undefined): boolean {
+  const unfinished = (sources ?? []).filter(source => source.status === "failed" || source.status === "processing");
+  return unfinished.length > 0 && unfinished.every(source => source.status === "failed" && source.requires_reupload === true);
+}
+
 export interface SubmissionSourceReasonCopy {
   title: string;
   description: string;
@@ -361,6 +366,8 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     nextStep: tx(locale, "稍后重试；持续失败时联系管理员，或改用 ZIP 上传。", "Retry later. If it persists, contact an administrator or upload a ZIP instead."),
   }),
   submission_archive_empty: (locale) => archiveCopy(locale, "压缩包中没有学生文件", "The archive contains no student files", "确认压缩包不是空的，且文件没有全部放在系统隐藏目录中。", "Make sure the archive is not empty and files are not all in hidden system folders."),
+  submission_archive_directories_only: (locale) => archiveCopy(locale, "压缩包中只找到目录，没有学生文件", "The archive contains folders but no student files", "普通多层文件夹可以读取；请确认文件夹中包含 PDF 等受支持文件后重新打包上传。", "Ordinary nested folders are supported. Include supported files such as PDFs inside the folders, then repack and upload."),
+  submission_archive_nested_unsupported: (locale) => archiveMemberCopy(locale, "压缩包内仍是压缩包，暂不支持继续解压", "This archive member is another archive and cannot be unpacked", "请先解压内层压缩包，再将其中的 PDF 等受支持文件重新打包上传；可以保留普通文件夹。", "Unpack the inner archive first, then repack its supported files, such as PDFs, and upload again. Ordinary folders can be retained."),
   submission_archive_invalid: (locale) => archiveCopy(locale, "压缩包损坏或结构不安全", "The archive is damaged or unsafe", "请重新打包为未加密的 ZIP 后上传。", "Create a new, unencrypted ZIP and upload it again."),
   submission_archive_limit_exceeded: (locale) => archiveCopy(locale, "压缩包超过安全上限", "The archive exceeds a safety limit", "减少文件数量、单文件大小或解压后总体积，再重新上传。", "Reduce file count, member size, or total expanded size, then upload again."),
   submission_archive_member_too_large: (locale) => archiveMemberCopy(locale, "压缩包中的这份文件过大", "This archive member is too large", "只压缩或拆分这份文件后重新打包；同包其他健康文件已经继续处理。", "Compress or split only this member, then rebuild the archive. Other healthy members continued processing."),
