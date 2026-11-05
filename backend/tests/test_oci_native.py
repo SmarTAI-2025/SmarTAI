@@ -87,6 +87,13 @@ def test_native_teacher_save_to_grade(monkeypatch, filename):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["teacher_zero", "platform", "ai_only_confirm"])
+async def test_native_review_and_release(monkeypatch, scenario):
+    from backend.tests.test_programming_scoring_contract import exercise_review_and_release
+    await exercise_review_and_release(monkeypatch, scenario, native=True)
+
+
+@pytest.mark.asyncio
 async def test_native_failures_cancellation_and_isolation(monkeypatch):
     async def run(code, timeout=3):
         return await run_program_oci(code, language="c", timeout=timeout)

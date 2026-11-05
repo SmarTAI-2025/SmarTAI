@@ -4,6 +4,11 @@ on:
   push:
     paths:
       - "tools/runner_spike/**"
+      - "tools/evaluation/programming/replay_u1.py"
+      - "backend/services/programming*.py"
+      - "backend/skills/programming*.py"
+      - "backend/tests/test_programming_saved_grading_flow.py"
+      - "backend/tests/test_programming_scoring_contract.py"
       - "backend/tools/grading_runner.py"
       - "backend/tools/oci_grading_runner.py"
       - "backend/tools/code_interpreter.py"
@@ -15,6 +20,11 @@ on:
     branches: [main]
     paths:
       - "tools/runner_spike/**"
+      - "tools/evaluation/programming/replay_u1.py"
+      - "backend/services/programming*.py"
+      - "backend/skills/programming*.py"
+      - "backend/tests/test_programming_saved_grading_flow.py"
+      - "backend/tests/test_programming_scoring_contract.py"
       - "backend/tools/grading_runner.py"
       - "backend/tools/oci_grading_runner.py"
       - "backend/tools/code_interpreter.py"

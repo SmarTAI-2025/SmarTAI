@@ -158,6 +158,10 @@ async def test_selected_experts_share_one_execution_and_weighted_real_zero(monke
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scenario", ["ai_only_confirm", "ai_only_edit", "code_only", "teacher_zero", "platform", "configuration", "no_submission"])
 async def test_run_review_finalization_and_release(monkeypatch, scenario):
+    await exercise_review_and_release(monkeypatch, scenario)
+
+
+async def exercise_review_and_release(monkeypatch, scenario, *, native=False):
     from backend.config import settings
     from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
     monkeypatch.setattr(settings, "multi_sample_n", 1)
@@ -182,10 +186,19 @@ async def test_run_review_finalization_and_release(monkeypatch, scenario):
     code = "" if scenario == "no_submission" else "print(0)"
     if scenario == "code_only":
         code = "#include <iostream>\nint main(){return 0;}"
+    flags = []
+    if native:
+        from backend.services.programming_submission_mapping import source_answers
+        code = '#include <stdio.h>\nint main(void){puts("0");}'
+        mapped, = source_answers("answer.c", code, {"q1":{"type": q.type, "stem": q.stem}}, {"q1"})
+        flags = mapped["flag"]
     submission_repository.add_revision(submission_id=sub.id, student_id=student, source="online",
-        answers=[{"question_id":q.id, "q_id":q.q_id, "type":q.type, "content":code}])
+        answers=[{"question_id":q.id, "q_id":q.q_id, "type":q.type, "content":code, "flag":flags}])
     if scenario == "platform":
-        monkeypatch.setattr(programming, "run_sandbox", AsyncMock(side_effect=IsolatedRunnerUnavailable()))
+        if native:
+            monkeypatch.setattr(settings, "program_runner_image", "smartai-intentionally-absent:missing")
+        else:
+            monkeypatch.setattr(programming, "run_sandbox", AsyncMock(side_effect=IsolatedRunnerUnavailable()))
     ai_score = 7 if scenario in {"ai_only_edit", "code_only"} else 0
     route = fixed_provider(response(award(ai_score)))
     registry = SimpleNamespace(count=lambda: 1, list_available=lambda: [route], pick_default=lambda: route)
