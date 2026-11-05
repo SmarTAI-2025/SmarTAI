@@ -131,7 +131,9 @@ async def verified_boundary(problem, run, public, proposal, execute, reporter):
     async with state.lock(key):
         previous = state.read(key, runs.AUXILIARY)
         if previous is not None:
-            return previous.get("observation")
+            # A pre-domain receipt contains only a display preview. Preserve the
+            # attempt limit on resume and surface only independently checked inputs.
+            return previous.get("observation") if previous.get("input_domain") == "allowed" else None
         case = _proposed_case(proposal, run.cases)
         if case is None or input_domain(problem, case) != "allowed":
             return None
@@ -160,5 +162,5 @@ async def verified_boundary(problem, run, public, proposal, execute, reporter):
             # An optional experiment cannot turn a valid official grade into a
             # student failure. Lease loss and cancellation still propagate.
             pass
-        state.store(runs.AUXILIARY, key, {"status": "done", "observation": observation})
+        state.store(runs.AUXILIARY, key, {"status": "done", "input_domain": "allowed", "observation": observation})
         return observation
