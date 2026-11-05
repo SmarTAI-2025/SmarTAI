@@ -4,7 +4,27 @@ This adapter connects the existing Python grading tool to Docker/Podman. It keep
 stdin/stdout comparison, explicit function-name/argument mapping, per-test results,
 and the existing grading/aggregation logic. Each test case runs in its own container.
 SymPy uses the same execution transport and reports its actual isolation mode.
-It does not implement C/C++ or alter the scoring rubric.
+Native uploads with an identified single-file main use C17 (gcc) or C++17 (g++).
+Every stdin case compiles and links inside its own container, with 12 seconds per
+build stage and a separate execution deadline. Only native cases mount an 8 MiB
+executable tmpfs at /binary. The /work scratch mount stays noexec. Compiler and
+linker diagnostics are classified inside the worker. Recognized source errors
+require a successful toolchain control build and run before they can affect scoring.
+Unknown failures leave the submission ungraded. Rebuild and pin the candidate
+image before enabling native execution. Teacher scoring uses the existing rubric.
+
+To replay the synthetic C/C++ U1 suite on Linux, fetch fixture commit
+`ab36293b5b00ea2dd20803cd89c727398671c835` from PR #277, select the candidate
+image with `SMARTAI_PROGRAM_RUNNER_IMAGE`, and run:
+
+```sh
+SMARTAI_OCI_REAL_TEST=1 SMARTAI_U1_NATIVE_EVIDENCE=/tmp/u1-native-evidence.json \
+  python -m pytest -q backend/tests/test_oci_native.py
+```
+
+The output path must be new. The CI run attaches the same JSON as
+`u1-native-evidence`. It records safe scoring inputs and observed per-case
+stdout and outcomes for synthetic C01–C04 and X01–X04, without model calls.
 
 ## Configuration
 

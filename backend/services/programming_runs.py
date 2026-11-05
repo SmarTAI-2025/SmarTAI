@@ -304,7 +304,7 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
 def has_native_main(code):
     # Ignore comments, literals and prototypes when identifying an entry.
     tokens = re.sub(r"""//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'""", " ", code, flags=re.S)
-    return bool(re.search(r"\bmain\s*\([^;{}]*\)[^;{}]*\{", tokens))
+    return bool(re.search(r"\b(?:int|signed|auto|[A-Za-z_]\w*_t)\s+main\s*\([^;{}]*\)[^;{}]*\{", tokens))
 
 
 async def prepare_pending(state, problems, students, selection, reporter):

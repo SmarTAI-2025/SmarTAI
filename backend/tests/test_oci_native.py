@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -11,7 +12,8 @@ from backend.services.programming_runs import evidence_for_answer, programming_r
 from backend.services.programming_submission_mapping import source_answers
 from backend.tools.code_interpreter import run_sandbox
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable, run_program_oci
-from tools.evaluation.programming.replay_u1 import fixture, teacher_cases
+from backend.skills.programming_evidence import describe_run
+from tools.evaluation.programming.replay_u1 import U1, fixture, teacher_cases
 
 pytestmark = pytest.mark.skipif(os.getenv("SMARTAI_OCI_REAL_TEST") != "1", reason="Requires real Linux OCI")
 
@@ -27,16 +29,30 @@ async def test_u1_native_submissions():
     questions = json.loads(fixture("questions.json"))
     submissions = json.loads(fixture("submissions.json"))
     seen_ids = set()
+    observations = []
     with programming_run(None, None):
         for q in (q for q in questions if q["language"] in {"c", "cpp"}):
             problem = ProblemInfo(q_id=q["q_id"], number="1", type="编程题", stem=q["stem"],
-                                  max_score=10, test_cases=teacher_cases(q), solution_code=fixture(q["reference"]))
+                                  max_score=10, criterion="\n".join(q["teacher_rules_draft"]), test_cases=teacher_cases(q), solution_code=fixture(q["reference"]))
             for row in (r for r in submissions if r["q_id"] == q["q_id"]):
                 filename = row["source_file"]
-                raw, = source_answers(filename, fixture(filename), {problem.q_id:problem.model_dump()}, {problem.q_id})
+                if filename:
+                    raw, = source_answers(filename, fixture(filename), {problem.q_id: problem.model_dump()}, {problem.q_id})
+                else:
+                    raw = dict(q_id=problem.q_id, number="1", type="编程题", content="")
                 evidence = await evidence_for_answer(problem=problem, answer=StudentAnswerInfo.model_validate(raw),
                     student_id=row["submission_id"], task_id="u1", provider=None, reporter=None,
                     generate=None, execute=run_sandbox)
+                zh, examples = describe_run(evidence, "zh", problem)
+                en, _ = describe_run(evidence, "en", problem)
+                cases = []
+                observations.append({"submission_id": row["submission_id"], "source_file": filename,
+                    "question": problem.q_id, "criterion": problem.criterion, "execution": evidence.status,
+                    "evidence": zh.model_dump(), "safe_summary_en": en.safe_summary, "examples": examples,
+                    "cases": cases})
+                if not filename:
+                    assert evidence.status == "no_submission" and zh.primary_reason == "no_submission"
+                    continue
                 assert evidence.status == "executed", evidence.reason
                 expected = row["expected_observation"]
                 assert evidence.report.passed_count == expected.get("passed", 0)
@@ -46,6 +62,16 @@ async def test_u1_native_submissions():
                     assert result.exit_reason == reason
                     assert result.isolation_mode == "oci_container" and result.execution_id not in seen_ids
                     seen_ids.add(result.execution_id)
+                    cases.append({"case_id": case["case_id"], "input": case["input"], "expected": case["expected"],
+                                  "actual": result.actual_output, "passed": result.passed, "outcome": result.exit_reason,
+                                  "execution_id": result.execution_id, "request_digest": result.request_digest,
+                                  "isolation_mode": result.isolation_mode, "duration_ms": result.duration_ms})
+    assert len(observations) == 8
+    if target := os.environ.get("SMARTAI_U1_NATIVE_EVIDENCE"):
+        with Path(target).open("x", encoding="utf-8") as output:
+            json.dump({"fixture_commit": U1, "code_commit": os.environ.get("GITHUB_SHA"),
+                       "image_id": settings.program_runner_image, "provider_calls": 0,
+                       "observations": observations}, output, indent=2, ensure_ascii=False)
     assert len(seen_ids) == 36
 
 

@@ -50,8 +50,16 @@ jobs:
           SMARTAI_RUNTIME_ENVIRONMENT: test
           SMARTAI_PROGRAM_RUNNER_IMAGE: smartai-runner-spike:week1
         run: |
+          export SMARTAI_PROGRAM_RUNNER_IMAGE="$(docker image inspect --format '{{.Id}}' smartai-runner-spike:week1)"
+          export SMARTAI_U1_NATIVE_EVIDENCE="$RUNNER_TEMP/u1-native-evidence.json"
           git fetch --depth=1 origin ab36293b5b00ea2dd20803cd89c727398671c835
           python -m pytest backend/tests/test_oci_real_runtime.py backend/tests/test_oci_native.py -q
+      - name: Save synthetic U1 native evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: u1-native-evidence
+          path: ${{ runner.temp }}/u1-native-evidence.json
+          if-no-files-found: error
       - name: Check container cleanup
         if: always()
         run: test -z "$(docker ps -aq --filter label=smartai.isolated-runner=true)"

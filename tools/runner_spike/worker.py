@@ -414,6 +414,8 @@ def _build_native(language, source, memory_mb):
                                for location in item.get("locations", [])) for item in diagnostics):
                     confirm_toolchain()
                     return reason
+            elif re.search(r"undefined reference to [`']main'", detail):
+                raise RuntimeError("no linked main definition")
             elif "undefined reference to" in detail or "multiple definition of" in detail:
                 confirm_toolchain()
                 return reason
