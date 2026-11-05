@@ -12,7 +12,7 @@ from backend.llm.providers import BaseProvider
 from backend.models import ExpertResult, GradingConfidence, ProblemInfo, StepScore, StudentAnswerInfo, TestCase
 from backend.services.grading_scores import round_ai_score
 from backend.services.programming_reference_inputs import NewTestInput
-from backend.services.programming_test_contract import required_function_name
+from backend.services.programming_test_contract import has_single_required_argument, required_function_name
 from backend.skills.base import (
     GradingSkill, build_system_prompt, classify_skill_error,
     format_deterministic_feedback, normalize_expert_result, normalize_score_scale, register_skill,
@@ -56,10 +56,11 @@ MAX_LLM_GENERATED_CASES = 8
 class TestCaseList(BaseModel):
     cases: list[TestCase] = Field(default_factory=list, max_length=MAX_LLM_GENERATED_CASES)
     inputs: list[NewTestInput] | None = Field(default=None, max_length=MAX_LLM_GENERATED_CASES)
+    single_arguments: list[object] | None = Field(default=None, max_length=MAX_LLM_GENERATED_CASES)
 
     @model_validator(mode="after")
     def one_collection(self):
-        if ("cases" in self.model_fields_set) == ("inputs" in self.model_fields_set):
+        if len(self.model_fields_set & {"cases", "inputs", "single_arguments"}) != 1:
             raise ValueError("Supply one collection of tests.")
         return self
 
@@ -229,11 +230,16 @@ async def _generate_test_cases(
     if reference_available:
         interface = ('Use {"args":[...]} for positional function arguments, plus optional kwargs. '
                      if entry else 'For a function use {"args":[...]}; for a complete program use {"input":"literal stdin"}. ')
+        envelope = '{"inputs":[...]}'
+        if has_single_required_argument(problem.stem):
+            envelope = '{"single_arguments":[...]}'
+            interface = ('Each element is the actual value of the single parameter, in its real JSON type. '
+                         'A list value is a JSON array, an integer is a JSON number, and text is a JSON string. '
+                         'Do not wrap these values in objects, strings encoding arrays, or an extra argument vector. ')
         system = (
             'Choose up to eight distinct, legal test inputs from the frozen question and teacher rubric. '
             'Include ordinary and boundary cases that can expose plausible errors. '
-            'Return exactly one JSON object {"inputs":[...]}. ' + interface +
-            'Each args slot holds one complete parameter value: a list passed as one argument is nested inside args. '
+            'Return exactly one JSON object ' + envelope + '. ' + interface +
             'Preserve spaces and line endings inside literal input. Do not predict or supply output: '
             'the grader runs the independently provided reference to determine the expected values. '
             'Never use student code, modify the problem domain, or generate a script.'
@@ -242,10 +248,15 @@ async def _generate_test_cases(
 
     def validate(generated):
         from backend.services.programming_test_contract import ProgrammingCaseError, adapt_programming_cases
-        if generated.inputs is not None:
+        input_rows = generated.inputs
+        if generated.single_arguments is not None:
+            if not has_single_required_argument(problem.stem):
+                raise _format_error("This question requires a full argument vector or a literal stdin input.")
+            input_rows = [NewTestInput(args=[value]) for value in generated.single_arguments]
+        if input_rows is not None:
             if not reference_available:
                 raise _format_error("Supply explicit expectations when there is no independent reference program.")
-            drafts = [item.draft() for item in generated.inputs]
+            drafts = [item.draft() for item in input_rows]
             try:
                 adapt_programming_cases(problem.stem, [draft.comparison_probe() for draft in drafts])
             except ProgrammingCaseError as exc:

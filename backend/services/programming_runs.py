@@ -335,6 +335,8 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
                 if derive_expectations:
                     cases = adapt_programming_cases(problem.stem, expectations_from_reference(cases, ref_cases, report))
                     data = [case.model_dump(mode="json") for case in cases]
+                    if len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode()) > 256 * 1024:
+                        raise ValueError("programming_cases_unavailable")
                 elif report.passed_count != len(cases):
                     raise ValueError("programming_reference_conflict")
         except ProgrammingCaseError as exc:

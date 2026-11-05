@@ -145,6 +145,16 @@ def _teacher_signature(stem, name):
     return next(iter(signatures), None)
 
 
+
+def has_single_required_argument(stem: str) -> bool:
+    signature = _teacher_signature(stem, required_function_name(stem))
+    if not signature or len(signature.parameters) != 1:
+        return False
+    parameter, = signature.parameters.values()
+    return (parameter.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+            and parameter.default is inspect.Parameter.empty)
+
+
 def _json(value):
     try:
         return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True)

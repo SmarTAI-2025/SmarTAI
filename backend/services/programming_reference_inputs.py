@@ -10,7 +10,7 @@ from backend.models import TestCase
 
 class NewTestInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    input: str | None = None
+    input: str | None = Field(default=None, max_length=8192)
     args: list[Any] | None = Field(default=None, max_length=100)
     kwargs: dict[str, Any] | None = None
 
@@ -40,7 +40,7 @@ class ReferenceInputCase(TestCase):
 def expectations_from_reference(cases, reference_cases, report):
     resolved = []
     for case, reference_case, row in zip(cases, reference_cases, report.results, strict=True):
-        if (row.error or row.exit_reason not in {"success", "wrong_answer", ""} or not row.executed
+        if ((row.error and not row.exit_reason) or row.exit_reason not in {"success", "wrong_answer", ""} or not row.executed
                 or row.stdout_truncated or row.stderr_truncated):
             raise ValueError("programming_reference_conflict")
         observed = row.return_value if reference_case.function_name else row.stdout
