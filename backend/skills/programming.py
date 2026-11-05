@@ -344,7 +344,7 @@ class ProgrammingSkill(GradingSkill):
                     problem.stem, k=3, scope=self.task_id, provider=self.provider, reporter=self.reporter,
                 )
                 data = {**_teacher_material(problem), "submitted_source": run.code,
-                        "execution": evidence.model_dump(), "case_examples": examples}
+                        "execution": evidence.model_dump(exclude={"evidence_id"}), "case_examples": examples}
                 if chunks:
                     data["textbook_reference"] = kb_tool.context_text(chunks)
                 if self.reporter and unit:

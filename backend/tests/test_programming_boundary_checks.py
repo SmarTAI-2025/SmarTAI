@@ -167,3 +167,16 @@ async def test_oversized_input_proposal_uses_one_repair_without_dropping_existin
     assert route.ainvoke.await_count == 2 and error is None
     assert [c.function_args for c in cases] == [[0], [-1], [8]]
     assert not problem.test_cases and all(c.expected_return is None for c in cases)
+
+
+@pytest.mark.asyncio
+async def test_identical_scoring_facts_produce_identical_model_input_across_independent_runs():
+    problem, answer = setup()
+    provider = fixed_provider(response(award(10)), response(award(10)))
+    votes = []
+    for _ in range(2):
+        with programming_run(None, None):
+            votes.append(await programming.ProgrammingSkill(provider).grade(problem, answer, student_id="s"))
+    assert votes[0].programming_evidence.evidence_id != votes[1].programming_evidence.evidence_id
+    first, second = provider.ainvoke.await_args_list
+    assert [m.content for m in first.args[0]] == [m.content for m in second.args[0]]
