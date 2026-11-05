@@ -7,7 +7,7 @@ import pytest
 
 from backend.db import assignment_repository, course_repository, workflow_repository
 from backend.services import submissions, task_facade
-from backend.services.programming_submission_mapping import source_answers
+from backend.services.programming_submission_mapping import PYTHON_FLAG, source_answers
 from backend.services.submission_manual_review import continue_manually
 from backend.services.task_execution import stop_task_run
 from backend.tests.test_ocr_normalized_ingest import _seed_user
@@ -57,7 +57,7 @@ def test_per_question_conflicts_and_missing_functions_retain_original(source, pe
 def test_single_explicit_signature_violation_remains_student_source(code):
     known = questions("Implement def add(a,b): return their sum.")
     answer, = source_answers("source.py", code, known, set(known))
-    assert answer["content"] == code and not answer["flag"]
+    assert answer["content"] == code and answer["flag"] == [PYTHON_FLAG]
 
 
 def test_teacher_cases_and_duplicate_contracts_checked_assignment_wide():
@@ -66,7 +66,7 @@ def test_teacher_cases_and_duplicate_contracts_checked_assignment_wide():
         known[qid]["test_cases"] = [{"source": "teacher", "function_name": name}]
     code = "def add(a): return a\ndef count(a): return 0\n"
     assert [row["flag"] for row in source_answers("x.py", code, known, set(known))] == [
-        ["recognition_manual_pending"], ["recognition_manual_pending"], []]
+        ["recognition_manual_pending", PYTHON_FLAG], ["recognition_manual_pending", PYTHON_FLAG], []]
 
 
 @pytest.mark.asyncio
@@ -92,7 +92,8 @@ async def test_original_module_reaches_every_answer_even_if_stopped_before_worke
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("archive", [False, True])
-async def test_authenticated_revision_contains_exact_single_module(monkeypatch, archive):
+@pytest.mark.parametrize("suffix", ["txt", "py"])
+async def test_authenticated_revision_contains_exact_single_module(monkeypatch, archive, suffix):
     owner, task = seed(SUM, COUNT)
     student = "student-" + owner
     _seed_user(student, "student")
@@ -100,7 +101,7 @@ async def test_authenticated_revision_contains_exact_single_module(monkeypatch, 
     course_repository.enroll(course, student_id=student, actor_id=owner)
     assignment_repository.publish(task, teacher_id=owner, expected_version=1)
     registry = _registry(monkeypatch, AsyncMock(side_effect=AssertionError("Native input called a provider")))
-    filename, content = "source.txt", SOURCE.encode()
+    filename, content = "source." + suffix, SOURCE.encode()
     if archive:
         data = io.BytesIO()
         with zipfile.ZipFile(data, "w") as out:
@@ -173,7 +174,7 @@ async def test_old_mapping_checkpoint_recovers_original_bytes_and_previous_ident
         student_candidate="prior-identity")
     restored = await task_facade._restore_legacy_native_result(old, questions(SUM, COUNT), task, owner)
     assert all(not a["flag"] for a in restored.student["stu_ans"])
-    assert restored.student["recognition"]["native_source_mapping_version"] == 2
+    assert restored.student["recognition"]["native_source_mapping_version"] == 3
     assert restored.student["stu_id"] == "prior-identity" and restored.student["identity_status"] == "matched"
     assert {a["q_id"]: a["content"] for a in restored.student["stu_ans"]} == {"q2": SOURCE, "q3": SOURCE}
     registry.provider.ainvoke.assert_not_awaited()

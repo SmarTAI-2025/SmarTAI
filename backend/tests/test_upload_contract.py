@@ -20,7 +20,7 @@ ROLE_EXTENSIONS = {
     "problem_reference": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
     "rubric": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
     "programming_tests": ("pdf", "txt", "md", "markdown", "docx", "json", "csv", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
-    "student_submission": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
+    "student_submission": ("py", "c", "cc", "cpp", "pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
 }
 OTHER_EXTENSIONS = ("py", "c", "cc", "cpp", "csv", "tsv", "rst", "pptx", "bmp", "tif", "tiff", "webp", "exe", "zip", "rar", "7z", "tar")
 

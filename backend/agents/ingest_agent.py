@@ -42,7 +42,7 @@ from backend.services.programming_test_contract import (
 )
 from backend.services.question_structure import annotate_major_question_structures
 from backend.services.programming_test_contract import required_function_name
-from backend.services.programming_submission_mapping import NATIVE_SOURCE_MAPPING_VERSION, may_contain_source, source_answers
+from backend.services.programming_submission_mapping import SOURCE_LANGUAGE_FLAGS, NATIVE_SOURCE_MAPPING_VERSION, may_contain_source, source_answers
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
     KATEX_GENERATION_GUIDANCE,
@@ -1235,7 +1235,7 @@ def _review_transcribed_programming_answers(student, problems):
     for answer in student.get("stu_ans", []):
         qid = answer.get("q_id")
         if qid in problems and is_programming_question_type(problems[qid].get("type")):
-            flags = [f for f in answer.get("flag", []) if not f.startswith("programming_source_entry:")]
+            flags = [f for f in answer.get("flag", []) if f not in SOURCE_LANGUAGE_FLAGS and not f.startswith("programming_source_entry:")]
             answer["flag"] = list(dict.fromkeys([*flags, "recognition_manual_pending"]))
             if answer.get("content"):
                 recognition = student.setdefault("recognition", {})

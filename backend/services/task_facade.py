@@ -87,7 +87,7 @@ from backend.llm.registry import (
 )
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import grading_runs
-from backend.services.programming_submission_mapping import NATIVE_SOURCE_MAPPING_VERSION, may_contain_source
+from backend.services.programming_submission_mapping import SOURCE_LANGUAGE_FLAGS, NATIVE_SOURCE_MAPPING_VERSION, may_contain_source
 from backend.services.question_sources import read_question_source
 from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE
 from backend.services.submission_work_budget import submission_work_budget, current_budget
@@ -2985,7 +2985,19 @@ async def _restore_legacy_native_result(result, problems, task_id, owner_id):
         if len(data) != stored.size_bytes or hashlib.sha256(data).hexdigest() != stored.sha256:
             raise InvalidTransition("The original submission changed.", code="submission_retry_source_unavailable")
         return data
-    text = await decode_text_bytes(await run_in_threadpool(original_bytes))
+    body = await run_in_threadpool(original_bytes)
+    if result.filename.lower().endswith(".py"):
+        from fastapi import HTTPException
+        from backend.tools.file_processing import extract_text_from_upload
+        try:
+            text = await extract_text_from_upload(body, result.filename, purpose="submissions")
+        except HTTPException as exc:
+            code = exc.detail.get("code") if isinstance(exc.detail, dict) else None
+            return replace(result, student=None, matched_answer_count=0, status="parse_failed",
+                           stable_error_code=code or "source_decode_failed", failure_phase="source_read",
+                           retryable=False)
+    else:
+        text = await decode_text_bytes(body)
     source = PreparedSubmissionSource(result.source_id, result.stored_file_id, result.filename, "text/plain", text)
     return await recover_native_submission_result(source, problems, result)
 
@@ -3087,7 +3099,7 @@ def _submission_result_incomplete(result):
     coverage = recognition.get("coverage") or {}
     # A native file can be fully read while its question association still
     # awaits the teacher. Replaying the file cannot resolve that review.
-    native = recognition.get("native_source_mapping_version") in (1, NATIVE_SOURCE_MAPPING_VERSION)
+    native = recognition.get("native_source_mapping_version") in (1, 2, NATIVE_SOURCE_MAPPING_VERSION)
     mapped = {"recognition_manual_pending"} if native else set()
     return bool(any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
                 or recognition.get("error_code")
@@ -4959,7 +4971,7 @@ def _public_answer_flags(flags, *, content=None, review_status=None):
     # Existing clients understand recognition_failed. Preserve the precise
     # source evidence too; projecting it must not mutate the stored answer.
     result = [flag for flag in flags or []
-              if not flag.startswith(("recognition_confidence:", "answer_recognition_confidence:"))
+              if flag not in SOURCE_LANGUAGE_FLAGS and not flag.startswith(("recognition_confidence:", "answer_recognition_confidence:"))
               and flag not in {"recognition_matching_review", "answer_assignment_conflict", "recognition_metadata_review", "recognition_low_confidence", "recognition_very_low_confidence",
                                "low_confidence", "very_low_confidence", "recognition_needs_review"}]
     if _metadata_only_recognition_fields(flags, content):
@@ -5766,7 +5778,8 @@ def update_student_answer(
             patch = {**patch, "flag": [*_public_answer_flags(patch["flag"]),
                                        *[flag for flag in target.flag or [] if flag.startswith("answer_recognition_confidence:")]]}
         if patch.get("flag") is not None or content_changed or target_q_id != target.q_id:
-            flags = [f for f in (patch.get("flag", target.flag) or []) if not f.startswith("programming_source_entry:")]
+            flags = [f for f in (patch.get("flag", target.flag) or []) if f not in SOURCE_LANGUAGE_FLAGS and not f.startswith("programming_source_entry:")]
+            flags.extend(f for f in target.flag or [] if f in SOURCE_LANGUAGE_FLAGS)
             if not content_changed and target_q_id == target.q_id:
                 flags.extend(f for f in target.flag or [] if f.startswith("programming_source_entry:"))
             if flags != list(target.flag or []) or patch.get("flag") is not None:

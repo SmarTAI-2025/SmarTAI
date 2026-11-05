@@ -526,10 +526,10 @@ describe("AddSubmissionsPage OCR uploads", () => {
     expect(await screen.findByText("progress page")).toBeInTheDocument();
   });
 
-  it("offers DOCX in the student submission file picker", () => {
+  it("offers DOCX and programming source in the student submission file picker", () => {
     const { container } = renderPage();
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
-    expect(input.accept.split(",")).toContain(".docx");
+    expect(input.accept.split(",")).toEqual(expect.arrayContaining([".docx", ".py", ".c", ".cc", ".cpp"]));
   });
 
   it.each([
@@ -537,10 +537,12 @@ describe("AddSubmissionsPage OCR uploads", () => {
     ["picker", "S001_Alice.DOCX"],
     ["drop", "S001_Alice.docx"],
     ["drop", "S001_Alice.DOCX"],
-  ])("keeps a DOCX selected through %s and submits its original file (%s)", async (method, filename) => {
+    ["picker", "S001_Alice.py"],
+    ["drop", "S001_Alice.CPP"],
+  ])("keeps a supported submission selected through %s and submits its original file (%s)", async (method, filename) => {
     const { container } = renderPage();
     const file = new File(["opaque document bytes"], filename, {
-      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      type: filename.toLowerCase().endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "text/plain",
     });
     if (method === "picker") {
       fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } });

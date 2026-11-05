@@ -194,3 +194,17 @@ async def test_failed_suite_retains_verified_cases_and_retries_only_the_missing_
     assert retry.status == "executed" and retry.report.passed_count == 2
     assert [(r.case_index, r.case_id) for r in retry.report.results] == [(0, "case-1"), (1, "case-2")]
     assert [e["message"] for e in events["retry"]] == [runs.COMPLETED]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,code", [("work.c", "int twice(int n) { return n+n; }"),
+                                      ("work.CPP", "// Python-looking example\n")])
+async def test_uploaded_c_family_skips_generation_and_python_execution(name, code):
+    from backend.services.programming_submission_mapping import source_answers
+    problem = question([case()]).model_copy(update={"stem": "读取标准输入并输出结果", "test_cases": []})
+    source, = source_answers(name, code, {"q7": problem.model_dump()}, {"q7"})
+    generate, execute = AsyncMock(), AsyncMock()
+    result = await grade(problem, "s", generate, execute, answer=StudentAnswerInfo.model_validate(source))
+    assert result.status == "unsupported" and result.reason == "programming_language_unsupported"
+    generate.assert_not_awaited()
+    execute.assert_not_awaited()

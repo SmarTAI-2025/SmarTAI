@@ -24,7 +24,7 @@ from backend.db import grading_repository
 from backend.models import ProblemInfo, StudentAnswerInfo, TestCase, is_programming_question_type
 from pydantic import ValidationError
 from backend.services.grading_checkpoints import CheckpointWriteError, current_checkpoints
-from backend.services.programming_submission_mapping import has_markup_fence
+from backend.services.programming_submission_mapping import C_FAMILY_FLAG, PYTHON_FLAG, has_markup_fence
 from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCodeExecutionDisabled
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
 
@@ -288,7 +288,10 @@ async def prepare_pending(state, problems, students, selection, reporter):
             if not sid or qid not in problems or (selection is not None and qid not in selection.get(sid, ())):
                 continue
             content = answer.get("content") or ""
-            if content.strip() and "recognition_manual_pending" not in (answer.get("flag") or ()) and _detect_language(content) not in {"cpp", "java"}:
+            flags = answer.get("flag") or ()
+            if (content.strip() and "recognition_manual_pending" not in flags
+                    and C_FAMILY_FLAG not in flags
+                    and (PYTHON_FLAG in flags or _detect_language(content) not in {"cpp", "java"})):
                 pending.add(qid)
     for qid, raw in problems.items():
         if qid not in pending or not is_programming_question_type(raw.get("type") if isinstance(raw, dict) else raw.type):
@@ -385,7 +388,9 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
         return ProgrammingEvidence("unavailable", code, [], reason="programming_source_too_large")
     if not code.strip():
         return ProgrammingEvidence("no_submission", code, [])
-    if _detect_language(code) in {"cpp", "java"}:
+    if C_FAMILY_FLAG in answer.flag:
+        return ProgrammingEvidence("unsupported", code, [], reason="programming_language_unsupported")
+    if PYTHON_FLAG not in answer.flag and _detect_language(code) in {"cpp", "java"}:
         try:
             ast.parse(code)  # A Python string or comment may contain a C/Java example.
         except (ValueError, SyntaxError, RecursionError):

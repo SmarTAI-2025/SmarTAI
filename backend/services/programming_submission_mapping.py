@@ -13,19 +13,23 @@ from collections import Counter, defaultdict
 from pathlib import PurePath
 
 from backend.models import is_programming_question_type
+from backend.services.upload_contract import PROGRAMMING_SOURCE_SUFFIXES
 from backend.services.programming_test_contract import required_function_names
 from backend.services.question_matching import question_number_candidates
 
-NATIVE_SOURCE_MAPPING_VERSION = 2
+NATIVE_SOURCE_MAPPING_VERSION = 3
+PYTHON_FLAG = "programming_source_language:python"
+C_FAMILY_FLAG = "programming_source_language:c_family"
+SOURCE_LANGUAGE_FLAGS = frozenset({PYTHON_FLAG, C_FAMILY_FLAG})
 
 
 def is_source_file(filename):
-    return PurePath(filename).suffix.lower() in {".py", ".c", ".cc", ".cpp"}
+    return PurePath(filename).suffix.lower() in PROGRAMMING_SOURCE_SUFFIXES
 
 
 def may_contain_source(filename, problems):
     if is_source_file(filename):
-        return any(is_programming_question_type(p.get("type")) for p in problems.values())
+        return bool(problems)
     return (PurePath(filename).suffix.lower() in {".txt", ".md", ".markdown"} and bool(problems)
             and all(is_programming_question_type(p.get("type")) for p in problems.values()))
 
@@ -218,6 +222,10 @@ def source_answers(filename, text, problems, target_ids):
                 ambiguous |= not unique_question or (len(definitions) > 1 and not stdin)
             if ambiguous:
                 flags = ["recognition_manual_pending"]
+            if not python:
+                flags.append(C_FAMILY_FLAG)
+            elif PurePath(filename).suffix.lower() == ".py":
+                flags.append(PYTHON_FLAG)
         answers.append(dict(q_id=qid, number=str(problem.get("number") or ""),
                             type=problem.get("type") or "", content=content, flag=flags))
     return answers

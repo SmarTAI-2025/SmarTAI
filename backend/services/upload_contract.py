@@ -24,12 +24,14 @@ COURSE_MATERIAL_FILENAME_MAX_CHARACTERS = 240
 
 DOCUMENT_EXTENSIONS = frozenset({"pdf", "txt", "md", "markdown", "docx",
                                  "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"})
+PROGRAMMING_SOURCE_EXTENSIONS = frozenset({"py", "c", "cc", "cpp"})
+PROGRAMMING_SOURCE_SUFFIXES = frozenset("." + ext for ext in PROGRAMMING_SOURCE_EXTENSIONS)
 ROLE_EXTENSIONS = MappingProxyType({
     "course_knowledge": DOCUMENT_EXTENSIONS,
     "problem_reference": DOCUMENT_EXTENSIONS,
     "rubric": DOCUMENT_EXTENSIONS,
     "programming_tests": DOCUMENT_EXTENSIONS | {"json", "csv"},
-    "student_submission": DOCUMENT_EXTENSIONS,
+    "student_submission": DOCUMENT_EXTENSIONS | PROGRAMMING_SOURCE_EXTENSIONS,
 })
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _BINARY_MEDIA = {
@@ -258,8 +260,14 @@ def validate_upload(role: str, file_name: str, data: bytes, *, from_library: boo
 
     if extension == "docx":
         validate_docx_package(data)
-    from backend.tools.file_processing import inspect_upload_content
+    from backend.tools.file_processing import inspect_upload_content, submission_source_error
     inspection = inspect_upload_content(data, file_name, content_type)
+    if extension in PROGRAMMING_SOURCE_EXTENSIONS:
+        error = submission_source_error(file_name, inspection, data)
+        if error:
+            raise UploadContractError(error)
+        # A printable PDF signature is still verified by the async reader.
+        return ValidatedUpload(file_name, "text/plain", extension, hashlib.sha256(data).hexdigest())
     if extension == "docx" and inspection.mismatch:
         raise UploadContractError("submission_source_content_type_mismatch" if role == "student_submission"
                                   else "source_content_type_not_allowed")
