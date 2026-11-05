@@ -1,0 +1,5473 @@
+{
+  "schema_version": 1,
+  "observed_repository_sha": "4ac06c80299196d94d6a490984ebe03f5329072f",
+  "observed_backend_tree": "399ebfb4a8258bc1f5cb11288810445fac598a88",
+  "input_manifest": {
+    "schema_version": 1,
+    "product_main_sha": "101352c8a7df4e628d2716a2731b702d5f294a8d",
+    "product_tree_sha": "e2e80a85e87548e044042a791b713eafc19ed209",
+    "u1": {
+      "pull_request": 277,
+      "commit": "c1c36025d2dad7c8f3208f3ba0fdb4dd2acf24bb",
+      "path": "manual_test_samples/programming_u1_20261028",
+      "policy": "Frozen original U1 v1 for before/after comparability; later U1 expanded inputs are pending next acceptance, not silently consumed.",
+      "consumed_sha256": {
+        "manifest.json": "a1d9acdb7f55291c4f90c92e70e61428f729af2646e2c284e886a67fb2352981",
+        "questions.json": "af31e7fe5582d908fd62d360cd889829d7c57430c4e170ece85779ee0b320576",
+        "references/fib.py": "a98b6fb26df105b3ff39a9adfe18b43929ead8890526fac54742837c1e486b98",
+        "references/positive_sum.py": "71560a1e20871f1d304ae5259bd851a7874bf22ce8b2a769860cd9006a315124",
+        "references/sum_stdin.cpp": "789b1ef4175d90839c9901953d06823d4ab32497a5745b96c7eb07a3b8dcf9a0",
+        "references/sum_stdin.py": "74d8d0b249fb9259cc9bfe90acd302185ba7cf77331a5b61d89a3bee161fdf26",
+        "submissions.json": "ebdd75ca003394a5b1dcc47a80d20e37fa01ba4599ed959c83b455ad045abafd",
+        "submissions/S01_fib_correct.py": "a98b6fb26df105b3ff39a9adfe18b43929ead8890526fac54742837c1e486b98",
+        "submissions/S03_fib_bad_zero.py": "3c6141e06fde915977c46e93d867748d1490a438ecd468ab51006788413aa50c",
+        "submissions/S05_fib_syntax.py": "4d65c41af394141f52ce6abecb584703115c4f833c091f4cf0bb5c970d575ecd",
+        "submissions/S06_fib_runtime.py": "0c6a483464d044e8b2975786ee39d075edae2946dc827f988ea1e8c4322128da",
+        "submissions/S07_shared_reverse.py": "1f298cfd4f5df61836556c893caf463457112df8081f28c93378a798962a1e63",
+        "submissions/S08_helper_first.py": "3f6bf694a826269b8343f02af01b5f92caf1ccf028e378513d833700197db684",
+        "submissions/S09_unique_sum.py": "5377f1350269c1e91d66e107dde45d559679fdbe5260b673c3bb264443f4523b",
+        "submissions/S13_stdin_correct.py": "74d8d0b249fb9259cc9bfe90acd302185ba7cf77331a5b61d89a3bee161fdf26",
+        "submissions/S14_stdin_abs_bug.py": "f4a001f4b5082e10bbaec378feba5d178d2f284998e15f50dd5482eb0a6a42b8",
+        "submissions/X01_correct.cpp": "789b1ef4175d90839c9901953d06823d4ab32497a5745b96c7eb07a3b8dcf9a0"
+      }
+    },
+    "additional_synthetic_inputs": [
+      "B21: first of five saved PY-F01 cases set llm_generated, remaining four teacher",
+      "B22: literal repr integer comparison with 2**53 and 2**53+1; no student execution"
+    ],
+    "rules_status": "AI proposed, no teacher gold standard"
+  },
+  "python_version": "3.12.14",
+  "python_executable": "/opt/anaconda3/envs/smartai-py312/bin/python",
+  "evidence_kind": "offline fixed-response baseline, NOT real grading quality or OCI validation",
+  "rules_status": "U1 AI-proposed; not teacher gold standard",
+  "real_model_calls": 0,
+  "real_oci_executions": 0,
+  "host_student_code_executions": 0,
+  "billed_cost": "not_applicable_no_calls",
+  "network_or_process_attempts_blocked": 0,
+  "u1_input_sha256": {
+    "manifest.json": "a1d9acdb7f55291c4f90c92e70e61428f729af2646e2c284e886a67fb2352981",
+    "questions.json": "af31e7fe5582d908fd62d360cd889829d7c57430c4e170ece85779ee0b320576",
+    "references/fib.py": "a98b6fb26df105b3ff39a9adfe18b43929ead8890526fac54742837c1e486b98",
+    "references/positive_sum.py": "71560a1e20871f1d304ae5259bd851a7874bf22ce8b2a769860cd9006a315124",
+    "references/sum_stdin.cpp": "789b1ef4175d90839c9901953d06823d4ab32497a5745b96c7eb07a3b8dcf9a0",
+    "references/sum_stdin.py": "74d8d0b249fb9259cc9bfe90acd302185ba7cf77331a5b61d89a3bee161fdf26",
+    "submissions.json": "ebdd75ca003394a5b1dcc47a80d20e37fa01ba4599ed959c83b455ad045abafd",
+    "submissions/S01_fib_correct.py": "a98b6fb26df105b3ff39a9adfe18b43929ead8890526fac54742837c1e486b98",
+    "submissions/S03_fib_bad_zero.py": "3c6141e06fde915977c46e93d867748d1490a438ecd468ab51006788413aa50c",
+    "submissions/S05_fib_syntax.py": "4d65c41af394141f52ce6abecb584703115c4f833c091f4cf0bb5c970d575ecd",
+    "submissions/S06_fib_runtime.py": "0c6a483464d044e8b2975786ee39d075edae2946dc827f988ea1e8c4322128da",
+    "submissions/S07_shared_reverse.py": "1f298cfd4f5df61836556c893caf463457112df8081f28c93378a798962a1e63",
+    "submissions/S08_helper_first.py": "3f6bf694a826269b8343f02af01b5f92caf1ccf028e378513d833700197db684",
+    "submissions/S09_unique_sum.py": "5377f1350269c1e91d66e107dde45d559679fdbe5260b673c3bb264443f4523b",
+    "submissions/S13_stdin_correct.py": "74d8d0b249fb9259cc9bfe90acd302185ba7cf77331a5b61d89a3bee161fdf26",
+    "submissions/S14_stdin_abs_bug.py": "f4a001f4b5082e10bbaec378feba5d178d2f284998e15f50dd5482eb0a6a42b8",
+    "submissions/X01_correct.cpp": "789b1ef4175d90839c9901953d06823d4ab32497a5745b96c7eb07a3b8dcf9a0"
+  },
+  "observations": [
+    {
+      "id": "B01-correct-function",
+      "u1_submission_id": "S01-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 5,
+            "total_count": 5,
+            "pass_rate": 1.0,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    0
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    1
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    2
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    5
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": true,
+                "actual_output": "5",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    10
+                  ],
+                  "expected_return": "55"
+                },
+                "passed": true,
+                "actual_output": "55",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 5/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "428748e672c2a18e93fece7a8ae31ec07c1607af1074785fae985edb0179e596"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "9fd16ea8a8e79663d3c797fbcc28d4ac070849c42983daad91dfa7098d45d4b4",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_TEACHER_CASES",
+            "  Pass rate: 5/5 (100%)",
+            "  Cases run: 5",
+            "  Summary: FIXTURE ONLY: 5/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000693
+    },
+    {
+      "id": "B02-partial-function",
+      "u1_submission_id": "S03-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 8,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 8.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 4/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 4,
+            "total_count": 5,
+            "pass_rate": 0.8,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    0
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "wrong_answer",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    1
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    2
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    5
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": true,
+                "actual_output": "5",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    10
+                  ],
+                  "expected_return": "55"
+                },
+                "passed": true,
+                "actual_output": "55",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 4/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "0ef181cf95f162c3500de61c7e335a45651286ea5a621f513f6acfb807cd5a25"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "b2fce31f19a3879665a1adc4b8de6a0ad2a1cb2a0584e7fcae1bc7ff7a877c80",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_TEACHER_CASES",
+            "  Pass rate: 4/5 (80%)",
+            "  Cases run: 5",
+            "  Summary: FIXTURE ONLY: 4/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000421
+    },
+    {
+      "id": "B03-weighted-rubric-not-pass-rate",
+      "u1_submission_id": "S09-F02",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 6,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "sum_positive",
+            "function_args": [
+              []
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "sum_positive",
+            "function_args": [
+              [
+                1,
+                2,
+                3
+              ]
+            ],
+            "expected_return": "6"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "sum_positive",
+            "function_args": [
+              [
+                -2,
+                0,
+                5
+              ]
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "sum_positive",
+            "function_args": [
+              [
+                2,
+                2,
+                3
+              ]
+            ],
+            "expected_return": "7"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "sum_positive",
+            "function_args": [
+              [
+                -4,
+                -1
+              ]
+            ],
+            "expected_return": "0"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 6.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 4/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 4,
+            "total_count": 5,
+            "pass_rate": 0.8,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "sum_positive",
+                  "function_args": [
+                    []
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "sum_positive",
+                  "function_args": [
+                    [
+                      1,
+                      2,
+                      3
+                    ]
+                  ],
+                  "expected_return": "6"
+                },
+                "passed": true,
+                "actual_output": "6",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "sum_positive",
+                  "function_args": [
+                    [
+                      -2,
+                      0,
+                      5
+                    ]
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": true,
+                "actual_output": "5",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "sum_positive",
+                  "function_args": [
+                    [
+                      2,
+                      2,
+                      3
+                    ]
+                  ],
+                  "expected_return": "7"
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "wrong_answer",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "sum_positive",
+                  "function_args": [
+                    [
+                      -4,
+                      -1
+                    ]
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 4/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "6db472d73f990f6acdd921f4f24f5565d84f80ccf7eafae032182d3aeed3834f"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "c11bcda07b8723741ec6177643ba1fb6c2cb61080a80c2ae51ca6d75c677f96a",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_TEACHER_CASES",
+            "  Pass rate: 4/5 (80%)",
+            "  Cases run: 5",
+            "  Summary: FIXTURE ONLY: 4/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000325
+    },
+    {
+      "id": "B04-confirmed-empty-code",
+      "u1_submission_id": "S04-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 0,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 0,
+        "runner_boundary": 0
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 0.0,
+          "max_score": 10.0,
+          "confidence": 1.0,
+          "comment": "No code provided by student.\n\n（沙箱测评：✗ 学生未提交代码）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": null,
+          "knowledge_citations": [],
+          "duration_ms": null,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [],
+        "received_code_sha256": []
+      },
+      "grading_requests": [],
+      "grading_prompt_branch": [],
+      "grading_prompt_contains_reference": null,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.00011
+    },
+    {
+      "id": "B05-syntax-error-fixture",
+      "u1_submission_id": "S05-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 3,
+        "confidence": 0.95,
+        "failure": "syntax",
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 3.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 0/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 0,
+            "total_count": 5,
+            "pass_rate": 0.0,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    0
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "SyntaxError: synthetic",
+                "duration_ms": 0,
+                "exit_reason": "runtime_error",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    1
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "SyntaxError: synthetic",
+                "duration_ms": 0,
+                "exit_reason": "runtime_error",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    2
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "SyntaxError: synthetic",
+                "duration_ms": 0,
+                "exit_reason": "runtime_error",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    5
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "SyntaxError: synthetic",
+                "duration_ms": 0,
+                "exit_reason": "runtime_error",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    10
+                  ],
+                  "expected_return": "55"
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "SyntaxError: synthetic",
+                "duration_ms": 0,
+                "exit_reason": "runtime_error",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 0/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "cfb0c4574508398624a6fafe02a291f71acf4c11ffae836949e728d7545675d9"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "6aefee7f0bb0af97d6df59bedd08ef99dbc3e6250afc9162d0cc6f47c01f1006",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_TEACHER_CASES",
+            "  Pass rate: 0/5 (0%)",
+            "  Cases run: 5",
+            "  Summary: FIXTURE ONLY: 0/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000316
+    },
+    {
+      "id": "B06-runtime-error-fixture",
+      "u1_submission_id": "S06-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 8,
+        "confidence": 0.95,
+        "failure": "runtime",
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 8.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 4/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 4,
+            "total_count": 5,
+            "pass_rate": 0.8,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    0
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "ZeroDivisionError: synthetic",
+                "duration_ms": 0,
+                "exit_reason": "runtime_error",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    1
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    2
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    5
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": true,
+                "actual_output": "5",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    10
+                  ],
+                  "expected_return": "55"
+                },
+                "passed": true,
+                "actual_output": "55",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 4/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "fba6d5ebbeff885b64c3e4dde460db05ece132e41aff42e826f762eceac58ac5"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "246902b8ae2b18816fa7666d902da7a619b1c59d92cd9833c0200d9b3624e466",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_TEACHER_CASES",
+            "  Pass rate: 4/5 (80%)",
+            "  Cases run: 5",
+            "  Summary: FIXTURE ONLY: 4/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000293
+    },
+    {
+      "id": "B07-platform-unavailable-fixture",
+      "u1_submission_id": "S01-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": "platform",
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 0,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 0.0,
+          "max_score": 10.0,
+          "confidence": 0.0,
+          "comment": "该题未执行：隔离执行服务不可用，已保留其他成功结果。请联系管理员恢复执行服务后仅重试失败项，或人工复核。",
+          "steps": [],
+          "hits": null,
+          "logs": null,
+          "raw_output": null,
+          "knowledge_citations": [],
+          "duration_ms": null,
+          "error_kind": "programming_execution_unavailable"
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [],
+        "received_code_sha256": [
+          "428748e672c2a18e93fece7a8ae31ec07c1607af1074785fae985edb0179e596"
+        ]
+      },
+      "grading_requests": [],
+      "grading_prompt_branch": [],
+      "grading_prompt_contains_reference": null,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.002483
+    },
+    {
+      "id": "B08-generation-failure-fallback",
+      "u1_submission_id": "S01-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 9,
+        "confidence": 0.99,
+        "failure": null,
+        "generation_failure": true,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 1,
+        "grading_boundary": 1,
+        "runner_boundary": 0
+      },
+      "generated_function_names": [
+        "fib"
+      ],
+      "selected_runner_cases": [],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 9.0,
+          "max_score": 10.0,
+          "confidence": 0.99,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✗ AI 生成测试用例时调用失败（网络/限流），本评分基于 AI 代码审查；建议稍后重新批改本题）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [],
+        "received_code_sha256": []
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "f8be5b117e28d30ceea9f80c189f115a39f2a1a4223eb1ea15e4faf1877b0f49",
+          "execution_summary_lines": [
+            "SANDBOX_LLM_CALL_FAILED"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_LLM_CALL_FAILED"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000311
+    },
+    {
+      "id": "B09-helper-first-without-cases",
+      "u1_submission_id": "S08-F02",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 1,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [
+        "is_positive"
+      ],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "is_positive",
+            "function_args": [
+              []
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "is_positive",
+            "function_args": [
+              [
+                1,
+                2,
+                3
+              ]
+            ],
+            "expected_return": "6"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "is_positive",
+            "function_args": [
+              [
+                -2,
+                0,
+                5
+              ]
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "is_positive",
+            "function_args": [
+              [
+                2,
+                2,
+                3
+              ]
+            ],
+            "expected_return": "7"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "is_positive",
+            "function_args": [
+              [
+                -4,
+                -1
+              ]
+            ],
+            "expected_return": "0"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成函数调用测试 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 5,
+            "total_count": 5,
+            "pass_rate": 1.0,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "is_positive",
+                  "function_args": [
+                    []
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "is_positive",
+                  "function_args": [
+                    [
+                      1,
+                      2,
+                      3
+                    ]
+                  ],
+                  "expected_return": "6"
+                },
+                "passed": true,
+                "actual_output": "6",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "is_positive",
+                  "function_args": [
+                    [
+                      -2,
+                      0,
+                      5
+                    ]
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": true,
+                "actual_output": "5",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "is_positive",
+                  "function_args": [
+                    [
+                      2,
+                      2,
+                      3
+                    ]
+                  ],
+                  "expected_return": "7"
+                },
+                "passed": true,
+                "actual_output": "7",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "is_positive",
+                  "function_args": [
+                    [
+                      -4,
+                      -1
+                    ]
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 5/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "932df0a639623c8675ae42d9bc735919dbe18819f36e8dde48685baa095224ce"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "a5d36cd0a18b53533c30a4480163c484407e49c57937166e1a284afdee3b972d",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES",
+            "  Pass rate: 5/5 (100%)",
+            "  Cases run: 5 (out of 5 generated)",
+            "  Summary: FIXTURE ONLY: 5/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000339
+    },
+    {
+      "id": "B10-reversed-functions-without-cases",
+      "u1_submission_id": "S07-F02",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 1,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [
+        "count_positive"
+      ],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "count_positive",
+            "function_args": [
+              []
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "count_positive",
+            "function_args": [
+              [
+                1,
+                2,
+                3
+              ]
+            ],
+            "expected_return": "6"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "count_positive",
+            "function_args": [
+              [
+                -2,
+                0,
+                5
+              ]
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "count_positive",
+            "function_args": [
+              [
+                2,
+                2,
+                3
+              ]
+            ],
+            "expected_return": "7"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F02-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "count_positive",
+            "function_args": [
+              [
+                -4,
+                -1
+              ]
+            ],
+            "expected_return": "0"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成函数调用测试 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 5,
+            "total_count": 5,
+            "pass_rate": 1.0,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "count_positive",
+                  "function_args": [
+                    []
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "count_positive",
+                  "function_args": [
+                    [
+                      1,
+                      2,
+                      3
+                    ]
+                  ],
+                  "expected_return": "6"
+                },
+                "passed": true,
+                "actual_output": "6",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "count_positive",
+                  "function_args": [
+                    [
+                      -2,
+                      0,
+                      5
+                    ]
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": true,
+                "actual_output": "5",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "count_positive",
+                  "function_args": [
+                    [
+                      2,
+                      2,
+                      3
+                    ]
+                  ],
+                  "expected_return": "7"
+                },
+                "passed": true,
+                "actual_output": "7",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F02-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "count_positive",
+                  "function_args": [
+                    [
+                      -4,
+                      -1
+                    ]
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 5/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "94a070dcbddf51a1f795201a2ea0b0fff529aa7933e597d03263dd6353e41e5b"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "9a2b4675efede4bbd3a4b3b921dd0857b49910912845b65ea9e2d2e9534f574a",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES",
+            "  Pass rate: 5/5 (100%)",
+            "  Cases run: 5 (out of 5 generated)",
+            "  Summary: FIXTURE ONLY: 5/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.00037
+    },
+    {
+      "id": "B11-empty-cases-three-students",
+      "u1_submission_id": "S01-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 3,
+      "event_counts": {
+        "generation_boundary": 3,
+        "grading_boundary": 3,
+        "runner_boundary": 3
+      },
+      "generated_function_names": [
+        "fib",
+        "fib",
+        "fib"
+      ],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ],
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ],
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成函数调用测试 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        },
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成函数调用测试 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        },
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成函数调用测试 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 5,
+            "total_count": 5,
+            "pass_rate": 1.0,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    0
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    1
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    2
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    5
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": true,
+                "actual_output": "5",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    10
+                  ],
+                  "expected_return": "55"
+                },
+                "passed": true,
+                "actual_output": "55",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 5/5; code not executed"
+          },
+          {
+            "passed_count": 5,
+            "total_count": 5,
+            "pass_rate": 1.0,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    0
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    1
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    2
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    5
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": true,
+                "actual_output": "5",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    10
+                  ],
+                  "expected_return": "55"
+                },
+                "passed": true,
+                "actual_output": "55",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 5/5; code not executed"
+          },
+          {
+            "passed_count": 5,
+            "total_count": 5,
+            "pass_rate": 1.0,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    0
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    1
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    2
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    5
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": true,
+                "actual_output": "5",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    10
+                  ],
+                  "expected_return": "55"
+                },
+                "passed": true,
+                "actual_output": "55",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 5/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "428748e672c2a18e93fece7a8ae31ec07c1607af1074785fae985edb0179e596",
+          "428748e672c2a18e93fece7a8ae31ec07c1607af1074785fae985edb0179e596",
+          "428748e672c2a18e93fece7a8ae31ec07c1607af1074785fae985edb0179e596"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "283536c331435fd4f4f2b57a3cc8b0a57c5b3daf6f1e31ef56800052ef548c64",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES",
+            "  Pass rate: 5/5 (100%)",
+            "  Cases run: 5 (out of 5 generated)",
+            "  Summary: FIXTURE ONLY: 5/5; code not executed"
+          ]
+        },
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "283536c331435fd4f4f2b57a3cc8b0a57c5b3daf6f1e31ef56800052ef548c64",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES",
+            "  Pass rate: 5/5 (100%)",
+            "  Cases run: 5 (out of 5 generated)",
+            "  Summary: FIXTURE ONLY: 5/5; code not executed"
+          ]
+        },
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "283536c331435fd4f4f2b57a3cc8b0a57c5b3daf6f1e31ef56800052ef548c64",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES",
+            "  Pass rate: 5/5 (100%)",
+            "  Cases run: 5 (out of 5 generated)",
+            "  Summary: FIXTURE ONLY: 5/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES",
+        "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES",
+        "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000684
+    },
+    {
+      "id": "B12-saved-cases-three-students",
+      "u1_submission_id": "S01-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 3,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 3,
+        "runner_boundary": 3
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ],
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ],
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        },
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        },
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 5,
+            "total_count": 5,
+            "pass_rate": 1.0,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    0
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    1
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    2
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    5
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": true,
+                "actual_output": "5",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    10
+                  ],
+                  "expected_return": "55"
+                },
+                "passed": true,
+                "actual_output": "55",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 5/5; code not executed"
+          },
+          {
+            "passed_count": 5,
+            "total_count": 5,
+            "pass_rate": 1.0,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    0
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    1
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    2
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    5
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": true,
+                "actual_output": "5",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    10
+                  ],
+                  "expected_return": "55"
+                },
+                "passed": true,
+                "actual_output": "55",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 5/5; code not executed"
+          },
+          {
+            "passed_count": 5,
+            "total_count": 5,
+            "pass_rate": 1.0,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    0
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    1
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    2
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    5
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": true,
+                "actual_output": "5",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    10
+                  ],
+                  "expected_return": "55"
+                },
+                "passed": true,
+                "actual_output": "55",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 5/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "428748e672c2a18e93fece7a8ae31ec07c1607af1074785fae985edb0179e596",
+          "428748e672c2a18e93fece7a8ae31ec07c1607af1074785fae985edb0179e596",
+          "428748e672c2a18e93fece7a8ae31ec07c1607af1074785fae985edb0179e596"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "9fd16ea8a8e79663d3c797fbcc28d4ac070849c42983daad91dfa7098d45d4b4",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_TEACHER_CASES",
+            "  Pass rate: 5/5 (100%)",
+            "  Cases run: 5",
+            "  Summary: FIXTURE ONLY: 5/5; code not executed"
+          ]
+        },
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "9fd16ea8a8e79663d3c797fbcc28d4ac070849c42983daad91dfa7098d45d4b4",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_TEACHER_CASES",
+            "  Pass rate: 5/5 (100%)",
+            "  Cases run: 5",
+            "  Summary: FIXTURE ONLY: 5/5; code not executed"
+          ]
+        },
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "9fd16ea8a8e79663d3c797fbcc28d4ac070849c42983daad91dfa7098d45d4b4",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_TEACHER_CASES",
+            "  Pass rate: 5/5 (100%)",
+            "  Cases run: 5",
+            "  Summary: FIXTURE ONLY: 5/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES",
+        "SANDBOX_RAN_TEACHER_CASES",
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.001099
+    },
+    {
+      "id": "B13-ai-function-zero-passes",
+      "u1_submission_id": "S01-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 9,
+        "confidence": 0.99,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": 0
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 9.0,
+          "max_score": 10.0,
+          "confidence": 0.99,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成函数调用测试 5 个，通过 0/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 0,
+            "total_count": 5,
+            "pass_rate": 0.0,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    0
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "wrong_answer",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    1
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "wrong_answer",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    2
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "wrong_answer",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    5
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "wrong_answer",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    10
+                  ],
+                  "expected_return": "55"
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "wrong_answer",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 0/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "428748e672c2a18e93fece7a8ae31ec07c1607af1074785fae985edb0179e596"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "3a7b1f2429127ceef0ac144ffd7d0b05c99e75367d17bbd858bdf43baf22eb88",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES",
+            "  Pass rate: 0/5 (0%)",
+            "  Cases run: 5",
+            "  Summary: FIXTURE ONLY: 0/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000312
+    },
+    {
+      "id": "B14-stdin-normal",
+      "u1_submission_id": "S13-S01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "3\n1 2 3\n",
+            "expected_output": "6\n",
+            "description": "PY-S01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "3\n-2 0 5\n",
+            "expected_output": "3\n",
+            "description": "PY-S01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "0\n",
+            "expected_output": "0\n",
+            "description": "PY-S01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "4\n2 2\n3 4\n",
+            "expected_output": "11\n",
+            "description": "PY-S01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "2\n1000000000 1000000000\n",
+            "expected_output": "2000000000\n",
+            "description": "PY-S01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 5,
+            "total_count": 5,
+            "pass_rate": 1.0,
+            "results": [
+              {
+                "test": {
+                  "input": "3\n1 2 3\n",
+                  "expected_output": "6\n",
+                  "description": "PY-S01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": true,
+                "actual_output": "6\n",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "3\n-2 0 5\n",
+                  "expected_output": "3\n",
+                  "description": "PY-S01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": true,
+                "actual_output": "3\n",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "0\n",
+                  "expected_output": "0\n",
+                  "description": "PY-S01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": true,
+                "actual_output": "0\n",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "4\n2 2\n3 4\n",
+                  "expected_output": "11\n",
+                  "description": "PY-S01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": true,
+                "actual_output": "11\n",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "2\n1000000000 1000000000\n",
+                  "expected_output": "2000000000\n",
+                  "description": "PY-S01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": true,
+                "actual_output": "2000000000\n",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 5/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "eb2b831976527639679fc852b08bf4ff934d0b714300cf8b8aabae7cae25de9e"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "4666d372afe79cd4ed23493c582508ed12b0f2d45da3b801192f19106e29ae8c",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_TEACHER_CASES",
+            "  Pass rate: 5/5 (100%)",
+            "  Cases run: 5",
+            "  Summary: FIXTURE ONLY: 5/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.00029
+    },
+    {
+      "id": "B15-stdin-partial",
+      "u1_submission_id": "S14-S01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 0,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "3\n1 2 3\n",
+            "expected_output": "6\n",
+            "description": "PY-S01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "3\n-2 0 5\n",
+            "expected_output": "3\n",
+            "description": "PY-S01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "0\n",
+            "expected_output": "0\n",
+            "description": "PY-S01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "4\n2 2\n3 4\n",
+            "expected_output": "11\n",
+            "description": "PY-S01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "2\n1000000000 1000000000\n",
+            "expected_output": "2000000000\n",
+            "description": "PY-S01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 0.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 4/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 4,
+            "total_count": 5,
+            "pass_rate": 0.8,
+            "results": [
+              {
+                "test": {
+                  "input": "3\n1 2 3\n",
+                  "expected_output": "6\n",
+                  "description": "PY-S01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": true,
+                "actual_output": "6\n",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "3\n-2 0 5\n",
+                  "expected_output": "3\n",
+                  "description": "PY-S01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "wrong_answer",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "0\n",
+                  "expected_output": "0\n",
+                  "description": "PY-S01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": true,
+                "actual_output": "0\n",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "4\n2 2\n3 4\n",
+                  "expected_output": "11\n",
+                  "description": "PY-S01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": true,
+                "actual_output": "11\n",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "2\n1000000000 1000000000\n",
+                  "expected_output": "2000000000\n",
+                  "description": "PY-S01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": true,
+                "actual_output": "2000000000\n",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 4/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "1efb1b881c4e5412fcaab1625ed041678b41a30a1a96b68869ed5155fd32ac3d"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "8fb67eeaa70edc7abb7ec0c459e660d18f327570817413264f9035a2d63b9620",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_TEACHER_CASES",
+            "  Pass rate: 4/5 (80%)",
+            "  Cases run: 5",
+            "  Summary: FIXTURE ONLY: 4/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000317
+    },
+    {
+      "id": "B16-ai-stdin-zero-passes",
+      "u1_submission_id": "S13-S01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 9,
+        "confidence": 0.99,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": 0
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "3\n1 2 3\n",
+            "expected_output": "6\n",
+            "description": "PY-S01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "3\n-2 0 5\n",
+            "expected_output": "3\n",
+            "description": "PY-S01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "0\n",
+            "expected_output": "0\n",
+            "description": "PY-S01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "4\n2 2\n3 4\n",
+            "expected_output": "11\n",
+            "description": "PY-S01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          },
+          {
+            "input": "2\n1000000000 1000000000\n",
+            "expected_output": "2000000000\n",
+            "description": "PY-S01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": null,
+            "function_args": null,
+            "expected_return": null
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 9.0,
+          "max_score": 10.0,
+          "confidence": 0.5,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ AI 生成测试用例 5 个，通过 0/5 ⚠ 全部未通过，AI 生成的测试用例可能不准确，建议人工复核）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 0,
+            "total_count": 5,
+            "pass_rate": 0.0,
+            "results": [
+              {
+                "test": {
+                  "input": "3\n1 2 3\n",
+                  "expected_output": "6\n",
+                  "description": "PY-S01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "wrong_answer",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "3\n-2 0 5\n",
+                  "expected_output": "3\n",
+                  "description": "PY-S01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "wrong_answer",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "0\n",
+                  "expected_output": "0\n",
+                  "description": "PY-S01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "wrong_answer",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "4\n2 2\n3 4\n",
+                  "expected_output": "11\n",
+                  "description": "PY-S01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "wrong_answer",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "2\n1000000000 1000000000\n",
+                  "expected_output": "2000000000\n",
+                  "description": "PY-S01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": null,
+                  "function_args": null,
+                  "expected_return": null
+                },
+                "passed": false,
+                "actual_output": "synthetic mismatch",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "wrong_answer",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 0/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "eb2b831976527639679fc852b08bf4ff934d0b714300cf8b8aabae7cae25de9e"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "874af7fe946c66a89a4e0289cbf607e2bddfcc4d201ef3b25e71973a4b0ddeda",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_LLM_CASES",
+            "  Pass rate: 0/5 (0%)",
+            "  Cases run: 5",
+            "  Summary: FIXTURE ONLY: 0/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_LLM_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000257
+    },
+    {
+      "id": "B17-empty-stdout-expectation",
+      "evidence_kind": "real comparison; fixed process output; no code execution",
+      "expected_output": "",
+      "actual_output": "UNEXPECTED\n",
+      "passed_count": 1,
+      "total_count": 1
+    },
+    {
+      "id": "B18-multiple-code-fences",
+      "evidence_kind": "pure function; no execution",
+      "input": "```python\ndef helper(): return 1\n```\n```python\ndef solve(): return helper()\n```",
+      "extracted_code": "def helper(): return 1",
+      "solve_preserved": false
+    },
+    {
+      "id": "B19-local-oci-unavailable",
+      "evidence_kind": "real local capability rejection, no process or container launched",
+      "cli_available": {
+        "docker": false,
+        "podman": false
+      },
+      "results": [
+        {
+          "provider": "u2:no-live-provider",
+          "provider_id": null,
+          "score": 0.0,
+          "max_score": 10.0,
+          "confidence": 0.0,
+          "comment": "该题未执行：隔离执行服务不可用，已保留其他成功结果。请联系管理员恢复执行服务后仅重试失败项，或人工复核。",
+          "steps": [],
+          "hits": null,
+          "logs": null,
+          "raw_output": null,
+          "knowledge_citations": [],
+          "duration_ms": null,
+          "error_kind": "programming_execution_unavailable"
+        }
+      ]
+    },
+    {
+      "id": "B20-cpp-code-review-only",
+      "u1_submission_id": "X01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 0
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✗ 跳过 — 当前仅支持 Python，detected language: cpp；本评分基于 AI 代码审查）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [],
+        "received_code_sha256": []
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "c03e824152d105be861e8f47a4eba386a6675306f4311ad118ef2d5293da7ed7",
+          "execution_summary_lines": [
+            "SANDBOX_SKIPPED_LANGUAGE"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_SKIPPED_LANGUAGE"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000314
+    },
+    {
+      "id": "B21-mixed-source-mislabel",
+      "u1_submission_id": "S01-F01",
+      "u1_rules_teacher_confirmed": false,
+      "evidence_kind": "real ProgrammingSkill; fixed model and runner responses; no code execution",
+      "injected_response": {
+        "score": 10,
+        "confidence": 0.95,
+        "failure": null,
+        "generation_failure": false,
+        "force_passed": null
+      },
+      "repeats": 1,
+      "event_counts": {
+        "generation_boundary": 0,
+        "grading_boundary": 1,
+        "runner_boundary": 1
+      },
+      "generated_function_names": [],
+      "selected_runner_cases": [
+        [
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T01",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "llm_generated",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T02",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              1
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T03",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              2
+            ],
+            "expected_return": "1"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T04",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              5
+            ],
+            "expected_return": "5"
+          },
+          {
+            "input": "",
+            "expected_output": "",
+            "description": "PY-F01-T05",
+            "title": "",
+            "visibility": "example",
+            "purpose": "normal",
+            "io_mode": "stdin",
+            "source": "teacher",
+            "sandbox_feasible": true,
+            "function_name": "fib",
+            "function_args": [
+              10
+            ],
+            "expected_return": "55"
+          }
+        ]
+      ],
+      "results": [
+        {
+          "provider": "u2:fixed-response",
+          "provider_id": null,
+          "score": 10.0,
+          "max_score": 10.0,
+          "confidence": 0.95,
+          "comment": "U2 fixed-response fixture; not a real grade.\n\n（沙箱测评：✓ 教师测试用例 5 个，通过 5/5）",
+          "steps": [],
+          "hits": null,
+          "logs": "",
+          "raw_output": "{}",
+          "knowledge_citations": [],
+          "duration_ms": 0.0,
+          "error_kind": null
+        }
+      ],
+      "runner_evidence": {
+        "kind": "injected ExecutionReport, not actual execution",
+        "reports": [
+          {
+            "passed_count": 5,
+            "total_count": 5,
+            "pass_rate": 1.0,
+            "results": [
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T01",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "llm_generated",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    0
+                  ],
+                  "expected_return": "0"
+                },
+                "passed": true,
+                "actual_output": "0",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T02",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    1
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T03",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    2
+                  ],
+                  "expected_return": "1"
+                },
+                "passed": true,
+                "actual_output": "1",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T04",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    5
+                  ],
+                  "expected_return": "5"
+                },
+                "passed": true,
+                "actual_output": "5",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              },
+              {
+                "test": {
+                  "input": "",
+                  "expected_output": "",
+                  "description": "PY-F01-T05",
+                  "title": "",
+                  "visibility": "example",
+                  "purpose": "normal",
+                  "io_mode": "stdin",
+                  "source": "teacher",
+                  "sandbox_feasible": true,
+                  "function_name": "fib",
+                  "function_args": [
+                    10
+                  ],
+                  "expected_return": "55"
+                },
+                "passed": true,
+                "actual_output": "55",
+                "error": "",
+                "duration_ms": 0,
+                "exit_reason": "success",
+                "stdout_truncated": false,
+                "stderr_truncated": false,
+                "isolation_mode": "u2_fixed_response_no_execution"
+              }
+            ],
+            "summary": "FIXTURE ONLY: 5/5; code not executed"
+          }
+        ],
+        "received_code_sha256": [
+          "428748e672c2a18e93fece7a8ae31ec07c1607af1074785fae985edb0179e596"
+        ]
+      },
+      "grading_requests": [
+        {
+          "kind": "intercepted structured_llm_call, not provider HTTP",
+          "prompt_sha256": "9fd16ea8a8e79663d3c797fbcc28d4ac070849c42983daad91dfa7098d45d4b4",
+          "execution_summary_lines": [
+            "SANDBOX_RAN_TEACHER_CASES",
+            "  Pass rate: 5/5 (100%)",
+            "  Cases run: 5",
+            "  Summary: FIXTURE ONLY: 5/5; code not executed"
+          ]
+        }
+      ],
+      "grading_prompt_branch": [
+        "SANDBOX_RAN_TEACHER_CASES"
+      ],
+      "grading_prompt_contains_reference": true,
+      "problem_test_cases_mutated": false,
+      "local_fixture_wall_seconds": 0.000325,
+      "defect_id": "D04",
+      "actual_source_counts": {
+        "teacher": 4,
+        "llm_generated": 1
+      },
+      "current_behavior": "AI case provenance survives runner input but is mislabeled teacher in grading prompt and footer"
+    },
+    {
+      "id": "B22-large-integer-comparison",
+      "defect_id": "D05",
+      "evidence_kind": "real pure comparator; no runner, model or student execution",
+      "comparisons": [
+        {
+          "actual": "9007199254740992",
+          "expected": "9007199254740993",
+          "intended_equality": false,
+          "observed_match": true
+        },
+        {
+          "actual": "-9007199254740992",
+          "expected": "-9007199254740993",
+          "intended_equality": false,
+          "observed_match": true
+        },
+        {
+          "actual": "9007199254740993",
+          "expected": "9007199254740993",
+          "intended_equality": true,
+          "observed_match": true
+        },
+        {
+          "actual": "2",
+          "expected": "3",
+          "intended_equality": false,
+          "observed_match": false
+        },
+        {
+          "actual": "0.30000000000000004",
+          "expected": "0.3",
+          "intended_equality": true,
+          "observed_match": true
+        }
+      ],
+      "boolean_integer_advisory": {
+        "observed_match": true,
+        "status": "contract_required_not_confirmed_defect",
+        "reason": "Strict bool/int distinction depends on the declared result type contract"
+      }
+    }
+  ]
+}
