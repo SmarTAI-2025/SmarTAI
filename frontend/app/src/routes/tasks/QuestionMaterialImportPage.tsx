@@ -565,7 +565,7 @@ function UploadSourcePicker({ locale, file, inputRef, acceptedExtensions, saveTo
         <input type="checkbox" checked={saveToLibrary && (!file || canSaveSourceToLibrary(file.name))} disabled={Boolean(file && !canSaveSourceToLibrary(file.name))} onChange={(event) => onSaveChange(event.target.checked)} className="h-4 w-4 rounded border-border accent-primary" />
         {materialImportText(locale, "saveToLibrary")}
       </label>
-      {file && !canSaveSourceToLibrary(file.name) ? <p className="mt-2 text-xs text-muted-foreground">{librarySourceFormatHint(locale)}</p> : null}
+      {file && (saveToLibrary || !canSaveSourceToLibrary(file.name)) ? <p className="mt-2 text-xs text-muted-foreground">{librarySourceFormatHint(locale)}</p> : null}
     </div>
   );
 }

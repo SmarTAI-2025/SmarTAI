@@ -861,7 +861,7 @@ function SourceEditor({
           <label className="mt-3 inline-flex items-center gap-2 text-xs text-muted-foreground">
             <input type="checkbox" checked={source.saveToLibrary && canSaveToLibrary} disabled={disabled || !canSaveToLibrary} onChange={(event) => onUpdate({ saveToLibrary: event.target.checked })} className="h-4 w-4 rounded border-border accent-primary" />
             {tx(locale, "同时保存到课程资料库", "Also save to course library")}
-            {!canSaveToLibrary ? <span>{librarySourceFormatHint(locale)}</span> : null}
+            {!canSaveToLibrary || source.saveToLibrary ? <span>{librarySourceFormatHint(locale)}</span> : null}
           </label>
         ) : null}
       </div>

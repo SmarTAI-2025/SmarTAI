@@ -8,7 +8,7 @@ from backend.api import task_preparation
 from backend.knowledge import service
 
 
-@pytest.mark.parametrize("filename", ["scan.png", "scan.JPG", "tests.json"])
+@pytest.mark.parametrize("filename", ["tests.json", "tests.csv", "slides.pptx"])
 def test_unsupported_library_original_has_actionable_error(filename):
     with pytest.raises(HTTPException) as caught:
         task_preparation._validate_source_library_format(save=True, filename=filename)
@@ -17,7 +17,7 @@ def test_unsupported_library_original_has_actionable_error(filename):
     task_preparation._validate_source_library_format(save=False, filename=filename)
 
 
-@pytest.mark.parametrize("filename", ["notes.pdf", "notes.TXT", "notes.MD", "notes.markdown"])
+@pytest.mark.parametrize("filename", ["notes.pdf", "notes.TXT", "notes.MD", "notes.markdown", "scan.png", "scan.JPG", "scan.tiff", "scan.webp"])
 def test_supported_library_originals_are_preserved(filename):
     task_preparation._validate_source_library_format(save=True, filename=filename)
 

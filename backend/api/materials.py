@@ -17,7 +17,7 @@ from backend.auth import require_teacher
 from backend.api.errors import domain_error_response
 from backend.config import settings
 from backend.db import course_library_repository as library_repo
-from backend.knowledge.service import ingest_document
+from backend.knowledge.service import KNOWLEDGE_UPLOAD_EXTENSIONS, ingest_document
 from backend.models import User
 from backend.domain.errors import DomainError
 from backend.tools.catalog_matching import match_catalog_items, normalize_catalog_text
@@ -203,7 +203,7 @@ def list_course_materials(
         "capabilities": {
             "durable": True,
             "ocr": True,
-            "accepted_types": ["pdf", "txt", "md", "markdown"],
+            "accepted_types": sorted(extension[1:] for extension in KNOWLEDGE_UPLOAD_EXTENSIONS),
         },
     }
 
@@ -216,6 +216,7 @@ async def upload_course_material(
     category: MaterialCategory = Form(default="other"),
     labels: str = Form(default="[]"),
     native_only: bool = Form(default=False),
+    recognition_route_id: Optional[str] = Form(default=None),
     current: User = Depends(require_teacher),
 ):
     group = None
@@ -249,6 +250,7 @@ async def upload_course_material(
             title=Path(filename).stem,
             retention_policy="retained",
             native_only=native_only,
+            recognition_route_id=recognition_route_id,
         )
     except HTTPException:
         raise

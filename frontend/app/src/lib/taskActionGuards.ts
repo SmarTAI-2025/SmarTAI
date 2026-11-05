@@ -1163,10 +1163,19 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "knowledge_image_requires_ocr") {
+    return {
+      title: tx(locale, "图片需要视觉/OCR 识别", "Images require vision/OCR"),
+      description: tx(locale, "图片没有可直接提取的文字。请取消“仅提取已有文字”并选择视觉/OCR 模型，或上传文字版文件。", "Images have no embedded text. Turn off “Existing text only” and choose a vision/OCR model, or upload a text-based file."),
+      actionLabel: tx(locale, "检查上传设置", "Check upload settings"),
+      actionKind: "reupload", tone: "warning", technicalDetails,
+    };
+  }
+
   if (code === "source_library_type_not_allowed") {
     return {
       title: tx(locale, "这种原文件不能存入课程资料库", "This original cannot be saved to the course library"),
-      description: tx(locale, "课程资料库仅保存 PDF、TXT、Markdown 原文件。图片或 JSON 可用于当前任务，请取消“同时保存到课程资料库”，或另选支持的文件。", "The course library stores PDF, TXT and Markdown originals only. Images and JSON can be used for this task. Turn off “Also save to course library” or choose a supported file."),
+      description: tx(locale, "课程资料库支持 PDF、TXT、Markdown 和静态图片。JSON/CSV 仅用于测试用例，请取消“同时保存到课程资料库”，或另选支持的文件。", "The course library supports PDF, TXT, Markdown and static images. JSON/CSV are for test cases only. Turn off “Also save to course library” or choose a supported file."),
       actionLabel: tx(locale, "检查上传设置", "Check upload settings"),
       actionKind: "reupload",
       tone: "warning",

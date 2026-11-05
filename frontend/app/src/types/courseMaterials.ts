@@ -79,6 +79,7 @@ export interface CourseMaterialGroupListResponse {
 export interface UploadCourseMaterialInput {
   file: File;
   nativeOnly?: boolean;
+  recognitionRouteId?: string;
   courseId?: string;
   groupId?: string;
   category: CourseMaterialCategory;

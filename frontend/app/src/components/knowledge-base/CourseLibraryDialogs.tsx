@@ -1,3 +1,5 @@
+import { KNOWLEDGE_SOURCE_EXTENSIONS, IMAGE_SOURCE_EXTENSIONS, knowledgeUploadMaxBytes, knowledgeUploadFormatHint, matchesUploadExtension } from "@/lib/sourceUploadPolicy";
+import { modelDisplayName, sortByProvider } from "@/lib/modelPresentation";
 import { userFacingError } from "@/lib/taskActionGuards";
 import { materialMetadataVersion } from "@/lib/editorVersions";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
@@ -13,6 +15,7 @@ import {
   useUpdateCourseMaterial,
   useUpdateCourseMaterialGroup,
   useUploadCourseMaterial,
+  useStageProviders,
 } from "@/api/hooks";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -197,6 +200,8 @@ interface UploadDialogProps {
 export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDialogProps) {
   const { locale } = useI18n();
   const upload = useUploadCourseMaterial();
+  const providers = useStageProviders();
+  const [recognitionRouteId, setRecognitionRouteId] = useState("");
   const inputId = useId();
   const [file, setFile] = useState<File | null>(null);
   const [nativeOnly, setNativeOnly] = useState(false);
@@ -211,15 +216,15 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
     [courseId, groups],
   );
 
-  const localDraft = useDraftProtection({ scope: "library-upload", value: { file, nativeOnly, courseId, groupId, category, labels }, busy: upload.isPending, onRestore: (draft) => { setFile(draft.file); setNativeOnly(draft.nativeOnly); setCourseId(draft.courseId); setGroupId(draft.groupId); setCategory(draft.category); setLabels(draft.labels); } });
+  const localDraft = useDraftProtection({ scope: "library-upload", value: { file, nativeOnly, recognitionRouteId, courseId, groupId, category, labels }, busy: upload.isPending, onRestore: (draft) => { setFile(draft.file); setNativeOnly(draft.nativeOnly); setRecognitionRouteId(draft.recognitionRouteId ?? ""); setCourseId(draft.courseId); setGroupId(draft.groupId); setCategory(draft.category); setLabels(draft.labels); } });
   function selectFile(selected: File | undefined) {
     if (!selected) return;
     const error = selected.size === 0
       ? tx(locale, "文件为空（0 字节），请确认有内容后重新上传。", "The file is empty (0 bytes). Add content before uploading again.")
-      : selected.size > 64 * 1024 * 1024
-        ? tx(locale, "文件超过 64 MiB，请拆分文件或减小文件大小后重新上传；不支持压缩包。", "The file exceeds 64 MiB. Split it or reduce the file size before uploading again; archives are not supported.")
-        : !/\.(pdf|txt|md|markdown)$/i.test(selected.name)
-          ? tx(locale, "资料库仅支持 PDF、TXT 和 Markdown。请先导出为支持的格式，不要只修改扩展名。", "The library supports PDF, TXT and Markdown. Export to a supported format; do not just rename the extension.")
+      : selected.size > knowledgeUploadMaxBytes(selected.name)
+        ? tx(locale, `文件超过 ${knowledgeUploadMaxBytes(selected.name) / 1024 / 1024} MiB，请拆分文件或减小文件大小后重新上传；不支持压缩包。`, `The file exceeds ${knowledgeUploadMaxBytes(selected.name) / 1024 / 1024} MiB. Split it or reduce the file size before uploading again; archives are not supported.`)
+        : !matchesUploadExtension(selected.name, KNOWLEDGE_SOURCE_EXTENSIONS)
+          ? tx(locale, "资料库仅支持 PDF、TXT、Markdown 和静态 JPG/JPEG/PNG/BMP/TIF/TIFF/WEBP 图片。请先导出为支持的格式，不要只修改扩展名。", "The library supports PDF, TXT, Markdown and static JPG/JPEG/PNG/BMP/TIF/TIFF/WEBP images. Export to a supported format; do not just rename the extension.")
           : null;
     setFile(error ? null : selected);
     setUploadError(error);
@@ -234,6 +239,10 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
       window.alert(message);
       return;
     }
+    if (nativeOnly && matchesUploadExtension(file.name, IMAGE_SOURCE_EXTENSIONS)) {
+      setUploadError(tx(locale, "图片没有可直接提取的文字。请取消“仅提取已有文字”并选择视觉/OCR 模型，或上传文字版文件。", "Images have no embedded text. Turn off “Existing text only” and choose a vision/OCR model, or upload a text-based file."));
+      return;
+    }
     setUploadError(null);
     try {
       const result = await upload.mutateAsync({
@@ -243,12 +252,13 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
         category,
         labels: parseLabels(labels),
         nativeOnly,
+        recognitionRouteId: nativeOnly ? undefined : recognitionRouteId || undefined,
       });
       toast.success(result.created
         ? result.parse_status === "ready" ? tx(locale, "资料已上传并解析", "Material uploaded and parsed") : tx(locale, "资料已保存，已进入处理队列", "Material saved and queued")
         : tx(locale, "相同资料已存在，已复用原文件", "The same material already exists and was reused"));
       if (!localDraft.isCurrent()) return;
-      if (!await localDraft.clear({ file, nativeOnly, courseId, groupId, category, labels })) return;
+      if (!await localDraft.clear({ file, nativeOnly, recognitionRouteId, courseId, groupId, category, labels })) return;
       if (!localDraft.isCurrent()) return;
       onUploaded(result);
     } catch (error) {
@@ -258,7 +268,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
       const description = quotaExceeded
         ? knowledgeStorageQuotaCopy(locale).description
         : code === "source_content_type_not_allowed" || code === "invalid_course_material"
-          ? tx(locale, "文件内容无法作为资料读取。请确认文件能正常打开，并重新导出为 PDF、TXT 或 Markdown 后上传。", "The file content could not be read as course material. Check that it opens, then export it again as PDF, TXT or Markdown.")
+          ? tx(locale, "文件内容无法作为资料读取。请确认文件能正常打开，并重新导出为 PDF、TXT、Markdown 或支持的静态图片后上传。", "The file content could not be read as course material. Check that it opens, then export it again as PDF, TXT, Markdown or a supported static image.")
           : code === "material_label_too_long"
             ? tx(locale, "单个标签不能超过 60 个字符，请缩短后再上传。", "Each label must be at most 60 characters. Shorten it before uploading.")
             : code === "too_many_material_labels"
@@ -272,7 +282,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
   return (
     <LibraryDialog
       title={tx(locale, "上传资料", "Upload material")}
-      description={tx(locale, "PDF / TXT / Markdown · 64 MiB", "PDF / TXT / Markdown · 64 MiB")}
+      description={knowledgeUploadFormatHint(locale)}
       closeLabel={tx(locale, "关闭", "Close")}
       onClose={onClose}
       footer={<><Button type="button" variant="secondary" onClick={() => leave.request(onClose)} disabled={upload.isPending}>{tx(locale, "取消", "Cancel")}</Button><Button type="submit" form="course-material-upload-form" disabled={upload.isPending} title={!file ? tx(locale, "请先选择一份资料文件。", "Choose a material file first.") : undefined}>{upload.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}{upload.isPending ? tx(locale, "正在上传…", "Uploading…") : tx(locale, "上传资料", "Upload")}</Button></>}
@@ -282,15 +292,23 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
           <label htmlFor={inputId} className="flex min-h-[92px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed bg-slate-50/60 px-4 py-4 text-center outline-none hover:border-primary dark:bg-slate-900/30">
             <FileUp className="h-5 w-5 text-primary" />
             <span className="mt-2 max-w-full truncate text-sm font-semibold">{file?.name ?? tx(locale, "选择一份资料文件", "Choose a material file")}</span>
-            <span className="mt-1 text-xs text-muted-foreground">{file ? `${formatBytes(file.size)} · ${tx(locale, "文件已就绪", "File ready")}` : tx(locale, "尚未选择文件 · PDF / TXT / Markdown", "No file selected · PDF / TXT / Markdown")}</span>
+            <span className="mt-1 text-xs text-muted-foreground">{file ? `${formatBytes(file.size)} · ${tx(locale, "文件已就绪", "File ready")}` : tx(locale, "尚未选择文件 · 文档或静态图片", "No file selected · Document or static image")}</span>
           </label>
-          <input id={inputId} className="sr-only" type="file" accept=".pdf,.txt,.md,.markdown" aria-invalid={Boolean(uploadError)} aria-describedby={uploadError ? `${inputId}-error` : undefined} onChange={(event) => { selectFile(event.target.files?.[0]); event.target.value = ""; }} />
+          <input id={inputId} className="sr-only" type="file" accept={KNOWLEDGE_SOURCE_EXTENSIONS.join(",")} aria-invalid={Boolean(uploadError)} aria-describedby={uploadError ? `${inputId}-error` : undefined} onChange={(event) => { selectFile(event.target.files?.[0]); event.target.value = ""; }} />
         </div>
         {uploadError ? <p id={`${inputId}-error`} role="alert" className="text-sm text-danger">{uploadError}</p> : null}
         <label className="flex items-start gap-2 text-sm">
           <input type="checkbox" className="mt-1" checked={nativeOnly} onChange={(event) => setNativeOnly(event.target.checked)} />
           <span>{tx(locale, "仅提取已有文字（不调用模型）", "Existing text only (no model calls)")}</span>
         </label>
+        {!nativeOnly ? <FormField label={tx(locale, "视觉/OCR 模型", "Vision/OCR model")}>
+          <select className={SELECT_CLASS} value={recognitionRouteId} onChange={(event) => setRecognitionRouteId(event.target.value)}>
+            <option value="">{tx(locale, "当前默认模型", "Current default model")}</option>
+            {sortByProvider((providers.data ?? []).filter((provider) => provider.enabled && provider.supports_vision !== false)).map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{modelDisplayName(provider)}</option>)}
+          </select>
+          {providers.isError ? <p role="status" className="text-xs text-muted-foreground">{tx(locale, "模型列表暂不可用，可重开窗口后再试。", "Model list unavailable. Reopen the dialog to retry.")}</p> : null}
+        </FormField> : null}
+        <p className="text-xs text-muted-foreground">{tx(locale, "图片需视觉/OCR 模型识别，不能仅提取已有文字。上传后会后台识别并建立检索内容，可能产生模型费用；请等待处理完成。", "Images require vision/OCR and cannot use existing-text-only mode. Uploads are indexed in the background and may incur model charges. Wait for processing before searching.")}</p>
         <div className="grid gap-4 sm:grid-cols-2">
           <FormField label={tx(locale, "课程（可选）", "Course (optional)")}>
             <select className={SELECT_CLASS} value={courseId} onChange={(event) => {

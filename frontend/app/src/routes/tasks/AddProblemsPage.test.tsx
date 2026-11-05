@@ -370,7 +370,7 @@ describe("AddProblemsPage upload capability contract", () => {
     expect(screen.getAllByText("cases.png")).toHaveLength(2);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByLabelText("启用该资料的视觉 OCR")).toBeInTheDocument();
-    expect(screen.getByLabelText(/同时保存到课程资料库/)).toBeDisabled();
+    expect(screen.getByLabelText(/同时保存到课程资料库/)).not.toBeDisabled();
   });
 });
 

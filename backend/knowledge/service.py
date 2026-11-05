@@ -9,9 +9,11 @@ from backend.db.knowledge_repository import KnowledgeDocument, get_document, req
 from backend.rag.chunker import MAX_FILE_BYTES
 from backend.services.knowledge_storage import persist_knowledge_upload
 from backend.storage import get_storage
-from backend.tools.file_processing import inspect_upload_content
+from backend.tools.file_processing import IMAGE_MEDIA_TYPES, inspect_upload_content
+from backend.tools.pdf_evidence import MAX_IMAGE_INPUT_BYTES
+from backend.tools.media_validation import validate_media_content
 
-KNOWLEDGE_UPLOAD_EXTENSIONS = {".pdf", ".txt", ".md", ".markdown"}
+KNOWLEDGE_UPLOAD_EXTENSIONS = {".pdf", ".txt", ".md", ".markdown", *IMAGE_MEDIA_TYPES}
 
 
 async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
@@ -31,14 +33,22 @@ async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
         raise HTTPException(415, detail={"code": "source_type_not_allowed",
                                          "accepted_extensions": sorted(KNOWLEDGE_UPLOAD_EXTENSIONS)})
     media_type = inspect_upload_content(content, safe_name, content_type).content_type
-    visual = media_type == "application/pdf"
-    expected_pdf = Path(safe_name).suffix.lower() == ".pdf"
-    if expected_pdf != visual or (not visual and not media_type.startswith("text/")):
+    extension = Path(safe_name).suffix.lower()
+    image = extension in IMAGE_MEDIA_TYPES
+    visual = media_type == "application/pdf" or image
+    expected_type = IMAGE_MEDIA_TYPES.get(extension) or ("application/pdf" if extension == ".pdf" else None)
+    if (expected_type and media_type != expected_type) or (not expected_type and not media_type.startswith("text/")):
         raise HTTPException(415, detail={"code": "source_content_type_not_allowed"})
+    if image and len(content) > MAX_IMAGE_INPUT_BYTES:
+        raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": MAX_IMAGE_INPUT_BYTES})
+    if visual:
+        await validate_media_content(content, media_type)
+    if image and native_only:
+        raise HTTPException(422, detail={"code": "knowledge_image_requires_ocr"})
     if registry is None and not native_only:
         from backend.services.task_facade import _registry_for_owner
         registry = await run_in_threadpool(_registry_for_owner, owner_id)
-    configuration = frozen_configuration(owner_id, registry, recognition_route_id, native_only=native_only)
+    configuration = frozen_configuration(owner_id, registry, recognition_route_id, native_only=native_only, require_visual=image)
     upload = await run_in_threadpool(persist_knowledge_upload,
         storage=get_storage(), owner_id=owner_id, original_name=safe_name, content=content,
         content_type=media_type, title=(title or Path(safe_name).stem or safe_name)[:512],

@@ -1,4 +1,4 @@
-import { DOCUMENT_SOURCE_EXTENSIONS, sourceUploadFormatHint, sourceUploadValidationError } from "@/lib/sourceUploadPolicy";
+import { KNOWLEDGE_SOURCE_EXTENSIONS, knowledgeUploadFormatHint, knowledgeUploadMaxBytes, sourceUploadValidationError } from "@/lib/sourceUploadPolicy";
 import { userFacingError } from "@/lib/taskActionGuards";
 import { ManualReviewLoader } from "@/components/tasks/ManualReviewButton";
 import { LOW_CONFIDENCE_THRESHOLD } from "@/lib/confidencePolicy";
@@ -624,7 +624,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
     if (frontier) return;
     setKnowledgeError(null);
     setKnowledgeNotice(null);
-    const validationError = sourceUploadValidationError(file, DOCUMENT_SOURCE_EXTENSIONS, 64 * 1024 * 1024, locale);
+    const validationError = sourceUploadValidationError(file, KNOWLEDGE_SOURCE_EXTENSIONS, knowledgeUploadMaxBytes(file.name), locale);
     if (validationError) {
       setKnowledgeError(validationError);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -764,7 +764,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
           ref={fileInputRef}
           disabled={frontier}
           type="file"
-          accept=".pdf,.txt,.md,.markdown"
+          accept={KNOWLEDGE_SOURCE_EXTENSIONS.join(",")}
           className="hidden"
           onChange={(event) => {
             const file = event.target.files?.[0];
@@ -773,7 +773,8 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
         />
       </div>
 
-      <p className="mt-2 text-xs text-muted-foreground">{sourceUploadFormatHint(DOCUMENT_SOURCE_EXTENSIONS, 64 * 1024 * 1024, locale)}</p>
+      <p className="mt-2 text-xs text-muted-foreground">{knowledgeUploadFormatHint(locale)}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{locale === "zh-CN" ? "图片使用当前默认视觉/OCR 模型后台识别，可能产生模型费用；处理完成前不可检索。可在课程资料库上传时指定其他识别模型。" : "Images use your current default vision/OCR model for background indexing, which may incur model charges. They are searchable after processing. Choose another recognition model when uploading in the course library."}</p>
       <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         {!frontier && <label className="inline-flex cursor-pointer items-center gap-2 text-[13px] font-medium text-foreground">
           <input type="checkbox" checked={saveToLibrary} onChange={(event) => setSaveToLibrary(event.target.checked)} className="h-4 w-4 rounded border-border accent-primary" />

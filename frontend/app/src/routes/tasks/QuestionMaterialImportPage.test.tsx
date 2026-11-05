@@ -53,13 +53,13 @@ describe("bulk material upload contracts", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("5 MiB");
     expect(preflight).not.toHaveBeenCalled();
   });
-  it("allows images for every target but keeps their originals out of the library", () => {
+  it("allows images for every target and preserves the explicit save-to-library choice", () => {
     const input = openUpload();
     expect(input.accept).toContain(".png");
     fireEvent.click(screen.getByLabelText("同时保存到课程资料库"));
     fireEvent.change(input, { target: { files: [new File(["image"], "scan.png")] } });
-    expect(screen.getByLabelText("同时保存到课程资料库")).toBeDisabled();
-    expect(screen.getByLabelText("同时保存到课程资料库")).not.toBeChecked();
-    expect(screen.getByText(/图片和 JSON 可用于本次任务/)).toBeInTheDocument();
+    expect(screen.getByLabelText("同时保存到课程资料库")).not.toBeDisabled();
+    expect(screen.getByLabelText("同时保存到课程资料库")).toBeChecked();
+    expect(screen.getByText(/图片需视觉\/OCR 模型后台识别后才可检索/)).toBeInTheDocument();
   });
 });

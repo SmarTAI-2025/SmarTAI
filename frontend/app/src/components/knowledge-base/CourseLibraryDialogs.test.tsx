@@ -17,6 +17,7 @@ vi.mock("@/api/hooks", () => ({
   useDeleteCourseMaterialGroup: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useUpdateCourseMaterial: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useUpdateCourseMaterialGroup: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useStageProviders: () => ({ data: [{provider_id: "vision-model", enabled: true, supports_vision: true, model:"Offline vision"}] }),
   useUploadCourseMaterial: () => ({ isPending: false, mutateAsync: mocks.upload }),
 }));
 
@@ -107,6 +108,32 @@ describe("course material deletion", () => {
     await user.upload(screen.getByLabelText(/选择一份资料文件/), new File(["bad pdf"], "broken.pdf", { type: "application/pdf" }));
     await user.click(screen.getByRole("button", { name: "上传资料" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("文件内容无法作为资料读取");
+  });
+
+  it("uploads static images with a chosen model and prevents native-only image uploads", async () => {
+    const user = userEvent.setup();
+    mocks.upload.mockResolvedValue({ ...material, created: true, parse_status: "processing" });
+    render(<UploadDialog courses={[]} groups={[]} onClose={vi.fn()} onUploaded={vi.fn()} />);
+    const checkbox = screen.getByRole("checkbox", {name:"仅提取已有文字（不调用模型）"});
+    await user.click(checkbox);
+    const file = new File(["pixels"], "scan.TIFF", {type:"image/tiff"});
+    await user.upload(screen.getByLabelText(/选择一份资料文件/), file);
+    await user.click(screen.getByRole("button", {name:"上传资料"}));
+    expect(screen.getByRole("alert")).toHaveTextContent("图片没有可直接提取的文字");
+    expect(mocks.upload).not.toHaveBeenCalled();
+    await user.click(checkbox);
+    await user.selectOptions(screen.getByRole("combobox", {name:"视觉/OCR 模型"}), "vision-model");
+    await user.click(screen.getByRole("button", {name:"上传资料"}));
+    expect(mocks.upload).toHaveBeenCalledWith(expect.objectContaining({file, nativeOnly:false, recognitionRouteId:"vision-model"}));
+  });
+
+  it("rejects an image above the decoder limit before calling the server", () => {
+    render(<UploadDialog courses={[]} groups={[]} onClose={vi.fn()} onUploaded={vi.fn()} />);
+    const file = new File(["pixels"], "large.PNG");
+    Object.defineProperty(file, "size", {value:10 * 1024 * 1024 + 1});
+    fireEvent.change(screen.getByLabelText(/选择一份资料文件/), {target:{files:[file]}});
+    expect(screen.getByRole("alert")).toHaveTextContent("10 MiB");
+    expect(mocks.upload).not.toHaveBeenCalled();
   });
 
   it("reports async deletion truthfully without offering a manual retry", async () => {

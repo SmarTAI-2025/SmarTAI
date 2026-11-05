@@ -965,6 +965,7 @@ async def preflight_problem_source(
                 task_id=task_id,
                 role=role,
                 existing_material_id=library_material_id,
+                registry=registry, recognition_route_id=route.route_id,
             )
         except DomainError as exc:
             _mark_problem_source_failed(
@@ -1313,6 +1314,7 @@ def _validate_source_library_format(*, save: bool, filename: str) -> None:
 async def _save_source_to_library(
     *, save: bool, descriptor: dict, owner_id: str, task_id: str,
     role: str, existing_material_id: str | None,
+    registry=None, recognition_route_id: str | None = None,
 ) -> dict | None:
     if not save:
         return None
@@ -1338,6 +1340,7 @@ async def _save_source_to_library(
         content_type=descriptor.get("content_type"),
         title=Path(filename).stem,
         retention_policy="retained",
+        registry=registry, recognition_route_id=recognition_route_id,
     )
     if document.status not in {"ready", "partial", "processing", "failed"}:
         raise InvalidTransition("knowledge_document_not_ready")
@@ -2384,6 +2387,7 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
             descriptor={"_body": body, "filename": draft.filename, "content_type": draft.content_type},
             owner_id=operation.owner_id, task_id=operation.assignment_id,
             role=draft.role, existing_material_id=draft.library_material_id,
+            registry=registry, recognition_route_id=route.route_id,
         )
         updated = {**payload, "recognition": result.recognition, "saved_material": saved}
         updated.pop("source_error", None)
@@ -2770,6 +2774,7 @@ async def preflight_material_import(
             task_id=task_id,
             role=target_role,
             existing_material_id=library_material_id,
+            registry=registry, recognition_route_id=route.route_id,
         )
         effective_material_id = (
             library_material_id

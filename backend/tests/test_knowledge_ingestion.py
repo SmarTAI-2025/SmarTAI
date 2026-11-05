@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import fitz
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from backend.db import knowledge_ingestion_repository as repo
@@ -97,10 +98,11 @@ async def test_native_only_never_resolves_credentials_and_keeps_all_pdf_pages(mo
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("name", ["book.png", "book.docx", "book.pptx", "book.rst"])
+@pytest.mark.parametrize("name", ["book.docx", "book.pptx", "book.rst"])
 async def test_public_knowledge_upload_does_not_expand_confirmed_formats(name):
-    with pytest.raises(ValueError, match="support PDF, TXT and Markdown"):
+    with pytest.raises(HTTPException) as caught:
         await ingest_document(owner_id=owner(), original_name=name, content=b"synthetic", registry=Registry())
+    assert caught.value.status_code == 415 and caught.value.detail["code"] == "source_type_not_allowed"
 
 
 @pytest.mark.asyncio
@@ -117,8 +119,9 @@ async def test_knowledge_rejects_mislabeled_content_before_storage(name, body, m
         pytest.fail("Invalid content must not be stored or queued")
 
     monkeypatch.setattr(service, "persist_knowledge_upload", unexpected_storage)
-    with pytest.raises(ValueError, match="does not match its format"):
+    with pytest.raises(HTTPException) as caught:
         await ingest_document(owner_id="format-check", original_name=name, content=body, native_only=True)
+    assert caught.value.status_code == 415 and caught.value.detail["code"] == "source_content_type_not_allowed"
 
 
 @pytest.mark.asyncio
