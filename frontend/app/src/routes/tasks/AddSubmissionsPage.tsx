@@ -576,7 +576,7 @@ function localizeSubmissionError(
   const code = submissionErrorCode(error);
   if (code === "submission_retry_requires_reupload") return userFacingError(error, locale);
   if (code === "submission_source_unsupported") return t("submissionUploadUnsupported");
-  if (code.startsWith("submission_roster_")) return userFacingError(error, locale);
+  if (code.startsWith("source_docx_") || code.startsWith("submission_roster_")) return userFacingError(error, locale);
   // Keep immediate HTTP validation consistent with background file failures.
   // Only known file repairs and processing retries use the shared guidance;
   // unknown HTTP errors retain the safe generic fallback below.

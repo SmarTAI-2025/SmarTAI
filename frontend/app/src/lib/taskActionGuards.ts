@@ -248,6 +248,7 @@ const FILE_CODES = new Set([
   "pdf_ocr_render_failed",
   "pdf_processing_unavailable",
   "source_decode_failed",
+  "source_docx_limit_exceeded",
   "source_empty",
   "source_json_invalid",
   "source_text_too_large",
@@ -1163,6 +1164,23 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code && ["source_docx_invalid", "source_docx_incomplete", "source_docx_busy", "source_docx_timeout", "source_docx_unavailable"].includes(code)) {
+    const retry = ["source_docx_busy", "source_docx_timeout", "source_docx_unavailable"].includes(code);
+    const invalid = code === "source_docx_invalid";
+    return {
+      title: retry ? tx(locale, "DOCX 读取暂未完成", "DOCX reading could not finish")
+        : invalid ? tx(locale, "DOCX 文件结构无效", "Invalid DOCX file")
+        : tx(locale, "DOCX 内容无法完整读取", "Some DOCX content could not be read"),
+      description: retry ? tx(locale, "请稍后重试读取同一份 DOCX。", "Retry reading the same DOCX shortly.")
+        : invalid ? tx(locale, "请用 Word 重新保存为未加密的 .docx，然后重新上传。", "Save a fresh, unencrypted .docx from Word and upload it again.")
+        : tx(locale, "可读取普通段落和表格。请将含公式、图片、修订或其他复杂内容的原件导出为 PDF，核对后重新上传。", "Plain paragraphs and tables are supported. Export the original with equations, images, tracked changes or other complex content to PDF, check it, and upload again."),
+      actionLabel: retry ? tx(locale, "重新尝试", "Try again") : tx(locale, "重新选择文件", "Choose another file"),
+      actionKind: retry ? "retry" : "reupload",
+      tone: retry ? "warning" : "danger",
+      technicalDetails,
+    };
+  }
+
   if (["media_inspection_unavailable", "media_inspection_busy", "media_inspection_timeout", "pdf_processing_unavailable", "pdf_ocr_render_failed"].includes(code ?? "")) {
     return {
       title: tx(locale, "文件处理服务暂时不可用", "File processing is temporarily unavailable"),
@@ -1197,7 +1215,7 @@ export function classifyRecoverableError(
   if (code === "source_library_type_not_allowed") {
     return {
       title: tx(locale, "这种原文件不能存入课程资料库", "This original cannot be saved to the course library"),
-      description: tx(locale, "课程资料库支持 PDF、TXT、Markdown 和静态图片。JSON/CSV 仅用于测试用例，请取消“同时保存到课程资料库”，或另选支持的文件。", "The course library supports PDF, TXT, Markdown and static images. JSON/CSV are for test cases only. Turn off “Also save to course library” or choose a supported file."),
+      description: tx(locale, "课程资料库支持 DOCX、PDF、TXT、Markdown 和静态图片。JSON/CSV 仅用于测试用例，请取消“同时保存到课程资料库”，或另选支持的文件。", "The course library supports DOCX, PDF, TXT, Markdown and static images. JSON/CSV are for test cases only. Turn off “Also save to course library” or choose a supported file."),
       actionLabel: tx(locale, "检查上传设置", "Check upload settings"),
       actionKind: "reupload",
       tone: "warning",
@@ -1508,6 +1526,9 @@ function fileErrorDescription(
   if (["source_empty", "submission_source_empty"].includes(code ?? "") || /file is empty/i.test(message)) {
     return tx(locale, "文件为空，请确认内容后重新保存并上传。", "The file is empty. Check its contents, save it, and upload again.");
   }
+  if (code === "source_docx_limit_exceeded") {
+    return tx(locale, "DOCX 内部文件过多或过大。请拆分文档、压缩内嵌资源，或导出为 PDF 后重新上传。", "The DOCX contains too many or oversized parts. Split the document, reduce embedded resources, or export it to PDF and upload again.");
+  }
   if (code === "media_inspection_resource_limit") {
     return tx(locale, "文件解码所需资源超过安全上限。请缩小图片或拆分 PDF 后重试；持续失败时联系管理员。", "Decoding this file exceeds the safe resource limit. Reduce the image or split the PDF, then retry. Contact an administrator if it persists.");
   }
@@ -1526,7 +1547,7 @@ function fileErrorDescription(
     return tx(locale, "文件声明的类型与扩展名不一致。请从原应用重新导出，并按上传区域支持的格式保存后再上传。", "The file's declared type does not match its extension. Export it again from the original app in a format supported by this upload area.");
   }
   if (code === "submission_source_unsupported") {
-    return tx(locale, "作答支持 PDF、TXT、MD、MARKDOWN、JPG、JPEG、PNG、WebP、BMP、TIF、TIFF；压缩包内部也须使用这些格式。", "Responses support PDF, TXT, MD, MARKDOWN, JPG, JPEG, PNG, WebP, BMP, TIF and TIFF. Files inside archives must also use these formats.");
+    return tx(locale, "作答支持 DOCX、PDF、TXT、MD、MARKDOWN、JPG、JPEG、PNG、WebP、BMP、TIF、TIFF；压缩包内部也须使用这些格式。", "Responses support DOCX, PDF, TXT, MD, MARKDOWN, JPG, JPEG, PNG, WebP, BMP, TIF and TIFF. Files inside archives must also use these formats.");
   }
   if (code === "source_content_type_not_allowed" || code === "submission_source_content_type_mismatch") {
     return tx(locale, "文件内容与扩展名不符，或文件已损坏。请确认能在本地打开，并重新导出为上传区域支持的格式；只修改文件后缀无效。", "The file contents do not match its extension, or the file is damaged. Check that it opens locally and export it in a format supported by this upload area; renaming the extension does not convert it.");
@@ -1556,7 +1577,7 @@ function fileErrorDescription(
     return tx(locale, "文本编码无法读取。请将原文件另存为 UTF-8 文本后重新上传，不要只修改扩展名。", "The text encoding could not be read. Save the original as UTF-8 text and upload it again; do not just rename its extension.");
   }
   if (code === "problem_source_decode_failed" || /contains no usable text|no extractable text/i.test(message)) {
-    return tx(locale, "没有从文件中读取到可用正文。若是扫描 PDF，请先转换为可复制文字的 PDF、TXT 或 Markdown。", "No usable text could be read. If this is a scanned PDF, convert it to a text-based PDF, TXT, or Markdown file first.");
+    return tx(locale, "没有从文件中读取到可用正文。若是扫描 PDF，请先转换为可复制文字的 DOCX、PDF、TXT 或 Markdown。", "No usable text could be read. If this is a scanned PDF, convert it to a text-based DOCX, PDF, TXT, or Markdown file first.");
   }
   if (code === "ocr_empty_result" || code === "image_recognition_unconfirmed") {
     return tx(locale, "视觉模型没有从图片或扫描页中识别出可用文字。请检查图片清晰度、方向和页面内容，或更换视觉模型后重试。", "The vision model found no usable text in the image or scanned page. Check clarity, orientation, and page content, or retry with another vision model.");

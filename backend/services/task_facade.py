@@ -2007,7 +2007,9 @@ def queue_task_problem_extraction(
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
     from backend.services.upload_contract import UploadContractError, validate_upload
     try:
-        validate_upload("legacy_problem", filename, content)
+        validated = validate_upload("legacy_problem", filename, content, content_type=content_type)
+        if validated.extension == "docx":
+            content_type = validated.media_type
     except UploadContractError as exc:
         raise ValidationError("The source upload is not allowed.", code=exc.code, details=exc.details) from None
     if assignment.status not in education.EDITABLE_ASSIGNMENT_STATUSES:
@@ -2096,6 +2098,7 @@ def queue_task_problem_extraction(
                 owner_id=owner_id, assignment_id=task_id
             )
             if item.kind == "problem_source"
+            and (validated.extension != "docx" or (item.original_name == filename and item.content_type == content_type))
             and item.sha256 == source_sha256
             and item.availability_status == "available"
         ), None)

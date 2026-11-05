@@ -81,6 +81,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     description: tx(locale, "测试资料未通过严格 JSON 数据校验，不会被当作代码执行。", "The test material failed strict JSON data validation and is not treated as executable code."),
     nextStep: tx(locale, "保存为合法 UTF-8 JSON，修正语法并移除 NaN、Infinity 等非有限数字后重新上传。", "Save valid UTF-8 JSON, fix syntax errors and remove non-finite numbers such as NaN or Infinity, then upload again."),
   }),
+  source_docx_limit_exceeded: (locale) => fileCopy(locale, "DOCX 超过读取上限", "The DOCX exceeds reading limits", "拆分文档或缩小内嵌资源后重新上传。", "Split the document or reduce embedded resources, then upload again."),
   source_docx_invalid: (locale) => ({
     title: tx(locale, "DOCX 文件结构无效", "The DOCX structure is invalid"),
     description: tx(locale, "文件未通过 Office 容器结构检查；普通 ZIP 改名不能成为 DOCX。", "The file failed Office container checks; renaming an ordinary ZIP does not make it a DOCX."),
@@ -95,6 +96,11 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     title: tx(locale, "DOCX 读取正忙", "DOCX extraction is busy"),
     description: tx(locale, "本次 DOCX 尚未完成读取；这不是学生答错。", "This DOCX has not finished reading; this is not a student mistake."),
     nextStep: tx(locale, "稍后通过现有重试入口继续读取，不需要为此开启学生代码执行。", "Retry reading later through the existing retry action; student-code execution does not need to be enabled."),
+  }),
+  source_docx_unavailable: (locale) => ({
+    title: tx(locale, "DOCX 读取服务暂时不可用", "The DOCX reader is temporarily unavailable"),
+    description: tx(locale, "服务器未完成原生文档读取。", "The server could not finish reading the document."),
+    nextStep: tx(locale, "稍后重试同一份文件。", "Retry the same file shortly."),
   }),
   source_docx_timeout: (locale) => ({
     title: tx(locale, "DOCX 读取超时", "DOCX extraction timed out"),
@@ -111,6 +117,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     description: tx(locale, "文件名超过当前上传入口的长度限制。", "The filename exceeds the length limit for this upload entry point."),
     nextStep: tx(locale, "缩短文件名并保留正确扩展名，再重新上传。", "Shorten the filename while keeping the correct extension, then upload again."),
   }),
+  source_text_too_large: (locale) => fileCopy(locale, "正文超过读取上限", "Extracted text exceeds the limit", "请将原文拆分或缩短后重新上传。", "Split or shorten the document and upload it again."),
   source_too_large: (locale) => ({
     title: tx(locale, "文件超过上传上限", "The file exceeds the upload limit"),
     description: tx(locale, "原件大小超过当前资料用途或入口的生效上限。", "The original exceeds the effective size limit for this source purpose or entry point."),
@@ -419,7 +426,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   source_decode_failed: (locale) => fileCopy(locale, "文本编码无法读取", "The text encoding could not be read", "请把文本另存为 UTF-8，或上传 PDF/图片版本。", "Save the text as UTF-8, or upload a PDF/image version."),
   submission_source_content_type_mismatch: (locale) => fileCopy(locale, "文件内容与扩展名或类型不一致", "The file contents do not match its name or declared type", "不要只修改扩展名；请从原应用重新导出为受支持的 PDF、TXT、JPG、PNG 或 WebP 后上传。", "Do not only rename the extension. Export the file again as a supported PDF, TXT, JPG, PNG, or WebP, then upload it."),
   submission_source_empty: (locale) => fileCopy(locale, "文件没有可识别内容", "The file contains no recognizable content", "检查是否为空白页、空文件或只包含不可见字符。", "Check for a blank page, empty file, or invisible-only content."),
-  submission_source_unsupported: (locale) => fileCopy(locale, "文件类型暂不支持", "This file type is not supported", "转换为 PDF、TXT、MD、MARKDOWN、JPG、JPEG、PNG、BMP、TIF、TIFF 或 WebP 后重新上传。", "Convert it to PDF, TXT, MD, MARKDOWN, JPG, JPEG, PNG, BMP, TIF, TIFF, or WebP and upload again."),
+  submission_source_unsupported: (locale) => fileCopy(locale, "文件类型暂不支持", "This file type is not supported", "转换为 DOCX、PDF、TXT、MD、MARKDOWN、JPG、JPEG、PNG、BMP、TIF、TIFF 或 WebP 后重新上传。", "Convert it to DOCX, PDF, TXT, MD, MARKDOWN, JPG, JPEG, PNG, BMP, TIF, TIFF, or WebP and upload again."),
   submission_source_too_large: (locale) => fileCopy(locale, "文件超过处理上限", "The file exceeds the processing limit", "压缩图片，或拆分 PDF/压缩包后重新上传。", "Compress the image or split the PDF/archive, then upload again."),
   ocr_input_invalid: (locale) => fileCopy(locale, "文件内容不是有效的 OCR 输入", "The file is not valid OCR input", "从原应用重新导出文件，不要只修改扩展名。", "Export the file again from its source application; do not only rename the extension."),
   ocr_unsupported_file: (locale) => fileCopy(locale, "百度 OCR 不支持该文件格式", "Baidu OCR does not support this file format", "转换为 PDF、JPG、PNG、BMP 或 TIFF，或更换识别模型。", "Convert it to PDF, JPG, PNG, BMP, or TIFF, or choose another recognition model."),

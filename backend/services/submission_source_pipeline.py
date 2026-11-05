@@ -709,7 +709,7 @@ async def prepare_submission_sources(
                 else:
                     read = await recognition_reader(raw, stored_file_id)
                     text, recognition = read.text, read.recognition
-            elif document_ocr_skill is not None:
+            elif document_ocr_skill is not None and not raw.filename.lower().endswith(".docx"):
                 recovered = (recovered_ocr_text_by_source or {}).get(source_id)
                 if recovered is not None:
                     text = recovered

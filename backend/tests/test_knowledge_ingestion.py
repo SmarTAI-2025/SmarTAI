@@ -98,7 +98,7 @@ async def test_native_only_never_resolves_credentials_and_keeps_all_pdf_pages(mo
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("name", ["book.docx", "book.pptx", "book.rst"])
+@pytest.mark.parametrize("name", ["book.doc", "book.pptx", "book.rst"])
 async def test_public_knowledge_upload_does_not_expand_confirmed_formats(name):
     with pytest.raises(HTTPException) as caught:
         await ingest_document(owner_id=owner(), original_name=name, content=b"synthetic", registry=Registry())

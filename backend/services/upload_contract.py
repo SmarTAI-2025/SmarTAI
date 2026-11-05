@@ -6,12 +6,14 @@ import hashlib
 import io
 import json
 import math
+import stat
 import struct
 from pathlib import PurePosixPath
+from typing import BinaryIO
 from types import MappingProxyType
 import zipfile
 import zlib
-from xml.etree import ElementTree
+from xml.parsers import expat
 
 
 MIB = 1024 * 1024
@@ -20,20 +22,21 @@ QUESTION_SOURCE_MAX_BYTES = 5 * MIB
 INDIVIDUAL_SUBMISSION_MAX_BYTES = 64 * MIB
 COURSE_MATERIAL_FILENAME_MAX_CHARACTERS = 240
 
-DOCUMENT_EXTENSIONS = frozenset({"pdf", "txt", "md", "markdown",
+DOCUMENT_EXTENSIONS = frozenset({"pdf", "txt", "md", "markdown", "docx",
                                  "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"})
 ROLE_EXTENSIONS = MappingProxyType({
     "course_knowledge": DOCUMENT_EXTENSIONS,
-    "problem_reference": DOCUMENT_EXTENSIONS | {"docx"},
+    "problem_reference": DOCUMENT_EXTENSIONS,
     "rubric": DOCUMENT_EXTENSIONS,
     "programming_tests": DOCUMENT_EXTENSIONS | {"json", "csv"},
-    "student_submission": DOCUMENT_EXTENSIONS | {"docx"},
+    "student_submission": DOCUMENT_EXTENSIONS,
 })
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _BINARY_MEDIA = {
     "pdf": "application/pdf", "png": "image/png",
     "jpg": "image/jpeg", "jpeg": "image/jpeg",
     "bmp": "image/bmp", "tif": "image/tiff", "tiff": "image/tiff", "webp": "image/webp",
-    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "docx": DOCX_MIME,
 }
 _OFFICE_MEMBERS = frozenset({"[Content_Types].xml", "_rels/.rels", "word/document.xml"})
 _PURPOSE_ROLES = {
@@ -121,45 +124,97 @@ def get_upload_contract() -> dict:
     }
 
 
+def _check_word_part(name: str, stream: BinaryIO) -> None:
+    """Validate the OPC declarations and main story without building an XML tree."""
+    types = "http://schemas.openxmlformats.org/package/2006/content-types"
+    rels = "http://schemas.openxmlformats.org/package/2006/relationships"
+    words = {"http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+             "http://purl.oclc.org/ooxml/wordprocessingml/main"}
+    office_rels = {"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
+                   "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument"}
+    expected_roots = {"[Content_Types].xml": {types + "}Types"}, "_rels/.rels": {rels + "}Relationships"},
+                      "word/document.xml": {ns + "}document" for ns in words}}
+    main_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+    depth = matches = 0
+    root = ""
+    def start(tag, attrs):
+        nonlocal depth, root, matches
+        depth += 1
+        if depth > 128:
+            raise ValueError("XML depth")
+        if depth == 1:
+            root = tag
+            if tag not in expected_roots[name]:
+                raise ValueError("office XML root")
+        if depth != 2:
+            return
+        if name == "word/document.xml" and tag == root.removesuffix("document") + "body":
+            matches += 1
+        elif name == "[Content_Types].xml" and tag == types + "}Override" and attrs.get("PartName") == "/word/document.xml":
+            if attrs.get("ContentType") != main_type:
+                raise ValueError("wrong main part type")
+            matches += 1
+        elif name == "_rels/.rels" and tag == rels + "}Relationship" and attrs.get("Type") in office_rels:
+            if (attrs.get("Target") not in {"word/document.xml", "/word/document.xml"}
+                    or attrs.get("TargetMode", "Internal") != "Internal"):
+                raise ValueError("wrong main part target")
+            matches += 1
+    def end(_tag):
+        nonlocal depth
+        depth -= 1
+    def reject_doctype(*_args):
+        raise ValueError("DTD in Office XML")
+    parser = expat.ParserCreate(namespace_separator="}")
+    parser.StartElementHandler, parser.EndElementHandler = start, end
+    parser.StartDoctypeDeclHandler = reject_doctype
+    for block in iter(lambda: stream.read(65536), b""):
+        parser.Parse(block, False)
+    parser.Parse(b"", True)
+    if matches != 1:
+        raise ValueError("missing or ambiguous main part")
+
+
 def validate_docx_package(data: bytes) -> None:
     limits = _limits()
     try:
+        # Bound central-directory allocations *before* ZipFile builds ZipInfo objects.
+        # Classic single-disk ZIP is sufficient at these document size limits.
+        end = data.rfind(b"PK\x05\x06", max(0, len(data) - 65557))
+        if end < 0 or not data.startswith(b"PK\x03\x04"):
+            raise ValueError("not a Word ZIP")
+        disk, directory_disk, local_count, count, size, offset, comment = struct.unpack_from("<4H2IH", data, end + 4)
+        if (disk or directory_disk or local_count != count or offset + size != end or end + 22 + comment != len(data)):
+            raise ValueError("unexpected ZIP directory")
+        if count > limits["archive_max_files"] or size > 512 * 1024:
+            raise UploadContractError("source_docx_limit_exceeded")
         with zipfile.ZipFile(io.BytesIO(data)) as package:
             infos = package.infolist()
-            names = [entry.filename for entry in infos]
-            if len(infos) > limits["archive_max_files"] or not _OFFICE_MEMBERS.issubset(names):
-                raise ValueError("office structure")
-            if sum(entry.file_size for entry in infos) > limits["archive_max_expanded_bytes"]:
-                raise ValueError("office size")
-            for name in _OFFICE_MEMBERS:
-                if names.count(name) != 1:
-                    raise ValueError("ambiguous office member")
-                info = package.getinfo(name)
-                if info.is_dir() or info.flag_bits & 1 or info.file_size <= 0:
-                    raise ValueError("unreadable office member")
+            names = set()
+            if len(infos) != count:
+                raise ValueError("wrong ZIP entry count")
+            if sum(info.file_size for info in infos) > limits["archive_max_expanded_bytes"]:
+                raise UploadContractError("source_docx_limit_exceeded")
+            for info in infos:
                 if info.file_size > limits["archive_max_member_bytes"]:
-                    raise ValueError("office member size")
-                # Read only required, bounded metadata/document members to
-                # verify decompression/CRC. This is not a DOCX text reader.
+                    raise UploadContractError("source_docx_limit_exceeded")
+                path = info.filename.rstrip("/")
+                if (not path or path.casefold() in names or info.filename != info.orig_filename
+                        or "\\" in path or any(part in {"", ".", ".."} for part in path.split("/"))
+                        or path.casefold().endswith("/vbaproject.bin")
+                        or stat.S_ISLNK(info.external_attr >> 16) or info.flag_bits & 1
+                        or info.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}):
+                    raise ValueError("unsafe or oversized office member")
+                names.add(path.casefold())
+            for name in _OFFICE_MEMBERS:
+                info = package.getinfo(name)
+                if info.is_dir() or not info.file_size:
+                    raise ValueError("missing Word part")
                 with package.open(info) as stream:
-                    member = stream.read(limits["archive_max_member_bytes"] + 1)
-                    if len(member) != info.file_size:
-                        raise ValueError("office member length")
-                # A renamed ordinary ZIP containing three arbitrary payloads
-                # is not an Office package. Check structure, never extract text.
-                root = ElementTree.fromstring(member)
-                expected = {
-                    "[Content_Types].xml": {"{http://schemas.openxmlformats.org/package/2006/content-types}Types"},
-                    "_rels/.rels": {"{http://schemas.openxmlformats.org/package/2006/relationships}Relationships"},
-                    "word/document.xml": {
-                        "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}document",
-                        "{http://purl.oclc.org/ooxml/wordprocessingml/main}document",
-                    },
-                }
-                if root.tag not in expected[name]:
-                    raise ValueError("office XML root")
-    except (OSError, ValueError, RuntimeError, NotImplementedError, EOFError,
-            ElementTree.ParseError, zlib.error, zipfile.BadZipFile, zipfile.LargeZipFile):
+                    _check_word_part(name, stream)
+    except UploadContractError:
+        raise
+    except (KeyError, OSError, ValueError, RuntimeError, EOFError, struct.error,
+            expat.ExpatError, zlib.error, zipfile.BadZipFile, zipfile.LargeZipFile):
         raise UploadContractError("source_docx_invalid") from None
 
 
@@ -179,7 +234,8 @@ def _validate_json(data: bytes) -> None:
         raise UploadContractError("programming_tests_json_invalid") from None
 
 
-def validate_upload(role: str, file_name: str, data: bytes) -> ValidatedUpload:
+def validate_upload(role: str, file_name: str, data: bytes, *, from_library: bool = False,
+                    content_type: str | None = None) -> ValidatedUpload:
     """Validate one ordinary file. ZIP container handling is a separate boundary."""
     extensions = ROLE_EXTENSIONS.get(role)
     if role == "legacy_problem":
@@ -194,7 +250,7 @@ def validate_upload(role: str, file_name: str, data: bytes) -> ValidatedUpload:
         raise UploadContractError("source_filename_too_long")
     if not data:
         raise UploadContractError("submission_source_empty" if role == "student_submission" else "source_empty")
-    max_bytes = _role_max_bytes(role, limits)
+    max_bytes = limits["knowledge_max_bytes"] if from_library else _role_max_bytes(role, limits)
     if extension in {"png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"}:
         max_bytes = min(max_bytes, limits["image_max_bytes"])
     if len(data) > max_bytes:
@@ -203,7 +259,10 @@ def validate_upload(role: str, file_name: str, data: bytes) -> ValidatedUpload:
     if extension == "docx":
         validate_docx_package(data)
     from backend.tools.file_processing import inspect_upload_content
-    inspection = inspect_upload_content(data, file_name)
+    inspection = inspect_upload_content(data, file_name, content_type)
+    if extension == "docx" and inspection.mismatch:
+        raise UploadContractError("submission_source_content_type_mismatch" if role == "student_submission"
+                                  else "source_content_type_not_allowed")
     media_type = inspection.content_type
     if media_type == "application/pdf" and extension in {"txt", "md", "markdown", "csv", "rst", "json"}:
         from backend.tools.file_processing import _looks_like_text

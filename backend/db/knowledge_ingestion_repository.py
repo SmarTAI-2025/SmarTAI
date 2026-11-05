@@ -64,6 +64,8 @@ def queue_document(document_id, owner_id, configuration, *, new_version=False, r
         doc = live_document(session, document_id, owner_id, lock=True)
         existing = session.scalar(select(KnowledgeIngestionRecord).where(
             KnowledgeIngestionRecord.document_id == document_id).order_by(KnowledgeIngestionRecord.created_at.desc()))
+        if existing and new_version and existing.error_code in {"source_docx_limit_exceeded", "source_docx_invalid", "source_docx_incomplete", "source_text_too_large"}:
+            raise RecognitionError(existing.error_code)
         if existing and (not new_version or existing.status in {"queued", "processing"}):
             return existing.id
         job_id = create_ingestion_in_session(session, doc, dict(configuration,
@@ -344,6 +346,10 @@ def release(job, *, status=None, error=None):
         elif row.status == "processing":
             row.status = "queued"
         row.error_code = error
+        if status == "failed":
+            doc = session.get(KnowledgeDocumentRecord, row.document_id)
+            if doc.active_version is None:
+                doc.status = "failed"
         _publish(session, row)
         row.lease_token = row.lease_expires_at = None
         row.updated_at = time.time()

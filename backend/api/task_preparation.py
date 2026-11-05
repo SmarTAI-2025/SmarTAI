@@ -95,7 +95,7 @@ from backend.services.question_preparation_identity import (
 )
 from backend.services.question_sources import read_question_source, question_recognition_options, attach_recognition_review, recognition_has_failure, recognition_requires_confirmation
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_requires_review
-from backend.services.upload_contract import ROLE_EXTENSIONS, QUESTION_SOURCE_MAX_BYTES, UploadContractError, upload_limit, upload_role_for_purpose, validate_upload
+from backend.services.upload_contract import DOCX_MIME, ROLE_EXTENSIONS, QUESTION_SOURCE_MAX_BYTES, UploadContractError, upload_limit, upload_role_for_purpose, validate_upload
 from backend.tools.file_processing import (
     IMAGE_MEDIA_TYPES,
     extract_text_from_upload,
@@ -153,6 +153,16 @@ def _failed_question_preparation_replay_response(operation):
 def _provider_http_status_for_code(code: str) -> int:
     if code in PDF_EVIDENCE_STATUS_CODES:
         return PDF_EVIDENCE_STATUS_CODES[code]
+    if code == "source_docx_limit_exceeded":
+        return 413
+    if code in {"source_docx_invalid", "source_docx_incomplete"}:
+        return 422
+    if code == "source_docx_busy":
+        return 429
+    if code == "source_docx_timeout":
+        return 408
+    if code == "source_docx_unavailable":
+        return 503
     if code == "recognition_already_running":
         return 409
     if code.startswith("recognition_") or code.startswith("target_") or code == "visual_capability_unavailable":
@@ -194,7 +204,7 @@ _SOURCE_MIME_TYPES = {
     ".markdown": frozenset({"text/markdown", "text/plain"}),
     ".json": frozenset({"application/json", "text/json", "text/plain"}),
     ".csv": frozenset({"text/csv", "application/csv", "text/plain"}),
-    ".docx": frozenset({"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}),
+    ".docx": frozenset({DOCX_MIME, "application/zip", "application/x-zip-compressed"}),
     ".jpg": frozenset({"image/jpeg"}),
     ".jpeg": frozenset({"image/jpeg"}),
     ".png": frozenset({"image/png"}),
@@ -1212,7 +1222,7 @@ async def _select_source(
             content_type = original.content_type
 
         _validate_source_upload(_LibraryUpload(), role=role, has_vision=True, enforce_vision=False)
-        maximum = upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES)
+        maximum = upload_limit("knowledge_max_bytes")
         if original.size_bytes > maximum:
             raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": maximum})
         def read_original():
@@ -1223,10 +1233,10 @@ async def _select_source(
                 or original.sha256 != material.sha256):
             raise HTTPException(422, detail={"code": "recognition_source_mismatch"})
         try:
-            validate_upload(upload_role_for_purpose(_source_role_ocr_purpose(role)), original.original_name, body)
+            validate_upload(upload_role_for_purpose(_source_role_ocr_purpose(role)), original.original_name, body, from_library=True)
         except UploadContractError as exc:
             code = "source_content_type_not_allowed" if exc.code == "submission_source_content_type_mismatch" else exc.code
-            raise HTTPException(413 if exc.code.endswith("too_large") else 422 if exc.code == "programming_tests_json_invalid" else 415,
+            raise HTTPException(413 if exc.code.endswith("too_large") or exc.code == "source_docx_limit_exceeded" else 422 if exc.code == "programming_tests_json_invalid" else 415,
                                 detail={"code": code, **exc.details}) from None
         descriptor = {
             "kind": "library", "filename": material.filename,
@@ -1260,10 +1270,10 @@ async def _extract_selected_source(
     vision_error_code: str | None = None, stored_file_id: str | None = None,
 ) -> str:
     """Text-only fallback. Visual business inputs must use the durable adapter."""
-    if descriptor["kind"] == "upload":
+    if descriptor["kind"] == "upload" or descriptor.get("_recognition_original"):
         if descriptor.get("content_type") in {"application/pdf", *IMAGE_MEDIA_TYPES.values()}:
             raise RecognitionError("recognition_request_invalid")
-        text = await extract_text_from_upload(descriptor["_body"], descriptor["filename"],
+        text = await extract_text_from_upload(descriptor["_body"], descriptor.get("_original_filename", descriptor["filename"]),
                                              purpose=_source_role_ocr_purpose(role))
     elif descriptor["kind"] == "library":
         from backend.db.knowledge_repository import list_chunks
@@ -1294,18 +1304,22 @@ async def _read_source(
         provider=route.provider, document_ocr_available=route.is_baidu_ocr, task_id=task_id,
     )
     if descriptor["kind"] == "upload" or descriptor.get("_recognition_original"):
-        if descriptor["kind"] == "upload" and descriptor.get("stored_file_id") is None:
+        stored_file_id = descriptor.get("stored_file_id") if descriptor["kind"] == "upload" else None
+        filename = descriptor.get("_original_filename", descriptor["filename"])
+        if stored_file_id is None and (descriptor["kind"] == "upload" or descriptor.get("content_type") == DOCX_MIME):
             stored, _ = await run_in_threadpool(
                 source_file_service.persist_problem_source, storage=get_storage(),
-                owner_id=owner_id, task_id=task_id, original_name=descriptor["filename"],
+                owner_id=owner_id, task_id=task_id, original_name=filename,
                 content=descriptor["_body"], content_type=descriptor["content_type"],
             )
-            descriptor["stored_file_id"] = stored.id
+            stored_file_id = stored.id
+            if descriptor["kind"] == "upload":
+                descriptor["stored_file_id"] = stored.id
         result = await read_question_source(
             owner_id=owner_id, task_id=task_id, content=descriptor["_body"],
-            filename=descriptor.get("_original_filename", descriptor["filename"]),
+            filename=filename,
             content_type=descriptor.get("content_type"), route=route, registry=registry,
-            stored_file_id=descriptor.get("stored_file_id") if descriptor["kind"] == "upload" else None,
+            stored_file_id=stored_file_id,
             purpose=_source_role_ocr_purpose(role), extraction_hint=extraction_hint, reporter=reporter,
             allow_vision=role not in {"rubric", "programming_tests"} or enable_material_ocr,
         )
@@ -1482,7 +1496,8 @@ def _validated_question_source_ref(
         ref.update(source_id=None, stored_file_id=None)
     if ref.get("stored_file_id"):
         original = file_repository.get_file(file_id=ref["stored_file_id"], owner_id=owner_id)
-        maximum = upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES)
+        maximum = (upload_limit("knowledge_max_bytes") if source_kind == "library"
+                   else upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES))
         if original is None or original.size_bytes > maximum:
             raise ValidationError("The saved source exceeds the supported limit.", code="source_too_large")
         with get_storage().open(original.storage_key) as stream:
@@ -1491,7 +1506,8 @@ def _validated_question_source_ref(
             raise ValidationError("The saved original changed.", code="recognition_source_mismatch")
         try:
             validate_upload(upload_role_for_purpose(_source_role_ocr_purpose(ref["role"])),
-                            stored.original_name if source_kind == "library" else original.original_name, body)
+                            stored.original_name if source_kind == "library" else original.original_name, body,
+                            from_library=source_kind == "library")
         except UploadContractError as exc:
             raise ValidationError("The saved source is not allowed for this role.", code=exc.code, details=exc.details) from None
     return ref
@@ -2397,7 +2413,8 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
         if (stored is None or stored.assignment_id != operation.assignment_id
                 or stored.kind != "problem_source" or stored.sha256 != draft.content_sha256):
             raise RecognitionError("recognition_source_unavailable")
-        maximum = upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES)
+        maximum = (upload_limit("knowledge_max_bytes") if draft.source_kind == "library"
+                   else upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES))
         if stored.size_bytes > maximum:
             raise RecognitionError("source_too_large")
         def read_original():
@@ -3161,7 +3178,9 @@ async def _revalidate_material_original(payload, *, owner_id: str, task_id: str)
                 or material.stored_file_id != stored.id or material.document_id != stored.knowledge_document_id
                 or material.sha256 != stored.sha256):
             raise RecognitionError("recognition_source_unavailable")
-    maximum = upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES)
+    from_library = payload.get("source_kind") == "library"
+    maximum = (upload_limit("knowledge_max_bytes") if from_library
+               else upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES))
     if stored.size_bytes > maximum:
         raise RecognitionError("source_too_large")
     def read_original():
@@ -3172,7 +3191,8 @@ async def _revalidate_material_original(payload, *, owner_id: str, task_id: str)
             or payload.get("original_sha256", stored.sha256) != stored.sha256):
         raise RecognitionError("recognition_source_mismatch")
     try:
-        validated = validate_upload(upload_role_for_purpose(_source_role_ocr_purpose(role)), stored.original_name, body)
+        validated = validate_upload(upload_role_for_purpose(_source_role_ocr_purpose(role)),
+                                    stored.original_name, body, from_library=from_library)
     except UploadContractError as exc:
         raise RecognitionError(exc.code) from None
     if role in {"rubric", "programming_tests"} and payload.get("enable_material_ocr") is not True:
@@ -3331,11 +3351,14 @@ def material_import_source_content(task_id: str, job_id: str, current: User = De
             raise NotFound("stored_file")
         workflow_repository.get_live_workflow(task_id, owner_id=current.id)
         mime = source_file_service.detected_preview_mime(body[:4096], stored.original_name)
-        if mime not in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}:
+        disposition = "inline"
+        if mime == DOCX_MIME and stored.content_type == DOCX_MIME:
+            disposition = "attachment"
+        elif mime not in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}:
             mime = "text/plain"
         return Response(content=body, media_type=mime, headers={
             "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
-            "Content-Disposition": "inline; filename*=UTF-8''" + quote(source_file_service.safe_display_name(stored.original_name), safe=""),
+            "Content-Disposition": disposition + "; filename*=UTF-8''" + quote(source_file_service.safe_display_name(stored.original_name), safe=""),
         })
     except DomainError as exc:
         return domain_error_response(exc)

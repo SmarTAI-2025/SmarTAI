@@ -86,6 +86,15 @@ def _read_source(job):
 
 
 async def native_units(filename, body):
+    if Path(filename).suffix.lower() == ".docx":
+        from fastapi import HTTPException
+        from backend.tools.file_processing import _extract_docx_text
+        try:
+            text = await _extract_docx_text(body)
+        except HTTPException as exc:
+            raise RecognitionError(exc.detail["code"]) from None
+        return dict(units=[text[i:i + 80000] for i in range(0, len(text), 80000)] or [""],
+                    unit="section", warning_codes=[])
     process = await asyncio.create_subprocess_exec(sys.executable, "-B", "-m", "backend.knowledge.native_worker",
         Path(filename).suffix.lower(), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     try:
@@ -214,7 +223,8 @@ class KnowledgeIngestionWorker:
         except (DomainError, ValueError, OSError, TimeoutError) as exc:
             code = exc.code if isinstance(exc, DomainError) else "knowledge_ingestion_failed"
             try:
-                await run_in_threadpool(repo.release, job, status="paused", error=code)
+                immutable = code in {"source_docx_limit_exceeded", "source_docx_invalid", "source_docx_incomplete", "source_text_too_large"}
+                await run_in_threadpool(repo.release, job, status="failed" if immutable else "paused", error=code)
             except DomainError:
                 pass
         finally:
