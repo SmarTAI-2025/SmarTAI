@@ -71,6 +71,8 @@ def record_deduction_basis(vote, awards, run, problem):
         return
     issues, cited, allocations = [], defaultdict(list), {}
     rule = problem.criterion or ""
+    positions = (getattr(run, "domain_review", None) or {}).get("positions") or range(1, len(run.cases) + 1)
+    outcomes = dict(zip(positions, zip(run.cases, run.report.results), strict=True))
     for step in awards:
         if getattr(step, "max_points", None) is None or step.score >= step.max_points:
             continue
@@ -89,14 +91,14 @@ def record_deduction_basis(vote, awards, run, problem):
             allocations[step.step_no]["claimed_source_quote"] = basis.source_quote
         cases = sorted(set(basis.failed_teacher_cases or _explicit_failure(step.desc)))
         detail = {"steps": [step.step_no], "cases": [], "descriptions": [step.desc[:240]]}
-        valid = [n for n in cases if 1 <= n <= len(run.cases)]
+        valid = [n for n in cases if n in outcomes]
         if valid:
-            passed = [n for n in valid if run.cases[n-1].source == "teacher" and run.report.results[n-1].passed]
+            passed = [n for n in valid if outcomes[n][0].source == "teacher" and outcomes[n][1].passed]
             if passed:
                 issues.append({**detail, "kind": "passed_case_cited_as_failed", "cases": passed})
             if len(cases) == 1:
                 n = cases[0]
-                if run.cases[n-1].source == "teacher" and not run.report.results[n-1].passed:
+                if outcomes[n][0].source == "teacher" and not outcomes[n][1].passed:
                     cited[n].append((step, basis.rubric_quote))
         for kind, quote, material in (
             ("rubric_quote_missing", basis.rubric_quote, rule + "\n" + (problem.stem or "")),
@@ -130,7 +132,7 @@ def record_deduction_basis(vote, awards, run, problem):
             issue["awards"] = [allocations[n] for n in issue["steps"]]
             if issue["kind"] == "per_case_deduction_exceeded":
                 issue["governing_rule"] = rule
-            issue["observed_cases"] = [{"number": n, "source": "teacher", "passed": run.report.results[n-1].passed}
+            issue["observed_cases"] = [{"number": n, "source": "teacher", "passed": outcomes[n][1].passed}
                                        for n in issue["cases"]]
         evidence.partial_check = {"status": "suspected", "issues": bounded}
 

@@ -845,7 +845,8 @@ def _grading_failure_code(run) -> str | None:
     if infrastructure.intersection(kinds) or legacy_execution_unavailable:
         return "programming_execution_unavailable"
     material_errors = {"programming_case_configuration_invalid", "programming_conflicting_expectations",
-                       "programming_cases_unavailable", "programming_reference_conflict", "programming_no_cases"}
+                       "programming_cases_unavailable", "programming_reference_conflict", "programming_no_cases",
+                       "programming_input_domain_unverified"}
     if missing and all(result.ai_expert_results and all(
         isinstance(expert, dict) and expert.get("error_kind") in material_errors
         for expert in result.ai_expert_results

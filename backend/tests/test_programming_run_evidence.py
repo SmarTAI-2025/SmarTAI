@@ -13,7 +13,7 @@ from backend.tools.code_interpreter import ExecutionReport, TestResult as Observ
 
 
 def question(cases=None, **changes):
-    return ProblemInfo(q_id="q7", number="7", type="编程题", stem="Implement the Python function:\ndef add(a, b):",
+    return ProblemInfo(q_id="q7", number="7", type="编程题", stem="Implement the Python function:\ndef add(a, b):\na and b are integers.",
                        criterion="Award correctness according to the teacher's rule.", test_cases=cases, **changes)
 
 

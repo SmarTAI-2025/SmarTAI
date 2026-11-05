@@ -36,6 +36,7 @@ _UNGRADED_REASONS = {
     "programming_conflicting_expectations": ("同一输入有不同的预期结果，请核对本题测试样例。", "The same input has different expected results. Check the test cases."),
     "programming_case_configuration_invalid": ("测试样例与题目要求不匹配，请核对输入、预期结果和函数要求。", "Check the test inputs and expected results against the question and its function requirements."),
     "programming_cases_unavailable": ("这组样例无法运行，请核对样例内容、数量及大小。", "These tests could not be run. Check their content, number and size."),
+    "programming_input_domain_unverified": ("无法确认生成的输入符合本题要求。请补充或确认本题的合法输入和预期结果后重试。", "The generated inputs could not be verified against the question’s input requirements. Add or confirm valid test inputs and expected results, then retry."),
     "programming_no_cases": ("未能生成可靠的测试样例，请补充输入和预期结果后重试。", "No reliable tests were generated. Add inputs and expected results, then retry."),
     "programming_preparation_interrupted": ("测试样例准备中断，请重试失败项。", "Test preparation was interrupted. Retry the failed items."),
     "programming_mapping_invalid": ("无法确定要测试的作答或函数，请核对本题与学生源码的对应关系。", "The submission or function to test is unclear. Check which code belongs to this question."),
@@ -130,6 +131,22 @@ def unavailable(reason, evidence_id, language, *, mapping="unknown", execution="
     )
 
 
+def _domain_feedback(run, language):
+    review = getattr(run, "domain_review", None)
+    if not review or not review.get("excluded"):
+        return ""
+    excluded = review["excluded"]
+    outside = sum(item["domain"] == "outside" for item in excluded)
+    unknown = len(excluded) - outside
+    if language == "zh":
+        return (f"AI 用例共 {review['ai_count']} 条，其中 {outside} 条超出输入范围，"
+                f"{unknown} 条无法确认输入是否合法。这 {len(excluded)} 条均未用于扣分。"
+                + ("本题只有 AI 用例，整组待确认。" if review["withheld"] else ""))
+    return (f"Of {review['ai_count']} AI test(s), {outside} fell outside the input domain and "
+            f"{unknown} could not be verified as valid. These {len(excluded)} test(s) were excluded from scoring."
+            + (" The AI-only suite awaits confirmation." if review["withheld"] else ""))
+
+
 def describe_run(run, language, problem: ProblemInfo):
     """Return a public projection and bounded prompt examples from the same facts."""
     if run.status == "no_submission":
@@ -167,7 +184,11 @@ def describe_run(run, language, problem: ProblemInfo):
             mapping = "ambiguous"
         elif "mapping" in reason:
             mapping = "missing" if "missing" in reason else "conflict"
-        return unavailable(reason, run.evidence_id, language, mapping=mapping), []
+        evidence = unavailable(reason, run.evidence_id, language, mapping=mapping)
+        note = _domain_feedback(run, language)
+        if note:
+            evidence.safe_summary += " " + note
+        return evidence, []
 
     report = run.report
     invalid = unavailable("contract_invalid", run.evidence_id, language)
@@ -197,7 +218,9 @@ def describe_run(run, language, problem: ProblemInfo):
                 or getattr(row, "case_index", None) not in (None, index)):
             return invalid, []
         ids.add(case_id)
-        case_label = case_id
+        positions = (getattr(run, "domain_review", None) or {}).get("positions")
+        display_number = positions[index] if positions else index + 1
+        case_label = f"case-{display_number}" if positions else case_id
         if frozen_ids:
             case_id = frozen_ids[index]
         modes.add(row.isolation_mode)
@@ -216,7 +239,7 @@ def describe_run(run, language, problem: ProblemInfo):
         key = (reason, case.source)
         detail = _case_detail(case_id, case_label, case, row, reason,
                               python_trace=getattr(run, "source_language", None) == "python")
-        detail["case_number"] = index + 1
+        detail["case_number"] = display_number
         (repeated if key in seen else representatives).append(detail)
         seen.add(key)
 
@@ -224,6 +247,9 @@ def describe_run(run, language, problem: ProblemInfo):
         return invalid, []
     teachers, generated = counts["teacher"], counts["llm_generated"]
     fragments = []
+    note = _domain_feedback(run, language)
+    if note:
+        fragments.append(note)
     for stat, en, zh in [(teachers, "teacher-provided tests", "教师用例"),
                          (generated, "AI-generated tests", "AI 生成用例")]:
         if stat.total:

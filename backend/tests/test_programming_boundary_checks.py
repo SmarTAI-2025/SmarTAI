@@ -21,7 +21,7 @@ def setup(*, independent=True, mixed=False):
     if mixed:
         cases.append(Case(io_mode="function", function_name="double", function_args=[-1],
                           expected_return="-2", source="llm_generated"))
-    problem = ProblemInfo(q_id="q1", number="1", type="编程题", stem="实现 double(n)，返回整数的两倍。",
+    problem = ProblemInfo(q_id="q1", number="1", type="编程题", stem="实现 double(n)，参数 n 为整数，返回它的两倍。",
                           max_score=10, criterion="教师用例全部通过得10分。", solution_code=REFERENCE, test_cases=cases)
     if not independent:
         problem._math_rubric_source = {"presentation":{"ai_completion_provenance":{"solution_code":{"source":"ai"}}}}
@@ -132,7 +132,7 @@ async def test_generated_argument_shape_is_repaired_before_the_class_suite_is_fr
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stem,proposal,reference,student,expected", [
-    ("实现 def keep(s): 返回原字符串。", {"args": [" x! "]}, "def keep(s): return s", "def keep(s): return s.strip()", repr(" x! ")),
+    ("实现 def keep(s): 参数 s 为字符串。返回原字符串。", {"args": [" x! "]}, "def keep(s): return s", "def keep(s): return s.strip()", repr(" x! ")),
     ("Read stdin and print it exactly.", {"input": " x! \n"}, "import sys\nsys.stdout.write(sys.stdin.read())", "print(input().strip())", " x! \n"),
 ])
 async def test_fresh_generated_inputs_obtain_expected_values_from_teacher_reference_once(monkeypatch, stem, proposal, reference, student, expected):
@@ -167,3 +167,39 @@ async def test_oversized_input_proposal_uses_one_repair_without_dropping_existin
     assert route.ainvoke.await_count == 2 and error is None
     assert [c.function_args for c in cases] == [[0], [-1], [8]]
     assert not problem.test_cases and all(c.expected_return is None for c in cases)
+
+
+@pytest.mark.asyncio
+async def test_identical_scoring_facts_produce_identical_model_input_across_independent_runs():
+    problem, answer = setup()
+    provider = fixed_provider(response(award(10)), response(award(10)))
+    votes = []
+    for _ in range(2):
+        with programming_run(None, None):
+            votes.append(await programming.ProgrammingSkill(provider).grade(problem, answer, student_id="s"))
+    assert votes[0].programming_evidence.evidence_id != votes[1].programming_evidence.evidence_id
+    first, second = provider.ainvoke.await_args_list
+    assert [m.content for m in first.args[0]] == [m.content for m in second.args[0]]
+
+
+@pytest.mark.asyncio
+async def test_class_shares_the_extra_reference_check_but_runs_each_student(monkeypatch):
+    problem, answer = setup()
+    execute = AsyncMock(wraps=programming.run_sandbox)
+    monkeypatch.setattr(programming, "run_sandbox", execute)
+    provider = fixed_provider(*(response({**award(10), "boundary_case": EXTRA}) for _ in range(3)))
+    with programming_run(None, None):
+        rows = await asyncio.gather(*(programming.ProgrammingSkill(provider).grade(problem, answer, student_id=sid)
+                                      for sid in ("a", "b", "c")))
+    assert all(row.programming_evidence.boundary_note for row in rows)
+    assert sum(call.args[0] == REFERENCE for call in execute.await_args_list) == 2  # official and additional
+    assert sum(call.args[0] == SOURCE for call in execute.await_args_list) == 6
+
+
+@pytest.mark.asyncio
+async def test_missing_award_list_remains_a_repairable_schema_error():
+    problem, answer = setup()
+    malformed = response({"step_1": {"step_no": 1, "score": 10, "is_correct": True, "desc": "Collected points."}})
+    provider = fixed_provider(malformed, response(award(10)))
+    result = await programming.ProgrammingSkill(provider).grade(problem, answer)
+    assert provider.ainvoke.await_count == 2 and result.score == 10 and not result.error_kind

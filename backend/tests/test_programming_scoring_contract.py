@@ -111,7 +111,7 @@ async def test_mixed_sources_late_failures_and_bounded_distinct_reasons():
     cases += [TestCase(input=str(i), expected_output="wanted " + "x" * 1000) for i in (5, 6, 7)]
     cases += [TestCase(input="8", expected_output="8", source="llm_generated")]
     route = fixed_provider(response(award(7)))
-    problem = _make_problem(test_cases=cases)
+    problem = _make_problem(stem="Read one integer and print its value.", test_cases=cases)
     problem.criterion = "Award 7 points for reading input; 3 for all correct outputs."
     code = "n=int(input())\nif n==8: raise ValueError('PRIVATE_ERROR')\nprint(n)"
     result = await programming.ProgrammingSkill(route).grade(problem, _make_answer(code))
@@ -147,7 +147,7 @@ async def test_selected_experts_share_one_execution_and_weighted_real_zero(monke
     setup = TaskGradingSetup(selected_provider_ids=["a","b"], primary_provider_id="a", aggregation_method=method,
                              expert_weights={"a":1,"b":3})
     cases = [TestCase(input="", expected_output="1", source="llm_generated")]
-    corr = await run_multi_expert(problem=_make_problem(test_cases=cases), answer=_make_answer("print(0)"),
+    corr = await run_multi_expert(problem=_make_problem(stem="Read stdin and print 1.", test_cases=cases), answer=_make_answer("print(0)"),
                                   registry=registry, student_id="s1", grading_setup=setup, aggregation_method=method)
     assert corr.score == 6 and corr.synthesis_method == method
     assert sum(s.score for s in corr.steps) == corr.score

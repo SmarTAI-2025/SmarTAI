@@ -20,7 +20,7 @@ async def test_prepared_generated_cases_call_function_and_preserve_real_failure(
                         expected_output=c.expected_return) for c in function_cases]
               if legacy else function_cases)
     problem = ProblemInfo(q_id="q1", number="1", type="编程题", max_score=10,
-        stem="Implement the required function:\ndef stable_softmax(xs):\n    ...", criterion="Numerical stability", test_cases=stored)
+        stem="Implement the required function:\ndef stable_softmax(xs):\nxs is a list of numbers.", criterion="Numerical stability", test_cases=stored)
     answer = StudentAnswerInfo(q_id="q1", number="1", type="编程题", content=(
         "import math\ndef stable_softmax(xs):\n"
         "    if not xs: return []\n    exps = [math.exp(x) for x in xs]\n"
