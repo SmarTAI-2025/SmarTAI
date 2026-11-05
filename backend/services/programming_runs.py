@@ -25,7 +25,7 @@ from backend.models import ProblemInfo, StudentAnswerInfo, TestCase, is_programm
 from pydantic import ValidationError
 from backend.services.grading_checkpoints import CheckpointWriteError, current_checkpoints
 from backend.services.programming_submission_mapping import C_FAMILY_FLAG, NATIVE_LANGUAGES, PYTHON_FLAG, has_markup_fence
-from backend.services.programming_test_contract import native_standard_supported
+from backend.services.programming_test_contract import has_function_only_contract, native_standard_supported
 from backend.services.python_source_encoding import PythonSourceEncodingError, python_execution_source
 from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCodeExecutionDisabled
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable, NativeBuildUnavailable
@@ -224,7 +224,7 @@ def _reference_execution_identity(problem):
     runtime = runtime_identity()
     try:
         source = _reference(problem)
-        if source:
+        if source and not has_function_only_contract(problem.stem, problem.test_cases):
             # Prior validations may have run a rewritten numeric stdin payload.
             runtime["reference_stdin_binding_version"] = 2
         copied = python_execution_source(source) if source else source

@@ -256,9 +256,14 @@ def _expectation(text, comparison, *, function):
     return text
 
 
+def _has_function_fields(case):
+    return (case.io_mode == "function" or case.function_name is not None or case.expected_return is not None
+            or case.function_args is not None or case.function_kwargs is not None)
+
+
 def _adapt_case(case, name, signature, *, function_mode, stdin_mode, edited):
     structured = case.function_args is not None or case.function_kwargs is not None
-    is_function = structured or case.io_mode == "function" or case.function_name is not None or case.expected_return is not None
+    is_function = _has_function_fields(case)
     if case.function_name is not None and (not case.function_name.isidentifier()
             or keyword.iskeyword(case.function_name) or (name and name != case.function_name)):
         raise ProgrammingCaseError("The test specifies an invalid or conflicting function name.")
@@ -339,6 +344,24 @@ def _adapt_case(case, name, signature, *, function_mode, stdin_mode, edited):
     return case.model_copy(update=updates)
 
 
+def _declared_modes(stem, name):
+    function_mode = bool(name or _FUNCTION.search(stem) or _FREE_NAME.search(stem))
+    alternatives = re.search(r"\beither\b|\bor (?:use|read|write)\b|或者|或(?:者)?使用|二选一", stem, re.I)
+    stdin_mode = bool(_STDIN.search(stem)) and (not function_mode or bool(alternatives))
+    return function_mode, stdin_mode
+
+
+def has_function_only_contract(stem: str, cases) -> bool:
+    """Use only the teacher's contract, including historical structured rows."""
+    names = required_function_names(stem)
+    if len(names) > 1:
+        return False
+    function_mode, stdin_mode = _declared_modes(stem, next(iter(names), None))
+    if stdin_mode:
+        return False
+    return function_mode or bool(cases) and all(_has_function_fields(case) for case in cases)
+
+
 def adapt_programming_cases(stem: str, cases, *, edited=False) -> list[TestCase]:
     """Validate and preserve a complete collection without consulting student code."""
     if not isinstance(cases, Sequence) or isinstance(cases, (str, bytes)) or len(cases) > 50:
@@ -350,9 +373,7 @@ def adapt_programming_cases(stem: str, cases, *, edited=False) -> list[TestCase]
         raise ProgrammingCaseError("The question does not identify one function entry point.")
     name = next(iter(names), None)
     signature = _teacher_signature(stem, name)
-    function_mode = bool(name or _FUNCTION.search(stem) or _FREE_NAME.search(stem))
-    alternatives = re.search(r"\beither\b|\bor (?:use|read|write)\b|或者|或(?:者)?使用|二选一", stem, re.I)
-    stdin_mode = bool(_STDIN.search(stem)) and (not function_mode or bool(alternatives))
+    function_mode, stdin_mode = _declared_modes(stem, name)
     if function_mode and stdin_mode:
         raise ProgrammingCaseError("The question specifies two possible execution interfaces.")
     result, outputs = [], {}
