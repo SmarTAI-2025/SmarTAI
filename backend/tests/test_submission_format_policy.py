@@ -117,3 +117,26 @@ async def test_retry_of_old_csv_input_is_rejected_before_queue(monkeypatch):
             background_tasks=BackgroundTasks(), current=SimpleNamespace(id="teacher"), registry=object())
     assert caught.value.detail["code"] == "submission_source_unsupported"
     queue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_real_pdf_with_printable_preamble_cannot_be_disguised_as_text():
+    import fitz
+    document = fitz.open()
+    document.new_page()
+    content = b"Printed report\n" + document.tobytes()
+    document.close()
+    assert (await validate_upload_content(content, "report.pdf", purpose="submissions")).content_type == "application/pdf"
+    with pytest.raises(HTTPException) as caught:
+        await validate_upload_content(content, "report.txt", purpose="submissions")
+    assert caught.value.detail["code"] == "submission_source_content_type_mismatch"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,content", [
+    ("notes.txt", b"Example signature: %PDF-1.7 is only text."),
+    ("cases.csv", b"input,expected\n%PDF-1.7,text\n"),
+    ("cases.json", b'{"input":"%PDF-1.7","expected":"text"}'),
+])
+async def test_text_materials_can_quote_a_pdf_marker(name, content):
+    assert await extract_text_from_upload(content, name, purpose="test_cases") == content.decode()

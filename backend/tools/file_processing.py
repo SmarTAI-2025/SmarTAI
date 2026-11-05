@@ -203,9 +203,9 @@ def _content_signature_type(data: bytes, filename: str) -> str:
     # An empty TAR has only zero end blocks, with no USTAR member header.
     if filename.lower().endswith(".tar") and len(data) >= 1024 and not any(data):
         return "application/x-tar"
-    # A container, image or text document can quote a PDF marker. Only tolerate
-    # a bounded whitespace/BOM preamble, not a marker anywhere in the payload.
-    if data[:1024].lstrip(b"\xef\xbb\xbf\x00\t\r\n\f ").startswith(b"%PDF-") or (filename.lower().endswith(".pdf") and b"%PDF-" in data[:1024]):
+    # PDF permits a bounded preamble. Treat the marker as a candidate only;
+    # the isolated parser distinguishes an actual PDF from quoted text.
+    if b"%PDF-" in data[:1024]:
         return "application/pdf"
     if _looks_like_text(data):
         return "text/plain"
@@ -291,7 +291,7 @@ async def validate_upload_content(content: bytes, filename: str, *, content_type
     inspection = inspect_upload_content(content, filename, content_type)
     # A plain-text/Markdown lesson may quote a PDF header. Only an actual PDF
     # parse can settle this ambiguous signature; a valid renamed PDF is rejected.
-    if inspection.content_type == "application/pdf" and _ext(filename) in DOCUMENT_TEXT_EXTENSIONS and _looks_like_text(content):
+    if inspection.content_type == "application/pdf" and _ext(filename) in (TEXT_EXTENSIONS | {".json"}) and _looks_like_text(content):
         try:
             await validate_media_content(content, "application/pdf", wait_for_slot=True)
         except HTTPException as exc:
