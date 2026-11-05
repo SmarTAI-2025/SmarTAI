@@ -105,6 +105,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "source_decode_failed",
     "source_empty",
     "source_json_invalid",
+    "source_content_type_not_allowed",
     "source_mime_type_not_allowed",
     "source_text_too_large",
     "source_too_large",
