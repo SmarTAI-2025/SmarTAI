@@ -27,6 +27,7 @@ export function uploadCourseMaterial(input: UploadCourseMaterialInput): Promise<
       category: input.category,
       labels: JSON.stringify(input.labels),
       native_only: input.nativeOnly ? "true" : undefined,
+      recognition_route_id: input.recognitionRouteId,
     },
   });
 }

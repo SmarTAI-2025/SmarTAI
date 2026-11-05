@@ -72,6 +72,7 @@ SAFE_SOURCE_REASON_CODES = RECOGNITION_ERROR_CODES | frozenset({
     "media_inspection_busy",
     "media_inspection_timeout",
     "media_inspection_failed",
+    "media_inspection_resource_limit",
     "source_decode_failed",
     "pdf_character_limit_exceeded",
     "pdf_extraction_busy",
@@ -81,7 +82,10 @@ SAFE_SOURCE_REASON_CODES = RECOGNITION_ERROR_CODES | frozenset({
     "pdf_page_limit_exceeded",
     "pdf_processing_unavailable",
     "ocr_empty_result",
+    "submission_archive_processing_unavailable",
     "submission_archive_empty",
+    "submission_archive_directories_only",
+    "submission_archive_nested_unsupported",
     "submission_archive_invalid",
     "submission_archive_limit_exceeded",
     "submission_archive_member_too_large",
@@ -115,6 +119,40 @@ NO_MATCH_DIAGNOSTICS = frozenset({
     ("no_matching_answer", "question_matching"),
 })
 NO_MATCH_REASON_CODES = frozenset(reason for reason, _phase in NO_MATCH_DIAGNOSTICS)
+
+
+# These diagnostics establish a problem in the immutable upload itself. Do
+# not infer this from a failure phase or from automatic retryability: provider
+# uncertainty, credentials, worker failures and unknown errors can recover.
+SOURCE_REUPLOAD_REASON_CODES = frozenset({
+    "submission_archive_empty",
+    "submission_archive_directories_only",
+    "submission_archive_nested_unsupported",
+    "submission_archive_invalid",
+    "submission_archive_limit_exceeded",
+    "submission_archive_member_too_large",
+    "submission_archive_member_unreadable",
+    "submission_archive_member_unsafe_path",
+    "submission_source_empty",
+    "submission_source_content_type_mismatch",
+    "submission_source_unsupported",
+    "submission_source_too_large",
+    "source_decode_failed",
+    "pdf_invalid",
+    "pdf_encrypted",
+    "image_invalid",
+    "image_format_mismatch",
+    "image_input_too_large",
+    "image_multiframe_unsupported",
+    "image_mode_unsupported",
+    "image_orientation_invalid",
+    "image_pixel_limit_exceeded",
+})
+
+
+def source_requires_reupload(reason_code: str | None, retryable: bool) -> bool:
+    """Shared by the retry guard and its public per-source projection."""
+    return not retryable and reason_code in SOURCE_REUPLOAD_REASON_CODES
 
 
 def source_diagnostic_is_valid(

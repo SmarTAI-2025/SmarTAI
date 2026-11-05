@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { APIError } from "@/api/client";
-import type { KnowledgeStorageUsage } from "@/types";
+import type { ExpertConfig, KnowledgeStorageUsage } from "@/types";
 import { KnowledgeBasePage } from "./KnowledgeBasePage";
 
 const mocks = vi.hoisted(() => ({
@@ -12,6 +12,12 @@ const mocks = vi.hoisted(() => ({
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
+
+const stageProviders: ExpertConfig[] = [
+  { provider_id: "library-vision", provider_type: "openai", model: "fixture-vision", display_name: "Library vision", enabled: true, supports_vision: true, max_concurrent: 1, rpm: 0 },
+  { provider_id: "library-text", provider_type: "openai", model: "fixture-text", display_name: "Text only", enabled: true, supports_vision: false, max_concurrent: 1, rpm: 0 },
+  { provider_id: "disabled-vision", provider_type: "openai", model: "fixture-disabled", display_name: "Disabled vision", enabled: false, supports_vision: true, max_concurrent: 1, rpm: 0 },
+];
 
 const retryingUsage: KnowledgeStorageUsage = {
   used_bytes: 12 * 1024 * 1024,
@@ -42,6 +48,7 @@ vi.mock("@/api/hooks", () => ({
     refetch: vi.fn(),
   }),
   useCourses: () => ({ data: [] }),
+  useStageProviders: () => ({ data: stageProviders, isError: false }),
   useKnowledgeStorageUsage: () => ({ data: retryingUsage, isLoading: false }),
   useUploadCourseMaterial: () => ({
     isPending: false,
@@ -98,6 +105,27 @@ describe("KnowledgeBasePage storage quota", () => {
     await waitFor(() => expect(mocks.uploadCourseMaterial).toHaveBeenCalledTimes(1));
     expect(within(dialog).getByText(/文件已就绪/)).toBeInTheDocument();
     expect(within(dialog).getByText("chapter.md")).toBeInTheDocument();
+  });
+
+  it("offers usable recognition models and preserves the chosen model after an image upload failure", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter><KnowledgeBasePage /></MemoryRouter>);
+    await user.click(screen.getByRole("button", { name: "上传资料" }));
+    const dialog = screen.getByRole("dialog", { name: "上传资料" });
+    const model = within(dialog).getByRole("combobox", { name: "视觉/OCR 模型" });
+    expect(within(model).getAllByRole("option").map(option => (option as HTMLOptionElement).value))
+      .toEqual(["", "library-vision"]);
+    await user.selectOptions(model, "library-vision");
+    const file = new File(["image fixture"], "lecture.png", { type: "image/png" });
+    await user.upload(within(dialog).getByLabelText(/选择一份资料文件/), file);
+    mocks.uploadCourseMaterial.mockRejectedValueOnce(new APIError(503, "Retry later"));
+    await user.click(within(dialog).getByRole("button", { name: "上传资料" }));
+    await waitFor(() => expect(mocks.uploadCourseMaterial).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ file, nativeOnly: false, recognitionRouteId: "library-vision" }),
+    ));
+    expect(model).toHaveValue("library-vision");
+    expect(within(dialog).getByText("lecture.png")).toBeInTheDocument();
+    expect(within(dialog).getByRole("alert")).toBeInTheDocument();
   });
 
   it("shows independent usage and automatic cleanup retry without a retry action", () => {

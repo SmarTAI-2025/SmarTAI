@@ -16,13 +16,13 @@ from PIL import Image
 
 # Independent expected values, not imported from the policy being tested.
 ROLE_EXTENSIONS = {
-    "course_knowledge": ("pdf", "txt", "md", "markdown"),
+    "course_knowledge": ("pdf", "txt", "md", "markdown", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
     "problem_reference": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
     "rubric": ("pdf", "txt", "md", "markdown", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
-    "programming_tests": ("pdf", "txt", "md", "markdown", "json", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
-    "student_submission": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp", "py", "c", "cc", "cpp", "csv", "tsv", "rst"),
+    "programming_tests": ("pdf", "txt", "md", "markdown", "json", "csv", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
+    "student_submission": ("pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"),
 }
-OTHER_EXTENSIONS = ("csv", "tsv", "rst", "pptx", "bmp", "tif", "tiff", "webp", "exe", "zip", "rar", "7z", "tar")
+OTHER_EXTENSIONS = ("py", "c", "cc", "cpp", "csv", "tsv", "rst", "pptx", "bmp", "tif", "tiff", "webp", "exe", "zip", "rar", "7z", "tar")
 
 
 def policy():
@@ -82,7 +82,7 @@ def test_disallowed_formats_are_rejected_before_mime_can_grant_access(role, exte
     module = policy()
     with pytest.raises(module.UploadContractError) as caught:
         module.validate_upload(role, "source." + extension, b"plain text cannot grant a new role")
-    assert caught.value.code == ("submission_source_type_not_allowed" if role == "student_submission" else "source_type_not_allowed")
+    assert caught.value.code == ("submission_source_unsupported" if role == "student_submission" else "source_type_not_allowed")
 
 
 def test_unknown_role_is_not_a_wide_default():
@@ -137,13 +137,13 @@ def test_image_policy_projects_and_enforces_the_lower_ocr_byte_limit(monkeypatch
 
 def test_extension_normalization_preserves_original_bytes_hash():
     data = b"\xef\xbb\xbfprint(1)\r\n"
-    result = policy().validate_upload("student_submission", "Original.PY", data)
-    assert result.extension == "py"
-    assert result.file_name == "Original.PY"
+    result = policy().validate_upload("student_submission", "Original.TXT", data)
+    assert result.extension == "txt"
+    assert result.file_name == "Original.TXT"
     assert result.sha256 == "41c1b808cc296dd7303431470c8ce2bf765dfac06f3935329ada15946f7433b9"
 
 
-@pytest.mark.parametrize("extension,data", [("txt", b"%PDF-1.7\n"), ("pdf", b"not a pdf"), ("png", b"plain text"), ("py", b"PK\x03\x04not source"), ("json", b"%PDF-1.7\n")])
+@pytest.mark.parametrize("extension,data", [("txt", payload("pdf")), ("pdf", b"not a pdf"), ("png", b"plain text"), ("txt", b"PK\x03\x04not source"), ("json", payload("pdf"))])
 def test_extension_content_disagreement_is_rejected(extension, data):
     module = policy()
     role = "programming_tests" if extension == "json" else "student_submission"

@@ -20,12 +20,14 @@ QUESTION_SOURCE_MAX_BYTES = 5 * MIB
 INDIVIDUAL_SUBMISSION_MAX_BYTES = 64 * MIB
 COURSE_MATERIAL_FILENAME_MAX_CHARACTERS = 240
 
+DOCUMENT_EXTENSIONS = frozenset({"pdf", "txt", "md", "markdown",
+                                 "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"})
 ROLE_EXTENSIONS = MappingProxyType({
-    "course_knowledge": frozenset({"pdf", "txt", "md", "markdown"}),
-    "problem_reference": frozenset({"pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"}),
-    "rubric": frozenset({"pdf", "txt", "md", "markdown", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"}),
-    "programming_tests": frozenset({"pdf", "txt", "md", "markdown", "json", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp"}),
-    "student_submission": frozenset({"pdf", "txt", "md", "markdown", "docx", "jpg", "jpeg", "png", "bmp", "tif", "tiff", "webp", "py", "c", "cc", "cpp", "csv", "tsv", "rst"}),
+    "course_knowledge": DOCUMENT_EXTENSIONS,
+    "problem_reference": DOCUMENT_EXTENSIONS | {"docx"},
+    "rubric": DOCUMENT_EXTENSIONS,
+    "programming_tests": DOCUMENT_EXTENSIONS | {"json", "csv"},
+    "student_submission": DOCUMENT_EXTENSIONS | {"docx"},
 })
 _BINARY_MEDIA = {
     "pdf": "application/pdf", "png": "image/png",
@@ -111,7 +113,7 @@ def get_upload_contract() -> dict:
                 "max_file_bytes": _role_max_bytes(role, limits),
                 "allow_vision": role not in {"rubric", "programming_tests"},
                 "allow_vision_opt_in": role in {"rubric", "programming_tests"},
-                "allow_native_text": role == "student_submission",
+                "allow_native_text": True,
             }
             for role, extensions in ROLE_EXTENSIONS.items()
         },
@@ -119,7 +121,8 @@ def get_upload_contract() -> dict:
     }
 
 
-def _validate_docx(data: bytes, limits: dict[str, int]) -> None:
+def validate_docx_package(data: bytes) -> None:
+    limits = _limits()
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as package:
             infos = package.infolist()
@@ -179,11 +182,13 @@ def _validate_json(data: bytes) -> None:
 def validate_upload(role: str, file_name: str, data: bytes) -> ValidatedUpload:
     """Validate one ordinary file. ZIP container handling is a separate boundary."""
     extensions = ROLE_EXTENSIONS.get(role)
+    if role == "legacy_problem":
+        extensions = ROLE_EXTENSIONS["problem_reference"] | {"csv", "rst"}
     if extensions is None:
         raise UploadContractError("invalid_source_role")
     extension = PurePosixPath(file_name).suffix.lower().lstrip(".")
-    if extension not in extensions and role != "student_submission":
-        raise UploadContractError("source_type_not_allowed", role=role)
+    if extension not in extensions:
+        raise UploadContractError("submission_source_unsupported" if role == "student_submission" else "source_type_not_allowed", role=role)
     limits = _limits()
     if len(file_name) > limits["source_filename_max_characters"]:
         raise UploadContractError("source_filename_too_long")
@@ -196,16 +201,14 @@ def validate_upload(role: str, file_name: str, data: bytes) -> ValidatedUpload:
         raise UploadContractError("submission_source_too_large" if role == "student_submission" else "source_too_large", max_bytes=max_bytes)
 
     if extension == "docx":
-        _validate_docx(data, limits)
+        validate_docx_package(data)
     from backend.tools.file_processing import inspect_upload_content
     inspection = inspect_upload_content(data, file_name)
-    # Keep main's native-text student input without decoding an over-limit body.
-    # This grants reading, never code execution or another business role.
-    native_student_text = (role == "student_submission" and not inspection.mismatch
-                           and inspection.content_type.startswith("text/"))
-    if extension not in extensions and not native_student_text:
-        raise UploadContractError("submission_source_type_not_allowed", role=role)
     media_type = inspection.content_type
+    if media_type == "application/pdf" and extension in {"txt", "md", "markdown", "csv", "rst", "json"}:
+        from backend.tools.file_processing import _looks_like_text
+        if _looks_like_text(data):
+            media_type = "text/plain"  # Final acceptance uses the bounded PDF probe.
     expected_binary = _BINARY_MEDIA.get(extension)
     if (expected_binary and media_type != expected_binary) or (not expected_binary and not media_type.startswith("text/")):
         raise UploadContractError("submission_source_content_type_mismatch")

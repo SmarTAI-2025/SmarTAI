@@ -66,7 +66,7 @@ async def prepare(content, filename):
 @pytest.mark.parametrize("encoding", ["utf-8", "gbk"])
 async def test_source_preserves_helpers_and_function_order(encoding):
     body = CODE.encode(encoding)
-    owner, task, sources = await prepare(body, "S1_Alice.py")
+    owner, task, sources = await prepare(body, "S1_Alice.txt")
     assert len(sources) == 1 and sources[0].pre_error_code is None
     assert sources[0].text == CODE
     stored = file_repository.get_file(file_id=sources[0].stored_file_id, owner_id=owner)
@@ -102,7 +102,7 @@ async def test_confirmed_identity_and_mapping_survive_retry(monkeypatch):
             dict(q_id="q1", number="1", type="programming", content=CODE, flag=[])])))
     registry = _registry(monkeypatch, invoke)
     queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
-        filename="S1_Alice.py", content=CODE.encode(), content_type="text/plain", registry=registry)
+        filename="S1_Alice.txt", content=CODE.encode(), content_type="text/plain", registry=registry)
     await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
     before = task_facade.get_task(task_id=task, owner_id=owner)
     answer = next(a for a in before["student_data"]["S1"]["stu_ans"] if a["q_id"] == "q1")
@@ -120,7 +120,7 @@ async def test_confirmed_identity_and_mapping_survive_retry(monkeypatch):
     assert retry.status_code == 409
     assert json.loads(retry.body)["error"]["code"] == "submission_retry_not_available"
     with pytest.raises(DomainError):
-        task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="S1_Alice.py",
+        task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="S1_Alice.txt",
             content=CODE.encode(), content_type="text/plain", registry=registry, replace_confirmed=False)
     after = task_facade.get_task(task_id=task, owner_id=owner)
     assert after["student_data"] == confirmed["student_data"]
@@ -136,13 +136,13 @@ async def test_confirmed_identity_and_mapping_survive_retry(monkeypatch):
 async def test_bad_archive_member_keeps_valid_sibling():
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w") as archive:
-        archive.writestr("group/S1.py", CODE.encode())
+        archive.writestr("group/S1.txt", CODE.encode())
         archive.writestr("bad.bin", b"\x00binary")
     owner, _task, sources = await prepare(out.getvalue(), "answers.zip")
     by_name = {s.filename: s for s in sources}
-    assert set(by_name) == {"group/S1.py", "bad.bin"}
-    assert by_name["group/S1.py"].text == CODE
-    assert by_name["bad.bin"].pre_error_code == "submission_source_type_not_allowed"
+    assert set(by_name) == {"group/S1.txt", "bad.bin"}
+    assert by_name["group/S1.txt"].text == CODE
+    assert by_name["bad.bin"].pre_error_code == "submission_source_unsupported"
     assert by_name["bad.bin"].text is None
     stored = file_repository.get_file(file_id=by_name["bad.bin"].stored_file_id, owner_id=owner)
     with get_storage().open(stored.storage_key) as original:
@@ -196,7 +196,7 @@ async def test_standard_word_package_keeps_code_and_plain_table_without_ocr():
     (b"\x00answer", "submission_source_content_type_mismatch"),
     (b"\xff\xff\xff", "submission_source_content_type_mismatch")])
 async def test_unreadable_source_keeps_original_and_stable_failure(body, code):
-    owner, _task, sources = await prepare(body, "S1.py")
+    owner, _task, sources = await prepare(body, "S1.txt")
     assert sources[0].text is None and sources[0].pre_error_code == code
     assert sources[0].failure_phase == "source_read"
     stored = file_repository.get_file(file_id=sources[0].stored_file_id, owner_id=owner)

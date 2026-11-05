@@ -217,6 +217,7 @@ async def upload_course_material(
     category: MaterialCategory = Form(default="other"),
     labels: str = Form(default="[]"),
     native_only: bool = Form(default=False),
+    recognition_route_id: Optional[str] = Form(default=None),
     current: User = Depends(require_teacher),
 ):
     group = None
@@ -250,6 +251,7 @@ async def upload_course_material(
             title=Path(filename).stem,
             retention_policy="retained",
             native_only=native_only,
+            recognition_route_id=recognition_route_id,
         )
     except HTTPException:
         raise

@@ -65,7 +65,7 @@ from backend.llm.registry import (
     ExpertRegistry,
     get_scoped_expert_registry,
 )
-from backend.knowledge.service import ingest_document
+from backend.knowledge.service import KNOWLEDGE_UPLOAD_EXTENSIONS, ingest_document
 from backend.models import (
     ProblemSourceDraft,
     QuestionScorePolicy,
@@ -99,6 +99,7 @@ from backend.services.upload_contract import ROLE_EXTENSIONS, QUESTION_SOURCE_MA
 from backend.tools.file_processing import (
     IMAGE_MEDIA_TYPES,
     extract_text_from_upload,
+    validate_upload_content,
     inspect_upload_content,
 )
 
@@ -192,6 +193,7 @@ _SOURCE_MIME_TYPES = {
     ".md": frozenset({"text/markdown", "text/plain"}),
     ".markdown": frozenset({"text/markdown", "text/plain"}),
     ".json": frozenset({"application/json", "text/json", "text/plain"}),
+    ".csv": frozenset({"text/csv", "application/csv", "text/plain"}),
     ".docx": frozenset({"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}),
     ".jpg": frozenset({"image/jpeg"}),
     ".jpeg": frozenset({"image/jpeg"}),
@@ -688,6 +690,8 @@ async def preflight_problem_source(
             document_ocr_available=route.is_baidu_ocr,
             task_id=task_id,
         )
+        if descriptor["kind"] == "upload":
+            _validate_source_library_format(save=save_to_library, filename=descriptor["filename"])
         provisional_payload = {
             "filename": descriptor["filename"],
             "content_type": descriptor.get("content_type"),
@@ -709,6 +713,8 @@ async def preflight_problem_source(
                 owner_id=current.id, route=route, registry=registry,
             ),
         }
+        if descriptor.get("_original_filename"):
+            provisional_payload["original_filename"] = descriptor["_original_filename"]
         # Preserve identities of older prepared sources. Only new upload-only
         # requests opt into recognition by the existing durable progress job.
         if defer_recognition:
@@ -784,7 +790,7 @@ async def preflight_problem_source(
                         storage=get_storage(),
                         owner_id=current.id,
                         task_id=task_id,
-                        original_name=descriptor["filename"],
+                        original_name=descriptor.get("_original_filename", descriptor["filename"]),
                         content=descriptor["_body"],
                         content_type=descriptor["content_type"],
                         replacement_file_ids=replacement_file_ids,
@@ -870,7 +876,8 @@ async def preflight_problem_source(
                 try:
                     read = await read_question_source(
                         owner_id=current.id, task_id=task_id, content=descriptor["_body"],
-                        filename=descriptor["filename"], content_type=descriptor.get("content_type"),
+                        filename=descriptor.get("_original_filename", descriptor["filename"]),
+                        content_type=descriptor.get("content_type"),
                         route=route, registry=registry, stored_file_id=stored.id if stored else None,
                         extraction_hint=extraction_hint, options=parsed_recognition_options.model_dump(),
                         purpose=_source_role_ocr_purpose(role),
@@ -956,6 +963,7 @@ async def preflight_problem_source(
                 task_id=task_id,
                 role=role,
                 existing_material_id=library_material_id,
+                registry=registry, recognition_route_id=route.route_id,
             )
         except DomainError as exc:
             _mark_problem_source_failed(
@@ -1163,22 +1171,11 @@ async def _select_source(
         filename = source_file_service.safe_display_name(
             source_upload.filename or "source"
         )
-        try:
-            validate_upload(upload_role_for_purpose(_source_role_ocr_purpose(role)), filename, body)
-        except UploadContractError as exc:
-            code = "source_content_type_not_allowed" if exc.code == "submission_source_content_type_mismatch" else exc.code
-            raise HTTPException(413 if exc.code.endswith("too_large") else 422 if exc.code == "programming_tests_json_invalid" else 415,
-                                detail={"code": code, **exc.details}) from None
         extension = Path(filename.lower()).suffix
-        detected = (
-            source_file_service.detected_preview_mime(body[:4096], filename)
-            if extension in {".pdf", *_IMAGE_SOURCE_EXTENSIONS}
-            else inspect_upload_content(
-                body,
-                filename,
-                source_upload.content_type,
-            ).content_type
-        )
+        detected = (await validate_upload_content(
+            body, filename, content_type=source_upload.content_type,
+            purpose=_source_role_ocr_purpose(role),
+        )).content_type
         if detected not in _SOURCE_MIME_TYPES[extension]:
             raise HTTPException(
                 status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
@@ -1206,14 +1203,15 @@ async def _select_source(
         )
         if material is None:
             raise NotFound("course_material")
-        class _LibraryUpload:
-            filename = material.filename
-            content_type = material.content_type
-
-        _validate_source_upload(_LibraryUpload(), role=role, has_vision=True, enforce_vision=False)
         original = file_repository.get_file(file_id=material.stored_file_id, owner_id=owner_id)
         if original is None or original.knowledge_document_id != material.document_id:
             raise NotFound("stored_file")
+
+        class _LibraryUpload:
+            filename = original.original_name
+            content_type = original.content_type
+
+        _validate_source_upload(_LibraryUpload(), role=role, has_vision=True, enforce_vision=False)
         maximum = upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES)
         if original.size_bytes > maximum:
             raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": maximum})
@@ -1239,8 +1237,12 @@ async def _select_source(
             "knowledge_document_id": material.document_id,
             "stored_file_id": material.stored_file_id,
         }
-        if material.content_type in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}:
-            descriptor.update(_body=body, _recognition_original=True)
+        if Path(original.original_name).suffix.lower() == ".docx" or material.content_type in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}:
+            # A library title is editable and need not have a file extension.
+            # Decode and persist copies using the owner-bound original's name,
+            # while keeping the title in UI/source-reference metadata.
+            descriptor.update(_body=body, _recognition_original=True,
+                              _original_filename=original.original_name)
     else:
         text = (inline_text or "").strip()
         descriptor = {
@@ -1300,7 +1302,8 @@ async def _read_source(
             )
             descriptor["stored_file_id"] = stored.id
         result = await read_question_source(
-            owner_id=owner_id, task_id=task_id, content=descriptor["_body"], filename=descriptor["filename"],
+            owner_id=owner_id, task_id=task_id, content=descriptor["_body"],
+            filename=descriptor.get("_original_filename", descriptor["filename"]),
             content_type=descriptor.get("content_type"), route=route, registry=registry,
             stored_file_id=descriptor.get("stored_file_id") if descriptor["kind"] == "upload" else None,
             purpose=_source_role_ocr_purpose(role), extraction_hint=extraction_hint, reporter=reporter,
@@ -1315,9 +1318,23 @@ async def _read_source(
     return text, descriptor
 
 
+def _validate_source_library_format(*, save: bool, filename: str) -> None:
+    """Reject unsupported library originals before OCR or persistent writes."""
+    if save is True and Path(filename).suffix.lower() not in KNOWLEDGE_UPLOAD_EXTENSIONS:
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={
+                "code": "source_library_type_not_allowed",
+                "accepted_extensions": sorted(KNOWLEDGE_UPLOAD_EXTENSIONS),
+            },
+        )
+
+
 async def _save_source_to_library(
     *, save: bool, descriptor: dict, owner_id: str, task_id: str,
     role: str, existing_material_id: str | None,
+    registry=None, recognition_route_id: str | None = None,
+    media_slot_timeout_seconds: float | None = 10,
 ) -> dict | None:
     if not save:
         return None
@@ -1335,6 +1352,7 @@ async def _save_source_to_library(
     if not isinstance(body, bytes) or not body:
         raise InvalidTransition("library_source_bytes_unavailable")
     filename = Path(str(descriptor.get("filename") or "source.txt")).name
+    _validate_source_library_format(save=save, filename=filename)
     document = await ingest_document(
         owner_id=owner_id,
         original_name=filename,
@@ -1342,6 +1360,8 @@ async def _save_source_to_library(
         content_type=descriptor.get("content_type"),
         title=Path(filename).stem,
         retention_policy="retained",
+        registry=registry, recognition_route_id=recognition_route_id,
+        media_slot_timeout_seconds=media_slot_timeout_seconds,
     )
     if document.status not in {"ready", "partial", "processing", "failed"}:
         raise InvalidTransition("knowledge_document_not_ready")
@@ -1471,7 +1491,7 @@ def _validated_question_source_ref(
             raise ValidationError("The saved original changed.", code="recognition_source_mismatch")
         try:
             validate_upload(upload_role_for_purpose(_source_role_ocr_purpose(ref["role"])),
-                            original.original_name, body)
+                            stored.original_name if source_kind == "library" else original.original_name, body)
         except UploadContractError as exc:
             raise ValidationError("The saved source is not allowed for this role.", code=exc.code, details=exc.details) from None
     return ref
@@ -2386,9 +2406,25 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
         body = await run_in_threadpool(read_original)
         if len(body) != stored.size_bytes or hashlib.sha256(body).hexdigest() != draft.content_sha256:
             raise RecognitionError("recognition_source_mismatch")
+        filename = ((payload.get("original_filename") if draft.source_kind == "library" else None)
+                    or stored.original_name)
+        content_type = draft.content_type
+        if (draft.source_kind == "library"
+                and content_type not in _SOURCE_MIME_TYPES.get(Path(filename).suffix.lower(), ())):
+            from backend.db import course_library_repository
+
+            material = course_library_repository.get_material(draft.library_material_id, operation.owner_id)
+            original = (file_repository.get_file(file_id=material.stored_file_id, owner_id=operation.owner_id)
+                        if material is not None else None)
+            if (original is None or original.knowledge_document_id != material.document_id
+                    or original.sha256 != draft.content_sha256 or material.sha256 != draft.content_sha256):
+                raise RecognitionError("recognition_source_unavailable")
+            filename, content_type = original.original_name, original.content_type
+        # Only legacy, wrongly named clones need their owner/hash-bound library
+        # original. New sources use frozen metadata, not a live library lookup.
         result = await read_question_source(
             owner_id=operation.owner_id, task_id=operation.assignment_id,
-            content=body, filename=draft.filename, content_type=draft.content_type,
+            content=body, filename=filename, content_type=content_type,
             route=route, registry=registry, stored_file_id=stored.id,
             extraction_hint=draft.extraction_hint, options=payload.get("recognition_options"),
             purpose=_source_role_ocr_purpose(draft.role), reporter=reporter,
@@ -2398,6 +2434,7 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
             timeout_profile=(operation.payload or {}).get("recognition_timeout_profile"),
             execution_scope=(operation.payload or {}).get("recognition_execution_scope"),
             allow_partial=allow_partial,
+            media_slot_timeout_seconds=None,
             on_pages=on_pages,
         )
         if not result.text.strip():
@@ -2414,6 +2451,8 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
             descriptor={"_body": body, "filename": draft.filename, "content_type": draft.content_type},
             owner_id=operation.owner_id, task_id=operation.assignment_id,
             role=draft.role, existing_material_id=draft.library_material_id,
+            registry=registry, recognition_route_id=route.route_id,
+            media_slot_timeout_seconds=None,
         )
         updated = {**payload, "recognition": result.recognition, "saved_material": saved}
         updated.pop("source_error", None)
@@ -2755,6 +2794,8 @@ async def preflight_material_import(
         parser_fingerprint = stage_provider_configuration_fingerprint(owner_id=current.id, registry=registry, route=parser_route)
         if not isinstance(extraction_hint, str) or len(extraction_hint) > 2000:
             raise RecognitionError("recognition_request_invalid")
+        if file is not None:
+            _validate_source_library_format(save=save_to_library, filename=file.filename or "source")
         text, descriptor = await _read_source(
             file=file, library_material_id=library_material_id,
             inline_text=None, owner_id=current.id, registry=registry,
@@ -2798,6 +2839,7 @@ async def preflight_material_import(
             task_id=task_id,
             role=target_role,
             existing_material_id=library_material_id,
+            registry=registry, recognition_route_id=route.route_id,
         )
         effective_material_id = (
             library_material_id

@@ -1,6 +1,11 @@
 import type { Locale } from "@/i18n/messages";
 import type { SubmissionPageError, SubmissionSourceOutcome } from "@/types";
 
+export function submissionRequiresReupload(sources: SubmissionSourceOutcome[] | undefined): boolean {
+  const unfinished = (sources ?? []).filter(source => source.status === "failed" || source.status === "processing");
+  return unfinished.length > 0 && unfinished.every(source => source.status === "failed" && source.requires_reupload === true);
+}
+
 export interface SubmissionSourceReasonCopy {
   title: string;
   description: string;
@@ -414,7 +419,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   source_decode_failed: (locale) => fileCopy(locale, "文本编码无法读取", "The text encoding could not be read", "请把文本另存为 UTF-8，或上传 PDF/图片版本。", "Save the text as UTF-8, or upload a PDF/image version."),
   submission_source_content_type_mismatch: (locale) => fileCopy(locale, "文件内容与扩展名或类型不一致", "The file contents do not match its name or declared type", "不要只修改扩展名；请从原应用重新导出为受支持的 PDF、TXT、JPG、PNG 或 WebP 后上传。", "Do not only rename the extension. Export the file again as a supported PDF, TXT, JPG, PNG, or WebP, then upload it."),
   submission_source_empty: (locale) => fileCopy(locale, "文件没有可识别内容", "The file contains no recognizable content", "检查是否为空白页、空文件或只包含不可见字符。", "Check for a blank page, empty file, or invisible-only content."),
-  submission_source_unsupported: (locale) => fileCopy(locale, "文件类型暂不支持", "This file type is not supported", "转换为 PDF、TXT、Markdown、CSV、JPG、PNG 或 WebP 后重新上传。", "Convert it to PDF, TXT, Markdown, CSV, JPG, PNG, or WebP and upload again."),
+  submission_source_unsupported: (locale) => fileCopy(locale, "文件类型暂不支持", "This file type is not supported", "转换为 PDF、TXT、MD、MARKDOWN、JPG、JPEG、PNG、BMP、TIF、TIFF 或 WebP 后重新上传。", "Convert it to PDF, TXT, MD, MARKDOWN, JPG, JPEG, PNG, BMP, TIF, TIFF, or WebP and upload again."),
   submission_source_too_large: (locale) => fileCopy(locale, "文件超过处理上限", "The file exceeds the processing limit", "压缩图片，或拆分 PDF/压缩包后重新上传。", "Compress the image or split the PDF/archive, then upload again."),
   ocr_input_invalid: (locale) => fileCopy(locale, "文件内容不是有效的 OCR 输入", "The file is not valid OCR input", "从原应用重新导出文件，不要只修改扩展名。", "Export the file again from its source application; do not only rename the extension."),
   ocr_unsupported_file: (locale) => fileCopy(locale, "百度 OCR 不支持该文件格式", "Baidu OCR does not support this file format", "转换为 PDF、JPG、PNG、BMP 或 TIFF，或更换识别模型。", "Convert it to PDF, JPG, PNG, BMP, or TIFF, or choose another recognition model."),
@@ -423,6 +428,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   media_inspection_unavailable: (locale) => fileCopy(locale, "文件安全检查暂时不可用", "Media safety inspection is unavailable", "请稍后重试，或联系管理员。", "Try again later or contact your administrator."),
   media_inspection_busy: (locale) => fileCopy(locale, "文件安全检查正忙", "Media safety inspection is busy", "稍等片刻后重试；文件尚未发送给百度。", "Wait briefly and retry. The file has not been sent to Baidu."),
   media_inspection_timeout: (locale) => fileCopy(locale, "文件安全检查超时", "Media safety inspection timed out", "优化或拆分文件后重试；文件尚未发送给百度。", "Optimize or split the file, then retry. The file was not sent to Baidu."),
+  media_inspection_resource_limit: (locale) => fileCopy(locale, "文件解码超过安全资源上限", "File decoding exceeds the safe resource limit", "缩小图片或拆分 PDF 后重试，持续失败时联系管理员。", "Reduce the image or split the PDF, then retry. Contact an administrator if it persists."),
   media_inspection_failed: (locale) => fileCopy(locale, "文件未通过安全检查", "Media safety inspection failed", "检查文件是否损坏或加密，并重新导出。", "Check whether the file is damaged or encrypted, then export it again."),
   pdf_processing_unavailable: (locale) => fileCopy(locale, "服务器暂时不能处理 PDF", "PDF processing is unavailable on the server", "请稍后重试，或将文件转为图片或 TXT 后上传。", "Try again later, or upload the content as images or TXT."),
   pdf_extraction_busy: (locale) => fileCopy(locale, "PDF 读取服务正忙", "PDF extraction is busy", "稍等片刻后直接重试；原文件已经保存。", "Wait briefly and retry; the original file is already saved."),
@@ -431,7 +437,14 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   pdf_character_limit_exceeded: (locale) => fileCopy(locale, "PDF 文字量超过上限", "The PDF exceeds the text limit", "拆分 PDF 后重新上传。", "Split the PDF and upload again."),
   pdf_extraction_failed: (locale) => fileCopy(locale, "PDF 内容无法读取", "The PDF could not be read", "检查文件是否损坏或加密，并尝试重新导出。", "Check whether the file is damaged or encrypted, and export it again."),
   pdf_ocr_render_failed: (locale) => fileCopy(locale, "扫描 PDF 无法转成 OCR 页面", "The scanned PDF could not be rendered for OCR", "尝试重新导出 PDF，或逐页转为清晰图片。", "Export the PDF again, or convert each page to a clear image."),
+  submission_archive_processing_unavailable: (locale) => ({
+    title: tx(locale, "服务器暂时无法解压", "Archive processing is temporarily unavailable"),
+    description: tx(locale, "解压工具不可用或服务器临时资源不足，原文件已保留；这不代表压缩包已损坏。", "The extraction tool is unavailable or the server temporarily lacks resources. The original is preserved; this does not mean the archive is damaged."),
+    nextStep: tx(locale, "稍后重试；持续失败时联系管理员，或改用 ZIP 上传。", "Retry later. If it persists, contact an administrator or upload a ZIP instead."),
+  }),
   submission_archive_empty: (locale) => archiveCopy(locale, "压缩包中没有学生文件", "The archive contains no student files", "确认压缩包不是空的，且文件没有全部放在系统隐藏目录中。", "Make sure the archive is not empty and files are not all in hidden system folders."),
+  submission_archive_directories_only: (locale) => archiveCopy(locale, "压缩包中只找到目录，没有学生文件", "The archive contains folders but no student files", "普通多层文件夹可以读取；请确认文件夹中包含 PDF 等受支持文件后重新打包上传。", "Ordinary nested folders are supported. Include supported files such as PDFs inside the folders, then repack and upload."),
+  submission_archive_nested_unsupported: (locale) => archiveMemberCopy(locale, "压缩包内仍是压缩包，暂不支持继续解压", "This archive member is another archive and cannot be unpacked", "请先解压内层压缩包，再将其中的 PDF 等受支持文件重新打包上传；可以保留普通文件夹。", "Unpack the inner archive first, then repack its supported files, such as PDFs, and upload again. Ordinary folders can be retained."),
   submission_archive_invalid: (locale) => archiveCopy(locale, "压缩包损坏或结构不安全", "The archive is damaged or unsafe", "请重新打包为未加密的 ZIP 后上传。", "Create a new, unencrypted ZIP and upload it again."),
   submission_archive_limit_exceeded: (locale) => archiveCopy(locale, "压缩包超过安全上限", "The archive exceeds a safety limit", "减少文件数量、单文件大小或解压后总体积，再重新上传。", "Reduce file count, member size, or total expanded size, then upload again."),
   submission_archive_member_too_large: (locale) => archiveMemberCopy(locale, "压缩包中的这份文件过大", "This archive member is too large", "只压缩或拆分这份文件后重新打包；同包其他健康文件已经继续处理。", "Compress or split only this member, then rebuild the archive. Other healthy members continued processing."),

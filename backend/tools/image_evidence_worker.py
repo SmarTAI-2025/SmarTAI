@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 import hashlib
 import io
 import math
@@ -78,8 +79,10 @@ def _orientation_matrix(orientation: int, width: int, height: int) -> list[list[
     }[orientation]
 
 
-def prepare_image(body: bytes, request: dict) -> dict:
-    from PIL import Image, ImageFile, ImageOps
+@contextmanager
+def _validated_image(body: bytes, content_type: str):
+    """Yield fully decoded pixels after bounded format/structure checks."""
+    from PIL import Image, ImageFile
 
     if not body:
         raise ImageFailure("image_invalid")
@@ -87,68 +90,90 @@ def prepare_image(body: bytes, request: dict) -> dict:
         raise ImageFailure("image_input_too_large")
     ImageFile.LOAD_TRUNCATED_IMAGES = False
     Image.MAX_IMAGE_PIXELS = MAX_PIXELS
+    original = None
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(body)) as probe:
-                if probe.format != FORMATS[request["content_type"]]:
-                    raise ImageFailure("image_format_mismatch")
-                if getattr(probe, "n_frames", 1) != 1:
-                    raise ImageFailure("image_multiframe_unsupported")
-                _pixel_limit(*probe.size)
-                probe.verify()
-            with Image.open(io.BytesIO(body)) as original:
-                raw_width, raw_height = original.size
-                source_mode = original.mode
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(io.BytesIO(body)) as probe:
+                    if probe.format != FORMATS.get(content_type):
+                        raise ImageFailure("image_format_mismatch")
+                    if getattr(probe, "n_frames", 1) != 1:
+                        raise ImageFailure("image_multiframe_unsupported")
+                    _pixel_limit(*probe.size)
+                    probe.verify()
+                original = Image.open(io.BytesIO(body))
                 if original.mode not in {"1", "L", "LA", "P", "RGB", "RGBA", "CMYK"}:
                     raise ImageFailure("image_mode_unsupported")
                 orientation = original.getexif().get(274, 1)
                 if type(orientation) is not int or orientation not in range(1, 9):
                     raise ImageFailure("image_orientation_invalid")
                 original.load()
-                oriented = ImageOps.exif_transpose(original) if orientation != 1 else original
-                if oriented is not original:
-                    original.close()
+        except ImageFailure:
+            raise
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+            raise ImageFailure("image_pixel_limit_exceeded") from None
+        except (MemoryError, OverflowError, RecursionError):
+            # Resource exhaustion does not establish an immutable input defect.
+            raise
+        except Exception:
+            raise ImageFailure("image_invalid") from None
+        # Conversion/encoding failures belong to the worker, not the original
+        # decoder. Do not turn exceptions from this consumer into image_invalid.
+        yield original
+    finally:
+        if original is not None:
+            original.close()
+
+
+def inspect_image(body: bytes, content_type: str) -> dict:
+    """Validate an original without color conversion, metadata copies or encoding."""
+    with _validated_image(body, content_type) as original:
+        return {"content_type": content_type, "width": original.width, "height": original.height}
+
+
+def prepare_image(body: bytes, request: dict) -> dict:
+    from PIL import ImageOps
+
+    with _validated_image(body, request["content_type"]) as original:
+        raw_width, raw_height = original.size
+        source_mode = original.mode
+        orientation = original.getexif().get(274, 1)
+        oriented = ImageOps.exif_transpose(original) if orientation != 1 else original
+        if oriented is not original:
+            original.close()
+        try:
+            width, height = oriented.size
+            region = request["region"]
+            crop_box = [math.floor(region[0] * width), math.floor(region[1] * height),
+                        math.ceil(region[2] * width), math.ceil(region[3] * height)]
+            _pixel_limit(crop_box[2] - crop_box[0], crop_box[3] - crop_box[1])
+            cropped = oriented if crop_box == [0, 0, width, height] else oriented.crop(crop_box)
+            if cropped is not oriented:
+                oriented.close()
+            try:
+                flattened = _clean_rgb(cropped)
+                cropped.close()
                 try:
-                    width, height = oriented.size
-                    region = request["region"]
-                    crop_box = [math.floor(region[0] * width), math.floor(region[1] * height),
-                                math.ceil(region[2] * width), math.ceil(region[3] * height)]
-                    _pixel_limit(crop_box[2] - crop_box[0], crop_box[3] - crop_box[1])
-                    cropped = oriented if crop_box == [0, 0, width, height] else oriented.crop(crop_box)
-                    if cropped is not oriented:
-                        oriented.close()
-                    try:
-                        flattened = _clean_rgb(cropped)
-                        cropped.close()
-                        try:
-                            payload = png_payload(flattened, limit=MAX_RESPONSE_BYTES,
-                                                  code="image_response_too_large")
-                        finally:
-                            flattened.close()
-                    finally:
-                        cropped.close()
-                    return {
-                        "source_sha256": hashlib.sha256(body).hexdigest(),
-                        "source_content_type": request["content_type"], "source_mode": source_mode,
-                        "source_width": raw_width, "source_height": raw_height,
-                        "exif_orientation": orientation,
-                        "source_to_oriented_matrix": _orientation_matrix(orientation, raw_width, raw_height),
-                        "oriented_width": width, "oriented_height": height,
-                        "region": region, "effective_region": [crop_box[0] / width, crop_box[1] / height,
-                                                                 crop_box[2] / width, crop_box[3] / height],
-                        "crop_box_pixels": crop_box, "width": crop_box[2] - crop_box[0],
-                        "height": crop_box[3] - crop_box[1], "content_type": "image/png",
-                        "payload_b64": payload, "alpha_background": "white", "resampled": False,
-                        "metadata_stripped": True,
-                    }
+                    payload = png_payload(flattened, limit=MAX_RESPONSE_BYTES,
+                                          code="image_response_too_large")
                 finally:
-                    oriented.close()
-    except ImageFailure:
-        raise
-    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
-        raise ImageFailure("image_pixel_limit_exceeded") from None
-    except (MemoryError, OverflowError):
-        raise ImageFailure("image_pixel_limit_exceeded") from None
-    except Exception:
-        raise ImageFailure("image_invalid") from None
+                    flattened.close()
+            finally:
+                cropped.close()
+            return {
+                "source_sha256": hashlib.sha256(body).hexdigest(),
+                "source_content_type": request["content_type"], "source_mode": source_mode,
+                "source_width": raw_width, "source_height": raw_height,
+                "exif_orientation": orientation,
+                "source_to_oriented_matrix": _orientation_matrix(orientation, raw_width, raw_height),
+                "oriented_width": width, "oriented_height": height,
+                "region": region, "effective_region": [crop_box[0] / width, crop_box[1] / height,
+                                                         crop_box[2] / width, crop_box[3] / height],
+                "crop_box_pixels": crop_box, "width": crop_box[2] - crop_box[0],
+                "height": crop_box[3] - crop_box[1], "content_type": "image/png",
+                "payload_b64": payload, "alpha_background": "white", "resampled": False,
+                "metadata_stripped": True,
+            }
+        finally:
+            oriented.close()

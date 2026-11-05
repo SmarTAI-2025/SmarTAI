@@ -378,11 +378,14 @@ async def test_page_failure_details_survive_worker_restart_and_retry_is_explicit
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("legacy_partial", [False, True])
-async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_source(monkeypatch, legacy_partial):
+@pytest.mark.parametrize("nested_archive", [False, True])
+async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_source(monkeypatch, legacy_partial, nested_archive):
     from types import SimpleNamespace
     owner, task = _seed_task(with_question=True)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as archive:
+        if nested_archive:
+            archive.writestr("inner.zip", _archive_bytes())
         archive.writestr("one.txt", "first answer")
         archive.writestr("two.txt", "second answer")
     reads, parsed = [], []
@@ -397,6 +400,11 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
     async def parse(sources, *_args, **_kwargs):
         result = []
         for source in sources:
+            if source.pre_error_code:
+                result.append(SubmissionSourceParseResult(source.source_id, source.stored_file_id,
+                    source.filename, "parse_failed", None, None, 0, (), source.pre_error_code,
+                    source.failure_phase, source.retryable))
+                continue
             parsed.append(source.filename)
             failed = source.filename == "two.txt" and round_number == 0
             student = None if failed else {"stu_id": source.filename, "stu_name": source.filename,
@@ -424,7 +432,7 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
     assert snapshot["status"] == "error"
     assert snapshot["student_data"] == {}
     assert snapshot["submission_source_summary"]["parsed"] == (0 if legacy_partial else 1)
-    assert snapshot["submission_source_summary"]["failed"] == (2 if legacy_partial else 1)
+    assert snapshot["submission_source_summary"]["failed"] == (2 if legacy_partial else 1) + int(nested_archive)
     round_number = 1
     retried = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=first["job_id"],
         request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=snapshot["workflow_revision"]),
@@ -434,6 +442,18 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
     assert sorted(reads) == sorted(expected)
     assert sorted(parsed) == sorted(expected)  # Independent sources parse concurrently.
     result = task_facade.get_task(task_id=task, owner_id=owner)
+    assert result["submission_source_summary"]["parsed"] == 2
+    assert result["submission_source_summary"]["failed"] == int(nested_archive)
+    if nested_archive:
+        assert result["status"] == "error"
+        blocked = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=retried["job_id"],
+            request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=result["workflow_revision"]),
+            background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=_Registry())
+        assert blocked.status_code == 409
+        assert "submission_retry_requires_reupload" in blocked.body.decode()
+        assert sorted(reads) == sorted(expected)
+        assert task_facade.get_task(task_id=task, owner_id=owner)["submission_sources"] == result["submission_sources"]
+        return
     assert result["status"] == "submissions_ready"
     assert len(result["student_data"]) == 2
     assert result["submission_source_summary"]["failed"] == 0
@@ -518,9 +538,9 @@ async def test_work_limit_drains_and_preserves_structured_answer_for_retry_or_ma
 async def test_submission_queue_persists_archive_and_has_no_request_task():
     owner_id, task_id = _seed_task(with_question=True)
     background = _BackgroundTasks()
-    original = _archive_bytes()
+    content = _archive_bytes()
     upload = UploadFile(
-        file=io.BytesIO(original), filename="answers.zip",
+        file=io.BytesIO(content), filename="answers.zip",
         headers=Headers({"content-type": "application/zip"}),
     )
 
@@ -553,7 +573,7 @@ async def test_submission_queue_persists_archive_and_has_no_request_task():
     assert stored is not None
     assert stored.id in operation.artifact_refs
     with get_storage().open(stored.storage_key) as stream:
-        assert stream.read() == original
+        assert stream.read() == content
 
 
 @pytest.mark.asyncio

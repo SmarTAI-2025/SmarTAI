@@ -172,6 +172,7 @@ def persist_problem_source(
     """Save one assignment-linked original, reusing only verified live bytes."""
 
     digest = hashlib.sha256(content).hexdigest()
+    extension = PurePosixPath(safe_display_name(original_name)).suffix.lower()
     for candidate in file_repository.list_files(
         owner_id=owner_id, assignment_id=task_id
     ):
@@ -179,6 +180,10 @@ def persist_problem_source(
             candidate.kind != "problem_source"
             or candidate.sha256 != digest
             or candidate.availability_status != SOURCE_FILE_AVAILABLE
+            # Older library preflights could save an editable title as the
+            # original name. Such a clone must not poison future decoding.
+            or PurePosixPath(candidate.original_name).suffix.lower() != extension
+            or candidate.content_type != content_type
         ):
             continue
         try:

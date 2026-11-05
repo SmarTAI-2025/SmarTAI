@@ -8,6 +8,8 @@ the tools/ namespace so it's discoverable as a "predefined tool" per docs §4.2.
 from __future__ import annotations
 
 import asyncio
+import bz2
+import errno
 import hashlib
 import io
 import json
@@ -64,7 +66,9 @@ SUBMISSION_ARCHIVE_MAX_MEMBER_BYTES = 5 * 1024 * 1024
 SUBMISSION_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
 MAX_SOURCE_FILENAME_CHARACTERS = 512
 
-TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".csv", ".rst"}
+DOCUMENT_TEXT_EXTENSIONS = frozenset({".txt", ".md", ".markdown"})
+# Retain the legacy problem-reader formats; submission policy is narrower.
+TEXT_EXTENSIONS = {*DOCUMENT_TEXT_EXTENSIONS, ".csv", ".rst"}
 IMAGE_MEDIA_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -74,9 +78,15 @@ IMAGE_MEDIA_TYPES = {
     ".tiff": "image/tiff",
     ".webp": "image/webp",
 }
+SUBMISSION_SOURCE_EXTENSIONS = frozenset({".pdf", ".docx", *DOCUMENT_TEXT_EXTENSIONS, *IMAGE_MEDIA_TYPES})
+
 ARCHIVE_EXTENSIONS = (
     ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
 )
+ARCHIVE_CONTENT_TYPES = frozenset({
+    "application/zip", "application/vnd.rar", "application/x-7z-compressed",
+    "application/x-tar", "application/gzip", "application/x-bzip2",
+})
 
 
 class _ArchiveLimitExceeded(RuntimeError):
@@ -115,12 +125,14 @@ class ContentInspection:
 
 
 _MIME_ALIASES = {
+    "application/x-pdf": "application/pdf",
     "application/x-zip-compressed": "application/zip",
-    "application/rar": "application/vnd.rar",
     "application/x-rar": "application/vnd.rar",
     "application/x-rar-compressed": "application/vnd.rar",
     "application/x-7z-compressed": "application/x-7z-compressed",
     "application/x-gzip": "application/gzip",
+    "application/csv": "text/csv",
+    "text/json": "application/json",
     "image/jpg": "image/jpeg",
     "text/x-markdown": "text/markdown",
 }
@@ -149,13 +161,15 @@ def _looks_like_text(data: bytes) -> bool:
 def _content_signature_type(data: bytes, filename: str) -> str:
     if not data:
         return "application/octet-stream"
-    if b"%PDF-" in data[:1024]:
+    if data.startswith(b"%PDF-"):
         return "application/pdf"
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
     if data.startswith(b"\xff\xd8\xff"):
         return "image/jpeg"
-    if data.startswith(b"BM"):
+    # "BM" alone also prefixes ordinary words such as "BMP". A bitmap file
+    # header includes two zero reserved fields before the pixel-data offset.
+    if len(data) >= 26 and data.startswith(b"BM") and data[6:10] == b"\0" * 4:
         return "image/bmp"
     if data.startswith((b"II*\x00", b"MM\x00*")):
         return "image/tiff"
@@ -169,14 +183,34 @@ def _content_signature_type(data: bytes, filename: str) -> str:
         return "application/x-7z-compressed"
     if data.startswith(b"\x1f\x8b"):
         return "application/gzip"
-    if data.startswith(b"BZh"):
-        return "application/x-bzip2"
-    if len(data) > 262 and data[257:262] == b"ustar":
+    if len(data) >= 4 and data.startswith(b"BZh") and data[3] in b"123456789":
+        # This ASCII prefix also occurs in ordinary text. Check a bounded
+        # binary probe with the actual decoder before routing to an archive.
+        # Neither input nor expanded output may grow with the uploaded file.
+        probe = data[:4096]
+        if not _looks_like_text(probe):
+            try:
+                bz2.BZ2Decompressor().decompress(probe, max_length=1)
+            except OSError:
+                pass
+            else:
+                return "application/x-bzip2"
+    if len(data) >= 512:
+        try:
+            tarfile.TarInfo.frombuf(data[:512], "utf-8", "surrogateescape")
+        except tarfile.HeaderError:
+            pass
+        else:
+            return "application/x-tar"
+    # An empty TAR has only zero end blocks, with no USTAR member header.
+    if filename.lower().endswith(".tar") and len(data) >= 1024 and not any(data):
         return "application/x-tar"
+    # PDF permits a bounded preamble. Treat the marker as a candidate only;
+    # the isolated parser distinguishes an actual PDF from quoted text.
+    if b"%PDF-" in data[:1024]:
+        return "application/pdf"
     if _looks_like_text(data):
-        guessed, _encoding = mimetypes.guess_type(filename)
-        guessed_type = _normalized_content_type(guessed)
-        return guessed_type if guessed_type.startswith("text/") else "text/plain"
+        return "text/plain"
     return "application/octet-stream"
 
 
@@ -209,7 +243,11 @@ def inspect_upload_content(
         for value in (supplied_type, filename_type)
         if value != "application/octet-stream"
     }
-    mismatch = any(value != detected for value in declared_hints)
+    # TXT and Markdown are both text. Their content cannot prove the intended
+    # suffix; validate readable bytes first and treat MIME only as a hint.
+    text_hints = {"text/plain", "text/markdown", "text/csv", "text/x-rst", "text/prs.fallenstein.rst", "application/json"}
+    mismatch = any(value != detected and not (detected == "text/plain" and value in text_hints)
+                   for value in declared_hints)
     return ContentInspection(
         content_type=detected,
         declared_content_type=declared,
@@ -228,6 +266,83 @@ def infer_upload_content_type(
         return _normalized_content_type(supplied)
     guessed, _encoding = mimetypes.guess_type(filename)
     return _normalized_content_type(guessed)
+
+
+def submission_source_error(filename: str, inspection: ContentInspection, content: bytes | None = None) -> str | None:
+    """One leaf-file policy for direct uploads, archive members and retries."""
+    if _ext(filename) not in SUBMISSION_SOURCE_EXTENSIONS:
+        return "submission_source_unsupported"
+    if inspection.mismatch:
+        if content is not None and inspection.content_type == "application/pdf" and _ext(filename) in DOCUMENT_TEXT_EXTENSIONS and _looks_like_text(content):
+            return None  # The bounded decoder will distinguish a real PDF from quoted text.
+        return "submission_source_content_type_mismatch"
+    return None
+
+
+async def validate_upload_content(content: bytes, filename: str, *, content_type: str | None = None,
+                                  purpose: OCRPurpose = "problems",
+                                  media_slot_timeout_seconds: float | None = 10) -> ContentInspection:
+    """Validate the actual body before trusting MIME metadata or calling OCR."""
+    from backend.tools.media_validation import validate_media_content
+    if not content:
+        raise HTTPException(400, detail={"code": "source_empty"})
+    allowed_extensions = (SUBMISSION_SOURCE_EXTENSIONS if purpose == "submissions" else
+                          frozenset({".pdf", *({".docx"} if purpose in {"problems", "reference"} else set()), *IMAGE_MEDIA_TYPES, *DOCUMENT_TEXT_EXTENSIONS,
+                                     *({".csv", ".json"} if purpose == "test_cases" else {".csv", ".rst"} if purpose == "problems" else set())}))
+    if _ext(filename) not in allowed_extensions:
+        raise HTTPException(415, detail={"code": "submission_source_unsupported" if purpose == "submissions" else "source_type_not_allowed"})
+    inspection = inspect_upload_content(content, filename, content_type)
+    # A plain-text/Markdown lesson may quote a PDF header. Only an actual PDF
+    # parse can settle this ambiguous signature; a valid renamed PDF is rejected.
+    if inspection.content_type == "application/pdf" and _ext(filename) in (TEXT_EXTENSIONS | {".json"}) and _looks_like_text(content):
+        try:
+            await validate_media_content(content, "application/pdf", wait_for_slot=True,
+                                         slot_timeout_seconds=media_slot_timeout_seconds)
+        except HTTPException as exc:
+            if isinstance(exc.detail, dict) and exc.detail.get("code") == "pdf_invalid":
+                inspection = ContentInspection("text/plain", inspection.declared_content_type, False)
+            else:
+                raise
+    if purpose == "submissions":
+        error = submission_source_error(filename, inspection)
+        if error:
+            raise HTTPException(415, detail={"code": error})
+    elif inspection.mismatch:
+        raise HTTPException(415, detail={"code": "source_content_type_not_allowed"})
+    suffix = _ext(filename)
+    if suffix == ".docx":
+        from backend.services.upload_contract import validate_docx_package, UploadContractError
+        try:
+            await asyncio.to_thread(validate_docx_package, content)
+        except UploadContractError as exc:
+            raise HTTPException(422, detail={"code": exc.code}) from None
+    elif inspection.content_type in {"application/pdf", *IMAGE_MEDIA_TYPES.values()}:
+        await validate_media_content(content, inspection.content_type, wait_for_slot=True,
+                                     slot_timeout_seconds=media_slot_timeout_seconds)
+    elif inspection.content_type == "text/plain":
+        allowed_text = TEXT_EXTENSIONS | ({".json"} if purpose == "test_cases" else set())
+        if suffix not in allowed_text:
+            raise HTTPException(415, detail={"code": "source_type_not_allowed"})
+        if suffix == ".json":
+            from backend.services.upload_contract import UploadContractError, _validate_json
+            try:
+                _validate_json(content)
+            except UploadContractError:
+                raise HTTPException(400, detail={"code": "source_json_invalid"}) from None
+            return ContentInspection("application/json", inspection.declared_content_type, False)
+    else:
+        raise HTTPException(415, detail={"code": "source_content_type_not_allowed"})
+    return inspection
+
+
+async def validate_submission_upload(content: bytes, filename: str, content_type: str | None = None) -> None:
+    if not content:
+        raise HTTPException(400, detail={"code": "submission_source_empty"})
+    if _ext(filename) in ARCHIVE_EXTENSIONS:
+        if inspect_upload_content(content, filename, content_type).mismatch:
+            raise HTTPException(415, detail={"code": "submission_source_content_type_mismatch"})
+        return  # Container/member structural validation runs in the bounded extractor.
+    await validate_upload_content(content, filename, content_type=content_type, purpose="submissions")
 
 
 async def decode_text_bytes(text_bytes: bytes) -> str:
@@ -589,6 +704,7 @@ async def extract_text_from_upload(
     purpose: OCRPurpose = "submissions",
     reporter=None,
     content_type: str | None = None,
+    media_slot_timeout_seconds: float | None = 10,
 ) -> str:
     """Convert a supported upload into text.
 
@@ -597,41 +713,18 @@ async def extract_text_from_upload(
     ingest skill when one is available.
     """
     safe_name = filename or "upload"
-    from backend.services.upload_contract import (
-        UploadContractError, upload_role_for_purpose, validate_upload,
+    inspection = await validate_upload_content(
+        file_bytes, safe_name, content_type=content_type, purpose=purpose,
+        media_slot_timeout_seconds=media_slot_timeout_seconds,
     )
-    try:
-        role = upload_role_for_purpose(purpose)
-        validated = validate_upload(role, safe_name, file_bytes)
-    except UploadContractError as exc:
-        status_code = (
-            413 if exc.code.endswith("too_large")
-            else 400 if exc.code.endswith("empty")
-            else 422 if exc.code in {"programming_tests_json_invalid", "invalid_source_role"}
-            else 415
-        )
-        raise HTTPException(status_code, detail={"code": exc.code, **exc.details}) from None
-    if validated.extension == "json":
-        if _normalized_content_type(content_type) not in {
-            "application/octet-stream", "application/json", "text/json", "text/plain",
-        }:
-            raise HTTPException(415, detail={"code": "submission_source_content_type_mismatch"})
-        # Validated JSON is teacher data, not an OCR request or executable code.
-        return file_bytes.decode("utf-8-sig")
-    inspection = inspect_upload_content(file_bytes, safe_name, content_type)
-    if inspection.mismatch:
-        raise HTTPException(
-            status_code=415,
-            detail={"code": "submission_source_content_type_mismatch"},
-        )
     media_type = inspection.content_type
     if reporter:
         await reporter._emit_message(f"Reading {safe_name}...")
 
-    if media_type.startswith("text/"):
+    if media_type.startswith("text/") or (media_type == "application/json" and purpose == "test_cases"):
         return await decode_text_bytes(file_bytes)
 
-    if validated.extension == "docx":
+    if _ext(safe_name) == ".docx":
         return await _extract_docx_text(file_bytes)
 
     if media_type == "application/pdf":
@@ -802,7 +895,28 @@ def _read_archive_member(stream) -> bytes:
     return data
 
 
-def extract_raw_files_from_archive(
+def _archive_infrastructure_error(exc: Exception) -> bool:
+    if rarfile is not None and isinstance(exc, rarfile.RarCannotExec):
+        return True
+    return isinstance(exc, OSError) and (
+        isinstance(exc, PermissionError) or exc.errno in {
+            errno.ENOSPC, errno.EDQUOT, errno.EMFILE, errno.ENFILE,
+            errno.ENOMEM, errno.EIO, errno.EROFS,
+        }
+    )
+
+
+def extract_raw_files_from_archive(file_bytes: bytes, filename: str, *,
+                                   content_type: str | None = None) -> list[RawUploadSource]:
+    try:
+        return _extract_raw_files_from_archive(file_bytes, filename, content_type=content_type)
+    except Exception as exc:
+        if _archive_infrastructure_error(exc):
+            raise RuntimeError("submission_archive_processing_unavailable") from exc
+        raise
+
+
+def _extract_raw_files_from_archive(
     file_bytes: bytes,
     filename: str,
     *,
@@ -840,22 +954,25 @@ def extract_raw_files_from_archive(
         expanded_bytes += len(data)
         if expanded_bytes > SUBMISSION_ARCHIVE_MAX_EXPANDED_BYTES:
             raise _ArchiveLimitExceeded("submission_archive_limit_exceeded")
+        if not data:
+            sources.append(RawUploadSource(
+                filename=clean, content=data, content_type="application/octet-stream",
+                pre_error_code="submission_source_empty", failure_phase="source_read",
+                retryable=False,
+            ))
+            return
         inspection = inspect_upload_content(data, clean)
-        from backend.services.upload_contract import UploadContractError, validate_upload
-        policy_error = None
-        try:
-            validate_upload("student_submission", clean, data)
-        except UploadContractError as exc:
-            policy_error = exc.code
-        error_code = policy_error or (
-            "submission_source_content_type_mismatch" if inspection.mismatch else None
+        error_code = (
+            "submission_archive_nested_unsupported"
+            if not inspection.mismatch and inspection.content_type in ARCHIVE_CONTENT_TYPES
+            else submission_source_error(clean, inspection, data)
         )
         sources.append(RawUploadSource(
             filename=clean,
             content=data,
             content_type=inspection.content_type,
             pre_error_code=error_code,
-            failure_phase="source_read" if error_code else None,
+            failure_phase=("archive" if error_code == "submission_archive_nested_unsupported" else "source_read") if error_code else None,
         ))
 
     def add_failure(raw_name: str, index: int, code: str) -> None:
@@ -865,7 +982,7 @@ def extract_raw_files_from_archive(
             content_type=container_inspection.content_type,
             pre_error_code=code,
             failure_phase="archive",
-            retryable=False,
+            retryable=code == "submission_archive_processing_unavailable",
         ))
 
     archive_suffix = lower.endswith(ARCHIVE_EXTENSIONS)
@@ -880,10 +997,13 @@ def extract_raw_files_from_archive(
 
     if lower.endswith(".zip"):
         with zipfile.ZipFile(file_in_memory, "r") as archive:
+            entries = archive.infolist()
             members = [
-                item for item in archive.infolist()
+                item for item in entries
                 if not item.is_dir() and _is_valid_file(item.filename)
             ]
+            if not members and any(item.is_dir() and _is_valid_file(item.filename) for item in entries):
+                raise RuntimeError("submission_archive_directories_only")
             _validate_archive_members([item.file_size for item in members])
             for index, item in enumerate(members):
                 repaired_name = _repair_zip_member_name(item)
@@ -900,19 +1020,24 @@ def extract_raw_files_from_archive(
                         add(clean, _read_archive_member(extracted))
                 except _ArchiveLimitExceeded:
                     raise
-                except Exception:
-                    add_failure(clean, index, "submission_archive_member_unreadable")
+                except Exception as exc:
+                    add_failure(clean, index, "submission_archive_processing_unavailable"
+                                if _archive_infrastructure_error(exc)
+                                else "submission_archive_member_unreadable")
         return sources
 
     if lower.endswith(".rar"):
         if rarfile is None:
-            raise ValueError("Processing .rar files requires rarfile")
+            raise RuntimeError("submission_archive_processing_unavailable")
         try:
             with rarfile.RarFile(file_in_memory, "r") as archive:
+                entries = archive.infolist()
                 members = [
-                    item for item in archive.infolist()
+                    item for item in entries
                     if not item.is_dir() and _is_valid_file(item.filename)
                 ]
+                if not members and any(item.is_dir() and _is_valid_file(item.filename) for item in entries):
+                    raise RuntimeError("submission_archive_directories_only")
                 _validate_archive_members([item.file_size for item in members])
                 for index, item in enumerate(members):
                     try:
@@ -928,20 +1053,28 @@ def extract_raw_files_from_archive(
                             add(clean, _read_archive_member(extracted))
                     except _ArchiveLimitExceeded:
                         raise
-                    except Exception:
-                        add_failure(clean, index, "submission_archive_member_unreadable")
-        except rarfile.UNRARError as exc:
+                    except Exception as exc:
+                        add_failure(clean, index, "submission_archive_processing_unavailable"
+                                    if _archive_infrastructure_error(exc)
+                                    else "submission_archive_member_unreadable")
+        except rarfile.Error as exc:
+            if _archive_infrastructure_error(exc):
+                raise RuntimeError("submission_archive_processing_unavailable") from exc
+
             raise RuntimeError("submission_archive_invalid") from exc
         return sources
 
     if lower.endswith(".7z"):
         if py7zr is None:
-            raise ValueError("Processing .7z files requires py7zr")
+            raise RuntimeError("submission_archive_processing_unavailable")
         with py7zr.SevenZipFile(file_in_memory, "r") as archive:
+            entries = archive.list()
             members = [
-                item for item in archive.list()
+                item for item in entries
                 if item.is_file and not item.is_symlink and _is_valid_file(item.filename)
             ]
+            if not members and any(item.is_directory and _is_valid_file(item.filename) for item in entries):
+                raise RuntimeError("submission_archive_directories_only")
         _validate_archive_members([int(item.uncompressed) for item in members])
         with tempfile.TemporaryDirectory(prefix="smartai-submissions-") as temp_dir:
             root = Path(temp_dir).resolve()
@@ -966,16 +1099,21 @@ def extract_raw_files_from_archive(
                         add(clean, _read_archive_member(handle))
                 except _ArchiveLimitExceeded:
                     raise
-                except Exception:
-                    add_failure(clean, index, "submission_archive_member_unreadable")
+                except Exception as exc:
+                    add_failure(clean, index, "submission_archive_processing_unavailable"
+                                if _archive_infrastructure_error(exc)
+                                else "submission_archive_member_unreadable")
         return sources
 
     if lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2")):
         with tarfile.open(fileobj=file_in_memory, mode="r:*") as archive:
+            entries = archive.getmembers()
             members = [
-                item for item in archive.getmembers()
+                item for item in entries
                 if item.isfile() and _is_valid_file(item.name)
             ]
+            if not members and any(item.isdir() and _is_valid_file(item.name) for item in entries):
+                raise RuntimeError("submission_archive_directories_only")
             _validate_archive_members([item.size for item in members])
             for index, item in enumerate(members):
                 try:
@@ -994,24 +1132,16 @@ def extract_raw_files_from_archive(
                         add(clean, _read_archive_member(extracted))
                 except _ArchiveLimitExceeded:
                     raise
-                except Exception:
-                    add_failure(clean, index, "submission_archive_member_unreadable")
+                except Exception as exc:
+                    add_failure(clean, index, "submission_archive_processing_unavailable"
+                                if _archive_infrastructure_error(exc)
+                                else "submission_archive_member_unreadable")
         return sources
 
-    from backend.services.upload_contract import UploadContractError, validate_upload
-    policy_error = None
-    try:
-        validate_upload("student_submission", filename, file_bytes)
-    except UploadContractError as exc:
-        policy_error = exc.code
-    error_code = policy_error or (
-        "submission_source_content_type_mismatch" if container_inspection.mismatch else None
-    )
+    error_code = submission_source_error(filename, container_inspection, file_bytes)
     return [RawUploadSource(
-        filename=_bounded_source_name(filename),
-        content=file_bytes,
-        content_type=container_inspection.content_type,
-        pre_error_code=error_code,
+        filename=_bounded_source_name(filename), content=file_bytes,
+        content_type=container_inspection.content_type, pre_error_code=error_code,
         failure_phase="source_read" if error_code else None,
     )]
 
@@ -1073,7 +1203,7 @@ async def extract_files_from_archive(
                     return {"filename": clean, "content": content}
 
                 files_data.extend(await _gather_limited([process(i) for i in valid]))
-        except rarfile.UNRARError as e:
+        except rarfile.Error as e:
             raise RuntimeError(
                 f"RAR extraction failed: {e}. Ensure 'unrar' CLI is installed on the server."
             )

@@ -46,7 +46,7 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
         reusable = {}
     else:
         upload = await run_in_threadpool(task_facade.load_submission_retry_upload,
-            task_id=task_id, owner_id=owner_id, job_id=source_origin_id)
+            task_id=task_id, owner_id=owner_id, job_id=source_origin_id, for_manual_review=True)
         reusable = await run_in_threadpool(task_facade._reusable_submission_results,
             owner_id=owner_id, task_id=task_id, payload={"retry_from": upload["retry_from"]}, questions=questions, include_incomplete=True)
     # A separate local operation keeps the stopped attempt and source outcomes

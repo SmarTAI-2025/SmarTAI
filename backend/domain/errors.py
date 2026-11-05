@@ -211,7 +211,7 @@ RECOGNITION_ERROR_CODES = frozenset({
     "ocr_input_invalid", "ocr_unsupported_file",
     "provider_model_not_found", "provider_image_payload_invalid", "provider_message_payload_not_supported",
     "provider_endpoint_dns_failed", "provider_endpoint_redirect_blocked", "provider_endpoint_protocol_mismatch",
-    "provider_endpoint_response_too_large",
+    "provider_endpoint_response_too_large", "submission_time_limit_reached",
 }) | frozenset(PDF_EVIDENCE_STATUS_CODES)
 
 

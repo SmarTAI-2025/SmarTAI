@@ -24,19 +24,6 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 }
 
 describe("submission source reason copy", () => {
-  it.each([
-    ["source_docx_incomplete", "DOCX 内容尚未完整读取", "DOCX reading is incomplete"],
-    ["source_docx_busy", "DOCX 读取正忙", "DOCX extraction is busy"],
-    ["source_docx_timeout", "DOCX 读取超时", "DOCX extraction timed out"],
-  ])("routes %s to actionable DOCX guidance instead of generic failure", (code, zhTitle, enTitle) => {
-    for (const [locale, title] of [["zh-CN", zhTitle], ["en-US", enTitle]] as const) {
-      const copy = getSubmissionSourceReasonCopy(source({ reason_code: code, failure_phase: "source_read" }), locale);
-      expect(copy.title).toBe(title);
-      expect(copy.description).toContain(locale === "zh-CN" ? "不是学生答错" : "not a student mistake");
-      expect(copy.nextStep?.trim().length).toBeGreaterThan(0);
-    }
-  });
-
   it.each(["zh-CN", "en-US"] as const)("explains work-time exhaustion and both continuation options (%s)", locale => {
     const copy = getSubmissionSourceReasonCopy(source({ reason_code: "submission_time_limit_reached" }), locale);
     expect(copy.description).toContain(locale === "zh-CN" ? "3 小时，排队不计时" : "3 hours of active processing, excluding queue time");
@@ -63,6 +50,19 @@ describe("submission source reason copy", () => {
     expect(local.description).toContain(locale === "zh-CN" ? "不是模型服务报错" : "not a model-service error");
     const invalid = getSubmissionSourceReasonCopy(source({ reason_code: "recognition_response_invalid" }), locale);
     expect(invalid.description).toContain(locale === "zh-CN" ? "不表示学生答错" : "does not mean the student's answer is wrong");
+  });
+
+  it.each([
+    ["source_docx_incomplete", "DOCX 内容尚未完整读取", "DOCX reading is incomplete"],
+    ["source_docx_busy", "DOCX 读取正忙", "DOCX extraction is busy"],
+    ["source_docx_timeout", "DOCX 读取超时", "DOCX extraction timed out"],
+  ])("routes %s to actionable DOCX guidance instead of generic failure", (code, zhTitle, enTitle) => {
+    for (const [locale, title] of [["zh-CN", zhTitle], ["en-US", enTitle]] as const) {
+      const copy = getSubmissionSourceReasonCopy(source({ reason_code: code, failure_phase: "source_read" }), locale);
+      expect(copy.title).toBe(title);
+      expect(copy.description).toContain(locale === "zh-CN" ? "不是学生答错" : "not a student mistake");
+      expect(copy.nextStep?.trim().length).toBeGreaterThan(0);
+    }
   });
 
   it("describes incomplete pages in the submission workflow", () => {
@@ -301,4 +301,10 @@ it.each(["zh-CN", "en-US"] as const)("zero quota source reports no allowance rat
   const copy = getSubmissionSourceReasonCopy(source({ reason_code: "provider_zero_quota" }), locale);
   expect(JSON.stringify(copy)).toContain(locale === "zh-CN" ? "当前无可用配额" : "No quota is currently available");
   expect(JSON.stringify(copy)).not.toMatch(/已用完|耗尽|exhausted|midnight/);
+});
+
+it.each(["zh-CN", "en-US"] as const)("explains retained archives on infrastructure failures (%s)", locale => {
+  const copy = getSubmissionSourceReasonCopy(source({ reason_code: "submission_archive_processing_unavailable", failure_phase: "archive", retryable: true }), locale);
+  expect(copy.description).toContain(locale === "zh-CN" ? "原文件已保留" : "original is preserved");
+  expect(copy.nextStep).toContain(locale === "zh-CN" ? "稍后重试" : "Retry later");
 });

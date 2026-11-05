@@ -63,8 +63,8 @@ async def test_existing_teacher_ocr_requires_explicit_opt_in_and_preserves_origi
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name,purpose", [
     ("teacher.markdown", "rubric"), ("tests.markdown", "test_cases"),
-    ("answer.csv", "submissions"), ("answer.rst", "submissions"),
-    ("answer.data", "submissions"),
+    ("tests.csv", "test_cases"), ("legacy.rst", "problems"),
+    ("answer.txt", "submissions"),
 ])
 async def test_existing_native_text_inputs_are_read_as_data_without_execution(name, purpose):
     body = "原始输入与预期，不执行\n".encode()
@@ -146,7 +146,7 @@ def test_oversized_native_text_is_rejected_before_decoding(monkeypatch):
             raise AssertionError("Oversized input must be rejected before text decoding")
 
     with pytest.raises(UploadContractError) as caught:
-        validate_upload("student_submission", "answer.data", DecodeForbidden(b"four"))
+        validate_upload("student_submission", "answer.txt", DecodeForbidden(b"four"))
     assert caught.value.code == "submission_source_too_large"
 
 

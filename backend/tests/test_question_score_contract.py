@@ -30,10 +30,9 @@ from backend.skills.question_score import (
 )
 
 
-PNG_1X1 = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
-    "AAMAASsJTYQAAAAASUVORK5CYII="
-)
+from backend.tests.test_file_processing import _valid_png_1x1
+
+PNG_1X1 = _valid_png_1x1()
 
 
 def _problems():

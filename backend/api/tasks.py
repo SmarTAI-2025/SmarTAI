@@ -10,9 +10,7 @@ from backend.agents.history_query_agent import interpret_history_query
 from backend.progress.tracker import ProgressReporter
 
 import asyncio
-import csv
 import hashlib
-import io
 import json
 import logging
 import time
@@ -55,12 +53,13 @@ from backend.llm.registry import (
 from backend.models import TaskGradingSetup, User
 from backend.services import source_files as source_file_service
 from backend.services import task_facade
+from backend.services.roster_import import parse_roster as _parse_roster
 from backend.services.stage_provider_routing import (
     baidu_ocr_credential_id,
     list_stage_provider_options,
 )
 from backend.storage import get_storage
-from backend.tools.file_processing import SUBMISSION_UPLOAD_MAX_BYTES
+from backend.tools.file_processing import SUBMISSION_UPLOAD_MAX_BYTES, validate_submission_upload
 from backend.services.task_history_progress import enrich_history_progress, progress_fields
 
 
@@ -434,11 +433,19 @@ async def extract_problems_endpoint(
         )
     if file is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "source_required"})
+    # Keep legacy format compatibility while sharing the preparation byte limit.
+    from backend.api.task_preparation import MAX_SOURCE_BYTES
+
     from backend.services.upload_contract import upload_limit
-    max_bytes = upload_limit("question_source_max_bytes")
+    max_bytes = upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES)
     content = await file.read(max_bytes + 1)
+    if not content:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"code": "source_empty"})
     if len(content) > max_bytes:
-        raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": max_bytes})
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail={"code": "source_too_large", "max_bytes": max_bytes},
+        )
     try:
         queued = task_facade.queue_task_problem_extraction(
             task_id=task_id, owner_id=current.id,
@@ -503,6 +510,12 @@ async def parse_submissions_endpoint(
         if stored_file_id is not None:
             if expected_workflow_revision is None:
                 raise ValidationError("Confirm the current task revision.", code="stale_revision")
+            if workflow.parse_job_id:
+                original = workflow_repository.get_operation(workflow.parse_job_id, owner_id=current.id)
+                if (original.assignment_id == task_id and original.operation_type == "submission_recognition"
+                        and original.status in {"error", "done"}
+                        and (original.payload or {}).get("input_file_id") == stored_file_id):
+                    task_facade.require_submission_retryable_sources(operation=original, owner_id=current.id)
             stored, body = load_submission_input(task_id=task_id, owner_id=current.id, stored_file_id=stored_file_id)
             filename, content_type = stored.original_name, stored.content_type
         if workflow.last_failed_job_id == workflow.parse_job_id and workflow.parse_job_id:
@@ -524,12 +537,17 @@ async def parse_submissions_endpoint(
             status.HTTP_413_CONTENT_TOO_LARGE,
             detail={"code": "submission_source_too_large"},
         )
+    await validate_submission_upload(body, filename, content_type)
     roster_entries: list[dict[str, str]] = []
     roster_name = None
-    if roster_file is not None:
-        roster_name = roster_file.filename or "roster.csv"
-        roster_entries = _parse_roster(await roster_file.read())
     try:
+        if roster_file is not None:
+            roster_name = roster_file.filename or "roster.csv"
+            roster_body = await roster_file.read(SUBMISSION_UPLOAD_MAX_BYTES + 1)
+            if len(roster_body) > SUBMISSION_UPLOAD_MAX_BYTES:
+                raise ValidationError(code="submission_roster_too_large", status_code=413,
+                                      details={"max_bytes": SUBMISSION_UPLOAD_MAX_BYTES})
+            roster_entries = _parse_roster(roster_body, filename=roster_name)
         if roster_file is None and reuse_roster_from_job_id and identity_mode == "roster":
             roster_entries, roster_name = load_saved_roster(task_id=task_id, owner_id=current.id, job_id=reuse_roster_from_job_id)
         queued = task_facade.queue_task_submission_parsing(
@@ -630,6 +648,7 @@ async def retry_submission_recognition_endpoint(
             owner_id=current.id,
             job_id=job_id,
         )
+        await validate_submission_upload(retry["content"], retry["filename"], retry["content_type"])
         queued = task_facade.queue_task_submission_parsing(
             task_id=task_id,
             owner_id=current.id,
@@ -670,22 +689,6 @@ async def manually_complete_submission_recognition(
                                        student_count=request.student_count)
     except DomainError as exc:
         return domain_error_response(exc)
-
-
-def _parse_roster(body: bytes) -> list[dict[str, str]]:
-    try:
-        text = body.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = body.decode("gbk")
-    reader = csv.DictReader(io.StringIO(text))
-    items = []
-    for row in reader:
-        normalized = {str(key or "").strip().casefold(): str(value or "").strip() for key, value in row.items()}
-        student_id = normalized.get("student_id") or normalized.get("stu_id") or normalized.get("学号") or ""
-        student_name = normalized.get("student_name") or normalized.get("stu_name") or normalized.get("name") or normalized.get("姓名") or ""
-        if student_id:
-            items.append({"stu_id": student_id, "stu_name": student_name})
-    return items
 
 
 @router.post("/{task_id}/grade")

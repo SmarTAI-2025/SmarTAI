@@ -14,9 +14,12 @@ from backend.tests.test_ocr_mounted_routes import client_registry, headers
 
 
 @pytest.mark.asyncio
-async def test_student_reader_keeps_existing_csv_as_native_data():
+async def test_csv_is_teacher_test_material_but_cannot_be_a_submission():
     original = b"student,answer\n1,2\n"
-    assert await extract_text_from_upload(original, "submission.csv", purpose="submissions") == original.decode()
+    assert await extract_text_from_upload(original, "tests.csv", purpose="test_cases") == original.decode()
+    with pytest.raises(HTTPException) as caught:
+        await extract_text_from_upload(original, "submission.csv", purpose="submissions")
+    assert caught.value.detail["code"] == "submission_source_unsupported"
 
 
 @pytest.mark.asyncio
@@ -37,21 +40,11 @@ async def test_programming_json_is_read_as_validated_data_without_ocr():
 async def test_programming_json_non_finite_data_is_rejected_before_reading():
     with pytest.raises(HTTPException) as caught:
         await extract_text_from_upload(b'{"cases":[{"value":1e999}]}', "tests.json", purpose="test_cases")
-    assert caught.value.detail["code"] == "programming_tests_json_invalid"
+    assert caught.value.detail["code"] == "source_json_invalid"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("purpose", ["knowledge"])
-async def test_restricted_image_inputs_do_not_reach_ocr(purpose):
-    skill = FakeOCRSkill("must not be called")
-    with pytest.raises(HTTPException) as caught:
-        await extract_text_from_upload(_valid_png_1x1(), "source.png", purpose=purpose, ocr_skill=skill)
-    assert caught.value.detail["code"] == "source_type_not_allowed"
-    assert skill.calls == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("purpose", ["submissions", "problems", "reference", "rubric", "test_cases"])
+@pytest.mark.parametrize("purpose", ["submissions", "problems", "reference", "rubric", "test_cases", "knowledge"])
 async def test_allowed_image_inputs_keep_real_reader_ocr_dispatch(purpose):
     skill = FakeOCRSkill("Literal student error 1 + 1 = 3")
     text = await extract_text_from_upload(_valid_png_1x1(), "source.png", purpose=purpose, ocr_skill=skill)
@@ -81,7 +74,7 @@ def test_raw_zip_member_policy_preserves_legal_sibling_and_rejected_original():
     assert by_name["good.txt"].content == b"valid student source"
     assert by_name["good.txt"].pre_error_code is None
     assert by_name["bad.bin"].content == b"\x00binary"
-    assert by_name["bad.bin"].pre_error_code == "submission_source_type_not_allowed"
+    assert by_name["bad.bin"].pre_error_code == "submission_source_unsupported"
 
 
 def test_docx_is_one_source_not_an_archive_of_students():
@@ -145,7 +138,7 @@ async def test_compatibility_pdf_reader_honors_provided_teacher_ocr_skill(purpos
     ("problem", {".pdf", ".txt", ".md", ".markdown", ".docx", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
     ("reference_answer", {".pdf", ".txt", ".md", ".markdown", ".docx", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
     ("rubric", {".pdf", ".txt", ".md", ".markdown", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
-    ("programming_tests", {".pdf", ".txt", ".md", ".markdown", ".json", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
+    ("programming_tests", {".pdf", ".txt", ".md", ".markdown", ".json", ".csv", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}),
 ])
 def test_draft_selectable_types_match_the_business_role(role, extensions):
     from backend.api import task_preparation
@@ -160,15 +153,15 @@ async def test_knowledge_upload_observes_lower_canonical_limit_before_publicatio
     from backend.tests.test_task_background_workflows import _seed_task
     owner, _ = _seed_task()
     monkeypatch.setattr(upload_contract, "KNOWLEDGE_MAX_BYTES", 3)
-    with pytest.raises(upload_contract.UploadContractError) as caught:
+    with pytest.raises(HTTPException) as caught:
         await ingest_document(owner_id=owner, original_name="notes.txt", content=b"four", native_only=True)
-    assert caught.value.code == "source_too_large"
+    assert caught.value.detail["code"] == "source_too_large"
     from backend.db.knowledge_repository import list_documents
     assert list_documents(owner) == []
 
 
 @pytest.mark.parametrize("filename,content,code", [
-    ("source.csv", b"teacher,question", "source_type_not_allowed"),
+    ("source.exe", b"teacher,question", "source_type_not_allowed"),
     ("source.png", b"not an image", "submission_source_content_type_mismatch"),
 ])
 def test_problem_queue_rejects_invalid_file_before_publishing_source(filename, content, code):
@@ -200,7 +193,7 @@ def test_submission_queue_denies_invalid_container_before_publication(filename, 
     with pytest.raises(ValidationError) as caught:
         task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
             filename=filename, content=content, content_type=None, registry=_RecoveryRegistry())
-    assert caught.value.code in {"submission_source_type_not_allowed", "submission_archive_invalid"}
+    assert caught.value.code in {"submission_source_unsupported", "submission_archive_invalid"}
     assert file_repository.list_files(owner_id=owner, assignment_id=task) == []
 
 
@@ -252,7 +245,7 @@ async def test_invalid_json_is_rejected_before_creating_source_records():
             extraction_hint="", save_to_library=False, recognition_options=None,
             role="programming_tests", enable_material_ocr=True,
             current=SimpleNamespace(id=owner), registry=_RecoveryRegistry())
-    assert caught.value.detail["code"] == "programming_tests_json_invalid"
+    assert caught.value.detail["code"] == "source_json_invalid"
     assert file_repository.list_files(owner_id=owner, assignment_id=task) == []
 
 
@@ -325,7 +318,7 @@ async def test_cached_submission_source_cannot_bypass_current_type_policy():
         job_attempt=running.attempt, operation_lease_token=running.lease_token,
         ocr_skill=None, reuse_source=reuse)
     assert len(result) == 1
-    assert result[0].pre_error_code == "submission_source_type_not_allowed"
+    assert result[0].pre_error_code == "submission_source_unsupported"
     assert result[0].failure_phase == "source_read"
     assert reused == []
     source = source_outcome_repository.get_source(result[0].source_id, owner_id=owner)
@@ -361,7 +354,7 @@ def test_saved_submission_retry_revalidates_original_format_without_deleting_it(
         content_type="application/octet-stream", assignment_id=task)
     with pytest.raises(ValidationError) as caught:
         workflow_inputs.load_submission_input(task_id=task, owner_id=owner, stored_file_id=stored.id)
-    assert caught.value.code == "submission_source_type_not_allowed"
+    assert caught.value.code == "submission_source_unsupported"
     assert get_storage().exists(stored.storage_key)
     assert file_repository.get_file(file_id=stored.id, owner_id=owner).sha256 == stored.sha256
 
@@ -573,7 +566,7 @@ def test_retry_loader_uses_original_filename_not_legacy_payload_permission():
         status="error", payload={"filename": "promoted.txt", "submission_structure_version": 2})
     with pytest.raises(ValidationError) as caught:
         task_facade.load_submission_retry_upload(task_id=task, owner_id=owner, job_id=operation.id)
-    assert caught.value.code == "submission_source_type_not_allowed"
+    assert caught.value.code == "submission_source_unsupported"
     assert get_storage().exists(stored.storage_key)
 
 
@@ -717,7 +710,7 @@ async def test_mixed_zip_records_rejected_source_and_publishes_valid_sibling(mon
     rows = source_outcome_repository.list_source_results(operation_id=claimed.id, owner_id=owner, attempt=claimed.attempt)
     results = {row.source.original_name: row for row in rows}
     assert results["S001.txt"].outcome.status == "parsed"
-    assert results["rejected.bin"].outcome.stable_error_code == "submission_source_type_not_allowed"
+    assert results["rejected.bin"].outcome.stable_error_code == "submission_source_unsupported"
     assert results["rejected.bin"].outcome.failure_phase == "source_read"
     stored = file_repository.get_file(file_id=results["rejected.bin"].source.stored_file_id, owner_id=owner)
     assert stored.sha256 == hashlib.sha256(b"\x00binary").hexdigest()
@@ -743,7 +736,7 @@ def test_invalid_replacement_does_not_retire_previous_problem_original():
     before = file_repository.list_files(owner_id=owner, assignment_id=task)
     with pytest.raises(ValidationError) as caught:
         task_facade.queue_task_problem_extraction(task_id=task, owner_id=owner,
-            filename="invalid.csv", content=b"teacher,question", content_type="text/csv",
+            filename="invalid.exe", content=b"teacher,question", content_type="text/csv",
             replace_confirmed=True, registry=registry)
     assert caught.value.code == "source_type_not_allowed"
     after = file_repository.list_files(owner_id=owner, assignment_id=task)

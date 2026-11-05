@@ -90,6 +90,7 @@ async def run_problem_extraction(
                 stored_file_id=source.stored_file_id, route=route, registry=registry,
                 extraction_hint=str(options.get("extraction_hint") or ""), options=options.get("recognition_options"),
                 text_reader=extract_text, reporter=reporter,
+                media_slot_timeout_seconds=None,
             )
         finally:
             remove_reporter(operation.operation_id, expected=reporter)

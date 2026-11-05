@@ -14,7 +14,7 @@ from backend.agents.recognition_agent import RecognitionReadRequestV1
 from backend.db import knowledge_ingestion_repository as repo
 from backend.db.knowledge_repository import get_document
 from backend.db.file_repository import get_file
-from backend.domain.errors import DomainError, LeaseLost, RecognitionError
+from backend.domain.errors import DomainError, LeaseLost, RecognitionError, ValidationError
 from backend.knowledge.evidence import KnowledgeEvidenceStore
 from backend.progress.tracker import ProgressReporter
 from backend.recognition.models import RecognitionPolicyV1, RecognitionSourceRefV1
@@ -38,8 +38,10 @@ PAUSE_PROVIDER_ERRORS = frozenset({
 })
 
 
-def frozen_configuration(owner_id, registry, requested_route_id=None, *, native_only=False):
+def frozen_configuration(owner_id, registry, requested_route_id=None, *, native_only=False, require_visual=False):
     if native_only:
+        if require_visual:
+            raise ValidationError("Images require a vision/OCR model.", code="knowledge_image_requires_ocr")
         if requested_route_id:
             raise ValueError("Native-only ingestion cannot select an OCR model.")
         return dict(policy_version=POLICY, prompt_version=PROMPT_VERSION,
@@ -48,8 +50,14 @@ def frozen_configuration(owner_id, registry, requested_route_id=None, *, native_
     try:
         route = resolve_stage_provider_route(owner_id=owner_id, registry=registry, requested_route_id=requested_route_id)
     except DomainError:
-        if requested_route_id:
+        if requested_route_id or require_visual:
             raise
+    if require_visual:
+        from backend.llm.image_capability import can_attempt_images
+        if route is None:
+            raise ValidationError("Images require a vision/OCR model.", code="vision_provider_required")
+        if not route.is_baidu_ocr and (route.provider is None or not can_attempt_images(route.provider)):
+            raise RecognitionError("provider_vision_not_supported")
     return dict(policy_version=POLICY, prompt_version=PROMPT_VERSION,
         route_id=route.route_id if route else None,
         route_fingerprint=stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry) if route else None)

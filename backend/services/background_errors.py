@@ -18,6 +18,7 @@ from backend.tools.structured_llm import PermanentLLMError, RateLimitError, Stru
 
 
 SAFE_BACKGROUND_ERROR_CODES = frozenset({
+    "source_library_type_not_allowed",
     "saved_text_recovery_retired",
     "operation_cancelled",
     "workflow_failed",
@@ -103,6 +104,8 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "workflow_revision_conflict",
     "source_decode_failed",
     "source_empty",
+    "source_json_invalid",
+    "source_content_type_not_allowed",
     "source_mime_type_not_allowed",
     "source_text_too_large",
     "source_too_large",
@@ -129,9 +132,9 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
 }) | SAFE_SOURCE_REASON_CODES | RECOGNITION_ERROR_CODES
 
 RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
+    "submission_time_limit_reached",
     "source_docx_busy",
     "source_docx_timeout",
-    "submission_time_limit_reached",
     "provider_capacity_unavailable",
     "provider_overloaded",
     "provider_timeout",
@@ -150,6 +153,7 @@ RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
     "submission_persistence_failed",
     "submission_outcome_persistence_failed",
     "submission_source_persistence_failed",
+    "submission_archive_processing_unavailable",
     "source_storage_reservation_conflict",
     "source_storage_write_failed",
     "source_storage_integrity_failed",
