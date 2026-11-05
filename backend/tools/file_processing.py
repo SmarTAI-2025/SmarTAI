@@ -160,6 +160,17 @@ def _looks_like_text(data: bytes) -> bool:
     return all(character in "\t\n\r" or ord(character) >= 32 for character in text)
 
 
+def _decodable_text(data: bytes, suffix: str) -> bool:
+    if suffix == ".py":
+        from backend.services.python_source_encoding import PythonSourceEncodingError, decode_python_submission
+        try:
+            decode_python_submission(data)
+        except PythonSourceEncodingError:
+            return False
+        return True
+    return _looks_like_text(data)
+
+
 def _content_signature_type(data: bytes, filename: str) -> str:
     if not data:
         return "application/octet-stream"
@@ -211,16 +222,7 @@ def _content_signature_type(data: bytes, filename: str) -> str:
     # the isolated parser distinguishes an actual PDF from quoted text.
     if b"%PDF-" in data[:1024]:
         return "application/pdf"
-    if _ext(filename) == ".py":
-        from backend.services.python_source_encoding import PythonSourceEncodingError, decode_python_submission
-        try:
-            decode_python_submission(data)
-        except PythonSourceEncodingError:
-            return "application/octet-stream"
-        return "text/plain"
-    if _looks_like_text(data):
-        return "text/plain"
-    return "application/octet-stream"
+    return "text/plain" if _decodable_text(data, _ext(filename)) else "application/octet-stream"
 
 
 def inspect_upload_content(
@@ -293,17 +295,19 @@ def infer_upload_content_type(
 
 def submission_source_error(filename: str, inspection: ContentInspection, content: bytes | None = None) -> str | None:
     """One leaf-file policy for direct uploads, archive members and retries."""
-    if _ext(filename) not in SUBMISSION_SOURCE_EXTENSIONS:
+    suffix = _ext(filename)
+    if suffix not in SUBMISSION_SOURCE_EXTENSIONS:
         return "submission_source_unsupported"
-    if content is not None and _ext(filename) == ".docx":
+    if content is not None and suffix == ".docx":
         from backend.services.upload_contract import UploadContractError, validate_docx_package
         try:
             validate_docx_package(content)
         except UploadContractError as exc:
             return exc.code
     if inspection.mismatch:
-        if content is not None and inspection.content_type == "application/pdf" and _ext(filename) in SUBMISSION_TEXT_EXTENSIONS and _looks_like_text(content) and (
-                _ext(filename) not in PROGRAMMING_SOURCE_SUFFIXES or inspection.declared_content_type == "text/plain"):
+        if (content is not None and inspection.content_type == "application/pdf"
+                and suffix in SUBMISSION_TEXT_EXTENSIONS and _decodable_text(content, suffix)
+                and (suffix not in PROGRAMMING_SOURCE_SUFFIXES or inspection.declared_content_type == "text/plain")):
             return None  # The bounded decoder will distinguish a real PDF from quoted text.
         return "submission_source_content_type_mismatch"
     return None
@@ -337,7 +341,7 @@ async def validate_upload_content(content: bytes, filename: str, *, content_type
     # parse can settle this ambiguous signature; a valid renamed PDF is rejected.
     allowed_text = (SUBMISSION_TEXT_EXTENSIONS if purpose == "submissions" else
                     TEXT_EXTENSIONS | ({".json"} if purpose == "test_cases" else set()))
-    if (inspection.content_type == "application/pdf" and suffix in allowed_text and _looks_like_text(content)
+    if (inspection.content_type == "application/pdf" and suffix in allowed_text and _decodable_text(content, suffix)
             and (suffix not in PROGRAMMING_SOURCE_SUFFIXES or inspection.declared_content_type in {"text/plain", "application/pdf"})):
         try:
             await validate_media_content(content, "application/pdf", wait_for_slot=True,
