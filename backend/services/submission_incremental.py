@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from backend.services.source_question_units import QUESTION_HEADING
+from backend.services.programming_submission_mapping import native_source
 
 
 def merge_parse_repair(previous, current, question_ids, *, problems):
@@ -144,13 +145,15 @@ def split_submission_question_units(source, problems, target_ids=None):
     ):
         return [(source, targets)]
     matches = list(QUESTION_HEADING.finditer(text))
+    if len(matches) < 2 or native_source(source.filename, text, problems) is not None:
+        return [(source, targets)]
     from backend.services.question_matching import resolve_question_match
     mapped = []
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         q_id = resolve_question_match(match.group("number"), text[match.start():end], problems)
         mapped.append([q_id] if q_id else [])
-    if (len(matches) < 2 or any(len(ids) != 1 for ids in mapped)
+    if (any(len(ids) != 1 for ids in mapped)
             or len({ids[0] for ids in mapped}) != len(mapped)):
         return [(source, targets)]
     preamble = text[:matches[0].start()].strip()
@@ -163,7 +166,7 @@ def split_submission_question_units(source, problems, target_ids=None):
         body = text[match.start():end].strip()
         if not body:
             return [(source, targets)]
-        units.append((replace(source, text="\n\n".join(part for part in (preamble, body) if part)), {q_id}))
+        units.append((replace(source, whole_source=False, text="\n\n".join(part for part in (preamble, body) if part)), {q_id}))
     return units or [(source, targets)]
 
 

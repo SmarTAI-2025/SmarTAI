@@ -30,6 +30,8 @@ from starlette.concurrency import run_in_threadpool
 from backend.agents.ingest_agent import (
     SubmissionSourceParseResult,
     normalize_submission_source_identities,
+    native_submission_result,
+    recover_native_submission_result,
     extract_problems,
     parse_student_answer_sources,
     parse_student_answer_sources_from_ocr_markdown,
@@ -77,7 +79,7 @@ from backend.domain.source_storage import (
     DELAYED_SOURCE_OPERATION_TYPES,
     TASK_DELETE_OPERATION,
 )
-from backend.models import TaskGradingSetup
+from backend.models import TaskGradingSetup, is_programming_question_type
 from backend.models import User
 from backend.llm.registry import (
     resolve_owner_default_provider,
@@ -2938,6 +2940,34 @@ def _load_submission_results(artifact) -> list[SubmissionSourceParseResult]:
     ) for item in payload if isinstance(item, dict)]
 
 
+async def _restore_legacy_native_result(result, problems, task_id, owner_id):
+    from backend.services.programming_submission_mapping import may_contain_source
+    from backend.tools.file_processing import decode_text_bytes
+    if (not result.student or (result.student.get("recognition") or {}).get("native_source_mapping_version") == 1
+            or not may_contain_source(result.filename, problems)
+            or result.stable_error_code == "provider_submit_uncertain"):
+        return result
+    # Old model-derived checkpoints may contain only one def. The original file
+    # is owner-scoped, size- and hash-verified; never repair it from teacher code.
+    def original_bytes():
+        stored = get_file(file_id=result.stored_file_id, owner_id=owner_id)
+        source = source_outcome_repository.get_source(result.source_id, owner_id=owner_id)
+        if (stored is None or source.stored_file_id != stored.id or source.assignment_id != task_id
+                or stored.assignment_id != task_id or stored.sha256 != source.sha256
+                or stored.availability_status != "available"
+                or stored.kind not in {"submission_source", "submission_archive_member"}
+                or stored.size_bytes > SUBMISSION_UPLOAD_MAX_BYTES):
+            raise InvalidTransition("The original submission is unavailable.", code="submission_retry_source_unavailable")
+        with get_storage().open(stored.storage_key) as stream:
+            data = stream.read(stored.size_bytes + 1)
+        if len(data) != stored.size_bytes or hashlib.sha256(data).hexdigest() != stored.sha256:
+            raise InvalidTransition("The original submission changed.", code="submission_retry_source_unavailable")
+        return data
+    text = await decode_text_bytes(await run_in_threadpool(original_bytes))
+    source = PreparedSubmissionSource(result.source_id, result.stored_file_id, result.filename, "text/plain", text)
+    return await recover_native_submission_result(source, problems, result)
+
+
 def _reusable_submission_results(*, owner_id, task_id, payload, questions, include_incomplete=False):
     """Load verified source results from an explicit failed-item retry lineage.
 
@@ -3033,10 +3063,13 @@ def _submission_result_incomplete(result):
     student = result.student or {}
     recognition = student.get("recognition") or {}
     coverage = recognition.get("coverage") or {}
+    # A native file can be fully read while its question association still
+    # awaits the teacher. Replaying the file cannot resolve that review.
+    mapped = {"recognition_manual_pending"} if recognition.get("native_source_mapping_version") == 1 else set()
     return bool(any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
                 or recognition.get("error_code")
                 or recognition.get("missing_question_ids")
-                or any(_answer_recognition_failures(answer.get("flag")) for answer in student.get("stu_ans", [])))
+                or any(_answer_recognition_failures(answer.get("flag")) - mapped for answer in student.get("stu_ans", [])))
 
 
 def _merge_submission_retry_answers(result, saved, target_ids, questions):
@@ -3170,6 +3203,7 @@ async def run_task_submission_parsing(
         assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
         questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
         await reporter.set_totals(students=0, questions=len(questions))
+        problem_data = {q.q_id: _serialize_problem(q) for q in questions}
         results = None
         if leased_operation is not None:
             parsed_artifact = _submission_result_artifact(
@@ -3179,7 +3213,8 @@ async def run_task_submission_parsing(
                 job_attempt=job_attempt,
             )
             if parsed_artifact is not None:
-                results = _load_submission_results(parsed_artifact)
+                results = [await _restore_legacy_native_result(r, problem_data, task_id, owner_id)
+                           for r in _load_submission_results(parsed_artifact)]
                 # Recovery must not publish an old partial parse or dispatch
                 # another paid read. Leave it failed for the explicit retry.
                 results = [replace(result, status="parse_failed",
@@ -3260,10 +3295,14 @@ async def run_task_submission_parsing(
                 await save_pages((read.recognition or {}).get("page_diagnostics"))
                 return read
 
-            reusable = _reusable_submission_results(
-                owner_id=owner_id, task_id=task_id, payload=frozen, questions=questions)
             retry_results = _reusable_submission_results(
                 owner_id=owner_id, task_id=task_id, payload=frozen, questions=questions, include_incomplete=True)
+            retry_results = {key: await _restore_legacy_native_result(result, problem_data, task_id, owner_id)
+                             for key, result in retry_results.items()}
+            reusable = {key: result for key, result in retry_results.items()
+                        if result.status in {"parsed", "identity_conflict"} and result.student
+                        and {a["q_id"] for a in result.student["stu_ans"]} == set(problem_data)
+                        and not _submission_result_incomplete(result)}
             reused, partials, source_question_ids, source_contexts = {}, {}, {}, {}
 
             def reuse_source(raw, source_id, stored_file_id):
@@ -3271,7 +3310,7 @@ async def run_task_submission_parsing(
                 result = reusable.get((raw.filename, hashlib.sha256(raw.content).hexdigest()))
                 if result is None:
                     saved = retry_results.get((raw.filename, hashlib.sha256(raw.content).hexdigest()))
-                    if saved is not None:
+                    if saved is not None and saved.student is not None:
                         good_ids = {answer["q_id"] for answer in saved.student.get("stu_ans", [])
                                     if "content" in answer and not _answer_recognition_failures(answer.get("flag"))}
                         targets = [q.q_id for q in questions if q.q_id not in good_ids]
@@ -3288,7 +3327,6 @@ async def run_task_submission_parsing(
             from backend.services.submission_incremental import (
                 invalidate_answer_units, merge_parse_repair, merge_source_answer_units, split_submission_question_units,
             )
-            problem_data = {q.q_id: _serialize_problem(q) for q in questions}
             from backend.agents.question_preparation_agent import _major_question_generation_concurrency
             parse_capacity = asyncio.Semaphore(_major_question_generation_concurrency(provider) if provider else 4)
             boundary_invalidations = {}
@@ -3321,7 +3359,8 @@ async def run_task_submission_parsing(
                     await run_in_threadpool(source_outcome_repository.assert_source_write_fence,
                         owner_id=owner_id, assignment_id=task_id, operation_id=job_id,
                         expected_attempt=job_attempt, expected_lease_token=leased_operation.lease_token)
-                    key = _hash_json(dict(version=3, operation_id=job_id, attempt=job_attempt,
+                    native = await native_submission_result(source, problem_data, set(target_ids), identity_mode, roster_entries or [])
+                    key = _hash_json(dict(version=4 if native else 3, operation_id=job_id, attempt=job_attempt,
                         file_id=source.stored_file_id, filename=source.filename,
                         text_sha256=hashlib.sha256(source.text.encode()).hexdigest(), questions=problem_data,
                         route=route_fingerprint, identity_mode=identity_mode, roster=roster_entries or [],
@@ -3352,7 +3391,7 @@ async def run_task_submission_parsing(
                     heartbeat = recognition_runs._RecognitionLeaseHeartbeat(lease_context, worker=worker)
                     heartbeat.start()
                     try:
-                        if child.checkpoint:
+                        if child.checkpoint and native is None:
                             return SubmissionSourceParseResult(
                                 source.source_id, source.stored_file_id, source.filename,
                                 "parse_failed", None, None, 0, (), "provider_submit_uncertain",
@@ -3362,7 +3401,7 @@ async def run_task_submission_parsing(
                             owner_id=owner_id, expected_attempt=child.attempt,
                             expected_checkpoint_revision=child.checkpoint_revision,
                             expected_lease_token=child.lease_token, stage="parser_pending", checkpoint={"pending": True})
-                        if not route.is_baidu_ocr:
+                        if not route.is_baidu_ocr and native is None:
                             checkpoint = dict(leased_operation.checkpoint_data)
                             checkpoint["structure_inflight"] = {**checkpoint.get("structure_inflight", {}),
                                 child.id: {"file_id": source.stored_file_id, "question_ids": sorted(target_ids)}}
@@ -3371,7 +3410,7 @@ async def run_task_submission_parsing(
                         try:
                             from backend.llm.request_timeouts import response_timeout_scope
                             with response_timeout_scope(900, response_only=True) as response_scope:
-                                result = attach_submission_recognition([await invoke()], [source])[0]
+                                result = attach_submission_recognition([native or await invoke()], [source])[0]
                                 if response_scope.submission_may_exist:
                                     result = replace(result, status="parse_failed",
                                         stable_error_code="provider_submit_uncertain", failure_phase="recognition", retryable=False)
@@ -5666,7 +5705,7 @@ def update_student_answer(
         elif matching_confirmation and not content_changed:
             # Preserve the metadata-only confirmation path. An explicit save
             # also resolves the doubt without requiring that confirmation.
-            if patch.get("review_status") == "confirmed":
+            if patch.get("review_status") == "confirmed" and not is_programming_question_type(target.type):
                 patch = {key: value for key, value in patch.items() if key != "flag"}
             else:
                 patch = {**patch, "flag": [flag for flag in target.flag or [] if flag != "recognition_manual_pending"]}
@@ -5684,6 +5723,12 @@ def update_student_answer(
         if patch.get("flag") is not None:
             patch = {**patch, "flag": [*_public_answer_flags(patch["flag"]),
                                        *[flag for flag in target.flag or [] if flag.startswith("answer_recognition_confidence:")]]}
+        if patch.get("flag") is not None or content_changed or target_q_id != target.q_id:
+            flags = [f for f in (patch.get("flag", target.flag) or []) if not f.startswith("programming_source_entry:")]
+            if not content_changed and target_q_id == target.q_id:
+                flags.extend(f for f in target.flag or [] if f.startswith("programming_source_entry:"))
+            if flags != list(target.flag or []) or patch.get("flag") is not None:
+                patch = {**patch, "flag": flags}
         flags_changed = patch.get("flag") is not None and list(patch["flag"]) != list(target.flag or [])
         if patch.get("review_status") == "confirmed" and not matching_confirmation and any(
             flag in failed_flags

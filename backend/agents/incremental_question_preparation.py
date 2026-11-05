@@ -353,6 +353,15 @@ class IncrementalQuestionPreparation:
                 items.append(dict(number=number, type="", stem="", criterion="", max_score=10))
                 existing.add(normalized)
         counts = Counter(normalize_question_number(row.get("number")) for row in items)
+        for material in materials:
+            number = normalize_question_number(material.get("number"))
+            provenance = material.get("material_provenance", {})
+            if counts[number] > 1 and number and provenance.get("criterion", {}).get("scope") != "overall":
+                tokens = sorted({field["source_token"] for field in provenance.values()})
+                material.setdefault("preparation_issues", []).append(
+                    _issue("q1", "source", "ambiguous_question_match", "warning", tokens))
+                material["review_status"] = "needs_review"
+                unmatched.append(material)
         for row in items:
             number = normalize_question_number(row.get("number"))
             row.setdefault("preparation_issues", [])
@@ -701,6 +710,12 @@ class IncrementalQuestionPreparation:
                 expected = (self.wanted or list(self.outline)) if (
                     not incomplete and len(chunks) == 1 and draft.role == "problem"
                     and sum(role == "problem" for role in self.roles.values()) == 1) else ()
+                # The independently extracted later questions need the same literal
+                # preamble as page units. Never carry an earlier question as context.
+                prefix_end = 0
+                if targeted and len(chunks) > 1:
+                    headings = question_headings(text, numbered=True)
+                    prefix_end = headings[0].start() if headings else 0
                 offset = 0
                 for index, chunk in enumerate(chunks):
                     context = ""
@@ -709,8 +724,9 @@ class IncrementalQuestionPreparation:
                         if start >= 0:
                             # Keep the existing request cap and carry literal
                             # earlier section evidence, never invented labels.
-                            labels = _source_section_labels(text[:start])
-                            context = "\n".join(labels)[-limit:]
+                            prefix = text[:min(start, prefix_end)].strip()
+                            labels = _source_section_labels(text[prefix_end:start])
+                            context = "\n".join(part for part in [prefix, *labels] if part)[-limit:]
                             offset = start + 1
                     planned.add(self._chunk_key(draft, chunk, index, context, not incomplete))
                     tasks.append(asyncio.create_task(self._chunk(draft, chunk, index, len(chunks),
@@ -1101,9 +1117,15 @@ class IncrementalQuestionPreparation:
             self.latest = self.project()
             if not self.latest:
                 raise ValidationError("No questions were extracted.", code="problem_extraction_failed")
-            if any(not str(row.get("stem") or "").strip()
-                   or any(issue.get("code") == "recognition_partial" for issue in row.get("preparation_issues", []))
-                   for row in self.latest.values()):
+            # A source-linked material awaiting assignment is a complete review
+            # item. Its deliberately empty stem is not a failed extraction.
+            if any(
+                any(issue.get("code") == "recognition_partial" for issue in row["preparation_issues"])
+                or (not str(row.get("stem") or "").strip() and not any(
+                    issue.get("code") == "ambiguous_question_match" and issue.get("field") == "source"
+                    for issue in row["preparation_issues"]))
+                for row in self.latest.values()
+            ):
                 raise ValidationError("Some question text is incomplete.", code="question_targets_incomplete")
             await self.reporter.set_stage_progress("committing_question_packages", total_steps=8, completed_steps=7)
             return self.latest

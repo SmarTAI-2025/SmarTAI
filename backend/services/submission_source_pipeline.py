@@ -51,6 +51,7 @@ class PreparedSubmissionSource:
     failure_phase: str | None = None
     retryable: bool = False
     recognition: dict | None = None
+    whole_source: bool = True
 
 
 def attach_submission_recognition(results, sources, *, verified_question_ids=()):

@@ -30,6 +30,7 @@ from backend.models import (
     ProblemInfo,
     StudentAnswerInfo,
     TestCase,
+    is_programming_question_type,
 )
 from backend.llm.providers import BaseProvider
 from backend.services.background_errors import (
@@ -38,6 +39,7 @@ from backend.services.background_errors import (
 )
 from backend.services.question_structure import annotate_major_question_structures
 from backend.services.programming_test_contract import required_function_name
+from backend.services.programming_submission_mapping import may_contain_source, source_answers
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
     KATEX_GENERATION_GUIDANCE,
@@ -852,6 +854,9 @@ async def parse_student_answer_sources(
                 )
 
             known_question_ids = set((source_question_ids or {}).get(source.source_id, problems_data))
+            native = await native_submission_result(source, problems_data, known_question_ids, identity_mode, safe_roster)
+            if native is not None:
+                return native
             problems_json = json.dumps([problem for problem in prompt_problems if problem["q_id"] in known_question_ids],
                                        ensure_ascii=False, indent=1)
             user_message = (
@@ -939,6 +944,7 @@ async def parse_student_answer_sources(
                 if independent_answers else (parsed.model_dump(), ()))
             from backend.services.question_matching import mark_question_match_conflicts
             mark_question_match_conflicts(payload, problems_data)
+            _review_transcribed_programming_answers(payload, problems_data)
             payload["source_filename"] = source.filename
             payload["source_id"] = source.source_id
             payload["stored_file_id"] = source.stored_file_id
@@ -1150,6 +1156,71 @@ def _ocr_identity_candidate(text: str, filename: str) -> tuple[str, str, bool]:
     )
 
 
+def _review_transcribed_programming_answers(student, problems):
+    """Only teacher-reviewed document transcriptions may become executable answers."""
+    for answer in student.get("stu_ans", []):
+        qid = answer.get("q_id")
+        if qid in problems and is_programming_question_type(problems[qid].get("type")):
+            flags = [f for f in answer.get("flag", []) if not f.startswith("programming_source_entry:")]
+            answer["flag"] = list(dict.fromkeys([*flags, "recognition_manual_pending"]))
+            if answer.get("content"):
+                recognition = student.setdefault("recognition", {})
+                reviews = recognition.setdefault("model_review_question_ids", [])
+                if qid not in reviews:
+                    reviews.append(qid)
+
+
+def _source_identity(text, filename, identity_mode, roster):
+    student_id, student_name, matched = _ocr_identity_candidate(text, filename)
+    if identity_mode == "roster":
+        entry = _match_roster_identity({"stu_id": student_id, "stu_name": student_name}, filename, roster)
+        if entry:
+            return entry["stu_id"], entry["stu_name"], True
+        matched = False
+    elif identity_mode == "manual_review":
+        matched = False
+    return student_id, student_name, matched
+
+
+async def native_submission_result(source, problems, targets, identity_mode, roster):
+    if not getattr(source, "whole_source", True) or not may_contain_source(source.filename, problems):
+        return None
+    try:
+        answers = await run_in_threadpool(source_answers, source.filename, source.text, problems, targets)
+    except ValueError as exc:
+        if str(exc) != "source_text_too_large":
+            raise
+        return SubmissionSourceParseResult(source.source_id, source.stored_file_id, source.filename,
+            "parse_failed", None, None, 0, (), "submission_source_too_large", "source_read", False)
+    if answers is None:
+        return None
+    # A string or comment in a module cannot override the filename/roster identity.
+    student_id, name, matched = _source_identity("", source.filename, identity_mode, roster)
+    student = dict(stu_id=student_id, stu_name=name, stu_ans=answers,
+        source_filename=source.filename, source_id=source.source_id, stored_file_id=source.stored_file_id,
+        identity_match_method=identity_mode, identity_status="matched" if matched else "needs_review",
+        recognition={"native_source_mapping_version": 1, "model_review_question_ids": [
+            a["q_id"] for a in answers if a["content"] and "recognition_manual_pending" in a["flag"]]})
+    return SubmissionSourceParseResult(source.source_id, source.stored_file_id, source.filename,
+        "parsed" if matched else "identity_conflict", student, student_id, len(answers), (),
+        None if matched else "identity_needs_review", None if matched else "identity", False)
+
+
+async def recover_native_submission_result(source, problems, previous):
+    """Restore from the immutable file, keeping the previously matched student."""
+    result = await native_submission_result(source, problems, set(problems), "manual_review", [])
+    if result is None:
+        return previous
+    if previous is None or previous.student is None or result.student is None:
+        return result
+    identity = {field: previous.student[field] for field in (
+        "stu_id", "stu_name", "identity_status", "identity_match_method") if field in previous.student}
+    matched = identity.get("identity_status") == "matched"
+    return replace(result, student={**result.student, **identity}, student_candidate=previous.student_candidate,
+        status="parsed" if matched else "identity_conflict",
+        stable_error_code=None if matched else "identity_needs_review", failure_phase=None if matched else "identity")
+
+
 async def parse_student_answer_sources_from_ocr_markdown(
     sources: List[Any],
     problems_data: Dict[str, Dict[str, Any]],
@@ -1205,26 +1276,11 @@ async def parse_student_answer_sources_from_ocr_markdown(
             continue
 
         text = str(source.text).strip()
-        student_id, student_name, identity_matched = _ocr_identity_candidate(
-            text,
-            source.filename,
-        )
-        identity_payload = {"stu_id": student_id, "stu_name": student_name}
-        if identity_mode == "roster":
-            roster_match = _match_roster_identity(
-                identity_payload,
-                source.filename,
-                safe_roster,
-            )
-            if roster_match is not None:
-                student_id = roster_match["stu_id"]
-                student_name = roster_match["stu_name"]
-                identity_matched = True
-            else:
-                identity_matched = False
-        elif identity_mode == "manual_review":
-            identity_matched = False
-
+        native = await native_submission_result(source, problems_data, requested, identity_mode, safe_roster)
+        if native is not None:
+            results.append(native)
+            continue
+        student_id, student_name, identity_matched = _source_identity(text, source.filename, identity_mode, safe_roster)
         sections = split_ocr_markdown_sections(text)
         unlabelled = not _OCR_NUMBERED_HEADING.search(text)
         matched_answers: list[dict[str, Any]] = []
@@ -1305,6 +1361,7 @@ async def parse_student_answer_sources_from_ocr_markdown(
             "identity_match_method": identity_mode,
             "identity_status": "matched" if identity_matched else "needs_review",
         }
+        _review_transcribed_programming_answers(payload, problems_data)
         results.append(SubmissionSourceParseResult(
             source_id=source.source_id,
             stored_file_id=source.stored_file_id,

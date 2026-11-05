@@ -14,6 +14,7 @@ from backend.db import submission_upload_repository
 from backend.domain.errors import DomainError, ValidationError
 from backend.services.recognition_artifacts import RecognitionArtifactBindingV1
 from backend.services.question_sources import read_question_source
+from backend.services.programming_submission_mapping import native_source
 from backend.services.upload_contract import INDIVIDUAL_SUBMISSION_MAX_BYTES, UploadContractError, upload_limit, validate_submission_upload
 from backend.services.stage_provider_routing import StageProviderRoute, stage_provider_configuration_fingerprint
 from backend.storage import get_storage
@@ -133,6 +134,7 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
                     return stored
 
                 await persist_original(filename, content, inspect_upload_content(content, filename, content_type).content_type)
+                native = False
                 texts = []
                 for item in raw_sources:
                     if item.pre_error_code or item.content is None:
@@ -144,20 +146,24 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
                         content=item.content, filename=item.filename, content_type=item.content_type,
                         route=route, registry=registry, stored_file_id=stored.id, purpose="submissions",
                         reporter=reporter, binding=binding)
-                    texts.append(f"[Source file: {item.filename}]\n{result.text}")
+                    if len(raw_sources) == 1:
+                        native = await run_in_threadpool(native_source, item.filename, result.text, problems) is not None
+                    texts.append(result.text if native else f"[Source file: {item.filename}]\n{result.text}")
                     if sum(map(len, texts)) > MAX_TRANSCRIPT_CHARS:
                         raise ValidationError("Submission text exceeds the parse budget; it was not truncated.",
                                               code="submission_upload_limit_exceeded")
-                await checkpoint("submission_parser_pending", parser_pending=True)
+                if not native:
+                    await checkpoint("submission_parser_pending", parser_pending=True)
                 parsed = (await parse_student_answer_sources(
-                    [SubmissionSourceInput(revision_id, originals[0].id, filename, "text/plain", "\n\n".join(texts))],
+                    [SubmissionSourceInput(revision_id, stored.id if native else originals[0].id,
+                        raw_sources[0].filename if native else filename, "text/plain", "\n\n".join(texts))],
                     problems, provider, reporter=reporter, single_attempt=True,
                 ))[0]
                 if parsed.student is None or parsed.unknown_question_ids:
                     raise ValidationError("Answers could not be mapped reliably.",
                                           code=parsed.stable_error_code or "no_matching_answer")
                 raw_answers = parsed.student.get("stu_ans") or []
-                answers = _build_answers({q.q_id: q for q in questions}, raw_answers)
+                answers = _build_answers({q.q_id: q for q in questions}, raw_answers, native_mapping=native)
                 if len({a["q_id"] for a in answers}) != len(answers):
                     raise ValidationError("Duplicate question mapping.", code="no_matching_answer")
                 data = json.dumps(answers, ensure_ascii=False).encode()

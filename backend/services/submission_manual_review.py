@@ -6,7 +6,8 @@ from copy import deepcopy
 
 from fastapi.concurrency import run_in_threadpool
 
-from backend.agents.ingest_agent import _ocr_identity_candidate
+from backend.agents.ingest_agent import recover_native_submission_result, _ocr_identity_candidate
+from backend.services.programming_submission_mapping import may_contain_source
 from backend.db import assignment_repository, source_outcome_repository, workflow_repository
 from backend.domain.errors import InvalidTransition, NotFound, ValidationError, VersionConflict
 from backend.domain.source_outcomes import safe_source_diagnostic
@@ -71,6 +72,7 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
             expected_attempt=row.attempt, expected_checkpoint_revision=row.checkpoint_revision,
             expected_lease_token=row.lease_token, stage="manual_sources",
             checkpoint={"source_state_refs": row.payload["source_state_refs"]}, artifact_refs=origin.artifact_refs)
+        problems = {q.q_id: task_facade._serialize_problem(q) for q in questions}
         if count_handoff:
             saved_source = next((result for result in source_outcome_repository.list_source_results(
                 operation_id=origin.id, owner_id=owner_id, attempt=origin.attempt)
@@ -89,7 +91,7 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
                 content=upload["content"], filename=upload["filename"], content_type=upload["content_type"],
                 owner_id=owner_id, task_id=task_id, job_id=row.id, job_attempt=row.attempt,
                 operation_lease_token=row.lease_token, ocr_skill=None,
-                reuse_source=lambda *_args: True)
+                reuse_source=lambda raw, *_: not may_contain_source(raw.filename, problems))
             # The container fallback means enumeration failed; it is not one student.
             unknown_count = bool(len(sources) == 1 and sources[0].pre_error_code
                 and sources[0].filename == upload["filename"]
@@ -117,7 +119,10 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
         recorded_sources = {source.source_id} if unknown_count else set()
         for student_index, source in enumerate(sources):
             saved = reusable.get((source.filename, originals[source.source_id].sha256))
-            if saved is not None:
+            had_saved_identity = saved is not None
+            if source.text and may_contain_source(source.filename, problems):
+                saved = await recover_native_submission_result(source, problems, saved)
+            if saved is not None and saved.student is not None:
                 student = deepcopy(saved.student)
                 outcome = dict(status=saved.status, stable_error_code=saved.stable_error_code,
                     failure_phase=saved.failure_phase, matched_answer_count=saved.matched_answer_count)
@@ -133,10 +138,11 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
                     candidate_id, candidate_name = f"manual-{student_index + 1}", "[Unknown Student]"
                 student = dict(stu_id=candidate_id, stu_name=candidate_name, stu_ans=[],
                     identity_status="needs_review", identity_match_method="manual_review")
-                reason, phase = safe_source_diagnostic("parse_failed", origin.error_code, "recognition")
+                reason, phase = safe_source_diagnostic("parse_failed", saved.stable_error_code if saved else origin.error_code,
+                                                       saved.failure_phase if saved else "recognition")
                 outcome = dict(status="parse_failed", stable_error_code=reason,
                     failure_phase=phase, matched_answer_count=0)
-            if student["stu_id"] in used_ids or (saved is None and student["stu_id"] in saved_ids):
+            if student["stu_id"] in used_ids or (not had_saved_identity and student["stu_id"] in saved_ids):
                 student["stu_id"] = f"{student['stu_id']}-{source.source_id[-8:]}"
                 student["identity_status"] = "needs_review"
             used_ids.add(student["stu_id"])
