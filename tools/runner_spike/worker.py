@@ -7,7 +7,10 @@ the container image has no reason to contain application settings or secrets.
 """
 from __future__ import annotations
 
+import ast
 import hashlib
+import inspect
+import importlib
 import json
 import math
 import os
@@ -70,6 +73,124 @@ def child_command(source, return_channel=None):
     if return_channel is None:
         return [sys.executable, "-I", "-B", str(source)]
     return [sys.executable, "-I", "-B", "-c", _CALL_PROGRAM, str(source), str(return_channel)]
+
+
+def _static_failure_reason(code, call):
+    """Inspect only the original source. Never import or evaluate a submission."""
+    try:
+        tree = ast.parse(code, "<submission>")
+        compile(tree, "<submission>", "exec", dont_inherit=True)
+    except SyntaxError:
+        return "syntax_error"
+    if call is None:
+        return "runtime_error"
+
+    # Dynamic bindings, decorator side effects, imports or executable module
+    # statements can change the target or fail before invocation. A phase we
+    # cannot prove must not be blamed on the student's declared signature.
+    functions = {}
+    safe_modules = {"sys", "math", "operator", "itertools", "functools", "collections", "bisect",
+                    "heapq", "re", "string", "typing", "fractions", "decimal", "statistics"}
+    for stmt in tree.body:
+        if isinstance(stmt, ast.ImportFrom) and stmt.module == "__future__" and not stmt.level:
+            continue
+        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            # Verify only known standard-library imports in this isolated
+            # inspector. An unavailable import can precede the function call.
+            for alias in stmt.names:
+                module = alias.name if isinstance(stmt, ast.Import) else stmt.module
+                if (module not in safe_modules or getattr(stmt, "level", 0)
+                        or alias.name == "*" or (alias.asname or alias.name) == call["name"]):
+                    return "runtime_error"
+                try:
+                    imported = importlib.import_module(module)
+                    if isinstance(stmt, ast.ImportFrom) and not hasattr(imported, alias.name):
+                        return "runtime_error"
+                except ImportError:
+                    return "runtime_error"
+            continue
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+            continue
+        if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Constant) and all(
+            isinstance(target, ast.Name) and target.id != call["name"] for target in stmt.targets
+        ):
+            continue
+        if not isinstance(stmt, ast.FunctionDef) or stmt.decorator_list or getattr(stmt, "type_params", []):
+            return "runtime_error"
+        args = stmt.args
+        declared = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+        declared += [arg for arg in (args.vararg, args.kwarg) if arg]
+        annotations = [stmt.returns, *(arg.annotation for arg in declared)]
+        builtins = {"int", "float", "complex", "str", "bool", "list", "tuple", "dict", "set", "bytes"}
+        if any(annotation is not None and not isinstance(annotation, ast.Constant)
+               and not (isinstance(annotation, ast.Name) and annotation.id in builtins) for annotation in annotations):
+            return "runtime_error"
+        if any(not isinstance(value, ast.Constant) for value in (*args.defaults, *args.kw_defaults) if value is not None):
+            return "runtime_error"
+        functions[stmt.name] = args
+    args = functions.get(call["name"])
+    if args is None:
+        return "target_function_missing"
+
+    param = inspect.Parameter
+    positional = [*args.posonlyargs, *args.args]
+    required = len(positional) - len(args.defaults)
+    params = [param(arg.arg, param.POSITIONAL_ONLY if i < len(args.posonlyargs) else param.POSITIONAL_OR_KEYWORD,
+                    default=param.empty if i < required else None)
+              for i, arg in enumerate(positional)]
+    if args.vararg:
+        params.append(param(args.vararg.arg, param.VAR_POSITIONAL))
+    params.extend(param(arg.arg, param.KEYWORD_ONLY, default=param.empty if default is None else None)
+                  for arg, default in zip(args.kwonlyargs, args.kw_defaults))
+    if args.kwarg:
+        params.append(param(args.kwarg.arg, param.VAR_KEYWORD))
+    try:
+        inspect.Signature(params).bind(*call["args"], **call["kwargs"])
+    except TypeError:
+        return "signature_mismatch"
+    return "runtime_error"
+
+
+_DIAGNOSES = {"syntax_error", "target_function_missing", "signature_mismatch", "runtime_error"}
+
+
+def _diagnose_failure(code, call):
+    # Only failed programming cases pay for this bounded compiler check. A
+    # separate trusted process receives the original request through stdin,
+    # never stdout, traceback or a path writable by the student's process.
+    if len(code) > MAX_CODE_CHARS:
+        return "runtime_error"
+    try:
+        check = subprocess.run([sys.executable, "-I", "-B", __file__, "--diagnose"],
+                               input=json.dumps([code, call]).encode(), capture_output=True,
+                               timeout=1.5, env=_SAFE_CHILD_ENV)
+        reason = check.stdout.decode("ascii")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return "runtime_error"
+    return reason if check.returncode == 0 and reason in _DIAGNOSES else "runtime_error"
+
+
+def _cgroup_events():
+    """Read only the private cgroup-v2 root of this single-case container."""
+    def counter(filename, key):
+        try:
+            rows = (Path("/sys/fs/cgroup") / filename).read_text().splitlines()
+            return int(dict(line.split() for line in rows)[key])
+        except (OSError, ValueError, KeyError):
+            return None
+    try:
+        if Path("/proc/self/cgroup").read_text().strip() != "0::/":
+            return (None, None)
+    except OSError:
+        return (None, None)
+    return counter("memory.events", "oom_kill"), counter("pids.events", "max")
+
+
+def _resource_failure(before, after):
+    for index, reason in enumerate(("memory_limit", "pid_limit")):
+        if before[index] is not None and after[index] is not None and after[index] > before[index]:
+            return reason
+    return None
 
 
 def request_digest(payload):
@@ -236,7 +357,7 @@ def _result(
     }
 
 
-def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[str, Any]:
+def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR, track_resources=False) -> dict[str, Any]:
     """Execute one validated request; container teardown owns directory cleanup."""
 
     try:
@@ -273,6 +394,7 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[s
             stderr_file = stack.enter_context(tempfile.TemporaryFile(dir=workdir))
             return_file = stack.enter_context(tempfile.TemporaryFile(dir=workdir)) if request["function_call"] else None
             return_fd = return_file.fileno() if return_file is not None else None
+            before = _cgroup_events() if track_resources else (None, None)
             process = subprocess.Popen(
                 child_command(script_path, return_fd),
                 pass_fds=(return_fd,) if return_fd is not None else (),
@@ -298,6 +420,7 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[s
                     pass
                 returncode = process.wait()
 
+            after = _cgroup_events() if track_resources else (None, None)
             stdout, stdout_truncated = _read_output(stdout_file, max_output)
             stderr, stderr_truncated = _read_output(stderr_file, max_output)
             return_value, return_truncated = _read_output(return_file, max_output) if return_file is not None else (None, False)
@@ -309,14 +432,22 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[s
         stderr, sanitize_stderr_truncated = _sanitize(stderr, max_output)
         stderr_truncated = stderr_truncated or sanitize_stderr_truncated
 
+        def case_result(**values):
+            result = _result(request["execution_id"], executed=True, **values)
+            if request["bind_request"]:
+                result["process_exit_code"] = returncode if returncode >= 0 else None
+                result["termination_signal"] = -returncode if returncode < 0 else None
+                for idx, key in enumerate(("cgroup_oom_kills", "cgroup_pid_denials")):
+                    if before[idx] is not None and after[idx] is not None and after[idx] >= before[idx]:
+                        result[key] = after[idx] - before[idx]
+            return result
+
         if timed_out:
             stderr, timeout_message_truncated = _truncate_text(
                 f"{stderr.rstrip()}\nTimeout after {request['timeout_seconds']}s".lstrip(),
                 max_output,
             )
-            return _result(
-                request["execution_id"],
-                executed=True,
+            return case_result(
                 exit_reason="timeout",
                 stdout=stdout,
                 stderr=stderr,
@@ -326,9 +457,7 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[s
                 resource_status="timeout",
             )
         if stdout_truncated or stderr_truncated or return_truncated:
-            return _result(
-                request["execution_id"],
-                executed=True,
+            return case_result(
                 exit_reason="output_limit",
                 stdout=stdout,
                 stderr=stderr,
@@ -337,10 +466,15 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[s
                 duration_ms=(time.perf_counter() - started_at) * 1000,
                 resource_status="output_limit",
             )
+        resource_failure = _resource_failure(before, after) if request["bind_request"] else None
+        if resource_failure:
+            # A child can swallow EAGAIN or lose an OOM-killed grandchild and
+            # still exit 0. The single-container controller owns this evidence.
+            return case_result(exit_reason=resource_failure, resource_status=resource_failure + "_exceeded",
+                               stdout=stdout, stderr=stderr, stdout_truncated=stdout_truncated,
+                               stderr_truncated=stderr_truncated, duration_ms=(time.perf_counter() - started_at) * 1000)
         if returncode == 0 and return_value != "":
-            result = _result(
-                request["execution_id"],
-                executed=True,
+            result = case_result(
                 exit_reason="success",
                 stdout=stdout,
                 stderr=stderr,
@@ -350,12 +484,17 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[s
             if return_value is not None:
                 result["return_value"] = return_value
             return result
-        return _result(
-            request["execution_id"],
-            executed=True,
-            exit_reason="runtime_error",
-            stdout=stdout,
-            stderr=stderr,
+        if request["bind_request"] and returncode == -signal.SIGKILL:
+            return case_result(exit_reason="internal_error", resource_status="unknown", stdout=stdout,
+                               stderr="The process was killed; resource attribution is unavailable.",
+                               duration_ms=(time.perf_counter() - started_at) * 1000)
+        reason = (
+            _diagnose_failure(request["code"], payload.get("function_call"))
+            if request["bind_request"] and returncode is not None and returncode > 0 else "runtime_error"
+        )
+        return case_result(
+            exit_reason=reason, stdout=stdout, stderr=stderr,
+            stdout_truncated=stdout_truncated, stderr_truncated=stderr_truncated,
             duration_ms=(time.perf_counter() - started_at) * 1000,
             resource_status="unknown",
         )
@@ -376,8 +515,8 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[s
                 pass
 
 
-def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[str, Any]:
-    result = _execute_request(payload, workdir=workdir)
+def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR, track_resources=False) -> dict[str, Any]:
+    result = _execute_request(payload, workdir=workdir, track_resources=track_resources)
     if isinstance(payload, dict) and payload.get("bind_request") is True:
         result["request_digest"] = request_digest(payload)
     return result
@@ -385,6 +524,17 @@ def execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR) -> dict[st
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv == ["--diagnose"]:
+        # Bound the compiler process separately. A pathological source cannot
+        # crash the website or the supervisor that owns the result protocol.
+        if sys.platform == "linux":
+            import ctypes
+            if ctypes.CDLL(None).prctl(4, 0, 0, 0, 0) != 0:
+                return 1
+            _apply_child_limits(128, 1, 8192)
+        code, call = json.loads(sys.stdin.buffer.read(MAX_REQUEST_BYTES * 6 + 1))
+        sys.stdout.write(_static_failure_reason(code, call))
+        return 0
     if len(argv) != 1:
         response = _result(
             "invalid",
@@ -413,7 +563,7 @@ def main(argv: list[str] | None = None) -> int:
             # stream), ptrace and process_vm_writev before starting the child.
             import ctypes
             if sys.platform == "linux" and ctypes.CDLL(None).prctl(4, 0, 0, 0, 0) == 0:
-                response = execute_request(payload)
+                response = execute_request(payload, track_resources=isinstance(payload, dict) and payload.get("bind_request") is True)
             else:
                 response = _result("unavailable", executed=False, exit_reason="internal_error",
                                    stderr="supervisor protection unavailable", resource_status="not_executed")

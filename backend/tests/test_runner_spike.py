@@ -144,3 +144,64 @@ def test_worker_owns_status_and_keeps_function_return_separate(tmp_path, monkeyp
     assert result.passed_count == result.total_count == 1
     assert result.return_value == "7" and result.stdout == "startup\nfake runner: passed=100\n"
     assert result.request_digest == worker.request_digest(request)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX private worker channels")
+@pytest.mark.parametrize(("code", "call", "reason"), [
+    ("def f(x): return (", {"name":"f", "args":[2], "kwargs":{}}, "syntax_error"),
+    ("return 4", None, "syntax_error"),
+    ("from operator import add as plus\ndef helper(x): return x", {"name":"f", "args":[2], "kwargs":{}}, "target_function_missing"),
+    ("def f(x: int, /, *, y: int): return x+y", {"name":"f", "args":[], "kwargs":{"x":2, "y":3}}, "signature_mismatch"),
+    ("def f(x): raise TypeError('missing required positional argument')", {"name":"f", "args":[1], "kwargs":{}}, "runtime_error"),
+    ("def f(*args, **kwargs): raise MemoryError('oom_kill 10')", {"name":"f", "args":[1], "kwargs":{}}, "runtime_error"),
+    ("def f(x):\n print('target_function_missing'); raise SyntaxError()", {"name":"f", "args":[1], "kwargs":{}}, "runtime_error"),
+    ("def f(x): return 2\nf = lambda: 1/0", {"name":"f", "args":[], "kwargs":{}}, "runtime_error"),
+])
+def test_failed_case_diagnoses_use_original_source_not_student_messages(tmp_path, monkeypatch, code, call, reason):
+    from tools.runner_spike import worker
+    if sys.platform != "linux":
+        monkeypatch.setattr(worker, "_apply_child_limits", lambda *_: None)
+    request = _request(code)
+    request.update(bind_request=True, task_type="programming", function_call=call)
+    result = execute_request(request, workdir=tmp_path)
+    assert result["executed"] and result["passed_count"] == 0
+    assert result["exit_reason"] == reason and result["resource_status"] == "unknown"
+    assert result["process_exit_code"] > 0 and result["termination_signal"] is None
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX signal evidence")
+@pytest.mark.parametrize(("before","after","reason"), [
+    ((2,5), (3,5), "memory_limit"),
+    ((2,5), (2,6), "pid_limit"),
+    ((2,5), (2,5), "internal_error"),
+    ((None,None), (None,None), "internal_error"),
+])
+def test_killed_case_requires_controller_evidence_for_resource_attribution(tmp_path, monkeypatch, before, after, reason):
+    from tools.runner_spike import worker
+    if sys.platform != "linux":
+        monkeypatch.setattr(worker, "_apply_child_limits", lambda *_: None)
+    counters = iter([before, after])
+    monkeypatch.setattr(worker, "_cgroup_events", lambda: next(counters))
+    request = _request("import os, signal\nos.kill(os.getpid(), signal.SIGKILL)")
+    request.update(bind_request=True, task_type="programming")
+    result = execute_request(request, workdir=tmp_path, track_resources=True)
+    assert result["exit_reason"] == reason and result["termination_signal"] == 9
+    assert result["process_exit_code"] is None
+    assert result["resource_status"] == ("unknown" if reason == "internal_error" else reason + "_exceeded")
+    assert result.get("cgroup_oom_kills") == (None if before[0] is None else after[0] - before[0])
+    assert result.get("cgroup_pid_denials") == (None if before[1] is None else after[1] - before[1])
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX worker contract")
+@pytest.mark.parametrize(("delta", "reason"), [((1,0), "memory_limit"), ((0,1), "pid_limit")])
+def test_controller_limit_overrides_apparent_success(tmp_path, monkeypatch, delta, reason):
+    from tools.runner_spike import worker
+    if sys.platform != "linux":
+        monkeypatch.setattr(worker, "_apply_child_limits", lambda *_: None)
+    counters = iter([(0,0), delta])
+    monkeypatch.setattr(worker, "_cgroup_events", lambda: next(counters))
+    request = _request("print('normal completion')")
+    request.update(bind_request=True, task_type="programming")
+    result = execute_request(request, workdir=tmp_path, track_resources=True)
+    assert result["executed"] and result["process_exit_code"] == 0 and result["passed_count"] == 0
+    assert result["exit_reason"] == reason and result["resource_status"] == reason + "_exceeded"

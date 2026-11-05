@@ -33,6 +33,7 @@ from decimal import Decimal, InvalidOperation
 import logging
 import os
 import subprocess
+import signal
 import sys
 import tempfile
 import time
@@ -52,7 +53,7 @@ from backend.config import settings
 from backend.models import TestCase
 from backend.tools.sandbox_runtime import get_sandbox_semaphore
 
-from tools.runner_spike.worker import child_command, request_digest
+from tools.runner_spike.worker import child_command, request_digest, _diagnose_failure
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,10 @@ class TestResult:
     case_id: str = ""
     case_index: int | None = None
     resource_status: str = "unknown"
+    process_exit_code: int | None = None
+    termination_signal: int | None = None
+    cgroup_oom_kills: int | None = None
+    cgroup_pid_denials: int | None = None
     executed: bool = True
 
 
@@ -178,6 +183,8 @@ async def run_python_subprocess(
                     error=f"Timeout after {timeout}s",
                     duration_ms=(time.perf_counter() - started_at) * 1000,
                     exit_reason="timeout", resource_status="timeout", execution_id=execution_id, request_digest=digest,
+                    process_exit_code=proc.returncode if proc.returncode >= 0 else None,
+                    termination_signal=-proc.returncode if proc.returncode < 0 else None,
                 )
 
             except BaseException:
@@ -213,20 +220,28 @@ async def run_python_subprocess(
                 limit_error = f"Output limit exceeded ({max_output_chars} chars)"
                 stderr = f"{stderr.rstrip()}\n{limit_error}".lstrip()
 
+            if bind_request and proc.returncode == -getattr(signal, "SIGKILL", 9):
+                from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
+                raise IsolatedRunnerUnavailable()
             missing_return = return_path is not None and not return_value
+            reason = "success"
+            if output_limited:
+                reason = "output_limit"
+            elif proc.returncode or missing_return:
+                reason = (await asyncio.to_thread(_diagnose_failure, code, function_call)
+                          if bind_request and proc.returncode > 0 else "runtime_error")
+
             return TestResult(
                 test=TestCase(input=test_input),
                 passed=(proc.returncode == 0 and not output_limited and not missing_return),
                 stdout=stdout, return_value=return_value, execution_id=execution_id, request_digest=digest,
                 resource_status="output_limit" if output_limited else "within_limits" if proc.returncode == 0 else "unknown",
+                process_exit_code=proc.returncode if proc.returncode >= 0 else None,
+                termination_signal=-proc.returncode if proc.returncode < 0 else None,
                 actual_output=stdout,
                 error=stderr if proc.returncode != 0 or output_limited else "",
                 duration_ms=(time.perf_counter() - started_at) * 1000,
-                exit_reason=(
-                    "output_limit"
-                    if output_limited
-                    else ("success" if proc.returncode == 0 and not missing_return else "runtime_error")
-                ),
+                exit_reason=reason,
                 stdout_truncated=stdout_truncated,
                 stderr_truncated=stderr_truncated,
             )

@@ -188,7 +188,7 @@ async def _host_slot(runtime, env, name):
 
 
 async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, max_output_chars=8192,
-                         function_call=None, bind_request=False):
+                         function_call=None, bind_request=True):
     from backend.models import TestCase
     from backend.tools.code_interpreter import TestResult
     from backend.tools.grading_runner import RunnerResult
@@ -223,6 +223,8 @@ async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, ma
                 args = build_container_command(runtime=runtime, image=settings.program_runner_image,
                     request_file=request, container_name=name, memory_mb=memory_mb)
                 args[2:2] = ["--pull=never", "--log-driver=none", f"--memory-swap={memory_mb}m", "--label=smartai.isolated-runner=true"]
+                if bind_request:
+                    args.insert(2, "--cgroupns=private")
                 raw = await _command(args, timeout=timeout + 12, env=env)
                 # Strict model; do not accept a trailing forged result after
                 # malformed output, a different execution ID, or host mode.
@@ -236,7 +238,12 @@ async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, ma
                     raise IsolatedRunnerUnavailable()
                 if result.execution_id != execution_id or result.isolation_mode != "oci_container" or not result.executed:
                     raise IsolatedRunnerUnavailable()
-                if result.exit_reason not in {"success", "runtime_error", "timeout", "output_limit", "syntax_error"}:
+                allowed = {"success", "runtime_error", "timeout", "output_limit", "syntax_error"}
+                if bind_request:
+                    allowed.update({"memory_limit", "pid_limit"})
+                if function_call is not None:
+                    allowed.update({"target_function_missing", "signature_mismatch"})
+                if result.exit_reason not in allowed:
                     raise IsolatedRunnerUnavailable()
                 success = result.exit_reason == "success"
                 if (result.total_count != 1 or result.passed_count != int(success)
@@ -246,13 +253,22 @@ async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, ma
                         or (result.return_value is not None and len(result.return_value) > max_output_chars)):
                     raise IsolatedRunnerUnavailable()
                 expected_status = {"success": "within_limits", "runtime_error": "unknown", "syntax_error": "unknown",
-                                   "timeout": "timeout", "output_limit": "output_limit"}
+                                   "timeout": "timeout", "output_limit": "output_limit",
+                                   "target_function_missing": "unknown", "signature_mismatch": "unknown",
+                                   "memory_limit": "memory_limit_exceeded", "pid_limit": "pid_limit_exceeded"}
                 if result.resource_status != expected_status[result.exit_reason.value]:
+                    raise IsolatedRunnerUnavailable()
+                if (result.process_exit_code is not None and result.termination_signal is not None
+                        or success and (result.termination_signal is not None or result.process_exit_code not in (None, 0))
+                        or result.exit_reason == "memory_limit" and not result.cgroup_oom_kills
+                        or result.exit_reason == "pid_limit" and not result.cgroup_pid_denials):
                     raise IsolatedRunnerUnavailable()
                 if len(result.stdout) > max_output_chars or len(result.stderr) > max_output_chars:
                     raise IsolatedRunnerUnavailable()
                 return TestResult(test=TestCase(input=test_input), passed=success, resource_status=result.resource_status.value,
                     actual_output=result.stdout, stdout=result.stdout, return_value=result.return_value,
+                    process_exit_code=result.process_exit_code, termination_signal=result.termination_signal,
+                    cgroup_oom_kills=result.cgroup_oom_kills, cgroup_pid_denials=result.cgroup_pid_denials,
                     execution_id=execution_id, request_digest=digest, error=result.stderr, duration_ms=result.duration_ms,
                     exit_reason=result.exit_reason.value, stdout_truncated=result.stdout_truncated,
                     stderr_truncated=result.stderr_truncated, isolation_mode="oci_container")

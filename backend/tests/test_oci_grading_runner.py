@@ -252,3 +252,30 @@ async def test_repeated_wire_field_is_not_valid_evidence(configured, monkeypatch
     monkeypatch.setattr(runner, "_command", command)
     with pytest.raises(runner.IsolatedRunnerUnavailable):
         await runner.run_python_oci("print(3)")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("reason","resource","metadata","valid"), [
+    ("memory_limit","memory_limit_exceeded",{"cgroup_oom_kills":1,"termination_signal":9}, True),
+    ("pid_limit","pid_limit_exceeded",{"cgroup_pid_denials":2,"process_exit_code":1}, True),
+    ("memory_limit","memory_limit_exceeded",{"termination_signal":9},False),
+    ("pid_limit","pid_limit_exceeded",{"cgroup_pid_denials":0},False),
+    ("signature_mismatch","unknown",{"process_exit_code":1},True),
+    ("target_function_missing","unknown",{"process_exit_code":1},True),
+    ("syntax_error","unknown",{"process_exit_code":1},True),
+])
+async def test_oci_accepts_only_evidenced_programming_failure(configured, monkeypatch, reason, resource, metadata, valid):
+    async def command(args, **kwargs):
+        if args[1] == "rm":
+            return b""
+        return worker_result(request_from(args), exit_reason=reason, resource_status=resource, **metadata)
+    monkeypatch.setattr(runner, "_command", command)
+    case = Case(function_name="f", function_args=[], expected_return="1")
+    if not valid:
+        with pytest.raises(runner.IsolatedRunnerUnavailable):
+            await code_interpreter.run_sandbox("def f(): return 0", [case])
+        return
+    raw = (await code_interpreter.run_sandbox("def f(): return 0", [case])).results[0]
+    assert raw.executed and not raw.passed and raw.exit_reason == reason and raw.resource_status == resource
+    assert raw.cgroup_oom_kills == metadata.get("cgroup_oom_kills")
+    assert raw.cgroup_pid_denials == metadata.get("cgroup_pid_denials")
