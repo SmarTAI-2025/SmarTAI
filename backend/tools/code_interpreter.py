@@ -25,10 +25,13 @@ from __future__ import annotations
 
 import ast
 import asyncio
+from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 import json
 import keyword
 import math
 import uuid
+import weakref
 from decimal import Decimal, InvalidOperation
 import logging
 import os
@@ -51,7 +54,7 @@ from typing import List, Optional
 # working.
 from backend.config import settings
 from backend.models import TestCase
-from backend.tools.sandbox_runtime import get_sandbox_semaphore
+from backend.tools.sandbox_runtime import get_sandbox_limit, get_sandbox_semaphore
 
 from tools.runner_spike.worker import child_command, request_digest, _diagnose_failure, split_function_result
 
@@ -267,6 +270,23 @@ def _truncate_output(value: str, limit: int) -> tuple[str, bool]:
     return value[: limit - len(marker)] + marker, True
 
 
+# A running batch owns a strong reference to its event-loop gate. Weak values
+# let test/application loops and their bound semaphores expire together.
+_programming_oci_gates = weakref.WeakValueDictionary()
+
+
+def _programming_dispatch():
+    if settings.program_runner_mode != "oci":
+        # run_python_subprocess already gates development host execution.
+        return nullcontext(), get_sandbox_limit()
+    limit = settings.program_runner_max_concurrent
+    loop = asyncio.get_running_loop()
+    gate = _programming_oci_gates.get(loop)
+    if gate is None:
+        gate = _programming_oci_gates[loop] = asyncio.Semaphore(limit)
+    return gate, limit
+
+
 async def run_sandbox(
     code: str,
     test_cases: List[TestCase],
@@ -274,10 +294,14 @@ async def run_sandbox(
     language: str = "python",
     per_case_timeout: float = 10.0,
     memory_mb: int = 256,
+    on_case_complete: Callable[[TestResult], Awaitable[None]] | None = None,
 ) -> ExecutionReport:
     """
     Run student code against a list of test cases. Returns ExecutionReport.
 
+    Each case gets its own bounded execution after admission. Completion
+    notifications receive compared, indexed cases in completion order, before
+    the batch finishes. Results in the returned report retain input order.
     With no test cases, record zero executions.
 
     Each TestCase chooses its own mode: if `function_name` is set, function-
@@ -316,27 +340,71 @@ async def run_sandbox(
     case_ids = [getattr(tc, "case_id", None) or f"case-{i + 1}" for i, tc in enumerate(test_cases)]
     if len(set(case_ids)) != len(case_ids):
         raise ValueError("Duplicate test case ID")
-    jobs = [asyncio.create_task(_run_case(code, tc, per_case_timeout, memory_mb)) for tc in test_cases]
+    dispatch, parallelism = _programming_dispatch()
+    remaining = iter(enumerate(test_cases))
+    results = {}
+    notifications = []
+    notification_lock = asyncio.Lock()
+    stopped = False
+
+    async def notify(result):
+        async with notification_lock:
+            await on_case_complete(result)
+
+    async def run_cases():
+        nonlocal stopped
+        try:
+            for index, case in remaining:
+                async with dispatch:
+                    if stopped:
+                        return
+                    result = await _run_case(code, case, per_case_timeout, memory_mb)
+                result.case_index = index
+                result.case_id = case_ids[index]
+                results[index] = result
+                if on_case_complete is not None:
+                    # A sibling can fail or a user can cancel while an already
+                    # completed case is waiting for its checkpoint callback.
+                    notice = asyncio.create_task(notify(result))
+                    notifications.append(notice)
+                    await asyncio.shield(notice)
+        except BaseException:
+            stopped = True
+            raise
+
+    # Each batch places at most one wave into the per-process FIFO. Other
+    # students can acquire slots before this batch dispatches its next wave.
+    # The OS-wide slots, per-case deadline and cleanup remain in the runner.
+    jobs = [asyncio.create_task(run_cases()) for _ in range(min(parallelism, len(test_cases)))]
     try:
-        results = await asyncio.wait_for(asyncio.gather(*jobs), timeout=60)
-    except BaseException:
+        await asyncio.gather(*jobs)
+    except BaseException as failure:
+        stopped = True
         for job in jobs:
             job.cancel()
         await asyncio.gather(*jobs, return_exceptions=True)
+        # Do not publish a partial score. Drain only callbacks for full
+        # observed results before the caller handles the actual failure.
+        outcomes = await asyncio.gather(*notifications, return_exceptions=True)
+        if not isinstance(failure, asyncio.CancelledError):
+            for outcome in outcomes:
+                if isinstance(outcome, Exception) and outcome is not failure:
+                    raise outcome from failure
         raise
 
-    for index, result in enumerate(results):
-        result.case_index = index
-        result.case_id = case_ids[index]
-    passed = sum(1 for r in results if r.passed)
-    total = len(results)
+    ordered = [results[index] for index in range(len(test_cases))]
+    passed = sum(1 for r in ordered if r.passed)
+    total = len(ordered)
     return ExecutionReport(
         passed_count=passed,
         total_count=total,
         pass_rate=passed / total if total else 0.0,
-        results=results,
+        results=ordered,
         summary=f"Passed {passed}/{total} tests",
     )
+
+
+run_sandbox.supports_case_checkpoints = True
 
 
 async def _run_case(code: str, tc: TestCase, timeout: float, memory_mb: int) -> TestResult:
