@@ -156,7 +156,7 @@ async def test_selected_experts_share_one_execution_and_weighted_real_zero(monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["ai_only_confirm", "ai_only_edit", "code_only", "teacher_zero", "platform", "configuration", "no_submission"])
+@pytest.mark.parametrize("scenario", ["ai_only_confirm", "ai_only_edit", "code_only", "entry_only", "teacher_zero", "platform", "configuration", "no_submission"])
 async def test_run_review_finalization_and_release(monkeypatch, scenario):
     await exercise_review_and_release(monkeypatch, scenario)
 
@@ -179,11 +179,17 @@ async def exercise_review_and_release(monkeypatch, scenario, *, native=False):
     cases = [{"input":"4", "expected_output":"4", "source":source}]
     if scenario == "configuration":
         cases += [{"input":"4", "expected_output":"5", "source":"teacher"}]
+    stem = "Read stdin and print the input."
+    if scenario == "entry_only":
+        stem = "Implement def add(a,b): return the sum."
+        cases = [{"function_name": "add", "function_args": [2, 3], "expected_return": "5", "source": "teacher"}]
     q = assignment_repository.add_question(assignment.id, teacher_id=teacher, q_id="q1", order_index=0,
-        type="编程题", stem="Read stdin and print the input.", criterion="Exact output.", test_cases=cases)
+        type="编程题", stem=stem, criterion="Exact output.", test_cases=cases)
     assignment_repository.publish(assignment_id=assignment.id, teacher_id=teacher, expected_version=1)
     sub = submission_repository.create_submission(assignment_id=assignment.id, student_id=student)
     code = "" if scenario == "no_submission" else "print(0)"
+    if scenario == "entry_only":
+        code = "def add(pair): return pair[0] + pair[1]"
     if scenario == "code_only":
         code = "#include <iostream>\nint main(){return 0;}"
     flags = []
@@ -199,7 +205,7 @@ async def exercise_review_and_release(monkeypatch, scenario, *, native=False):
             monkeypatch.setattr(settings, "program_runner_image", "smartai-intentionally-absent:missing")
         else:
             monkeypatch.setattr(programming, "run_sandbox", AsyncMock(side_effect=IsolatedRunnerUnavailable()))
-    ai_score = 7 if scenario in {"ai_only_edit", "code_only"} else 0
+    ai_score = 7 if scenario in {"ai_only_edit", "code_only", "entry_only"} else 0
     route = fixed_provider(response(award(ai_score)))
     registry = SimpleNamespace(count=lambda: 1, list_available=lambda: [route], pick_default=lambda: route)
     run = grading_runs.create_run(teacher_id=teacher, assignment_id=assignment.id)
@@ -212,11 +218,24 @@ async def exercise_review_and_release(monkeypatch, scenario, *, native=False):
         route.ainvoke.assert_not_awaited()
         assert row.result_status == "failed" and row.ai_score is None and public["score"] is None
         assert evidence["score_status"] == "unavailable" and task_facade._correction_review_blocks_finalization(row)
+        reason, zh, en = (
+            ("programming_execution_unavailable", "测试服务未能完成运行", "test service could not finish")
+            if scenario == "platform" else
+            ("programming_conflicting_expectations", "同一输入有不同的预期结果", "same input has different expected results")
+        )
+        assert evidence["primary_reason"] == reason and reason not in public["comment"]
+        assert zh in public["comment"] or en in public["comment"]
+        assert public["expert_results"][0]["comment"] == public["comment"]
+        failure = task_facade._grading_failure_code(grading_repository.get_run(run.id))
+        assert failure == ("programming_execution_unavailable" if scenario == "platform"
+                           else "programming_test_material_needs_review")
         with pytest.raises(ResultNotReleasable):
             grading_runs.release(teacher_id=teacher, run_id=run.id)
         assert not grading_runs.student_results(student_id=student, assignment_id=assignment.id)
-    elif scenario in {"ai_only_confirm", "ai_only_edit", "code_only"}:
-        reason = "programming_code_review_only" if scenario == "code_only" else "programming_ai_only"
+    elif scenario in {"ai_only_confirm", "ai_only_edit", "code_only", "entry_only"}:
+        reason = {"code_only": "programming_code_review_only", "entry_only": "programming_interface_only"}.get(scenario, "programming_ai_only")
+        if scenario == "entry_only":
+            assert evidence["primary_reason"] == "signature_mismatch" and evidence["teacher_tests"]["total"] == 1
         assert public["provisional_score"] == public["score"] == ai_score
         assert evidence["score_status"] == "provisional" and reason in row.initial_review_reasons
 
@@ -316,6 +335,7 @@ async def test_execution_categories_keep_platform_failures_out_of_rubric(monkeyp
     case_prompt = json.loads(route.ainvoke.await_args.args[0][1].content)["case_examples"][0]
     assert case_prompt["case_id"] == "frozen-case-id" and case_prompt["outcome"] == reason
     assert "host/path" not in json.dumps(case_prompt) and "private raw stderr" not in result.comment
+    assert "Failed cases: case 1 (" in result.comment and reason not in result.comment
 
 
 @pytest.mark.asyncio
@@ -340,3 +360,22 @@ async def test_generated_solution_is_never_an_independent_oracle():
     prompt = route.ainvoke.await_args.args[0][1].content
     assert not err and cases and problem.reference_answer in prompt and problem.solution_code not in prompt
     assert programming._teacher_material(problem)["ai_generated_fields"] == ["solution_code"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language,detail,summary", [
+    ("zh", "模型返回的内容不完整", "样例 1（结果与预期不符）"),
+    ("en", "model returned an incomplete", "case 1 (result differs from the expected value)"),
+])
+async def test_grading_model_failure_after_tests_keeps_localized_execution_evidence(monkeypatch, language, detail, summary):
+    from backend.services import programming_runs
+    from backend.tools.code_interpreter import ExecutionReport, TestResult
+    case = TestCase(input="1", expected_output="2")
+    run = SimpleNamespace(status="executed", code="print(1)", cases=[case], reason="", evidence_id="private-run-id",
+                          report=ExecutionReport(0, 1, 0, [TestResult(case, False, "1", "", 1, exit_reason="wrong_answer")]))
+    monkeypatch.setattr(programming_runs, "evidence_for_answer", AsyncMock(return_value=run))
+    monkeypatch.setattr(programming, "structured_llm_call", AsyncMock(side_effect=StructuredOutputInvalidError("PRIVATE")))
+    result = await programming.ProgrammingSkill(fixed_provider(), language=language).grade(_make_problem(), _make_answer(run.code))
+    assert result.error_kind == "parse_failed" and result.programming_evidence.score_status == "unavailable"
+    assert detail in result.comment and summary in result.comment
+    assert all(token not in result.comment for token in ("parse_failed", "wrong_answer", "private-run-id", "PRIVATE"))

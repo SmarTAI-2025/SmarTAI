@@ -512,6 +512,12 @@ describe("background task failure guidance", () => {
     expect(info.actionKind).toBe("retry");
   });
 
+  it.each(["zh-CN", "en-US"] as const)("explains programming test material failures in %s", (locale) => {
+    const info = classifyRecoverableError("programming_test_material_needs_review", { locale, taskId: "T" });
+    expect(info.description).toContain(locale === "zh-CN" ? "预期结果和参考程序" : "expected results and reference program");
+    expect(info.actionHref).toBe("/tasks/T/grading/progress");
+  });
+
   it("routes an unsafe image payload back to file selection", () => {
     const info = classifyRecoverableError("provider_image_payload_invalid", { locale: "zh-CN" });
 

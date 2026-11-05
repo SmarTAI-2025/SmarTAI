@@ -253,7 +253,7 @@ async def _notify(reporter, step):
 
 
 async def _prepare(state, problem, provider, generate, execute, reporter):
-    from backend.services.programming_test_contract import adapt_programming_cases, bind_stdin_cases, required_function_name
+    from backend.services.programming_test_contract import ProgrammingCaseError, adapt_programming_cases, bind_stdin_cases, required_function_name
     from backend.skills.programming import _scan_complexity_keywords
     key = _question_key(state, problem)
     async with state.lock(key):
@@ -299,6 +299,10 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
                 _validate_report(report, ref_cases)
                 if report.passed_count != len(cases):
                     raise ValueError("programming_reference_conflict")
+        except ProgrammingCaseError as exc:
+            state.failures[key] = ("programming_conflicting_expectations" if exc.issue == "conflicting_expectations"
+                                   else "programming_case_configuration_invalid")
+            return key, [], state.failures[key]
         except ValueError as exc:
             state.failures[key] = str(exc) if str(exc) in {
                 "programming_conflicting_expectations", "programming_reference_conflict",
@@ -483,7 +487,7 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
         elif hints:
             cases = bind_programming_cases(problem.stem, cases, executable, entry_hint=hints.pop())
         else:
-            cases = bind_programming_cases(problem.stem, cases, executable)
+            cases = bind_programming_cases(problem.stem, cases, executable, validated_reference=_reference(problem))
     except ValueError:
         return ProgrammingEvidence("unavailable", code, [], reason="programming_mapping_invalid")
     cp = state.checkpoints

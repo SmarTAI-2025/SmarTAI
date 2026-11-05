@@ -815,6 +815,9 @@ function expertScoreSummary(expert: ExpertResult) {
 
 function ExpertScore({ locale, expert }: { locale: Locale; expert: ExpertResult }) {
   if (expert.error_kind === "operation_cancelled") return <>{tx(locale, "手动停止，尚未完成批改", "Manually stopped before completion")}</>;
+  if (expert.error_kind && expert.programming_evidence?.contract === "smartai.programming_evidence") {
+    return <>{tx(locale, "无有效分数，不参与合成", "No valid score; excluded from synthesis")}</>;
+  }
   if (expert.error_kind) return <>{expert.error_kind === "quota_exhausted" ? tx(locale, "额度不足", "Quota exhausted") : expert.error_kind === "transient_llm" ? tx(locale, "网络或超时错误", "Network error or timeout") : tx(locale, "模型出错", "Model error")} · {tx(locale, "无有效分数，不参与合成", "No valid score; excluded from synthesis")}</>;
   return <>{expertScoreSummary(expert)}, conf={expert.confidence.toFixed(2)}</>;
 }

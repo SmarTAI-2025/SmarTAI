@@ -1,6 +1,7 @@
 {
   "base": {"q_id": "q1", "type": "reasoning", "score": 8, "provisional_score": 8, "max_score": 10, "confidence": 0.95, "comment": "Evidence", "steps": [], "teacher_score": null, "review_status": "pending", "review_reasons": [], "initial_review_reasons": [], "expert_results": []},
   "cases": [
+    {"name":"required entry unavailable for every case", "patch":{"type":"programming","score":8,"provisional_score":8,"review_reasons":["programming_interface_only"]}, "pending":true, "required":true},
     {"name": "AI-only programming zero pending", "patch": {"type":"programming","score":0,"provisional_score":0,"review_reasons":["programming_ai_only"]}, "pending":true, "required":true},
     {"name": "AI-only programming comment edit", "patch": {"type":"programming","teacher_score":8,"review_status":"edited","initial_review_reasons":["programming_ai_only"]}, "pending":true, "required":true},
     {"name": "AI-only programming unchanged confirmed", "patch": {"type":"programming","teacher_score":8,"review_status":"confirmed","initial_review_reasons":["programming_ai_only"]}, "pending":false, "required":false},

@@ -188,6 +188,11 @@ async def test_mounted_editor_persists_derived_fields_and_rolls_back_invalid_bat
         "expected_workflow_revision":persisted["workflow_revision"],
         "test_cases":[submitted[0], {"function_name":"fib","function_args":"not-a-list","expected_return":1}]})
     assert invalid.status_code == 422 and invalid.json()["error"]["code"] == "invalid_programming_test_cases"
+    assert invalid.json()["error"]["details"] == {"case_number": 2, "issue": "configuration"}
+    duplicate = client.put(url, json={"test_cases": [
+        {"input":"1", "expected_output":"1"}, {"input":"1", "expected_output":"2"}]})
+    assert duplicate.status_code == 422
+    assert duplicate.json()["error"]["details"] == {"case_number": 2, "issue": "conflicting_expectations"}
     assert get()["problem_data"] == persisted["problem_data"]
     assert get()["workflow_revision"] == persisted["workflow_revision"]
     assert assignment_repository.list_questions(task, teacher_id=owner)[0].version == question.version
@@ -371,3 +376,15 @@ async def test_unnumbered_arrow_txt_upload_apply_readback_and_execute(monkeypatc
     execution = await run_sandbox(code, bound)
     assert [row.passed for row in execution.results] == [True, True, False]
     forbidden.assert_not_awaited()
+
+
+def test_syntax_error_uses_only_an_independently_validated_stdin_interface():
+    stem = "首个整数 n，其后有 n 个整数，输出它们之和。"
+    cases = [{"input": "1 -2", "expected_output": "-2"}]
+    student = "print(sum([1, 2])"
+    result = bind_programming_cases(stem, cases, student, validated_reference="print(-2)")
+    assert len(result) == 1 and result[0].io_mode == "stdin"
+    assert (result[0].input, result[0].expected_output) == ("1 -2", "-2")
+    for reference in (None, "def add(x): return x"):
+        with pytest.raises(ValueError):
+            bind_programming_cases(stem, cases, student, validated_reference=reference)
