@@ -9,6 +9,12 @@ import {
 } from "./taskActionGuards";
 
 describe("task contract compatibility", () => {
+  it.each(["zh-CN", "en-US"] as const)("shows the single-source packaging correction (%s)", locale => {
+    const info = classifyRecoverableError("submission_programming_multiple_files", { locale });
+    expect(info.actionKind).toBe("reupload");
+    expect(info.description).toContain(locale === "zh-CN" ? "每名学生一份完整源码" : "one self-contained source file per student");
+  });
+
   it.each(["pdf_evidence_busy", "source_extent_unavailable"])("offers retained-result retry for local PDF failure %s", code => {
     for (const locale of ["zh-CN", "en-US"] as const) {
       const info = classifyRecoverableError(code, { locale });

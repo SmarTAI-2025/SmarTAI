@@ -6,6 +6,11 @@ export function submissionRequiresReupload(sources: SubmissionSourceOutcome[] | 
   return unfinished.length > 0 && unfinished.every(source => source.status === "failed" && source.requires_reupload === true);
 }
 
+export function programmingArchiveGuidance(locale: Locale): string {
+  return tx(locale, "请按每名学生一份完整源码重新打包，用学号和姓名标记文件或学生目录。多文件工程请先整理成独立单文件。",
+    "Repack one self-contained source file per student. Label each file or student folder with the student ID and name. Combine multi-file projects before uploading.");
+}
+
 export interface SubmissionSourceReasonCopy {
   title: string;
   description: string;
@@ -20,6 +25,9 @@ export function getSubmissionSourceReasonCopy(
     title: tx(locale, "教师已完成处理", "Resolved by the teacher"),
     description: tx(locale, "原文件和识别记录已保留。", "Original files and recognition records are retained."),
   };
+  if (source.status === "manual_review" && source.reason_code === "submission_programming_multiple_files") {
+    return REASON_COPY[source.reason_code](locale, source);
+  }
   if (source.status === "manual_review") return {
     title: tx(locale, "识别未完成，等待人工处理", "Recognition incomplete; awaiting manual review"),
     description: tx(locale, "原文件和已完成识别已保留。请逐题补齐作答或确认未作答。", "Originals and completed recognition are preserved. Complete each answer or confirm it is blank."),
@@ -426,7 +434,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   source_decode_failed: (locale) => fileCopy(locale, "文本编码无法读取", "The text encoding could not be read", "请把文本另存为 UTF-8，或上传 PDF/图片版本。", "Save the text as UTF-8, or upload a PDF/image version."),
   submission_source_content_type_mismatch: (locale) => fileCopy(locale, "文件内容与扩展名或类型不一致", "The file contents do not match its name or declared type", "不要只修改扩展名；请从原应用重新导出为受支持的 PDF、TXT、JPG、PNG 或 WebP 后上传。", "Do not only rename the extension. Export the file again as a supported PDF, TXT, JPG, PNG, or WebP, then upload it."),
   submission_source_empty: (locale) => fileCopy(locale, "文件没有可识别内容", "The file contains no recognizable content", "检查是否为空白页、空文件或只包含不可见字符。", "Check for a blank page, empty file, or invisible-only content."),
-  submission_source_unsupported: (locale) => fileCopy(locale, "文件类型暂不支持", "This file type is not supported", "转换为 DOCX、PDF、TXT、MD、MARKDOWN、JPG、JPEG、PNG、BMP、TIF、TIFF 或 WebP 后重新上传。", "Convert it to DOCX, PDF, TXT, MD, MARKDOWN, JPG, JPEG, PNG, BMP, TIF, TIFF, or WebP and upload again."),
+  submission_source_unsupported: (locale) => fileCopy(locale, "文件类型暂不支持", "This file type is not supported", "请重新上传单文件源码（.py、.c、.cc、.cpp），或支持的 DOCX、PDF、文本、Markdown 或图片。旧版 .doc 请另存为 .docx。", "Upload single-file source (.py, .c, .cc, .cpp), or a supported DOCX, PDF, text, Markdown or image file. Save legacy .doc files as .docx."),
   submission_source_too_large: (locale) => fileCopy(locale, "文件超过处理上限", "The file exceeds the processing limit", "压缩图片，或拆分 PDF/压缩包后重新上传。", "Compress the image or split the PDF/archive, then upload again."),
   ocr_input_invalid: (locale) => fileCopy(locale, "文件内容不是有效的 OCR 输入", "The file is not valid OCR input", "从原应用重新导出文件，不要只修改扩展名。", "Export the file again from its source application; do not only rename the extension."),
   ocr_unsupported_file: (locale) => fileCopy(locale, "百度 OCR 不支持该文件格式", "Baidu OCR does not support this file format", "转换为 PDF、JPG、PNG、BMP 或 TIFF，或更换识别模型。", "Convert it to PDF, JPG, PNG, BMP, or TIFF, or choose another recognition model."),
@@ -450,6 +458,10 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     nextStep: tx(locale, "稍后重试；持续失败时联系管理员，或改用 ZIP 上传。", "Retry later. If it persists, contact an administrator or upload a ZIP instead."),
   }),
   submission_archive_empty: (locale) => archiveCopy(locale, "压缩包中没有学生文件", "The archive contains no student files", "确认压缩包不是空的，且文件没有全部放在系统隐藏目录中。", "Make sure the archive is not empty and files are not all in hidden system folders."),
+  submission_programming_multiple_files: (locale) => ({
+    title: tx(locale, "多份源码的学生归属需要核对", "Check which source files belong to each student"),
+    description: programmingArchiveGuidance(locale),
+  }),
   submission_archive_directories_only: (locale) => archiveCopy(locale, "压缩包中只找到目录，没有学生文件", "The archive contains folders but no student files", "普通多层文件夹可以读取；请确认文件夹中包含 PDF 等受支持文件后重新打包上传。", "Ordinary nested folders are supported. Include supported files such as PDFs inside the folders, then repack and upload."),
   submission_archive_nested_unsupported: (locale) => archiveMemberCopy(locale, "压缩包内仍是压缩包，暂不支持继续解压", "This archive member is another archive and cannot be unpacked", "请先解压内层压缩包，再将其中的 PDF 等受支持文件重新打包上传；可以保留普通文件夹。", "Unpack the inner archive first, then repack its supported files, such as PDFs, and upload again. Ordinary folders can be retained."),
   submission_archive_invalid: (locale) => archiveCopy(locale, "压缩包损坏或结构不安全", "The archive is damaged or unsafe", "请重新打包为未加密的 ZIP 后上传。", "Create a new, unencrypted ZIP and upload it again."),

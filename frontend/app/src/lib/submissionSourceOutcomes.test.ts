@@ -24,6 +24,12 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 }
 
 describe("submission source reason copy", () => {
+  it.each(["failed", "manual_review"] as const)("explains how to repackage a multi-source submission (%s)", status => {
+    const issue = source({status, reason_code: "submission_programming_multiple_files", requires_reupload: true});
+    expect(getSubmissionSourceReasonCopy(issue, "zh-CN").description).toContain("每名学生一份完整源码");
+    expect(getSubmissionSourceReasonCopy(issue, "en-US").description).toContain("one self-contained source file per student");
+  });
+
   it.each(["zh-CN", "en-US"] as const)("explains work-time exhaustion and both continuation options (%s)", locale => {
     const copy = getSubmissionSourceReasonCopy(source({ reason_code: "submission_time_limit_reached" }), locale);
     expect(copy.description).toContain(locale === "zh-CN" ? "3 小时，排队不计时" : "3 hours of active processing, excluding queue time");

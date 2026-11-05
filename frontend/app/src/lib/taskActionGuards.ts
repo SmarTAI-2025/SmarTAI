@@ -1,3 +1,4 @@
+import { programmingArchiveGuidance } from "@/lib/submissionSourceOutcomes";
 import { isTaskAwaitingGrading } from "@/lib/taskFlow";
 import { getAPIErrorCode, getAPIErrorDetail, normalizeAPIError } from "@/api/client";
 import type { Locale } from "@/i18n/messages";
@@ -277,6 +278,7 @@ const FILE_CODES = new Set([
   "submission_archive_empty",
   "submission_archive_directories_only",
   "submission_archive_nested_unsupported",
+  "submission_programming_multiple_files",
   "submission_retry_requires_reupload",
   "submission_archive_invalid",
   "submission_archive_limit_exceeded",
@@ -1547,7 +1549,7 @@ function fileErrorDescription(
     return tx(locale, "文件声明的类型与扩展名不一致。请从原应用重新导出，并按上传区域支持的格式保存后再上传。", "The file's declared type does not match its extension. Export it again from the original app in a format supported by this upload area.");
   }
   if (code === "submission_source_unsupported") {
-    return tx(locale, "作答支持 DOCX、PDF、TXT、MD、MARKDOWN、JPG、JPEG、PNG、WebP、BMP、TIF、TIFF；压缩包内部也须使用这些格式。", "Responses support DOCX, PDF, TXT, MD, MARKDOWN, JPG, JPEG, PNG, WebP, BMP, TIF and TIFF. Files inside archives must also use these formats.");
+    return tx(locale, "作答支持单文件源码（.py、.c、.cc、.cpp）、DOCX、PDF、TXT、MD、MARKDOWN、JPG、JPEG、PNG、WebP、BMP、TIF、TIFF；压缩包内部也须使用这些格式。旧版 .doc 请另存为 .docx。", "Responses support single-file source (.py, .c, .cc, .cpp), DOCX, PDF, TXT, MD, MARKDOWN, JPG, JPEG, PNG, WebP, BMP, TIF and TIFF. Files inside archives must also use these formats. Save legacy .doc files as .docx.");
   }
   if (code === "source_content_type_not_allowed" || code === "submission_source_content_type_mismatch") {
     return tx(locale, "文件内容与扩展名不符，或文件已损坏。请确认能在本地打开，并重新导出为上传区域支持的格式；只修改文件后缀无效。", "The file contents do not match its extension, or the file is damaged. Check that it opens locally and export it in a format supported by this upload area; renaming the extension does not convert it.");
@@ -1600,6 +1602,7 @@ function fileErrorDescription(
   if (code === "submission_archive_directories_only") {
     return tx(locale, "压缩包中只找到目录，没有学生文件。普通多层文件夹可以读取；请确认文件夹中包含 PDF 等受支持文件后重新打包上传。", "The archive contains folders but no student files. Ordinary nested folders are supported. Include supported files such as PDFs inside the folders, then repack and upload.");
   }
+  if (code === "submission_programming_multiple_files") return programmingArchiveGuidance(locale);
   if (code === "submission_archive_nested_unsupported") {
     return tx(locale, "压缩包内发现另一个压缩包，暂不支持继续解压。请先解压内层压缩包，再将其中的 PDF 等受支持文件重新打包上传；可以保留普通文件夹。", "Another archive was found inside the upload and cannot be unpacked. Unpack it first, then repack its supported files, such as PDFs, and upload again. Ordinary folders can be retained.");
   }

@@ -140,3 +140,34 @@ async def test_real_pdf_with_printable_preamble_cannot_be_disguised_as_text():
 ])
 async def test_text_materials_can_quote_a_pdf_marker(name, content):
     assert await extract_text_from_upload(content, name, purpose="test_cases") == content.decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,mime,data", [
+    ("S001.PY", "text/x-python", b'print("%PDF-1.7 example")\r\n'),
+    ("S005.py", "text/x-python", b'# coding: latin-1\nprint("%PDF-1.7 caf\xe9")\n'),
+    ("S002.c", "text/x-csrc", b"int main(void) {return 0;}\n"),
+    ("S003.CC", "text/x-c++", b"// student source\n"),
+    ("S004.CpP", "text/x-c++src", b"int main(){}"),
+])
+async def test_native_submission_direct_and_archived_keep_source_bytes(name, mime, data):
+    from backend.services.upload_contract import validate_upload
+    assert validate_upload("student_submission", name, data, content_type=mime).media_type == "text/plain"
+    for filename, body in ((name, data), ("responses.zip", archive({"class/" + name: data}))):
+        leaf, = extract_raw_files_from_archive(body, filename)
+        assert leaf.pre_error_code is None and leaf.content == data and leaf.content_type == "text/plain"
+        assert await extract_text_from_upload(leaf.content, leaf.filename, purpose="submissions",
+                                              content_type=leaf.content_type) == data.decode("latin-1")
+
+
+@pytest.mark.asyncio
+async def test_native_extensions_cannot_disguise_an_archive_binary_pdf_or_wrong_mime():
+    import fitz
+    with fitz.open() as doc:
+        doc.new_page()
+        pdf = doc.tobytes()
+    for data, mime in ((pdf, "application/pdf"), (b"\x7fELF\0binary", "text/plain"),
+                       (archive({"fake.txt": b"x"}), None), (b"print(3)", "image/png")):
+        with pytest.raises(HTTPException) as failed:
+            await validate_upload_content(data, "answer.py", content_type=mime, purpose="submissions")
+        assert failed.value.status_code == 415

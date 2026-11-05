@@ -44,6 +44,7 @@ except ImportError:
 from fastapi import HTTPException
 
 from backend.config import settings
+from backend.services.upload_contract import PROGRAMMING_SOURCE_SUFFIXES
 from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
 from backend.skills.ocr_ingest import OCRImage, OCRIngestSkill, OCRPurpose
 
@@ -78,7 +79,8 @@ IMAGE_MEDIA_TYPES = {
     ".tiff": "image/tiff",
     ".webp": "image/webp",
 }
-SUBMISSION_SOURCE_EXTENSIONS = frozenset({".pdf", ".docx", *DOCUMENT_TEXT_EXTENSIONS, *IMAGE_MEDIA_TYPES})
+SUBMISSION_TEXT_EXTENSIONS = DOCUMENT_TEXT_EXTENSIONS | PROGRAMMING_SOURCE_SUFFIXES
+SUBMISSION_SOURCE_EXTENSIONS = frozenset({".pdf", ".docx", *SUBMISSION_TEXT_EXTENSIONS, *IMAGE_MEDIA_TYPES})
 
 ARCHIVE_EXTENSIONS = (
     ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
@@ -158,6 +160,17 @@ def _looks_like_text(data: bytes) -> bool:
     return all(character in "\t\n\r" or ord(character) >= 32 for character in text)
 
 
+def _decodable_text(data: bytes, suffix: str) -> bool:
+    if suffix == ".py":
+        from backend.services.python_source_encoding import PythonSourceEncodingError, decode_python_submission
+        try:
+            decode_python_submission(data)
+        except PythonSourceEncodingError:
+            return False
+        return True
+    return _looks_like_text(data)
+
+
 def _content_signature_type(data: bytes, filename: str) -> str:
     if not data:
         return "application/octet-stream"
@@ -209,9 +222,7 @@ def _content_signature_type(data: bytes, filename: str) -> str:
     # the isolated parser distinguishes an actual PDF from quoted text.
     if b"%PDF-" in data[:1024]:
         return "application/pdf"
-    if _looks_like_text(data):
-        return "text/plain"
-    return "application/octet-stream"
+    return "text/plain" if _decodable_text(data, _ext(filename)) else "application/octet-stream"
 
 
 def inspect_upload_content(
@@ -225,6 +236,17 @@ def inspect_upload_content(
     guessed, _encoding = mimetypes.guess_type(filename)
     filename_type = _normalized_content_type(guessed)
     extension = _ext(filename)
+    if extension in PROGRAMMING_SOURCE_SUFFIXES:
+        # Browser/OS MIME databases differ. The bytes determine text vs binary;
+        # explicit MIME claims must still be consistent with the source role.
+        filename_type = "text/plain"
+        aliases = ({"text/x-python", "text/x-python-script", "application/x-python"}
+                   if extension == ".py" else
+                   {"text/x-c", "text/x-csrc", "text/x-c++", "text/x-c++src", "application/x-c"})
+        if supplied_type in aliases:
+            supplied_type = "text/plain"
+        declared = supplied_type if supplied_type != "application/octet-stream" else filename_type
+        return ContentInspection(detected, declared, detected != "text/plain" or declared != "text/plain")
     if extension in {".tar.gz", ".tgz"}:
         filename_type = "application/gzip"
     elif extension in {".tar.bz2", ".tbz2"}:
@@ -258,13 +280,25 @@ def inspect_upload_content(
     )
 
 
+def _stored_content_type(filename: str, content: bytes, inspection: ContentInspection) -> str:
+    suffix = _ext(filename)
+    if (suffix in PROGRAMMING_SOURCE_SUFFIXES and inspection.content_type == "application/pdf"
+            and inspection.declared_content_type in {"text/plain", "application/pdf"}
+            and _decodable_text(content, suffix)):
+        # Filename and source bytes indicate code quoting a PDF header. Before
+        # any text is consumed, the reader still checks the bounded PDF parser.
+        return "text/plain"
+    return inspection.content_type
+
+
 def infer_upload_content_type(
     filename: str,
     supplied: str | None = None,
     content: bytes | None = None,
 ) -> str:
     if content is not None:
-        return inspect_upload_content(content, filename, supplied).content_type
+        inspection = inspect_upload_content(content, filename, supplied)
+        return _stored_content_type(filename, content, inspection)
     if supplied and supplied.strip() and supplied != "application/octet-stream":
         return _normalized_content_type(supplied)
     guessed, _encoding = mimetypes.guess_type(filename)
@@ -273,16 +307,20 @@ def infer_upload_content_type(
 
 def submission_source_error(filename: str, inspection: ContentInspection, content: bytes | None = None) -> str | None:
     """One leaf-file policy for direct uploads, archive members and retries."""
-    if _ext(filename) not in SUBMISSION_SOURCE_EXTENSIONS:
+    suffix = _ext(filename)
+    if suffix not in SUBMISSION_SOURCE_EXTENSIONS:
         return "submission_source_unsupported"
-    if content is not None and _ext(filename) == ".docx":
+    if content is not None and suffix == ".docx":
         from backend.services.upload_contract import UploadContractError, validate_docx_package
         try:
             validate_docx_package(content)
         except UploadContractError as exc:
             return exc.code
     if inspection.mismatch:
-        if content is not None and inspection.content_type == "application/pdf" and _ext(filename) in DOCUMENT_TEXT_EXTENSIONS and _looks_like_text(content):
+        if (content is not None and inspection.content_type == "application/pdf"
+                and suffix in SUBMISSION_TEXT_EXTENSIONS and _decodable_text(content, suffix)
+                and (suffix not in PROGRAMMING_SOURCE_SUFFIXES
+                     or inspection.declared_content_type in {"text/plain", "application/pdf"})):
             return None  # The bounded decoder will distinguish a real PDF from quoted text.
         return "submission_source_content_type_mismatch"
     return None
@@ -314,7 +352,10 @@ async def validate_upload_content(content: bytes, filename: str, *, content_type
         return inspection
     # A plain-text/Markdown lesson may quote a PDF header. Only an actual PDF
     # parse can settle this ambiguous signature; a valid renamed PDF is rejected.
-    if inspection.content_type == "application/pdf" and _ext(filename) in (TEXT_EXTENSIONS | {".json"}) and _looks_like_text(content):
+    allowed_text = (SUBMISSION_TEXT_EXTENSIONS if purpose == "submissions" else
+                    TEXT_EXTENSIONS | ({".json"} if purpose == "test_cases" else set()))
+    if (inspection.content_type == "application/pdf" and suffix in allowed_text and _decodable_text(content, suffix)
+            and (suffix not in PROGRAMMING_SOURCE_SUFFIXES or inspection.declared_content_type in {"text/plain", "application/pdf"})):
         try:
             await validate_media_content(content, "application/pdf", wait_for_slot=True,
                                          slot_timeout_seconds=media_slot_timeout_seconds)
@@ -333,7 +374,6 @@ async def validate_upload_content(content: bytes, filename: str, *, content_type
         await validate_media_content(content, inspection.content_type, wait_for_slot=True,
                                      slot_timeout_seconds=media_slot_timeout_seconds)
     elif inspection.content_type == "text/plain":
-        allowed_text = TEXT_EXTENSIONS | ({".json"} if purpose == "test_cases" else set())
         if suffix not in allowed_text:
             raise HTTPException(415, detail={"code": "source_type_not_allowed"})
         if suffix == ".json":
@@ -735,6 +775,12 @@ async def extract_text_from_upload(
         await reporter._emit_message(f"Reading {safe_name}...")
 
     if media_type.startswith("text/") or (media_type == "application/json" and purpose == "test_cases"):
+        if purpose == "submissions" and _ext(safe_name) == ".py":
+            from backend.services.python_source_encoding import PythonSourceEncodingError, decode_python_submission
+            try:
+                return decode_python_submission(file_bytes)
+            except PythonSourceEncodingError:
+                raise HTTPException(400, detail={"code": "source_decode_failed"}) from None
         return await decode_text_bytes(file_bytes)
 
     if _ext(safe_name) == ".docx":
@@ -998,7 +1044,7 @@ def _extract_raw_files_from_archive(
         sources.append(RawUploadSource(
             filename=clean,
             content=data,
-            content_type=inspection.content_type,
+            content_type=inspection.content_type if error_code else _stored_content_type(clean, data, inspection),
             pre_error_code=error_code,
             failure_phase=("archive" if error_code == "submission_archive_nested_unsupported" else "source_read") if error_code else None,
         ))
@@ -1173,7 +1219,8 @@ def _extract_raw_files_from_archive(
     error_code = submission_source_error(filename, container_inspection, file_bytes)
     return [RawUploadSource(
         filename=_bounded_source_name(filename), content=file_bytes,
-        content_type=container_inspection.content_type, pre_error_code=error_code,
+        content_type=container_inspection.content_type if error_code else _stored_content_type(filename, file_bytes, container_inspection),
+        pre_error_code=error_code,
         failure_phase="source_read" if error_code else None,
     )]
 
