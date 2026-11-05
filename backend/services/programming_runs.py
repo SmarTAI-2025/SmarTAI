@@ -127,6 +127,8 @@ class ProgrammingRun:
             run = grading_repository.get_run(cp.run_id)
             self.owner, self.assignment, self.run_id = run.teacher_id, run.assignment_id, run.id
             self.records = _saved(run.id, cp.manifest, self.owner)
+        self.restored_evidence_ids = {r["value"]["evidence_id"] for r in self.records.values()
+                                      if r["kind"] == COMPLETED and r["value"].get("evidence_id")}
         self.locks = {}
         # A shared unsuccessful attempt stops this batch's fan-out. It is never
         # persisted as a valid set of tests or a completed student execution.
@@ -528,7 +530,7 @@ async def _execute_remaining(state, key, identity, code, cases, execute):
 
 
 async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo, student_id: str,
-                              task_id, provider, reporter, generate, execute) -> ProgrammingEvidence:
+                              task_id, provider, reporter, generate, execute, saved_only=False) -> ProgrammingEvidence:
     from backend.services.programming_test_contract import bind_programming_cases, bind_stdin_cases
     from backend.skills.programming import _detect_language
     state = _current.get() or ProgrammingRun(provider)
@@ -560,6 +562,8 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
         executable = code if native else python_execution_source(code)
     except PythonSourceEncodingError:
         return ProgrammingEvidence("unavailable", code, [], reason="programming_source_encoding_unavailable")
+    if saved_only and not state.read(_question_key(state, problem), PREPARED):
+        return ProgrammingEvidence("unavailable", code, [])
     plan_key, cases, reason = await _prepare(state, problem, provider, generate, execute, reporter)
     domain_review = _domain_review(state, plan_key)
     if reason:
@@ -600,6 +604,8 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
                 raise CheckpointWriteError("programming_evidence_identity_invalid")
             rows = [TestResult(test=c, **r) for c, r in zip(cases, saved["rows"], strict=True)]
             report = ExecutionReport(results=rows, **saved["summary"])
+        elif saved_only:
+            return ProgrammingEvidence("unavailable", code, cases)
         else:
             await _notify(reporter, "run_programming_test_cases")
             try:
