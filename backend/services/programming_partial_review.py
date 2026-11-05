@@ -76,8 +76,9 @@ def record_deduction_basis(vote, awards, run, problem):
             basis = DeductionBasis()  # Bad optional metadata never discards the grade.
         cases = sorted(set(basis.failed_teacher_cases or _explicit_failure(step.desc)))
         detail = {"steps": [step.step_no], "cases": [], "descriptions": [step.desc[:240]]}
-        if cases and all(1 <= n <= len(run.cases) for n in cases):
-            passed = [n for n in cases if run.cases[n-1].source == "teacher" and run.report.results[n-1].passed]
+        valid = [n for n in cases if 1 <= n <= len(run.cases)]
+        if valid:
+            passed = [n for n in valid if run.cases[n-1].source == "teacher" and run.report.results[n-1].passed]
             if passed:
                 issues.append({**detail, "kind": "passed_case_cited_as_failed", "cases": passed})
             if len(cases) == 1:
@@ -94,9 +95,12 @@ def record_deduction_basis(vote, awards, run, problem):
     for n, claims in cited.items():
         if len(claims) < 2:
             continue
-        quotes = {quote.strip() for _, quote in claims}
-        if len(quotes) == len(claims) and all(quote and _located(quote, rule) for quote in quotes):
-            continue  # Distinct, present rubric clauses can use the same observed failure.
+        quotes = [" ".join(quote.split()) for _, quote in claims]
+        text = " ".join(rule.split())
+        if all(quote and text.count(quote) == 1 for quote in quotes):
+            spans = sorted((text.index(quote), text.index(quote) + len(quote)) for quote in quotes)
+            if all(left[1] <= right[0] for left, right in zip(spans, spans[1:])):
+                continue  # Distinct, nonoverlapping rubric references can cite the same failure.
         cap = _per_case_cap(rule)
         deduction = sum(Decimal(str(step.max_points)) - Decimal(str(step.score)) for step, _ in claims)
         kind = "per_case_deduction_exceeded" if cap is not None and deduction > cap else "shared_failure"

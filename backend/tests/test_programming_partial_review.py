@@ -65,6 +65,9 @@ async def test_ordinary_partial_or_independent_rubric_item_needs_no_extra_reques
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind,first,second,rule,confirmed", [
     ("passed_case_cited_as_failed", {"failed_teacher_cases":[1]}, None, "Accuracy.", True),
+    ("passed_case_cited_as_failed", {"failed_teacher_cases":[1,99]}, None, "Accuracy.", True),
+    ("shared_failure", {"failed_teacher_cases":[5], "rubric_quote":"output format"},
+     {"failed_teacher_cases":[5], "rubric_quote":"format"}, "Check the output format.", False),
     ("source_quote_missing", {"source_quote":"return abs(value)"}, None, "Accuracy.", True),
     ("rubric_quote_missing", {"rubric_quote":"Recursion is mandatory."}, None, "Accuracy.", True),
     ("shared_failure", {"failed_teacher_cases":[5]}, {"failed_teacher_cases":[5]}, "Each criterion may independently use the same observed error.", False),
