@@ -6,6 +6,7 @@ them. A new full batch starts with an empty manifest.
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import hashlib
 import json
@@ -152,8 +153,9 @@ def _validate_report(report, cases):
             or not math.isclose(report.pass_rate, report.passed_count / len(cases))):
         raise ValueError("programming_execution_contract_invalid")
     ids = set()
-    for case, result in zip(cases, report.results, strict=True):
-        if (result.test != case or type(result.passed) is not bool
+    for index, (case, result) in enumerate(zip(cases, report.results, strict=True)):
+        if (result.test != case or result.executed is not True or type(result.passed) is not bool
+                or (result.case_index is not None and result.case_index != index)
                 or not math.isfinite(result.duration_ms) or result.duration_ms < 0):
             raise ValueError("programming_execution_contract_invalid")
         if result.isolation_mode == "oci_container":
@@ -191,6 +193,9 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
             return key, [], state.failures[key]
         saved = state.read(key, PREPARED)
         if saved:
+            if (saved.get("q_id") != problem.q_id or saved.get("suite_hash") != digest(saved["cases"])
+                    or not 1 <= len(saved["cases"]) <= 50):
+                raise CheckpointWriteError("programming_suite_identity_invalid")
             return key, [TestCase.model_validate(row) for row in saved["cases"]], ""
         if state.read(key, STARTED):
             return key, [], "programming_preparation_interrupted"
@@ -252,16 +257,30 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
         code = _source(answer.content)
     except ValueError:
         return ProgrammingEvidence("unavailable", answer.content, [], reason="programming_mapping_invalid")
+    if "recognition_manual_pending" in answer.flag:
+        return ProgrammingEvidence("unavailable", code, [], reason="programming_mapping_invalid")
+    if len(code.encode()) > 64 * 1024:
+        return ProgrammingEvidence("unavailable", code, [], reason="programming_source_too_large")
     if not code.strip():
         return ProgrammingEvidence("no_submission", code, [])
     if _detect_language(code) in {"cpp", "java"}:
-        return ProgrammingEvidence("unsupported", code, [], reason="programming_language_unsupported")
+        try:
+            ast.parse(code)  # A Python string or comment may contain a C/Java example.
+        except (ValueError, SyntaxError, RecursionError):
+            return ProgrammingEvidence("unsupported", code, [], reason="programming_language_unsupported")
     plan_key, cases, reason = await _prepare(state, problem, provider, generate, execute, reporter)
     if reason:
         return ProgrammingEvidence("unsupported" if reason == "programming_mode_unsupported" else "unavailable",
                                    code, [], reason=reason)
     try:
-        cases = bind_programming_cases(problem.stem, cases, code)
+        hints = {f.removeprefix("programming_source_entry:") for f in answer.flag
+                 if f.startswith("programming_source_entry:")}
+        if len(hints) > 1:
+            raise ValueError("programming_mapping_invalid")
+        if hints:
+            cases = bind_programming_cases(problem.stem, cases, code, entry_hint=hints.pop())
+        else:
+            cases = bind_programming_cases(problem.stem, cases, code)
     except ValueError:
         return ProgrammingEvidence("unavailable", code, [], reason="programming_mapping_invalid")
     cp = state.checkpoints

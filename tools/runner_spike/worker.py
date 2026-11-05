@@ -60,8 +60,9 @@ value = namespace[call["name"]](*call["args"], **call["kwargs"])
 with open(int(target) if target.isdecimal() else target, "wb") as channel:
     # Use JSON to reject tensors, class instances, handles and non-finite
     # floats before exposing the legacy repr-compatible comparison value.
-    encoded = json.dumps(value, ensure_ascii=True, allow_nan=False)
-    channel.write(repr(json.loads(encoded)).encode("utf-8"))
+    json.dumps(value, ensure_ascii=True, allow_nan=False)
+    # Preserve tuple/list and numeric/string key distinctions for comparison.
+    channel.write(repr(value).encode("utf-8"))
 """
 
 

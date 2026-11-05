@@ -58,3 +58,11 @@ async def test_function_channel_separates_keyword_only_return_and_printed_output
     assert result.passed and result.actual_output == result.return_value == "7"
     assert result.stdout == "module log\ndebug: 999\n"
     assert result.execution_id and len(result.request_digest) == 64
+
+
+@pytest.mark.asyncio
+async def test_return_transport_preserves_python_literal_types():
+    code = "def pair(): return (1, 2)"
+    cases = [Case(function_name="pair", function_args=[], expected_return=v) for v in ("[1, 2]", "(1, 2)")]
+    report = await runner.run_sandbox(code, cases)
+    assert [r.passed for r in report.results] == [False, True]
