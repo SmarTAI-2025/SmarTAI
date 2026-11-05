@@ -139,3 +139,90 @@ async def test_media_cancellation_releases_only_owned_slot_and_work_clock(monkey
     assert slots.acquire(blocking=False)
     assert not slots.acquire(blocking=False)
     slots.release()
+
+
+@pytest.mark.asyncio
+async def test_durable_media_admission_has_independent_cap_without_spending_active_time(monkeypatch, budget):
+    from unittest.mock import AsyncMock
+    from fastapi import HTTPException
+    from backend.tools import media_validation
+
+    slots = threading.BoundedSemaphore(1)
+    slots.acquire()
+    monkeypatch.setattr(file_processing, "_PDF_EXTRACTION_SLOTS", slots)
+    monkeypatch.setattr(media_validation, "MEDIA_ADMISSION_WAIT_SECONDS", .03)
+    launch = AsyncMock(side_effect=AssertionError("queued media must not launch"))
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+    try:
+        with pytest.raises(HTTPException) as error:
+            await asyncio.wait_for(validate_media_content(
+                b"%PDF-1.7", "application/pdf", wait_for_slot=True, slot_timeout_seconds=None,
+            ), .5)
+        assert error.value.status_code == 429
+        assert error.value.detail == {"code": "media_inspection_busy"}
+        assert budget.active == 0 and budget.elapsed == 0
+        assert not budget.exhausted.is_set()
+        launch.assert_not_awaited()
+        assert not slots.acquire(blocking=False)
+    finally:
+        slots.release()
+    assert slots.acquire(blocking=False)
+    assert not slots.acquire(blocking=False)
+    slots.release()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["launch", "communicate", "wait"])
+async def test_unreaped_media_worker_retains_its_slot_until_late_cleanup(monkeypatch, budget, phase):
+    from unittest.mock import AsyncMock
+    from fastapi import HTTPException
+    from backend.tools import pdf_evidence, pdf_worker_lifecycle
+
+    budget.limit = 10
+    slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(file_processing, "_PDF_EXTRACTION_SLOTS", slots)
+    monkeypatch.setattr(pdf_worker_lifecycle, "PDF_CLEANUP_SECONDS", .02)
+    resume, reaped = asyncio.Event(), asyncio.Event()
+
+    class Process:
+        returncode = None
+        def kill(self):
+            self.returncode = -9
+        async def communicate(self):
+            if phase == "communicate":
+                await resume.wait()
+            return b"", b""
+        async def wait(self):
+            if phase == "wait":
+                await resume.wait()
+            reaped.set()
+            return self.returncode
+
+    process = Process()
+    async def launch(*args, **kwargs):
+        if phase == "launch":
+            await resume.wait()
+        return process
+    launch_mock = AsyncMock(side_effect=launch)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch_mock)
+    monkeypatch.setattr(pdf_evidence, "_exchange", AsyncMock(return_value=
+        b'{"status":"ok","content_type":"application/pdf","page_count":1}'))
+    try:
+        with pytest.raises(HTTPException) as error:
+            await validate_media_content(b"%PDF-1.7", "application/pdf", timeout_seconds=.01)
+        assert error.value.detail["code"] in {"media_inspection_timeout", "media_inspection_failed"}
+        assert budget.active == 0 and budget.timer is None
+        assert not slots.acquire(blocking=False)
+        with pytest.raises(HTTPException) as busy:
+            await validate_media_content(b"%PDF-1.7", "application/pdf")
+        assert busy.value.status_code == 429
+        assert busy.value.detail == {"code": "media_inspection_busy"}
+        launch_mock.assert_awaited_once()
+    finally:
+        resume.set()
+        await asyncio.wait_for(reaped.wait(), .5)
+        # Finish cleanup's callbacks before the test tears down its loop.
+        await asyncio.sleep(0)
+    assert slots.acquire(blocking=False)
+    assert not slots.acquire(blocking=False)
+    slots.release()

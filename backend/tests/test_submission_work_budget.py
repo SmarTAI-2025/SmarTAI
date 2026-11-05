@@ -216,7 +216,7 @@ async def test_other_user_queued_work_keeps_a_fresh_independent_budget(install):
 async def test_submission_wrapper_does_not_leave_clock_in_other_workflows(monkeypatch):
     @clocks.submission_work_budget
     async def run(**kwargs):
-        assert clocks.current_budget().limit == 10800
+        assert clocks.current_budget().limit == 9000
         return "done"
     assert await run(job_id="job", job_attempt=1) == "done"
     assert clocks.current_budget() is None

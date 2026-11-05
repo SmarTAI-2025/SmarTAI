@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import logging
 from typing import Optional
 
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 # Default concurrency cap. Tunable via init_sandbox_semaphore(limit=...).
 DEFAULT_SANDBOX_CONCURRENCY = 8
+SANDBOX_ADMISSION_WAIT_SECONDS = 600.0
 
 _SEMAPHORE: Optional[asyncio.Semaphore] = None
 _LIMIT: int = DEFAULT_SANDBOX_CONCURRENCY
@@ -66,3 +68,48 @@ def get_sandbox_semaphore() -> asyncio.Semaphore:
 def get_sandbox_limit() -> int:
     """Return the configured concurrency limit (for diagnostics / tests)."""
     return _LIMIT
+
+
+class SandboxWorkSlot:
+    """One owned permit; a late reaper can retain it past caller cancellation."""
+
+    def __init__(self, release):
+        from backend.services.submission_work_budget import current_budget
+        self._release = release
+        self._budget = current_budget()
+        self._started = False
+        self.transferred = False
+        self.released = False
+
+    def start(self):
+        if self._budget is not None:
+            self._budget.start()
+            self._started = True
+
+    def transfer(self):
+        self.transferred = True
+        return self.release
+
+    def release(self):
+        if self.released:
+            return
+        self.released = True
+        if self._started:
+            self._budget.finish()
+        self._release()
+
+
+@asynccontextmanager
+async def sandbox_slot():
+    """Queue independently for at most ten minutes; charge only admitted work."""
+    from backend.services.submission_work_budget import wait_for_admission
+    semaphore = get_sandbox_semaphore()
+    async with asyncio.timeout(SANDBOX_ADMISSION_WAIT_SECONDS):
+        await wait_for_admission(semaphore.acquire())
+    slot = SandboxWorkSlot(semaphore.release)
+    try:
+        slot.start()
+        yield slot
+    finally:
+        if not slot.transferred:
+            slot.release()

@@ -54,9 +54,11 @@ describe("submission recognition completion", () => {
       submission_sources: [{ ...source("failed"), reason_code: "submission_time_limit_reached" }],
       submission_source_summary: { uploaded: 1, parsed: 0, failed: 1, pending: 0, identity_needs_review: 0 } };
     show();
-    expect(screen.getByRole("heading", { name: "本次识别已达到处理时限" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "本次作答识别已达到有效处理时限" })).toBeVisible();
     expect(screen.getByRole("button", { name: "重试失败项" })).toBeInTheDocument();
-    expect(screen.getByText(/排队不计时。已完成的识别和结构化作答已保留/)).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent("有效处理上限为 2.5 小时");
+    expect(screen.getByRole("alert")).toHaveTextContent("总时限为 3.5 小时");
+    expect(screen.getByRole("alert")).toHaveTextContent("已保存的结果保留");
     fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
     expect(await screen.findByRole("heading", { name: "作答校对页面" })).toBeVisible();
   });

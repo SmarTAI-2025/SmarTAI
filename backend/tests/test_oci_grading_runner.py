@@ -147,3 +147,68 @@ async def test_production_podman_requires_delegated_resource_controllers(configu
     host["cgroupControllers"] = ["cpu", "pids"]
     with pytest.raises(runner.IsolatedRunnerUnavailable):
         await runner._check_runtime("/usr/bin/podman", {})
+
+
+@pytest.mark.asyncio
+async def test_cancelled_oci_cleanup_is_bounded_and_quarantines_host_slot(configured, monkeypatch):
+    from backend.tools import pdf_worker_lifecycle as lifecycle
+    monkeypatch.setattr(runner.settings, "program_runner_max_concurrent", 1)
+    monkeypatch.setattr(lifecycle, "PDF_CLEANUP_SECONDS", .02)
+    monkeypatch.setattr(runner, "HOST_ADMISSION_WAIT_SECONDS", .02)
+    running, cleaning, finish_cleanup = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    async def command(args, **kwargs):
+        if args[1] == "rm":
+            cleaning.set()
+            await finish_cleanup.wait()
+            return b""
+        running.set()
+        await asyncio.Event().wait()
+    monkeypatch.setattr(runner, "_command", command)
+    task = asyncio.create_task(runner.run_python_oci("pass"))
+    await running.wait()
+    task.cancel()
+    await cleaning.wait()
+    task.cancel()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 1)
+        assert runner._quarantined_slots
+        with pytest.raises(runner.IsolatedRunnerUnavailable):
+            async with runner._host_slot():
+                pytest.fail("Unconfirmed container cleanup must retain host capacity")
+    finally:
+        finish_cleanup.set()
+        for _ in range(50):
+            if not runner._quarantined_slots:
+                break
+            await asyncio.sleep(0)
+        assert not runner._quarantined_slots
+    async with runner._host_slot():
+        pass
+
+
+@pytest.mark.asyncio
+async def test_failed_oci_removal_cannot_silently_release_capacity(configured, monkeypatch):
+    monkeypatch.setattr(runner.settings, "program_runner_max_concurrent", 1)
+    monkeypatch.setattr(runner, "HOST_ADMISSION_WAIT_SECONDS", .02)
+    async def command(args, **kwargs):
+        if args[1] == "rm":
+            raise runner.IsolatedRunnerUnavailable()
+        if args[1] == "ps":
+            return b"smartai-oci-still-running\n"
+        return worker_result(request_from(args))
+    monkeypatch.setattr(runner, "_command", command)
+    try:
+        with pytest.raises(runner.IsolatedRunnerUnavailable):
+            await runner.run_python_oci("pass")
+        assert runner._quarantined_slots
+        with pytest.raises(runner.IsolatedRunnerUnavailable):
+            async with runner._host_slot():
+                pytest.fail("A possibly live container must keep its slot")
+    finally:
+        # This test uses no real container. Clear only its synthetic quarantine.
+        for slot in list(runner._quarantined_slots):
+            if slot._temporary is not None:
+                slot._temporary.cleanup()
+            slot.release()
+            runner._quarantined_slots.discard(slot)

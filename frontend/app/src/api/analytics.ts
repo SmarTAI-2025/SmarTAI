@@ -4,7 +4,8 @@ import type { GroundedAskExecution } from "@/types";
 import { deleteJSON, getJSON, postJSON } from "./client";
 import type { AnalyticsMode, AnalyticsResult, FilterIntentResult, FilterIntentSurface, PerQuestionBreakdown } from "@/types";
 
-export const ANALYTICS_REQUEST_TIMEOUT_MS = 300_000;
+// Backend 290s plus Gemini cleanup 10s and response delivery 5s.
+export const ANALYTICS_REQUEST_TIMEOUT_MS = 305_000;
 
 export function runAnalyticsQuery(
   taskId: string,
@@ -33,7 +34,7 @@ export async function interpretFilterIntent(taskId: string, question: string,
 }
 
 export function getPerQuestionBreakdown(taskId: string, qId: string): Promise<PerQuestionBreakdown> {
-  return getJSON<PerQuestionBreakdown>(`/analytics/${taskId}/per_question/${qId}`);
+  return getJSON<PerQuestionBreakdown>(`/analytics/${taskId}/per_question/${qId}`, { timeout: 40_000 });
 }
 
 export function resetPerQuestionCache(taskId: string, qId: string): Promise<{ status: "cleared" }> {

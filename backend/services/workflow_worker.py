@@ -482,6 +482,7 @@ class WorkflowWorker:
         heartbeat_task = asyncio.create_task(self._heartbeat(ctx))
         self._heartbeats.add(heartbeat_task)
         heartbeat_task.add_done_callback(self._heartbeats.discard)
+        execution_task = None
         try:
             try:
                 from backend.services.execution_control import run_controlled
@@ -494,16 +495,25 @@ class WorkflowWorker:
                     return row.error_code in {"operation_cancelled", "superseded"} or row.attempt != operation.attempt
 
                 from backend.progress.recognition_activity import observe_recognition
-                async with observe_recognition(ctx):
-                    await run_controlled(operation.id, is_cancelled, self._handlers[operation.operation_type](ctx),
-                                         persist_progress=ctx.update_progress)
+                from backend.services.workflow_deadlines import operation_budget, cancel_and_drain
+                async with operation_budget(ctx), observe_recognition(ctx):
+                    execution_task = asyncio.create_task(run_controlled(
+                        operation.id, is_cancelled, self._handlers[operation.operation_type](ctx),
+                        persist_progress=ctx.update_progress))
+                    # The outer timer must not wait indefinitely for a child
+                    # that swallows cancellation during its own cleanup.
+                    await asyncio.shield(execution_task)
             except asyncio.CancelledError:
                 raise
             except LeaseLost:
                 pass  # fenced; the context blocks further mutation
             except Exception as exc:
+                await cancel_and_drain(execution_task)
                 await self._record_failure(ctx, exc)
         finally:
+            from backend.services.workflow_deadlines import cancel_and_drain
+            if execution_task is not None and not execution_task.done():
+                await cancel_and_drain(execution_task)
             heartbeat_task.cancel()
             try:
                 await heartbeat_task
@@ -534,6 +544,24 @@ class WorkflowWorker:
         self, ctx: LeasedOperation, exc: BaseException
     ) -> None:
         code = _stable_error_code(exc)
+        from backend.services.workflow_deadlines import LIMIT_CODES, BUDGET_TYPES
+        if (code in LIMIT_CODES or code == "provider_submit_uncertain") and ctx.operation_type in BUDGET_TYPES:
+            # Cancel/drain the handler before releasing its owner slot. Keep
+            # verified artifacts and uncertain-submit checkpoints, and update
+            # the task marker in the same fenced transaction as the failure.
+            try:
+                stopped = workflow_repository.fail_timed_out_operation(
+                    ctx.operation_id, owner_id=ctx.owner_id, expected_attempt=ctx.attempt,
+                    expected_lease_token=ctx.lease_token, code=code)
+                if stopped and ctx.operation_type == "submission_recognition":
+                    from backend.db import source_outcome_repository
+                    source_outcome_repository.finalize_pending_sources_as_failed(
+                        owner_id=ctx.owner_id, assignment_id=ctx.assignment_id,
+                        operation_id=ctx.operation_id, expected_attempt=ctx.attempt,
+                        reason_code=code, failure_phase="recognition", retryable=True)
+            except (LeaseLost, VersionConflict, InvalidTransition, NotFound):
+                pass
+            return
         # Only the operation id and the stable code are logged; the exception
         # and any payload the handler carried are never written to logs.
         logger.warning(

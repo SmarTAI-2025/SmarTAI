@@ -110,7 +110,7 @@ async def test_legacy_recognition_dispatch_counts_underlying_model_not_shared_wr
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_legacy_gemini_proxy_clock_covers_sync_response_and_cancellation_drain(
+async def test_bounded_gemini_proxy_clock_covers_async_response_and_cancellation_drain(
     cancel, scheduler, monkeypatch,
 ):
     monkeypatch.setattr(clocks, "_current", ContextVar("submission_budget", default=None))
@@ -118,17 +118,25 @@ async def test_legacy_gemini_proxy_clock_covers_sync_response_and_cancellation_d
     clocks._current.set(budget)
     monkeypatch.setattr(GeminiProvider, "_needs_proxy_mode", property(lambda self: True))
     provider = GeminiProvider(ProviderConfig(provider_type="gemini", model="fixture", api_key="fake"))
-    release, started = threading.Event(), asyncio.Event()
+    release, started = asyncio.Event(), asyncio.Event()
     calls = []
-    loop = asyncio.get_running_loop()
 
-    def invoke(*args, **kwargs):
+    async def invoke(*args, **kwargs):
         calls.append(True)
-        loop.call_soon_threadsafe(started.set)
-        assert release.wait(3)
-        return SimpleNamespace(content="saved sync response")
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            # Keep checking that admitted cleanup owns its work/slot until it
+            # finishes. The bounded proxy route now uses the SDK's async API.
+            await release.wait()
+            raise
+        return SimpleNamespace(content="saved async response")
 
-    monkeypatch.setattr(provider, "_build_client_sync", lambda: SimpleNamespace(invoke=invoke))
+    async def close():
+        pass
+
+    monkeypatch.setattr(provider, "_build_client_sync", lambda: SimpleNamespace(ainvoke=invoke, aclose=close))
     scheduler.host_capacity.capacity = 0
     pending = asyncio.create_task(provider.ainvoke(MESSAGES))
     try:
@@ -147,7 +155,7 @@ async def test_legacy_gemini_proxy_clock_covers_sync_response_and_cancellation_d
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(pending, 2)
         else:
-            assert (await asyncio.wait_for(pending, 2)).content == "saved sync response"
+            assert (await asyncio.wait_for(pending, 2)).content == "saved async response"
         assert budget.active == scheduler.active == scheduler.host_capacity.active == 0
         with pytest.raises(RecognitionError, match=clocks.CODE):
             await provider.ainvoke(MESSAGES)

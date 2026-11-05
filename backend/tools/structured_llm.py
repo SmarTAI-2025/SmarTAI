@@ -208,6 +208,9 @@ def _classify_exception(e: Exception) -> Exception:
     if quota_code and quota_code != "provider_rate_limited":
         return DailyQuotaError() if quota_code == "provider_daily_quota_exceeded" else PermanentLLMError(quota_code)
     if getattr(e, "retryable", True) is False:
+        if getattr(e, "submission_may_exist", False):
+            from backend.services.background_errors import classify_background_error
+            return PermanentLLMError(classify_background_error(e, "provider_submit_uncertain"))
         return PermanentLLMError("non_retryable_provider_limit")
     if quota_code == "provider_rate_limited":
         return RateLimitError(quota_code, retry_after=_provider_retry_after(e))

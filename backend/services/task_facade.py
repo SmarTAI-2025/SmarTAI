@@ -4503,6 +4503,7 @@ def _fail_operation(
                     created_at=now,
                 ))
         if operation.operation_type in _AUXILIARY_QUESTION_OPERATION_TYPES:
+            operation.payload = {**(operation.payload or {}), "stopped_workflow_revision": workflow.workflow_revision}
             workflow.last_failed_job_id = job_id
             workflow.error_code = safe
             workflow.updated_at = now

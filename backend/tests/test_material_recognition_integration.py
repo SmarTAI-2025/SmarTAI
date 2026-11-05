@@ -167,3 +167,88 @@ def test_unconfirmed_or_unparsed_cases_cannot_reach_runner(monkeypatch, state):
     else:
         assert result.status_code == 409
         apply.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["question", "material"])
+async def test_cancelled_preflight_finalizes_draft_and_explicit_retry_is_not_busy(tmp_path, monkeypatch, kind):
+    import asyncio
+    from backend.db.session import session_scope
+    from backend.api import request_deadlines
+
+    owner, task = _seed_task(with_question=True, criterion="")
+    storage = LocalStorage(tmp_path)
+    monkeypatch.setattr(api, "get_storage", lambda: storage)
+    monkeypatch.setattr(question_sources, "get_storage", lambda: storage)
+    registry = _RecoveryRegistry()
+    real_timeout = asyncio.timeout
+    request_scopes = []
+    def capture(seconds):
+        scope = real_timeout(seconds)
+        if seconds == request_deadlines.MATERIAL_PREFLIGHT_SECONDS:
+            request_scopes.append(scope)
+        return scope
+    monkeypatch.setattr(request_deadlines.asyncio, "timeout", capture)
+
+    async def wait_during_library_save(**kwargs):
+        request_scopes[0].reschedule(asyncio.get_running_loop().time())
+        await asyncio.Event().wait()
+    monkeypatch.setattr(api, "_save_source_to_library", wait_during_library_save)
+
+    async def preflight():
+        common = dict(task_id=task, library_material_id=None, structure_mode="organized",
+                      extraction_hint="", save_to_library=False,
+                      current=SimpleNamespace(id=owner), registry=registry)
+        if kind == "question":
+            return await api.preflight_problem_source(**common, file=None, role="problem", inline_text="1. Explain A.",
+                recognition_provider_id="test-provider")
+        return await api.preflight_material_import(**common,
+            file=UploadFile(file=io.BytesIO(b"1. Teacher rubric"), filename="rubric.txt"), targets='["criterion"]')
+
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as expired:
+        await preflight()
+    assert expired.value.status_code == 504
+    with session_scope() as session:
+        rows = session.query(workflow_repository.WorkflowOperationRecord).filter_by(
+            assignment_id=task, operation_type="problem_source" if kind == "question" else "material_source").all()
+        assert len(rows) == 1
+        failed_id = rows[0].id
+        assert rows[0].status == "error"
+        assert rows[0].error_code == "request_timeout"
+        assert rows[0].completed_at is not None
+
+    monkeypatch.setattr(request_deadlines.asyncio, "timeout", real_timeout)
+    monkeypatch.setattr(api, "_save_source_to_library", AsyncMock(return_value=None))
+    result = await preflight()
+    assert result["status"] == "ready"
+    if kind == "question":
+        assert result["source_token"] == failed_id
+        assert workflow_repository.get_operation(failed_id, owner_id=owner).attempt == 2
+    else:
+        assert not any(row.status == "preparing" for row in (
+            workflow_repository.get_operation(failed_id, owner_id=owner),
+            workflow_repository.get_operation(result["source_token"], owner_id=owner),
+        ))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["source_empty", "source_persistence_failed"])
+async def test_existing_safe_problem_source_failures_still_allow_explicit_retry(monkeypatch, code):
+    owner, task = _seed_task(with_question=True, criterion="")
+    original = api._extract_selected_source
+    monkeypatch.setattr(api, "_extract_selected_source", AsyncMock(side_effect=RecognitionError(code)))
+
+    async def preflight():
+        return await api.preflight_problem_source(
+            task_id=task, file=None, library_material_id=None, inline_text="1. Explain A.",
+            role="problem", structure_mode="organized", extraction_hint="", save_to_library=False,
+            recognition_provider_id="test-provider", current=SimpleNamespace(id=owner), registry=_RecoveryRegistry(),
+        )
+
+    failed = await preflight()
+    assert failed.status_code >= 400
+    monkeypatch.setattr(api, "_extract_selected_source", original)
+    result = await preflight()
+    assert result["status"] == "ready"
+    assert workflow_repository.get_operation(result["source_token"], owner_id=owner).attempt == 2

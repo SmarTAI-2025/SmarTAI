@@ -36,6 +36,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
   const [experts, setExperts] = useState<ExpertConfig[]>([]);
   const [modelError, setModelError] = useState(false);
   const [routeId, setRouteId] = useState("");
+  const [, refreshDeadline] = useState(0);
   const identity = useRef(documentId);
   identity.current = documentId;
   useEffect(() => { setCoverage(null); setError(false); }, [documentId, ingestion?.id, ingestion?.processed_pages, ingestion?.status]);
@@ -44,6 +45,17 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
   const summary = coverage?.summary ?? ingestion;
   const active = ["queued", "processing"].includes(summary?.status ?? "");
   const paused = ["paused", "cancelled"].includes(summary?.status ?? "");
+  const deadlineMs = typeof summary?.processing_deadline_at === "number" && Number.isFinite(summary.processing_deadline_at)
+    ? summary.processing_deadline_at * 1000 : null;
+  const expired = summary?.error_code === "knowledge_ingestion_timeout"
+    || (paused && deadlineMs !== null && deadlineMs <= Date.now());
+  useEffect(() => {
+    if (!paused || deadlineMs === null || deadlineMs <= Date.now()) return;
+    // Paused jobs are not polled. Update this view when their existing wall
+    // clock expires, without resuming work or issuing another API request.
+    const timer = window.setTimeout(() => refreshDeadline((value) => value + 1), deadlineMs - Date.now() + 1);
+    return () => window.clearTimeout(timer);
+  }, [paused, deadlineMs, summary?.id]);
   const canRetry = !active && (!!summary?.failed_pages || paused);
   useEffect(() => {
     if (frontier || !expanded || !canRetry) return;
@@ -86,6 +98,10 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
   }
   async function command(action: "resume" | "cancel" | "retry-failed") {
     if (!documentId) return;
+    if (action === "resume" && (expired || (deadlineMs !== null && deadlineMs <= Date.now()))) {
+      refreshDeadline((value) => value + 1);
+      return;
+    }
     setBusy(true); setError(false);
     try {
       const path = `/knowledge/documents/${documentId}/${action}`;
@@ -109,7 +125,10 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
     <div className="mt-2 max-w-xs space-y-2 break-words">
       {summary.total_pages ? <p>{zh ? "可检索 / 空白 / 未完整识别" : "Searchable / blank / incomplete"}: {summary.searchable_pages ?? 0} / {summary.blank_pages ?? 0} / {summary.failed_pages ?? 0}</p> : null}
       {summary.partially_searchable_pages ? <p>{zh ? "可检索页中仍有内容缺口" : "Searchable pages with content gaps"}: {summary.partially_searchable_pages}</p> : null}
-      {summary.error_code ? <p role="status">{backgroundErrorTitle(summary.error_code, zh ? "zh-CN" : "en-US")}</p> : null}
+      {summary.error_code || expired ? <p role="status">{expired
+        ? (zh ? "整份文件识别已达到 2 小时时限，已完成页面已保存。可手动重试未完成或失败页面；状态不明的模型请求不会自动重发。"
+          : "This file reached its 2-hour processing limit. Completed pages are saved. Retry unfinished or failed pages manually. Requests with unknown status are not automatically resent.")
+        : backgroundErrorTitle(summary.error_code, zh ? "zh-CN" : "en-US")}</p> : null}
       <div className="max-h-60 space-y-2 overflow-y-auto">
         {coverage?.pages.filter((page) => !["searchable", "searchable_with_warning", "blank_confirmed"].includes(page.state)).map((page) => <p key={page.page_number}>{page.page_number}: {pageStateLabel(page.state, zh)}{page.error_code ? ` · ${backgroundErrorTitle(page.error_code, zh ? "zh-CN" : "en-US")}` : ""}</p>)}
       </div>
@@ -129,7 +148,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
       </label> : null}
       <div className="flex flex-wrap gap-2">
         <button type="button" className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-md border bg-card px-2 py-1 text-xs hover:bg-muted disabled:opacity-50" disabled={busy} onClick={() => void load()} title={zh ? "刷新状态" : "Refresh status"} aria-label={zh ? "刷新状态" : "Refresh status"}><RefreshCw aria-hidden="true" className="h-4 w-4 shrink-0" /><span>{zh ? "刷新状态" : "Refresh status"}</span></button>
-        {active || paused ? <button type="button" className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-md border bg-card px-2 py-1 text-xs hover:bg-muted disabled:opacity-50" disabled={busy} onClick={() => void command(paused ? "resume" : "cancel")} title={paused ? (zh ? "继续处理" : "Resume") : (zh ? "暂停处理" : "Pause")} aria-label={paused ? (zh ? "继续处理" : "Resume") : (zh ? "暂停处理" : "Pause")}>{paused ? <Play aria-hidden="true" className="h-4 w-4 shrink-0" /> : <Pause aria-hidden="true" className="h-4 w-4 shrink-0" />}<span>{paused ? (zh ? "继续处理" : "Resume") : (zh ? "暂停处理" : "Pause")}</span></button> : null}
+        {active || (paused && !expired) ? <button type="button" className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-md border bg-card px-2 py-1 text-xs hover:bg-muted disabled:opacity-50" disabled={busy} onClick={() => void command(paused ? "resume" : "cancel")} title={paused ? (zh ? "继续处理" : "Resume") : (zh ? "暂停处理" : "Pause")} aria-label={paused ? (zh ? "继续处理" : "Resume") : (zh ? "暂停处理" : "Pause")}>{paused ? <Play aria-hidden="true" className="h-4 w-4 shrink-0" /> : <Pause aria-hidden="true" className="h-4 w-4 shrink-0" />}<span>{paused ? (zh ? "继续处理" : "Resume") : (zh ? "暂停处理" : "Pause")}</span></button> : null}
         {canRetry ? <button type="button" className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-md border bg-card px-2 py-1 text-xs hover:bg-muted disabled:opacity-50" disabled={busy} onClick={() => void command("retry-failed")} title={zh ? "重试缺页" : "Retry gaps"} aria-label={zh ? "重试缺页" : "Retry gaps"}><RotateCcw aria-hidden="true" className="h-4 w-4 shrink-0" /><span>{zh ? "重试缺页" : "Retry gaps"}</span></button> : null}
         {coverage?.next_offset != null ? <button type="button" className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-md border bg-card px-2 py-1 text-xs hover:bg-muted disabled:opacity-50" disabled={busy} onClick={() => void load(coverage.next_offset!)} title={zh ? "下一批页" : "Next pages"} aria-label={zh ? "下一批页" : "Next pages"}><ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0" /><span>{zh ? "下一批页" : "Next pages"}</span></button> : null}
       </div>

@@ -23,6 +23,9 @@ from backend.rag.chunker import chunk_spans
 TERMINAL_PAGES = {"searchable", "searchable_with_warning", "blank_confirmed", "failed"}
 GOOD_PAGES = {"searchable", "searchable_with_warning", "blank_confirmed"}
 BATCH_PAGES = 24
+INGESTION_TIMEOUT_CODE = "knowledge_ingestion_timeout"
+FILE_TIMEOUT_SECONDS = 7200
+_DEADLINE_FIELDS = ("processing_started_at", "processing_deadline_at", "processing_timeout_seconds")
 MAX_DERIVED_BYTES = 128 * 1024 * 1024
 MAX_TEXT_CHARS = 32 * 1024 * 1024
 
@@ -53,7 +56,7 @@ def _job(session, job_id, owner_id, token=None):
     live_document(session, row.document_id, owner_id, lock=True)
     session.refresh(row)
     if token is not None and (row.lease_token != token or (row.lease_expires_at or 0) <= time.time()
-                              or row.status != "processing"):
+                              or row.status != "processing" or remaining_budget(row) <= 0):
         raise LeaseLost()
     return row
 
@@ -125,7 +128,8 @@ def _seed_gap_retry(session, row, previous):
 def create_ingestion_in_session(session, doc, configuration):
     """Called under the owner gate during original publication or explicit retry."""
     row = KnowledgeIngestionRecord(id=_id("ki_"), document_id=doc.id, owner_id=doc.owner_id,
-        configuration=dict(configuration, source_sha256=doc.sha256), status="queued")
+        configuration=dict({key: value for key, value in configuration.items() if key not in _DEADLINE_FIELDS},
+                           source_sha256=doc.sha256), status="queued")
     session.add(row)
     session.flush()
     doc.ingestion_summary = dict(id=row.id, status="queued", total_pages=None, processed_pages=0,
@@ -133,6 +137,34 @@ def create_ingestion_in_session(session, doc, configuration):
     if not doc.active_version and doc.status != "ready":
         doc.status = "processing"
     return row.id
+
+
+def remaining_budget(job):
+    """Whole-file wall time starts on the first claim and includes later waits."""
+    return max(0.0, float(job.configuration.get("processing_deadline_at", 0)) - time.time())
+
+
+def _pause_expired_ingestion(session, row):
+    row.status, row.error_code = "paused", INGESTION_TIMEOUT_CODE
+    row.lease_token = row.lease_expires_at = None
+    # Do not turn in-flight work into retryable gaps. Preserve its original
+    # operation, artifacts and before-submit marker for explicit gap retry.
+    for page in session.scalars(select(KnowledgePageRecord).where(
+            KnowledgePageRecord.ingestion_id == row.id, KnowledgePageRecord.state == "processing")):
+        if any(call.get("state") == "pending" for call in (page.operation.get("checkpoint") or {}).get("calls", [])):
+            page.evidence = dict(page.evidence, error_code="provider_submit_uncertain")
+        if page.operation:
+            page.operation = dict(page.operation, lease_token=None, lease_expires_at=None)
+    row.updated_at = time.time()
+    _publish(session, row)
+
+
+def expire_ingestion(job):
+    """Fence timed-out file work even when its short lease has already expired."""
+    with session_scope() as session:
+        row = _job(session, job.id, job.owner_id)
+        if row.status == "processing" and row.lease_token == job.lease_token:
+            _pause_expired_ingestion(session, row)
 
 
 def claim_next(*, job_id=None):
@@ -157,7 +189,15 @@ def claim_next(*, job_id=None):
                 continue
             if row.status not in {"queued", "processing"} or (row.lease_expires_at or 0) > now:
                 continue
-            row.status, row.lease_token, row.lease_expires_at = "processing", uuid.uuid4().hex, now + 360
+            if row.configuration.get("processing_deadline_at") is not None and remaining_budget(row) <= 0:
+                _pause_expired_ingestion(session, row)
+                continue
+            if row.configuration.get("processing_deadline_at") is None:
+                row.configuration = dict(row.configuration, processing_started_at=now,
+                    processing_deadline_at=now + FILE_TIMEOUT_SECONDS,
+                    processing_timeout_seconds=FILE_TIMEOUT_SECONDS)
+            row.status, row.lease_token, row.lease_expires_at = "processing", uuid.uuid4().hex, min(
+                now + 360, row.configuration["processing_deadline_at"])
             row.updated_at = now
             session.flush()
             return row
@@ -192,7 +232,7 @@ def next_pages(job):
 def prepare_page(job, page_id, *, batch_extra_remaining):
     with session_scope() as session:
         row = _job(session, job.id, job.owner_id, job.lease_token)
-        row.lease_expires_at = time.time() + 360
+        row.lease_expires_at = min(time.time() + 360, row.configuration["processing_deadline_at"])
         page = session.get(KnowledgePageRecord, page_id)
         if page is None or page.ingestion_id != row.id or page.state in TERMINAL_PAGES:
             raise LeaseLost()
@@ -318,6 +358,8 @@ def _publish(session, row):
         blank_pages=counts.get("blank_confirmed", 0), warning_pages=counts.get("searchable_with_warning", 0),
         failed_pages=counts.get("failed", 0), coverage_complete=complete,
         unit=row.configuration.get("unit", "page"), error_code=row.error_code,
+        processing_deadline_at=row.configuration.get("processing_deadline_at"),
+        processing_timeout_seconds=row.configuration.get("processing_timeout_seconds", FILE_TIMEOUT_SECONDS),
         policy_version=row.configuration.get("policy_version"), extra_calls_reserved=row.extra_reserved,
         usage=row.configuration.get("usage", {}))
     # The first version may publish incrementally. Reprocessing never replaces
@@ -337,7 +379,12 @@ def release(job, *, status=None, error=None):
         row = _job(session, job.id, job.owner_id)
         if row.status in {"complete", "complete_with_warning", "partial", "failed"}:
             return
-        if row.lease_token != job.lease_token or (row.lease_expires_at or 0) <= time.time():
+        if row.lease_token != job.lease_token:
+            raise LeaseLost()
+        if remaining_budget(row) <= 0:
+            _pause_expired_ingestion(session, row)
+            return
+        if (row.lease_expires_at or 0) <= time.time():
             raise LeaseLost()
         if status:
             row.status = status
@@ -369,7 +416,12 @@ def resume(document_id, owner_id):
         row = session.get(KnowledgeIngestionRecord, (doc.ingestion_summary or {}).get("id"))
         if row is None or row.status not in {"paused", "cancelled"}:
             raise InvalidTransition("Only a paused or cancelled ingestion can resume.")
+        if row.configuration.get("processing_deadline_at") is not None and remaining_budget(row) <= 0:
+            raise InvalidTransition("The file processing deadline expired. Retry unfinished pages explicitly.")
         row.status, row.error_code = "queued", None
+        row.lease_token = row.lease_expires_at = None
+        # Resume continues the same file budget; only explicit gap retry creates
+        # a new ingestion, retaining completed pages and unknown-call guards.
         row.updated_at = time.time()
         _publish(session, row)
 
@@ -432,7 +484,7 @@ class KnowledgeRunRepository:
             if page.id != operation_id or (data.get("lease_expires_at") or 0) > time.time():
                 raise LeaseLost()
             data.update(status="running", worker_id=worker_id, lease_token=uuid.uuid4().hex,
-                        lease_expires_at=time.time() + lease_seconds)
+                        lease_expires_at=min(time.time() + lease_seconds, self.job.configuration["processing_deadline_at"]))
             page.operation = data
             return SimpleNamespace(**data)
 

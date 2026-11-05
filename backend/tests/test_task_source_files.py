@@ -1337,3 +1337,38 @@ def test_source_file_routes_require_authentication():
     api.include_router(tasks_api.router)
     response = TestClient(api).get("/tasks/unknown/source-files")
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_cancelled_visual_preflight_preserves_source_and_blocks_provider_replay(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    owner_id, task_id = "cancel-preflight-owner", "cancel-preflight-task"
+    _seed_task(owner_id, task_id)
+    reader = AsyncMock(side_effect=asyncio.CancelledError())
+    monkeypatch.setattr(task_preparation, "read_question_source", reader)
+
+    async def preflight():
+        return await task_preparation.preflight_problem_source(
+            task_id=task_id,
+            file=UploadFile(file=io.BytesIO(PDF), filename="questions.pdf",
+                            headers=Headers({"content-type": "application/pdf"})),
+            library_material_id=None, inline_text=None, structure_mode="organized", role="problem",
+            extraction_hint="", save_to_library=False,
+            current=SimpleNamespace(id=owner_id), registry=_Registry(),
+        )
+
+    with pytest.raises(asyncio.CancelledError):
+        await preflight()
+    operation_id = next(row.id for row in _operations(owner_id) if row.operation_type == "problem_source")
+    operation = workflow_repository.get_operation(operation_id, owner_id=owner_id)
+    assert operation.status == "error"
+    assert operation.error_code == "provider_submit_uncertain"
+    assert operation.artifact_refs
+    assert operation.checkpoint["source_refs"]
+    with pytest.raises(HTTPException) as replay:
+        await preflight()
+    assert replay.value.detail["code"] == "provider_submit_uncertain"
+    assert replay.value.detail["stored_file_id"] == operation.artifact_refs[0]
+    reader.assert_awaited_once()

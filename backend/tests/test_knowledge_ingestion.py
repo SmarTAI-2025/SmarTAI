@@ -486,3 +486,243 @@ def test_gap_retry_text_budget_failure_rolls_back_without_changing_published_pag
     assert repo.manifest(doc_id, who) == before
     with session_scope() as session:
         assert list(session.scalars(select(KnowledgeIngestionRecord.id))) == [job_id]
+
+
+def test_file_deadline_starts_at_first_claim_and_survives_batches_waits_recovery_and_resume(monkeypatch):
+    from backend.domain.errors import InvalidTransition
+    clock = [10_000.0]
+    monkeypatch.setattr(repo.time, "time", lambda: clock[0])
+    who, doc_id, job_id = queued()
+    clock[0] += 5000  # Initial queue admission does not spend the file budget.
+    job = repo.claim_next(job_id=job_id)
+    deadline = job.configuration["processing_deadline_at"]
+    assert deadline == 22_200 and repo.FILE_TIMEOUT_SECONDS == 7200
+    repo.initialize(job, 25)
+    page = repo.next_pages(job)[0]
+    repo.prepare_page(job, page.id, batch_extra_remaining=0)
+    repo.finish_page(job, page.id, text="Saved page", state="searchable", evidence={})
+    repo.release(job)
+    clock[0] += 100  # Queue waits after the first claim count against the budget.
+    reclaimed = repo.claim_next(job_id=job_id)
+    assert reclaimed.configuration["processing_deadline_at"] == deadline
+    clock[0] += 400  # Crash recovery cannot renew the file budget.
+    reclaimed = repo.claim_next(job_id=job_id)
+    assert reclaimed.configuration["processing_deadline_at"] == deadline
+    repo.cancel(doc_id, who)
+    clock[0] += 100
+    repo.resume(doc_id, who)
+    continued = repo.claim_next(job_id=job_id)
+    assert continued.configuration["processing_deadline_at"] == deadline
+    clock[0] = deadline + 1
+    assert repo.claim_next(job_id=job_id) is None
+    summary = repo.manifest(doc_id, who)["summary"]
+    assert summary["status"] == "paused" and summary["error_code"] == repo.INGESTION_TIMEOUT_CODE
+    assert summary["processed_pages"] == 1 and not summary["coverage_complete"]
+    assert [chunk.content for chunk in list_chunks([doc_id])] == ["Saved page"]
+    with pytest.raises(InvalidTransition, match="deadline expired"):
+        repo.resume(doc_id, who)
+    retry = repo.queue_document(doc_id, who, job.configuration, new_version=True, retry_failed_only=True)
+    retried = repo.claim_next(job_id=retry)
+    assert retried.configuration["processing_deadline_at"] == clock[0] + 7200
+    assert [page.page_number for page in repo.next_pages(retried)] == list(range(2, 26))
+    assert repo.manifest(doc_id, who)["summary"]["processed_pages"] == 1
+
+
+def test_expired_file_fences_late_page_writes_and_preserves_uncertain_ledger(monkeypatch):
+    from backend.domain.errors import LeaseLost
+    clock = [10_000.0]
+    monkeypatch.setattr(repo.time, "time", lambda: clock[0])
+    who, doc_id, job_id = queued()
+    job = repo.claim_next(job_id=job_id)
+    repo.initialize(job, 1)
+    page = repo.next_pages(job)[0]
+    repo.prepare_page(job, page.id, batch_extra_remaining=0)
+    operation = {"checkpoint": {"calls": [{"state": "pending", "kind": "initial"}]},
+                 "lease_token": "old-operation-token", "lease_expires_at": 20_000}
+    with session_scope() as session:
+        session.get(KnowledgePageRecord, page.id).operation = operation
+    clock[0] = job.configuration["processing_deadline_at"] + 1
+    with pytest.raises(LeaseLost):
+        repo.finish_page(job, page.id, text="Late write", state="searchable", evidence={})
+    repo.expire_ingestion(job)
+    saved = repo.manifest(doc_id, who)
+    assert saved["pages"][0]["error_code"] == "provider_submit_uncertain"
+    assert saved["pages"][0]["state"] == "processing"
+    assert not list_chunks([doc_id])
+    with session_scope() as session:
+        operation_after = session.get(KnowledgePageRecord, page.id).operation
+    assert operation_after["checkpoint"] == operation["checkpoint"]
+    assert operation_after["lease_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_full_file_budget_is_shared_by_all_24_page_batches(monkeypatch):
+    from backend.knowledge import ingestion
+    clock = [10_000.0]
+    monkeypatch.setattr(repo.time, "time", lambda: clock[0])
+    who, doc_id, job_id = queued(pdf(25))
+    calls = []
+    async def read(request, *args, **kwargs):
+        calls.append(request.pages[0])
+        clock[0] += 200
+        return SimpleNamespace(result=(f"Page {request.pages[0]}", "searchable", {}),
+            operation_usage=SimpleNamespace(patch_calls=0, empty_recovery_calls=0))
+    monkeypatch.setattr(ingestion, "_page_result", lambda run: run.result)
+    worker = KnowledgeIngestionWorker(registry_factory=lambda _: Registry(), page_reader=read)
+    await worker.run_once(job_id)
+    summary = repo.manifest(doc_id, who)["summary"]
+    assert summary["status"] == "queued" and summary["processed_pages"] == 24
+    assert summary["processing_deadline_at"] == 17_200
+    clock[0] += 500
+    await worker.run_once(job_id)
+    assert calls == list(range(1, 26))
+    final = get_document(doc_id, who).ingestion_summary
+    assert final["coverage_complete"] and final["processing_deadline_at"] == 17_200
+
+
+def _expire_file_when(monkeypatch, entered):
+    """Advance the durable clock at the target stage, avoiding cold-start races."""
+    clock = [repo.time.time()]
+    monkeypatch.setattr(repo.time, "time", lambda: clock[0])
+    original_wait = asyncio.wait
+    async def controlled_wait(tasks, *, timeout):
+        if any(task.get_coro().__name__ == "_run_batch" for task in tasks):
+            await asyncio.wait_for(entered.wait(), 15)
+            clock[0] += repo.FILE_TIMEOUT_SECONDS + 1
+            return set(), set(tasks)
+        return await original_wait(tasks, timeout=timeout)
+    monkeypatch.setattr(asyncio, "wait", controlled_wait)
+
+
+@pytest.mark.asyncio
+async def test_file_wall_timer_stops_a_stalled_reader_and_retains_completed_pages(monkeypatch):
+    from backend.knowledge import ingestion
+    who, doc_id, job_id = queued(pdf(2))
+    calls = []
+    entered, cancelled = asyncio.Event(), asyncio.Event()
+    _expire_file_when(monkeypatch, entered)
+    async def read(request, *args, **kwargs):
+        calls.append(request.pages[0])
+        if request.pages == [2]:
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        return SimpleNamespace(result=("Saved before timeout", "searchable", {}),
+            operation_usage=SimpleNamespace(patch_calls=0, empty_recovery_calls=0))
+    monkeypatch.setattr(ingestion, "_page_result", lambda run: run.result)
+    await asyncio.wait_for(KnowledgeIngestionWorker(registry_factory=lambda _: Registry(), page_reader=read).run_once(job_id), 20)
+    await asyncio.wait_for(cancelled.wait(), 5)
+    summary = repo.manifest(doc_id, who)["summary"]
+    assert summary["status"] == "paused" and summary["error_code"] == repo.INGESTION_TIMEOUT_CODE
+    assert summary["processed_pages"] == 1 and not summary["coverage_complete"]
+    assert calls == [1, 2]
+    assert [chunk.content for chunk in list_chunks([doc_id])] == ["Saved before timeout"]
+    assert repo.claim_next(job_id=job_id) is None
+
+
+def test_explicit_new_ingestion_never_inherits_an_old_file_deadline():
+    who, doc_id, job_id = queued()
+    job = repo.claim_next(job_id=job_id)
+    repo.cancel(doc_id, who)
+    new_id = repo.queue_document(doc_id, who, job.configuration, new_version=True)
+    with session_scope() as session:
+        config = session.get(KnowledgeIngestionRecord, new_id).configuration
+    assert "processing_deadline_at" not in config
+
+
+@pytest.mark.asyncio
+async def test_timed_out_paid_page_is_not_resubmitted_on_manual_gap_retry(monkeypatch):
+    from contextlib import asynccontextmanager
+    from backend.tests.test_recognition_recheck import Engine, source_file
+    from backend.knowledge import ingestion
+    engine = Engine(initial=["literal text"])
+    calls, entered = [], asyncio.Event()
+    _expire_file_when(monkeypatch, entered)
+    async def blocked(request):
+        calls.append(request)
+        entered.set()
+        await asyncio.Event().wait()
+    engine.recognize = blocked
+    @asynccontextmanager
+    async def adapter(**_):
+        yield engine
+    monkeypatch.setattr(ingestion, "recognition_engine", adapter)
+    who = owner()
+    body, media = source_file()
+    upload = persist_knowledge_upload(storage=get_storage(), owner_id=who, original_name="scan.png", content=body,
+                                     content_type=media, retention_policy="retained")
+    config = dict(policy_version=POLICY, prompt_version="faithful-reader-v1", route_id=None, route_fingerprint=None)
+    job_id = repo.queue_document(upload.document_id, who, config)
+    worker = KnowledgeIngestionWorker(registry_factory=lambda _: Registry())
+    await asyncio.wait_for(worker.run_once(job_id), 20)
+    summary = repo.manifest(upload.document_id, who)["summary"]
+    assert summary["status"] == "paused" and summary["error_code"] == repo.INGESTION_TIMEOUT_CODE
+    assert len(calls) == 1
+    retry = repo.queue_document(upload.document_id, who, config, new_version=True, retry_failed_only=True)
+    assert not await worker.run_once(retry)
+    page = repo.manifest(upload.document_id, who)["pages"][0]
+    assert page["state"] == "failed" and page["error_code"] == "provider_submit_uncertain"
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_file_deadline_does_not_wait_for_cancel_resistant_reader_cleanup(monkeypatch):
+    from backend.knowledge import ingestion
+    who, doc_id, job_id = queued(pdf())
+    cleanup_gate, finished, entered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    _expire_file_when(monkeypatch, entered)
+    async def slow_cleanup(*args, **kwargs):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await cleanup_gate.wait()
+            return SimpleNamespace(result=("Must not publish", "searchable", {}),
+                operation_usage=SimpleNamespace(patch_calls=0, empty_recovery_calls=0))
+        finally:
+            finished.set()
+    monkeypatch.setattr(ingestion, "_page_result", lambda run: run.result)
+    try:
+        await asyncio.wait_for(KnowledgeIngestionWorker(registry_factory=lambda _: Registry(), page_reader=slow_cleanup).run_once(job_id), 20)
+        assert not finished.is_set()
+        assert repo.manifest(doc_id, who)["summary"]["status"] == "paused"
+    finally:
+        cleanup_gate.set()
+        await asyncio.wait_for(finished.wait(), 5)
+    await asyncio.sleep(.05)
+    assert not list_chunks([doc_id])
+
+
+@pytest.mark.asyncio
+async def test_native_worker_cancellation_reaps_before_releasing_capacity(monkeypatch):
+    import asyncio
+    from backend.knowledge.ingestion import native_units
+    from backend.tools import sandbox_runtime
+    semaphore = asyncio.Semaphore(1)
+    monkeypatch.setattr(sandbox_runtime, "_SEMAPHORE", semaphore)
+    started, killed, reaped = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    class Process:
+        returncode = None
+        async def communicate(self, body=None):
+            if body is not None:
+                started.set()
+                await asyncio.Event().wait()
+            return b"{}", None
+        def kill(self):
+            killed.set()
+            self.returncode = -9
+        async def wait(self):
+            reaped.set()
+            return self.returncode
+    async def launch(*args, **kwargs):
+        return Process()
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+    task = asyncio.create_task(native_units("source.txt", b"text"))
+    await started.wait()
+    assert semaphore._value == 0
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert killed.is_set() and reaped.is_set() and semaphore._value == 1

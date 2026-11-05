@@ -270,3 +270,35 @@ async def test_local_read_excludes_worker_queue_but_keeps_storage_deadline(tmp_p
     monkeypatch.setattr(reader, "_require_active", slow_after_worker)
     with pytest.raises(RecognitionError, match="recognition_timeout"):
         await asyncio.wait_for(reader.read(data, command, timeout_seconds=0.04), 1)
+
+
+@pytest.mark.asyncio
+async def test_paused_local_processing_deadline_still_has_bounded_slot_admission(tmp_path, monkeypatch):
+    import threading
+    from contextvars import ContextVar
+    from backend.domain.errors import PdfEvidenceError
+    from backend.services import submission_work_budget as clocks
+    from backend.tools import file_processing, pdf_evidence
+
+    reader, data, _, _, _ = setup(tmp_path)
+    slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(file_processing, "_PDF_EXTRACTION_SLOTS", slots)
+    monkeypatch.setattr(pdf_evidence, "PDF_ADMISSION_WAIT_SECONDS", .03)
+    budget = clocks.SubmissionWorkBudget("local-queue", limit_seconds=30)
+    monkeypatch.setattr(clocks, "_current", ContextVar("local_queue_budget", default=budget))
+    slots.acquire()
+    try:
+        with pytest.raises(PdfEvidenceError) as error:
+            await asyncio.wait_for(reader.read(data, PdfIndexRequest(), timeout_seconds=10), 1)
+        assert error.value.code == "pdf_evidence_busy"
+        assert budget.active == 0 and budget.elapsed == 0
+        assert not slots.acquire(blocking=False)
+    finally:
+        slots.release()
+        budget.close()
+    # A fresh explicit read after capacity returns is healthy; no leaked reader
+    # or taken/released extra semaphore permit survived admission failure.
+    result = await reader.read(data, PdfIndexRequest())
+    assert result.evidence.total_pages == 1
+    assert slots.acquire(blocking=False)
+    slots.release()

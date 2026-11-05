@@ -1,3 +1,4 @@
+import { classifyRecoverableError } from "./taskActionGuards";
 import type { Locale } from "@/i18n/messages";
 import type { SubmissionPageError, SubmissionSourceOutcome } from "@/types";
 
@@ -56,12 +57,21 @@ export function getSubmissionPageErrorLabel(source: SubmissionSourceOutcome, err
   return tx(locale, `第 ${error.page} 页：${reason}${status}`, `Page ${error.page}: ${reason}${status}`);
 }
 
+function submissionLimitCopy(locale: Locale, code: string): SubmissionSourceReasonCopy {
+  const info = classifyRecoverableError(code, { locale });
+  return {
+    title: info.title, description: info.description,
+    nextStep: tx(locale, "重试失败项可继续补充未完成内容；不确定的请求须先明确确认，也可选择人工继续处理。", "Retry failed files to complete unfinished content after explicitly confirming any uncertain requests, or continue manually."),
+  };
+}
+
 const REASON_COPY: Record<string, ReasonFactory> = {
-  submission_time_limit_reached: (locale) => ({
-    title: tx(locale, "本次识别已达到处理时限", "This recognition run reached its processing limit"),
-    description: tx(locale, "本次有效处理时间已达到 3 小时，排队不计时；已完成的识别和结构化作答已保留。", "This run reached 3 hours of active processing, excluding queue time. Completed recognition and structured answers are retained."),
-    nextStep: tx(locale, "重试失败项可继续补充未完成内容；也可选择人工继续处理，核对已有作答并补齐其余内容。", "Retry failed files to complete unfinished content, or continue manually to review saved answers and fill the gaps."),
-  }),
+  question_preparation_time_limit_reached: (locale) => submissionLimitCopy(locale, "question_preparation_time_limit_reached"),
+  question_preparation_wall_time_limit_reached: (locale) => submissionLimitCopy(locale, "question_preparation_wall_time_limit_reached"),
+  grading_time_limit_reached: (locale) => submissionLimitCopy(locale, "grading_time_limit_reached"),
+  grading_wall_time_limit_reached: (locale) => submissionLimitCopy(locale, "grading_wall_time_limit_reached"),
+  submission_time_limit_reached: (locale) => submissionLimitCopy(locale, "submission_time_limit_reached"),
+  submission_wall_time_limit_reached: (locale) => submissionLimitCopy(locale, "submission_wall_time_limit_reached"),
   operation_cancelled: (locale) => ({
     title: tx(locale, "已手动暂停，尚未完成识别", "Manually paused before recognition completed"),
     description: tx(locale, "原文件和已完成识别已保留。可以继续识别未完成部分，也可以人工继续处理。", "Originals and completed recognition are preserved. Resume the unfinished work or continue manually."),

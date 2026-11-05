@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { KnowledgeIngestionStatus } from "./KnowledgeIngestionStatus";
@@ -111,4 +111,53 @@ it("keeps a failed page visible when the model list is unavailable", async () =>
   await screen.findByText("模型列表暂不可用，请重新展开。");
   expect(screen.getByText("1: 内容不完整")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "重试缺页" })).not.toBeDisabled();
+});
+
+
+it("explains a timed-out file without implying that incomplete pages were lost or retried", async () => {
+  const summary = { id: "run", status: "paused", error_code: "knowledge_ingestion_timeout", total_pages: 1000, processed_pages: 12 };
+  api.getJSON.mockResolvedValue({ summary, pages: [], next_offset: null });
+  render(<KnowledgeIngestionStatus documentId="book" ingestion={summary} zh />);
+  await userEvent.click(screen.getByText("已暂停 · 12/1000"));
+  expect(screen.getByText(/整份文件识别已达到 2 小时时限，已完成页面已保存/)).toBeInTheDocument();
+  expect(screen.getByText(/状态不明的模型请求不会自动重发/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "继续处理" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "重试缺页" })).toBeInTheDocument();
+  expect(api.postJSON).not.toHaveBeenCalled();
+});
+
+it.each(["paused", "cancelled"])("offers gap retry, not resume, after a paused file's deadline (%s)", async (status) => {
+  const summary = { id: "run", status, error_code: "provider_quota_exceeded", total_pages: 10,
+    processed_pages: 3, processing_deadline_at: Date.now() / 1000 - 1 };
+  api.getJSON.mockResolvedValue({ summary, pages: [], next_offset: null });
+  api.postMultipart.mockResolvedValue({ status: "queued" });
+  render(<KnowledgeIngestionStatus documentId="book" ingestion={summary} zh />);
+  await userEvent.click(screen.getByText("已暂停 · 3/10"));
+  expect(screen.getByText(/整份文件识别已达到 2 小时时限/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "继续处理" })).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole("button", { name: "重试缺页" })).not.toBeDisabled());
+  await userEvent.click(screen.getByRole("button", { name: "重试缺页" }));
+  expect(api.postMultipart).toHaveBeenLastCalledWith("/knowledge/documents/book/retry-failed", null,
+    { fields: { accept_uncertain_resubmission: false } });
+  expect(api.postJSON).not.toHaveBeenCalled();
+});
+
+it("switches an open paused view to gap retry when its wall clock expires without polling", async () => {
+  vi.useFakeTimers();
+  try {
+    const summary = { id: "run", status: "paused", total_pages: 10, processed_pages: 3,
+      processing_deadline_at: (Date.now() + 1000) / 1000 };
+    api.getJSON.mockResolvedValue({ summary, pages: [], next_offset: null });
+    const view = render(<KnowledgeIngestionStatus documentId="book" ingestion={summary} zh />);
+    await act(async () => { fireEvent.click(screen.getByText("已暂停 · 3/10")); });
+    expect(screen.getByRole("button", { name: "继续处理" })).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1001); });
+    expect(screen.queryByRole("button", { name: "继续处理" })).not.toBeInTheDocument();
+    expect(screen.getByText(/整份文件识别已达到 2 小时时限/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试缺页" })).toBeInTheDocument();
+    expect(api.getJSON).toHaveBeenCalledTimes(1);
+    expect(api.postJSON).not.toHaveBeenCalled();
+    expect(api.postMultipart).not.toHaveBeenCalled();
+    view.unmount();
+  } finally { vi.useRealTimers(); }
 });

@@ -182,6 +182,9 @@ class PdfEvidenceError(DomainError):
 
 
 RECOGNITION_ERROR_CODES = frozenset({
+    "question_preparation_time_limit_reached", "grading_time_limit_reached",
+    "question_preparation_wall_time_limit_reached", "grading_wall_time_limit_reached",
+    "submission_wall_time_limit_reached",
     "question_source_pages_out_of_range", "question_source_incomplete",
     "material_ocr_confirmation_required", "material_recognition_review_required", "material_parser_provider_required",
     "recognition_request_invalid", "recognition_source_mismatch", "recognition_plan_changed",

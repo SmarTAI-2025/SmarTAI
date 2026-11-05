@@ -8,6 +8,9 @@ Experts API router — BYOK (Bring Your Own Key) management endpoints.
 """
 from __future__ import annotations
 
+from backend.api.request_deadlines import EXPERT_PROBE_SECONDS
+from backend.llm.request_timeouts import cancellable_provider_scope
+
 import asyncio
 import logging
 import ssl
@@ -543,17 +546,20 @@ async def verify_provider(
         _check_custom_probe_limit(current.id, "verify_text")
     try:
         validate_provider_api_key(stored.config.api_key)
+        # Leave room for persisted verification status before the browser's 75s wait.
         timeout_seconds = max(
             5,
             min(
+                EXPERT_PROBE_SECONDS,
                 int(settings.llm_timeout),
                 int(settings.custom_provider_verification_timeout_seconds),
             ),
         )
-        await asyncio.wait_for(
-            provider.ainvoke([HumanMessage(content="Reply with exactly OK.")]),
-            timeout=timeout_seconds,
-        )
+        with cancellable_provider_scope():
+            await asyncio.wait_for(
+                provider.ainvoke([HumanMessage(content="Reply with exactly OK.")]),
+                timeout=timeout_seconds,
+            )
     except Exception as exc:
         error_code = _verification_error_code(exc)
         persisted = set_provider_verification(
@@ -644,12 +650,13 @@ async def verify_provider_image(
     state, reason = "inconclusive", "image_probe_answer_incorrect"
     try:
         validate_provider_api_key(provider.config.api_key)
-        response = await asyncio.wait_for(provider.ainvoke_vision(
-            IMAGE_CHALLENGE_PROMPT, [VisionImage(data=pixels, media_type="image/png")],
-            # Some compatible models include reasoning in the output budget.
-            # Keep the single optional probe bounded without clipping a short answer.
-            max_output_tokens=256,
-        ), timeout=max(5, min(int(settings.llm_timeout), int(settings.custom_provider_verification_timeout_seconds))))
+        with cancellable_provider_scope():
+            response = await asyncio.wait_for(provider.ainvoke_vision(
+                IMAGE_CHALLENGE_PROMPT, [VisionImage(data=pixels, media_type="image/png")],
+                # Some compatible models include reasoning in the output budget.
+                # Keep the single optional probe bounded without clipping a short answer.
+                max_output_tokens=256,
+            ), timeout=max(5, min(EXPERT_PROBE_SECONDS, int(settings.llm_timeout), int(settings.custom_provider_verification_timeout_seconds))))
         if getattr(response, "finish_reason", None) == "length":
             reason = "image_probe_response_truncated"
         elif response.content.strip() == answer:

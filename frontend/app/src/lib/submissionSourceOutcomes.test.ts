@@ -26,7 +26,11 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 describe("submission source reason copy", () => {
   it.each(["zh-CN", "en-US"] as const)("explains work-time exhaustion and both continuation options (%s)", locale => {
     const copy = getSubmissionSourceReasonCopy(source({ reason_code: "submission_time_limit_reached" }), locale);
-    expect(copy.description).toContain(locale === "zh-CN" ? "3 小时，排队不计时" : "3 hours of active processing, excluding queue time");
+    expect(copy.description).toContain(locale === "zh-CN" ? "有效处理上限为 2.5 小时" : "active processing limit is 2.5 hours");
+    expect(copy.description).toContain(locale === "zh-CN" ? "总时限为 3.5 小时" : "elapsed time limit after the first start is 3.5 hours");
+    const wall = getSubmissionSourceReasonCopy(source({ reason_code: "submission_wall_time_limit_reached" }), locale);
+    expect(wall.description).toContain(locale === "zh-CN" ? "已取消本地处理" : "local processing was cancelled");
+    expect(wall.description).toContain(locale === "zh-CN" ? "重启不会重置" : "does not reset on restart");
     expect(copy.nextStep).toContain(locale === "zh-CN" ? "人工继续处理" : "continue manually");
     expect(JSON.stringify(copy)).not.toMatch(/管理员|administrator/);
   });

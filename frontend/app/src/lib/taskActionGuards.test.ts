@@ -9,6 +9,35 @@ import {
 } from "./taskActionGuards";
 
 describe("task contract compatibility", () => {
+  it.each(["zh-CN", "en-US"] as const)("distinguishes whole-run limits from provider response timeouts (%s)", locale => {
+    const grade = classifyRecoverableError("grading_time_limit_reached", { locale });
+    const question = classifyRecoverableError("question_preparation_time_limit_reached", { locale });
+    expect(grade.description).toContain(locale === "zh-CN" ? "2.5 小时" : "2.5 hours");
+    expect(question.description).toContain(locale === "zh-CN" ? "1.5 小时" : "1.5 hours");
+    for (const info of [grade, question]) {
+      expect(info.description).toContain(locale === "zh-CN" ? "首次运行前的排队不计时" : "Initial queue time is excluded");
+      expect(info.description).toContain(locale === "zh-CN" ? "可能仍在处理" : "may still be processing");
+      expect(info.actionKind).toBe("refresh");
+      expect(info.title).not.toContain("模型响应超时");
+    }
+    for (const [family, active, wall] of [["question_preparation", "1.5", "2.5"], ["grading", "2.5", "3.5"], ["submission", "2.5", "3.5"]]) {
+      const activeInfo = classifyRecoverableError(`${family}_time_limit_reached`, { locale });
+      const wallInfo = classifyRecoverableError(`${family}_wall_time_limit_reached`, { locale });
+      for (const info of [activeInfo, wallInfo]) {
+        expect(info.description).toContain(active);
+        expect(info.description).toContain(wall);
+        expect(info.description).toContain(locale === "zh-CN" ? "重启不会重置" : "does not reset on restart");
+        expect(info.description).toContain(locale === "zh-CN" ? "明确确认" : "explicit confirmation");
+      }
+      expect(activeInfo.description).toContain(locale === "zh-CN" ? "限定时间内收尾" : "bounded drain period");
+      expect(wallInfo.description).toContain(locale === "zh-CN" ? "已取消本地处理" : "local processing was cancelled");
+    }
+    const request = classifyRecoverableError("request_timeout", { locale });
+    expect(request.description).toContain(locale === "zh-CN" ? "先查看任务状态" : "Check the task status before retrying");
+    expect(request.actionKind).toBe("refresh");
+    const submission = classifyRecoverableError("submission_time_limit_reached", { locale });
+    expect(submission.description).toContain(locale === "zh-CN" ? "有效处理上限" : "active processing");
+  });
   it.each(["pdf_evidence_busy", "source_extent_unavailable"])("offers retained-result retry for local PDF failure %s", code => {
     for (const locale of ["zh-CN", "en-US"] as const) {
       const info = classifyRecoverableError(code, { locale });

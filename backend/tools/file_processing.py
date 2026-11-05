@@ -44,7 +44,7 @@ except ImportError:
 from fastapi import HTTPException
 
 from backend.config import settings
-from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
+from backend.tools.pdf_worker_lifecycle import PdfWorkerCleanupTimeout, reap_pdf_worker
 from backend.skills.ocr_ingest import OCRImage, OCRIngestSkill, OCRPurpose
 
 logger = logging.getLogger(__name__)
@@ -376,12 +376,12 @@ async def _extract_pdf_payload(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         ))
-        process = await asyncio.shield(launch_task)
         try:
-            stdout, _ = await asyncio.wait_for(
-                process.communicate(pdf_bytes),
-                timeout=timeout_seconds,
-            )
+            # Startup and transport share the existing processing allowance.
+            # Shield launch so cleanup can still own a handle arriving late.
+            async with asyncio.timeout(timeout_seconds):
+                process = await asyncio.shield(launch_task)
+                stdout, _ = await process.communicate(pdf_bytes)
         except asyncio.TimeoutError as exc:
             logger.warning("PDF extraction timed out")
             raise HTTPException(
@@ -428,9 +428,9 @@ async def _extract_pdf_payload(
         ) from exc
     finally:
         try:
-            await reap_pdf_worker(launch_task)
-        finally:
-            _PDF_EXTRACTION_SLOTS.release()
+            await reap_pdf_worker(launch_task, release_slot=_PDF_EXTRACTION_SLOTS.release)
+        except PdfWorkerCleanupTimeout:
+            raise HTTPException(503, detail={"code": "pdf_extraction_busy"}) from None
 
 
 async def inspect_baidu_ocr_upload(
@@ -496,12 +496,12 @@ async def inspect_baidu_ocr_upload(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         ))
-        process = await asyncio.shield(launch_task)
         try:
-            stdout, _ = await asyncio.wait_for(
-                process.communicate(file_bytes),
-                timeout=timeout_seconds,
-            )
+            # Startup and transport share the existing processing allowance.
+            # Shield launch so cleanup can still own a handle arriving late.
+            async with asyncio.timeout(timeout_seconds):
+                process = await asyncio.shield(launch_task)
+                stdout, _ = await process.communicate(file_bytes)
         except asyncio.TimeoutError as exc:
             raise HTTPException(
                 status_code=408,
@@ -539,9 +539,9 @@ async def inspect_baidu_ocr_upload(
         return inspection
     finally:
         try:
-            await reap_pdf_worker(launch_task)
-        finally:
-            _PDF_EXTRACTION_SLOTS.release()
+            await reap_pdf_worker(launch_task, release_slot=_PDF_EXTRACTION_SLOTS.release)
+        except PdfWorkerCleanupTimeout:
+            raise HTTPException(503, detail={"code": "media_inspection_busy"}) from None
 
 
 async def extract_text_from_pdf(

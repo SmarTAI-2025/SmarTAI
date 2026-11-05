@@ -910,6 +910,49 @@ def supersede_workflow_operation(
         return _detach_workflow(row)
 
 
+def fail_timed_out_operation(operation_id: str, *, owner_id: str, expected_attempt: int,
+                             expected_lease_token: str, code: str = "question_preparation_time_limit_reached") -> bool:
+    """Atomically fence a timed-out recognition run and release its task marker.
+
+    Keep checkpoints/artifacts and provider-submit uncertainty intact. Only the
+    current live lease can stop its attempt; a stale timer cannot stop a retry.
+    """
+    from backend.services.workflow_deadlines import BUDGET_TYPES, LIMIT_CODES
+    if code not in LIMIT_CODES | {"provider_submit_uncertain"}:
+        raise ValueError("Invalid timeout code")
+    now = time.time()
+    with session_scope() as session:
+        stopped = session.execute(update(WorkflowOperationRecord).where(
+            WorkflowOperationRecord.id == operation_id,
+            WorkflowOperationRecord.owner_id == owner_id,
+            WorkflowOperationRecord.attempt == expected_attempt,
+            WorkflowOperationRecord.operation_type.in_(BUDGET_TYPES),
+            WorkflowOperationRecord.status == "running",
+            WorkflowOperationRecord.lease_token == expected_lease_token,
+            WorkflowOperationRecord.lease_expires_at >= now,
+        ).values(status="error", error_code=code, completed_at=now, updated_at=now,
+                 lease_owner=None, lease_token=None, lease_expires_at=None, lease_heartbeat_at=None))
+        if stopped.rowcount != 1:
+            return False
+        operation = session.get(WorkflowOperationRecord, operation_id)
+        operation.progress = {**(operation.progress or {}), "phase": "error", "error_detail": code, "model_waits": []}
+        workflow = session.scalar(select(AssignmentWorkflowRecord).where(
+            AssignmentWorkflowRecord.assignment_id == operation.assignment_id,
+            AssignmentWorkflowRecord.owner_id == owner_id,
+        ).with_for_update())
+        _lock_live_assignment(session, assignment_id=operation.assignment_id, owner_id=owner_id)
+        if workflow is not None and workflow.active_job_id == operation_id:
+            workflow.active_job_id = workflow.active_operation = None
+            workflow.last_failed_job_id = operation_id
+            workflow.error_code = code
+            workflow.presentation_status = (
+                "problems_ready" if operation.operation_type in {"material_import", "ai_completion"} else "error")
+            workflow.updated_at = now
+            if operation.operation_type in {"material_import", "ai_completion"}:
+                operation.payload = {**(operation.payload or {}), "stopped_workflow_revision": workflow.workflow_revision}
+        return True
+
+
 def generate_result_artifacts_atomic(
     *,
     assignment_id: str,
@@ -1525,6 +1568,13 @@ def save_operation_checkpoint(
             if matched_refs != set(refs):
                 raise NotFound("stored_file")
 
+        from backend.services.workflow_deadlines import CHECKPOINT_KEY, WORK_CHECKPOINT_KEY
+        if CHECKPOINT_KEY in (current.checkpoint or {}):
+            checkpoint = {**checkpoint, CHECKPOINT_KEY: current.checkpoint[CHECKPOINT_KEY]}
+        if WORK_CHECKPOINT_KEY not in checkpoint and WORK_CHECKPOINT_KEY in (current.checkpoint or {}):
+            checkpoint = {**checkpoint, WORK_CHECKPOINT_KEY: current.checkpoint[WORK_CHECKPOINT_KEY]}
+        checkpoint = _validate_json_object(checkpoint, field="checkpoint", max_bytes=MAX_OPERATION_CHECKPOINT_BYTES)
+
         checkpoint_values = {
             "checkpoint_revision": current.checkpoint_revision + 1,
             "checkpoint_stage": stage,
@@ -1576,9 +1626,14 @@ def claim_operation(
     now = time.time()
     with session_scope() as session:
         from backend.db.execution_admission import WORKLOAD_TYPES, admit_owner
-        operation_type = session.scalar(select(WorkflowOperationRecord.operation_type).where(
+        previous = session.execute(select(WorkflowOperationRecord.operation_type,
+            WorkflowOperationRecord.status, WorkflowOperationRecord.progress).where(
             WorkflowOperationRecord.id == operation_id, WorkflowOperationRecord.owner_id == owner_id,
-        ))
+        )).first()
+        operation_type = previous.operation_type if previous else None
+        historical_start = (previous.progress or {}).get("started_at") if previous and previous.status == "running" else None
+        if not (type(historical_start) in (int, float) and 0 < historical_start <= now):
+            historical_start = now
         if operation_type in WORKLOAD_TYPES:
             admit_owner(session, owner_id, exclude_id=operation_id)
         result = session.execute(
@@ -1653,6 +1708,14 @@ def claim_operation(
                 raise LeaseLost(
                     "The task is being deleted.", code="task_deleted"
                 )
+        from backend.services.workflow_deadlines import BUDGET_TYPES, CHECKPOINT_KEY, workflow_limit
+        if row.operation_type in BUDGET_TYPES:
+            saved_clock = (row.checkpoint or {}).get(CHECKPOINT_KEY) or {}
+            if saved_clock.get("attempt") != row.attempt:
+                row.checkpoint = {**(row.checkpoint or {}), CHECKPOINT_KEY: {
+                    "attempt": row.attempt, "started_at": historical_start,
+                    "deadline_at": historical_start + workflow_limit(row.operation_type)}}
+                session.flush()
         return _detach_operation(row)
 
 

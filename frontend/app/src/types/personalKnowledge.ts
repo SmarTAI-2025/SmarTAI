@@ -10,6 +10,8 @@ export interface KnowledgeIngestionSummary {
   warning_pages?: number;
   coverage_complete?: boolean;
   unit?: "page" | "section" | "slide";
+  processing_deadline_at?: number | null;
+  processing_timeout_seconds?: number;
   error_code?: string | null;
 }
 

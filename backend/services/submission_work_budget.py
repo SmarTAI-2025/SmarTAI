@@ -1,6 +1,6 @@
 """Attempt-local submission work clock; queue waits do not consume its budget.
 
-Only submission parsing installs this context. Concurrent PDF/model work is
+Durable recognition and grading install this shared context. Concurrent PDF/model work is
 counted once in elapsed seconds. Exhaustion closes admission, not running calls:
 their existing request deadlines still bound draining and result persistence.
 """
@@ -10,25 +10,25 @@ import asyncio
 from contextvars import ContextVar
 from functools import wraps
 import math
-import logging
 
-from backend.domain.errors import RecognitionError, LeaseLost
+from backend.domain.errors import RecognitionError
 
-logger = logging.getLogger(__name__)
 
-LIMIT_SECONDS = 3 * 60 * 60
+LIMIT_SECONDS = 150 * 60
 CODE = "submission_time_limit_reached"
-PROFILE = "submission-active-3h-v1"
+PROFILE = "submission-active-v2"
 CHECKPOINT_KEY = "submission_work_clock"
 _current = ContextVar("submission_work_budget", default=None)
 
 
 class SubmissionWorkBudget:
-    def __init__(self, job_id, *, attempt=1, saved=None, limit_seconds=None):
+    def __init__(self, job_id, *, attempt=1, saved=None, limit_seconds=None,
+                 code=CODE, profile=PROFILE, checkpoint_key=CHECKPOINT_KEY):
         self.job_id = job_id
         self.attempt = attempt
         self.limit = LIMIT_SECONDS if limit_seconds is None else limit_seconds
-        saved = saved if isinstance(saved, dict) and saved.get("profile") == PROFILE and saved.get("attempt") == attempt else {}
+        self.code, self.profile, self.checkpoint_key = code, profile, checkpoint_key
+        saved = saved if isinstance(saved, dict) and saved.get("profile") == profile and saved.get("attempt") == attempt else {}
         spent = saved.get("active_seconds", 0)
         self.spent = float(spent) if type(spent) in (float, int) and math.isfinite(spent) and spent >= 0 else 0.0
         self.active = 0
@@ -49,7 +49,7 @@ class SubmissionWorkBudget:
             self.expire()
         if self.exhausted.is_set():
             self.blocked = True
-            raise RecognitionError(CODE)
+            raise RecognitionError(self.code)
 
     def start(self):
         self.check()
@@ -78,7 +78,7 @@ class SubmissionWorkBudget:
             deadline.reschedule(now)
 
     def snapshot(self):
-        return {"profile": PROFILE, "attempt": self.attempt, "active_seconds": self.elapsed,
+        return {"profile": self.profile, "attempt": self.attempt, "active_seconds": self.elapsed,
                 "draining": self.exhausted.is_set(), "blocked": self.blocked}
 
     async def wait(self, awaitable):
@@ -94,7 +94,7 @@ class SubmissionWorkBudget:
             if not deadline.expired():
                 raise
             self.blocked = True
-            raise RecognitionError(CODE)
+            raise RecognitionError(self.code)
         finally:
             self.waiters.discard(deadline)
 
@@ -109,7 +109,7 @@ def current_budget():
 
 def with_work_checkpoint(job_id, checkpoint):
     budget = current_budget()
-    return {**checkpoint, CHECKPOINT_KEY: budget.snapshot()} if budget is not None and budget.job_id == job_id else checkpoint
+    return {**checkpoint, budget.checkpoint_key: budget.snapshot()} if budget is not None and budget.job_id == job_id else checkpoint
 
 
 async def wait_for_admission(awaitable):
@@ -120,37 +120,18 @@ async def wait_for_admission(awaitable):
 def submission_work_budget(function):
     @wraps(function)
     async def run(*args, **kwargs):
-        operation = kwargs.get("leased_operation")
-        saved = operation.checkpoint_data.get(CHECKPOINT_KEY) if operation is not None else None
-        budget = SubmissionWorkBudget(kwargs["job_id"], attempt=kwargs["job_attempt"], saved=saved)
-        token = _current.set(budget)
-        owner_task = asyncio.current_task()
-
-        async def persist_clock():
-            reported = False
-            while True:
-                await asyncio.sleep(5)
-                if operation is not None:
-                    try:
-                        await operation.checkpoint(stage=operation.checkpoint_stage,
-                            checkpoint=operation.checkpoint_data, artifact_refs=operation.artifact_refs)
-                    except LeaseLost:
-                        owner_task.cancel()
-                        return
-                    except Exception as exc:
-                        logger.warning("Submission work clock checkpoint failed; exception_type=%s", type(exc).__name__)
-                if budget.exhausted.is_set() and not reported:
-                    from backend.progress.tracker import get_reporter
-                    if (reporter := get_reporter(budget.job_id)) is not None:
-                        await reporter._emit_message(CODE, level="warn")
-                    reported = True
-
-        watcher = asyncio.create_task(persist_clock())
-        try:
+        if current_budget() is not None:
             return await function(*args, **kwargs)
-        finally:
-            watcher.cancel()
-            await asyncio.gather(watcher, return_exceptions=True)
-            budget.close()
-            _current.reset(token)
+        operation = kwargs.get("leased_operation")
+        from backend.services.workflow_deadlines import processing_budget, CHECKPOINT_KEY as WALL_KEY, WORK_CHECKPOINT_KEY
+        saved = operation.checkpoint_data.get(WORK_CHECKPOINT_KEY) if operation is not None else None
+        started_at = (operation.checkpoint_data.get(WALL_KEY) or {}).get("started_at") if operation is not None else None
+        async def persist(snapshot):
+            if operation is not None:
+                await operation.checkpoint(stage=operation.checkpoint_stage,
+                    checkpoint={**operation.checkpoint_data, WORK_CHECKPOINT_KEY: snapshot},
+                    artifact_refs=operation.artifact_refs)
+        async with processing_budget(kwargs["job_id"], kind="submission_recognition", attempt=kwargs["job_attempt"],
+                                     saved=saved, started_at=started_at, persist=persist, raise_on_blocked=False):
+            return await function(*args, **kwargs)
     return run

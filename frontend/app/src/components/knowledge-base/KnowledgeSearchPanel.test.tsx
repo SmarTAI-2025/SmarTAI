@@ -55,3 +55,12 @@ it("only requests the explicitly selected model and keeps fallback visible", asy
   expect(screen.getByText(/Model calls this search: 0/)).toHaveTextContent("Reused query");
   expect(api.postJSON).toHaveBeenCalledWith("/knowledge/search", { query:"中文查询", document_ids:["book"], limit:5, query_provider_id:"owner-model" }, { _authScope: "teacher" });
 });
+
+
+it("never claims no matches when expansion or local retrieval is incomplete", async () => {
+  api.postJSON.mockResolvedValue({ matches: [], partial: true, query_plan: { status: "rewritten" } });
+  render(<KnowledgeSearchPanel documentIds={["book"]} />);
+  await userEvent.type(screen.getByRole("textbox"), "algebra{Enter}");
+  expect(await screen.findByRole("alert")).toHaveTextContent("Relevant passages may be missing");
+  expect(screen.queryByText(/No matching passages/)).not.toBeInTheDocument();
+});

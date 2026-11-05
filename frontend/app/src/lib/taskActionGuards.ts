@@ -787,12 +787,45 @@ export function classifyRecoverableError(
     };
   }
 
-  if (code === "submission_time_limit_reached") {
+  if (code === "request_timeout") {
     return {
-      title: tx(locale, "本次识别已达到处理时限", "This recognition run reached its processing limit"),
-      description: tx(locale, "本次有效处理时间已达到 3 小时，排队不计时。已完成的识别和结构化作答已保留；可重试失败项继续补充，也可人工继续处理，只补齐未完成内容。", "This run reached 3 hours of active processing, excluding queue time. Completed recognition and structured answers are retained. Retry failed files to continue, or fill unfinished content manually."),
-      actionLabel: tx(locale, "重试失败项", "Retry failed files"),
-      actionKind: "retry", tone: "warning", technicalDetails,
+      title: tx(locale, "本次请求已超时", "This request reached its time limit"),
+      description: tx(locale, "本次请求等待过久，已停止等待。请先查看任务状态再决定是否重试；文件或结果可能已保存，已提交给服务商的请求也可能仍在处理。", "This request took too long and stopped waiting. Check the task status before retrying: files or results may already be saved, and the provider may still be processing a submitted request."),
+      actionLabel: tx(locale, "查看任务状态", "Check task status"),
+      actionKind: "refresh", tone: "warning", technicalDetails,
+    };
+  }
+
+  if (["question_preparation_time_limit_reached", "question_preparation_wall_time_limit_reached",
+    "grading_time_limit_reached", "grading_wall_time_limit_reached",
+    "submission_time_limit_reached", "submission_wall_time_limit_reached"].includes(code ?? "")) {
+    const question = code?.startsWith("question_preparation_");
+    const submission = code?.startsWith("submission_");
+    const wall = code?.includes("_wall_");
+    const subject = question ? tx(locale, "本次题目准备", "This question preparation")
+      : submission ? tx(locale, "本次作答识别", "This submission recognition") : tx(locale, "本次批改", "This grading run");
+    return {
+      title: subject + (wall ? tx(locale, "已达到运行总时限", " reached its elapsed time limit")
+        : tx(locale, "已达到有效处理时限", " reached its active processing limit")),
+      description: (question
+        ? tx(locale, "有效处理上限为 1.5 小时，首次运行后的总时限为 2.5 小时。", "The active processing limit is 1.5 hours; the elapsed time limit after the first start is 2.5 hours. ")
+        : tx(locale, "有效处理上限为 2.5 小时，首次运行后的总时限为 3.5 小时。", "The active processing limit is 2.5 hours; the elapsed time limit after the first start is 3.5 hours. "))
+        + tx(locale, "首次运行前的排队不计时；首次运行后所有等待均计入总时限，重启不会重置。", "Initial queue time is excluded; after the first start, all waiting counts toward elapsed time, which does not reset on restart. ")
+        + (wall
+          ? tx(locale, "本次已达到运行总时限，已取消本地处理。", "The elapsed time limit was reached and local processing was cancelled. ")
+          : tx(locale, "本次已达到有效处理上限，已停止发起新请求，并在限定时间内收尾已发出的请求。", "The active processing limit was reached: new requests stopped and in-flight work received a bounded drain period. "))
+        + tx(locale, "已保存的结果保留。已提交的服务商请求可能仍在处理或计费，不确定项须明确确认后才能重试。人工重试会新建一次运行，只补充未完成内容。", "Saved results are retained. Submitted provider requests may still be processing or billable; uncertain items require explicit confirmation before retrying. An explicit retry starts a new attempt for unfinished work."),
+      actionLabel: submission ? tx(locale, "重试失败项", "Retry failed files") : tx(locale, "检查已保存结果", "Review saved results"),
+      actionKind: submission ? "retry" : "refresh", tone: "warning", technicalDetails,
+    };
+  }
+
+  if (code === "workflow_time_limit_reached") {
+    return {
+      title: tx(locale, "本次后台处理已达到时限", "This background operation reached its time limit"),
+      description: tx(locale, "本次后台处理已停止等待。已保存的结果保留，请先检查任务状态再决定是否重试。", "This background operation stopped waiting. Saved results are retained; check the task status before retrying."),
+      actionLabel: tx(locale, "检查已保存结果", "Review saved results"),
+      actionKind: "refresh", tone: "warning", technicalDetails,
     };
   }
 

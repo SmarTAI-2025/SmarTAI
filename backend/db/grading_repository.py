@@ -709,7 +709,7 @@ def claim_lease(run_id: str, *, worker_id: str, lease_seconds: int,
                 lease_expiry=new_expiry,
                 last_heartbeat_at=now,
                 status=education.GradingRunStatus.RUNNING.value,
-                started_at=now,
+                started_at=func.coalesce(GradingRunRecord.started_at, now),
             )
         )
         if result.rowcount != 1:

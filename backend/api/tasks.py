@@ -517,7 +517,7 @@ async def parse_submissions_endpoint(
         if workflow.last_failed_job_id == workflow.parse_job_id and workflow.parse_job_id:
             failed = workflow_repository.get_operation(workflow.parse_job_id, owner_id=current.id)
             task_facade.require_current_submission_pipeline(failed.payload)
-            if (failed.error_code == "provider_submit_uncertain" or (failed.checkpoint or {}).get("ocr_inflight_source_id")
+            if (failed.error_code in {"provider_submit_uncertain", "submission_wall_time_limit_reached"} or (failed.checkpoint or {}).get("ocr_inflight_source_id")
                     or (failed.checkpoint or {}).get("structure_inflight")):
                 if not acknowledge_possible_duplicate_call:
                     raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")
@@ -569,6 +569,7 @@ class StopTaskRunRequest(BaseModel):
 
 class ContinueTaskRunRequest(StopTaskRunRequest):
     manual: bool = False
+    acknowledge_possible_duplicate_call: bool = Field(default=False, strict=True)
 
 
 @router.post("/{task_id}/continue")
@@ -577,7 +578,8 @@ async def continue_stopped_auxiliary_task(task_id: str, request: ContinueTaskRun
     from backend.progress.tracker import remove_reporter
     try:
         result = await asyncio.to_thread(continue_manual_grading if request.manual else continue_auxiliary_run, task_id=task_id, owner_id=current.id,
-                                        job_id=request.job_id, expected_revision=request.expected_workflow_revision)
+                                        job_id=request.job_id, expected_revision=request.expected_workflow_revision,
+                                        **({} if request.manual else {"acknowledge_possible_duplicate_call": request.acknowledge_possible_duplicate_call}))
         if result["status"] == "started":
             remove_reporter(request.job_id)
         return result
@@ -635,7 +637,7 @@ async def retry_submission_recognition_endpoint(
         legacy_partial = workflow.parse_job_id == job_id and bool(summary.failed_count)
         if workflow.last_failed_job_id != job_id and not legacy_partial:
             raise InvalidTransition("Only the latest failed input can be retried.", code="submission_retry_not_available")
-        uncertain = failed.error_code == "provider_submit_uncertain" or bool(
+        uncertain = failed.error_code in {"provider_submit_uncertain", "submission_wall_time_limit_reached"} or bool(
             (failed.checkpoint or {}).get("ocr_inflight_source_id") or (failed.checkpoint or {}).get("structure_inflight"))
         if uncertain and not request.acknowledge_possible_duplicate_call:
             raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")

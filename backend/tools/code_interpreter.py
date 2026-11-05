@@ -48,7 +48,7 @@ from typing import List, Optional
 # working.
 from backend.config import settings
 from backend.models import TestCase
-from backend.tools.sandbox_runtime import get_sandbox_semaphore
+from backend.tools.sandbox_runtime import sandbox_slot
 
 logger = logging.getLogger(__name__)
 
@@ -119,8 +119,7 @@ async def run_python_subprocess(
                                     memory_mb=memory_mb, max_output_chars=max_output_chars or 8192)
     if settings.runtime_environment == "production":
         raise HostCodeExecutionDisabled()
-    sem = get_sandbox_semaphore()
-    async with sem:
+    async with sandbox_slot() as slot:
         started_at = time.perf_counter()
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", newline="\n", suffix=".py", delete=False
@@ -128,28 +127,35 @@ async def run_python_subprocess(
             f.write(code)
             code_path = f.name
 
+        launch = None
+        def release_slot():
+            try:
+                os.unlink(code_path)
+            except OSError:
+                pass
+            slot.release()
+        slot.transfer()
         try:
             preexec_fn = (
                 (lambda: _apply_limits(memory_mb, int(timeout) + 2))
                 if sys.platform != "win32"
                 else None
             )
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                code_path,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                preexec_fn=preexec_fn,
-            )
             try:
-                stdout_b, stderr_b = await asyncio.wait_for(
-                    proc.communicate(test_input.encode()),
-                    timeout=timeout,
-                )
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+                # Startup and execution share the per-case clock. Shield the
+                # launch so cancellation cannot lose an eventual child handle.
+                async with asyncio.timeout(timeout):
+                    launch = asyncio.create_task(asyncio.create_subprocess_exec(
+                        sys.executable,
+                        code_path,
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        preexec_fn=preexec_fn,
+                    ))
+                    proc = await asyncio.shield(launch)
+                    stdout_b, stderr_b = await proc.communicate(test_input.encode())
+            except TimeoutError:
                 return TestResult(
                     test=TestCase(input=test_input),
                     passed=False,
@@ -195,10 +201,14 @@ async def run_python_subprocess(
                 stderr_truncated=stderr_truncated,
             )
         finally:
+            from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
             try:
-                os.unlink(code_path)
-            except OSError:
-                pass
+                await reap_pdf_worker(launch, release_slot=release_slot)
+            except Exception:
+                if asyncio.current_task().cancelling():
+                    raise asyncio.CancelledError from None
+                raise
+
 
 
 def _truncate_output(value: str, limit: int) -> tuple[str, bool]:

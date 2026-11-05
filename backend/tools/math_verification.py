@@ -79,7 +79,7 @@ async def verify_math(request: MathVerificationRequest) -> MathVerificationEvide
     The existing sandbox concurrency gate is shared; programming sandbox policy
     is unchanged. Worker environment excludes application credentials.
     """
-    from backend.tools.sandbox_runtime import get_sandbox_semaphore
+    from backend.tools.sandbox_runtime import sandbox_slot
 
     try:
         # Revalidate even model_construct / mutated nested dictionaries.
@@ -89,9 +89,9 @@ async def verify_math(request: MathVerificationRequest) -> MathVerificationEvide
     try:
         # Each admitted check gets its own deadline, including worker startup.
         # Keep the slot until the child has been reaped, including on cancellation.
-        async with get_sandbox_semaphore():
+        async with sandbox_slot() as slot:
             async with asyncio.timeout(WALL_SECONDS):
-                return await _run_worker(request)
+                return await _run_worker(request, release_slot=slot.transfer())
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -104,7 +104,7 @@ async def verify_math(request: MathVerificationRequest) -> MathVerificationEvide
         return _unknown("Mathematical verification could not be completed.")
 
 
-async def _run_worker(request: MathVerificationRequest) -> MathVerificationEvidence:
+async def _run_worker(request: MathVerificationRequest, *, release_slot=None) -> MathVerificationEvidence:
     # Keep ownership even if cancellation arrives before process creation
     # returns its handle. The enclosing call budget still bounds startup.
     launch = asyncio.create_task(asyncio.create_subprocess_exec(
@@ -121,35 +121,14 @@ async def _run_worker(request: MathVerificationRequest) -> MathVerificationEvide
             return _unknown("Worker failed or exceeded its resource limit.", method="resource_limit")
         return MathVerificationEvidence.model_validate_json(output)
     finally:
-        await _reap_worker(launch)
+        await _reap_worker(launch, release_slot=release_slot)
 
 
-async def _reap_worker(launch: asyncio.Task) -> None:
-    async def cleanup():
-        try:
-            process = await launch
-        except (Exception, asyncio.CancelledError):
-            return
-        if process.returncode is None:
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-        try:
-            await process.communicate()
-        finally:
-            await process.wait()
-
-    cleanup_task = asyncio.create_task(cleanup())
-    cancelled = False
-    while not cleanup_task.done():
-        try:
-            await asyncio.shield(cleanup_task)
-        except asyncio.CancelledError:
-            cancelled = True
-    await cleanup_task
-    if cancelled:
-        raise asyncio.CancelledError
+async def _reap_worker(launch: asyncio.Task, *, release_slot=None) -> None:
+    # The owned-process helper is shared with PDF/image workers. Its cleanup
+    # allowance is bounded; an unreaped process keeps its permit quarantined.
+    from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
+    await reap_pdf_worker(launch, release_slot=release_slot)
 
 
 class _Unsupported(ValueError):
