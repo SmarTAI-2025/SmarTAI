@@ -32,6 +32,7 @@ from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable, NativeBu
 
 VERSION = "programming_run_v1"
 PREPARED = grading_repository.PROGRAMMING_CASES_PREPARED
+AUXILIARY = grading_repository.PROGRAMMING_AUXILIARY_CHECK
 STARTED = grading_repository.PROGRAMMING_PREPARATION_STARTED
 PARTIAL = grading_repository.PROGRAMMING_EXECUTION_PARTIAL
 COMPLETED = grading_repository.PROGRAMMING_EXECUTION_COMPLETED
@@ -66,7 +67,7 @@ def _saved(run_id, manifest, owner):
     references = manifest.get("programming_artifacts") or {}
     source_runs = {ref["origin_run"] for ref in references.values()}
     for source in source_runs:
-        for event in grading_repository.list_events(source, actor_id=owner, messages=(PREPARED, PARTIAL, COMPLETED)):
+        for event in grading_repository.list_events(source, actor_id=owner, messages=(PREPARED, PARTIAL, COMPLETED, AUXILIARY)):
             row = event["payload"]
             ref = references.get(row.get("key"), {})
             if (row.get("owner") == owner and row.get("version") == VERSION
@@ -75,7 +76,7 @@ def _saved(run_id, manifest, owner):
                 records[row["key"]] = row
     if references.keys() - records.keys():
         raise CheckpointWriteError("programming_retry_evidence_missing")
-    for event in grading_repository.list_events(run_id, actor_id=owner, messages=(PREPARED, PARTIAL, COMPLETED, STARTED)):
+    for event in grading_repository.list_events(run_id, actor_id=owner, messages=(PREPARED, PARTIAL, COMPLETED, STARTED, AUXILIARY)):
         row = event["payload"]
         if row.get("version") == VERSION and row.get("owner") == owner:
             records[row["key"]] = row
@@ -86,7 +87,7 @@ def artifacts_for_retry(run_id, manifest, owner):
     # An interrupted preparation has unknown submission status and is never
     # inherited as a success. Only an explicit retry may start it again.
     return {k: {field: row[field] for field in ("origin_run", "kind", "digest")}
-            for k, row in _saved(run_id, manifest, owner).items() if row.get("kind") in {PREPARED, PARTIAL, COMPLETED}}
+            for k, row in _saved(run_id, manifest, owner).items() if row.get("kind") in {PREPARED, PARTIAL, COMPLETED, AUXILIARY}}
 
 
 def runtime_identity():
@@ -135,6 +136,10 @@ class ProgrammingRun:
                 or row.get("digest") != digest(row.get("value"))):
             raise CheckpointWriteError("programming_checkpoint_identity_invalid")
         return deepcopy(row["value"])
+
+
+def current_programming_run():
+    return _current.get()
 
 
 @contextmanager
