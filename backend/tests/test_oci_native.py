@@ -204,3 +204,33 @@ async def test_runtime_feedback_follows_observed_failure(filename, source, marke
             assert marker in evidence.safe_summary
         else:
             assert "ZeroDivisionError" not in evidence.safe_summary
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language,filename", [("c","candidate.c"), ("cpp","candidate.cpp")])
+async def test_reference_outputs_and_optional_boundary_use_real_native_processes(language, filename):
+    from backend.skills.programming import ProgrammingSkill, _generate_test_cases
+    from backend.tests.test_programming_scoring_contract import award, fixed_provider, response
+
+    source = '#include <stdio.h>\nint main(void){int n; if(scanf("%d",&n)!=1)return 1; printf("%d\\n",2*n); return 0;}'
+    student = source.replace("2*n", "(n==-1 ? 0 : 2*n)")
+    problem = ProblemInfo(q_id="double", number="1", type="编程题", stem="Read an integer from stdin and print double its value.",
+                          max_score=10, criterion="All teacher examples correct earns full credit.",
+                          solution_code=f"```{language}\n{source}\n```")
+    raw, = source_answers(filename, student, {problem.q_id:problem.model_dump()}, {problem.q_id})
+    answer = StudentAnswerInfo.model_validate(raw)
+    route = fixed_provider(response({"inputs":[{"input":"-1\n"}]}))
+    with programming_run(None, None):
+        generated = await evidence_for_answer(problem=problem, answer=answer, student_id="native-student", task_id="t",
+                provider=route, reporter=None, generate=_generate_test_cases, execute=run_sandbox)
+    assert generated.status == "executed" and generated.report.passed_count == 0
+    assert generated.cases[0].expected_output == "-2\n" and generated.cases[0].source == "llm_generated"
+    assert generated.report.results[0].isolation_mode == "oci_container"
+
+    problem.test_cases = [Case(input="3\n", expected_output="6\n", source="teacher")]
+    route = fixed_provider(response({**award(10), "boundary_case":{"stdin":"-1\n","expected":"-2\n"}}))
+    with programming_run(None, None):
+        vote = await ProgrammingSkill(route, language="zh").grade(problem, answer, student_id="native-student")
+    assert vote.score == 10 and vote.programming_evidence.score_status == "final"
+    assert vote.programming_evidence.teacher_tests.passed == 1 and "-2" in vote.programming_evidence.boundary_note
+    assert vote.programming_evidence.isolation_mode == "oci_container"
