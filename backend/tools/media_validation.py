@@ -14,7 +14,6 @@ from backend.tools.image_evidence_worker import FORMATS, MAX_INPUT_BYTES as MAX_
 from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
 
 MAX_PDF_BYTES = 100 * 1024 * 1024
-MEDIA_ADMISSION_WAIT_SECONDS = 600.0
 _INVALID_CODES = frozenset({
     "pdf_invalid", "pdf_encrypted", "image_invalid", "image_format_mismatch",
     "image_multiframe_unsupported", "image_mode_unsupported", "image_orientation_invalid",
@@ -39,9 +38,9 @@ async def validate_media_content(
     Call only for a PDF/image candidate. Text and archives use their own
     decoders. The returned MIME is verified against the decoded media format.
     HTTP callers retain a short admission limit. Already-queued jobs may set
-    slot_timeout_seconds=None for an independent, bounded 600-second queue wait.
-    Owning-task cancellation/deadlines still apply. The decoder's timeout starts
-    only after admission; waiting never launches or holds another worker's slot.
+    slot_timeout_seconds=None and rely on their owning task's cancellation or
+    deadline while waiting. The decoder's timeout starts only after admission;
+    waiting never launches a worker or holds another worker's slot.
     """
     from backend.tools import file_processing
     from backend.tools.pdf_evidence import _exchange
@@ -67,20 +66,15 @@ async def validate_media_content(
     if budget is not None:
         budget.check()
     slots = file_processing._PDF_EXTRACTION_SLOTS
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + (slot_timeout_seconds if slot_timeout_seconds is not None
-                              else MEDIA_ADMISSION_WAIT_SECONDS)
-    while True:
+    deadline = (asyncio.get_running_loop().time() + slot_timeout_seconds
+                if slot_timeout_seconds is not None else None)
+    while not slots.acquire(blocking=False):
         if budget is not None:
             budget.check()
-        if wait_for_slot and loop.time() >= deadline:
-            raise HTTPException(429, detail={"code": "media_inspection_busy"})
-        if slots.acquire(blocking=False):
-            break
-        if not wait_for_slot:
+        if not wait_for_slot or (deadline is not None and asyncio.get_running_loop().time() >= deadline):
             raise HTTPException(429, detail={"code": "media_inspection_busy"})
         # No slot is held while waiting, so cancellation needs no cleanup.
-        await wait_for_admission(asyncio.sleep(min(0.02, max(0, deadline - loop.time()))))
+        await wait_for_admission(asyncio.sleep(0.02))
     launch_task = None
     failure: BaseException | None = None
     work_started = False
@@ -126,9 +120,7 @@ async def validate_media_content(
         raise failure from None
     finally:
         try:
-            # Cleanup owns the permit even if its bounded wait returns early.
-            # Unreaped workers must not create capacity for more processes.
-            await reap_pdf_worker(launch_task, release_slot=slots.release)
+            await reap_pdf_worker(launch_task)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -140,3 +132,4 @@ async def validate_media_content(
         finally:
             if work_started:
                 budget.finish()
+            slots.release()

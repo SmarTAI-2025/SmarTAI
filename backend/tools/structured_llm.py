@@ -202,15 +202,14 @@ def _classify_exception(e: Exception) -> Exception:
     into the default 3-attempt transient path.
     """
     from backend.llm.provider_limits import quota_error_code
-    if getattr(e, "code", None) == "submission_time_limit_reached":
-        return PermanentLLMError("submission_time_limit_reached")
+    if getattr(e, "code", None) in {
+        "submission_time_limit_reached", "question_preparation_time_limit_reached", "grading_time_limit_reached",
+    }:
+        return PermanentLLMError(e.code)
     quota_code = quota_error_code(e)
     if quota_code and quota_code != "provider_rate_limited":
         return DailyQuotaError() if quota_code == "provider_daily_quota_exceeded" else PermanentLLMError(quota_code)
     if getattr(e, "retryable", True) is False:
-        if getattr(e, "submission_may_exist", False):
-            from backend.services.background_errors import classify_background_error
-            return PermanentLLMError(classify_background_error(e, "provider_submit_uncertain"))
         return PermanentLLMError("non_retryable_provider_limit")
     if quota_code == "provider_rate_limited":
         return RateLimitError(quota_code, retry_after=_provider_retry_after(e))

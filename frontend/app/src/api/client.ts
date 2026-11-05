@@ -352,8 +352,6 @@ export async function deleteJSON<T>(path: string, config?: AxiosRequestConfig): 
 }
 
 export interface UploadOptions {
-  /** Override only for endpoints that complete synchronous work before replying. */
-  timeout?: number;
   contentType?: string;
   onProgress?: (percent: number, event: AxiosProgressEvent) => void;
   fields?: Record<string, string | number | boolean | null | undefined>;
@@ -382,7 +380,7 @@ export async function postMultipart<T>(
 
   try {
     const response = await apiClient.post<T>(path, formData, {
-      timeout: options.timeout ?? 180_000,
+      timeout: 180_000,
       headers: options.contentType ? { "Content-Type": options.contentType } : undefined,
       onUploadProgress: (event) => {
         if (!options.onProgress) {

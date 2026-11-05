@@ -58,81 +58,40 @@ def knowledge_activity(q: str = Query(default="", max_length=128),
                          page_size=page_size, prioritize_active=prioritize_active)
 
 
-# Below the browser's 30s timeout, including a reserved revocation check.
-SEARCH_TIMEOUT_SECONDS = 29.0
-SEARCH_VISIBILITY_RESERVE_SECONDS = 1.0
-
-
 @router.post("/search")
 async def search_knowledge(request: KnowledgeSearchRequest, current: User = Depends(get_task_user)):
-    import asyncio
     from dataclasses import asdict
-    from backend.knowledge.retriever import PersistentKnowledgeRetriever, _reference, live_references
+    from backend.knowledge.retriever import PersistentKnowledgeRetriever, _reference
     from backend.db.knowledge_ingestion_repository import live_document
     from backend.db.knowledge_repository import _document
     from backend.db.session import session_scope
-    from backend.knowledge.query_plan import QUERY_PLANNER, QueryPlan, fuse_results, bounded_await
-
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + SEARCH_TIMEOUT_SECONDS
-    work_deadline = deadline - SEARCH_VISIBILITY_RESERVE_SECONDS
-    documents, refs, chunks, groups, warnings = [], [], [], [], []
-    plan = QueryPlan()
-    stage = "scope"
-
-    def load_documents():
-        with session_scope() as session:
-            return [_document(live_document(session, key, current.id))
-                    for key in dict.fromkeys(request.document_ids)]
-
-    async def work(awaitable):
-        return await bounded_await(awaitable, work_deadline - loop.time())
-
+    from backend.knowledge.query_plan import QUERY_PLANNER, QueryPlan, fuse_results
     try:
-        try:
-            documents = await work(run_in_threadpool(load_documents))
-            refs = [_reference(doc) for doc in documents if doc.chunk_count and doc.status in {"ready", "partial"}]
-            retriever = PersistentKnowledgeRetriever()
-            stage = "local_search"
-            chunks = await work(retriever.retrieve_documents(request.query, request.limit,
-                owner_id=current.id, documents=documents, refs=refs))
-            groups = [chunks]
-            if request.query_provider_id:
-                stage = "query_provider"
-                registry = await work(run_in_threadpool(get_scoped_expert_registry, current))
-                provider = registry.get(request.query_provider_id)
-                if registry.uses_shared_pool() or provider is None or not provider.config.enabled:
-                    raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code":"knowledge_query_provider_unavailable"})
-                if refs:
-                    stage = "rewrite"
-                    plan = await QUERY_PLANNER.plan(request.query, provider=provider, scope="owner:" + current.id,
-                        timeout=max(0, work_deadline - loop.time()))
-                    if plan.status == "rewrite_timeout":
-                        warnings.append(plan.status)
-                    stage = "expansion"
-                    for query in plan.queries:
-                        groups.append(await work(retriever.retrieve_documents(query, request.limit,
-                            owner_id=current.id, documents=documents, refs=refs)))
-                    chunks = fuse_results(groups, request.limit)
-        except TimeoutError:
-            warnings.append(stage + "_timeout")
-            # Keep only completed retrievals, never an unfinished expansion.
-            if len(groups) > 1:
+        with session_scope() as session:
+            documents = [_document(live_document(session, key, current.id)) for key in dict.fromkeys(request.document_ids)]
+        refs = [_reference(doc) for doc in documents if doc.chunk_count and doc.status in {"ready", "partial"}]
+        retriever = PersistentKnowledgeRetriever()
+        chunks = await retriever.retrieve_documents(request.query, request.limit,
+            owner_id=current.id, documents=documents, refs=refs)
+        plan = QueryPlan()
+        if request.query_provider_id:
+            registry = await run_in_threadpool(get_scoped_expert_registry, current)
+            provider = registry.get(request.query_provider_id)
+            if registry.uses_shared_pool() or provider is None or not provider.config.enabled:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code":"knowledge_query_provider_unavailable"})
+            if refs:
+                plan = await QUERY_PLANNER.plan(request.query, provider=provider, scope="owner:" + current.id)
+                groups = [chunks]
+                for query in plan.queries:
+                    groups.append(await retriever.retrieve_documents(query, request.limit,
+                        owner_id=current.id, documents=documents, refs=refs))
                 chunks = fuse_results(groups, request.limit)
-
-        # Always revalidate retained results and metadata, including local-only
-        # and timeout fallback paths. Failure to check visibility fails closed.
-        try:
-            visible = await bounded_await(run_in_threadpool(live_references, current.id,
-                [_reference(doc) for doc in documents]), deadline - loop.time()) if documents else set()
-            chunks = [c for c in chunks if c.citation.get("document_id") in visible]
-            documents = [doc for doc in documents if doc.id in visible]
-        except TimeoutError:
-            chunks, documents = [], []
-            warnings.append("visibility_timeout")
+                # Recheck after model work, including all cached original results.
+                from backend.knowledge.retriever import live_references
+                visible = await run_in_threadpool(live_references, current.id, refs)
+                chunks = [c for c in chunks if c.citation.get("document_id") in visible]
         return dict(matches=[asdict(chunk) for chunk in chunks], documents=[doc.public() for doc in documents],
-                    matched=bool(chunks), retrieval="query_expansion_rrf" if len(groups) > 1 else "local_bm25",
-                    partial=bool(warnings), warnings=warnings,
+                    matched=bool(chunks), retrieval="query_expansion_rrf" if plan.queries else "local_bm25",
                     provider_calls=plan.provider_calls, query_plan=asdict(plan))
     except DomainError as exc:
         return domain_error_response(exc)

@@ -188,9 +188,10 @@ class Settings(BaseSettings):
     progress_ring_buffer_size: int = 200  # max events kept per job
 
     # ─── Job recovery & maintenance (Task 4) ───────────────────────────────────
-    # Per-claim delayed-source cleanup/maintenance cap, not a model workflow
-    # or knowledge-file lifetime. Each resumable cleanup pass has its own deadline.
-    background_pass_timeout_seconds: int = int(os.getenv("SMARTAI_BACKGROUND_PASS_TIMEOUT_SECONDS", "3600"))
+    # Hard wall-clock cap on a single grading job. The periodic maintenance loop
+    # marks active jobs older than this (by created_at) as error so a wedged
+    # worker cannot hold a concurrency slot forever.
+    job_timeout_seconds: int = int(os.getenv("SMARTAI_JOB_TIMEOUT_SECONDS", "3600"))
     # How often the per-worker maintenance loop runs recover_interrupted()/maintain().
     job_maintenance_interval_seconds: int = int(
         os.getenv("SMARTAI_JOB_MAINTENANCE_INTERVAL_SECONDS", "300")

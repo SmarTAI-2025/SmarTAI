@@ -138,10 +138,8 @@ class RecognitionLocalEvidenceReader:
                     raise RecognitionError("recognition_timeout")
                 reader = read_image_evidence if isinstance(command, ImagePrepareRequest) else read_pdf_evidence
                 # Admission is queue time, not PDF processing time. The owned
-                # worker reader separately bounds slot admission, bounds execution,
-                # and reaps on cancellation. Pausing this processing deadline
-                # does not permit an unbounded queue wait. Keep cache/storage
-                # checks bounded on either side of it.
+                # worker reader bounds execution and reaps on cancellation;
+                # keep cache/storage checks bounded on either side of it.
                 deadline.reschedule(None)
                 def on_admitted():
                     deadline.reschedule(asyncio.get_running_loop().time() + remaining)

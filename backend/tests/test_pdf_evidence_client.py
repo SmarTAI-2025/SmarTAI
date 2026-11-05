@@ -173,7 +173,7 @@ async def test_queued_pdf_reads_get_their_own_processing_deadline(monkeypatch, c
         try:
             await asyncio.wait_for(all_queued.wait(), 15)
             assert not timeout_starts and active == 0
-            clock_offset = 3 * timeout_seconds
+            clock_offset = 2 * timeout_seconds
             await real_sleep(0)  # Let every queued read recheck admission after the jump.
             assert all(not task.done() for task in tasks)
             assert not timeout_starts and active == 0
@@ -458,38 +458,3 @@ def test_detail_cannot_omit_a_native_block_but_claim_full_page_text():
     page["observation"].update(native_char_count=len(page["native_text"]), native_quality="clean", verified_blank=False)
     with pytest.raises(ValidationError, match="cover all native text"):
         PdfDetailPage.model_validate(page)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("image", [False, True])
-async def test_slot_admission_cap_does_not_charge_active_work_launch_or_release_an_unowned_slot(monkeypatch, image):
-    from contextvars import ContextVar
-    from backend.services import submission_work_budget as clocks
-
-    _, launch = install_process(monkeypatch, b"")
-    slots = file_processing._PDF_EXTRACTION_SLOTS
-    slots.acquire()
-    budget = clocks.SubmissionWorkBudget("queued", limit_seconds=1)
-    monkeypatch.setattr(clocks, "_current", ContextVar("queued_pdf_budget", default=budget))
-    monkeypatch.setattr(pdf_evidence, "PDF_ADMISSION_WAIT_SECONDS", .03)
-    admitted = []
-    try:
-        with pytest.raises(PdfEvidenceError) as error:
-            if image:
-                await pdf_evidence.read_image_evidence(b"image-bytes", pdf_evidence.ImagePrepareRequest(content_type="image/png"),
-                    wait_for_slot=True, on_admitted=lambda: admitted.append(True))
-            else:
-                await read_pdf_evidence(b"%PDF-synthetic", PdfIndexRequest(),
-                    wait_for_slot=True, on_admitted=lambda: admitted.append(True))
-        assert error.value.code == "pdf_evidence_busy"
-        launch.assert_not_awaited()
-        assert admitted == [] and budget.active == 0
-        assert budget.elapsed == 0
-        assert not budget.exhausted.is_set()
-        assert not slots.acquire(blocking=False)
-    finally:
-        slots.release()
-        budget.close()
-    # The abandoned reader neither released another owner's slot nor took one.
-    assert slots.acquire(blocking=False)
-    slots.release()

@@ -6,7 +6,6 @@ question records.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -44,7 +43,6 @@ from backend.agents.question_preparation_agent import (
     prepare_question_packages,
 )
 from backend.api.errors import domain_error_response
-from backend.api.request_deadlines import MATERIAL_PREFLIGHT_SECONDS, request_deadline
 from backend.auth import require_task_teacher as require_teacher
 from backend.db import (
     assignment_repository,
@@ -613,7 +611,6 @@ def check_material_draft_reference(
 
 @router.post("/{task_id}/problem-sources/preflight")
 @router.post("/{task_id}/question-preparation/sources/preflight")
-@request_deadline(MATERIAL_PREFLIGHT_SECONDS)
 async def preflight_problem_source(
     task_id: str,
     file: UploadFile | None = File(default=None),
@@ -632,8 +629,6 @@ async def preflight_problem_source(
     current: User = Depends(require_teacher),
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
-    operation = None
-    recognition_inflight = False
     try:
         # Endpoint functions are also exercised directly by service tests;
         # FastAPI's Form sentinel is not a submitted boolean in that path.
@@ -887,7 +882,6 @@ async def preflight_problem_source(
             if (descriptor.get("content_type") in {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}
                     and (descriptor["kind"] == "upload" or descriptor.get("_recognition_original"))):
                 try:
-                    recognition_inflight = True
                     read = await read_question_source(
                         owner_id=current.id, task_id=task_id, content=descriptor["_body"],
                         filename=descriptor.get("_original_filename", descriptor["filename"]),
@@ -906,7 +900,6 @@ async def preflight_problem_source(
                     raise HTTPException(_provider_http_status_for_code(exc.code), detail=detail) from None
                 finally:
                     remove_reporter(operation.id)
-                recognition_inflight = False
                 text = read.text
                 descriptor["recognition"] = read.recognition
                 source_ref["recognition"] = read.recognition
@@ -1029,15 +1022,6 @@ async def preflight_problem_source(
             operation=operation,
             workflow_revision=workflow.workflow_revision,
         )
-    except asyncio.CancelledError:
-        if operation is not None and operation.status == "preparing":
-            # Never erase recognition pending-call evidence or replay an
-            # interrupted provider submission under a fresh source attempt.
-            _mark_problem_source_failed(
-                operation=operation, owner_id=current.id,
-                error_code="provider_submit_uncertain" if recognition_inflight else "request_timeout",
-            )
-        raise
     except DomainError as exc:
         return domain_error_response(exc)
 
@@ -1959,7 +1943,7 @@ async def retry_question_preparation(
                 code="question_preparation_retry_not_available",
             )
         submission_uncertain = bool(
-            failed.error_code in {"provider_submit_uncertain", "question_preparation_wall_time_limit_reached"}
+            failed.error_code == "provider_submit_uncertain"
             or (failed.checkpoint or {}).get("incremental_inflight_units")
             or (failed.checkpoint or {}).get("base_provider_inflight_stage")
             or list(
@@ -2729,7 +2713,6 @@ async def _run_question_preparation(
 
 
 @router.post("/{task_id}/material-imports/preflight")
-@request_deadline(MATERIAL_PREFLIGHT_SECONDS)
 async def preflight_material_import(
     task_id: str,
     file: UploadFile | None = File(default=None),
@@ -2873,13 +2856,6 @@ async def preflight_material_import(
             "saved_material": saved_material,
             "recognition": descriptor.get("recognition"),
         }
-    except asyncio.CancelledError:
-        # OCR precedes this draft and owns its own durable pending markers.
-        # A draft here means recognition returned; retain any saved artifacts
-        # but stop advertising an abandoned producer as still preparing.
-        if draft is not None and draft.status == "preparing":
-            _mark_problem_source_failed(operation=draft, owner_id=current.id, error_code="request_timeout")
-        raise
     except HTTPException:
         raise
     except DomainError as exc:
@@ -3045,15 +3021,6 @@ async def _run_material_import(
         )
         candidates = recovered_candidates
         if candidates is None:
-            if durable_operation is not None:
-                if durable_operation.checkpoint_data.get("auxiliary_provider_inflight"):
-                    raise ValidationError("The prior provider request may exist.", code="provider_submit_uncertain")
-                from backend.services.submission_work_budget import current_budget
-                if current_budget() is not None:
-                    current_budget().check()
-                await durable_operation.checkpoint(stage="auxiliary_provider_pending",
-                    checkpoint={**durable_operation.checkpoint_data, "auxiliary_provider_inflight": True},
-                    artifact_refs=durable_operation.artifact_refs)
             candidates = await parse_material_import_to_candidates(
                 text=str(source_payload.get("text") or ""),
                 problems_data=problems_data,
@@ -3075,8 +3042,7 @@ async def _run_material_import(
         ):
             await durable_operation.checkpoint(
                 stage="material_candidates_generated",
-                checkpoint={**durable_operation.checkpoint_data, "result_artifact_id": result_artifact.id,
-                            "auxiliary_provider_inflight": False},
+                checkpoint={"result_artifact_id": result_artifact.id},
                 artifact_refs=[result_artifact.id],
             )
         serialized = []
@@ -3556,15 +3522,6 @@ async def _run_ai_completion(
         )
         candidates = recovered_candidates
         if candidates is None:
-            if durable_operation is not None:
-                if durable_operation.checkpoint_data.get("auxiliary_provider_inflight"):
-                    raise ValidationError("The prior provider request may exist.", code="provider_submit_uncertain")
-                from backend.services.submission_work_budget import current_budget
-                if current_budget() is not None:
-                    current_budget().check()
-                await durable_operation.checkpoint(stage="auxiliary_provider_pending",
-                    checkpoint={**durable_operation.checkpoint_data, "auxiliary_provider_inflight": True},
-                    artifact_refs=durable_operation.artifact_refs)
             candidates = await generate_missing_question_materials(
                 problems_data=problems_data, requested_targets=selected,
                 test_case_count=test_case_count, provider=provider,
@@ -3590,8 +3547,7 @@ async def _run_ai_completion(
         ):
             await durable_operation.checkpoint(
                 stage="ai_candidates_generated",
-                checkpoint={**durable_operation.checkpoint_data, "result_artifact_id": result_artifact.id,
-                            "auxiliary_provider_inflight": False},
+                checkpoint={"result_artifact_id": result_artifact.id},
                 artifact_refs=[result_artifact.id],
             )
         effective_provider_id = result_provider_id or provider.provider_id

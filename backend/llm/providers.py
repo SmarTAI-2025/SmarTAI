@@ -6,8 +6,8 @@ Each provider implements: `ainvoke(messages) -> LLMResponse`.
 Gemini proxy compatibility:
   The supported langchain-google-genai 4.x client uses Google's HTTP SDK.
   Keep the established per-call synchronous client path for legacy calls when
-  an explicit SmarTAI proxy is configured. Bounded HTTP and durable workflow
-  calls use that fresh client's cancellable async API. Do not reintroduce
+  an explicit SmarTAI proxy is configured. Response-only OCR uses that fresh
+  client's cancellable async API. Do not reintroduce
   the removed legacy transport="rest" parameter or infer machine credentials.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ import ssl
 import time
 from abc import ABC, abstractmethod
 from collections import deque
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any, Deque, Callable
 from dataclasses import dataclass
 
@@ -42,12 +42,12 @@ from backend.llm.endpoint_policy import (
 from backend.llm.provider_catalog import effective_wire_protocol
 from backend.llm.image_capability import is_explicit_image_rejection, explicitly_rejects_images
 from backend.llm.request_timeouts import (
-    cancellable_provider_calls, current_response_scope, current_response_timeout_seconds, provider_local_step,
+    current_response_scope, current_response_timeout_seconds, current_workflow_cancellation_scope,
+    provider_local_step,
 )
 from backend.models import ProviderConfig
 
 logger = logging.getLogger(__name__)
-_LOCAL_ADMISSION_SECONDS = 600.0
 
 
 
@@ -132,31 +132,9 @@ class ProviderRequestError(RuntimeError):
         self.retry_after = retry_after
 
 
-async def _wait_provider_local(awaitable, *, local_wait_seconds=None):
+async def _wait_provider_local(awaitable):
     scope = current_response_scope()
-    if scope is not None:
-        return await scope.wait_local(awaitable)
-    from backend.services.submission_work_budget import wait_for_admission
-    seconds = _LOCAL_ADMISSION_SECONDS if local_wait_seconds is None else min(_LOCAL_ADMISSION_SECONDS, local_wait_seconds)
-    deadline = asyncio.timeout(seconds)
-    try:
-        async with deadline:
-            return await wait_for_admission(awaitable)
-    except TimeoutError as exc:
-        if not deadline.expired():
-            raise
-        error = ProviderRequestError("provider_capacity_unavailable")
-        error.retryable = False
-        raise error from exc
-
-
-@asynccontextmanager
-async def _provider_admission(lease, *, local_wait_seconds=None):
-    # Bound only acquisition. Neither queueing nor release spends response or
-    # active-work time, and cancellation still releases an acquired lease.
-    async with AsyncExitStack() as stack:
-        await _wait_provider_local(stack.enter_async_context(lease), local_wait_seconds=local_wait_seconds)
-        yield
+    return await scope.wait_local(awaitable) if scope is not None else await awaitable
 
 
 def _request_definitely_rejected(exc: BaseException) -> bool:
@@ -474,78 +452,80 @@ class BaseProvider(ABC):
         from backend.services.execution_control import current_execution
         from backend.progress.recognition_activity import report_provider_state
         scope = current_response_scope()
-        bounded = cancellable_provider_calls()
+        if scope is None:
+            await report_provider_state(self, "queued")
         control = current_execution()
+        admitted = False
+        # SDK timeouts bound individual network reads, not admission or an
+        # upstream stream that keeps sending keep-alives. Bound this whole
+        # attempt so one waiter cannot occupy a workflow worker indefinitely.
+        deadline = asyncio.timeout(float(settings.llm_timeout) if scope is None else None)
         try:
-            await provider_local_step(report_provider_state(self, "queued"), best_effort=bounded)
+            if scope is not None:
+                await provider_local_step(report_provider_state(self, "queued"), best_effort=True)
             if control is not None:
                 await provider_local_step(control.check(self))
             scheduler = get_scheduler()
-            lease = scheduler.lease(
-                key=quota_key(self.config, endpoint_key(self.config)),
-                rpm=max(0, int(self.config.rpm or 0)),
-                owner=self.config.scheduling_owner or "anonymous",
-                endpoint=endpoint_key(self.config),
-                endpoint_limit=min(HARD_LIMIT, max(1, int(settings.max_concurrent_llm_per_endpoint)),
-                                   max(1, int(settings.max_concurrent_llm_per_provider))),
-                memory=request_memory(messages),
-                ready=lambda: not self._endpoint_breaker().is_open,
-            )
-            # Preserve the previous finite capacity-queue cap. Preparation,
-            # breaker and proxy-slot waits instead gain the independent cap.
-            async with _provider_admission(lease, local_wait_seconds=float(settings.llm_timeout)):
-                if control is not None:
-                    await provider_local_step(control.check(self))
-                if scope is None:
-                    await provider_local_step(report_provider_state(self, "responding"), best_effort=bounded)
-                try:
-                    yield
-                except Exception as exc:
-                    from backend.llm.provider_limits import exhausted_quota_code
-                    code = exhausted_quota_code(exc)
-                    if control is not None and code:
-                        control.block(self, code)
-                    raise
-                else:
+            async with deadline:
+                lease = scheduler.lease(
+                    key=quota_key(self.config, endpoint_key(self.config)),
+                    rpm=max(0, int(self.config.rpm or 0)),
+                    owner=self.config.scheduling_owner or "anonymous",
+                    endpoint=endpoint_key(self.config),
+                    endpoint_limit=min(HARD_LIMIT, max(1, int(settings.max_concurrent_llm_per_endpoint)),
+                                       max(1, int(settings.max_concurrent_llm_per_provider))),
+                    memory=request_memory(messages),
+                    ready=lambda: not self._endpoint_breaker().is_open,
+                )
+                async with scope.local_admission(lease) if scope is not None else lease:
+                    admitted = True
                     if control is not None:
-                        await provider_local_step(control.succeeded(self), best_effort=bounded)
-            await provider_local_step(report_provider_state(self, "processing"), best_effort=bounded)
+                        await provider_local_step(control.check(self))
+                    # Time spent waiting for RPM/capacity is not provider
+                    # response time. Give the admitted request its full budget.
+                    if scope is None:
+                        await report_provider_state(self, "responding")
+                        deadline.reschedule(asyncio.get_running_loop().time() + (
+                            float(settings.llm_timeout) if response_timeout is None else response_timeout
+                        ))
+                    try:
+                        yield
+                    except Exception as exc:
+                        from backend.llm.provider_limits import exhausted_quota_code
+                        code = exhausted_quota_code(exc)
+                        if control is not None and code:
+                            control.block(self, code)
+                        raise
+                    else:
+                        if control is not None:
+                            await provider_local_step(control.succeeded(self), best_effort=scope is not None)
+            await provider_local_step(report_provider_state(self, "processing"), best_effort=scope is not None)
+        except TimeoutError as exc:
+            if not deadline.expired():
+                raise
+            code = "provider_timeout" if admitted else "provider_capacity_unavailable"
+            logger.warning("LLM attempt deadline reached; provider_type=%s admitted=%s code=%s",
+                           self.provider_type, admitted, code)
+            error = ProviderRequestError(code)
+            if not admitted:
+                # No upstream request was sent. Surface local capacity pressure
+                # for an explicit retry instead of silently requeueing for minutes.
+                error.retryable = False
+            raise error from exc
+
         finally:
             from backend.progress.recognition_activity import finish_provider_request
-            await provider_local_step(finish_provider_request(), best_effort=bounded)
+            await provider_local_step(finish_provider_request(), best_effort=scope is not None)
 
     async def _invoke_response(self, invoke, *, timeout_seconds=None):
         scope = current_response_scope()
         if scope is None:
             from backend.services.submission_work_budget import current_budget
             budget = current_budget()
-            bounded = cancellable_provider_calls()
-            # Keep legacy native response_timeout_scope behavior; durable and
-            # HTTP callers opt into per-call overrides without mutating clients.
-            seconds = current_response_timeout_seconds() if bounded else None
-            if timeout_seconds is not None:
-                seconds = timeout_seconds if seconds is None else min(seconds, timeout_seconds)
-            deadline = asyncio.timeout(float(settings.llm_timeout) if seconds is None else seconds)
             if budget is not None:
                 budget.start()
             try:
-                try:
-                    async with deadline:
-                        result = await invoke()
-                    if deadline.expired():
-                        raise ProviderRequestError("provider_timeout")
-                    return result
-                except TimeoutError as exc:
-                    if not deadline.expired():
-                        raise
-                    raise ProviderRequestError("provider_timeout") from exc
-            except (Exception, asyncio.CancelledError) as exc:
-                if bounded and not _request_definitely_rejected(exc):
-                    # Timeout/cancellation does not prove that upstream work
-                    # stopped. Generic retry wrappers must not replay it.
-                    exc.retryable = False
-                    exc.submission_may_exist = True
-                raise
+                return await invoke()
             finally:
                 if budget is not None:
                     budget.finish()
@@ -600,8 +580,8 @@ class BaseProvider(ABC):
     async def ainvoke(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:
         """Invoke the LLM. Default: native async. Gemini overrides this."""
         generation_kwargs = self._generation_kwargs(max_output_tokens)
-        if cancellable_provider_calls():
-            generation_kwargs["timeout"] = current_response_timeout_seconds() or settings.llm_timeout
+        if (scope := current_response_scope()) is not None:
+            generation_kwargs["timeout"] = scope.seconds
         self._ensure_async_primitives()
         client = await _wait_provider_local(self._get_client())
         # Admission combines actual-start RPM, quota concurrency and resources;
@@ -659,10 +639,10 @@ class BaseProvider(ABC):
 
 class GeminiProvider(BaseProvider):
     """
-    Gemini provider selected by SmarTAI's explicit proxy settings:
-      - Proxy mode: per-call fresh client; cancellable scopes use native ainvoke,
-        while legacy unscoped callers retain their synchronous SDK path.
-      - Direct mode: native ainvoke with a shared client.
+    Gemini provider with two modes:
+      - Proxy mode (local): run_in_threadpool + per-call fresh client (parallel safe)
+      - Direct mode (cloud): native ainvoke with shared client (faster)
+    Auto-detected from SmarTAI's explicit proxy settings.
     """
     provider_type = "gemini"
 
@@ -693,10 +673,10 @@ class GeminiProvider(BaseProvider):
             # Cloud mode: native async, shared client
             return await super().ainvoke(messages, max_output_tokens=max_output_tokens)
 
-        # Keep fresh clients in proxy mode, but never start a synchronous paid
-        # request for a caller that promises cancellable work.
+        # Local proxy mode: sync invoke in threadpool, fresh client per call
+        scope = current_response_scope()
         slots = get_scheduler().proxy_slots
-        async with _provider_admission(slots):
+        async with scope.local_admission(slots) if scope is not None else slots:
             return await self._invoke_proxy(messages, generation_kwargs)
 
     async def _invoke_proxy(self, messages: List[BaseMessage], generation_kwargs: dict[str, Any]) -> LLMResponse:
@@ -704,11 +684,10 @@ class GeminiProvider(BaseProvider):
 
         # Prepare before RPM admission; at most 50 per-call clients can wait.
         # Preparation uses the default pool, separate from the 50 SDK workers.
-        bounded = cancellable_provider_calls()
-        local_client = await _wait_provider_local(to_thread.run_sync(
-            self._build_client_sync, abandon_on_cancel=bounded,
-        ))
-        if bounded:
+        local_client = await _wait_provider_local(to_thread.run_sync(self._build_client_sync))
+        if current_response_scope() is not None:
+            return await self._invoke_proxy_async(messages, generation_kwargs, local_client)
+        if current_workflow_cancellation_scope():
             return await self._invoke_proxy_async(messages, generation_kwargs, local_client)
         self._ensure_async_primitives()
         await _wait_provider_local(self._endpoint_breaker().before_call())
@@ -761,7 +740,7 @@ class GeminiProvider(BaseProvider):
                 raise
 
     async def _invoke_proxy_async(self, messages, generation_kwargs, local_client):
-        """Bounded callers keep fresh proxy clients and cancellable responses."""
+        """OCR and whole-workflow owners use fresh cancellable proxy clients."""
         try:
             self._ensure_async_primitives()
             await _wait_provider_local(self._endpoint_breaker().before_call())
@@ -769,9 +748,10 @@ class GeminiProvider(BaseProvider):
                 try:
                     async def invoke():
                         started = time.perf_counter()
-                        response = await local_client.ainvoke(
-                            messages, **generation_kwargs, timeout=current_response_timeout_seconds() or settings.llm_timeout,
-                        )
+                        options = dict(generation_kwargs)
+                        if current_response_scope() is not None:
+                            options["timeout"] = current_response_timeout_seconds()
+                        response = await local_client.ainvoke(messages, **options)
                         content = _response_text(response.content if hasattr(response, "content") else response)
                         return content, _response_metadata(response), (time.perf_counter() - started) * 1000
 
@@ -791,7 +771,7 @@ class GeminiProvider(BaseProvider):
             # Public 4.x aclose closes the fresh sync and async transports on
             # this loop. A caller cancellation cannot cancel that short cleanup;
             # its own local-step deadline still bounds it to ten seconds.
-            cleanup = asyncio.create_task(provider_local_step(close(), best_effort=True, always_bounded=True))
+            cleanup = asyncio.create_task(provider_local_step(close(), best_effort=True))
             cleanup.add_done_callback(lambda task: None if task.cancelled() else task.exception())
             await asyncio.shield(cleanup)
 

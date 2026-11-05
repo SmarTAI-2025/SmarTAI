@@ -7,8 +7,6 @@ worker that cannot observe a local invalidation hook.
 """
 from __future__ import annotations
 
-from backend.api.request_deadlines import ASK_REQUEST_SECONDS, QUESTION_ANALYSIS_SECONDS, request_deadline
-
 import asyncio
 import hashlib
 import logging
@@ -704,7 +702,6 @@ def _check_ask_limit(owner_id: str) -> None:
         requests.append(now)
 
 
-@request_deadline(ASK_REQUEST_SECONDS)
 async def _run_grounded_ask(task_id: str | None, req: AskRequest, current: User, registry: ExpertRegistry):
     try:
         if any(len(turn) > 2000 for turn in req.history):
@@ -839,7 +836,6 @@ def _clear_cache(owner_id: str, task_id: str, question_id: str | None = None) ->
 
 
 @router.get("/{task_id}/per_question/{question_id}")
-@request_deadline(QUESTION_ANALYSIS_SECONDS)
 async def per_question(
     task_id: str,
     question_id: str,

@@ -29,7 +29,6 @@ from backend.rag.chunker import MAX_FILE_BYTES
 
 logger = logging.getLogger(__name__)
 POLICY = "knowledge-economy-v1"
-DEADLINE_CLEANUP_SECONDS = 10
 PAUSE_PROVIDER_ERRORS = frozenset({
     "provider_overloaded",
     "provider_auth_failed", "provider_permission_denied", "provider_region_unsupported", "provider_quota_exceeded", "provider_zero_quota",
@@ -81,24 +80,18 @@ def _read_source(job):
 
 
 async def native_units(filename, body):
-    from backend.tools.sandbox_runtime import sandbox_slot
-    from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
-    async with sandbox_slot() as slot:
-        launch = None
-        slot.transfer()
-        try:
-            async with asyncio.timeout(60):
-                launch = asyncio.create_task(asyncio.create_subprocess_exec(
-                    sys.executable, "-B", "-m", "backend.knowledge.native_worker",
-                    Path(filename).suffix.lower(), stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL))
-                process = await asyncio.shield(launch)
-                output, _ = await process.communicate(body)
-            if process.returncode or len(output) > 64 * 1024 * 1024:
-                raise RecognitionError("recognition_request_invalid")
-            return json.loads(output)
-        finally:
-            await reap_pdf_worker(launch, release_slot=slot.release)
+    process = await asyncio.create_subprocess_exec(sys.executable, "-B", "-m", "backend.knowledge.native_worker",
+        Path(filename).suffix.lower(), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    try:
+        async with asyncio.timeout(60):
+            output, _ = await process.communicate(body)
+        if process.returncode or len(output) > 64 * 1024 * 1024:
+            raise RecognitionError("recognition_request_invalid")
+        return json.loads(output)
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await asyncio.shield(process.wait())
 
 
 def _page_result(run):
@@ -142,47 +135,6 @@ class KnowledgeIngestionWorker:
         if job is None:
             return False
         reporter = ProgressReporter(job.id)
-        task = asyncio.create_task(self._run_batch(job, reporter))
-        try:
-            # asyncio.wait does not wait indefinitely for cancellation cleanup.
-            # A provider may already have accepted a request; durable write
-            # fences and before-submit checkpoints protect late completions.
-            done, _ = await asyncio.wait({task}, timeout=repo.remaining_budget(job))
-            if done:
-                await task
-            else:
-                task.cancel()
-                task.add_done_callback(self._consume_result)
-                await self._expire_ingestion(job)
-        except asyncio.CancelledError:
-            task.cancel()
-            task.add_done_callback(self._consume_result)
-            await asyncio.wait({task}, timeout=DEADLINE_CLEANUP_SECONDS)
-            raise
-        finally:
-            from backend.progress.tracker import remove_reporter
-            remove_reporter(job.id)
-        return True
-
-    @staticmethod
-    def _consume_result(task):
-        if not task.cancelled():
-            task.exception()
-
-    @staticmethod
-    async def _expire_ingestion(job):
-        cleanup = asyncio.create_task(run_in_threadpool(repo.expire_ingestion, job))
-        done, _ = await asyncio.wait({cleanup}, timeout=DEADLINE_CLEANUP_SECONDS)
-        if done:
-            try:
-                cleanup.result()
-            except DomainError:
-                pass
-        else:
-            cleanup.add_done_callback(KnowledgeIngestionWorker._consume_result)
-            # claim_next also pauses expired ingestions if this write is delayed.
-
-    async def _run_batch(self, job, reporter):
         try:
             document, body = await run_in_threadpool(_read_source, job)
             visual = document.content_type == "application/pdf" or (document.content_type or "").startswith("image/")
@@ -259,6 +211,10 @@ class KnowledgeIngestionWorker:
                 await run_in_threadpool(repo.release, job, status="paused", error=code)
             except DomainError:
                 pass
+        finally:
+            from backend.progress.tracker import remove_reporter
+            remove_reporter(job.id)
+        return True
 
     async def run_forever(self):
         while not self.stopped:

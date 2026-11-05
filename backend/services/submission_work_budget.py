@@ -1,6 +1,6 @@
 """Attempt-local submission work clock; queue waits do not consume its budget.
 
-Durable recognition and grading install this shared context. Concurrent PDF/model work is
+Question preparation, submission parsing and grading share this context. Concurrent PDF/model work is
 counted once in elapsed seconds. Exhaustion closes admission, not running calls:
 their existing request deadlines still bound draining and result persistence.
 """
@@ -8,15 +8,16 @@ from __future__ import annotations
 
 import asyncio
 from contextvars import ContextVar
+from contextlib import asynccontextmanager
 from functools import wraps
 import math
 
 from backend.domain.errors import RecognitionError
 
-
 LIMIT_SECONDS = 150 * 60
 CODE = "submission_time_limit_reached"
-PROFILE = "submission-active-v2"
+# Keep the deployed checkpoint schema identity; LIMIT_SECONDS sets the cap.
+PROFILE = "submission-active-3h-v1"
 CHECKPOINT_KEY = "submission_work_clock"
 _current = ContextVar("submission_work_budget", default=None)
 
@@ -117,21 +118,36 @@ async def wait_for_admission(awaitable):
     return await budget.wait(awaitable) if budget is not None else await awaitable
 
 
+
+@asynccontextmanager
+async def active_work():
+    """Charge existing admitted local computation, never its semaphore wait."""
+    budget = current_budget()
+    if budget is not None:
+        budget.start()
+    try:
+        yield
+    finally:
+        if budget is not None:
+            budget.finish()
+
+
 def submission_work_budget(function):
     @wraps(function)
     async def run(*args, **kwargs):
         if current_budget() is not None:
             return await function(*args, **kwargs)
         operation = kwargs.get("leased_operation")
-        from backend.services.workflow_deadlines import processing_budget, CHECKPOINT_KEY as WALL_KEY, WORK_CHECKPOINT_KEY
-        saved = operation.checkpoint_data.get(WORK_CHECKPOINT_KEY) if operation is not None else None
-        started_at = (operation.checkpoint_data.get(WALL_KEY) or {}).get("started_at") if operation is not None else None
+        from backend.services.workflow_deadlines import processing_budget, CHECKPOINT_KEY as WALL_KEY
+        checkpoint = operation.checkpoint_data if operation is not None else {}
         async def persist(snapshot):
             if operation is not None:
                 await operation.checkpoint(stage=operation.checkpoint_stage,
-                    checkpoint={**operation.checkpoint_data, WORK_CHECKPOINT_KEY: snapshot},
+                    checkpoint={**operation.checkpoint_data, CHECKPOINT_KEY: snapshot},
                     artifact_refs=operation.artifact_refs)
-        async with processing_budget(kwargs["job_id"], kind="submission_recognition", attempt=kwargs["job_attempt"],
-                                     saved=saved, started_at=started_at, persist=persist, raise_on_blocked=False):
+        async with processing_budget(kwargs["job_id"], kind="submission_recognition",
+            attempt=kwargs["job_attempt"], saved=checkpoint.get(CHECKPOINT_KEY),
+            started_at=(checkpoint.get(WALL_KEY) or {}).get("started_at"),
+            persist=persist, raise_on_blocked=False):
             return await function(*args, **kwargs)
     return run

@@ -16,7 +16,7 @@ _LOCAL_STEP_SECONDS = 10.0
 
 _response_seconds: ContextVar[float | None] = ContextVar("provider_response_seconds", default=None)
 _response_scope: ContextVar[ResponseDeadlineScope | None] = ContextVar("provider_response_scope", default=None)
-_cancellable_providers: ContextVar[bool] = ContextVar("cancellable_providers", default=False)
+_workflow_cancellation: ContextVar[bool] = ContextVar("workflow_cancellation", default=False)
 
 
 def _positive_seconds(seconds: float) -> float:
@@ -115,8 +115,6 @@ class ResponseDeadlineScope:
             deadline = asyncio.timeout(seconds)
             async with deadline:
                 result = await invoke()
-            if deadline.expired():
-                raise ProviderRequestError("provider_timeout")
         except TimeoutError as exc:
             if deadline is None or not deadline.expired():
                 raise
@@ -143,26 +141,27 @@ def current_response_scope() -> ResponseDeadlineScope | None:
     return _response_scope.get()
 
 
-def cancellable_provider_calls() -> bool:
-    """Bounded HTTP/workflow callers must never start an undrainable SDK thread."""
-    from backend.services.submission_work_budget import current_budget
-    return _cancellable_providers.get() or current_response_scope() is not None or current_budget() is not None
+def current_workflow_cancellation_scope() -> bool:
+    return _workflow_cancellation.get()
 
 
 @contextmanager
-def cancellable_provider_scope() -> Iterator[None]:
-    token = _cancellable_providers.set(True)
+def workflow_cancellation_scope() -> Iterator[None]:
+    """Let the three whole-workflow owners cancel Gemini's local request.
+
+    This selects its existing async transport only. It does not change any
+    per-request timeout, admission limit, or ordinary-error retry policy.
+    """
+    token = _workflow_cancellation.set(True)
     try:
         yield
     finally:
-        _cancellable_providers.reset(token)
+        _workflow_cancellation.reset(token)
 
 
-async def provider_local_step(
-    awaitable: Awaitable[T], *, best_effort: bool = False, always_bounded: bool = False,
-) -> T | None:
+async def provider_local_step(awaitable: Awaitable[T], *, best_effort: bool = False) -> T | None:
     """Bound new-mode control/progress I/O without spending response time."""
-    if not always_bounded and not cancellable_provider_calls():
+    if current_response_scope() is None:
         return await awaitable
     deadline = asyncio.timeout(_LOCAL_STEP_SECONDS)
     try:

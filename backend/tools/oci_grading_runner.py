@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from contextvars import ContextVar
 try:
     import fcntl
 except ImportError:  # OCI execution is supported on Linux hosts only.
@@ -27,10 +26,6 @@ from tools.runner_spike.harness import build_container_command
 
 
 logger = logging.getLogger(__name__)
-HOST_ADMISSION_WAIT_SECONDS = 120.0
-_command_reaps = ContextVar("oci_command_reaps", default=None)
-# Keep file locks alive if the runtime cannot prove a container was removed.
-_quarantined_slots = set()
 
 
 class IsolatedRunnerUnavailable(RuntimeError):
@@ -61,32 +56,27 @@ async def _bounded_read(stream, limit=300_000):
 
 
 async def _command(args, *, timeout, env):
-    from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
-    launch, reads = None, None
-    reaped = asyncio.get_running_loop().create_future()
-    pending = _command_reaps.get()
-    if pending is not None:
-        pending.append(reaped)
+    process = await asyncio.create_subprocess_exec(
+        *args, stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
+    )
+    reads = asyncio.gather(_bounded_read(process.stdout), _bounded_read(process.stderr))
     try:
-        async with asyncio.timeout(timeout):
-            launch = asyncio.create_task(asyncio.create_subprocess_exec(
-                *args, stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
-            ))
-            process = await asyncio.shield(launch)
-            reads = asyncio.gather(_bounded_read(process.stdout), _bounded_read(process.stderr))
-            stdout, _stderr = await reads
-            await process.wait()
+        stdout, _stderr = await asyncio.wait_for(reads, timeout)
+        await asyncio.wait_for(process.wait(), timeout)
         if process.returncode:
             logger.warning("OCI command failed: operation=%s exit=%s", args[1], process.returncode)
             raise IsolatedRunnerUnavailable()
         return stdout
     finally:
-        if reads is not None and not reads.done():
+        if process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+            await process.wait()
+        if not reads.done():
             reads.cancel()
-        if reads is not None:
-            reads.add_done_callback(lambda done: None if done.cancelled() else done.exception())
-        await reap_pdf_worker(launch, release_slot=lambda: reaped.set_result(None))
+        with contextlib.suppress(BaseException):
+            await reads
 
 
 async def _check_runtime(runtime, env):
@@ -121,10 +111,8 @@ async def _host_slot():
     directory.mkdir(mode=0o700, exist_ok=True)
     if directory.is_symlink() or directory.stat().st_uid != os.getuid() or directory.stat().st_mode & 0o077:
         raise IsolatedRunnerUnavailable()
-    from backend.services.submission_work_budget import wait_for_admission
-    from backend.tools.sandbox_runtime import SandboxWorkSlot
-    handle, slot = None, None
-    deadline = asyncio.get_running_loop().time() + HOST_ADMISSION_WAIT_SECONDS
+    handle = None
+    deadline = asyncio.get_running_loop().time() + 120
     try:
         while handle is None:
             for index in range(settings.program_runner_max_concurrent):
@@ -139,30 +127,21 @@ async def _host_slot():
             if handle is None:
                 if asyncio.get_running_loop().time() >= deadline:
                     raise IsolatedRunnerUnavailable()
-                await wait_for_admission(asyncio.sleep(min(.05, max(0, deadline - asyncio.get_running_loop().time()))))
-        slot = SandboxWorkSlot(handle.close)
-        slot.start()
-        yield slot
+                await asyncio.sleep(0.05)
+        yield
     finally:
-        if slot is not None and not slot.transferred:
-            slot.release()
-        elif slot is None and handle is not None:
+        if handle is not None:
             handle.close()
 
 
 async def _remove(runtime, name, env):
-    try:
+    with contextlib.suppress(Exception):
         await _command([runtime, "rm", "--force", name], timeout=5, env=env)
-    except Exception:
-        # An unsuccessful rm is safe only if the live runtime confirms absence.
-        remaining = await _command([runtime, "ps", "-a", "--filter", f"name=^{name}$",
-                                    "--format", "{{.Names}}"], timeout=5, env=env)
-        if remaining.strip():
-            raise IsolatedRunnerUnavailable()
 
 
 async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, max_output_chars=8192):
     from backend.models import TestCase
+    from backend.services.submission_work_budget import active_work
     from backend.tools.code_interpreter import TestResult
     from backend.tools.grading_runner import RunnerResult
     if settings.program_runner_mode != "oci":
@@ -182,71 +161,42 @@ async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, ma
         raise IsolatedRunnerUnavailable()
     try:
         env = launcher_environment()
-        async with _host_slot() as slot:
-            from backend.tools.pdf_worker_lifecycle import retain_cleanup, wait_pdf_cleanup
-            pending = []
-            token = _command_reaps.set(pending)
-            temporary = None
-            container_may_exist = False
-            try:
-                # Capability checks launch a CLI too; keep them under the same
-                # host-wide cap so large assignments cannot spawn an info storm.
-                await _check_runtime(runtime, env)
-                temporary = tempfile.TemporaryDirectory(prefix="smartai-oci-")
-                tmp = temporary.name
+        async with _host_slot(), active_work():
+            # Capability checks launch a CLI too; keep them under the same
+            # host-wide cap so large assignments cannot spawn an info storm.
+            await _check_runtime(runtime, env)
+            with tempfile.TemporaryDirectory(prefix="smartai-oci-") as tmp:
                 request = Path(tmp) / "request.json"
                 request.write_bytes(encoded)
                 request.chmod(0o444)
                 args = build_container_command(runtime=runtime, image=settings.program_runner_image,
                     request_file=request, container_name=name, memory_mb=memory_mb)
                 args[2:2] = ["--pull=never", "--log-driver=none", f"--memory-swap={memory_mb}m", "--label=smartai.isolated-runner=true"]
-                container_may_exist = True
-                raw = await _command(args, timeout=timeout + 12, env=env)
-                # Strict model; do not accept a trailing forged result after
-                # malformed output, a different execution ID, or host mode.
-                result = RunnerResult.model_validate_json(raw)
-                if result.execution_id != execution_id or result.isolation_mode != "oci_container" or not result.executed:
-                    raise IsolatedRunnerUnavailable()
-                if result.exit_reason not in {"success", "runtime_error", "timeout", "output_limit", "syntax_error"}:
-                    raise IsolatedRunnerUnavailable()
-                if len(result.stdout) > max_output_chars or len(result.stderr) > max_output_chars:
-                    raise IsolatedRunnerUnavailable()
-                return TestResult(test=TestCase(input=test_input), passed=result.exit_reason == "success",
-                    actual_output=result.stdout, error=result.stderr, duration_ms=result.duration_ms,
-                    exit_reason=result.exit_reason.value, stdout_truncated=result.stdout_truncated,
-                    stderr_truncated=result.stderr_truncated, isolation_mode="oci_container")
-            finally:
-                # CLI cancellation is not proof that the runtime stopped its
-                # container. Transfer the lock until both are confirmed gone.
-                slot.transfer()
-                _quarantined_slots.add(slot)
-                slot._temporary = temporary
-                async def cleanup():
-                    for reaped in list(pending):
-                        await asyncio.shield(reaped)
-                    if container_may_exist:
-                        await _remove(runtime, name, env)
-                    for reaped in list(pending):
-                        await asyncio.shield(reaped)
-                    if temporary is not None:
-                        temporary.cleanup()
-                    slot.release()
-                    _quarantined_slots.discard(slot)
-                cleaning = asyncio.create_task(cleanup())
-                retain_cleanup(cleaning)
                 try:
-                    done, cancelled = await wait_pdf_cleanup(cleaning)
-                    if cancelled:
-                        raise asyncio.CancelledError
-                    if not done:
+                    raw = await _command(args, timeout=timeout + 12, env=env)
+                    # Strict model; do not accept a trailing forged result after
+                    # malformed output, a different execution ID, or host mode.
+                    result = RunnerResult.model_validate_json(raw)
+                    if result.execution_id != execution_id or result.isolation_mode != "oci_container" or not result.executed:
                         raise IsolatedRunnerUnavailable()
-                    cleaning.result()
+                    if result.exit_reason not in {"success", "runtime_error", "timeout", "output_limit", "syntax_error"}:
+                        raise IsolatedRunnerUnavailable()
+                    if len(result.stdout) > max_output_chars or len(result.stderr) > max_output_chars:
+                        raise IsolatedRunnerUnavailable()
+                    return TestResult(test=TestCase(input=test_input), passed=result.exit_reason == "success",
+                        actual_output=result.stdout, error=result.stderr, duration_ms=result.duration_ms,
+                        exit_reason=result.exit_reason.value, stdout_truncated=result.stdout_truncated,
+                        stderr_truncated=result.stderr_truncated, isolation_mode="oci_container")
                 finally:
-                    _command_reaps.reset(token)
-
+                    # Cancellation must not release capacity while a container
+                    # still runs. Cleanup is shielded and awaited before return.
+                    cleanup = asyncio.create_task(_remove(runtime, name, env))
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError:
+                        await cleanup
+                        raise
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        if asyncio.current_task().cancelling():
-            raise asyncio.CancelledError from None
         raise IsolatedRunnerUnavailable() from exc

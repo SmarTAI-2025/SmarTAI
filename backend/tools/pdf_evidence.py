@@ -22,7 +22,7 @@ from backend.domain.errors import PDF_EVIDENCE_STATUS_CODES, PdfEvidenceError, R
 from backend.recognition.models import EvidenceModel, NormalizedRegionV1
 from backend.recognition.planner import PageObservationV1
 from backend.tools import file_processing
-from backend.tools.pdf_worker_lifecycle import reap_pdf_worker, retain_cleanup, wait_pdf_cleanup
+from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
 
 if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
@@ -31,9 +31,6 @@ MAX_INPUT_BYTES = 100 * 1024 * 1024
 MAX_IMAGE_INPUT_BYTES = 10 * 1024 * 1024
 INDEX_RESPONSE_BYTES = 512 * 1024
 DETAIL_RESPONSE_BYTES = 8 * 1024 * 1024
-# Queue time is free of active-work charges, but a leaked slot must not
-# strand a run forever. This is independent of the worker execution timeout.
-PDF_ADMISSION_WAIT_SECONDS = 600.0
 Region = tuple[float, float, float, float]
 PageNumber = Annotated[int, Field(strict=True, ge=1, le=10000)]
 
@@ -435,13 +432,15 @@ async def _exchange(process, pdf_bytes: bytes, limit: int) -> bytes:
             if not task.done():
                 task.cancel()
         cleanup = asyncio.gather(writer, reader, return_exceptions=True)
-        retain_cleanup(cleanup)
-        done, cancelled = await wait_pdf_cleanup(cleanup)
+        cancelled = False
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                cancelled = True
+        cleanup.result()
         if cancelled:
             raise asyncio.CancelledError
-        if not done:
-            raise PdfEvidenceError("pdf_evidence_timeout")
-        cleanup.result()
 
 
 async def read_pdf_evidence(
@@ -512,18 +511,12 @@ async def _read_evidence(
     # Model calls may run concurrently while local PDF workers remain bounded.
     # Task pipelines wait only for this short CPU step, never hold its slot
     # throughout a model response. Other callers retain fail-fast admission.
-    loop = asyncio.get_running_loop()
-    admission_deadline = loop.time() + PDF_ADMISSION_WAIT_SECONDS
-    while True:
+    while not slots.acquire(blocking=False):
         if budget is not None:
             budget.check()
-        if wait_for_slot and loop.time() >= admission_deadline:
-            raise PdfEvidenceError("pdf_evidence_busy")
-        if slots.acquire(blocking=False):
-            break
         if not wait_for_slot:
             raise PdfEvidenceError("pdf_evidence_busy")
-        await asyncio.sleep(min(0.02, max(0, admission_deadline - loop.time())))
+        await asyncio.sleep(0.02)
     launch_task = None
     failure: BaseException | None = None
     work_started = False
@@ -569,7 +562,7 @@ async def _read_evidence(
         raise failure from None
     finally:
         try:
-            await reap_pdf_worker(launch_task, release_slot=slots.release)
+            await reap_pdf_worker(launch_task)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -581,3 +574,4 @@ async def _read_evidence(
         finally:
             if work_started:
                 budget.finish()
+            slots.release()

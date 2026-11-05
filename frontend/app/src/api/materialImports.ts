@@ -1,4 +1,3 @@
-import { SOURCE_PREFLIGHT_TIMEOUT_MS } from "./requestTimeouts";
 import { apiClient, getJSON, normalizeAPIError, postJSON } from "./client";
 import type {
   ApplyMaterialImportInput,
@@ -25,7 +24,7 @@ export async function preflightMaterialImport(
     const response = await apiClient.post<MaterialImportPreflightResponse>(
       `/tasks/${input.taskId}/material-imports/preflight`,
       formData,
-      { timeout: SOURCE_PREFLIGHT_TIMEOUT_MS },
+      { timeout: 960_000 },
     );
     return response.data;
   } catch (error) {

@@ -1,20 +1,18 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProblemRecognitionProgressPage } from "./ProblemRecognitionProgressPage";
 import type { JobProgress } from "@/types";
 
-const { retryPreparation, manualPreparation } = vi.hoisted(() => ({ retryPreparation: vi.fn(), manualPreparation: vi.fn() }));
-let questionProviderId = "";
 let failureCode = "provider_timeout";
 let failedPages: number[] = [];
 let generationProgress: Partial<JobProgress> = {};
-beforeEach(() => { vi.clearAllMocks(); questionProviderId = ""; failureCode = "provider_timeout"; failedPages = []; generationProgress = {}; });
+beforeEach(() => { failureCode = "provider_timeout"; failedPages = []; generationProgress = {}; });
 
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({ data: [], isError: false, isLoading: false }),
-  useRetryQuestionPreparation: () => ({ isPending: false, mutateAsync: retryPreparation }),
-  useManuallyCompleteQuestionPreparation: () => ({ isPending: false, mutateAsync: manualPreparation }),
+  useRetryQuestionPreparation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useManuallyCompleteQuestionPreparation: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useTask: () => ({
     data: {
       task_id: "task-1",
@@ -31,7 +29,7 @@ vi.mock("@/api/hooks", () => ({
 
 vi.mock("@/hooks/useTaskProgress", () => ({
   useTaskProgress: () => ({
-    data: { workflow_revision: 3, question_recognition_provider_id: questionProviderId, status: "error", active_job_id: null, last_failed_job_id: "job-1", error: failureCode },
+    data: { status: "error", active_job_id: null, last_failed_job_id: "job-1", error: failureCode },
     error: null,
     isFetching: false,
     progress: {
@@ -57,33 +55,6 @@ vi.mock("@/i18n/I18nProvider", () => ({
 }));
 
 describe("ProblemRecognitionProgressPage generation failure", () => {
-  it.each(["question_preparation_time_limit_reached", "question_preparation_wall_time_limit_reached"])("shows both question budgets and preserves explicit recovery for %s", async (code) => {
-    failureCode = code;
-    questionProviderId = "provider-1";
-    generationProgress = { failed_question_ids: [], question_error_codes: {} };
-    retryPreparation.mockResolvedValue({ status: "started" });
-    render(<MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}>
-      <Routes><Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} /></Routes>
-    </MemoryRouter>);
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent(code.includes("_wall_") ? "本次题目准备已达到运行总时限" : "本次题目准备已达到有效处理时限");
-    expect(alert).toHaveTextContent("有效处理上限为 1.5 小时");
-    expect(alert).toHaveTextContent("总时限为 2.5 小时");
-    expect(alert).toHaveTextContent("首次运行后所有等待均计入总时限");
-    expect(alert).not.toHaveTextContent("模型响应超时");
-    expect(alert).toHaveTextContent("已保存的结果保留");
-    expect(alert).toHaveTextContent("已提交的服务商请求可能仍在处理");
-    expect(screen.getByRole("button", { name: "人工继续处理" })).toBeEnabled();
-    const retry = screen.getByRole("button", { name: "重试失败项" });
-    expect(retry).toBeEnabled();
-    expect(retryPreparation).not.toHaveBeenCalled();
-    expect(manualPreparation).not.toHaveBeenCalled();
-    fireEvent.click(retry);
-    await waitFor(() => expect(retryPreparation).toHaveBeenCalledExactlyOnceWith({
-      taskId: "task-1", jobId: "job-1", recognitionProviderId: "provider-1", expectedWorkflowRevision: 3,
-    }));
-  });
-
   it("shows the persisted failed page and refusal without enabling an unacknowledged retry", () => {
     failureCode = "provider_submit_uncertain";
     generationProgress = { provider_failures: [{ code: "provider_recitation_blocked", pages: [8] }] };
@@ -103,6 +74,22 @@ describe("ProblemRecognitionProgressPage generation failure", () => {
     expect(screen.getByRole("heading", { name: "模型服务暂时不可用" })).toBeInTheDocument();
     expect(screen.getByText(/HTTP 503/)).toHaveTextContent("重试时会复用已识别资料");
     expect(screen.getByRole("button", { name: "重试失败项" })).toBeDisabled();
+  });
+
+  it.each([
+    ["question_preparation_time_limit_reached", "本次题目处理已达到有效处理时限", "1.5 小时，排队不计时", "已达到有效处理时限"],
+    ["question_preparation_wall_time_limit_reached", "本次题目处理已达到总时限", "2.5 小时总时限，自首次开始运行起，之后等待计入", "已达到总时限"],
+  ])("shows retained question results and existing recovery actions for %s", (code, title, timing, itemLabel) => {
+    failureCode = code;
+    generationProgress = { question_error_codes: { q2: code } };
+    render(<MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}>
+      <Routes><Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByRole("heading", { name: title })).toBeVisible();
+    expect(screen.getByText(new RegExp(timing))).toHaveTextContent("已保存的题干、参考答案和评分标准会保留");
+    expect(screen.getByText(`1.1.7 · ${itemLabel}`)).toBeVisible();
+    expect(screen.getByRole("button", { name: "重试失败项" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "人工继续处理" })).toBeEnabled();
   });
 
   it("keeps uncertain request numbers and completed counts visible after a real-style timeout", () => {

@@ -1,4 +1,3 @@
-import { SOURCE_PREFLIGHT_TIMEOUT_MS } from "./requestTimeouts";
 import { apiClient, getJSON, normalizeAPIError } from "./client";
 import type {
   ProblemLibraryResponse,
@@ -62,7 +61,7 @@ export async function preflightProblemSource(
     const response = await apiClient.post<ProblemSourcePreflightResponse>(
       `/tasks/${input.taskId}/question-preparation/sources/preflight`,
       formData,
-      { timeout: SOURCE_PREFLIGHT_TIMEOUT_MS },
+      { timeout: 960_000 },
     );
     return response.data;
   } catch (error) {

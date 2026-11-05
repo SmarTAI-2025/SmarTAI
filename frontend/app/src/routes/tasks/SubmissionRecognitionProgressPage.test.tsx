@@ -49,16 +49,15 @@ beforeEach(() => {
 });
 
 describe("submission recognition completion", () => {
-  it("offers retry and manual review with retained results after the active work limit", async () => {
-    snapshot = { ...detail, status: "error", last_failed_job_id: "new-job", error: "submission_time_limit_reached",
-      submission_sources: [{ ...source("failed"), reason_code: "submission_time_limit_reached" }],
+  it.each(["submission_time_limit_reached", "submission_wall_time_limit_reached"])("offers retry and manual review with retained results after %s", async code => {
+    const wallTime = code === "submission_wall_time_limit_reached";
+    snapshot = { ...detail, status: "error", last_failed_job_id: "new-job", error: code,
+      submission_sources: [{ ...source("failed"), reason_code: code }],
       submission_source_summary: { uploaded: 1, parsed: 0, failed: 1, pending: 0, identity_needs_review: 0 } };
     show();
-    expect(screen.getByRole("heading", { name: "本次作答识别已达到有效处理时限" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: wallTime ? "本次识别已达到总时限" : "本次识别已达到处理时限" })).toBeVisible();
     expect(screen.getByRole("button", { name: "重试失败项" })).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("有效处理上限为 2.5 小时");
-    expect(screen.getByRole("alert")).toHaveTextContent("总时限为 3.5 小时");
-    expect(screen.getByRole("alert")).toHaveTextContent("已保存的结果保留");
+    expect(screen.getByText(wallTime ? /3.5 小时总时限，自首次开始运行起，之后等待计入。已完成的识别和结构化作答已保留/ : /2.5 小时，排队不计时。已完成的识别和结构化作答已保留/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
     expect(await screen.findByRole("heading", { name: "作答校对页面" })).toBeVisible();
   });

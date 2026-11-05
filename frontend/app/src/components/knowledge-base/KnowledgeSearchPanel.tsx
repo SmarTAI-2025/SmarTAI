@@ -22,12 +22,11 @@ export function KnowledgeSearchPanel({ documentIds }: { documentIds: string[] })
   const [failed, setFailed] = useState(false);
   const [experts, setExperts] = useState<ExpertConfig[]>([]);
   const [providerId, setProviderId] = useState("");
-  const [partial, setPartial] = useState(false);
   const [rewriteFailed, setRewriteFailed] = useState(false);
   const [queryUsage, setQueryUsage] = useState<QueryUsage | null>(null);
   const generation = useRef(0);
   const scope = JSON.stringify([...new Set(documentIds)].sort());
-  useEffect(() => { generation.current += 1; setMatches(null); setPending(false); setFailed(false); setPartial(false); setRewriteFailed(false); setQueryUsage(null); }, [scope, providerId]);
+  useEffect(() => { generation.current += 1; setMatches(null); setPending(false); setFailed(false); setRewriteFailed(false); setQueryUsage(null); }, [scope, providerId]);
   useEffect(() => () => { generation.current += 1; }, []);
   useEffect(() => {
     if (frontier) return;
@@ -41,15 +40,14 @@ export function KnowledgeSearchPanel({ documentIds }: { documentIds: string[] })
   function search() {
     if (!query.trim() || pending || ids.length > 20) return;
     const current = ++generation.current;
-    setPending(true); setFailed(false); setPartial(false); setRewriteFailed(false); setMatches(null); setQueryUsage(null);
-    void postJSON<{ matches: KnowledgeMatch[]; partial?: boolean; query_plan?: QueryUsage }>("/knowledge/search", {
+    setPending(true); setFailed(false); setRewriteFailed(false); setMatches(null); setQueryUsage(null);
+    void postJSON<{ matches: KnowledgeMatch[]; query_plan?: QueryUsage }>("/knowledge/search", {
       query: query.trim(), document_ids: ids, limit: 5, ...(providerId ? { query_provider_id: providerId } : {}),
     }, { _authScope: frontier ? "frontier" : "teacher" } as AuthAwareRequestConfig)
       .then((result) => { if (current === generation.current) {
         setMatches(result.matches);
         setQueryUsage(result.query_plan ?? null);
-        setPartial(Boolean(result.partial || result.query_plan?.status === "rewrite_timeout"));
-        setRewriteFailed(Boolean(providerId && result.query_plan?.status.startsWith("rewrite_") && result.query_plan.status !== "rewrite_timeout"));
+        setRewriteFailed(Boolean(providerId && result.query_plan?.status.startsWith("rewrite_") && result.query_plan.status !== "rewritten"));
       } })
       .catch(() => { if (current === generation.current) setFailed(true); })
       .finally(() => { if (current === generation.current) setPending(false); });
@@ -86,9 +84,8 @@ export function KnowledgeSearchPanel({ documentIds }: { documentIds: string[] })
     </p> : null}
     {ids.length > 20 ? <p className="mt-2 text-xs text-muted-foreground">{zh ? "请将范围缩小到 20 份资料以内。" : "Narrow the selection to at most 20 materials."}</p> : null}
     {failed ? <p role="alert" className="mt-2 text-xs text-danger">{zh ? "检索暂不可用，请稍后重试或缩小资料范围。" : "Search unavailable. Retry or narrow the material selection."}</p> : null}
-    {rewriteFailed && !partial ? <p role="alert" className="mt-2 text-xs text-muted-foreground">{zh ? "模型辅助暂不可用，以下为本地检索结果。" : "Model assistance unavailable; showing local search results."}</p> : null}
-    {partial ? <p role="alert" className="mt-2 text-xs text-muted-foreground">{zh ? "检索未全部完成，以下仅为已完成的检索结果，可能遗漏相关片段。" : "Search is incomplete; showing available search results. Relevant passages may be missing."}</p> : null}
-    {matches?.length === 0 && !partial ? <p role="status" className="mt-2 text-xs text-muted-foreground">{zh ? "已入库内容中未找到相关片段。" : "No matching passages in indexed content."}</p> : null}
+    {rewriteFailed ? <p role="alert" className="mt-2 text-xs text-muted-foreground">{zh ? "模型辅助暂不可用，以下为本地检索结果。" : "Model assistance unavailable; showing local search results."}</p> : null}
+    {matches?.length === 0 ? <p role="status" className="mt-2 text-xs text-muted-foreground">{zh ? "已入库内容中未找到相关片段。" : "No matching passages in indexed content."}</p> : null}
     <ol className="mt-3 divide-y">
       {matches?.map((match) => <li key={match.citation.citation_id} className="min-w-0 py-3">
         <MarkdownMath className="break-words text-sm leading-6">{match.content}</MarkdownMath>

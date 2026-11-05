@@ -918,7 +918,7 @@ def fail_timed_out_operation(operation_id: str, *, owner_id: str, expected_attem
     current live lease can stop its attempt; a stale timer cannot stop a retry.
     """
     from backend.services.workflow_deadlines import BUDGET_TYPES, LIMIT_CODES
-    if code not in LIMIT_CODES | {"provider_submit_uncertain"}:
+    if code not in LIMIT_CODES:
         raise ValueError("Invalid timeout code")
     now = time.time()
     with session_scope() as session:
@@ -945,13 +945,9 @@ def fail_timed_out_operation(operation_id: str, *, owner_id: str, expected_attem
             workflow.active_job_id = workflow.active_operation = None
             workflow.last_failed_job_id = operation_id
             workflow.error_code = code
-            workflow.presentation_status = (
-                "problems_ready" if operation.operation_type in {"material_import", "ai_completion"} else "error")
+            workflow.presentation_status = "error"
             workflow.updated_at = now
-            if operation.operation_type in {"material_import", "ai_completion"}:
-                operation.payload = {**(operation.payload or {}), "stopped_workflow_revision": workflow.workflow_revision}
         return True
-
 
 def generate_result_artifacts_atomic(
     *,
@@ -1569,10 +1565,12 @@ def save_operation_checkpoint(
                 raise NotFound("stored_file")
 
         from backend.services.workflow_deadlines import CHECKPOINT_KEY, WORK_CHECKPOINT_KEY
-        if CHECKPOINT_KEY in (current.checkpoint or {}):
-            checkpoint = {**checkpoint, CHECKPOINT_KEY: current.checkpoint[CHECKPOINT_KEY]}
-        if WORK_CHECKPOINT_KEY not in checkpoint and WORK_CHECKPOINT_KEY in (current.checkpoint or {}):
-            checkpoint = {**checkpoint, WORK_CHECKPOINT_KEY: current.checkpoint[WORK_CHECKPOINT_KEY]}
+        from backend.services.submission_work_budget import CHECKPOINT_KEY as SUBMISSION_CLOCK
+        # A stage checkpoint cannot restart the first-claim deadline or lose
+        # saved active time. An explicit new attempt clears these in create_operation.
+        for key in (CHECKPOINT_KEY, WORK_CHECKPOINT_KEY, SUBMISSION_CLOCK):
+            if key in (current.checkpoint or {}) and (key == CHECKPOINT_KEY or key not in checkpoint):
+                checkpoint = {**checkpoint, key: current.checkpoint[key]}
         checkpoint = _validate_json_object(checkpoint, field="checkpoint", max_bytes=MAX_OPERATION_CHECKPOINT_BYTES)
 
         checkpoint_values = {
@@ -1626,14 +1624,9 @@ def claim_operation(
     now = time.time()
     with session_scope() as session:
         from backend.db.execution_admission import WORKLOAD_TYPES, admit_owner
-        previous = session.execute(select(WorkflowOperationRecord.operation_type,
-            WorkflowOperationRecord.status, WorkflowOperationRecord.progress).where(
+        operation_type = session.scalar(select(WorkflowOperationRecord.operation_type).where(
             WorkflowOperationRecord.id == operation_id, WorkflowOperationRecord.owner_id == owner_id,
-        )).first()
-        operation_type = previous.operation_type if previous else None
-        historical_start = (previous.progress or {}).get("started_at") if previous and previous.status == "running" else None
-        if not (type(historical_start) in (int, float) and 0 < historical_start <= now):
-            historical_start = now
+        ))
         if operation_type in WORKLOAD_TYPES:
             admit_owner(session, owner_id, exclude_id=operation_id)
         result = session.execute(
@@ -1708,14 +1701,14 @@ def claim_operation(
                 raise LeaseLost(
                     "The task is being deleted.", code="task_deleted"
                 )
-        from backend.services.workflow_deadlines import BUDGET_TYPES, CHECKPOINT_KEY, workflow_limit
+        from backend.services.workflow_deadlines import BUDGET_TYPES, CHECKPOINT_KEY, policy
         if row.operation_type in BUDGET_TYPES:
-            saved_clock = (row.checkpoint or {}).get(CHECKPOINT_KEY) or {}
-            if saved_clock.get("attempt") != row.attempt:
+            clock = (row.checkpoint or {}).get(CHECKPOINT_KEY) or {}
+            if clock.get("attempt") != row.attempt:
                 row.checkpoint = {**(row.checkpoint or {}), CHECKPOINT_KEY: {
-                    "attempt": row.attempt, "started_at": historical_start,
-                    "deadline_at": historical_start + workflow_limit(row.operation_type)}}
-                session.flush()
+                    "attempt": row.attempt, "started_at": now,
+                    "deadline_at": now + policy(row.operation_type)[1],
+                }}
         return _detach_operation(row)
 
 

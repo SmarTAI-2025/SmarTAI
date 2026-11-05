@@ -318,125 +318,126 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
 
     try:
         heartbeat_task = asyncio.create_task(_heartbeat())
-        from backend.services.workflow_deadlines import processing_budget, cancel_and_drain
+        run_registry = registry or _registry_for(run.teacher_id)
+        grading_setup = None
+
+        # A normalized caller that does not use the Figma façade has no setup
+        # row and retains the main default behavior. Database/read failures are
+        # deliberately not swallowed: silently widening the provider selection
+        # would violate the teacher-approved cost and privacy boundary.
+        if frozen_setup is not None:
+            try:
+                grading_setup = TaskGradingSetup.model_validate(frozen_setup.setup)
+            except PydanticValidationError as exc:
+                raise ValidationError(
+                    "grading_setup_invalid", code="grading_setup_invalid"
+                ) from exc
+            assert_grading_routes_supported(grading_setup)
+            from backend.services.grading_input_security import (
+                provider_configuration_fingerprint,
+            )
+            frozen_provider_fingerprint = (
+                frozen_setup.input_manifest or {}
+            ).get("provider_configuration_fingerprint")
+            if not frozen_provider_fingerprint or (
+                provider_configuration_fingerprint(
+                    owner_id=run.teacher_id,
+                    selected_provider_ids=grading_setup.selected_provider_ids,
+                )
+                != frozen_provider_fingerprint
+            ):
+                raise ValidationError(
+                    "Provider configuration changed after run confirmation.",
+                    code="grading_provider_configuration_changed",
+                )
+            try:
+                run_registry = run_registry.select(
+                    grading_setup.selected_provider_ids,
+                    primary_provider_id=grading_setup.primary_provider_id,
+                )
+            except ValueError as exc:
+                raise ValidationError(
+                    "grading_provider_selection_invalid",
+                    code="grading_provider_selection_invalid",
+                ) from exc
+            language = grading_setup.feedback_language
+        # The explicitly enabled E2E provider is injected inside the adapter,
+        # so it does not appear in a teacher-scoped production registry.
+        if run_registry.count() == 0 and not settings.e2e_fake_provider:
+            raise ValidationError(
+                "no_provider_configured", code="no_provider_configured"
+            )
+        questions = _questions_for_run(
+            assignment_id=run.assignment_id, frozen_setup=frozen_setup,
+        )
+        from backend.services.math_grading_context import ensure_run_math_version
+        ensure_run_math_version(
+            run_id=run_id, worker_id=worker_id, questions=questions, frozen_setup=frozen_setup,
+        )
+        frozen_rows = grading_repository.list_frozen_submissions(run_id=run_id)
+        frozen_revisions: list[tuple[education.SubmissionRevisionDTO, str]] = []
+        for fr in frozen_rows:
+            revision = submission_repository.get_revision(revision_id=fr.id, actor_id=run.teacher_id)
+            if revision is not None:
+                frozen_revisions.append((revision, fr.student_id))
+        grading_repository.record_event(
+            run_id=run_id, level="info", message="grading_started",
+            payload={"students": len(frozen_revisions), "questions": len(questions)},
+        )
+        # A reclaimed/re-run pass must start from a clean counter. The reporter
+        # is a process-local singleton keyed by run_id; without this reset a
+        # second pass over the same run would keep accumulating completed_units
+        # past total_students*total_questions (progress bar overshoots 100%).
+        remove_reporter(run_id)
+        reporter = get_or_create_reporter(
+            run_id,
+            total_students=len(frozen_revisions),
+            total_questions=len(questions),
+        )
+
+        def _persist_progress(event, payload):
+            grading_repository.record_event(
+                run_id=run_id,
+                level=event.level,
+                message="grading_progress",
+                payload=payload,
+            )
+
+        reporter.set_event_sink(_persist_progress)
+        reused_pairs = {(row.submission_revision_id, row.q_id)
+                        for row in grading_repository.list_results_for_run(run_id)}
+        for snapshot in (frozen_setup.input_manifest if frozen_setup else {}).get("reused_results", []):
+            preserved = education.GradeResultDTO.model_validate(snapshot)
+            preserved.grading_run_id = run_id
+            if (preserved.submission_revision_id, preserved.q_id) not in reused_pairs:
+                grading_repository.upsert_result(run_id=run_id, worker_id=worker_id,
+                    grade_result=preserved, inherited_review=preserved.teacher_review)
+            reused_pairs.add((preserved.submission_revision_id, preserved.q_id))
+        for _ in reused_pairs:
+            await reporter.increment_completed()
+        retry_options = {"reused_pairs": reused_pairs} if reused_pairs else {}
+        from backend.services.execution_control import run_controlled
+        from backend.services.grading_checkpoints import GradingCheckpoints
+        checkpoints = GradingCheckpoints(run_id=run_id, worker_id=worker_id,
+            questions=questions, frozen_revisions=frozen_revisions)
+
+        def is_cancelled():
+            try:
+                return grading_repository.get_run(run_id=run_id).status == "cancelled"
+            except NotFound:
+                return True
+
+        from backend.services.workflow_deadlines import processing_budget, run_owned_work
         saved_clock = next((event["payload"] for event in reversed(grading_repository.list_events(run_id))
                             if event["message"] == "grading_work_clock"), None)
         async def persist_clock(snapshot):
             grading_repository.record_event(run_id=run_id, worker_id=worker_id, level="info",
                 message="grading_work_clock", payload=snapshot)
-        async with processing_budget(run_id, kind="grading", saved=saved_clock,
-                                     started_at=run.started_at, persist=persist_clock) as budget:
-            run_registry = registry or _registry_for(run.teacher_id)
-            grading_setup = None
 
-            # A normalized caller that does not use the Figma façade has no setup
-            # row and retains the main default behavior. Database/read failures are
-            # deliberately not swallowed: silently widening the provider selection
-            # would violate the teacher-approved cost and privacy boundary.
-            if frozen_setup is not None:
-                try:
-                    grading_setup = TaskGradingSetup.model_validate(frozen_setup.setup)
-                except PydanticValidationError as exc:
-                    raise ValidationError(
-                        "grading_setup_invalid", code="grading_setup_invalid"
-                    ) from exc
-                assert_grading_routes_supported(grading_setup)
-                from backend.services.grading_input_security import (
-                    provider_configuration_fingerprint,
-                )
-                frozen_provider_fingerprint = (
-                    frozen_setup.input_manifest or {}
-                ).get("provider_configuration_fingerprint")
-                if not frozen_provider_fingerprint or (
-                    provider_configuration_fingerprint(
-                        owner_id=run.teacher_id,
-                        selected_provider_ids=grading_setup.selected_provider_ids,
-                    )
-                    != frozen_provider_fingerprint
-                ):
-                    raise ValidationError(
-                        "Provider configuration changed after run confirmation.",
-                        code="grading_provider_configuration_changed",
-                    )
-                try:
-                    run_registry = run_registry.select(
-                        grading_setup.selected_provider_ids,
-                        primary_provider_id=grading_setup.primary_provider_id,
-                    )
-                except ValueError as exc:
-                    raise ValidationError(
-                        "grading_provider_selection_invalid",
-                        code="grading_provider_selection_invalid",
-                    ) from exc
-                language = grading_setup.feedback_language
-            # The explicitly enabled E2E provider is injected inside the adapter,
-            # so it does not appear in a teacher-scoped production registry.
-            if run_registry.count() == 0 and not settings.e2e_fake_provider:
-                raise ValidationError(
-                    "no_provider_configured", code="no_provider_configured"
-                )
-            questions = _questions_for_run(
-                assignment_id=run.assignment_id, frozen_setup=frozen_setup,
-            )
-            from backend.services.math_grading_context import ensure_run_math_version
-            ensure_run_math_version(
-                run_id=run_id, worker_id=worker_id, questions=questions, frozen_setup=frozen_setup,
-            )
-            frozen_rows = grading_repository.list_frozen_submissions(run_id=run_id)
-            frozen_revisions: list[tuple[education.SubmissionRevisionDTO, str]] = []
-            for fr in frozen_rows:
-                revision = submission_repository.get_revision(revision_id=fr.id, actor_id=run.teacher_id)
-                if revision is not None:
-                    frozen_revisions.append((revision, fr.student_id))
-            grading_repository.record_event(
-                run_id=run_id, level="info", message="grading_started",
-                payload={"students": len(frozen_revisions), "questions": len(questions)},
-            )
-            # A reclaimed/re-run pass must start from a clean counter. The reporter
-            # is a process-local singleton keyed by run_id; without this reset a
-            # second pass over the same run would keep accumulating completed_units
-            # past total_students*total_questions (progress bar overshoots 100%).
-            remove_reporter(run_id)
-            reporter = get_or_create_reporter(
-                run_id,
-                total_students=len(frozen_revisions),
-                total_questions=len(questions),
-            )
-
-            def _persist_progress(event, payload):
-                grading_repository.record_event(
-                    run_id=run_id,
-                    level=event.level,
-                    message="grading_progress",
-                    payload=payload,
-                )
-
-            reporter.set_event_sink(_persist_progress)
-            reused_pairs = {(row.submission_revision_id, row.q_id)
-                            for row in grading_repository.list_results_for_run(run_id)}
-            for snapshot in (frozen_setup.input_manifest if frozen_setup else {}).get("reused_results", []):
-                preserved = education.GradeResultDTO.model_validate(snapshot)
-                preserved.grading_run_id = run_id
-                if (preserved.submission_revision_id, preserved.q_id) not in reused_pairs:
-                    grading_repository.upsert_result(run_id=run_id, worker_id=worker_id,
-                        grade_result=preserved, inherited_review=preserved.teacher_review)
-                reused_pairs.add((preserved.submission_revision_id, preserved.q_id))
-            for _ in reused_pairs:
-                await reporter.increment_completed()
-            retry_options = {"reused_pairs": reused_pairs} if reused_pairs else {}
-            from backend.services.execution_control import run_controlled
-            from backend.services.grading_checkpoints import GradingCheckpoints
-            checkpoints = GradingCheckpoints(run_id=run_id, worker_id=worker_id,
-                questions=questions, frozen_revisions=frozen_revisions)
-
-            def is_cancelled():
-                try:
-                    return grading_repository.get_run(run_id=run_id).status == "cancelled"
-                except NotFound:
-                    return True
-
-            grading_task = asyncio.create_task(
-                run_controlled(run_id, is_cancelled, checkpoints.run(grading_adapter.run_grading(
+        async def grade_with_budget():
+            async with processing_budget(run_id, kind="grading", saved=saved_clock,
+                                         started_at=run.started_at, persist=persist_clock):
+                return await run_owned_work(run_controlled(run_id, is_cancelled, checkpoints.run(grading_adapter.run_grading(
                     **retry_options,
                     run_id=run_id,
                     assignment_id=run.assignment_id,
@@ -447,56 +448,57 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
                     language=language,
                     reporter=reporter,
                     grading_setup=grading_setup,
-                )), response_timeout_seconds=settings.grading_custom_provider_timeout_seconds)
-            )
-            done, _pending = await asyncio.wait(
-                (grading_task, heartbeat_task),
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if heartbeat_task in done:
-                # Losing the durable lease (including a task tombstone) must stop
-                # provider work immediately. Merely ending the heartbeat coroutine
-                # would let an expensive grading call continue and attempt writes.
-                heartbeat_error = heartbeat_task.exception()
-                await cancel_and_drain(grading_task)
-                if heartbeat_error is not None:
-                    raise heartbeat_error
-                raise LeaseLost("grading_heartbeat_stopped")
-            if grading_task.cancelled():
-                if is_cancelled():
-                    return  # A teacher stop must not terminate the shared poller.
-                raise asyncio.CancelledError()
-            outcomes = grading_task.result()
-            if budget.blocked:
-                from backend.domain.errors import RecognitionError
-                raise RecognitionError(budget.code)
-            for outcome in outcomes:
-                for res in outcome.results:
-                    try:
-                        grading_repository.upsert_result(
-                            run_id=run_id, worker_id=worker_id, grade_result=res,
-                            inherited_review=checkpoints.teacher_review_for(res),
-                        )
-                    except VersionConflict:
-                        pass
-            completed, failed = grading_repository.persisted_result_counters(run_id)
-            grading_repository.mark_completed(
-                run_id=run_id, worker_id=worker_id, completed=completed, failed=failed
-            )
-            grading_repository.record_event(
-                run_id=run_id, level="info", message="run_completed",
-                payload={"completed": completed, "failed": failed},
-            )
+                )), response_timeout_seconds=settings.grading_custom_provider_timeout_seconds))
+        grading_task = asyncio.create_task(grade_with_budget())
+        done, _pending = await asyncio.wait(
+            (grading_task, heartbeat_task),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if heartbeat_task in done:
+            # Losing the durable lease (including a task tombstone) must stop
+            # provider work immediately. Merely ending the heartbeat coroutine
+            # would let an expensive grading call continue and attempt writes.
+            heartbeat_error = heartbeat_task.exception()
+            grading_task.cancel()
+            try:
+                await grading_task
+            except asyncio.CancelledError:
+                pass
+            if heartbeat_error is not None:
+                raise heartbeat_error
+            raise LeaseLost("grading_heartbeat_stopped")
+        if grading_task.cancelled():
+            if is_cancelled():
+                return  # A teacher stop must not terminate the shared poller.
+            raise asyncio.CancelledError()
+        outcomes = grading_task.result()
+        for outcome in outcomes:
+            for res in outcome.results:
+                try:
+                    grading_repository.upsert_result(
+                        run_id=run_id, worker_id=worker_id, grade_result=res,
+                        inherited_review=checkpoints.teacher_review_for(res),
+                    )
+                except VersionConflict:
+                    pass
+        completed, failed = grading_repository.persisted_result_counters(run_id)
+        # Final database publication is part of this run's total time too.
+        # Keep already persisted results, but never publish a late success.
+        from backend.services.workflow_deadlines import policy
+        if time.time() >= run.started_at + policy("grading")[1]:
+            raise DomainError("grading_wall_time_limit_reached", code="grading_wall_time_limit_reached")
+        grading_repository.mark_completed(
+            run_id=run_id, worker_id=worker_id, completed=completed, failed=failed
+        )
+        grading_repository.record_event(
+            run_id=run_id, level="info", message="run_completed",
+            payload={"completed": completed, "failed": failed},
+        )
     except LeaseLost:
         # Lease loss is an expected fencing outcome (including task deletion),
         # not a grading failure to persist onto a run we no longer own.
         raise
     except Exception as exc:
-        # The whole-run timer cancels this coordinator while it is waiting on
-        # two independent tasks. Drain paid work before marking failed/releasing
-        # the owner slot; a cancelled coordinator alone does not stop children.
-        if grading_task is not None and not grading_task.done():
-            await cancel_and_drain(grading_task)
         error_code = classify_background_error(
             exc,
             "grading_failed",
@@ -525,8 +527,12 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
         for background_task in (grading_task, heartbeat_task):
             if background_task is None:
                 continue
-            from backend.services.workflow_deadlines import cancel_and_drain
-            await cancel_and_drain(background_task)
+            if not background_task.done():
+                background_task.cancel()
+            try:
+                await background_task
+            except (asyncio.CancelledError, Exception):
+                pass
         # Release only this worker's reporter; a reclaimed run may already
         # have a replacement reporter while this stale worker is exiting.
         if reporter is not None:

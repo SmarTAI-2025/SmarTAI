@@ -44,8 +44,7 @@ def continue_manual_grading(*, task_id: str, owner_id: str, job_id: str, expecte
         return {"status": "manual_review", "job_id": job_id}
 
 
-def continue_auxiliary_run(*, task_id: str, owner_id: str, job_id: str, expected_revision: int,
-                           acknowledge_possible_duplicate_call: bool = False) -> dict:
+def continue_auxiliary_run(*, task_id: str, owner_id: str, job_id: str, expected_revision: int) -> dict:
     """Republish a stopped material/AI job with its saved inputs and a new queue time."""
     with session_scope() as session:
         row = session.scalar(select(workflows.WorkflowOperationRecord).where(
@@ -64,23 +63,11 @@ def continue_auxiliary_run(*, task_id: str, owner_id: str, job_id: str, expected
         if workflow and workflow.active_job_id == job_id and row.status in {"pending", "running"}:
             return {"status": "already_running", "job_id": job_id}
         if (workflow is None or workflow.active_job_id or workflow.workflow_revision != expected_revision
-                or workflow.last_failed_job_id != job_id or row.error_code not in {
-                    "operation_cancelled", "question_preparation_time_limit_reached",
-                    "question_preparation_wall_time_limit_reached", "provider_submit_uncertain"}
+                or workflow.last_failed_job_id != job_id or row.error_code != "operation_cancelled"
                 or (row.payload or {}).get("stopped_workflow_revision") != workflow.workflow_revision):
             raise VersionConflict("The stopped run changed.", code="workflow_revision_conflict")
-        checkpoint = row.checkpoint or {}
-        if (row.error_code == "provider_submit_uncertain" or checkpoint.get("auxiliary_provider_inflight")
-                or checkpoint.get("base_provider_inflight_stage") or checkpoint.get("provider_inflight_question_ids")
-                or checkpoint.get("incremental_inflight_units")) and not acknowledge_possible_duplicate_call:
-            raise ValidationError("A previous provider request may still exist; review before retrying.",
-                                  code="provider_submit_uncertain")
         row.payload = {**(row.payload or {}), "base_workflow_revision": workflow.workflow_revision,
                        "resume_saved_results": True}
-        if acknowledge_possible_duplicate_call:
-            # Keep the old uncertainty as audit evidence; only the teacher can authorize a new request.
-            row.checkpoint = {**checkpoint, "acknowledged_inflight_attempt": row.attempt,
-                              "auxiliary_provider_inflight": False}
         row.status, row.error_code, row.completed_at = "pending", None, None
         row.attempt += 1
         row.updated_at = time.time()  # list_claimable_operations uses this new submission time.

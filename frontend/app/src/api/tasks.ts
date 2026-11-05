@@ -1,4 +1,3 @@
-import { SOURCE_PREFLIGHT_TIMEOUT_MS } from "./requestTimeouts";
 import { runGroundedAsk } from "./analytics";
 import { deleteJSON, getBlob, getJSON, postJSON, postMultipart, putJSON, type UploadOptions, type AuthAwareRequestConfig } from "./client";
 import type {
@@ -45,11 +44,10 @@ export function stopTaskRun(taskId: string, jobId: string, revision: number) {
   );
 }
 
-export function continueTaskRun(taskId: string, jobId: string, revision: number, manual = false, acknowledgePossibleDuplicateCall = false) {
+export function continueTaskRun(taskId: string, jobId: string, revision: number, manual = false) {
   return postJSON<{ status: "started" | "already_running" | "manual_review"; job_id: string }>(
     `/tasks/${encodeURIComponent(taskId)}/continue`,
-    { job_id: jobId, expected_workflow_revision: revision, ...(manual ? { manual: true } : {}),
-      ...(acknowledgePossibleDuplicateCall ? { acknowledge_possible_duplicate_call: true } : {}) },
+    { job_id: jobId, expected_workflow_revision: revision, ...(manual ? { manual: true } : {}) },
   );
 }
 
@@ -239,13 +237,12 @@ export function manuallyCompleteQuestionPreparation(input: {
       ...(input.questionCount !== undefined ? { question_count: input.questionCount } : {}) });
 }
 
-// These compatibility routes perform material preflight before acknowledging the job.
 export function uploadReference(taskId: string, file: File, options?: UploadOptions): Promise<TaskMutationResponse> {
-  return postMultipart<TaskMutationResponse>(`/tasks/${taskId}/upload_reference`, file, { ...options, timeout: SOURCE_PREFLIGHT_TIMEOUT_MS });
+  return postMultipart<TaskMutationResponse>(`/tasks/${taskId}/upload_reference`, file, options);
 }
 
 export function uploadTestCases(taskId: string, file: File, options?: UploadOptions): Promise<TaskMutationResponse> {
-  return postMultipart<TaskMutationResponse>(`/tasks/${taskId}/upload_test_cases`, file, { ...options, timeout: SOURCE_PREFLIGHT_TIMEOUT_MS });
+  return postMultipart<TaskMutationResponse>(`/tasks/${taskId}/upload_test_cases`, file, options);
 }
 
 export function startGrading(
