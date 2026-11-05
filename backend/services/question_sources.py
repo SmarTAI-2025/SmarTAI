@@ -163,7 +163,8 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     from backend.services.source_files import persist_problem_source
 
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
-    allow_vision = purpose not in {"rubric", "test_cases"} if allow_vision is None else allow_vision is True
+    restricted_role = purpose in {"rubric", "test_cases"}
+    allow_vision = not restricted_role if allow_vision is None else allow_vision is True
     reporter = reporter or ProgressReporter(f"recognition-{task_id}")
     inspection = await validate_upload_content(
         content, filename, content_type=content_type, purpose=purpose,
@@ -245,7 +246,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                     timeout_profile=timeout_profile, allow_partial=allow_partial, on_pages=on_pages,
                 )
             except RecognitionError as exc:
-                if not allow_vision and exc.code == "visual_capability_unavailable":
+                if not allow_vision and exc.code in {"visual_capability_unavailable", "ocr_empty_result"}:
                     raise RecognitionError("material_ocr_confirmation_required", **(exc.details or {})) from None
                 if exc.code != "provider_vision_not_supported" or not allow_vision or engine is None:
                     raise
@@ -271,6 +272,8 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         raise RecognitionError("recognition_already_running")
     assembly = run.assembly
     if assembly is None or assembly.document is None:
+        if not allow_vision and run.safe_error_code == "visual_capability_unavailable":
+            raise RecognitionError("material_ocr_confirmation_required")
         raise RecognitionError(run.safe_error_code or "recognition_artifact_unavailable")
     document = assembly.document
     text = document.final_markdown

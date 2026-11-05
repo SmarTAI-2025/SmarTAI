@@ -16,21 +16,27 @@ host. Default cap is 8.
 EXECUTION MODES:
   - stdin/stdout (default): student code is a complete program; we feed
     `tc.input` on stdin and compare stdout to `tc.expected_output`.
-  - function-call (LeetCode style): student code is just a function definition
-    (no top-level I/O). When `tc.function_name` is set we wrap the student
-    code with an auto-generated harness that loads `tc.function_args` from
-    stdin (JSON), calls the function, and prints repr(result). The harness
-    output is compared to `tc.expected_return` after ast.literal_eval
-    normalization so e.g. "1" and "1.0" with int rounding still match.
+  - function-call: a fixed harness loads the unchanged module, invokes the
+    named function with positional/keyword arguments and writes its result to
+    a separate channel. The supervisor keeps stdout as diagnostics. The
+    expected result and the comparison run outside the student process.
 """
 from __future__ import annotations
 
 import ast
 import asyncio
+from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 import json
+import keyword
+import math
+import uuid
+import weakref
+from decimal import Decimal, InvalidOperation
 import logging
 import os
 import subprocess
+import signal
 import sys
 import tempfile
 import time
@@ -48,7 +54,10 @@ from typing import List, Optional
 # working.
 from backend.config import settings
 from backend.models import TestCase
-from backend.tools.sandbox_runtime import get_sandbox_semaphore
+from backend.services.python_source_encoding import python_execution_source
+from backend.tools.sandbox_runtime import get_sandbox_limit, get_sandbox_semaphore
+
+from tools.runner_spike.worker import child_command, request_digest, _diagnose_failure, split_function_result
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +81,18 @@ class TestResult:
     stdout_truncated: bool = False
     stderr_truncated: bool = False
     isolation_mode: str = "host_subprocess"
+    stdout: str = ""
+    return_value: str | None = None
+    execution_id: str = ""
+    request_digest: str = ""
+    case_id: str = ""
+    case_index: int | None = None
+    resource_status: str = "unknown"
+    process_exit_code: int | None = None
+    termination_signal: int | None = None
+    cgroup_oom_kills: int | None = None
+    cgroup_pid_denials: int | None = None
+    executed: bool = True
 
 
 @dataclass
@@ -103,6 +124,8 @@ async def run_python_subprocess(
     timeout: float = 10.0,
     memory_mb: int = 256,
     max_output_chars: Optional[int] = None,
+    function_call: dict | None = None,
+    bind_request: bool = False,
 ) -> TestResult:
     """Run a single test case in a subprocess.
 
@@ -116,9 +139,14 @@ async def run_python_subprocess(
     if settings.program_runner_mode == "oci":
         from backend.tools.oci_grading_runner import run_python_oci
         return await run_python_oci(code, test_input, timeout=timeout,
-                                    memory_mb=memory_mb, max_output_chars=max_output_chars or 8192)
+                                    memory_mb=memory_mb, max_output_chars=max_output_chars or 8192,
+                                    function_call=function_call, bind_request=bind_request)
     if settings.runtime_environment == "production":
         raise HostCodeExecutionDisabled()
+    execution_id = uuid.uuid4().hex
+    digest = request_digest({"execution_id": execution_id, "code": code, "stdin": test_input,
+                             "function_call": function_call, "timeout": timeout, "memory_mb": memory_mb,
+                             "max_output_chars": max_output_chars})
     sem = get_sandbox_semaphore()
     async with sem:
         started_at = time.perf_counter()
@@ -128,15 +156,17 @@ async def run_python_subprocess(
             f.write(code)
             code_path = f.name
 
+        result_dir = tempfile.TemporaryDirectory(prefix="smartai-function-") if function_call is not None else None
+        return_path = os.path.join(result_dir.name, "return") if result_dir else None
         try:
             preexec_fn = (
                 (lambda: _apply_limits(memory_mb, int(timeout) + 2))
                 if sys.platform != "win32"
                 else None
             )
+            command = child_command(code_path, return_path) if bind_request or function_call is not None else [sys.executable, code_path]
             proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                code_path,
+                *command,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -144,7 +174,7 @@ async def run_python_subprocess(
             )
             try:
                 stdout_b, stderr_b = await asyncio.wait_for(
-                    proc.communicate(test_input.encode()),
+                    proc.communicate((json.dumps(function_call, allow_nan=False) if function_call is not None else test_input).encode()),
                     timeout=timeout,
                 )
             except asyncio.TimeoutError:
@@ -156,9 +186,16 @@ async def run_python_subprocess(
                     actual_output="",
                     error=f"Timeout after {timeout}s",
                     duration_ms=(time.perf_counter() - started_at) * 1000,
-                    exit_reason="timeout",
+                    exit_reason="timeout", resource_status="timeout", execution_id=execution_id, request_digest=digest,
+                    process_exit_code=proc.returncode if proc.returncode >= 0 else None,
+                    termination_signal=-proc.returncode if proc.returncode < 0 else None,
                 )
 
+            except BaseException:
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
+                raise
             stdout = stdout_b.decode(errors="replace")
             stderr = stderr_b.decode(errors="replace").replace(
                 code_path,
@@ -175,26 +212,48 @@ async def run_python_subprocess(
                     stderr,
                     max_output_chars,
                 )
-            output_limited = stdout_truncated or stderr_truncated
+            return_value = None
+            module_loaded = False
+            return_truncated = False
+            if return_path and os.path.isfile(return_path):
+                limit = max_output_chars or 8192
+                with open(return_path, "rb") as returned:
+                    value = returned.read((limit + 1) * 4 + 1).decode(errors="replace")
+                value, return_truncated = _truncate_output(value, limit + 1)
+                module_loaded, return_value = split_function_result(value)
+            output_limited = stdout_truncated or stderr_truncated or return_truncated
             if output_limited:
                 limit_error = f"Output limit exceeded ({max_output_chars} chars)"
                 stderr = f"{stderr.rstrip()}\n{limit_error}".lstrip()
 
+            if bind_request and proc.returncode == -getattr(signal, "SIGKILL", 9):
+                from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
+                raise IsolatedRunnerUnavailable()
+            missing_return = return_path is not None and not return_value
+            reason = "success"
+            if output_limited:
+                reason = "output_limit"
+            elif proc.returncode or missing_return:
+                reason = (await asyncio.to_thread(_diagnose_failure, code, function_call, module_loaded)
+                          if bind_request and proc.returncode > 0 else "runtime_error")
+
             return TestResult(
                 test=TestCase(input=test_input),
-                passed=(proc.returncode == 0 and not output_limited),
+                passed=(proc.returncode == 0 and not output_limited and not missing_return),
+                stdout=stdout, return_value=return_value, execution_id=execution_id, request_digest=digest,
+                resource_status="output_limit" if output_limited else "within_limits" if proc.returncode == 0 else "unknown",
+                process_exit_code=proc.returncode if proc.returncode >= 0 else None,
+                termination_signal=-proc.returncode if proc.returncode < 0 else None,
                 actual_output=stdout,
                 error=stderr if proc.returncode != 0 or output_limited else "",
                 duration_ms=(time.perf_counter() - started_at) * 1000,
-                exit_reason=(
-                    "output_limit"
-                    if output_limited
-                    else ("success" if proc.returncode == 0 else "runtime_error")
-                ),
+                exit_reason=reason,
                 stdout_truncated=stdout_truncated,
                 stderr_truncated=stderr_truncated,
             )
         finally:
+            if result_dir:
+                result_dir.cleanup()
             try:
                 os.unlink(code_path)
             except OSError:
@@ -212,6 +271,23 @@ def _truncate_output(value: str, limit: int) -> tuple[str, bool]:
     return value[: limit - len(marker)] + marker, True
 
 
+# A running batch owns a strong reference to its event-loop gate. Weak values
+# let test/application loops and their bound semaphores expire together.
+_programming_oci_gates = weakref.WeakValueDictionary()
+
+
+def _programming_dispatch():
+    if settings.program_runner_mode != "oci":
+        # run_python_subprocess already gates development host execution.
+        return nullcontext(), get_sandbox_limit()
+    limit = settings.program_runner_max_concurrent
+    loop = asyncio.get_running_loop()
+    gate = _programming_oci_gates.get(loop)
+    if gate is None:
+        gate = _programming_oci_gates[loop] = asyncio.Semaphore(limit)
+    return gate, limit
+
+
 async def run_sandbox(
     code: str,
     test_cases: List[TestCase],
@@ -219,151 +295,234 @@ async def run_sandbox(
     language: str = "python",
     per_case_timeout: float = 10.0,
     memory_mb: int = 256,
+    on_case_complete: Callable[[TestResult], Awaitable[None]] | None = None,
 ) -> ExecutionReport:
     """
     Run student code against a list of test cases. Returns ExecutionReport.
 
-    If test_cases is empty, runs code once with no stdin to check it at least
-    compiles / doesn't crash.
+    Each case gets its own bounded execution after admission. Completion
+    notifications receive compared, indexed cases in completion order, before
+    the batch finishes. Results in the returned report retain input order.
+    With no test cases, record zero executions.
 
     Each TestCase chooses its own mode: if `function_name` is set, function-
     call mode is used (LeetCode style — wrap student code, call fn(*args),
     print repr); otherwise stdin/stdout mode.
     """
-    if language != "python":
+    if language not in {"python", "c", "cpp"}:
         logger.warning(f"Language {language!r} not yet supported; returning skip result")
         return ExecutionReport(summary=f"Language {language} not supported in sandbox")
 
     if not test_cases:
-        # Empty run to at least check for syntax errors
-        result = await run_python_subprocess(
-            code, "", timeout=per_case_timeout, memory_mb=memory_mb
-        )
-        return ExecutionReport(
-            passed_count=int(result.passed),
-            total_count=1,
-            pass_rate=1.0 if result.passed else 0.0,
-            results=[result],
-            summary="Syntax check only (no test cases provided)",
-        )
+        return ExecutionReport(summary="No test cases; execution not attempted")
 
-    # Run each test case concurrently
-    coros = []
+    # Validate all executable contracts before dispatching even one case.
+    if len(test_cases) > 50:
+        raise ValueError("Programming test case count exceeds 50")
     for tc in test_cases:
+        mode = getattr(tc, "comparison", "default")
+        if mode not in {"default", "exact", "trimmed", "tokens", "json", "numeric"}:
+            raise ValueError("Unsupported comparison mode")
+        for tol in (getattr(tc, "abs_tol", 1e-9), getattr(tc, "rel_tol", 0.0)):
+            if not isinstance(tol, (int, float)) or not math.isfinite(tol) or tol < 0:
+                raise ValueError("Invalid numeric tolerance")
+        if language != "python" and (tc.io_mode != "stdin" or tc.function_name):
+            raise ValueError("Native execution requires stdin cases")
         if tc.function_name:
-            coros.append(_run_function_call(code, tc, timeout=per_case_timeout, memory_mb=memory_mb))
-        else:
-            coros.append(run_python_subprocess(code, tc.input, timeout=per_case_timeout, memory_mb=memory_mb))
-    results = await asyncio.gather(*coros)
+            if tc.function_args is None and getattr(tc, "function_kwargs", None) is None:
+                raise ValueError("Missing function invocation arguments")
+            if not tc.function_name.isidentifier() or keyword.iskeyword(tc.function_name):
+                raise ValueError("Invalid function entry")
+            if tc.expected_return is None:
+                raise ValueError("Missing expected function return")
+            if mode in {"tokens", "trimmed"}:
+                raise ValueError("Token comparison requires standard output")
+        elif "expected_output" not in tc.model_fields_set:
+            raise ValueError("Missing expected standard output")
 
-    # Compare actual vs expected for stdin/stdout cases (function-call cases
-    # have already populated `passed` inside _run_function_call).
-    for r, tc in zip(results, test_cases):
-        r.test = tc
-        if tc.function_name:
-            continue  # already compared
-        if r.passed and tc.expected_output:
-            # Normalize trailing whitespace for comparison
-            r.passed = r.actual_output.strip() == tc.expected_output.strip()
+    # Only the executable copy receives a transport-encoding change. The
+    # confirmed source/answer hash used by the grading evidence stays intact.
+    if language == "python":
+        code = python_execution_source(code)
+    case_ids = [getattr(tc, "case_id", None) or f"case-{i + 1}" for i, tc in enumerate(test_cases)]
+    if len(set(case_ids)) != len(case_ids):
+        raise ValueError("Duplicate test case ID")
+    dispatch, parallelism = _programming_dispatch()
+    native_options = {"language": language} if language != "python" else {}
+    remaining = iter(enumerate(test_cases))
+    results = {}
+    notifications = []
+    notification_lock = asyncio.Lock()
+    stopped = False
 
-    passed = sum(1 for r in results if r.passed)
-    total = len(results)
+    async def notify(result):
+        async with notification_lock:
+            await on_case_complete(result)
+
+    async def run_cases():
+        nonlocal stopped
+        try:
+            for index, case in remaining:
+                async with dispatch:
+                    if stopped:
+                        return
+                    result = await _run_case(code, case, per_case_timeout, memory_mb, **native_options)
+                result.case_index = index
+                result.case_id = case_ids[index]
+                results[index] = result
+                if on_case_complete is not None:
+                    # A sibling can fail or a user can cancel while an already
+                    # completed case is waiting for its checkpoint callback.
+                    notice = asyncio.create_task(notify(result))
+                    notifications.append(notice)
+                    await asyncio.shield(notice)
+        except BaseException:
+            stopped = True
+            raise
+
+    # Each batch places at most one wave into the per-process FIFO. Other
+    # students can acquire slots before this batch dispatches its next wave.
+    # The OS-wide slots, per-case deadline and cleanup remain in the runner.
+    jobs = [asyncio.create_task(run_cases()) for _ in range(min(parallelism, len(test_cases)))]
+    try:
+        await asyncio.gather(*jobs)
+    except BaseException as failure:
+        stopped = True
+        for job in jobs:
+            job.cancel()
+        await asyncio.gather(*jobs, return_exceptions=True)
+        # Do not publish a partial score. Drain only callbacks for full
+        # observed results before the caller handles the actual failure.
+        outcomes = await asyncio.gather(*notifications, return_exceptions=True)
+        if not isinstance(failure, asyncio.CancelledError):
+            for outcome in outcomes:
+                if isinstance(outcome, Exception) and outcome is not failure:
+                    raise outcome from failure
+        raise
+
+    ordered = [results[index] for index in range(len(test_cases))]
+    passed = sum(1 for r in ordered if r.passed)
+    total = len(ordered)
     return ExecutionReport(
         passed_count=passed,
         total_count=total,
         pass_rate=passed / total if total else 0.0,
-        results=results,
+        results=ordered,
         summary=f"Passed {passed}/{total} tests",
     )
 
 
-# ─── Function-call (LeetCode-style) mode ──────────────────────────────────────
-
-_FUNCTION_HARNESS = """
-# === SmarTAI auto-injected harness — do not modify ===
-import json, sys
-__smartai_args = json.loads(sys.stdin.read() or "[]")
-print(repr({fn}(*__smartai_args)))
-"""
+run_sandbox.supports_case_checkpoints = True
 
 
-def _values_match(actual_repr: str, expected_repr: str) -> bool:
-    """Compare two repr-style strings, falling back to literal_eval normalization.
+async def _run_case(code: str, tc: TestCase, timeout: float, memory_mb: int, *, language="python") -> TestResult:
+    call = None
+    if tc.function_name:
+        call = {"name": tc.function_name, "args": tc.function_args or [], "kwargs": getattr(tc, "function_kwargs", None) or {}}
+    if language == "python":
+        raw = await run_python_subprocess(code, "" if call else tc.input, timeout=timeout, memory_mb=memory_mb,
+                                          max_output_chars=8192, function_call=call, bind_request=True)
+    else:
+        from backend.tools.oci_grading_runner import run_program_oci
+        raw = await run_program_oci(code, tc.input, language=language, timeout=timeout, memory_mb=memory_mb)
+    raw.test = tc
+    raw.stdout = raw.actual_output
+    if not raw.passed:
+        return raw
+    mode = getattr(tc, "comparison", "default")
+    abs_tol, rel_tol = getattr(tc, "abs_tol", 1e-9), getattr(tc, "rel_tol", 0.0)
+    if call:
+        if raw.return_value is None:
+            raise ValueError("Missing function result channel")
+        raw.actual_output = raw.return_value
+        raw.passed = _values_match(raw.return_value, tc.expected_return, mode, abs_tol, rel_tol)
+    elif mode == "numeric":
+        raw.passed = _numeric_text_match(raw.actual_output, tc.expected_output, abs_tol, rel_tol)
+    elif mode == "trimmed":
+        def trimmed(value):
+            return "\n".join(line.rstrip() for line in value.replace("\r\n", "\n").split("\n")).rstrip("\n")
+        raw.passed = trimmed(raw.actual_output) == trimmed(tc.expected_output)
+    elif mode == "json":
+        raw.passed = _json_match(raw.actual_output, tc.expected_output)
+    elif mode == "tokens":
+        raw.passed = raw.actual_output.split() == tc.expected_output.split()
+    elif mode == "exact" or tc.expected_output == "":
+        raw.passed = raw.actual_output.replace("\r\n", "\n") == tc.expected_output.replace("\r\n", "\n")
+    elif mode == "default":
+        raw.passed = raw.actual_output.strip() == tc.expected_output.strip()
+    else:
+        raise ValueError("Unsupported comparison mode")
+    if not raw.passed:
+        raw.exit_reason = "wrong_answer"
+    return raw
 
-    LLM-generated `expected_return` may be "1" while student returns 1
-    (`repr(1) == '1'`), or LLM may use single quotes vs double — literal_eval
-    canonicalizes both sides through Python's own AST so equivalent values
-    compare equal. Numeric values are also compared with a small tolerance
-    so floating-point formatting drift (``0.30000000000000004`` vs ``0.3``)
-    does not cause spurious failures.
-    """
-    a = (actual_repr or "").strip()
-    b = (expected_repr or "").strip()
-    if a == b:
-        return True
-    # Numeric tolerance — covers float formatting drift that literal_eval
-    # would otherwise honor as "not equal" (Python: 0.3 == 0.30000000000000004
-    # is False).
+
+def _json_match(actual_text, expected_text):
+    def reject(value):
+        raise ValueError("Non-finite JSON number")
     try:
-        return abs(float(a) - float(b)) < 1e-9
-    except ValueError:
-        pass
-    # Structural equality via literal_eval (lists, tuples, strings with
-    # different quotes, etc).
-    try:
-        return _literal_values_match(ast.literal_eval(a), ast.literal_eval(b))
-    except (ValueError, SyntaxError):
+        actual = json.loads(actual_text, parse_constant=reject)
+        expected = json.loads(expected_text, parse_constant=reject)
+        return _literal_values_match(actual, expected, True, 0, 0)
+    except (TypeError, ValueError, RecursionError, OverflowError):
         return False
 
 
-def _literal_values_match(actual: object, expected: object) -> bool:
-    """Apply the scalar tolerance to returned containers as well."""
-    if isinstance(actual, (list, tuple)) and type(actual) is type(expected):
-        return len(actual) == len(expected) and all(
-            _literal_values_match(a, b) for a, b in zip(actual, expected)
-        )
-    if isinstance(actual, dict) and isinstance(expected, dict):
-        return actual.keys() == expected.keys() and all(
-            _literal_values_match(actual[key], expected[key]) for key in actual
-        )
-    if type(actual) in (int, float) and type(expected) in (int, float):
-        return actual == expected or abs(actual - expected) < 1e-9
-    return actual == expected
-
-
-async def _run_function_call(
-    student_code: str,
-    tc: TestCase,
-    *,
-    timeout: float,
-    memory_mb: int,
-) -> TestResult:
-    """Wrap student code with a call harness, then run + compare."""
-    fn = tc.function_name or ""
-    if not fn or not fn.replace("_", "").isalnum():
-        return TestResult(
-            test=tc, passed=False, actual_output="",
-            error=f"Invalid function_name: {fn!r}",
-            duration_ms=0.0,
-        )
-    args = tc.function_args if tc.function_args is not None else []
+def _numeric_text_match(actual, expected, abs_tol, rel_tol):
     try:
-        stdin_payload = json.dumps(args)
-    except (TypeError, ValueError) as e:
-        return TestResult(
-            test=tc, passed=False, actual_output="",
-            error=f"function_args not JSON-serializable: {e}",
-            duration_ms=0.0,
-        )
+        a, b = Decimal(actual.strip()), Decimal(expected.strip())
+    except InvalidOperation:
+        return False
+    if not a.is_finite() or not b.is_finite():
+        return False
+    # If both inputs are integers, compare them exactly. Decimal avoids
+    # collapsing adjacent large integers to the same machine float.
+    if a == b:
+        return True
+    if a.as_tuple().exponent >= 0 and b.as_tuple().exponent >= 0:
+        return False
+    try:
+        return abs(a - b) <= max(Decimal(str(abs_tol)), Decimal(str(rel_tol)) * max(abs(a), abs(b)))
+    except ArithmeticError:
+        return False
 
-    wrapped = student_code.rstrip() + "\n" + _FUNCTION_HARNESS.format(fn=fn)
-    raw = await run_python_subprocess(
-        wrapped, stdin_payload, timeout=timeout, memory_mb=memory_mb,
-    )
-    if not raw.passed:
-        # subprocess failure (timeout / non-zero exit / runtime error)
-        raw.test = tc
-        return raw
-    raw.passed = _values_match(raw.actual_output, tc.expected_return or "")
-    raw.test = tc
-    return raw
+
+def _values_match(actual_repr: str, expected_repr: str, mode="default", abs_tol=1e-9, rel_tol=0.0) -> bool:
+    if mode == "numeric":
+        return _numeric_text_match(actual_repr, expected_repr, abs_tol, rel_tol)
+    if mode == "json":
+        try:
+            # Function results are represented as Python literals at this layer.
+            value = ast.literal_eval(actual_repr.strip())
+            return _json_match(json.dumps(value, allow_nan=False), expected_repr)
+        except (TypeError, ValueError, SyntaxError, RecursionError):
+            return False
+    if mode not in {"default", "exact"}:
+        raise ValueError("Unsupported function result comparison")
+    try:
+        actual = ast.literal_eval(actual_repr.strip())
+        expected = ast.literal_eval(expected_repr.strip())
+        return _literal_values_match(actual, expected, mode == "exact", abs_tol, rel_tol)
+    except (ValueError, SyntaxError, OverflowError, RecursionError):
+        return False
+
+
+def _literal_values_match(actual, expected, exact, abs_tol, rel_tol):
+    if type(actual) in (int, float) and type(expected) in (int, float):
+        if exact and type(actual) is not type(expected):
+            return False
+        if any(type(v) is float and not math.isfinite(v) for v in (actual, expected)):
+            return False
+        if (type(actual) is int and type(expected) is int) or exact or actual == expected:
+            return actual == expected
+        return _numeric_text_match(repr(actual), repr(expected), abs_tol, rel_tol)
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(actual, (list, tuple)):
+        return len(actual) == len(expected) and all(
+            _literal_values_match(a, b, exact, abs_tol, rel_tol) for a, b in zip(actual, expected)
+        )
+    if isinstance(actual, dict):
+        return ({(type(k), k) for k in actual} == {(type(k), k) for k in expected}
+                and all(_literal_values_match(actual[k], expected[k], exact, abs_tol, rel_tol) for k in actual))
+    return actual == expected

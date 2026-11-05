@@ -1,5 +1,8 @@
 FROM python:3.12-slim-bookworm
 
+RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ libc6-dev \
+    && rm -rf /var/lib/apt/lists/* && mkdir -p /binary
+
 RUN python -m pip install --no-cache-dir "sympy==1.14.0"
 
 RUN mkdir -p /input /work /opt/smartai-runner \

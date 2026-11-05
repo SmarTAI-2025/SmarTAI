@@ -1,127 +1,54 @@
-"""
-ProgrammingSkill: grades programming questions (编程题).
-
-Strategy (4-tier sandbox-cases ladder):
-
-    1. teacher          → ProblemInfo.test_cases from normalized assignment
-                          questions is non-empty.
-                          Run sandbox; pass/fail tally is the score anchor.
-    2. llm_generated    → No teacher cases AND no complexity-keyword hits
-                          AND student code is Python.
-                          LLM generates ≤ 8 cases each carrying a
-                          `sandbox_feasible: bool` self-assessment. Run sandbox
-                          on the feasible subset.
-    3. skipped_complex  → Either (a) the problem stem / student code mentions
-                          GUI / network / multiprocessing / huge-input keywords,
-                          or (b) every LLM-generated case marked itself
-                          infeasible. We do NOT run sandbox; the LLM grades on
-                          code review against the rubric and the comment carries
-                          a metadata footer explaining why.
-    4. skipped_lang     → Student wrote in a non-Python language (best-effort
-                          detection). Sandbox supports only Python; LLM grades
-                          purely on code review.
-
-The sandbox itself is gated by a global asyncio.Semaphore (limit=8, configured
-in backend/main.py lifespan) so this skill cannot fork-bomb the host even when
-many students are graded concurrently.
-"""
+"""Rubric-based programming scoring over shared, question-scoped execution evidence."""
 from __future__ import annotations
 
+import json
 import logging
-import os
-import re
-from typing import Optional, List, Tuple, TYPE_CHECKING
+from decimal import Decimal
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from backend.skills.base import (
-    GradingSkill,
-    authoritative_score_instruction,
-    build_system_prompt,
-    format_deterministic_feedback,
-    normalize_expert_result,
-    register_skill,
-)
-from backend.models import GradingConfidence, ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup, TestCase
 from backend.llm.providers import BaseProvider
+from backend.models import ExpertResult, GradingConfidence, ProblemInfo, StepScore, StudentAnswerInfo, TestCase
+from backend.services.grading_scores import round_ai_score
 from backend.services.programming_test_contract import required_function_name
-from backend.tools.structured_llm import structured_llm_call
+from backend.skills.base import (
+    GradingSkill, authoritative_score_instruction, build_system_prompt, classify_skill_error,
+    format_deterministic_feedback, normalize_expert_result, normalize_score_scale, register_skill,
+)
+from backend.skills.programming_evidence import describe_run, unavailable, ungraded_message
 from backend.tools import knowledge as kb_tool
-from backend.tools.code_interpreter import run_sandbox, ExecutionReport
-
-if TYPE_CHECKING:
-    from backend.progress.tracker import ProgressReporter
+from backend.tools.code_interpreter import run_sandbox
+from backend.tools.structured_llm import (
+    PermanentLLMError, StructuredOutputBoundsError, StructuredOutputInvalidError,
+    TransientLLMError, structured_llm_call,
+)
 
 logger = logging.getLogger(__name__)
+_TEMPLATE = (Path(__file__).resolve().parents[1] / "prompts" / "programming.txt").read_text(encoding="utf-8")
 
-
-# ─── LLM output schemas ──────────────────────────────────────────────────────
 
 class ProgrammingGradingOutput(BaseModel):
     score: float = Field(ge=0, allow_inf_nan=False)
     max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False)
     confidence: GradingConfidence = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
     comment: str
-    steps: List[dict] = Field(default_factory=list)
-    # LLMs commonly emit `"logs": null` (the prompt asks for a `logs` field but
-    # there is often nothing to log). Keep this nullable so a null doesn't
-    # trip Pydantic validation and turn an otherwise-valid grade into a
-    # confidence-0 parse failure. Downstream ExpertResult.logs is Optional too.
-    logs: Optional[str] = Field(default="")
+    steps: list[StepScore]
+    logs: str | None = ""
+
+
+MAX_LLM_GENERATED_CASES = 8
 
 
 class TestCaseList(BaseModel):
-    """LLM-generated test cases for a programming problem."""
-    cases: List[TestCase] = Field(default_factory=list, max_length=20)
+    cases: list[TestCase] = Field(max_length=MAX_LLM_GENERATED_CASES)
 
 
-# ─── Prompt template loading ─────────────────────────────────────────────────
-
-def _load_template() -> str:
-    path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts", "programming.txt")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    except FileNotFoundError:
-        return _DEFAULT_TEMPLATE
-
-
-_DEFAULT_TEMPLATE = """You are a programming teacher grading student code.
-
-Problem:
-{problem}
-
-Student Code:
-```
-{code}
-```
-
-Sandbox / Test Cases Result:
-{branch_info}
-
-Grading Rubric:
-{rubric}
-
-Return JSON: score, max_score, confidence, comment, steps, logs.
-"""
-
-
-# ─── Limits ──────────────────────────────────────────────────────────────────
-
-# How many LLM-generated cases we run at most. Even if the LLM returns more,
-# we slice down so the sandbox semaphore (8) is not blocked for too long.
-MAX_LLM_GENERATED_CASES = 8
-
-# Per-test sandbox timeout.
-SANDBOX_PER_CASE_TIMEOUT_S = 10.0
-
-# Keywords whose presence in the problem stem or student code marks the problem
-# as "too complex for sandbox". When matched we skip sandbox and tell the LLM
-# (and the teacher) we did so.
+# Hints in the frozen question for workloads outside the configured sandbox.
 #
 # Each keyword is tagged with a short rationale used in the comment metadata
 # so the teacher can see WHY we skipped — "tkinter (GUI)" beats just "tkinter".
-COMPLEXITY_KEYWORDS: List[Tuple[str, str]] = [
+COMPLEXITY_KEYWORDS: list[tuple[str, str]] = [
     ("tkinter", "GUI"),
     ("PyQt", "GUI"),
     ("pygame", "GUI"),
@@ -148,23 +75,8 @@ COMPLEXITY_KEYWORDS: List[Tuple[str, str]] = [
 ]
 
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
-
-def _extract_code(answer_content: str) -> str:
-    """Extract code from the answer, stripping markdown fences if present."""
-    # Match ```python ... ``` or ``` ... ```
-    match = re.search(r"```(?:\w+)?\s*\n?(.*?)\n?\s*```", answer_content, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return answer_content.strip()
-
-
 def _detect_language(code: str) -> str:
-    """Best-effort language detection. Returns python | cpp | java | unknown.
-
-    Used purely for "should we sandbox this?" gating. False-negatives drop us
-    into LLM-only review which is still safe.
-    """
+    """Legacy language hints used by programming run preparation."""
     if not code:
         return "unknown"
     sig_python = ("def ", "import ", "print(", "elif ", "lambda ")
@@ -179,27 +91,7 @@ def _detect_language(code: str) -> str:
     return "unknown"
 
 
-_TOP_LEVEL_INPUT_RE = re.compile(r"^[^#\n]*\binput\s*\(", re.MULTILINE)
-_TOP_LEVEL_PRINT_RE = re.compile(r"^[^#\n]*\bprint\s*\(", re.MULTILINE)
-_TOP_LEVEL_DEF_RE = re.compile(r"^def\s+([A-Za-z_]\w*)\s*\(", re.MULTILINE)
-
-
-def _detect_function_only(code: str) -> Optional[str]:
-    """Detect "student wrote a function definition with no top-level I/O".
-
-    Returns the first top-level function name if so (LeetCode-style), else None.
-    Falls back to None when neither input() / print() are present but no def
-    either — that's just empty / non-functional code.
-    """
-    if not code:
-        return None
-    if _TOP_LEVEL_INPUT_RE.search(code) or _TOP_LEVEL_PRINT_RE.search(code):
-        return None
-    m = _TOP_LEVEL_DEF_RE.search(code)
-    return m.group(1) if m else None
-
-
-def _scan_complexity_keywords(text: str) -> Optional[Tuple[str, str]]:
+def _scan_complexity_keywords(text: str) -> tuple[str, str] | None:
     """Return (keyword, rationale) of the first match, or None."""
     if not text:
         return None
@@ -209,546 +101,205 @@ def _scan_complexity_keywords(text: str) -> Optional[Tuple[str, str]]:
     return None
 
 
-async def _generate_test_cases(
-    provider: BaseProvider, problem: ProblemInfo, function_name: Optional[str] = None
-) -> Tuple[List[TestCase], Optional[str]]:
-    """Ask the LLM to generate up to 8 test cases.
-
-    When `function_name` is provided, instructs the LLM to produce LeetCode-
-    style function-call cases (function_args + expected_return) instead of
-    stdin/stdout — the sandbox will wrap the student's function with a small
-    harness. Otherwise stdin/stdout cases as before.
-
-    Returns ``(cases, error_kind)`` where error_kind is:
-      - None on success (cases may still be empty if LLM intentionally
-        returned 0 cases)
-      - "llm_failed_transient" — provider call timed out / 5xx / 429
-      - "llm_returned_empty"   — LLM returned a parsed-but-empty list
-    Caller uses error_kind to decide whether to surface a network/quota
-    error or a "problem too complex" message in the metadata footer.
-    """
-    if function_name:
-        system_prompt = (
-            "You are an expert at writing concise unit tests for programming problems "
-            "where the student is asked to implement a *function*. The student's code "
-            f"defines a top-level function called `{function_name}`. Return at most 8 "
-            "test cases. Each case has:\n"
-            "  - function_name:    EXACTLY the string above\n"
-            "  - function_args:    JSON array of positional arguments to pass\n"
-            "  - expected_return:  Python repr() of the expected return value, "
-            "                      e.g. '5', '[1, 1, 2]', '\"hello\"'\n"
-            "  - description:      ≤ 60 chars label\n"
-            "  - source:           ALWAYS \"llm_generated\"\n"
-            "  - sandbox_feasible: true unless arguments are huge / non-JSON-able\n\n"
-            "Do NOT use input/expected_output fields — leave them empty.\n"
-            "Return JSON {\"cases\": [...]}"
-        )
-        user_prompt = (
-            f"Problem (type={problem.type}):\n{problem.stem}\n\n"
-            f"Rubric:\n{problem.criterion}\n\n"
-            f"Student function name: {function_name}\n"
-            "Generate the function-call test cases now."
-        )
-    else:
-        system_prompt = (
-            "You are an expert at writing concise stdin/stdout test cases for "
-            "programming problems. Return at most 8 test cases. Each case has:\n"
-            "  - input:            what the program reads from stdin (use \\n)\n"
-            "  - expected_output:  what the program prints to stdout\n"
-            "  - description:      ≤ 60 chars label\n"
-            "  - source:           ALWAYS \"llm_generated\"\n"
-            "  - sandbox_feasible: false ONLY if the test would require GUI, "
-            "                      network, big files, or special environment. "
-            "                      Otherwise true.\n\n"
-            "If the problem is so complex that no simple stdin/stdout test makes "
-            "sense (image processing, GUI, web scraping, etc.), return cases all "
-            "marked sandbox_feasible=false.\n\n"
-            "Return JSON {\"cases\": [...]}"
-        )
-        user_prompt = (
-            f"Problem (type={problem.type}):\n{problem.stem}\n\n"
-            f"Rubric:\n{problem.criterion}\n\n"
-            "Generate the test cases now."
-        )
-    try:
-        result, _raw = await structured_llm_call(
-            provider,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            output_model=TestCaseList,
-        )
-    except Exception as e:
-        logger.warning(
-            "_generate_test_cases LLM call failed; exception_type=%s",
-            type(e).__name__,
-        )
-        return [], "llm_failed_transient"
-
-    if not result.cases:
-        return [], "llm_returned_empty"
-
-    # Force source="llm_generated" regardless of LLM output.
-    cases = [
-        TestCase(
-            input=tc.input,
-            expected_output=tc.expected_output,
-            description=tc.description,
-            source="llm_generated",
-            sandbox_feasible=tc.sandbox_feasible,
-            function_name=tc.function_name,
-            function_args=tc.function_args,
-            expected_return=tc.expected_return,
-        )
-        for tc in result.cases
-    ]
-    return cases, None
+def _format_error(message):
+    error = StructuredOutputInvalidError(message)
+    error.repair_context = message  # Fixed contract description, never raw student or provider text.
+    return error
 
 
-def _coerce_test_cases(raw: object) -> List[TestCase]:
-    """Convert problem.test_cases (which may be list[dict] after JSON round-trip).
-
-    Tasks store the test cases as model_dump()ed dicts inside problem_data,
-    so by the time this skill runs they may come back as either TestCase
-    instances OR dicts. Normalize to TestCase.
-    """
-    if not raw:
-        return []
-    out: List[TestCase] = []
-    for item in raw:
-        if isinstance(item, TestCase):
-            out.append(item)
-        elif isinstance(item, dict):
-            try:
-                out.append(TestCase(**item))
-            except Exception as e:
-                logger.warning(
-                    "Skipping invalid test case; exception_type=%s",
-                    type(e).__name__,
-                )
-    return out
+def _validate_awards(result, maximum):
+    total = Decimal(str(result.score))
+    steps = sum((Decimal(str(step.score)) for step in result.steps), Decimal(0))
+    difference = abs(steps - total)
+    if len({step.step_no for step in result.steps}) != len(result.steps):
+        raise _format_error("Use each rubric step number only once.")
+    normalized_total, normalized_steps = normalize_score_scale(
+        score=result.score, reported_max_score=result.max_score, authoritative_max_score=maximum, steps=result.steps,
+    )
+    normalized_gap = abs(sum(step.score for step in normalized_steps) - normalized_total)
+    if (not result.steps or normalized_gap > 0.010000000001 or difference > Decimal("0.01")
+            or difference * Decimal(str(maximum)) / Decimal(str(result.max_score)) > Decimal("0.01")):
+        raise _format_error("Return rubric awards whose scores sum to the total within 0.01 points.")
 
 
-def _format_branch_info(
-    cases_source: str,
-    skipped_reason: Optional[str],
-    exec_report: Optional[ExecutionReport],
-    cases_run: int,
-    cases_total_seen: int,
-) -> str:
-    """Build the {branch_info} string injected into the LLM prompt.
-
-    Mirrors the metadata footer shape so the LLM understands what context it
-    has and grades accordingly.
-    """
-    if cases_source in ("teacher", "llm_generated", "llm_function_call") and exec_report is not None:
-        if cases_source == "teacher":
-            header = "SANDBOX_RAN_TEACHER_CASES"
-            note = ""
-        elif cases_source == "llm_function_call":
-            header = "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES"
-            note = "\n  Mode: LeetCode-style — student function called with args, return value compared."
-        else:
-            header = "SANDBOX_RAN_LLM_CASES"
-            note = "\n  Note: cases were AI-generated and may have bugs — weight rubric criteria heavily."
-        info = (
-            f"{header}\n"
-            f"  Pass rate: {exec_report.passed_count}/{exec_report.total_count} "
-            f"({exec_report.pass_rate:.0%})\n"
-            f"  Cases run: {cases_run}"
-            + (f" (out of {cases_total_seen} generated)" if cases_total_seen else "")
-            + f"\n  Summary: {exec_report.summary}{note}"
-        )
-        for r in exec_report.results[:5]:
-            label = r.test.description or r.test.function_name or (r.test.input[:50] if r.test.input else "(no input)")
-            info += f"\n  - {label!r}: {'PASS' if r.passed else 'FAIL'}"
-            if r.error:
-                info += f" | err: {r.error[:100]}"
-        if cases_source == "llm_generated" and exec_report.total_count >= 3 and exec_report.passed_count == 0:
-            info += (
-                "\n  ⚠ ZERO_PASS_RATE: with ≥3 AI-generated cases all failing, the cases "
-                "themselves may be wrong. Cap your confidence ≤ 0.5 and start your "
-                "comment with '测试用例可能不准确，建议人工复核'."
-            )
-        return info
-    if cases_source == "function_only_no_io":
-        return (
-            "SANDBOX_SKIPPED_FUNCTION_ONLY\n"
-            f"  Reason: {skipped_reason or 'student submitted only a function definition'}\n"
-            "  No execution attempted — grade on code review + LLM-generated function tests."
-        )
-    if cases_source == "llm_call_failed":
-        return (
-            "SANDBOX_LLM_CALL_FAILED\n"
-            f"  Reason: {skipped_reason or 'LLM call timed out / rate-limited'}\n"
-            "  No execution attempted — grade purely on code review."
-        )
-    if cases_source == "skipped_complex":
-        return (
-            f"SANDBOX_SKIPPED_COMPLEX\n"
-            f"  Reason: {skipped_reason or 'unknown'}\n"
-            "  No execution attempted — grade purely on code review."
-        )
-    if cases_source == "skipped_lang":
-        return (
-            f"SANDBOX_SKIPPED_LANGUAGE\n"
-            f"  Reason: {skipped_reason or 'non-Python language'}\n"
-            "  Sandbox only supports Python — grade purely on code review."
-        )
-    if cases_source == "no_code":
-        return "SANDBOX_NO_CODE\n  Student submitted nothing."
-    return f"UNKNOWN_BRANCH ({cases_source})"
-
-
-def _format_metadata_zh(
-    cases_source: str,
-    skipped_reason: Optional[str],
-    exec_report: Optional[ExecutionReport],
-    cases_run: int,
-) -> str:
-    """Build the human-readable metadata footer appended to the LLM comment."""
-    if cases_source == "teacher" and exec_report is not None:
-        return (
-            f"\n\n（沙箱测评：✓ 教师测试用例 {cases_run} 个，"
-            f"通过 {exec_report.passed_count}/{exec_report.total_count}）"
-        )
-    if cases_source == "llm_generated" and exec_report is not None:
-        zero_warn = ""
-        if exec_report.total_count >= 3 and exec_report.passed_count == 0:
-            zero_warn = " ⚠ 全部未通过，AI 生成的测试用例可能不准确，建议人工复核"
-        return (
-            f"\n\n（沙箱测评：✓ AI 生成测试用例 {cases_run} 个，"
-            f"通过 {exec_report.passed_count}/{exec_report.total_count}{zero_warn}）"
-        )
-    if cases_source == "llm_function_call" and exec_report is not None:
-        return (
-            f"\n\n（沙箱测评：✓ AI 生成函数调用测试 {cases_run} 个，"
-            f"通过 {exec_report.passed_count}/{exec_report.total_count}）"
-        )
-    if cases_source == "function_only_no_io":
-        return (
-            "\n\n（沙箱测评：✗ 学生只提交了函数定义但 AI 未生成函数调用测试 — "
-            "本评分基于 AI 代码审查）"
-        )
-    if cases_source == "llm_call_failed":
-        return (
-            "\n\n（沙箱测评：✗ AI 生成测试用例时调用失败（网络/限流），"
-            "本评分基于 AI 代码审查；建议稍后重新批改本题）"
-        )
-    if cases_source == "skipped_complex":
-        return (
-            f"\n\n（沙箱测评：✗ 跳过 — 题目复杂度超出沙箱能力（{skipped_reason or '未知'}）；"
-            f"本评分基于 AI 代码审查）"
-        )
-    if cases_source == "skipped_lang":
-        return (
-            f"\n\n（沙箱测评：✗ 跳过 — 当前仅支持 Python，{skipped_reason or '检测到非 Python 代码'}；"
-            f"本评分基于 AI 代码审查）"
-        )
-    return ""
-
-
-def _format_metadata(cases_source, skipped_reason, exec_report, cases_run, *, language):
-    if language != "en":
-        return _format_metadata_zh(cases_source, skipped_reason, exec_report, cases_run)
-    labels = {"teacher": "teacher-provided tests", "llm_generated": "AI-generated tests",
-              "llm_function_call": "AI-generated function-call tests"}
-    if cases_source in labels and exec_report is not None:
-        warning = (" None passed; AI-generated tests may be inaccurate. Please review them."
-                   if cases_source == "llm_generated" and exec_report.total_count >= 3
-                   and exec_report.passed_count == 0 else "")
-        return (f"\n\n(Sandbox: {cases_run} {labels[cases_source]}; "
-                f"passed {exec_report.passed_count}/{exec_report.total_count}.{warning})")
-    reasons = {
-        "function_only_no_io": "Only a function definition was submitted and no function-call tests were generated",
-        "llm_call_failed": "Test generation failed due to a model or connection error; retry grading this question later",
-        "skipped_complex": "The program requires capabilities outside the sandbox",
-        "skipped_lang": "Only Python execution is supported; the submitted code was not identified as Python",
+def _error_kind(exc):
+    from backend.services.background_errors import classify_background_error
+    from backend.skills.math_grading import _critical_failure
+    if _critical_failure(exc):
+        raise exc
+    if isinstance(exc, (StructuredOutputInvalidError, StructuredOutputBoundsError)):
+        return "parse_failed"
+    if str(exc) in {"provider_content_blocked", "provider_recitation_blocked"}:
+        return str(exc)
+    code = classify_background_error(exc, "workflow_failed")
+    kinds = {
+        "provider_zero_quota": "zero_quota", "provider_daily_quota_exceeded": "daily_quota_exhausted",
+        "provider_rate_limited": "quota_exhausted", "provider_response_invalid": "parse_failed",
+        "provider_timeout": "transient_llm", "provider_upstream_unavailable": "transient_llm",
+        "provider_unreachable": "transient_llm",
     }
-    reason = reasons.get(cases_source)
-    return f"\n\n(Sandbox skipped: {reason}. This score is based on AI code review.)" if reason else ""
+    if code != "workflow_failed":
+        return kinds.get(code, code)
+    if isinstance(exc, PermanentLLMError):
+        return "provider_request_rejected"
+    if isinstance(exc, TransientLLMError) and exc.__cause__ is None:
+        return "transient_llm"
+    # The retry wrapper treats unknown errors as transient. Only propagate
+    # that classification when the actual exception carries transport evidence.
+    return classify_skill_error(exc)[0]
 
 
-# ─── Skill ───────────────────────────────────────────────────────────────────
+def _teacher_material(problem, *, for_generation=False):
+    material = {
+        "problem": problem.stem, "rubric": problem.criterion, "max_score": problem.max_score,
+        "reference_answer": problem.reference_answer, "solution_code": problem.solution_code,
+    }
+    presentation = (problem._math_rubric_source or {}).get("presentation") or {}
+    generated = presentation.get("ai_completion_provenance") or {}
+    if for_generation:
+        # A generated solution cannot serve as an independent answer oracle.
+        for field in ("reference_answer", "solution_code"):
+            if field in generated:
+                material.pop(field)
+    derived = sorted(set(material).intersection(generated))
+    if derived:
+        material["ai_generated_fields"] = derived
+    return material
+
+
+async def _generate_test_cases(
+    provider: BaseProvider, problem: ProblemInfo, function_name: str | None = None,
+) -> tuple[list[TestCase], str | None]:
+    """Generate only from the frozen question. The shared caller owns locking and storage."""
+    entry = function_name or required_function_name(problem.stem)
+    system = (
+        "Create at most eight concise programming test cases from the frozen teacher material. "
+        "Cover representative inputs, boundaries and likely mistakes within the stated input domain. "
+        "Preserve teacher expectations, use the independent reference to determine expected values, "
+        "and never invent a new requirement. Return JSON with a cases array; return an empty array "
+        "if no reliable tests can be derived. Supply only test data, never harness code. "
+        "Use stdin/input and expected_output for programs; explicitly set expected_output even when empty. "
+        "For function problems use io_mode=function, function_args (positional JSON array), "
+        "function_kwargs for keyword arguments when needed, and expected_return as Python repr text. "
+        "Use the specified function_name when the teacher requires one. When no name is specified, "
+        "leave the name unset; do not impose an identifier. Mark infeasible tests sandbox_feasible=false."
+    )
+    prompt = json.dumps({**_teacher_material(problem, for_generation=True), "required_function_name": entry}, ensure_ascii=False)
+
+    def validate(generated):
+        for case in generated.cases:
+            if not case.sandbox_feasible:
+                continue
+            if entry and case.function_name != entry:
+                raise _format_error("Use the frozen required_function_name for every function test.")
+            if entry or case.io_mode == "function" or case.function_name:
+                if case.expected_return is None or case.function_args is None:
+                    raise _format_error("A function test requires function_args and a textual expected_return.")
+            elif "expected_output" not in case.model_fields_set:
+                raise _format_error("Include the expected_output field for every standard I/O test.")
+
+    try:
+        result, _ = await structured_llm_call(
+            provider, system_prompt=system, user_prompt=prompt,
+            output_model=TestCaseList, validate_output=validate,
+        )
+    except Exception as exc:
+        logger.warning("Programming test generation failed; exception_type=%s", type(exc).__name__)
+        return [], _error_kind(exc)
+    if not result.cases:
+        return [], "programming_no_cases"
+    return [case.model_copy(update={"source": "llm_generated"}) for case in result.cases], None
+
 
 @register_skill("编程题")
 class ProgrammingSkill(GradingSkill):
     name = "ProgrammingSkill"
     problem_type = "编程题"
 
-    def __init__(
-        self,
-        provider: BaseProvider,
-        *,
-        reporter: Optional["ProgressReporter"] = None,
-        language: str = "en",
-        task_id: Optional[str] = None,
-        grading_setup: Optional[TaskGradingSetup] = None,
-    ):
-        super().__init__(
-            provider, reporter=reporter, language=language, task_id=task_id,
-            grading_setup=grading_setup,
-        )
-        self._template = _load_template()
+    async def grade(self, problem: ProblemInfo, answer: StudentAnswerInfo, *, student_id: str = "") -> ExpertResult:
+        from contextlib import nullcontext
+        from backend.services.programming_runs import evidence_for_answer
 
-    async def grade(
-        self,
-        problem: ProblemInfo,
-        answer: StudentAnswerInfo,
-        *,
-        student_id: str = "",
-    ) -> ExpertResult:
-        logger.info(
-            f"ProgrammingSkill.grade start: q_id={problem.q_id}, "
-            f"has_test_cases={problem.test_cases is not None}, "
-            f"provider={self.provider.provider_id}"
-        )
-
-        active_unit = None
-        step_ctx = None
-        if self.reporter:
-            step_ctx = self.reporter.step(student_id, problem.q_id, self.name, self.provider.provider_id)
-            active_unit = await step_ctx.__aenter__()
-
-        try:
-            # ─── Step 1: Extract code ────────────────────────────────────────
-            if self.reporter and active_unit:
-                await self.reporter.substep(active_unit, "extract_code")
-            code = _extract_code(answer.content or "")
-            if not code:
-                return ExpertResult(
-                    provider=self.provider.provider_id,
-                    score=0.0,
-                    max_score=problem.max_score,
-                    confidence=1.0,
-                    comment=format_deterministic_feedback(
-                        self.grading_setup,
-                        zh_message="学生未提交代码，本题记 0 分。",
-                        en_message="No student code was provided, so this item receives 0 points.",
-                        zh_detail="未运行沙箱或模型批改。",
-                        en_detail="Neither sandbox execution nor model grading was run.",
-                        zh_suggestion="请补交代码后重新批改。",
-                        en_suggestion="Submit the missing code, then grade this item again.",
-                        legacy_message=(
-                            "No code provided by student.\n\n"
-                            "（沙箱测评：✗ 学生未提交代码）"
-                        ),
-                    ),
-                    steps=[],
-                    logs="",
+        context = (self.reporter.step(student_id, problem.q_id, self.name, self.provider.provider_id)
+                   if self.reporter else nullcontext())
+        evidence = None
+        async with context as unit:
+            try:
+                if self.reporter and unit:
+                    await self.reporter.substep(unit, "prepare_execution_evidence")
+                run = await evidence_for_answer(
+                    problem=problem, answer=answer, student_id=student_id, task_id=self.task_id,
+                    provider=self.provider, reporter=self.reporter, generate=_generate_test_cases, execute=run_sandbox,
                 )
-
-            student_lang = _detect_language(code)
-            function_only = _detect_function_only(code) if student_lang == "python" else None
-
-            # ─── Step 2: Decide cases source ────────────────────────────────
-            test_cases: List[TestCase] = _coerce_test_cases(problem.test_cases)
-            # Older generated preparation material could contain stdin cases
-            # for a required function. Such cases never call the submission;
-            # generate function-call cases through the existing path instead
-            # of sending a false 0/N execution result to the grading model.
-            if (function_only and required_function_name(problem.stem) == function_only
-                    and test_cases and all(tc.source == "llm_generated" for tc in test_cases)
-                    and any(tc.sandbox_feasible and (not tc.function_name
-                        or tc.function_args is None or tc.expected_return is None) for tc in test_cases)):
-                test_cases = []
-            cases_source: str
-            #   "teacher" | "llm_generated" | "llm_function_call"
-            # | "skipped_complex" | "skipped_lang" | "function_only_no_io"
-            # | "llm_call_failed"
-            skipped_reason: Optional[str] = None
-            cases_total_seen = 0  # distinct from cases_run when LLM-generated > MAX
-
-            if test_cases:
-                # Teacher uploaded cases → use them as-is. Filter out any
-                # sandbox_feasible=False cases (rare on teacher uploads but
-                # honor the field if present).
-                feasible = [tc for tc in test_cases if tc.sandbox_feasible]
-                if feasible:
-                    test_cases = feasible
-                    if all(tc.source == "llm_generated" for tc in feasible):
-                        cases_source = "llm_function_call" if all(tc.function_name for tc in feasible) else "llm_generated"
-                    else:
-                        cases_source = "teacher"
-                else:
-                    cases_source = "skipped_complex"
-                    skipped_reason = "teacher cases all marked infeasible"
-                    test_cases = []
-            else:
-                # No teacher cases → keyword scan first
-                hit = _scan_complexity_keywords(problem.stem + "\n" + code)
-                if hit:
-                    cases_source = "skipped_complex"
-                    skipped_reason = f"keyword:{hit[0]} ({hit[1]})"
-                    test_cases = []
-                else:
-                    # Generate via LLM. If student wrote a bare function (no
-                    # top-level I/O), prompt the LLM for LeetCode-style cases
-                    # so the harness can call student's function directly.
-                    if self.reporter and active_unit:
-                        await self.reporter.substep(active_unit, "generate_test_cases")
-                    generated, gen_error = await _generate_test_cases(
-                        self.provider, problem, function_name=function_only,
+                evidence, examples = describe_run(run, self.language, problem)
+                if evidence.score_status == "unavailable":
+                    result = self._blank_result(problem.q_id, problem.max_score,
+                                                evidence.safe_summary, error_kind=evidence.primary_reason)
+                    result.programming_evidence = evidence
+                    return result
+                if run.status == "no_submission":
+                    return ExpertResult(
+                        provider=self.provider.provider_id, score=0, max_score=problem.max_score, confidence=1,
+                        comment=format_deterministic_feedback(
+                            self.grading_setup, zh_message="学生未提交代码，本题记 0 分。",
+                            en_message="No student code was provided, so this item receives 0 points.",
+                            zh_detail="未运行沙箱或模型批改。", en_detail="No sandbox or model grading was run.",
+                            zh_suggestion="请补交代码后重新批改。", en_suggestion="Submit the missing code, then grade again.",
+                            legacy_message=evidence.safe_summary,
+                        ), programming_evidence=evidence,
                     )
-                    cases_total_seen = len(generated)
-                    if gen_error == "llm_failed_transient":
-                        cases_source = "llm_call_failed"
-                        skipped_reason = "transient LLM error during test-case generation"
-                        test_cases = []
-                    elif not generated:
-                        if function_only:
-                            cases_source = "function_only_no_io"
-                            skipped_reason = (
-                                f"student function {function_only}() has no top-level I/O "
-                                "and AI returned no function-call cases"
-                            )
-                        else:
-                            cases_source = "skipped_complex"
-                            skipped_reason = "LLM did not return any test cases"
-                        test_cases = []
-                    else:
-                        capped = generated[:MAX_LLM_GENERATED_CASES]
-                        feasible = [tc for tc in capped if tc.sandbox_feasible]
-                        if not feasible:
-                            cases_source = "skipped_complex"
-                            skipped_reason = "all LLM-generated cases marked infeasible"
-                            test_cases = []
-                        else:
-                            test_cases = feasible
-                            # If we asked for function-call cases AND the LLM
-                            # actually used function_name, label as such.
-                            if function_only and any(tc.function_name for tc in feasible):
-                                cases_source = "llm_function_call"
-                                # filter to only function-call cases (drop any
-                                # stdin/stdout cases LLM mixed in — they would
-                                # fail since student has no print/input)
-                                test_cases = [tc for tc in feasible if tc.function_name]
-                            elif function_only:
-                                # Student wrote function-only but LLM ignored
-                                # the hint and returned stdin/stdout cases.
-                                # Running them would 0-pass. Fall back to
-                                # code-review-only.
-                                cases_source = "function_only_no_io"
-                                skipped_reason = (
-                                    f"student function {function_only}() has no top-level I/O; "
-                                    "AI failed to generate function-call cases"
-                                )
-                                test_cases = []
-                            else:
-                                cases_source = "llm_generated"
 
-            # Language gate (overrides everything except no_code)
-            if student_lang != "python":
-                cases_source = "skipped_lang"
-                skipped_reason = f"detected language: {student_lang}"
-                test_cases = []
-
-            # ─── Step 3: Run sandbox if applicable ──────────────────────────
-            exec_report: Optional[ExecutionReport] = None
-            if cases_source in ("teacher", "llm_generated", "llm_function_call") and test_cases:
-                if self.reporter and active_unit:
-                    await self.reporter.substep(active_unit, "run_sandbox")
-                exec_report = await run_sandbox(
-                    code,
-                    test_cases,
-                    language="python",
-                    per_case_timeout=SANDBOX_PER_CASE_TIMEOUT_S,
+                if self.reporter and unit:
+                    await self.reporter.substep(unit, "retrieve_knowledge")
+                chunks = await kb_tool.retrieve_for_grading(
+                    problem.stem, k=3, scope=self.task_id, provider=self.provider, reporter=self.reporter,
                 )
-
-            if self.reporter and active_unit:
-                await self.reporter.substep(active_unit, "retrieve_knowledge")
-            chunks = await kb_tool.retrieve_for_grading(problem.stem, k=3, scope=self.task_id,
-                provider=self.provider, reporter=self.reporter)
-
-            # ─── Step 4: Build prompt ───────────────────────────────────────
-            if self.reporter and active_unit:
-                await self.reporter.substep(active_unit, "build_prompt")
-            branch_info = _format_branch_info(
-                cases_source, skipped_reason, exec_report,
-                cases_run=len(test_cases),
-                cases_total_seen=cases_total_seen,
-            )
-            prompt = self._template
-            prompt = prompt.replace("{problem}", problem.stem)
-            prompt = prompt.replace("{code}", code)
-            prompt = prompt.replace("{branch_info}", branch_info)
-            # Backwards compat with legacy template that used {execution_results}
-            prompt = prompt.replace("{execution_results}", branch_info)
-            prompt = prompt.replace("{rubric}", problem.criterion)
-            if problem.reference_answer:
-                prompt += "\n\nReference answer:\n" + problem.reference_answer
-            if chunks:
-                prompt += ("\n\nTextbook reference evidence (not executable code or test cases; "
-                           "does not override the teacher's rubric or actual sandbox results):\n"
-                           + kb_tool.context_text(chunks))
-
-            # ─── Step 5: LLM grading ────────────────────────────────────────
-            if self.reporter and active_unit:
-                await self.reporter.substep(active_unit, "llm_grade")
-
-            system_prompt = build_system_prompt(
-                "You are a programming teacher grading student code. "
-                "Walk through the 4-step reasoning workflow (Functionality → Edge cases → "
-                "Code quality → Efficiency) and produce a structured per-dimension score. "
-                "Respect the sandbox branch rules in the user prompt."
-                + authoritative_score_instruction(problem.max_score),
-                self.language,
-                self.grading_setup,
-            )
-            result, raw = await structured_llm_call(
-                self.provider,
-                system_prompt=system_prompt,
-                user_prompt=prompt,
-                output_model=ProgrammingGradingOutput,
-            )
-
-            step_scores = []
-            for s in result.steps:
-                if isinstance(s, dict):
-                    step_scores.append(StepScore(
-                        step_no=s.get("step_no", len(step_scores) + 1),
-                        desc=s.get("desc", s.get("comment", "")),
-                        is_correct=bool(s.get("is_correct", True)),
-                        score=float(s.get("score", 0.0)),
-                    ))
-
-            metadata_footer = _format_metadata(
-                cases_source, skipped_reason, exec_report, len(test_cases), language=self.language
-            )
-            final_comment = (result.comment or "") + metadata_footer
-
-            # Cap confidence when AI-generated cases all failed — this is the
-            # signal that LLM-as-judge had a bad map of expected behavior, so
-            # human review is needed even if the LLM itself sounded confident.
-            confidence = max(0.0, min(result.confidence, 1.0))
-            if (
-                cases_source == "llm_generated"
-                and exec_report is not None
-                and exec_report.total_count >= 3
-                and exec_report.passed_count == 0
-            ):
-                confidence = min(confidence, 0.5)
-
-            return normalize_expert_result(ExpertResult(
-                provider=self.provider.provider_id,
-                score=max(0.0, min(result.score, result.max_score)),
-                max_score=result.max_score,
-                confidence=confidence,
-                comment=final_comment,
-                steps=step_scores,
-                logs=result.logs,
-                raw_output=raw.content,
-                knowledge_citations=kb_tool.citations(chunks),
-                duration_ms=raw.duration_ms,
-            ), problem.max_score)
-
-        except Exception as e:
-            logger.error(
-                "ProgrammingSkill failed; exception_type=%s",
-                type(e).__name__,
-            )
-            from backend.skills.base import classify_skill_error
-            kind, friendly = classify_skill_error(e)
-            return self._blank_result(problem.q_id, problem.max_score, friendly, error_kind=kind)
-        finally:
-            if step_ctx:
-                await step_ctx.__aexit__(None, None, None)
+                data = {**_teacher_material(problem), "submitted_source": run.code,
+                        "execution": evidence.model_dump(), "case_examples": examples}
+                if chunks:
+                    data["textbook_reference"] = kb_tool.context_text(chunks)
+                if self.reporter and unit:
+                    await self.reporter.substep(unit, "llm_grade")
+                result, raw = await structured_llm_call(
+                    self.provider, system_prompt=build_system_prompt(
+                        _TEMPLATE + authoritative_score_instruction(problem.max_score), self.language, self.grading_setup,
+                    ),
+                    user_prompt=json.dumps(data, ensure_ascii=False),
+                    output_model=ProgrammingGradingOutput,
+                    validate_output=lambda output: _validate_awards(output, problem.max_score),
+                )
+                confidence = result.confidence
+                if (not evidence.teacher_tests.total and evidence.generated_tests.total >= 3
+                        and evidence.generated_tests.passed == 0):
+                    confidence = min(confidence, 0.5)
+                vote = normalize_expert_result(ExpertResult(
+                    provider=self.provider.provider_id, score=result.score, max_score=result.max_score,
+                    confidence=confidence, comment=f"{result.comment}\n\n{evidence.safe_summary}",
+                    steps=result.steps, raw_output=raw.content, duration_ms=raw.duration_ms,
+                    programming_evidence=evidence, knowledge_citations=kb_tool.citations(chunks),
+                ), problem.max_score)
+                if evidence.execution_status == "unsupported" and round_ai_score(vote.score, vote.max_score) == 0:
+                    # Without a run, code review alone cannot establish a publishable student zero.
+                    vote.error_kind = "programming_unverified_zero"
+                    vote.confidence = 0
+                    vote.steps = []
+                    evidence.score_status = "unavailable"
+                    evidence.primary_reason = vote.error_kind
+                    evidence.safe_summary = ("未运行，无法确认学生零分，请人工复核。" if self.language == "zh"
+                                             else "Ungraded. No execution supports a zero score; teacher review required.")
+                    vote.programming_evidence = evidence
+                    vote.comment = evidence.safe_summary
+                return vote
+            except Exception as exc:
+                logger.warning("Programming grading failed; exception_type=%s", type(exc).__name__)
+                kind = _error_kind(exc)
+                if evidence is None:
+                    evidence = unavailable(kind, "", self.language)
+                else:
+                    evidence = evidence.model_copy(update={
+                        "score_status": "unavailable", "primary_reason": kind, "requires_human_review": True,
+                    })
+                    evidence.safe_summary = f"{ungraded_message(kind, self.language)} {evidence.safe_summary}"
+                result = self._blank_result(problem.q_id, problem.max_score, evidence.safe_summary, error_kind=kind)
+                result.programming_evidence = evidence
+                return result

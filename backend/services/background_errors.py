@@ -92,6 +92,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "grading_failed",
     "grading_provider_transient",
     "programming_execution_unavailable",
+    "programming_test_material_needs_review",
     "grading_inputs_changed",
     "grading_persistence_failed",
     "grading_provider_configuration_changed",
@@ -133,6 +134,9 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
 
 RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
     "submission_time_limit_reached",
+    "source_docx_busy",
+    "source_docx_unavailable",
+    "source_docx_timeout",
     "provider_capacity_unavailable",
     "provider_overloaded",
     "provider_timeout",

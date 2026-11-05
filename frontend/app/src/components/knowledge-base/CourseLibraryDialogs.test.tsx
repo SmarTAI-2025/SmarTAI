@@ -80,7 +80,7 @@ describe("course material deletion", () => {
 
   it.each([
     ["empty.txt", "", "文件为空"],
-    ["answer.docx", "text", "资料库仅支持"],
+    ["answer.doc", "text", "资料库仅支持"],
     ["large.pdf", "pdf", "文件超过"],
   ])("explains rejected upload %s and recovers with a valid replacement", async (name, content, message) => {
     const user = userEvent.setup();

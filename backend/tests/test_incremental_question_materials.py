@@ -646,3 +646,39 @@ async def test_partial_material_repair_preserves_saved_siblings_and_retries_inco
         if not runner.done():
             runner.cancel()
             await asyncio.gather(runner, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role,field", [("rubric", "criterion"), ("reference_answer", "reference_answer")])
+async def test_duplicate_number_preserves_unassigned_material_in_manual_review(monkeypatch, role, field):
+    from backend.services.task_execution import stop_task_run
+    literal = "Literal material from the separate file."
+    owner, task, operation, pipeline = await material_setup(monkeypatch, [(role, literal)])
+    extracted = [row(7, stem=f"Compute the determinant of matrix {name}.", criterion=f"Rubric {name}",
+                     reference_answer=f"Answer {name}") for name in ("A", "B")]
+    monkeypatch.setattr(inc, "_extract_problems_call", AsyncMock(return_value=inc._rows(extracted)))
+    monkeypatch.setattr(inc, "structured_llm_call", AsyncMock(return_value=parsed_material("7", literal)))
+    await pipeline.run()
+    _, saved = persisted(owner, operation)
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    stop_task_run(task_id=task, owner_id=owner, job_id=operation.operation_id,
+                  expected_revision=workflow.workflow_revision)
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    await api.manually_complete_question_preparation(task, operation.operation_id,
+        api.ManualQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision),
+        current=SimpleNamespace(id=owner))
+    published = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]
+    token = next(draft.source_token for draft, _, _ in pipeline.sources if draft.role == role)
+    for rows in (saved, published):
+        assert len(rows) == 3
+        for item, expected in zip((rows["q1"], rows["q2"]), extracted):
+            for key in ("stem", "criterion", "reference_answer"):
+                assert item[key] == expected[key]
+        pending = rows["q3"]
+        assert not pending["stem"] and pending[field] == literal
+        assert pending["review_status"] == "needs_review"
+        assert pending["material_provenance"][field]["source_token"] == token
+        assert any(i["code"] == "ambiguous_question_match" and i["status"] == "open" and token in i["source_ids"]
+                   for i in pending["preparation_issues"])
+    readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)
+    assert "question_manual_completion_required" in readiness["blocking_issues"]

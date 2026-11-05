@@ -37,3 +37,26 @@ except OSError: print('isolated')
 else: raise AssertionError('network unexpectedly available')
 """)
     assert result.passed and result.actual_output.strip() == "isolated"
+
+
+@pytest.mark.asyncio
+async def test_child_cannot_access_supervisor_protocol_descriptor():
+    result = await run_python_oci(
+        "import os\n"
+        "try:\n fd=os.open('/proc/1/fd/1',os.O_WRONLY)\n"
+        "except (PermissionError, FileNotFoundError):\n print('protected')\n"
+        "else:\n os.close(fd); print('accessible')"
+    )
+    assert result.passed and result.actual_output.strip() == "protected"
+
+
+@pytest.mark.asyncio
+async def test_real_private_pids_controller_and_unattributed_sigkill():
+    # The cap is set by the trusted container command. At least one fork must
+    # fail; the code deliberately leaves that exception unhandled.
+    pids = await run_python_oci("import subprocess\nchildren=[]\nfor i in range(32):\n children.append(subprocess.Popen(['sleep','2']))",
+                                bind_request=True)
+    assert pids.exit_reason == "pid_limit" and pids.cgroup_pid_denials > 0
+    from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
+    with pytest.raises(IsolatedRunnerUnavailable):
+        await run_python_oci("import os,signal; os.kill(os.getpid(),signal.SIGKILL)", bind_request=True)

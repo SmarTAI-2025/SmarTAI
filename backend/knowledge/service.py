@@ -10,9 +10,10 @@ from backend.rag.chunker import MAX_FILE_BYTES
 from backend.services.knowledge_storage import persist_knowledge_upload
 from backend.storage import get_storage
 from backend.tools.file_processing import IMAGE_MEDIA_TYPES, validate_upload_content
+from backend.services.upload_contract import ROLE_EXTENSIONS, upload_limit
 from backend.tools.pdf_evidence import MAX_IMAGE_INPUT_BYTES
 
-KNOWLEDGE_UPLOAD_EXTENSIONS = {".pdf", ".txt", ".md", ".markdown", *IMAGE_MEDIA_TYPES}
+KNOWLEDGE_UPLOAD_EXTENSIONS = frozenset("." + ext for ext in ROLE_EXTENSIONS["course_knowledge"])
 
 
 async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
@@ -30,8 +31,9 @@ async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
 
     if not content:
         raise HTTPException(400, detail={"code": "source_empty"})
-    if len(content) > MAX_FILE_BYTES:
-        raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": MAX_FILE_BYTES})
+    maximum = upload_limit("knowledge_max_bytes", MAX_FILE_BYTES)
+    if len(content) > maximum:
+        raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": maximum})
     safe_name = Path(original_name).name or "knowledge.txt"
     if Path(safe_name).suffix.lower() not in KNOWLEDGE_UPLOAD_EXTENSIONS:
         raise HTTPException(415, detail={"code": "source_type_not_allowed",
@@ -45,9 +47,6 @@ async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
         media_slot_timeout_seconds=media_slot_timeout_seconds,
     )).content_type
     visual = media_type == "application/pdf" or image
-    expected_type = IMAGE_MEDIA_TYPES.get(extension) or ("application/pdf" if extension == ".pdf" else None)
-    if (expected_type and media_type != expected_type) or (not expected_type and not media_type.startswith("text/")):
-        raise HTTPException(415, detail={"code": "source_content_type_not_allowed"})
     if image and native_only:
         raise HTTPException(422, detail={"code": "knowledge_image_requires_ocr"})
     if registry is None and not native_only:

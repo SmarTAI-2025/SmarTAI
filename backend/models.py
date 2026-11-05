@@ -40,6 +40,28 @@ class StepScore(BaseModel):
     score: float = Field(ge=0, allow_inf_nan=False)
 
 
+class ProgrammingTestCounts(BaseModel):
+    passed: int = Field(default=0, ge=0)
+    total: int = Field(default=0, ge=0)
+
+
+class ProgrammingEvidence(BaseModel):
+    """Public scoring facts. Full source and case output stay in the run evidence."""
+    contract: Literal["smartai.programming_evidence"] = "smartai.programming_evidence"
+    schema_version: Literal[1] = 1
+    evidence_id: str = ""
+    score_status: Literal["final", "provisional", "unavailable"]
+    execution_status: Literal["executed", "not_requested", "not_executed", "unsupported"]
+    mapping_status: Literal["valid", "ambiguous", "missing", "conflict", "unknown"] = "unknown"
+    isolation_mode: str | None = None
+    teacher_tests: ProgrammingTestCounts = Field(default_factory=ProgrammingTestCounts)
+    generated_tests: ProgrammingTestCounts = Field(default_factory=ProgrammingTestCounts)
+    failure_counts: dict[str, int] = Field(default_factory=dict)
+    primary_reason: str
+    requires_human_review: bool
+    safe_summary: str
+
+
 class ExpertResult(BaseModel):
     """Result from a single expert (provider) grading a question."""
     provider: str = Field(description="Provider identifier, e.g. 'openai:gpt-4o', 'gemini:gemini-2.5-pro'")
@@ -51,6 +73,7 @@ class ExpertResult(BaseModel):
     steps: List[StepScore] = []
     hits: Optional[List[str]] = None
     logs: Optional[str] = None
+    programming_evidence: ProgrammingEvidence | None = Field(default=None, exclude_if=lambda value: value is None)
     raw_output: Optional[str] = Field(None, description="Raw LLM output for traceability")
     knowledge_citations: List[Dict[str, Any]] = Field(default_factory=list, max_length=10,
         description="System-supplied retrieved references, not verified support for a model claim")
@@ -161,6 +184,12 @@ class TestCase(BaseModel):
         default=None,
         description="Positional arguments passed to function_name. JSON-serializable.",
     )
+    function_kwargs: dict[str, Any] | None = Field(
+        default=None, description="JSON keyword arguments passed to the function.",
+    )
+    comparison: Literal["default", "exact", "trimmed", "json", "tokens", "numeric"] = "default"
+    abs_tol: float = Field(default=1e-9, ge=0, allow_inf_nan=False, strict=True)
+    rel_tol: float = Field(default=0, ge=0, allow_inf_nan=False, strict=True)
     expected_return: Optional[str] = Field(
         default=None,
         description="repr() of expected return value; compared after ast.literal_eval normalization.",

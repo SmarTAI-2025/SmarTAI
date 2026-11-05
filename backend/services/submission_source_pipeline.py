@@ -26,6 +26,7 @@ from backend.services.background_errors import (
 )
 from backend.storage import get_storage
 from backend.services.question_sources import recognition_has_failure
+from backend.services.upload_contract import PROGRAMMING_SOURCE_SUFFIXES, validate_submission_upload
 from backend.tools.file_processing import (
     ARCHIVE_EXTENSIONS,
     RawUploadSource,
@@ -50,6 +51,7 @@ class PreparedSubmissionSource:
     failure_phase: str | None = None
     retryable: bool = False
     recognition: dict | None = None
+    whole_source: bool = True
 
 
 def attach_submission_recognition(results, sources, *, verified_question_ids=()):
@@ -564,6 +566,7 @@ async def prepare_submission_sources(
 
     archive_error: str | None = None
     try:
+        validate_submission_upload(filename, content)
         raw_sources = await run_in_threadpool(
             extract_raw_files_from_archive,
             content,
@@ -607,7 +610,7 @@ async def prepare_submission_sources(
             content_type=raw_sources[0].content_type,
             text=None,
             pre_error_code=code,
-            failure_phase="archive",
+            failure_phase="archive" if container_file is not None else failure_phase_for_code(code),
             retryable=is_retryable_background_error(code),
         )
         if on_source_ready is not None:
@@ -706,7 +709,7 @@ async def prepare_submission_sources(
                 else:
                     read = await recognition_reader(raw, stored_file_id)
                     text, recognition = read.text, read.recognition
-            elif document_ocr_skill is not None:
+            elif document_ocr_skill is not None and not raw.filename.lower().endswith((".docx", *PROGRAMMING_SOURCE_SUFFIXES)):
                 recovered = (recovered_ocr_text_by_source or {}).get(source_id)
                 if recovered is not None:
                     text = recovered

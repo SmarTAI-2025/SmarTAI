@@ -17,10 +17,10 @@ from backend.storage import get_storage
 from backend.tests.test_task_background_workflows import _BackgroundTasks, _Registry, _seed_task
 
 
-def _archive_bytes() -> bytes:
+def _archive_bytes(name: str = "student.txt", content: bytes = b"answer") -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("student.txt", "answer")
+        archive.writestr(name, content)
     return buffer.getvalue()
 
 
@@ -958,7 +958,7 @@ async def test_submission_failure_records_fenced_source_outcome(monkeypatch):
     owner_id, task_id = _seed_task(with_question=True)
     queued = task_facade.queue_task_submission_parsing(
         task_id=task_id, owner_id=owner_id, filename="answers.zip",
-        content=b"archive-bytes", content_type="application/zip",
+        content=_archive_bytes("student.png", b"not image bytes"), content_type="application/zip",
         registry=_Registry(),
     )
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _Registry())
