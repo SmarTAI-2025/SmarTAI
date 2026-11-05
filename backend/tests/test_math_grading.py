@@ -484,7 +484,10 @@ async def test_actual_math_tool_evidence_is_consumed_before_final_ledger(
 @pytest.mark.asyncio
 async def test_middle_timeout_retains_grade_and_evidence_from_earlier_and_later_checks(monkeypatch, provider):
     import asyncio
-    from backend.tools import math_verification
+    from backend.tools import math_verification, sandbox_runtime
+
+    slots = asyncio.Semaphore(1)
+    monkeypatch.setattr(sandbox_runtime, "_SEMAPHORE", slots)
 
     p, a, plan = problem(), answer(), plan_for()
     draft = assessment(checks=[grading.Verification(claim_id="s1", context_quote=p.stem,
@@ -501,14 +504,17 @@ async def test_middle_timeout_retains_grade_and_evidence_from_earlier_and_later_
     with manual_clock(monkeypatch) as clock:
         calls = 0
 
-        async def verify(_):
+        async def verify(_, *, release_slot):
             nonlocal calls
-            calls += 1
-            if calls == 2:
-                clock.now += 31  # One second past the independent execution deadline.
-                await asyncio.Event().wait()  # The real per-check timeout cancels this call.
-            return math_verification.MathVerificationEvidence(
-                status="refuted", method="exact", reason=f"Completed check {calls}.")
+            try:
+                calls += 1
+                if calls == 2:
+                    clock.now += 31  # One second past the independent execution deadline.
+                    await asyncio.Event().wait()  # The real per-check timeout cancels this call.
+                return math_verification.MathVerificationEvidence(
+                    status="refuted", method="exact", reason=f"Completed check {calls}.")
+            finally:
+                release_slot()  # The worker owns the transferred permit, even on timeout.
 
         monkeypatch.setattr(math_verification, "_run_worker", verify)
         with math_plans_context({"q1": plan}), grading.math_review_scope():
@@ -518,6 +524,7 @@ async def test_middle_timeout_retains_grade_and_evidence_from_earlier_and_later_
     assert result.comment == draft.comment
     assert sum(step.score for step in result.steps) == result.score
     assert model.await_count == 2
+    assert calls == 3 and slots._value == 1
     evidence = grading.read_math_trace(result)["evidence"]
 
     assert [entry["method"] for entry in evidence] == ["exact", "timeout", "exact"]
