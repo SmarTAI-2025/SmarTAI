@@ -71,6 +71,11 @@ def test_teacher_edit_is_used_by_every_expert_and_execution_is_durable(monkeypat
     assert result["results"][0]["corrections"][0]["score"] == 10
     assert executed.await_count == 1 and generation.await_count == 0 and scoring.await_count == 2
     assert executed.call_args.args[0] == source
+    activity = grading_runs.get_run(run_id=job, actor_id=owner, role="teacher")["events"]
+    assert activity
+    assert not {e["message"] for e in activity}.intersection({
+        programming_runs.PREPARED, programming_runs.STARTED, programming_runs.COMPLETED,
+    })
     events = grading_repository.list_events(job,actor_id=owner,messages=(programming_runs.COMPLETED,))
     assert len(events) == 1
     evidence = events[0]["payload"]["value"]

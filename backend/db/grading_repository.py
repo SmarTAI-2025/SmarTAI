@@ -1078,6 +1078,11 @@ def record_event(run_id: str, *, level: str, message: str, payload: dict | None 
         )
 
 
+PROGRAMMING_CASES_PREPARED = "programming_cases_prepared"
+PROGRAMMING_PREPARATION_STARTED = "programming_preparation_started"
+PROGRAMMING_EXECUTION_COMPLETED = "programming_execution_completed"
+
+
 def list_events(run_id: str, *, actor_id: str | None = None,
                 after_sequence: int = 0, limit: int | None = None,
                 messages: tuple[str, ...] | None = None) -> list[dict]:
@@ -1094,6 +1099,12 @@ def list_events(run_id: str, *, actor_id: str | None = None,
         )
         if messages is not None:
             query = query.where(GradingRunEventRecord.message.in_(messages))
+        else:
+            # Only the evidence consumer needs the frozen inputs and full output.
+            # Exclude those rows before pagination or progress polling loads a class of results.
+            query = query.where(GradingRunEventRecord.message.not_in((
+                PROGRAMMING_CASES_PREPARED, PROGRAMMING_PREPARATION_STARTED, PROGRAMMING_EXECUTION_COMPLETED,
+            )))
         if limit is not None:
             query = query.limit(limit)
         rows = session.scalars(query).all()

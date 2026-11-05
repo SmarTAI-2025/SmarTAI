@@ -28,9 +28,9 @@ from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCode
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
 
 VERSION = "programming_run_v1"
-PREPARED = "programming_cases_prepared"
-STARTED = "programming_preparation_started"
-COMPLETED = "programming_execution_completed"
+PREPARED = grading_repository.PROGRAMMING_CASES_PREPARED
+STARTED = grading_repository.PROGRAMMING_PREPARATION_STARTED
+COMPLETED = grading_repository.PROGRAMMING_EXECUTION_COMPLETED
 _current = ContextVar("programming_run", default=None)
 
 
