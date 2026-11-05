@@ -81,6 +81,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     description: tx(locale, "测试资料未通过严格 JSON 数据校验，不会被当作代码执行。", "The test material failed strict JSON data validation and is not treated as executable code."),
     nextStep: tx(locale, "保存为合法 UTF-8 JSON，修正语法并移除 NaN、Infinity 等非有限数字后重新上传。", "Save valid UTF-8 JSON, fix syntax errors and remove non-finite numbers such as NaN or Infinity, then upload again."),
   }),
+  source_docx_limit_exceeded: (locale) => fileCopy(locale, "DOCX 超过读取上限", "The DOCX exceeds reading limits", "拆分文档或缩小内嵌资源后重新上传。", "Split the document or reduce embedded resources, then upload again."),
   source_docx_invalid: (locale) => ({
     title: tx(locale, "DOCX 文件结构无效", "The DOCX structure is invalid"),
     description: tx(locale, "文件未通过 Office 容器结构检查；普通 ZIP 改名不能成为 DOCX。", "The file failed Office container checks; renaming an ordinary ZIP does not make it a DOCX."),
@@ -116,6 +117,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     description: tx(locale, "文件名超过当前上传入口的长度限制。", "The filename exceeds the length limit for this upload entry point."),
     nextStep: tx(locale, "缩短文件名并保留正确扩展名，再重新上传。", "Shorten the filename while keeping the correct extension, then upload again."),
   }),
+  source_text_too_large: (locale) => fileCopy(locale, "正文超过读取上限", "Extracted text exceeds the limit", "请将原文拆分或缩短后重新上传。", "Split or shorten the document and upload it again."),
   source_too_large: (locale) => ({
     title: tx(locale, "文件超过上传上限", "The file exceeds the upload limit"),
     description: tx(locale, "原件大小超过当前资料用途或入口的生效上限。", "The original exceeds the effective size limit for this source purpose or entry point."),

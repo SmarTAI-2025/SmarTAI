@@ -304,13 +304,13 @@ async def validate_upload_content(content: bytes, filename: str, *, content_type
     suffix = _ext(filename)
     if suffix == ".docx":
         from backend.services.upload_contract import validate_docx_package, UploadContractError
-        try:
-            await asyncio.to_thread(validate_docx_package, content)
-        except UploadContractError as exc:
-            raise HTTPException(422, detail={"code": exc.code}) from None
         if inspection.mismatch:
             code = "submission_source_content_type_mismatch" if purpose == "submissions" else "source_content_type_not_allowed"
             raise HTTPException(415, detail={"code": code})
+        try:
+            await asyncio.to_thread(validate_docx_package, content)
+        except UploadContractError as exc:
+            raise HTTPException(413 if exc.code == "source_docx_limit_exceeded" else 422, detail={"code": exc.code}) from None
         return inspection
     # A plain-text/Markdown lesson may quote a PDF header. Only an actual PDF
     # parse can settle this ambiguous signature; a valid renamed PDF is rejected.

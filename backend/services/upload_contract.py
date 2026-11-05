@@ -183,22 +183,26 @@ def validate_docx_package(data: bytes) -> None:
         if end < 0 or not data.startswith(b"PK\x03\x04"):
             raise ValueError("not a Word ZIP")
         disk, directory_disk, local_count, count, size, offset, comment = struct.unpack_from("<4H2IH", data, end + 4)
-        if (disk or directory_disk or local_count != count or count > limits["archive_max_files"]
-                or size > 512 * 1024 or offset + size != end or end + 22 + comment != len(data)):
+        if (disk or directory_disk or local_count != count or offset + size != end or end + 22 + comment != len(data)):
             raise ValueError("unexpected ZIP directory")
+        if count > limits["archive_max_files"] or size > 512 * 1024:
+            raise UploadContractError("source_docx_limit_exceeded")
         with zipfile.ZipFile(io.BytesIO(data)) as package:
             infos = package.infolist()
             names = set()
-            if len(infos) != count or sum(info.file_size for info in infos) > limits["archive_max_expanded_bytes"]:
-                raise ValueError("office size")
+            if len(infos) != count:
+                raise ValueError("wrong ZIP entry count")
+            if sum(info.file_size for info in infos) > limits["archive_max_expanded_bytes"]:
+                raise UploadContractError("source_docx_limit_exceeded")
             for info in infos:
+                if info.file_size > limits["archive_max_member_bytes"]:
+                    raise UploadContractError("source_docx_limit_exceeded")
                 path = info.filename.rstrip("/")
                 if (not path or path.casefold() in names or info.filename != info.orig_filename
                         or "\\" in path or any(part in {"", ".", ".."} for part in path.split("/"))
                         or path.casefold().endswith("/vbaproject.bin")
                         or stat.S_ISLNK(info.external_attr >> 16) or info.flag_bits & 1
-                        or info.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
-                        or info.file_size > limits["archive_max_member_bytes"]):
+                        or info.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}):
                     raise ValueError("unsafe or oversized office member")
                 names.add(path.casefold())
             for name in _OFFICE_MEMBERS:
@@ -207,6 +211,8 @@ def validate_docx_package(data: bytes) -> None:
                     raise ValueError("missing Word part")
                 with package.open(info) as stream:
                     _check_word_part(name, stream)
+    except UploadContractError:
+        raise
     except (KeyError, OSError, ValueError, RuntimeError, EOFError, struct.error,
             expat.ExpatError, zlib.error, zipfile.BadZipFile, zipfile.LargeZipFile):
         raise UploadContractError("source_docx_invalid") from None

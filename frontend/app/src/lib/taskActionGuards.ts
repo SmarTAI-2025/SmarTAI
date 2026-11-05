@@ -248,6 +248,7 @@ const FILE_CODES = new Set([
   "pdf_ocr_render_failed",
   "pdf_processing_unavailable",
   "source_decode_failed",
+  "source_docx_limit_exceeded",
   "source_empty",
   "source_json_invalid",
   "source_text_too_large",
@@ -1524,6 +1525,9 @@ function fileErrorDescription(
 ): string {
   if (["source_empty", "submission_source_empty"].includes(code ?? "") || /file is empty/i.test(message)) {
     return tx(locale, "文件为空，请确认内容后重新保存并上传。", "The file is empty. Check its contents, save it, and upload again.");
+  }
+  if (code === "source_docx_limit_exceeded") {
+    return tx(locale, "DOCX 内部文件过多或过大。请拆分文档、压缩内嵌资源，或导出为 PDF 后重新上传。", "The DOCX contains too many or oversized parts. Split the document, reduce embedded resources, or export it to PDF and upload again.");
   }
   if (code === "media_inspection_resource_limit") {
     return tx(locale, "文件解码所需资源超过安全上限。请缩小图片或拆分 PDF 后重试；持续失败时联系管理员。", "Decoding this file exceeds the safe resource limit. Reduce the image or split the PDF, then retry. Contact an administrator if it persists.");

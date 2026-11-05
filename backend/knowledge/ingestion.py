@@ -223,7 +223,7 @@ class KnowledgeIngestionWorker:
         except (DomainError, ValueError, OSError, TimeoutError) as exc:
             code = exc.code if isinstance(exc, DomainError) else "knowledge_ingestion_failed"
             try:
-                immutable = code in {"source_docx_invalid", "source_docx_incomplete", "source_text_too_large"}
+                immutable = code in {"source_docx_limit_exceeded", "source_docx_invalid", "source_docx_incomplete", "source_text_too_large"}
                 await run_in_threadpool(repo.release, job, status="failed" if immutable else "paused", error=code)
             except DomainError:
                 pass

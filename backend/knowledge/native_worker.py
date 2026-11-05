@@ -25,6 +25,14 @@ def _verify_word_members(archive, body):
     for part in archive.infolist():
         with archive.open(part):  # checks name, local header, and overlapping members
             pass
+        flags, method = struct.unpack_from("<HH", raw, part.header_offset + 6)
+        if flags != part.flag_bits or method != part.compress_type:
+            raise ValueError("inconsistent local Word header")
+        if not flags & 8:  # Otherwise CRC/sizes follow the part in a data descriptor.
+            crc, compressed_size, file_size = struct.unpack_from("<III", raw, part.header_offset + 14)
+            if (crc != part.CRC or compressed_size not in {part.compress_size, 0xffffffff}
+                    or file_size not in {part.file_size, 0xffffffff}):
+                raise ValueError("inconsistent local Word sizes")
         name_size, extra_size = struct.unpack_from("<HH", raw, part.header_offset + 26)
         start = part.header_offset + 30 + name_size + extra_size
         compressed = raw[start:start + part.compress_size]

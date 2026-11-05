@@ -112,7 +112,7 @@ def test_complex_word_in_library_remains_downloadable_without_partial_index_or_r
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fault", ["main_type", "root_target", "external_link", "no_body", "duplicate", "unsafe",
-                                   "utf16_dtd", "secondary_crc", "compression", "oversized", "directory_count"])
+                                   "utf16_dtd", "secondary_crc", "local_flags", "compression", "oversized", "directory_count"])
 async def test_abnormal_package_never_returns_partial_text(fault):
     out = io.BytesIO()
     with zipfile.ZipFile(io.BytesIO(office_package())) as src, zipfile.ZipFile(out, "w") as dst:
@@ -143,11 +143,14 @@ async def test_abnormal_package_never_returns_partial_text(fault):
     data = out.getvalue()
     if fault == "secondary_crc":
         data = data.replace(b"SECONDARY_CRC_SENTINEL", b"!" * len(b"SECONDARY_CRC_SENTINEL"))
+    if fault == "local_flags":
+        data = data[:6] + b"\x01\x00" + data[8:]  # Local-only encryption flag.
     if fault == "directory_count":
         data = data[:-12] + b"\xff\xff" + data[-10:]
     with pytest.raises(HTTPException) as caught:
         await extract_text_from_upload(data, "source.DOCX", purpose="rubric")
-    assert caught.value.detail["code"] == "source_docx_invalid"
+    expected = "source_docx_limit_exceeded" if fault == "oversized" else "source_docx_invalid"
+    assert caught.value.detail["code"] == expected
 
 
 @pytest.mark.asyncio
@@ -190,3 +193,50 @@ def test_word_cannot_be_used_as_a_roster_or_disguised_as_a_class_zip(word):
     assert caught.value.code == "submission_roster_unsupported"
     (source,) = extract_raw_files_from_archive(word, "class.zip")
     assert source.pre_error_code == "submission_source_content_type_mismatch" and source.content == word
+
+
+@pytest.mark.asyncio
+async def test_durable_retry_reuses_word_original_then_requires_replacement_for_remaining_gap(word, monkeypatch):
+    from backend.services import task_facade
+    from backend.tests.test_submission_incremental import _registry, _response
+    from backend.tests.test_submission_upload_retry_policy import finish, retry
+    from backend.tools import file_processing
+
+    owner, task = _seed_task(with_question=True)
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr("S1.DOCX", word)
+        archive.writestr("S2.DOCX", docx("<w:p><w:r><w:drawing/></w:r></w:p>"))
+    body = stream.getvalue()
+
+    async def invoke(messages):
+        assert "return x + 1" in messages[-1].content
+        return _response(content=TEXT)
+
+    registry = _registry(monkeypatch, invoke)
+    original_reader = file_processing._extract_docx_text
+
+    async def busy_once(data, **kwargs):
+        if data == word:
+            raise HTTPException(429, detail={"code": "source_docx_busy"})
+        return await original_reader(data, **kwargs)
+
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="class.zip",
+        content=body, content_type="application/zip", registry=registry)
+    with monkeypatch.context() as initial:
+        initial.setattr(file_processing, "_extract_docx_text", busy_once)
+        await finish(queued["job_id"], owner)
+    snapshot = task_facade.get_task(task_id=task, owner_id=owner)
+    reasons = {item["file_name"]: item for item in snapshot["submission_sources"]}
+    assert reasons["S1.DOCX"]["reason_code"] == "source_docx_busy" and reasons["S1.DOCX"]["retryable"]
+    assert reasons["S2.DOCX"]["reason_code"] == "source_docx_incomplete" and reasons["S2.DOCX"]["requires_reupload"]
+    registry.provider.ainvoke.assert_not_awaited()
+    restarted = await retry(task, owner, snapshot)
+    assert restarted["reused_original_upload"]
+    await finish(restarted["job_id"], owner)
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    assert after["submission_source_summary"]["parsed"] == 1
+    assert after["submission_source_summary"]["failed"] == 1
+    registry.provider.ainvoke.assert_awaited_once()
+    blocked = await retry(task, owner, after)
+    assert blocked.status_code == 409 and "submission_retry_requires_reupload" in blocked.body.decode()

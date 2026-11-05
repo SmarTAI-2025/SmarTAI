@@ -64,7 +64,7 @@ def queue_document(document_id, owner_id, configuration, *, new_version=False, r
         doc = live_document(session, document_id, owner_id, lock=True)
         existing = session.scalar(select(KnowledgeIngestionRecord).where(
             KnowledgeIngestionRecord.document_id == document_id).order_by(KnowledgeIngestionRecord.created_at.desc()))
-        if existing and new_version and existing.error_code in {"source_docx_invalid", "source_docx_incomplete", "source_text_too_large"}:
+        if existing and new_version and existing.error_code in {"source_docx_limit_exceeded", "source_docx_invalid", "source_docx_incomplete", "source_text_too_large"}:
             raise RecognitionError(existing.error_code)
         if existing and (not new_version or existing.status in {"queued", "processing"}):
             return existing.id

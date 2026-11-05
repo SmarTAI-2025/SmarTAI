@@ -153,6 +153,8 @@ def _failed_question_preparation_replay_response(operation):
 def _provider_http_status_for_code(code: str) -> int:
     if code in PDF_EVIDENCE_STATUS_CODES:
         return PDF_EVIDENCE_STATUS_CODES[code]
+    if code == "source_docx_limit_exceeded":
+        return 413
     if code in {"source_docx_invalid", "source_docx_incomplete"}:
         return 422
     if code == "source_docx_busy":
@@ -1234,7 +1236,7 @@ async def _select_source(
             validate_upload(upload_role_for_purpose(_source_role_ocr_purpose(role)), original.original_name, body, from_library=True)
         except UploadContractError as exc:
             code = "source_content_type_not_allowed" if exc.code == "submission_source_content_type_mismatch" else exc.code
-            raise HTTPException(413 if exc.code.endswith("too_large") else 422 if exc.code == "programming_tests_json_invalid" else 415,
+            raise HTTPException(413 if exc.code.endswith("too_large") or exc.code == "source_docx_limit_exceeded" else 422 if exc.code == "programming_tests_json_invalid" else 415,
                                 detail={"code": code, **exc.details}) from None
         descriptor = {
             "kind": "library", "filename": material.filename,
