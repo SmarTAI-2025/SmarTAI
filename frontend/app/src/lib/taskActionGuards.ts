@@ -1138,6 +1138,39 @@ export function classifyRecoverableError(
     };
   }
 
+  if (["media_inspection_unavailable", "media_inspection_busy", "media_inspection_timeout", "pdf_processing_unavailable", "pdf_ocr_render_failed"].includes(code ?? "")) {
+    return {
+      title: tx(locale, "文件处理服务暂时不可用", "File processing is temporarily unavailable"),
+      description: tx(locale, "服务器未能完成文件检查或 PDF 处理，这不代表文件格式不支持。请稍后重试；持续失败时联系管理员，并确认文件能在本地正常打开。", "The server could not complete file inspection or PDF processing. This does not mean the format is unsupported. Retry later; if it persists, contact an administrator and check that the file opens locally."),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "submission_archive_processing_unavailable") {
+    return {
+      title: tx(locale, "服务器暂时无法解压", "Archive processing is temporarily unavailable"),
+      description: tx(locale, "服务器解压工具不可用或临时资源不足，尚不能判定压缩包损坏。原文件已保留，请稍后重试；持续失败时联系管理员，或改用 ZIP 上传。", "The server's extraction tool is unavailable or temporarily lacks resources; this does not establish that the archive is damaged. The original is preserved. Retry later; if it persists, contact an administrator or upload a ZIP instead."),
+      actionLabel: tx(locale, "重新尝试", "Try again"),
+      actionKind: "retry",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
+  if (code === "source_library_type_not_allowed") {
+    return {
+      title: tx(locale, "这种原文件不能存入课程资料库", "This original cannot be saved to the course library"),
+      description: tx(locale, "课程资料库仅保存 PDF、TXT、Markdown 原文件。图片或 JSON 可用于当前任务，请取消“同时保存到课程资料库”，或另选支持的文件。", "The course library stores PDF, TXT and Markdown originals only. Images and JSON can be used for this task. Turn off “Also save to course library” or choose a supported file."),
+      actionLabel: tx(locale, "检查上传设置", "Check upload settings"),
+      actionKind: "reupload",
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
   if (
     (code && FILE_CODES.has(code))
     || apiError.status === 413
@@ -1438,8 +1471,22 @@ function fileErrorDescription(
   detail: Record<string, unknown> | null,
   locale: Locale,
 ): string {
-  if (["source_empty", "submission_source_empty"].includes(code ?? "") || /file is empty|contains no usable text|no extractable text/i.test(message)) {
+  if (["source_empty", "submission_source_empty"].includes(code ?? "") || /file is empty/i.test(message)) {
     return tx(locale, "文件为空，请确认内容后重新保存并上传。", "The file is empty. Check its contents, save it, and upload again.");
+  }
+  if (code === "source_type_not_allowed") {
+    const extensions = Array.isArray(detail?.accepted_extensions)
+      ? detail.accepted_extensions.filter((item): item is string => typeof item === "string" && /^\.[a-z0-9.]{1,16}$/i.test(item)).slice(0, 24) : [];
+    const formats = extensions.map(item => item.slice(1).toUpperCase()).join(" / ");
+    return formats
+      ? tx(locale, `当前资料类型不支持此文件。可用格式：${formats}。请从原应用导出为支持的格式，不要只修改扩展名。`, `This file type is not supported here. Available formats: ${formats}. Export from the original app to a supported format; do not just rename the extension.`)
+      : tx(locale, "当前资料类型不支持此文件。请按上传区域列出的格式重新导出，不要只修改扩展名。", "This file type is not supported here. Export to a format listed in the upload area; do not just rename the extension.");
+  }
+  if (code === "source_mime_type_not_allowed") {
+    return tx(locale, "文件声明的类型与扩展名不一致。请从原应用重新导出，并按上传区域支持的格式保存后再上传。", "The file's declared type does not match its extension. Export it again from the original app in a format supported by this upload area.");
+  }
+  if (code === "submission_source_unsupported") {
+    return tx(locale, "作答支持 PDF、TXT、Markdown、CSV、RST、JPG、JPEG、PNG、WebP、BMP、TIF、TIFF；压缩包内部也须使用这些格式。", "Responses support PDF, TXT, Markdown, CSV, RST, JPG, JPEG, PNG, WebP, BMP, TIF and TIFF. Files inside archives must also use these formats.");
   }
   if (code === "source_content_type_not_allowed" || code === "submission_source_content_type_mismatch") {
     return tx(locale, "文件内容与扩展名不符，或文件已损坏。请确认能在本地打开，并重新导出为上传区域支持的格式；只修改文件后缀无效。", "The file contents do not match its extension, or the file is damaged. Check that it opens locally and export it in a format supported by this upload area; renaming the extension does not convert it.");
@@ -1459,17 +1506,32 @@ function fileErrorDescription(
   if (code === "image_pixel_limit_exceeded") {
     return tx(locale, "图片像素尺寸超过处理上限。请缩小图片尺寸并保留文字清晰度，再上传。", "The image dimensions exceed the processing limit. Reduce its pixel dimensions while keeping the text readable, then upload again.");
   }
-  if (code === "source_too_large") {
+  if (code === "source_too_large" || code === "submission_source_too_large") {
     const limit = formatByteLimit(detail?.max_bytes);
     return limit
       ? tx(locale, `文件超过 ${limit} 的单文件上传上限，请选择更小的文件。`, `The file exceeds the ${limit} per-file upload limit. Choose a smaller file.`)
       : tx(locale, "文件超过单文件上传上限，请选择更小的文件。", "The file exceeds the per-file upload limit. Choose a smaller file.");
   }
-  if (code === "problem_source_decode_failed" || code === "source_decode_failed") {
+  if (code === "source_decode_failed") {
+    return tx(locale, "文本编码无法读取。请将原文件另存为 UTF-8 文本后重新上传，不要只修改扩展名。", "The text encoding could not be read. Save the original as UTF-8 text and upload it again; do not just rename its extension.");
+  }
+  if (code === "problem_source_decode_failed" || /contains no usable text|no extractable text/i.test(message)) {
     return tx(locale, "没有从文件中读取到可用正文。若是扫描 PDF，请先转换为可复制文字的 PDF、TXT 或 Markdown。", "No usable text could be read. If this is a scanned PDF, convert it to a text-based PDF, TXT, or Markdown file first.");
   }
   if (code === "ocr_empty_result" || code === "image_recognition_unconfirmed") {
     return tx(locale, "视觉模型没有从图片或扫描页中识别出可用文字。请检查图片清晰度、方向和页面内容，或更换视觉模型后重试。", "The vision model found no usable text in the image or scanned page. Check clarity, orientation, and page content, or retry with another vision model.");
+  }
+  if (code === "submission_archive_empty") {
+    return tx(locale, "压缩包中没有可处理文件。请确认包含学生作答，且文件没有全部放在系统隐藏目录中。", "The archive contains no processable files. Include student responses and make sure they are not all in hidden system folders.");
+  }
+  if (code === "submission_archive_member_too_large") {
+    return tx(locale, "压缩包中有文件超过 5 MiB。请缩小或拆分该文件后重新打包；其他文件的成功结果会保留。", "An archive member exceeds 5 MiB. Reduce or split that file and rebuild the archive. Successful results from other files are preserved.");
+  }
+  if (code === "submission_archive_member_unreadable") {
+    return tx(locale, "压缩包中有文件无法读取，可能已损坏或加密。请检查该文件并重新打包为未加密的 ZIP；原压缩包已保留供核对。", "An archive member could not be read and may be damaged or encrypted. Check that file and rebuild an unencrypted ZIP. The original archive is preserved for review.");
+  }
+  if (code === "submission_archive_member_unsafe_path") {
+    return tx(locale, "压缩包中有文件路径不安全。请将作答文件重新打包为只含正常相对路径的 ZIP。", "An archive member has an unsafe path. Repack responses as a ZIP containing normal relative paths only.");
   }
   if (code === "submission_archive_invalid") {
     return tx(locale, "压缩包损坏或包含不安全的文件路径。请重新打包为正常 ZIP 后上传。", "The archive is damaged or contains unsafe paths. Create a clean ZIP archive and upload it again.");
@@ -1480,7 +1542,7 @@ function fileErrorDescription(
   if (code === "pdf_page_limit_exceeded") {
     return tx(locale, "PDF 页数超出本次处理上限。请拆分文件后重新上传。", "The PDF exceeds the page limit. Split it into smaller files and upload again.");
   }
-  if (["problem_source_character_limit_exceeded", "problem_source_token_limit_exceeded", "pdf_character_limit_exceeded"].includes(code ?? "")) {
+  if (["source_text_too_large", "problem_source_character_limit_exceeded", "problem_source_token_limit_exceeded", "pdf_character_limit_exceeded"].includes(code ?? "")) {
     return tx(locale, "文件正文过长。请拆分内容，或通过“从原文提取”限定章节与题号。", "The document is too long. Split it, or use Extract from source to limit chapters and question numbers.");
   }
   if (code === "submission_roster_unsupported") {

@@ -217,7 +217,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
     const error = selected.size === 0
       ? tx(locale, "文件为空（0 字节），请确认有内容后重新上传。", "The file is empty (0 bytes). Add content before uploading again.")
       : selected.size > 64 * 1024 * 1024
-        ? tx(locale, "文件超过 64 MiB，请拆分或压缩后重新上传。", "The file exceeds 64 MiB. Split or compress it before uploading again.")
+        ? tx(locale, "文件超过 64 MiB，请拆分文件或减小文件大小后重新上传；不支持压缩包。", "The file exceeds 64 MiB. Split it or reduce the file size before uploading again; archives are not supported.")
         : !/\.(pdf|txt|md|markdown)$/i.test(selected.name)
           ? tx(locale, "资料库仅支持 PDF、TXT 和 Markdown。请先导出为支持的格式，不要只修改扩展名。", "The library supports PDF, TXT and Markdown. Export to a supported format; do not just rename the extension.")
           : null;

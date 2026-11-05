@@ -650,3 +650,32 @@ describe("roster import validation", () => {
     }
   });
 });
+describe("upload error details", () => {
+  it.each(["zh-CN", "en-US"] as const)("keeps archive infrastructure failures retryable (%s)", locale => {
+    const info = classifyRecoverableError("submission_archive_processing_unavailable", { locale });
+    expect(info.actionKind).toBe("retry");
+    expect(info.description).toContain(locale === "zh-CN" ? "原文件已保留" : "original is preserved");
+    expect(info.description).toContain(locale === "zh-CN" ? "管理员" : "administrator");
+  });
+  it.each(["zh-CN", "en-US"] as const)("uses the server's format list and distinguishes the library (%s)", locale => {
+    const rejected = classifyRecoverableError(new APIError(415, "source_type_not_allowed", { detail: { code: "source_type_not_allowed", accepted_extensions: [".pdf", ".json", "<script>"] } }), { locale });
+    expect(rejected.description).toContain("PDF / JSON");
+    expect(rejected.description).not.toContain("<script>");
+    const library = classifyRecoverableError("source_library_type_not_allowed", { locale });
+    expect(library.description).toContain(locale === "zh-CN" ? "取消" : "Turn off");
+  });
+  it.each(["submission_archive_empty", "submission_archive_member_too_large", "submission_archive_member_unreadable", "submission_archive_member_unsafe_path", "source_mime_type_not_allowed"])("has specific bilingual guidance for %s", code => {
+    for (const locale of ["zh-CN", "en-US"] as const) {
+      const info = classifyRecoverableError(code, { locale });
+      expect(info.actionKind).toBe("reupload");
+      expect(info.description).not.toMatch(/请检查文件格式与内容后重新选择|Check the file format and content, then choose it again/);
+    }
+  });
+});
+
+
+it.each(["media_inspection_unavailable", "media_inspection_busy", "media_inspection_timeout", "pdf_processing_unavailable", "pdf_ocr_render_failed"])("does not blame the format for temporary processing failure %s", code => {
+  const info = classifyRecoverableError(code, { locale: "zh-CN" });
+  expect(info.actionKind).toBe("retry");
+  expect(info.description).toContain("这不代表文件格式不支持");
+});

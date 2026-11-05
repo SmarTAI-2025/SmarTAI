@@ -1,3 +1,4 @@
+import { canSaveSourceToLibrary, IMAGE_SOURCE_EXTENSIONS, librarySourceFormatHint, MAX_SOURCE_UPLOAD_BYTES, sourceUploadExtensions, sourceUploadFormatHint, sourceUploadValidationError } from "@/lib/sourceUploadPolicy";
 import { ManualReviewButton } from "@/components/tasks/ManualReviewButton";
 import { DemoSourceUpload } from "@/components/tasks/DemoSourceUpload";
 import { GenerationLanguageSelect } from "@/components/tasks/GenerationLanguageSelect";
@@ -53,10 +54,6 @@ import type {
 } from "@/types";
 
 const SOURCE_ROLES: PreparationSourceRole[] = ["problem", "reference_answer", "rubric", "programming_tests"];
-const DOCUMENT_SOURCE_EXTENSIONS = [".pdf", ".txt", ".md", ".markdown"] as const;
-const IMAGE_SOURCE_EXTENSIONS = new Set([
-  ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp",
-]);
 
 type AddProblemsRouteState = Record<string, never>;
 
@@ -267,7 +264,7 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
           recognitionOptions: source.role === "problem" && source.structureMode === "extract_from_source"
             ? parseQuestionRecognitionScope(source.recognitionPages ?? "", source.recognitionTargets ?? "").options
             : undefined,
-          saveToLibrary: source.sourceMode === "upload" && source.saveToLibrary,
+          saveToLibrary: source.sourceMode === "upload" && source.saveToLibrary && canSaveSourceToLibrary(source.file?.name ?? source.fileName),
           recognitionProviderId,
           enableMaterialOcr: source.enableMaterialOcr ?? false,
           replaceConfirmed,
@@ -457,7 +454,7 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
                 disabled={isBusy}
                 hasTaskCourse={Boolean(taskQuery.data?.course_id)}
                 acceptedExtensions={capabilitiesQuery.data?.source_roles[source.role]?.accepted_extensions}
-                maxFileBytes={capabilitiesQuery.data?.limits.max_file_bytes}
+                maxFileBytes={capabilitiesQuery.data?.limits.max_file_bytes ?? MAX_SOURCE_UPLOAD_BYTES}
                 locale={locale}
                 onUpdate={(patch) => updateSource(source.id, patch)}
                 onRemove={() => removeSource(source.id)}
@@ -697,22 +694,18 @@ function SourceEditor({
   const libraryLoading = libraryQuery.isFetching;
   const advertised = acceptedExtensions?.length
     ? acceptedExtensions.map((extension) => extension.toLowerCase())
-    : source.role === "programming_tests"
-      ? [...DOCUMENT_SOURCE_EXTENSIONS, ".json"]
-      : [...DOCUMENT_SOURCE_EXTENSIONS];
-  const accepted = source.role === "programming_tests"
-    ? advertised
-    : [...new Set([...advertised, ...IMAGE_SOURCE_EXTENSIONS])];
+    : sourceUploadExtensions(source.role);
+  const accepted = [...new Set([...advertised, ...IMAGE_SOURCE_EXTENSIONS])];
+  const canSaveToLibrary = !source.fileName || canSaveSourceToLibrary(source.file?.name ?? source.fileName);
   const accept = accepted.join(",");
   const needsFileReselection = source.sourceMode === "upload" && Boolean(source.fileName) && !source.file && !source.storedFileId;
 
   function selectFile(file?: File) {
     if (!file || disabled) return;
-    const validationError = sourceFileValidationError(
+    const validationError = sourceUploadValidationError(
       file,
-      source.role,
       accepted,
-      maxFileBytes,
+      maxFileBytes ?? MAX_SOURCE_UPLOAD_BYTES,
       locale,
     );
     if (validationError) {
@@ -787,10 +780,7 @@ function SourceEditor({
             <FileText aria-hidden="true" className="h-6 w-6 text-primary" />
             <p className="mt-1.5 max-w-full truncate text-sm font-semibold text-foreground">{needsFileReselection ? tx(locale, `待重新选择：${source.fileName}`, `Reselect: ${source.fileName}`) : source.file?.name || source.fileName || tx(locale, "拖入或选择文件", "Drop or choose a file")}</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {accept.replaceAll(".", "").toUpperCase().replaceAll(",", " / ")}
-              {maxFileBytes
-                ? tx(locale, ` · 单个文件最大 ${formatFileSize(maxFileBytes)}`, ` · Maximum ${formatFileSize(maxFileBytes)} per file`)
-                : ""}
+              {sourceUploadFormatHint(accepted, maxFileBytes ?? MAX_SOURCE_UPLOAD_BYTES, locale)}
             </p>
             <label className="mt-2 inline-flex h-9 cursor-pointer items-center rounded-[7px] border bg-card px-4 text-xs font-semibold text-foreground hover:bg-muted">
               {source.file || source.storedFileId ? tx(locale, "替换文件", "Replace File") : tx(locale, "选择文件", "Choose File")}
@@ -869,8 +859,9 @@ function SourceEditor({
 
         {source.sourceMode === "upload" ? (
           <label className="mt-3 inline-flex items-center gap-2 text-xs text-muted-foreground">
-            <input type="checkbox" checked={source.saveToLibrary} disabled={disabled} onChange={(event) => onUpdate({ saveToLibrary: event.target.checked })} className="h-4 w-4 rounded border-border accent-primary" />
+            <input type="checkbox" checked={source.saveToLibrary && canSaveToLibrary} disabled={disabled || !canSaveToLibrary} onChange={(event) => onUpdate({ saveToLibrary: event.target.checked })} className="h-4 w-4 rounded border-border accent-primary" />
             {tx(locale, "同时保存到课程资料库", "Also save to course library")}
+            {!canSaveToLibrary ? <span>{librarySourceFormatHint(locale)}</span> : null}
           </label>
         ) : null}
       </div>
@@ -960,54 +951,6 @@ function sourceSummary(source: SourceDraft, locale: string) {
   if (source.sourceMode === "library" && source.libraryMaterial) return source.libraryMaterial.filename;
   if (source.sourceMode === "inline_text" && source.inlineText?.trim()) return tx(locale, "自然语言评分标准", "Natural-language rubric");
   return roleMeta(source.role, locale).sourceLabel;
-}
-
-function sourceFileValidationError(
-  file: File,
-  role: PreparationSourceRole,
-  acceptedExtensions: string[],
-  maxFileBytes: number | undefined,
-  locale: string,
-) {
-  if (file.size === 0) {
-    return tx(locale, "文件为空（0 字节），请选择包含题目或资料内容的文件。", "This file is empty (0 bytes). Choose a file containing questions or supporting material.");
-  }
-  if (maxFileBytes && file.size > maxFileBytes) {
-    return tx(
-      locale,
-      `文件超过单个文件 ${formatFileSize(maxFileBytes)} 的上传上限，请选择更小的文件。`,
-      `This file exceeds the ${formatFileSize(maxFileBytes)} per-file upload limit. Choose a smaller file.`,
-    );
-  }
-  const normalizedName = file.name.trim().toLowerCase();
-  const extension = normalizedName.includes(".")
-    ? `.${normalizedName.split(".").pop()}`
-    : "";
-  if (extension && acceptedExtensions.includes(extension)) return null;
-
-  if (IMAGE_SOURCE_EXTENSIONS.has(extension)) {
-    if (role === "programming_tests") {
-      return tx(
-        locale,
-        "编程题测试资料不接受图片，请上传 PDF、TXT、Markdown 或 JSON。",
-        "Programming-test materials do not accept images. Upload PDF, TXT, Markdown, or JSON.",
-      );
-    }
-    return tx(
-      locale,
-      "当前模型配置未开放题目图片 OCR。请启用支持视觉识别的模型并刷新，或改用 PDF、TXT、Markdown。",
-      "Question-image OCR is not available with the current model configuration. Enable a vision-capable model and refresh, or use PDF, TXT, or Markdown.",
-    );
-  }
-
-  const formats = acceptedExtensions
-    .map((item) => item.replace(/^\./, "").toUpperCase())
-    .join(" / ");
-  return tx(
-    locale,
-    `不支持 ${extension ? extension.slice(1).toUpperCase() : "无扩展名"} 文件。当前可用格式：${formats}。`,
-    `${extension ? extension.slice(1).toUpperCase() : "Files without an extension are"} not supported. Available formats: ${formats}.`,
-  );
 }
 
 function roleMeta(role: PreparationSourceRole, locale: string) {

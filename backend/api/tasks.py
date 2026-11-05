@@ -433,7 +433,17 @@ async def extract_problems_endpoint(
         )
     if file is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "source_required"})
-    content = await file.read()
+    # Keep legacy format compatibility while sharing the preparation byte limit.
+    from backend.api.task_preparation import MAX_SOURCE_BYTES
+
+    content = await file.read(MAX_SOURCE_BYTES + 1)
+    if not content:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"code": "source_empty"})
+    if len(content) > MAX_SOURCE_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail={"code": "source_too_large", "max_bytes": MAX_SOURCE_BYTES},
+        )
     try:
         queued = task_facade.queue_task_problem_extraction(
             task_id=task_id, owner_id=current.id,

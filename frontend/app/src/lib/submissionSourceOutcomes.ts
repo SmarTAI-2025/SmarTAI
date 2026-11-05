@@ -355,6 +355,11 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   pdf_character_limit_exceeded: (locale) => fileCopy(locale, "PDF 文字量超过上限", "The PDF exceeds the text limit", "拆分 PDF 后重新上传。", "Split the PDF and upload again."),
   pdf_extraction_failed: (locale) => fileCopy(locale, "PDF 内容无法读取", "The PDF could not be read", "检查文件是否损坏或加密，并尝试重新导出。", "Check whether the file is damaged or encrypted, and export it again."),
   pdf_ocr_render_failed: (locale) => fileCopy(locale, "扫描 PDF 无法转成 OCR 页面", "The scanned PDF could not be rendered for OCR", "尝试重新导出 PDF，或逐页转为清晰图片。", "Export the PDF again, or convert each page to a clear image."),
+  submission_archive_processing_unavailable: (locale) => ({
+    title: tx(locale, "服务器暂时无法解压", "Archive processing is temporarily unavailable"),
+    description: tx(locale, "解压工具不可用或服务器临时资源不足，原文件已保留；这不代表压缩包已损坏。", "The extraction tool is unavailable or the server temporarily lacks resources. The original is preserved; this does not mean the archive is damaged."),
+    nextStep: tx(locale, "稍后重试；持续失败时联系管理员，或改用 ZIP 上传。", "Retry later. If it persists, contact an administrator or upload a ZIP instead."),
+  }),
   submission_archive_empty: (locale) => archiveCopy(locale, "压缩包中没有学生文件", "The archive contains no student files", "确认压缩包不是空的，且文件没有全部放在系统隐藏目录中。", "Make sure the archive is not empty and files are not all in hidden system folders."),
   submission_archive_invalid: (locale) => archiveCopy(locale, "压缩包损坏或结构不安全", "The archive is damaged or unsafe", "请重新打包为未加密的 ZIP 后上传。", "Create a new, unencrypted ZIP and upload it again."),
   submission_archive_limit_exceeded: (locale) => archiveCopy(locale, "压缩包超过安全上限", "The archive exceeds a safety limit", "减少文件数量、单文件大小或解压后总体积，再重新上传。", "Reduce file count, member size, or total expanded size, then upload again."),

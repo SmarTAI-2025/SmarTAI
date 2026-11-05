@@ -8,6 +8,7 @@ the tools/ namespace so it's discoverable as a "predefined tool" per docs §4.2.
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import io
 import json
@@ -735,7 +736,28 @@ def _read_archive_member(stream) -> bytes:
     return data
 
 
-def extract_raw_files_from_archive(
+def _archive_infrastructure_error(exc: Exception) -> bool:
+    if rarfile is not None and isinstance(exc, rarfile.RarCannotExec):
+        return True
+    return isinstance(exc, OSError) and (
+        isinstance(exc, PermissionError) or exc.errno in {
+            errno.ENOSPC, errno.EDQUOT, errno.EMFILE, errno.ENFILE,
+            errno.ENOMEM, errno.EIO, errno.EROFS,
+        }
+    )
+
+
+def extract_raw_files_from_archive(file_bytes: bytes, filename: str, *,
+                                   content_type: str | None = None) -> list[RawUploadSource]:
+    try:
+        return _extract_raw_files_from_archive(file_bytes, filename, content_type=content_type)
+    except Exception as exc:
+        if _archive_infrastructure_error(exc):
+            raise RuntimeError("submission_archive_processing_unavailable") from exc
+        raise
+
+
+def _extract_raw_files_from_archive(
     file_bytes: bytes,
     filename: str,
     *,
@@ -773,6 +795,13 @@ def extract_raw_files_from_archive(
         expanded_bytes += len(data)
         if expanded_bytes > SUBMISSION_ARCHIVE_MAX_EXPANDED_BYTES:
             raise _ArchiveLimitExceeded("submission_archive_limit_exceeded")
+        if not data:
+            sources.append(RawUploadSource(
+                filename=clean, content=data, content_type="application/octet-stream",
+                pre_error_code="submission_source_empty", failure_phase="source_read",
+                retryable=False,
+            ))
+            return
         inspection = inspect_upload_content(data, clean)
         sources.append(RawUploadSource(
             filename=clean,
@@ -792,7 +821,7 @@ def extract_raw_files_from_archive(
             content_type=container_inspection.content_type,
             pre_error_code=code,
             failure_phase="archive",
-            retryable=False,
+            retryable=code == "submission_archive_processing_unavailable",
         ))
 
     archive_suffix = lower.endswith(ARCHIVE_EXTENSIONS)
@@ -827,13 +856,15 @@ def extract_raw_files_from_archive(
                         add(clean, _read_archive_member(extracted))
                 except _ArchiveLimitExceeded:
                     raise
-                except Exception:
-                    add_failure(clean, index, "submission_archive_member_unreadable")
+                except Exception as exc:
+                    add_failure(clean, index, "submission_archive_processing_unavailable"
+                                if _archive_infrastructure_error(exc)
+                                else "submission_archive_member_unreadable")
         return sources
 
     if lower.endswith(".rar"):
         if rarfile is None:
-            raise ValueError("Processing .rar files requires rarfile")
+            raise RuntimeError("submission_archive_processing_unavailable")
         try:
             with rarfile.RarFile(file_in_memory, "r") as archive:
                 members = [
@@ -855,15 +886,19 @@ def extract_raw_files_from_archive(
                             add(clean, _read_archive_member(extracted))
                     except _ArchiveLimitExceeded:
                         raise
-                    except Exception:
-                        add_failure(clean, index, "submission_archive_member_unreadable")
-        except rarfile.UNRARError as exc:
+                    except Exception as exc:
+                        add_failure(clean, index, "submission_archive_processing_unavailable"
+                                    if _archive_infrastructure_error(exc)
+                                    else "submission_archive_member_unreadable")
+        except rarfile.Error as exc:
+            if _archive_infrastructure_error(exc):
+                raise RuntimeError("submission_archive_processing_unavailable") from exc
             raise RuntimeError("submission_archive_invalid") from exc
         return sources
 
     if lower.endswith(".7z"):
         if py7zr is None:
-            raise ValueError("Processing .7z files requires py7zr")
+            raise RuntimeError("submission_archive_processing_unavailable")
         with py7zr.SevenZipFile(file_in_memory, "r") as archive:
             members = [
                 item for item in archive.list()
@@ -893,8 +928,10 @@ def extract_raw_files_from_archive(
                         add(clean, _read_archive_member(handle))
                 except _ArchiveLimitExceeded:
                     raise
-                except Exception:
-                    add_failure(clean, index, "submission_archive_member_unreadable")
+                except Exception as exc:
+                    add_failure(clean, index, "submission_archive_processing_unavailable"
+                                if _archive_infrastructure_error(exc)
+                                else "submission_archive_member_unreadable")
         return sources
 
     if lower.endswith((".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2")):
@@ -921,8 +958,10 @@ def extract_raw_files_from_archive(
                         add(clean, _read_archive_member(extracted))
                 except _ArchiveLimitExceeded:
                     raise
-                except Exception:
-                    add_failure(clean, index, "submission_archive_member_unreadable")
+                except Exception as exc:
+                    add_failure(clean, index, "submission_archive_processing_unavailable"
+                                if _archive_infrastructure_error(exc)
+                                else "submission_archive_member_unreadable")
         return sources
 
     return [RawUploadSource(

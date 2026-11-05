@@ -18,6 +18,7 @@ from backend.tools.structured_llm import PermanentLLMError, RateLimitError, Stru
 
 
 SAFE_BACKGROUND_ERROR_CODES = frozenset({
+    "source_library_type_not_allowed",
     "saved_text_recovery_retired",
     "operation_cancelled",
     "workflow_failed",
@@ -129,6 +130,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
 }) | SAFE_SOURCE_REASON_CODES | RECOGNITION_ERROR_CODES
 
 RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
+    "submission_archive_processing_unavailable",
     "provider_capacity_unavailable",
     "provider_overloaded",
     "provider_timeout",

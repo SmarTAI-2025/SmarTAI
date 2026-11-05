@@ -230,3 +230,9 @@ it.each(["zh-CN", "en-US"] as const)("zero quota source reports no allowance rat
   expect(JSON.stringify(copy)).toContain(locale === "zh-CN" ? "当前无可用配额" : "No quota is currently available");
   expect(JSON.stringify(copy)).not.toMatch(/已用完|耗尽|exhausted|midnight/);
 });
+
+it.each(["zh-CN", "en-US"] as const)("explains retained archives on infrastructure failures (%s)", locale => {
+  const copy = getSubmissionSourceReasonCopy(source({ reason_code: "submission_archive_processing_unavailable", failure_phase: "archive", retryable: true }), locale);
+  expect(copy.description).toContain(locale === "zh-CN" ? "原文件已保留" : "original is preserved");
+  expect(copy.nextStep).toContain(locale === "zh-CN" ? "稍后重试" : "Retry later");
+});

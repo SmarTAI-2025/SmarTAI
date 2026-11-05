@@ -65,7 +65,7 @@ from backend.llm.registry import (
     ExpertRegistry,
     get_scoped_expert_registry,
 )
-from backend.knowledge.service import ingest_document
+from backend.knowledge.service import KNOWLEDGE_UPLOAD_EXTENSIONS, ingest_document
 from backend.models import (
     ProblemSourceDraft,
     QuestionScorePolicy,
@@ -696,6 +696,7 @@ async def preflight_problem_source(
             document_ocr_available=route.is_baidu_ocr,
             task_id=task_id,
         )
+        _validate_source_library_format(save=save_to_library, filename=descriptor["filename"])
         provisional_payload = {
             "filename": descriptor["filename"],
             "content_type": descriptor.get("content_type"),
@@ -1297,6 +1298,18 @@ async def _read_source(
     return text, descriptor
 
 
+def _validate_source_library_format(*, save: bool, filename: str) -> None:
+    """Reject unsupported library originals before OCR or persistent writes."""
+    if save is True and Path(filename).suffix.lower() not in KNOWLEDGE_UPLOAD_EXTENSIONS:
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={
+                "code": "source_library_type_not_allowed",
+                "accepted_extensions": sorted(KNOWLEDGE_UPLOAD_EXTENSIONS),
+            },
+        )
+
+
 async def _save_source_to_library(
     *, save: bool, descriptor: dict, owner_id: str, task_id: str,
     role: str, existing_material_id: str | None,
@@ -1317,6 +1330,7 @@ async def _save_source_to_library(
     if not isinstance(body, bytes) or not body:
         raise InvalidTransition("library_source_bytes_unavailable")
     filename = Path(str(descriptor.get("filename") or "source.txt")).name
+    _validate_source_library_format(save=save, filename=filename)
     document = await ingest_document(
         owner_id=owner_id,
         original_name=filename,
@@ -2711,6 +2725,8 @@ async def preflight_material_import(
         parser_fingerprint = stage_provider_configuration_fingerprint(owner_id=current.id, registry=registry, route=parser_route)
         if not isinstance(extraction_hint, str) or len(extraction_hint) > 2000:
             raise RecognitionError("recognition_request_invalid")
+        if file is not None:
+            _validate_source_library_format(save=save_to_library, filename=file.filename or "source")
         text, descriptor = await _read_source(
             file=file, library_material_id=library_material_id,
             inline_text=None, owner_id=current.id, registry=registry,

@@ -542,3 +542,65 @@ async def test_octet_stream_with_real_png_uses_detected_image_type():
     assert len(ocr.calls) == 1
     assert ocr.calls[0]["images"][0].media_type == "image/png"
     assert ocr.calls[0]["images"][0].label == "upload.bin"
+
+
+def test_empty_archive_member_is_empty_not_mismatch():
+    sources = extract_raw_files_from_archive(_zip_bytes({"healthy.txt": b"ok", "empty.pdf": b""}), "answers.zip")
+    assert sources[0].pre_error_code is None
+    assert sources[1].content == b""
+    assert sources[1].pre_error_code == "submission_source_empty"
+
+
+@pytest.mark.parametrize("error", [PermissionError("denied"), OSError(28, "disk full")])
+def test_archive_temp_storage_error_is_retryable(monkeypatch, error):
+    from backend.tools import file_processing
+    from backend.services.background_errors import classify_background_error, is_retryable_background_error
+    py7zr = pytest.importorskip("py7zr")
+    payload = io.BytesIO()
+    with py7zr.SevenZipFile(payload, "w") as archive:
+        archive.writestr(b"answer", "student.txt")
+    def fail_temp(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(file_processing.tempfile, "TemporaryDirectory", fail_temp)
+    with pytest.raises(RuntimeError, match="submission_archive_processing_unavailable") as captured:
+        extract_raw_files_from_archive(payload.getvalue(), "answers.7z")
+    code = classify_background_error(captured.value, "submission_archive_invalid")
+    assert code == "submission_archive_processing_unavailable"
+    assert is_retryable_background_error(code)
+
+
+def test_missing_rar_executable_preserves_healthy_member(monkeypatch):
+    from backend.tools import file_processing
+    rarfile = pytest.importorskip("rarfile")
+    from types import SimpleNamespace
+    class FakeRar:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def infolist(self):
+            return [SimpleNamespace(filename=name, file_size=2, is_dir=lambda: False) for name in ["healthy.txt", "broken.txt"]]
+        def open(self, item):
+            if item.filename == "broken.txt":
+                raise rarfile.RarCannotExec("missing executable")
+            return io.BytesIO(b"ok")
+    monkeypatch.setattr(rarfile, "RarFile", FakeRar)
+    monkeypatch.setattr(file_processing, "inspect_upload_content", lambda *a, **k: SimpleNamespace(content_type="application/vnd.rar", mismatch=False))
+    sources = extract_raw_files_from_archive(b"RAR", "answers.rar")
+    assert sources[0].content == b"ok"
+    assert sources[0].pre_error_code is None
+    assert sources[1].pre_error_code == "submission_archive_processing_unavailable"
+    assert sources[1].retryable is True
+
+
+def test_archive_member_disk_failure_preserves_healthy_source(monkeypatch):
+    archive = _zip_bytes({"healthy.txt": b"ok", "broken.txt": b"no"})
+    original_open = zipfile.ZipFile.open
+    def fail_one(self, name, mode="r", *args, **kwargs):
+        if getattr(name, "filename", name) == "broken.txt":
+            raise OSError(28, "disk full")
+        return original_open(self, name, mode, *args, **kwargs)
+    monkeypatch.setattr(zipfile.ZipFile, "open", fail_one)
+    sources = extract_raw_files_from_archive(archive, "answers.zip")
+    assert sources[0].content == b"ok"
+    assert sources[1].pre_error_code == "submission_archive_processing_unavailable"
+    assert sources[1].retryable is True

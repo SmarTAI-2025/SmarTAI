@@ -81,6 +81,7 @@ SAFE_SOURCE_REASON_CODES = RECOGNITION_ERROR_CODES | frozenset({
     "pdf_page_limit_exceeded",
     "pdf_processing_unavailable",
     "ocr_empty_result",
+    "submission_archive_processing_unavailable",
     "submission_archive_empty",
     "submission_archive_invalid",
     "submission_archive_limit_exceeded",

@@ -1,3 +1,4 @@
+import { DOCUMENT_SOURCE_EXTENSIONS, sourceUploadFormatHint, sourceUploadValidationError } from "@/lib/sourceUploadPolicy";
 import { userFacingError } from "@/lib/taskActionGuards";
 import { ManualReviewLoader } from "@/components/tasks/ManualReviewButton";
 import { LOW_CONFIDENCE_THRESHOLD } from "@/lib/confidencePolicy";
@@ -623,6 +624,12 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
     if (frontier) return;
     setKnowledgeError(null);
     setKnowledgeNotice(null);
+    const validationError = sourceUploadValidationError(file, DOCUMENT_SOURCE_EXTENSIONS, 64 * 1024 * 1024, locale);
+    if (validationError) {
+      setKnowledgeError(validationError);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
     try {
       await uploadDocument.mutateAsync({ taskId, file, saveToLibrary: !frontier && saveToLibrary });
       onChange("all_task_docs");
@@ -766,6 +773,7 @@ export function KnowledgeSection({ locale, taskId, value, onChange }: {
         />
       </div>
 
+      <p className="mt-2 text-xs text-muted-foreground">{sourceUploadFormatHint(DOCUMENT_SOURCE_EXTENSIONS, 64 * 1024 * 1024, locale)}</p>
       <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         {!frontier && <label className="inline-flex cursor-pointer items-center gap-2 text-[13px] font-medium text-foreground">
           <input type="checkbox" checked={saveToLibrary} onChange={(event) => setSaveToLibrary(event.target.checked)} className="h-4 w-4 rounded border-border accent-primary" />

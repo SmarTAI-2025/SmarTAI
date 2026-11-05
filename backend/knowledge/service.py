@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from starlette.concurrency import run_in_threadpool
+from fastapi import HTTPException
 
 from backend.db.file_repository import StoredFile, get_file
 from backend.db.knowledge_repository import KnowledgeDocument, get_document, request_document_deletion
@@ -21,16 +22,19 @@ async def ingest_document(*, owner_id: str, original_name: str, content: bytes,
     from backend.db.knowledge_ingestion_repository import queue_document
     from backend.knowledge.ingestion import frozen_configuration, KnowledgeIngestionWorker
 
-    if not content or len(content) > MAX_FILE_BYTES:
-        raise ValueError("Knowledge files must contain 1 byte to 64 MiB.")
+    if not content:
+        raise HTTPException(400, detail={"code": "source_empty"})
+    if len(content) > MAX_FILE_BYTES:
+        raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": MAX_FILE_BYTES})
     safe_name = Path(original_name).name or "knowledge.txt"
     if Path(safe_name).suffix.lower() not in KNOWLEDGE_UPLOAD_EXTENSIONS:
-        raise ValueError("Knowledge uploads support PDF, TXT and Markdown; convert other formats to PDF.")
+        raise HTTPException(415, detail={"code": "source_type_not_allowed",
+                                         "accepted_extensions": sorted(KNOWLEDGE_UPLOAD_EXTENSIONS)})
     media_type = inspect_upload_content(content, safe_name, content_type).content_type
     visual = media_type == "application/pdf"
     expected_pdf = Path(safe_name).suffix.lower() == ".pdf"
     if expected_pdf != visual or (not visual and not media_type.startswith("text/")):
-        raise ValueError("Knowledge file content does not match its format; re-export as PDF, TXT or Markdown.")
+        raise HTTPException(415, detail={"code": "source_content_type_not_allowed"})
     if registry is None and not native_only:
         from backend.services.task_facade import _registry_for_owner
         registry = await run_in_threadpool(_registry_for_owner, owner_id)
