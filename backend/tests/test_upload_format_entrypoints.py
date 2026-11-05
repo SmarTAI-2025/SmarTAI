@@ -116,9 +116,11 @@ async def test_knowledge_zip_renamed_pdf_rejected_before_storage(monkeypatch):
         pytest.fail("A disguised archive must not be persisted")
     monkeypatch.setattr(service, "persist_knowledge_upload", forbidden)
     body, _ = archive_bytes("zip", {"source.pdf": PDF})
-    with pytest.raises(ValueError, match="does not match its format"):
+    with pytest.raises(HTTPException) as caught:
         await service.ingest_document(owner_id="synthetic-owner", original_name="source.pdf", content=body,
                                       content_type="application/pdf", native_only=True)
+    assert caught.value.status_code == 415
+    assert caught.value.detail == {"code": "source_content_type_not_allowed"}
 
 
 def test_roster_csv_is_parsed_as_csv_even_with_pdf_marker_in_a_field():
@@ -148,11 +150,17 @@ async def test_compatibility_question_reader_checks_filename_and_mime_before_vis
         pytest.fail("Inconsistent file hints must be rejected before PDF/model work")
     monkeypatch.setattr(question_sources, "read_pdf_evidence", forbidden)
     registry = _RecoveryRegistry()
+    import fitz
+    document = fitz.open()
+    document.new_page()
+    body = document.tobytes()
+    document.close()
     with pytest.raises(HTTPException) as caught:
         await question_sources.read_question_source(owner_id="synthetic-owner", task_id="synthetic-task",
-            content=PDF, filename=name, content_type=mime, registry=registry,
+            content=body, filename=name, content_type=mime, registry=registry,
             route=StageProviderRoute(route_id="test-provider", kind="llm", provider=registry.provider))
-    assert caught.value.detail == {"code": "submission_source_content_type_mismatch"}
+    assert caught.value.status_code == 415
+    assert caught.value.detail == {"code": "source_content_type_not_allowed"}
 
 
 @pytest.mark.asyncio
