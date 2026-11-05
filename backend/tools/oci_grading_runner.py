@@ -122,7 +122,11 @@ def _store_slot(handle, container_name):
 
 async def _remove(runtime, name, env):
     try:
-        await _command([runtime, "rm", "--force", name], timeout=5, env=env)
+        # A cancelled grader must terminate the student immediately. Podman
+        # otherwise waits its container stop timeout, longer than our CLI
+        # deadline, and can leave the container stuck in Stopping.
+        stop = ["--time=0"] if Path(runtime).name == "podman" else []
+        await _command([runtime, "rm", "--force", *stop, name], timeout=10, env=env)
     except Exception:
         # --rm may already have removed it. Only a successful, exact absence
         # query counts as cleanup evidence; a daemon failure is not absence.
