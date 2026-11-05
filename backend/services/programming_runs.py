@@ -326,6 +326,12 @@ async def _execute_remaining(state, key, identity, code, cases, execute):
                 raise CheckpointWriteError("programming_partial_identity_invalid")
             rows[index] = TestResult(test=cases[index], **item)
     missing = [i for i in range(len(cases)) if i not in rows]
+    if not missing:
+        # Cancellation can arrive after the final compared case but before the
+        # aggregate is returned. Revalidate every row without dispatching an empty suite.
+        report = _report_from_rows([rows[i] for i in range(len(cases))])
+        _validate_report(report, cases)
+        return report
     subset = [cases[i] for i in missing]
 
     def restore_index(row, local):
@@ -351,7 +357,7 @@ async def _execute_remaining(state, key, identity, code, cases, execute):
         result = await execute(code, subset, **options)
         _validate_report(result, subset)
     except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError, asyncio.CancelledError):
-        if len(cases) - len(missing) < len(rows) < len(cases):
+        if len(cases) - len(missing) < len(rows):
             state.store(PARTIAL, key, {"identity": identity,
                                       "rows": [_persisted_row(rows[i]) for i in sorted(rows)]})
         raise

@@ -150,7 +150,8 @@ async def test_leased_checkpoint_reclaim_retry_fresh_and_corruption(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_failed_suite_retains_verified_cases_and_retries_only_the_missing_input(monkeypatch):
+@pytest.mark.parametrize("interruption", ["infrastructure_after_first", "cancel_after_last"])
+async def test_failed_suite_retains_verified_cases_and_retries_only_the_missing_input(monkeypatch, interruption):
     events = {}
     cp = NS(run_id="first", worker_id="worker", manifest={}, questions={}, revisions={"s": "rev"})
     monkeypatch.setattr(runs, "current_checkpoints", lambda: cp)
@@ -169,21 +170,27 @@ async def test_failed_suite_retains_verified_cases_and_retries_only_the_missing_
         report = observed(cases)
         for index, row in enumerate(report.results):
             row.case_id, row.case_index = f"case-{index + 1}", index
-            if len(batches) == 1 and index == 1:
+            if interruption == "infrastructure_after_first" and len(batches) == 1 and index == 1:
                 raise runs.IsolatedRunnerUnavailable()
             await on_case_complete(row)
+        if interruption == "cancel_after_last" and len(batches) == 1:
+            raise asyncio.CancelledError
         return report
 
     execute.supports_case_checkpoints = True
     with runs.programming_run(NS(), None):
-        first = await grade(problem, "s", AsyncMock(), execute)
-    assert first.status == "unavailable" and first.report is None
+        if interruption == "cancel_after_last":
+            with pytest.raises(asyncio.CancelledError):
+                await grade(problem, "s", AsyncMock(), execute)
+        else:
+            first = await grade(problem, "s", AsyncMock(), execute)
+            assert first.status == "unavailable" and first.report is None
     assert [e["message"] for e in events["first"]] == [runs.PREPARED, runs.PARTIAL]
     cp.manifest = {"programming_artifacts": runs.artifacts_for_retry("first", {}, "t")}
     cp.run_id = "retry"
     with runs.programming_run(NS(), None):
         retry = await grade(problem, "s", AsyncMock(), execute)
-    assert batches == [[[2, 3], [3, 4]], [[3, 4]]]
+    assert batches == ([[[2, 3], [3, 4]], [[3, 4]]] if interruption == "infrastructure_after_first" else [[[2, 3], [3, 4]]])
     assert retry.status == "executed" and retry.report.passed_count == 2
     assert [(r.case_index, r.case_id) for r in retry.report.results] == [(0, "case-1"), (1, "case-2")]
     assert [e["message"] for e in events["retry"]] == [runs.COMPLETED]
