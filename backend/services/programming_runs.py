@@ -432,7 +432,7 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
         if hints:
             cases = bind_programming_cases(problem.stem, cases, executable, entry_hint=hints.pop())
         else:
-            cases = bind_programming_cases(problem.stem, cases, executable)
+            cases = bind_programming_cases(problem.stem, cases, executable, validated_reference=_reference(problem))
     except ValueError:
         return ProgrammingEvidence("unavailable", code, [], reason="programming_mapping_invalid")
     cp = state.checkpoints

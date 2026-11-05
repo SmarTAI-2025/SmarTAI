@@ -55,7 +55,7 @@ from typing import List, Optional, Tuple, TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from backend.config import settings as _settings
-from backend.domain.grading_review import expert_disagreement_signal
+from backend.domain.grading_review import expert_disagreement_signal, programming_evidence_review_reason
 from backend.models import Correction, ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.llm.registry import ExpertRegistry
@@ -177,8 +177,7 @@ def _project_programming_result(correction: Correction) -> Correction:
         # The optional judge owns prose only. Always display verified counts.
         correction.comment += "\n\n" + evidence.safe_summary
     if evidence.requires_human_review:
-        reason = ("programming_ai_only" if evidence.execution_status == "executed"
-                  else "programming_code_review_only")
+        reason = programming_evidence_review_reason(evidence.model_dump())
         correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, reason]))
         correction.requires_human_review = True
     return correction

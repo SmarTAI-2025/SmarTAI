@@ -418,7 +418,8 @@ def _script_io(body):
     return False
 
 
-def bind_programming_cases(stem: str, cases, code: str, *, entry_hint: str | None = None) -> list[TestCase]:
+def bind_programming_cases(stem: str, cases, code: str, *, entry_hint: str | None = None,
+                           validated_reference: str | None = None) -> list[TestCase]:
     """Resolve unspecified interfaces per submission, never fix an explicit student error."""
     prepared = adapt_programming_cases(stem, cases)
     if not prepared or required_function_name(stem):
@@ -434,6 +435,12 @@ def bind_programming_cases(stem: str, cases, code: str, *, entry_hint: str | Non
     try:
         body = ast.parse(code).body
     except (SyntaxError, ValueError, RecursionError) as exc:
+        # The teacher's reference already passed this suite. Its stdin contract lets
+        # the runner diagnose a syntax error even when the student program cannot parse.
+        if isinstance(exc, SyntaxError) and validated_reference and not function_mode and entry_hint is None:
+            reference_cases = bind_programming_cases(stem, prepared, validated_reference)
+            if all(case.io_mode == "stdin" for case in reference_cases):
+                return reference_cases
         raise ProgrammingCaseError("Cannot identify the interface of this submission.") from exc
     candidates = [node for node in body if isinstance(node, ast.FunctionDef)]
     script_io = _script_io(body)

@@ -156,7 +156,7 @@ async def test_selected_experts_share_one_execution_and_weighted_real_zero(monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["ai_only_confirm", "ai_only_edit", "code_only", "teacher_zero", "platform", "configuration", "no_submission"])
+@pytest.mark.parametrize("scenario", ["ai_only_confirm", "ai_only_edit", "code_only", "entry_only", "teacher_zero", "platform", "configuration", "no_submission"])
 async def test_run_review_finalization_and_release(monkeypatch, scenario):
     from backend.config import settings
     from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
@@ -175,18 +175,24 @@ async def test_run_review_finalization_and_release(monkeypatch, scenario):
     cases = [{"input":"4", "expected_output":"4", "source":source}]
     if scenario == "configuration":
         cases += [{"input":"4", "expected_output":"5", "source":"teacher"}]
+    stem = "Read stdin and print the input."
+    if scenario == "entry_only":
+        stem = "Implement def add(a,b): return the sum."
+        cases = [{"function_name": "add", "function_args": [2, 3], "expected_return": "5", "source": "teacher"}]
     q = assignment_repository.add_question(assignment.id, teacher_id=teacher, q_id="q1", order_index=0,
-        type="编程题", stem="Read stdin and print the input.", criterion="Exact output.", test_cases=cases)
+        type="编程题", stem=stem, criterion="Exact output.", test_cases=cases)
     assignment_repository.publish(assignment_id=assignment.id, teacher_id=teacher, expected_version=1)
     sub = submission_repository.create_submission(assignment_id=assignment.id, student_id=student)
     code = "" if scenario == "no_submission" else "print(0)"
+    if scenario == "entry_only":
+        code = "def add(pair): return pair[0] + pair[1]"
     if scenario == "code_only":
         code = "#include <iostream>\nint main(){return 0;}"
     submission_repository.add_revision(submission_id=sub.id, student_id=student, source="online",
         answers=[{"question_id":q.id, "q_id":q.q_id, "type":q.type, "content":code}])
     if scenario == "platform":
         monkeypatch.setattr(programming, "run_sandbox", AsyncMock(side_effect=IsolatedRunnerUnavailable()))
-    ai_score = 7 if scenario in {"ai_only_edit", "code_only"} else 0
+    ai_score = 7 if scenario in {"ai_only_edit", "code_only", "entry_only"} else 0
     route = fixed_provider(response(award(ai_score)))
     registry = SimpleNamespace(count=lambda: 1, list_available=lambda: [route], pick_default=lambda: route)
     run = grading_runs.create_run(teacher_id=teacher, assignment_id=assignment.id)
@@ -213,8 +219,10 @@ async def test_run_review_finalization_and_release(monkeypatch, scenario):
         with pytest.raises(ResultNotReleasable):
             grading_runs.release(teacher_id=teacher, run_id=run.id)
         assert not grading_runs.student_results(student_id=student, assignment_id=assignment.id)
-    elif scenario in {"ai_only_confirm", "ai_only_edit", "code_only"}:
-        reason = "programming_code_review_only" if scenario == "code_only" else "programming_ai_only"
+    elif scenario in {"ai_only_confirm", "ai_only_edit", "code_only", "entry_only"}:
+        reason = {"code_only": "programming_code_review_only", "entry_only": "programming_interface_only"}.get(scenario, "programming_ai_only")
+        if scenario == "entry_only":
+            assert evidence["primary_reason"] == "signature_mismatch" and evidence["teacher_tests"]["total"] == 1
         assert public["provisional_score"] == public["score"] == ai_score
         assert evidence["score_status"] == "provisional" and reason in row.initial_review_reasons
 

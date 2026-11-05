@@ -29,7 +29,16 @@ def number(value: Any) -> float | None:
     return float(value) if math.isfinite(value) else None
 
 
-PROGRAMMING_REVIEW_REASONS = ("programming_ai_only", "programming_code_review_only")
+PROGRAMMING_REVIEW_REASONS = ("programming_ai_only", "programming_code_review_only", "programming_interface_only")
+
+
+def programming_evidence_review_reason(evidence: dict) -> str:
+    if evidence.get("execution_status") != "executed":
+        return "programming_code_review_only"
+    if ((evidence.get("teacher_tests") or {}).get("total", 0) > 0
+            and evidence.get("primary_reason") in {"target_function_missing", "signature_mismatch"}):
+        return "programming_interface_only"
+    return "programming_ai_only"
 
 
 def programming_review_reason(reasons, experts) -> str | None:
@@ -42,8 +51,7 @@ def programming_review_reason(reasons, experts) -> str | None:
         if (isinstance(evidence, dict) and not expert.get("error_kind")
                 and evidence.get("contract") == "smartai.programming_evidence"
                 and evidence.get("score_status") == "provisional"):
-            return ("programming_ai_only" if evidence.get("execution_status") == "executed"
-                    else "programming_code_review_only")
+            return programming_evidence_review_reason(evidence)
     return None
 
 
