@@ -426,3 +426,17 @@ def test_programming_total_is_computed_from_valid_awards_without_model_arithmeti
                     {**payload, "steps": [{**payload["steps"][0], "score": 21}]}):
         with pytest.raises(StructuredOutputInvalidError):
             programming._validate_awards(programming.ProgrammingGradingOutput.model_validate(invalid), 20)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("points", [7, 10])
+async def test_public_programming_comment_matches_awards(points):
+    item = {"step_no": 1, "desc": "Concrete rubric observation.", "score": points,
+            "max_points": 10, "is_correct": points == 10}
+    provider = fixed_provider(response({"steps": [item], "max_score": 10, "confidence": .9,
+                                       "comment": "Contradicts the awarded steps."}))
+    problem = _make_problem(stem="Read stdin and print the input.", test_cases=[TestCase(input="5", expected_output="5")])
+    vote = await programming.ProgrammingSkill(provider).grade(problem, _make_answer("print(input())"))
+    assert vote.score == points and vote.steps[0].desc == item["desc"]
+    assert "Contradicts" not in vote.comment and "passed" in vote.comment
+    assert ("All rubric criteria received full credit." if points == 10 else item["desc"]) in vote.comment

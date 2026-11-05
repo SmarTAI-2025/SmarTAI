@@ -42,7 +42,7 @@ class ProgrammingGradingOutput(BaseModel):
     score: float = Field(default_factory=_sum_step_awards, ge=0, allow_inf_nan=False, validate_default=True)
     max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False)
     confidence: GradingConfidence = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
-    comment: str
+    comment: str = ""
     logs: str | None = ""
 
 
@@ -126,6 +126,8 @@ def _validate_awards(result, maximum):
                 raise _format_error("Distinguish available points from earned points. Mark full credit correct; partial or zero credit is not full credit.")
         if sum(Decimal(str(step.max_points)) for step in result.steps) != Decimal(str(maximum)):
             raise _format_error("The available points across distinct rubric criteria must add up to the question maximum.")
+    elif "comment" not in result.model_fields_set:
+        raise _format_error("Include a comment or explain each award with its available points.")
     total = Decimal(str(result.score))
     steps = sum((Decimal(str(step.score)) for step in result.steps), Decimal(0))
     difference = abs(steps - total)
@@ -292,9 +294,19 @@ class ProgrammingSkill(GradingSkill):
                 if (not evidence.teacher_tests.total and evidence.generated_tests.total >= 3
                         and evidence.generated_tests.passed == 0):
                     confidence = min(confidence, 0.5)
+                # A second, freely generated summary can contradict a validated
+                # award and the executed cases. Present the same rubric judgments
+                # in the summary and detail views when the provider supplied them.
+                comment = result.comment
+                if isinstance(result, ProgrammingGradingOutput) and all(step.max_points is not None for step in result.steps):
+                    deductions = [step.desc for step in result.steps if not step.is_correct]
+                    comment = "\n".join(deductions) if deductions else (
+                        "按本题评分标准，各项均获满分。" if self.language == "zh"
+                        else "All rubric criteria received full credit."
+                    )
                 vote = normalize_expert_result(ExpertResult(
                     provider=self.provider.provider_id, score=result.score, max_score=result.max_score,
-                    confidence=confidence, comment=f"{result.comment}\n\n{evidence.safe_summary}",
+                    confidence=confidence, comment=f"{comment}\n\n{evidence.safe_summary}",
                     steps=result.steps, raw_output=raw.content, duration_ms=raw.duration_ms,
                     programming_evidence=evidence, knowledge_citations=kb_tool.citations(chunks),
                 ), problem.max_score)
