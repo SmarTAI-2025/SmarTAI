@@ -463,8 +463,9 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
 async def test_submission_queue_persists_archive_and_has_no_request_task():
     owner_id, task_id = _seed_task(with_question=True)
     background = _BackgroundTasks()
+    content = _archive_bytes()
     upload = UploadFile(
-        file=io.BytesIO(b"archive-bytes"), filename="answers.zip",
+        file=io.BytesIO(content), filename="answers.zip",
         headers=Headers({"content-type": "application/zip"}),
     )
 
@@ -497,7 +498,7 @@ async def test_submission_queue_persists_archive_and_has_no_request_task():
     assert stored is not None
     assert stored.id in operation.artifact_refs
     with get_storage().open(stored.storage_key) as stream:
-        assert stream.read() == b"archive-bytes"
+        assert stream.read() == content
 
 
 @pytest.mark.asyncio
