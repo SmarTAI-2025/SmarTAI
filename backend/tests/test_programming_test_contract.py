@@ -188,6 +188,11 @@ async def test_mounted_editor_persists_derived_fields_and_rolls_back_invalid_bat
         "expected_workflow_revision":persisted["workflow_revision"],
         "test_cases":[submitted[0], {"function_name":"fib","function_args":"not-a-list","expected_return":1}]})
     assert invalid.status_code == 422 and invalid.json()["error"]["code"] == "invalid_programming_test_cases"
+    assert invalid.json()["error"]["details"] == {"case_number": 2, "issue": "configuration"}
+    duplicate = client.put(url, json={"test_cases": [
+        {"input":"1", "expected_output":"1"}, {"input":"1", "expected_output":"2"}]})
+    assert duplicate.status_code == 422
+    assert duplicate.json()["error"]["details"] == {"case_number": 2, "issue": "conflicting_expectations"}
     assert get()["problem_data"] == persisted["problem_data"]
     assert get()["workflow_revision"] == persisted["workflow_revision"]
     assert assignment_repository.list_questions(task, teacher_id=owner)[0].version == question.version

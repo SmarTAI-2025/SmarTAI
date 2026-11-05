@@ -16,7 +16,7 @@ from backend.skills.base import (
     GradingSkill, authoritative_score_instruction, build_system_prompt, classify_skill_error,
     format_deterministic_feedback, normalize_expert_result, normalize_score_scale, register_skill,
 )
-from backend.skills.programming_evidence import describe_run, unavailable
+from backend.skills.programming_evidence import describe_run, unavailable, ungraded_message
 from backend.tools import knowledge as kb_tool
 from backend.tools.code_interpreter import run_sandbox
 from backend.tools.structured_llm import (
@@ -299,8 +299,7 @@ class ProgrammingSkill(GradingSkill):
                     evidence = evidence.model_copy(update={
                         "score_status": "unavailable", "primary_reason": kind, "requires_human_review": True,
                     })
-                    label = "未评分" if self.language == "zh" else "Ungraded"
-                    evidence.safe_summary = f"{label} ({kind}). {evidence.safe_summary}"
+                    evidence.safe_summary = f"{ungraded_message(kind, self.language)} {evidence.safe_summary}"
                 result = self._blank_result(problem.q_id, problem.max_score, evidence.safe_summary, error_kind=kind)
                 result.programming_evidence = evidence
                 return result

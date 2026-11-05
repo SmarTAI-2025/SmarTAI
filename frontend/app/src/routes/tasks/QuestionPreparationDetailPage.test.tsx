@@ -1,4 +1,5 @@
 import "fake-indexeddb/auto";
+import { APIError } from "@/api/client";
 import { clearPageDrafts, listPageDrafts } from "@/lib/pageDraftStore";
 import { PageDraftSession } from "@/hooks/useDraftProtection";
 import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
@@ -658,4 +659,24 @@ it("formal field save clears only its explicit snapshot; failure preserves the o
   await user.click(question.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(question.getByText(/保存失败/)).toBeInTheDocument());
   expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:reference_answer"]);
+});
+
+it.each([
+  ["zh-CN", "测试样例", "修改", "保存测试样例", "样例 1 未保存。同一输入有不同的预期结果，请核对。"],
+  ["en-US", "Test Cases", "Edit", "Save Test Cases", "Test case 1 was not saved. The same input has different expected results. Check the expected values."],
+])("keeps a rejected programming case editable and explains the conflicting expectation (%s)", async (locale, title, edit, save, message) => {
+  testState.locale = locale;
+  renderPage("/tasks/task-1/questions/Q3/answer");
+  const question = within(document.querySelector<HTMLElement>('article[data-question-id="Q3"]')!);
+  const section = within(question.getByText(title, { selector: "h4" }).closest("section")!);
+  await userEvent.click(section.getByRole("button", { name: edit }));
+  const input = section.getAllByRole("textbox").find(node => (node as HTMLTextAreaElement).value === "0")!;
+  fireEvent.change(input, { target: { value: "1" } });
+  mutateAsync.mockRejectedValueOnce(new APIError(422, "internal diagnostic", {
+    error: { code: "invalid_programming_test_cases", details: { case_number: 1, issue: "conflicting_expectations" } },
+  }));
+  await userEvent.click(section.getByRole("button", { name: save }));
+  expect(await section.findByText(message)).toBeVisible();
+  expect(input).toHaveValue("1");
+  expect(section.queryByText(/invalid_programming_test_cases|internal diagnostic/)).toBeNull();
 });

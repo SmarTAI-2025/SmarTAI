@@ -843,6 +843,13 @@ def _grading_failure_code(run) -> str | None:
     )
     if "programming_execution_unavailable" in kinds or legacy_execution_unavailable:
         return "programming_execution_unavailable"
+    material_errors = {"programming_case_configuration_invalid", "programming_conflicting_expectations",
+                       "programming_cases_unavailable", "programming_reference_conflict", "programming_no_cases"}
+    if missing and all(result.ai_expert_results and all(
+        isinstance(expert, dict) and expert.get("error_kind") in material_errors
+        for expert in result.ai_expert_results
+    ) for result in missing):
+        return "programming_test_material_needs_review"
     if "quota_exhausted" in kinds:
         return "provider_rate_limited"
     if "parse_failed" in kinds:
@@ -936,7 +943,8 @@ def _validated_test_cases(stem, question_type, cases, *, edited=False):
         return [case.model_dump(mode="json", exclude_unset=True) for case in
                 adapt_programming_cases(stem or "", cases, edited=edited)]
     except ProgrammingCaseError as exc:
-        raise ValidationError(str(exc), code="invalid_programming_test_cases") from exc
+        raise ValidationError(str(exc), code="invalid_programming_test_cases",
+                              details={"case_number": exc.case_number, "issue": exc.issue}) from exc
 
 
 def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> dict:

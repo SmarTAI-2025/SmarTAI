@@ -15,6 +15,11 @@ from backend.models import TestCase
 class ProgrammingCaseError(ValueError):
     """The supplied materials do not define one executable test contract."""
 
+    def __init__(self, message, *, issue="configuration", case_number=None):
+        super().__init__(message)
+        self.issue = issue
+        self.case_number = case_number
+
 
 # Only declaration/requirement phrases establish a name. A call appearing in
 # an example, or an arbitrary helper in a submission, is not an entry contract.
@@ -144,7 +149,7 @@ def _json(value):
     try:
         return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True)
     except (TypeError, ValueError, RecursionError) as exc:
-        raise ProgrammingCaseError("Arguments must be finite JSON values.") from exc
+        raise ProgrammingCaseError("Arguments must be finite JSON values.", issue="arguments") from exc
 
 
 def _literal(node):
@@ -164,7 +169,7 @@ def _literal(node):
         return result
     value = ast.literal_eval(node)
     if type(value) not in (type(None), str, bool, int, float):
-        raise ProgrammingCaseError("Unsupported function argument.")
+        raise ProgrammingCaseError("Unsupported function argument.", issue="arguments")
     _json(value)
     return value
 
@@ -189,13 +194,13 @@ def _arguments(text, signature, *, vector=False):
         # An explicit JSON string or a single plain word is one scalar.
         if re.fullmatch(r"[\w-]+", value) and value.isidentifier() and not keyword.iskeyword(value):
             return [value], {}
-        raise ProgrammingCaseError("Use literal function arguments or named keyword arguments.") from exc
+        raise ProgrammingCaseError("Use literal function arguments or named keyword arguments.", issue="arguments") from exc
 
     if not kwargs and len(args) == 1:
         item = args[0]
         if vector and isinstance(item, dict) and set(item) == {"args", "kwargs"}:
             if not isinstance(item["args"], list) or not isinstance(item["kwargs"], dict):
-                raise ProgrammingCaseError("Invalid args/kwargs object.")
+                raise ProgrammingCaseError("Invalid args/kwargs object.", issue="arguments")
             return item["args"], item["kwargs"]
         if isinstance(item, list):
             if vector:
@@ -212,14 +217,14 @@ def _arguments(text, signature, *, vector=False):
 
 def _check_call(args, kwargs, signature):
     if json.loads(_json([args, kwargs])) != [args, kwargs]:
-        raise ProgrammingCaseError("Arguments must round-trip as JSON values.")
+        raise ProgrammingCaseError("Arguments must round-trip as JSON values.", issue="arguments")
     if any(not k.isidentifier() or keyword.iskeyword(k) for k in kwargs):
-        raise ProgrammingCaseError("Invalid keyword argument name.")
+        raise ProgrammingCaseError("Invalid keyword argument name.", issue="arguments")
     if signature is not None:
         try:
             signature.bind(*args, **kwargs)
         except TypeError as exc:
-            raise ProgrammingCaseError("The test arguments do not match the required signature.") from exc
+            raise ProgrammingCaseError("The test arguments do not match the required signature.", issue="arguments") from exc
 
 
 def _expectation(text, comparison, *, function):
@@ -228,12 +233,12 @@ def _expectation(text, comparison, *, function):
             if not Decimal(text.strip()).is_finite():
                 raise ValueError
         except (ValueError, InvalidOperation) as exc:
-            raise ProgrammingCaseError("Numeric comparison needs a finite expected number.") from exc
+            raise ProgrammingCaseError("Numeric comparison needs a finite expected number.", issue="expected_result") from exc
     elif comparison == "json":
         try:
             _json(json.loads(text))
         except (ValueError, RecursionError) as exc:
-            raise ProgrammingCaseError("JSON comparison needs a valid finite JSON expectation.") from exc
+            raise ProgrammingCaseError("JSON comparison needs a valid finite JSON expectation.", issue="expected_result") from exc
     elif function:
         if comparison in {"trimmed", "tokens"}:
             raise ProgrammingCaseError("This comparison requires standard output.")
@@ -245,7 +250,7 @@ def _expectation(text, comparison, *, function):
                 _json(value)
             except (ValueError, RecursionError):
                 if text.lstrip().startswith(("[", "{", "'", '"')):
-                    raise ProgrammingCaseError("Invalid literal expected return.")
+                    raise ProgrammingCaseError("Invalid literal expected return.", issue="expected_result")
                 value = text
             return repr(value)
     return text
@@ -269,11 +274,11 @@ def _adapt_case(case, name, signature, *, function_mode, stdin_mode, edited):
     pair = _EXPECTED_PAIR.fullmatch(text)
     if pair:
         if expected is not None and expected != pair[2]:
-            raise ProgrammingCaseError("The example contains two different expectations.")
+            raise ProgrammingCaseError("The example contains two different expectations.", issue="expected_result")
         text, expected = pair.groups()
     if not (function_mode or is_function):
         if expected is None:
-            raise ProgrammingCaseError("The test needs an explicit expected output.")
+            raise ProgrammingCaseError("The test needs an explicit expected output.", issue="expected_result")
         _expectation(expected, case.comparison, function=False)
         return case.model_copy(update={"expected_output": expected}) if pair else case
 
@@ -281,7 +286,7 @@ def _adapt_case(case, name, signature, *, function_mode, stdin_mode, edited):
     if not structured and not text.strip() and (
         "input" not in fields or (case.function_name and signature is None)
     ):
-        raise ProgrammingCaseError("The function test needs explicit arguments (use [] for none).")
+        raise ProgrammingCaseError("The function test needs explicit arguments (use [] for none).", issue="arguments")
     # Structured-only historical rows have empty display placeholders. Fill
     # those once for the existing editor. On save, its submitted fields win.
     if not structured or text or (edited and "input" in fields):
@@ -296,11 +301,11 @@ def _adapt_case(case, name, signature, *, function_mode, stdin_mode, edited):
                 if len(parsed_args) != 1 or not isinstance(parsed_args[0], list):
                     parsed_args, parsed_kwargs = natural
             elif not edited:
-                raise ProgrammingCaseError("The displayed input conflicts with the stored arguments.")
+                raise ProgrammingCaseError("The displayed input conflicts with the stored arguments.", issue="arguments")
         args, kwargs = parsed_args, parsed_kwargs
     _check_call(args, kwargs, signature)
     if structured and not edited and case.expected_return is None and not text and not expected:
-        raise ProgrammingCaseError("The structured test needs an explicit expected return.")
+        raise ProgrammingCaseError("The structured test needs an explicit expected return.", issue="expected_result")
     displayed = expected
     if not edited and case.expected_return is not None and not expected:
         # Historical structured cases serialized empty text placeholders.
@@ -308,19 +313,19 @@ def _adapt_case(case, name, signature, *, function_mode, stdin_mode, edited):
     if displayed is None:
         displayed = case.expected_return
     if displayed is None:
-        raise ProgrammingCaseError("The function test needs an explicit expected return.")
+        raise ProgrammingCaseError("The function test needs an explicit expected return.", issue="expected_result")
     result = _expectation(displayed, case.comparison, function=True)
     if not edited and case.expected_return is not None and result != _expectation(
         case.expected_return, case.comparison, function=True
     ):
-        raise ProgrammingCaseError("The displayed expectation conflicts with the stored return.")
+        raise ProgrammingCaseError("The displayed expectation conflicts with the stored return.", issue="expected_result")
     updates = dict(io_mode="function", expected_return=result)
     if not structured and signature is None and text.strip().startswith("["):
         # A plain list can mean f(xs) or f(a,b). With no required signature
         # keep that original input until binding; never use a student's
         # signature to alter a teacher-mandated entry.
         if name or case.function_name:
-            raise ProgrammingCaseError("Specify the argument vector for this named function.")
+            raise ProgrammingCaseError("Specify the argument vector for this named function.", issue="arguments")
     else:
         updates["function_args"] = args
     if name or case.function_name:
@@ -337,7 +342,7 @@ def _adapt_case(case, name, signature, *, function_mode, stdin_mode, edited):
 def adapt_programming_cases(stem: str, cases, *, edited=False) -> list[TestCase]:
     """Validate and preserve a complete collection without consulting student code."""
     if not isinstance(cases, Sequence) or isinstance(cases, (str, bytes)) or len(cases) > 50:
-        raise ProgrammingCaseError("Expected a list of at most 50 test cases.")
+        raise ProgrammingCaseError("Expected a list of at most 50 test cases.", issue="case_limit")
     if not cases:
         return []
     names = required_function_names(stem)
@@ -367,10 +372,14 @@ def adapt_programming_cases(stem: str, cases, *, edited=False) -> list[TestCase]
             key = _json(identity)
             expected = case.expected_return if case.io_mode == "function" else case.expected_output
             if key in outputs and outputs[key] != expected:
-                raise ProgrammingCaseError("The same input has conflicting expected results.")
+                raise ProgrammingCaseError("The same input has conflicting expected results.", issue="conflicting_expectations")
             outputs[key] = expected
         except (ValueError, RecursionError) as exc:
-            raise ProgrammingCaseError(f"Test case {i}: {exc if isinstance(exc, ProgrammingCaseError) else 'Invalid case fields.'}") from exc
+            message = str(exc) if isinstance(exc, ProgrammingCaseError) else "Invalid case fields."
+            raise ProgrammingCaseError(
+                f"Test case {i}: {message}", case_number=i,
+                issue=exc.issue if isinstance(exc, ProgrammingCaseError) else "configuration",
+            ) from exc
         result.append(case)
     if len({c.io_mode for c in result}) > 1 or len({c.function_name for c in result if c.function_name}) > 1:
         raise ProgrammingCaseError("The tests specify conflicting execution interfaces.")

@@ -669,6 +669,20 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "programming_test_material_needs_review") {
+    return {
+      title: tx(locale, "编程题测试资料需要核对", "Programming test materials need review"),
+      description: tx(locale,
+        "请核对题目的输入、预期结果和参考程序。可在复核中查看未评分原因并补齐分数。",
+        "Check the test inputs, expected results and reference program. Open review to see why each item was ungraded and enter a score."),
+      actionLabel: tx(locale, "查看进度与恢复", "View progress and recovery"),
+      actionKind: "refresh",
+      actionHref: taskId ? `/tasks/${taskId}/grading/progress` : undefined,
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
   if (code === "programming_execution_unavailable") {
     return {
       title: tx(locale, "编程题测试暂不可用", "Programming tests are unavailable"),
