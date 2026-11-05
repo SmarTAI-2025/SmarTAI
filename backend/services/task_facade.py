@@ -2172,6 +2172,7 @@ async def run_task_problem_extraction(
             registry=registry, extraction_hint=str((extraction_options or {}).get("extraction_hint") or ""),
             options=(extraction_options or {}).get("recognition_options"), reporter=reporter,
             text_reader=extract_text_from_upload,
+            media_slot_timeout_seconds=None,
         )
         text = read.text
         problem_data: dict[str, dict] = {}
@@ -3230,6 +3231,7 @@ async def run_task_submission_parsing(
                         timeout_profile=frozen.get("recognition_timeout_profile"),
                         execution_scope=frozen.get("recognition_execution_scope"),
                         allow_partial=True,
+                        media_slot_timeout_seconds=None,
                         on_pages=lambda pages: on_saved_pages(raw, stored_file_id, pages),
                     )
                 except DomainError as exc:

@@ -2374,6 +2374,7 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
             timeout_profile=(operation.payload or {}).get("recognition_timeout_profile"),
             execution_scope=(operation.payload or {}).get("recognition_execution_scope"),
             allow_partial=allow_partial,
+            media_slot_timeout_seconds=None,
             on_pages=on_pages,
         )
         if not result.text.strip():

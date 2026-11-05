@@ -29,13 +29,16 @@ async def validate_media_content(
     max_pdf_pages: int | None = None,
     timeout_seconds: float = 10,
     wait_for_slot: bool = False,
+    slot_timeout_seconds: float | None = 10,
 ) -> dict:
     """Verify actual decoding, not filename/MIME claims; never call a provider.
 
     Call only for a PDF/image candidate. Text and archives use their own
     decoders. The returned MIME is verified against the decoded media format.
-    Batch callers may wait for the bounded CPU pool instead of failing busy;
-    queue time and decoder execution each have their own timeout.
+    HTTP callers retain a short admission limit. Already-queued jobs may set
+    slot_timeout_seconds=None and rely on their owning task's cancellation or
+    deadline while waiting. The decoder's timeout starts only after admission;
+    waiting never launches a worker or holds another worker's slot.
     """
     from backend.tools import file_processing
     from backend.tools.pdf_evidence import _exchange
@@ -50,14 +53,18 @@ async def validate_media_content(
     if (type(timeout_seconds) not in {float, int} or not math.isfinite(timeout_seconds)
             or not 0 < timeout_seconds <= 30 or
             (max_pdf_pages is not None and (type(max_pdf_pages) is not int or max_pdf_pages < 1))
-            or type(wait_for_slot) is not bool):
+            or type(wait_for_slot) is not bool
+            or (slot_timeout_seconds is not None and (
+                type(slot_timeout_seconds) not in {float, int}
+                or not math.isfinite(slot_timeout_seconds) or slot_timeout_seconds <= 0))):
         raise ValueError("Invalid media validation limits")
     if file_processing.fitz is None:
         raise HTTPException(503, detail={"code": "media_inspection_unavailable"})
     slots = file_processing._PDF_EXTRACTION_SLOTS
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    deadline = (asyncio.get_running_loop().time() + slot_timeout_seconds
+                if slot_timeout_seconds is not None else None)
     while not slots.acquire(blocking=False):
-        if not wait_for_slot or asyncio.get_running_loop().time() >= deadline:
+        if not wait_for_slot or (deadline is not None and asyncio.get_running_loop().time() >= deadline):
             raise HTTPException(429, detail={"code": "media_inspection_busy"})
         # No slot is held while waiting, so cancellation needs no cleanup.
         await asyncio.sleep(0.02)

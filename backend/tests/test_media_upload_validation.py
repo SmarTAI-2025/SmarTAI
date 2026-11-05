@@ -221,7 +221,9 @@ async def test_cancellation_while_queued_does_not_release_another_workers_slot(m
     async def forbidden(*_args, **_kwargs):
         pytest.fail("queued validation must not launch a worker")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", forbidden)
-    task = asyncio.create_task(validate_media_content(b"%PDF-1.7", "application/pdf", wait_for_slot=True))
+    task = asyncio.create_task(validate_media_content(
+        b"%PDF-1.7", "application/pdf", wait_for_slot=True, slot_timeout_seconds=None,
+    ))
     await asyncio.sleep(0.03)
     assert not task.done()
     task.cancel()
@@ -243,8 +245,61 @@ async def test_queue_timeout_does_not_launch_or_release_another_workers_slot(mon
         pytest.fail("queued validation must not launch a worker")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", forbidden)
     with pytest.raises(HTTPException) as caught:
-        await validate_media_content(b"%PDF-1.7", "application/pdf", wait_for_slot=True, timeout_seconds=0.01)
+        await validate_media_content(
+            b"%PDF-1.7", "application/pdf", wait_for_slot=True, slot_timeout_seconds=0.01,
+        )
     assert caught.value.status_code == 429
     assert caught.value.detail == {"code": "media_inspection_busy"}
     assert not slots.acquire(blocking=False)
     slots.release()
+
+
+@pytest.mark.asyncio
+async def test_queue_wait_does_not_consume_decoder_timeout(monkeypatch, tmp_path):
+    worker = tmp_path / "valid_worker.py"
+    worker.write_text(
+        'import json, sys\nsys.stdin.buffer.read()\n'
+        'print(json.dumps({"status": "ok", "content_type": "application/pdf", "page_count": 1}))\n'
+    )
+    slots = threading.BoundedSemaphore(1)
+    slots.acquire()
+    monkeypatch.setattr(file_processing, "_PDF_WORKER_PATH", worker)
+    monkeypatch.setattr(file_processing, "_PDF_EXTRACTION_SLOTS", slots)
+    task = asyncio.create_task(validate_media_content(
+        b"%PDF-1.7", "application/pdf", wait_for_slot=True,
+        slot_timeout_seconds=None, timeout_seconds=0.3,
+    ))
+    try:
+        await asyncio.sleep(0.4)
+        assert not task.done()
+    finally:
+        slots.release()
+    assert await asyncio.wait_for(task, 3) == {"content_type": "application/pdf", "page_count": 1}
+    assert slots.acquire(blocking=False)
+    slots.release()
+
+
+@pytest.mark.asyncio
+async def test_owning_deadline_cancels_unbounded_admission_without_launch(monkeypatch):
+    slots = threading.BoundedSemaphore(1)
+    slots.acquire()
+    monkeypatch.setattr(file_processing, "_PDF_EXTRACTION_SLOTS", slots)
+
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("queued validation must not launch a worker")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", forbidden)
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.03):
+            await validate_media_content(
+                b"%PDF-1.7", "application/pdf", wait_for_slot=True, slot_timeout_seconds=None,
+            )
+    assert not slots.acquire(blocking=False)
+    slots.release()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [False, 0, -1, float("inf"), float("nan"), "10"])
+async def test_invalid_admission_limits_fail_before_acquisition(timeout):
+    with pytest.raises(ValueError, match="Invalid media validation limits"):
+        await validate_media_content(b"%PDF-1.7", "application/pdf", slot_timeout_seconds=timeout)

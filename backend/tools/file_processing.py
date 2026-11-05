@@ -277,7 +277,8 @@ def submission_source_error(filename: str, inspection: ContentInspection, conten
 
 
 async def validate_upload_content(content: bytes, filename: str, *, content_type: str | None = None,
-                                  purpose: OCRPurpose = "problems") -> ContentInspection:
+                                  purpose: OCRPurpose = "problems",
+                                  media_slot_timeout_seconds: float | None = 10) -> ContentInspection:
     """Validate the actual body before trusting MIME metadata or calling OCR."""
     from backend.tools.media_validation import validate_media_content
     if not content:
@@ -292,7 +293,8 @@ async def validate_upload_content(content: bytes, filename: str, *, content_type
     # parse can settle this ambiguous signature; a valid renamed PDF is rejected.
     if inspection.content_type == "application/pdf" and _ext(filename) in (TEXT_EXTENSIONS | {".json"}) and _looks_like_text(content):
         try:
-            await validate_media_content(content, "application/pdf", wait_for_slot=True)
+            await validate_media_content(content, "application/pdf", wait_for_slot=True,
+                                         slot_timeout_seconds=media_slot_timeout_seconds)
         except HTTPException as exc:
             if isinstance(exc.detail, dict) and exc.detail.get("code") == "pdf_invalid":
                 inspection = ContentInspection("text/plain", inspection.declared_content_type, False)
@@ -306,7 +308,8 @@ async def validate_upload_content(content: bytes, filename: str, *, content_type
         raise HTTPException(415, detail={"code": "source_content_type_not_allowed"})
     suffix = _ext(filename)
     if inspection.content_type in {"application/pdf", *IMAGE_MEDIA_TYPES.values()}:
-        await validate_media_content(content, inspection.content_type, wait_for_slot=True)
+        await validate_media_content(content, inspection.content_type, wait_for_slot=True,
+                                     slot_timeout_seconds=media_slot_timeout_seconds)
     elif inspection.content_type == "text/plain":
         allowed_text = TEXT_EXTENSIONS | ({".json"} if purpose == "test_cases" else set())
         if suffix not in allowed_text:
