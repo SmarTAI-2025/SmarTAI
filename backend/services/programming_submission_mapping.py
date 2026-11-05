@@ -13,8 +13,10 @@ from collections import Counter, defaultdict
 from pathlib import PurePath
 
 from backend.models import is_programming_question_type
-from backend.services.programming_test_contract import required_function_name
+from backend.services.programming_test_contract import required_function_names
 from backend.services.question_matching import question_number_candidates
+
+NATIVE_SOURCE_MAPPING_VERSION = 2
 
 
 def is_source_file(filename):
@@ -44,9 +46,10 @@ def _standalone_python(text):
         module = ast.parse(text)
     except (SyntaxError, ValueError, RecursionError, tokenize.TokenError):
         return False
-    # Bare names, strings, formulas or Markdown identifiers around code can be
-    # written answers. Do not promote a document containing them to a script.
-    if any(isinstance(node, ast.Expr) and not isinstance(node.value, ast.Call) for node in module.body):
+    # A module may start with one docstring. Other bare strings, names or
+    # formulas can be written answers and still require document review.
+    statements = module.body[1:] if ast.get_docstring(module, clean=False) is not None else module.body
+    if any(isinstance(node, ast.Expr) and not isinstance(node.value, ast.Call) for node in statements):
         return False
     if any(isinstance(node, ast.FunctionDef) for node in module.body):
         return True
@@ -59,6 +62,23 @@ def _standalone_python(text):
     return False
 
 
+def has_markup_fence(text, *, python=True):
+    """Ignore fence-shaped lines quoted inside Python literals."""
+    if not re.search(r"(?m)^[^\S\r\n]*```", text):
+        return False
+    if not python:
+        return True
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(text).readline):
+            if token.type in {tokenize.OP, tokenize.ERRORTOKEN} and token.string == "`":
+                column = token.start[1]
+                if not token.line[:column].strip() and token.line.startswith("```", column):
+                    return True
+    except (SyntaxError, tokenize.TokenError):
+        return True
+    return False
+
+
 def native_source(filename, text, problems):
     if not may_contain_source(filename, problems) or not text:
         return None
@@ -67,14 +87,15 @@ def native_source(filename, text, problems):
         return suffix, text
     fence = re.fullmatch(r"[ \t]*```(python|py|c|cpp|c\+\+)[ \t]*\r?\n(.*?)^```[ \t]*\s*",
                          text, re.I | re.S | re.M)
-    if fence and fence[2].strip() and not re.search(r"(?m)^\s*```", fence[2]):
-        return (".py" if fence[1].lower() in {"python", "py"} else ".cpp"), fence[2]
+    if fence and fence[2].strip():
+        python = fence[1].lower() in {"python", "py"}
+        if not has_markup_fence(fence[2], python=python):
+            return (".py" if python else ".cpp"), fence[2]
     if suffix == ".txt" and _standalone_python(text):
         return ".py", text
     return None
 
 
-_DECLARATION = re.compile(r"\bdef\s+([^\W\d]\w*)\s*\(")
 _QUESTION_COMMENT = re.compile(
     r"#\s*(?:第\s*|(?:question|problem|q)\s*)(\d+(?:\.\d+)*)(?:\s*题)?(?=[\s:：.、()（）-]|$)", re.I)
 
@@ -118,12 +139,7 @@ def _python_declarations(text):
 
 
 def _teacher_entries(problem):
-    # Include inline signatures such as "实现 def add(a, b):". Multiple distinct
-    # requirements (in the stem or teacher cases) cannot choose a single callee.
-    stem = problem.get("stem") or ""
-    names = set(_DECLARATION.findall(stem))
-    if entry := required_function_name(stem):
-        names.add(entry)
+    names = required_function_names(problem.get("stem") or "")
     for case in problem.get("test_cases") or ():
         if isinstance(case, dict) and case.get("source", "teacher") == "teacher":
             name = case.get("function_name")

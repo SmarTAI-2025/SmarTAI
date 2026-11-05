@@ -85,7 +85,8 @@ def _declarations(stem):
     return list(_DECLARATION.finditer(stem or ""))
 
 
-def _entry_names(stem):
+def required_function_names(stem: str) -> set[str]:
+    """All teacher entry candidates, excluding example definitions when an entry is named."""
     declarations = _declarations(stem)
     named = {name for name in _NAMED.findall(stem or "") if not keyword.iskeyword(name)}
     for match in declarations:
@@ -97,7 +98,7 @@ def _entry_names(stem):
 
 
 def required_function_name(stem: str) -> str | None:
-    names = _entry_names(stem)
+    names = required_function_names(stem)
     return names.pop() if len(names) == 1 else None
 
 
@@ -339,7 +340,7 @@ def adapt_programming_cases(stem: str, cases, *, edited=False) -> list[TestCase]
         raise ProgrammingCaseError("Expected a list of at most 50 test cases.")
     if not cases:
         return []
-    names = _entry_names(stem)
+    names = required_function_names(stem)
     if len(names) > 1:
         raise ProgrammingCaseError("The question does not identify one function entry point.")
     name = next(iter(names), None)

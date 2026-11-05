@@ -87,6 +87,7 @@ from backend.llm.registry import (
 )
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import grading_runs
+from backend.services.programming_submission_mapping import NATIVE_SOURCE_MAPPING_VERSION, may_contain_source
 from backend.services.question_sources import read_question_source
 from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE
 from backend.services.submission_work_budget import submission_work_budget, current_budget
@@ -2959,13 +2960,13 @@ def _load_submission_results(artifact) -> list[SubmissionSourceParseResult]:
 
 
 async def _restore_legacy_native_result(result, problems, task_id, owner_id):
-    from backend.services.programming_submission_mapping import may_contain_source
     from backend.tools.file_processing import decode_text_bytes
-    if (not result.student or (result.student.get("recognition") or {}).get("native_source_mapping_version") == 1
+    version = ((result.student or {}).get("recognition") or {}).get("native_source_mapping_version")
+    if (not result.student or version == NATIVE_SOURCE_MAPPING_VERSION
             or not may_contain_source(result.filename, problems)
             or result.stable_error_code == "provider_submit_uncertain"):
         return result
-    # Old model-derived checkpoints may contain only one def. The original file
+    # Earlier checkpoints may contain a model excerpt or an outdated entry match. The original file
     # is owner-scoped, size- and hash-verified; never repair it from teacher code.
     def original_bytes():
         stored = get_file(file_id=result.stored_file_id, owner_id=owner_id)
@@ -3083,7 +3084,8 @@ def _submission_result_incomplete(result):
     coverage = recognition.get("coverage") or {}
     # A native file can be fully read while its question association still
     # awaits the teacher. Replaying the file cannot resolve that review.
-    mapped = {"recognition_manual_pending"} if recognition.get("native_source_mapping_version") == 1 else set()
+    native = recognition.get("native_source_mapping_version") in (1, NATIVE_SOURCE_MAPPING_VERSION)
+    mapped = {"recognition_manual_pending"} if native else set()
     return bool(any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
                 or recognition.get("error_code")
                 or recognition.get("missing_question_ids")
@@ -3378,7 +3380,8 @@ async def run_task_submission_parsing(
                         owner_id=owner_id, assignment_id=task_id, operation_id=job_id,
                         expected_attempt=job_attempt, expected_lease_token=leased_operation.lease_token)
                     native = await native_submission_result(source, problem_data, set(target_ids), identity_mode, roster_entries or [])
-                    key = _hash_json(dict(version=4 if native else 3, operation_id=job_id, attempt=job_attempt,
+                    parser_version = f"native-{NATIVE_SOURCE_MAPPING_VERSION}" if native else 3
+                    key = _hash_json(dict(version=parser_version, operation_id=job_id, attempt=job_attempt,
                         file_id=source.stored_file_id, filename=source.filename,
                         text_sha256=hashlib.sha256(source.text.encode()).hexdigest(), questions=problem_data,
                         route=route_fingerprint, identity_mode=identity_mode, roster=roster_entries or [],

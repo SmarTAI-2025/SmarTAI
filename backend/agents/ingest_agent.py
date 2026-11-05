@@ -42,7 +42,7 @@ from backend.services.programming_test_contract import (
 )
 from backend.services.question_structure import annotate_major_question_structures
 from backend.services.programming_test_contract import required_function_name
-from backend.services.programming_submission_mapping import may_contain_source, source_answers
+from backend.services.programming_submission_mapping import NATIVE_SOURCE_MAPPING_VERSION, may_contain_source, source_answers
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
     KATEX_GENERATION_GUIDANCE,
@@ -1273,7 +1273,7 @@ async def native_submission_result(source, problems, targets, identity_mode, ros
     student = dict(stu_id=student_id, stu_name=name, stu_ans=answers,
         source_filename=source.filename, source_id=source.source_id, stored_file_id=source.stored_file_id,
         identity_match_method=identity_mode, identity_status="matched" if matched else "needs_review",
-        recognition={"native_source_mapping_version": 1, "model_review_question_ids": [
+        recognition={"native_source_mapping_version": NATIVE_SOURCE_MAPPING_VERSION, "model_review_question_ids": [
             a["q_id"] for a in answers if a["content"] and "recognition_manual_pending" in a["flag"]]})
     return SubmissionSourceParseResult(source.source_id, source.stored_file_id, source.filename,
         "parsed" if matched else "identity_conflict", student, student_id, len(answers), (),

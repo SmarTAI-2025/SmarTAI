@@ -117,16 +117,19 @@ def test_mounted_txt_import_roundtrips_whole_program(client_registry, monkeypatc
     import asyncio
     from backend.tests.test_ocr_mounted_routes import headers
     client, registry = client_registry
-    owner, task = seed(SUM, COUNT)
+    owner, task = seed("Implement sum_positive(nums). A helper is supplied:\ndef ok(x): return x > 0", COUNT)
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
     monkeypatch.setattr(registry.provider, "ainvoke", AsyncMock(side_effect=AssertionError("Native source reached text generation")), raising=False)
-    text = "```python\n" + SOURCE + "```\n" if envelope else SOURCE
+    module = '"""Example documentation:\r\n```\r\nprint(1)\r\n```\r\n"""\r\n' + SOURCE
+    text = "```python\n" + module + "```\n" if envelope else module
     queued = client.post(f"/tasks/{task}/parse_submissions", headers=headers(owner),
                          files={"file": ("S1_Alice.txt", text.encode(), "text/plain")})
     assert queued.status_code == 200, queued.text
     asyncio.run(task_facade.run_durable_submission_recognition(_claim(owner, queued.json()["job_id"])))
     saved = client.get(f"/tasks/{task}", headers=headers(owner)).json()
-    assert {a["q_id"]: a["content"] for a in saved["student_data"]["S1"]["stu_ans"]} == {"q2": SOURCE, "q3": SOURCE}
+    answers = saved["student_data"]["S1"]["stu_ans"]
+    assert {a["q_id"]: a["content"] for a in answers} == {"q2": module, "q3": module}
+    assert all("recognition_manual_pending" not in a["flag"] for a in answers)
     registry.provider.ainvoke.assert_not_awaited()
 
 
@@ -152,7 +155,8 @@ def test_numbered_entry_hints_bind_the_function_after_each_explicit_number():
 
 
 @pytest.mark.asyncio
-async def test_pre_mapping_checkpoint_recovers_original_bytes_and_previous_identity(monkeypatch):
+@pytest.mark.parametrize("version", [None, 1])
+async def test_old_mapping_checkpoint_recovers_original_bytes_and_previous_identity(monkeypatch, version):
     from dataclasses import replace
     from backend.db import file_repository
     owner, task = seed(SUM, COUNT)
@@ -162,10 +166,14 @@ async def test_pre_mapping_checkpoint_recovers_original_bytes_and_previous_ident
     await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
     saved, = task_facade._load_submission_results(next(f for f in file_repository.list_files(
         owner_id=owner, assignment_id=task) if f.kind == "submission_recognition_result"))
-    old = replace(saved, student={**saved.student, "stu_id": "prior-identity", "recognition": {},
-        "stu_ans": [{**a, "content": "return x"} for a in saved.student["stu_ans"]]},
+    recognition = {} if version is None else {"native_source_mapping_version": version}
+    old = replace(saved, student={**saved.student, "stu_id": "prior-identity", "recognition": recognition,
+        "stu_ans": [{**a, "content": "return x" if version is None else SOURCE, "flag": ["recognition_manual_pending"]}
+                    for a in saved.student["stu_ans"]]},
         student_candidate="prior-identity")
     restored = await task_facade._restore_legacy_native_result(old, questions(SUM, COUNT), task, owner)
+    assert all(not a["flag"] for a in restored.student["stu_ans"])
+    assert restored.student["recognition"]["native_source_mapping_version"] == 2
     assert restored.student["stu_id"] == "prior-identity" and restored.student["identity_status"] == "matched"
     assert {a["q_id"]: a["content"] for a in restored.student["stu_ans"]} == {"q2": SOURCE, "q3": SOURCE}
     registry.provider.ainvoke.assert_not_awaited()
@@ -222,3 +230,40 @@ def test_mounted_mixed_text_requires_teacher_review_before_grading(client_regist
     assert "submission_recognition_blocked" in task_facade.grading_readiness(
         task_id=task, owner_id=owner)["blocking_issues"]
     model.assert_awaited_once()
+
+
+@pytest.mark.parametrize("stem,expected_flags", [
+    ("Implement solve(x). A provided helper follows:\ndef helper(x): return x", []),
+    ("Implement solve(x) and implement helper(x).", ["recognition_manual_pending"]),
+])
+def test_source_mapping_respects_the_shared_teacher_entry_contract(stem, expected_flags):
+    known = questions(stem)
+    # Conflicting requirements still need review when the submission has just one def.
+    source = "def solve(x): return x\n"
+    answer, = source_answers("work.txt", source, known, set(known))
+    assert answer["content"] == source
+    assert answer["flag"] == expected_flags
+
+
+@pytest.mark.parametrize("enclosed", [False, True])
+def test_module_docstring_and_markdown_in_python_strings_survive_import_and_execution_input(enclosed):
+    from backend.services.programming_runs import _source
+    known = questions("Implement solve(x).")
+    module = ('"""Student module documentation."""\n'
+              'EXAMPLE = """Below is a Markdown example.\n```python\nprint(1)\n```\n"""\n'
+              'def solve(x): return EXAMPLE + x\n\n')
+    text = "```python\n" + module + "```\n" if enclosed else module
+    answer, = source_answers("work.txt", text, known, set(known))
+    assert not answer["flag"] and answer["content"] == module
+    assert _source(answer["content"]) == _source(text) == module
+
+
+def test_real_fences_and_prose_outside_module_still_require_review():
+    from backend.services.programming_runs import _source
+    known = questions("Implement solve(x).")
+    blocks = '```python\ndef helper(x): return x\n```\n\n```python\ndef solve(x): return helper(x)\n```\n'
+    assert source_answers("work.txt", blocks, known, set(known)) is None
+    with pytest.raises(ValueError, match="programming_ambiguous_code_blocks"):
+        _source(blocks)
+    commentary = '"""Module docstring"""\ndef solve(x): return x\n"Another explanation."\n'
+    assert source_answers("work.txt", commentary, known, set(known)) is None

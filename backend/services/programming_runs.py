@@ -24,6 +24,7 @@ from backend.db import grading_repository
 from backend.models import ProblemInfo, StudentAnswerInfo, TestCase, is_programming_question_type
 from pydantic import ValidationError
 from backend.services.grading_checkpoints import CheckpointWriteError, current_checkpoints
+from backend.services.programming_submission_mapping import has_markup_fence
 from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCodeExecutionDisabled
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
 
@@ -155,13 +156,12 @@ def programming_run(registry, grading_setup):
 def _source(content):
     # Remove only a single enclosing markup fence. A source file, including
     # leading indentation or comments containing backticks, stays byte-for-byte.
-    fenced = re.fullmatch(r"\s*```(?:python|py|c\+\+|cpp|c|java)?[^\S\n]*\r?\n(.*?)^\s*```\s*", content,
+    fenced = re.fullmatch(r"\s*```(python|py|c\+\+|cpp|c|java)?[^\S\n]*\r?\n(.*?)^[ \t]*```\s*", content,
                           flags=re.DOTALL | re.MULTILINE | re.IGNORECASE)
-    if fenced and not re.search(r"^\s*```", fenced[1], re.M):
-        return fenced[1]
-    if re.search(r"^\s*```", content, re.M):
+    language, source = fenced.groups() if fenced else (None, content)
+    if has_markup_fence(source, python=(language or "python").lower() in {"python", "py"}):
         raise ValueError("programming_ambiguous_code_blocks")
-    return content
+    return source
 
 
 def _validate_report(report, cases):
