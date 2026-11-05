@@ -85,15 +85,15 @@ def _short(value: str, limit=140):
 
 def _case_detail(case_id, case_label, case, result, reason):
     detail = {"case_id": case_id, "case_label": case_label, "source": case.source, "outcome": reason}
+    expected = case.expected_return if case.function_name else case.expected_output
+    if case.function_name:
+        arguments = {"args": case.function_args, "kwargs": getattr(case, "function_kwargs", None) or {}}
+        detail["call_arguments"] = _short(json.dumps(arguments, ensure_ascii=False))
+    else:
+        detail["input"] = _short(case.input)
+    detail["expected"] = _short(expected or "")
+    detail["actual"] = _short(result.actual_output)
     if not result.passed:
-        expected = case.expected_return if case.function_name else case.expected_output
-        if case.function_name:
-            arguments = {"args": case.function_args, "kwargs": getattr(case, "function_kwargs", None) or {}}
-            detail["call_arguments"] = _short(json.dumps(arguments, ensure_ascii=False))
-        else:
-            detail["input"] = _short(case.input)
-        detail["expected"] = _short(expected or "")
-        detail["actual"] = _short(result.actual_output)
         # A traceback, temporary path or arbitrary exception message is never
         # needed to explain a runtime error. Only keep a Python exception type.
         if reason == "compile_error":
@@ -266,3 +266,30 @@ def describe_run(run, language, problem: ProblemInfo):
         teacher_tests=teachers, generated_tests=generated, failure_counts=dict(failure_counts),
         primary_reason=primary, requires_human_review=ai_only or interface_only, safe_summary=" · ".join(fragments),
     ), (representatives + repeated + passed)[:_MAX_CASE_EXAMPLES]
+
+
+def mark_teacher_case_score_review(vote, language):
+    """Keep the model's score and rubric awards; qualify its interpretation."""
+    from backend.domain.grading_review import teacher_case_score_review_reason
+    evidence = vote.programming_evidence
+    if vote.error_kind or evidence is None or evidence.score_review_reason:
+        return
+    reason = teacher_case_score_review_reason(evidence.model_dump(), vote.score, vote.max_score)
+    if reason is None:
+        return
+    if reason == "programming_teacher_tests_passed_deduction":
+        message = ("教师用例全部通过，模型仍建议扣分。请按评分标准核对是否另有方法或过程要求。"
+                   if language == "zh" else
+                   "All teacher tests passed, but the model suggests a deduction. Check the rubric for separate method or process requirements.")
+    else:
+        message = ("有教师用例未通过，模型仍建议满分。请按评分标准核对该样例是否影响得分。"
+                   if language == "zh" else
+                   "A teacher test failed, but the model suggests full credit. Check whether that test affects the score under the rubric.")
+    # Older checkpoint votes already have the unqualified summary appended.
+    model_comment = vote.comment.removesuffix("\n\n" + evidence.safe_summary)
+    evidence.score_review_reason = reason
+    evidence.requires_human_review = True
+    evidence.score_status = "provisional"
+    evidence.safe_summary += " · " + message
+    label = "模型评分意见" if language == "zh" else "Model scoring opinion"
+    vote.comment = f"{evidence.safe_summary}\n\n{label} · {model_comment}"

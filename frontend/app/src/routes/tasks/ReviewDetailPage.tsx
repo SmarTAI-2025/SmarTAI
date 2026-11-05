@@ -27,6 +27,7 @@ import {
   buildResultsModel,
   aiCorrectionScore,
   correctionScoreSource,
+  pendingProgrammingReview,
   correctionReviewDraftScore,
   effectiveCorrectionScore,
   formatConfidence,
@@ -679,6 +680,10 @@ function ReviewQuestionCard({ locale, student, question, correction, primaryProv
   const displayScore = correction ? aiCorrectionScore(correction) : null;
   const validExperts = correction ? validExpertResults(correction) : [];
   const primaryExpert = validExperts.find(expert => expert.provider_id === primaryProviderId) ?? validExperts[0];
+  const programmingReview = correction && pendingProgrammingReview(correction);
+  // A later expert may disagree with the shared execution. The synthesized
+  // note starts with this evidence even if the selected expert does not.
+  const disputedScore = programmingReview === "programming_teacher_tests_passed_deduction" || programmingReview === "programming_teacher_tests_failed_full_credit";
   const scoreSource = correction ? correctionScoreSource(correction) : null;
   const answer = student.answerByQuestion.get(question.id);
   const alreadyConfirmed = (scoreSource === "teacher_confirmed_same" || scoreSource === "teacher_changed")
@@ -720,15 +725,17 @@ function ReviewQuestionCard({ locale, student, question, correction, primaryProv
                 {correction
                   ? displayScore === null
                     ? tx(locale, "无有效分数", "No valid score")
-                    : `${formatScore(displayScore, correction.max_score)} / ${correction.max_score}`
+                    : disputedScore
+                      ? tx(locale, `建议 ${formatScore(displayScore, correction.max_score)} / ${correction.max_score}，待复核`, `Suggested ${formatScore(displayScore, correction.max_score)} / ${correction.max_score}, pending review`)
+                      : `${formatScore(displayScore, correction.max_score)} / ${correction.max_score}`
                   : "— / —"}
               </span>
             </div>
             {correction ? (
               <>
                 {primaryExpert ? <p className="mt-3 break-words text-xs font-semibold text-foreground">{primaryExpert.provider}（{expertScoreSummary(primaryExpert)}, conf={primaryExpert.confidence.toFixed(2)}）</p> : null}
-                <MarkdownMath className="mt-3 text-[13px] leading-6 text-foreground">{(primaryExpert ? primaryExpert.comment : correction.comment) || tx(locale, "SmarTAI 未返回文字说明。", "SmarTAI returned no written rationale.")}</MarkdownMath>
-                <ScoringSteps locale={locale} steps={primaryExpert ? primaryExpert.steps : correction.steps} />
+                <MarkdownMath className="mt-3 text-[13px] leading-6 text-foreground">{(primaryExpert && !disputedScore ? primaryExpert.comment : correction.comment) || tx(locale, "SmarTAI 未返回文字说明。", "SmarTAI returned no written rationale.")}</MarkdownMath>
+                <ScoringSteps locale={locale} steps={primaryExpert && !disputedScore ? primaryExpert.steps : correction.steps} />
                   <dl className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
                     <Signal label={tx(locale, "置信度", "Confidence")} value={formatConfidence(correction.confidence)} />
                     <Signal label={tx(locale, "专家数", "Models")} value={correction.expert_results?.length ? `${validExpertResults(correction).length} / ${correction.expert_results.length}${hasPartialExperts(correction) ? tx(locale, " · 部分专家完成", " · Some experts completed") : ""}` : hasPartialExperts(correction) ? tx(locale, "部分专家完成", "Some experts completed") : displayScore !== null ? "1" : "0"} />

@@ -310,6 +310,25 @@ describe("one-click grading review", () => {
     expect(details).not.toHaveTextContent(/模型出错|Model error|0\/10|programming_execution_unavailable/);
   });
 
+  it.each([
+    ["zh-CN", "SmarTAI 批改结果", "建议 9 / 10，待复核", "教师用例 5/5 通过。模型建议扣分，待核对。"],
+    ["en-US", "SmarTAI Grading Result", "Suggested 9 / 10, pending review", "All 5/5 teacher tests passed. Review the proposed deduction."],
+  ])("leads with shared facts when a later expert disagrees (%s)", (locale, title, pending, note) => {
+    state.locale = locale;
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: 9, provisional_score: 9,
+      comment: note, expert_results: [
+        {provider: "first", score: 10, max_score: 10, confidence: .99, steps: [], comment: "First expert's own conclusion"},
+        {provider: "second", score: 8, max_score: 10, confidence: .99, steps: [], comment: "Disputed deduction",
+          programming_evidence: {contract: "smartai.programming_evidence", execution_status: "executed",
+          score_status: "provisional", score_review_reason: "programming_teacher_tests_passed_deduction"}},
+      ]})]}];
+    show(true);
+    const result = within(screen.getByRole("region", { name: title }));
+    expect(result.getByText(pending)).toBeVisible();
+    expect(result.getByText(note)).toBeVisible();
+    expect(result.queryByText("First expert's own conclusion")).not.toBeVisible();
+  });
+
   it("keeps original AI score after a teacher override and labels failed experts without a zero grade", () => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", {
       score: 9, provisional_score: 8.53, teacher_score: 9,
