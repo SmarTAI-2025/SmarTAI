@@ -68,16 +68,24 @@ async def test_queued_submission_waits_past_http_limit_then_reads_original_pdf(m
     slots.acquire()
     monkeypatch.setattr(file_processing, "_PDF_EXTRACTION_SLOTS", slots)
 
+    http_done = asyncio.Event()
+
     async def release():
         await asyncio.sleep(10.4)
+        # Under a delayed event loop, admission and release may wake together.
+        # Confirm HTTP protection before returning capacity to the queued job.
+        await http_done.wait()
         slots.release()
         slots.release()
 
     async def http_upload():
-        with pytest.raises(HTTPException) as caught:
-            await file_processing.validate_submission_upload(body, "answer.pdf", "application/pdf")
-        assert caught.value.status_code == 429
-        assert caught.value.detail == {"code": "media_inspection_busy"}
+        try:
+            with pytest.raises(HTTPException) as caught:
+                await file_processing.validate_submission_upload(body, "answer.pdf", "application/pdf")
+            assert caught.value.status_code == 429
+            assert caught.value.detail == {"code": "media_inspection_busy"}
+        finally:
+            http_done.set()
 
     releaser = asyncio.create_task(release())
     started = time.monotonic()

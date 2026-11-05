@@ -8,6 +8,8 @@ import sys
 
 from fastapi import HTTPException
 
+from backend.domain.errors import RecognitionError
+from backend.services.submission_work_budget import current_budget, wait_for_admission
 from backend.tools.image_evidence_worker import FORMATS, MAX_INPUT_BYTES as MAX_IMAGE_BYTES
 from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
 
@@ -60,17 +62,26 @@ async def validate_media_content(
         raise ValueError("Invalid media validation limits")
     if file_processing.fitz is None:
         raise HTTPException(503, detail={"code": "media_inspection_unavailable"})
+    budget = current_budget()
+    if budget is not None:
+        budget.check()
     slots = file_processing._PDF_EXTRACTION_SLOTS
     deadline = (asyncio.get_running_loop().time() + slot_timeout_seconds
                 if slot_timeout_seconds is not None else None)
     while not slots.acquire(blocking=False):
+        if budget is not None:
+            budget.check()
         if not wait_for_slot or (deadline is not None and asyncio.get_running_loop().time() >= deadline):
             raise HTTPException(429, detail={"code": "media_inspection_busy"})
         # No slot is held while waiting, so cancellation needs no cleanup.
-        await asyncio.sleep(0.02)
+        await wait_for_admission(asyncio.sleep(0.02))
     launch_task = None
     failure: BaseException | None = None
+    work_started = False
     try:
+        if budget is not None:
+            budget.start()
+            work_started = True
         async with asyncio.timeout(timeout_seconds):
             launch_task = asyncio.create_task(asyncio.create_subprocess_exec(
                 sys.executable, str(file_processing._PDF_WORKER_PATH), "inspect-upload",
@@ -101,7 +112,7 @@ async def validate_media_content(
     except TimeoutError:
         failure = HTTPException(408, detail={"code": "media_inspection_timeout"})
         raise failure from None
-    except (HTTPException, asyncio.CancelledError) as exc:
+    except (HTTPException, RecognitionError, asyncio.CancelledError) as exc:
         failure = exc
         raise
     except Exception:
@@ -119,4 +130,6 @@ async def validate_media_content(
             if failure is None:
                 raise HTTPException(400, detail={"code": "media_inspection_failed"}) from None
         finally:
+            if work_started:
+                budget.finish()
             slots.release()
