@@ -37,3 +37,14 @@ in the feedback. Keep each explanation to one concrete sentence. Apply explicit
 process credit even if the submission cannot run. If an entry name or argument
 list is wrong, assess the algorithm separately when the rubric allows this.
 The system attaches the test-source summary.
+
+
+Score against the teacher rubric. If that rubric awards full credit, keep the
+full award even if a further input would be useful for practice. When you can
+identify a concrete, previously untested input within the stated domain that
+could expose a different result, you may supply one optional boundary_case.
+For a function use {"args": [...], "expected": "Python literal"} (kwargs is
+optional); for a complete program use {"stdin": "...", "expected": "..."}.
+Do not propose code or a new entry point. The grader checks the suggestion
+against the independent reference and submission. An unverified guess is not
+grounds for a deduction.

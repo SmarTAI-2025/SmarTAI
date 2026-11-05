@@ -145,7 +145,7 @@ def review_state(correction: dict) -> tuple[bool, bool]:
                                             or disagreement or partial or bool(reasons & {
                                                 "partial_experts", "degraded_to_single", "math_scoring_uncertainty",
                                                 "math_expert_disagreement", "math_verification_conflict",
-                                                "math_proof_concern", "math_model_review",
+                                                "math_proof_concern", "math_model_review", "programming_extra_boundary",
                                             })))
     return pending, reviewed
 

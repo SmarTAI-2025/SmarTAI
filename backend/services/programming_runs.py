@@ -24,6 +24,7 @@ from backend.db import grading_repository
 from backend.models import ProblemInfo, StudentAnswerInfo, TestCase, is_programming_question_type
 from pydantic import ValidationError
 from backend.services.grading_checkpoints import CheckpointWriteError, current_checkpoints
+from backend.services.programming_reference_inputs import ReferenceInputCase, expectations_from_reference
 from backend.services.programming_submission_mapping import C_FAMILY_FLAG, NATIVE_LANGUAGES, PYTHON_FLAG, has_markup_fence
 from backend.services.programming_test_contract import native_standard_supported
 from backend.services.python_source_encoding import PythonSourceEncodingError, python_execution_source
@@ -291,13 +292,18 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
                 state.failures[key] = error or "programming_no_cases"
                 return key, [], state.failures[key]
         try:
+            derive_expectations = not problem.test_cases and any(isinstance(case, ReferenceInputCase) for case in cases)
+            reference = _reference(problem)
+            if derive_expectations:
+                if not reference or not all(isinstance(case, ReferenceInputCase) for case in cases):
+                    raise ValueError("programming_cases_unavailable")
+                cases = [case.comparison_probe() for case in cases]
             cases = adapt_programming_cases(problem.stem, cases)
             if not cases or len(cases) > 50 or any(not c.sandbox_feasible for c in cases):
                 raise ValueError("programming_cases_unavailable")
             data = [c.model_dump(mode="json") for c in cases]
             if len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode()) > 256 * 1024:
                 raise ValueError("programming_cases_unavailable")
-            reference = _reference(problem)
             if reference:
                 from backend.services.programming_test_contract import bind_programming_cases
                 language = _reference_language(problem, reference)
@@ -309,7 +315,10 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
                 await _notify(reporter, "validate_programming_reference")
                 report = await execute(executable, ref_cases, language=language, per_case_timeout=10.0)
                 _validate_report(report, ref_cases)
-                if report.passed_count != len(cases):
+                if derive_expectations:
+                    cases = adapt_programming_cases(problem.stem, expectations_from_reference(cases, ref_cases, report))
+                    data = [case.model_dump(mode="json") for case in cases]
+                elif report.passed_count != len(cases):
                     raise ValueError("programming_reference_conflict")
         except ProgrammingCaseError as exc:
             state.failures[key] = ("programming_conflicting_expectations" if exc.issue == "conflicting_expectations"
@@ -325,7 +334,7 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
             state.failures[key] = exc.reason if isinstance(exc, NativeBuildUnavailable) else "programming_execution_unavailable"
             return key, [], state.failures[key]
         state.store(PREPARED, key, {"q_id": problem.q_id, "cases": data, "suite_hash": digest(data),
-                                    "reference_checked": bool(reference)})
+                                    "reference_checked": bool(reference), "reference_derived_expectations": derive_expectations})
         return key, cases, ""
 
 

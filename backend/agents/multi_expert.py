@@ -186,6 +186,12 @@ def _project_programming_result(correction: Correction, language: str) -> Correc
             correction.comment = f"{disputed.safe_summary}\n\n{label} · {correction.comment}"
     elif correction.synthesis_method == "judge_agent":
         correction.comment += "\n\n" + evidence.safe_summary
+    boundary = next((v.programming_evidence.boundary_note for v in votes
+                     if v.programming_evidence and v.programming_evidence.boundary_note), None)
+    if boundary:
+        correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, "programming_extra_boundary"]))
+        if boundary not in correction.comment:
+            correction.comment += "\n" + boundary
     for vote in votes:
         facts = vote.programming_evidence
         if facts and facts.requires_human_review:
