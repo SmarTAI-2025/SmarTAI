@@ -32,8 +32,12 @@ def _sum_step_awards(validated):
     return float(sum((Decimal(str(step.score)) for step in validated["steps"]), Decimal(0)))
 
 
+class ProgrammingAward(StepScore):
+    max_points: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+
 class ProgrammingGradingOutput(BaseModel):
-    steps: list[StepScore]
+    steps: list[ProgrammingAward]
     # Keep explicitly supplied legacy totals subject to the consistency check.
     score: float = Field(default_factory=_sum_step_awards, ge=0, allow_inf_nan=False, validate_default=True)
     max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False)
@@ -113,10 +117,15 @@ def _format_error(message):
 
 
 def _validate_awards(result, maximum):
-    if "score" not in result.model_fields_set and (
-        "max_score" not in result.model_fields_set or result.max_score != maximum or result.score > maximum
-    ):
-        raise _format_error("Use the question's maximum and keep step awards within that maximum.")
+    if "score" not in result.model_fields_set or any(step.max_points is not None for step in result.steps):
+        if "max_score" not in result.model_fields_set or result.max_score != maximum:
+            raise _format_error("Use the question's stated maximum for the rubric.")
+        for step in result.steps:
+            if (step.max_points is None or step.score > step.max_points
+                    or step.is_correct != (step.score == step.max_points)):
+                raise _format_error("Distinguish available points from earned points. Mark full credit correct; partial or zero credit is not full credit.")
+        if sum(Decimal(str(step.max_points)) for step in result.steps) != Decimal(str(maximum)):
+            raise _format_error("The available points across distinct rubric criteria must add up to the question maximum.")
     total = Decimal(str(result.score))
     steps = sum((Decimal(str(step.score)) for step in result.steps), Decimal(0))
     difference = abs(steps - total)

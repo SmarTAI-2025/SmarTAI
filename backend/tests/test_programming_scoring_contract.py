@@ -373,11 +373,13 @@ async def test_grading_model_failure_after_tests_keeps_localized_execution_evide
 def test_programming_total_is_computed_from_valid_awards_without_model_arithmetic():
     payload = award(4, maximum=20)
     payload.pop("score")
-    payload["steps"].append({"step_no": 2, "desc": "Boundary case.", "is_correct": True, "score": 1.25})
+    payload["steps"][0].update(max_points=18.75, is_correct=False)
+    payload["steps"].append({"step_no": 2, "desc": "Boundary case.", "is_correct": True, "score": 1.25, "max_points": 1.25})
     result = programming.ProgrammingGradingOutput.model_validate(payload)
     programming._validate_awards(result, 20)
     assert result.score == 5.25
     for invalid in ({**payload, "score": 0}, {**payload, "max_score": 10},
+                    {**payload, "steps": [{**payload["steps"][0], "score": 20, "max_points": 20, "is_correct": False}]},
                     {**payload, "steps": [{**payload["steps"][0], "score": 21}]}):
         with pytest.raises(StructuredOutputInvalidError):
             programming._validate_awards(programming.ProgrammingGradingOutput.model_validate(invalid), 20)
