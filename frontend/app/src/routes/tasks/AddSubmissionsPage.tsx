@@ -33,7 +33,7 @@ import type { SubmissionIdentityMode } from "@/types";
 
 const SUBMISSION_SUFFIXES = [
   ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
-  ".txt", ".md", ".markdown", ".pdf", ".jpg", ".jpeg", ".png",
+  ".txt", ".md", ".markdown", ".docx", ".pdf", ".jpg", ".jpeg", ".png",
   ".bmp", ".tif", ".tiff", ".webp",
 ] as const;
 const SUBMISSION_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;

@@ -17,7 +17,8 @@ from backend.auth import require_teacher
 from backend.api.errors import domain_error_response
 from backend.config import settings
 from backend.db import course_library_repository as library_repo
-from backend.knowledge.service import KNOWLEDGE_UPLOAD_EXTENSIONS, ingest_document
+from backend.knowledge.service import ingest_document
+from backend.services.upload_contract import get_upload_contract, upload_limit
 from backend.models import User
 from backend.domain.errors import DomainError
 from backend.tools.catalog_matching import match_catalog_items, normalize_catalog_text
@@ -203,7 +204,7 @@ def list_course_materials(
         "capabilities": {
             "durable": True,
             "ocr": True,
-            "accepted_types": sorted(extension[1:] for extension in KNOWLEDGE_UPLOAD_EXTENSIONS),
+            "accepted_types": get_upload_contract()["roles"]["course_knowledge"]["extensions"],
         },
     }
 
@@ -233,14 +234,14 @@ async def upload_course_material(
             )
 
     filename = Path(file.filename or "upload.bin").name.strip() or "upload.bin"
-    if len(filename) > 240:
+    maximum_name = upload_limit("course_material_filename_max_characters")
+    if len(filename) > maximum_name:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "material_filename_too_long", "max_length": 240},
+            detail={"code": "material_filename_too_long", "max_length": maximum_name},
         )
     normalized_labels = _parse_labels(labels)
-    from backend.rag.chunker import MAX_FILE_BYTES
-    body = await file.read(MAX_FILE_BYTES + 1)
+    body = await file.read(upload_limit("knowledge_max_bytes") + 1)
     try:
         document = await ingest_document(
             owner_id=current.id,

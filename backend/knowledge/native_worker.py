@@ -12,7 +12,66 @@ MAX_BYTES = 64 * 1024 * 1024
 MAX_TEXT = 8 * 1024 * 1024
 
 
-def extract(kind, body):
+def _word_attribute(node, name):
+    return next((value for key, value in node.attrib.items() if key.rsplit("}", 1)[-1] == name), None)
+
+
+def _docx_numbering_unread(root, archive):
+    """Inspect used paragraph styles only, including inherited/default ones.
+
+    Native extraction does not implement Word's list-counter rendering. An
+    unused ListNumber definition in a normal Word template is not a blocker.
+    """
+    styles, default_style = {}, None
+    if "word/styles.xml" in archive.namelist():
+        definition = ET.fromstring(archive.read("word/styles.xml"))
+        for node in definition:
+            local = node.tag.rsplit("}", 1)[-1]
+            if local == "docDefaults" and any(item.tag.rsplit("}", 1)[-1] == "numPr" for item in node.iter()):
+                return True
+            if local == "style" and _word_attribute(node, "type") == "paragraph":
+                style_id = _word_attribute(node, "styleId")
+                styles[style_id] = node
+                if _word_attribute(node, "default") in {"1", "true"}:
+                    default_style = style_id
+    references = set()
+    for paragraph in root.iter():
+        if paragraph.tag.rsplit("}", 1)[-1] == "p":
+            style = next((node for node in paragraph.iter() if node.tag.rsplit("}", 1)[-1] == "pStyle"), None)
+            references.add(_word_attribute(style, "val") if style is not None else default_style)
+    for style_id in references:
+        seen = set()
+        while style_id:
+            if style_id in seen or style_id not in styles:
+                return True  # Broken/cyclic style chains cannot prove completeness.
+            seen.add(style_id)
+            style = styles[style_id]
+            if any(node.tag.rsplit("}", 1)[-1] == "numPr" for node in style.iter()):
+                return True
+            base = next((node for node in style if node.tag.rsplit("}", 1)[-1] == "basedOn"), None)
+            style_id = _word_attribute(base, "val") if base is not None else None
+    return False
+
+
+def _docx_blocks(node):
+    """Keep native paragraphs, explicit code whitespace and table cell order."""
+    local = node.tag.rsplit("}", 1)[-1]
+    if local == "p":
+        characters = {"tab": "\t", "br": "\n", "cr": "\n", "noBreakHyphen": "\u2011", "softHyphen": "\u00ad"}
+        yield "".join(child.text or "" if child.tag.rsplit("}", 1)[-1] == "t"
+                      else characters.get(child.tag.rsplit("}", 1)[-1], "")
+                      for child in node.iter())
+    elif local == "tbl":
+        for row in node:
+            if row.tag.rsplit("}", 1)[-1] == "tr":
+                yield "\t".join("\n".join(_docx_blocks(cell)) for cell in row
+                                if cell.tag.rsplit("}", 1)[-1] == "tc")
+    else:
+        for child in node:
+            yield from _docx_blocks(child)
+
+
+def extract(kind, body, *, preserve_docx_layout=False):
     warnings = []
     if kind not in {".docx", ".pptx"}:
         try:
@@ -43,6 +102,23 @@ def extract(kind, body):
         units, chars = [], 0
         for name in names:
             root = ET.fromstring(archive.read(name))
+            if kind == ".docx" and preserve_docx_layout:
+                # This is a native reader, not a claim to have OCRed pictures,
+                # evaluated fields, or resolved tracked changes/embedded parts.
+                unsupported = {"drawing", "pict", "object", "altChunk", "oMath", "oMathPara", "del", "ins",
+                               "gridSpan", "vMerge", "sdt", "AlternateContent", "numPr", "sym",
+                               "moveFrom", "moveTo", "moveFromRangeStart", "moveFromRangeEnd", "moveToRangeStart", "moveToRangeEnd",
+                               "fldSimple", "fldChar", "instrText", "commentReference", "commentRangeStart", "commentRangeEnd"}
+                if (any(node.tag.rsplit("}", 1)[-1] in unsupported for node in root.iter())
+                        or _docx_numbering_unread(root, archive)):
+                    warnings.append("office_structure_native_unverified")
+                if any(info.filename.startswith("word/comments") for info in files):
+                    warnings.append("office_supplementary_text_unprocessed")
+                text = "\n".join(_docx_blocks(root))
+                if len(text) > MAX_TEXT:
+                    raise ValueError("native text budget")
+                units.extend([text[i:i + 80000] for i in range(0, len(text), 80000)] or [""])
+                continue
             paragraphs = []
             for node in root.iter():
                 local = node.tag.rsplit("}", 1)[-1]
@@ -70,7 +146,8 @@ def main():
     body = sys.stdin.buffer.read(MAX_BYTES + 1)
     if len(body) > MAX_BYTES:
         raise ValueError("input budget")
-    sys.stdout.write(json.dumps(extract(sys.argv[1], body), ensure_ascii=True))
+    sys.stdout.write(json.dumps(extract(sys.argv[1], body,
+        preserve_docx_layout="--preserve-docx-layout" in sys.argv[2:]), ensure_ascii=True))
 
 
 if __name__ == "__main__":

@@ -133,6 +133,8 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
 
 RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
     "submission_time_limit_reached",
+    "source_docx_busy",
+    "source_docx_timeout",
     "provider_capacity_unavailable",
     "provider_overloaded",
     "provider_timeout",

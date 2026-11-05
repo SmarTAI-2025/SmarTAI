@@ -21,7 +21,7 @@ def archive(files):
     return output.getvalue()
 
 
-@pytest.mark.parametrize("name", ["response.csv", "response.rst", "response.json", "response.html", "response.docx"])
+@pytest.mark.parametrize("name", ["response.csv", "response.rst", "response.json", "response.html", "response.doc"])
 def test_unsupported_response_suffix_is_rejected_directly_and_in_archives(name):
     for data, filename in [(b"answer", name), (archive({name: b"answer", "healthy.markdown": b"# answer"}), "responses.zip")]:
         sources = extract_raw_files_from_archive(data, filename)

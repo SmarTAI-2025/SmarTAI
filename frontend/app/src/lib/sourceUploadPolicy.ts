@@ -9,7 +9,7 @@ export const MAX_KNOWLEDGE_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_SOURCE_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 export function sourceUploadExtensions(role: PreparationSourceRole): string[] {
-  return [...DOCUMENT_SOURCE_EXTENSIONS, ...(role === "programming_tests" ? [".json", ".csv"] : []), ...IMAGE_SOURCE_EXTENSIONS];
+  return [...DOCUMENT_SOURCE_EXTENSIONS, ...(role === "problem" || role === "reference_answer" ? [".docx"] : []), ...(role === "programming_tests" ? [".json", ".csv"] : []), ...IMAGE_SOURCE_EXTENSIONS];
 }
 
 export function matchesUploadExtension(filename: string, extensions: readonly string[]): boolean {

@@ -14,12 +14,13 @@ from backend.db import submission_upload_repository
 from backend.domain.errors import DomainError, ValidationError
 from backend.services.recognition_artifacts import RecognitionArtifactBindingV1
 from backend.services.question_sources import read_question_source
+from backend.services.upload_contract import INDIVIDUAL_SUBMISSION_MAX_BYTES, UploadContractError, upload_limit, validate_submission_upload
 from backend.services.stage_provider_routing import StageProviderRoute, stage_provider_configuration_fingerprint
 from backend.storage import get_storage
 from backend.tools.file_processing import extract_raw_files_from_archive, inspect_upload_content
 from backend.progress.tracker import ProgressReporter
 
-MAX_UPLOAD_BYTES = 64 * 1024 * 1024
+MAX_UPLOAD_BYTES = INDIVIDUAL_SUBMISSION_MAX_BYTES
 MAX_TRANSCRIPT_CHARS = 200_000
 MAX_CANDIDATE_BYTES = 4 * 1024 * 1024
 
@@ -43,7 +44,7 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
                                       filename, content, content_type, provider, registry=None):
     from backend.services.submissions import _build_answers, _problem_store
 
-    if not content or len(content) > MAX_UPLOAD_BYTES:
+    if not content or len(content) > upload_limit("individual_submission_max_bytes", MAX_UPLOAD_BYTES):
         raise ValidationError("Upload exceeds the supported byte limit.", code="submission_upload_limit_exceeded")
     await run_in_threadpool(submission_repository.validate_submission_access,
                             assignment_id, student_id=student_id)
@@ -51,6 +52,10 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
     teacher_id = assignment.teacher_id
     if actor_id not in {teacher_id, student_id}:
         raise ValidationError("Upload actor is not authorized.")
+    try:
+        validate_submission_upload(filename, content)
+    except UploadContractError as exc:
+        raise ValidationError("The submission upload is not allowed.", code=exc.code, details=exc.details) from None
     questions = await run_in_threadpool(assignment_repository.get_questions_by_assignment, assignment_id=assignment_id)
     if not questions:
         raise ValidationError("Assignment has no questions")

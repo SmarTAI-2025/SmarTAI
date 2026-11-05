@@ -55,6 +55,9 @@ PDF_EXTRACTION_TIMEOUT_SECONDS = 10.0
 PDF_EXTRACTION_MAX_WORKERS = 2
 _PDF_EXTRACTION_SLOTS = threading.BoundedSemaphore(PDF_EXTRACTION_MAX_WORKERS)
 _PDF_WORKER_PATH = Path(__file__).with_name("_pdf_worker.py")
+_NATIVE_OFFICE_WORKER_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "native_worker.py"
+DOCX_MAX_CHARACTERS = 500_000
+DOCX_EXTRACTION_TIMEOUT_SECONDS = 10.0
 BAIDU_OCR_MAX_PDF_PAGES = 500
 BAIDU_OCR_MAX_IMAGE_SIDE = 8192
 SUBMISSION_ARCHIVE_MAX_FILES = 500
@@ -75,7 +78,7 @@ IMAGE_MEDIA_TYPES = {
     ".tiff": "image/tiff",
     ".webp": "image/webp",
 }
-SUBMISSION_SOURCE_EXTENSIONS = frozenset({".pdf", *DOCUMENT_TEXT_EXTENSIONS, *IMAGE_MEDIA_TYPES})
+SUBMISSION_SOURCE_EXTENSIONS = frozenset({".pdf", ".docx", *DOCUMENT_TEXT_EXTENSIONS, *IMAGE_MEDIA_TYPES})
 
 ARCHIVE_EXTENSIONS = (
     ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
@@ -284,7 +287,7 @@ async def validate_upload_content(content: bytes, filename: str, *, content_type
     if not content:
         raise HTTPException(400, detail={"code": "source_empty"})
     allowed_extensions = (SUBMISSION_SOURCE_EXTENSIONS if purpose == "submissions" else
-                          frozenset({".pdf", *IMAGE_MEDIA_TYPES, *DOCUMENT_TEXT_EXTENSIONS,
+                          frozenset({".pdf", *({".docx"} if purpose in {"problems", "reference"} else set()), *IMAGE_MEDIA_TYPES, *DOCUMENT_TEXT_EXTENSIONS,
                                      *({".csv", ".json"} if purpose == "test_cases" else {".csv", ".rst"} if purpose == "problems" else set())}))
     if _ext(filename) not in allowed_extensions:
         raise HTTPException(415, detail={"code": "submission_source_unsupported" if purpose == "submissions" else "source_type_not_allowed"})
@@ -307,7 +310,13 @@ async def validate_upload_content(content: bytes, filename: str, *, content_type
     elif inspection.mismatch:
         raise HTTPException(415, detail={"code": "source_content_type_not_allowed"})
     suffix = _ext(filename)
-    if inspection.content_type in {"application/pdf", *IMAGE_MEDIA_TYPES.values()}:
+    if suffix == ".docx":
+        from backend.services.upload_contract import validate_docx_package, UploadContractError
+        try:
+            await asyncio.to_thread(validate_docx_package, content)
+        except UploadContractError as exc:
+            raise HTTPException(422, detail={"code": exc.code}) from None
+    elif inspection.content_type in {"application/pdf", *IMAGE_MEDIA_TYPES.values()}:
         await validate_media_content(content, inspection.content_type, wait_for_slot=True,
                                      slot_timeout_seconds=media_slot_timeout_seconds)
     elif inspection.content_type == "text/plain":
@@ -315,10 +324,10 @@ async def validate_upload_content(content: bytes, filename: str, *, content_type
         if suffix not in allowed_text:
             raise HTTPException(415, detail={"code": "source_type_not_allowed"})
         if suffix == ".json":
-            text = await decode_text_bytes(content)
+            from backend.services.upload_contract import UploadContractError, _validate_json
             try:
-                json.loads(text, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
-            except (ValueError, RecursionError):
+                _validate_json(content)
+            except UploadContractError:
                 raise HTTPException(400, detail={"code": "source_json_invalid"}) from None
             return ContentInspection("application/json", inspection.declared_content_type, False)
     else:
@@ -715,6 +724,9 @@ async def extract_text_from_upload(
     if media_type.startswith("text/") or (media_type == "application/json" and purpose == "test_cases"):
         return await decode_text_bytes(file_bytes)
 
+    if _ext(safe_name) == ".docx":
+        return await _extract_docx_text(file_bytes)
+
     if media_type == "application/pdf":
         if fitz is None:
             raise HTTPException(
@@ -758,6 +770,44 @@ async def extract_text_from_upload(
         status_code=415,
         detail={"code": "submission_source_unsupported"},
     )
+
+
+async def _extract_docx_text(body: bytes) -> str:
+    """Read data through the existing bounded Office worker, never run source."""
+    # Share the existing native document process budget and cancellation-safe
+    # reaper rather than open unrestricted Office parsers in the web process.
+    if not _PDF_EXTRACTION_SLOTS.acquire(blocking=False):
+        raise HTTPException(429, detail={"code": "source_docx_busy"})
+    launch_task = None
+    try:
+        launch_task = asyncio.create_task(asyncio.create_subprocess_exec(
+            sys.executable, "-B", str(_NATIVE_OFFICE_WORKER_PATH), ".docx", "--preserve-docx-layout",
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL))
+        process = await asyncio.shield(launch_task)
+        try:
+            output, _ = await asyncio.wait_for(process.communicate(body), timeout=DOCX_EXTRACTION_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            raise HTTPException(408, detail={"code": "source_docx_timeout"}) from None
+        if process.returncode or len(output) > 64 * 1024 * 1024:
+            raise HTTPException(422, detail={"code": "source_docx_invalid"})
+        try:
+            payload = json.loads(output)
+            units = payload["units"]
+            if not isinstance(units, list) or any(not isinstance(unit, str) for unit in units):
+                raise ValueError("native payload")
+            text = "".join(units)
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(422, detail={"code": "source_docx_invalid"}) from None
+        if payload.get("warning_codes"):
+            raise HTTPException(422, detail={"code": "source_docx_incomplete"})
+        if len(text) > DOCX_MAX_CHARACTERS:
+            raise HTTPException(413, detail={"code": "source_text_too_large", "max_characters": DOCX_MAX_CHARACTERS})
+        return text
+    finally:
+        try:
+            await reap_pdf_worker(launch_task)
+        finally:
+            _PDF_EXTRACTION_SLOTS.release()
 
 
 def _is_valid_file(name: str) -> bool:
