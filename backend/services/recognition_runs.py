@@ -51,6 +51,15 @@ class RecognitionRunResultV1:
     artifact_ids: tuple[str, ...] = ()
     safe_error_code: str | None = None
 
+    def __post_init__(self):
+        # Keep immutable assembly artifacts unchanged, including older ones.
+        # Their missing-page-count diagnostic must not hide the actual local
+        # read failure at the business boundary.
+        if self.safe_error_code == "source_extent_unavailable" and self.assembly is not None:
+            cause = next((code for code in self.assembly.raw.stop_codes
+                          if code in RECOGNITION_ERROR_CODES), self.safe_error_code)
+            object.__setattr__(self, "safe_error_code", cause)
+
 
 def _zero():
     return RecognitionUsageV1(input_tokens=0, output_tokens=0)

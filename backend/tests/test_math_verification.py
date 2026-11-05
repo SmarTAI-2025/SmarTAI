@@ -1,6 +1,7 @@
 """Real function execution against independently checkable mathematical cases."""
 import asyncio
 import json
+import sys
 import time
 
 import pytest
@@ -16,6 +17,37 @@ def verify(student, reference, **kwargs):
     # Wire evidence may contain no SymPy instances, NaNs or infinities.
     json.dumps(evidence.model_dump(mode="json"), allow_nan=False)
     return evidence
+
+
+@pytest.mark.parametrize(("student", "reference", "status"), [
+    ("41", "42", "refuted"), ("6 + 3", "9", "supported"),
+    ("8-11", "0-3", "supported"), ("0 * 999999999", "0", "supported"),
+    ("999999999*999999999", "999999998*999999999", "refuted"),
+])
+def test_small_exact_comparison_preserves_evidence_without_sympy(monkeypatch, student, reference, status):
+    request = mv.MathVerificationRequest(student_expression=student, reference_expression=reference)
+    # Parentheses force the same mathematical relation through the symbolic engine.
+    symbolic = mv._verify_sync(request.model_copy(update={"student_expression": f"({student})"}))
+    monkeypatch.setitem(sys.modules, "sympy", None)
+    evidence = mv._verify_sync(request)
+    assert evidence.status == status
+    assert evidence == symbolic
+
+
+@pytest.mark.parametrize(("student", "reference", "options"), [
+    ("2", "1", {"comparison": "numeric"}), ("2", "1", {"comparison": "antiderivative"}),
+    ("2", "1", {"assumptions": {"x": {"positive": True}}}), ("2", "1", {"variable": "x"}),
+    ("2", "1", {"domain": "x > 1 and x < 0"}), ("2", "1", {"allow_approximation": True}),
+    ("2", "1", {"absolute_tolerance": 0}), ("2", "1", {"relative_tolerance": 0}),
+    ("2", "1", {"student_unit": "cm"}), ("2", "1", {"reference_unit": "m"}),
+    ("0", "1/0", {}), ("2**10", "1024", {}), ("1+2+3", "6", {}),
+    ("1000000000", "1", {}), ("001", "1", {}), ("１", "1", {}), ("2.0", "2", {}),
+])
+def test_other_relations_keep_the_symbolic_path(monkeypatch, student, reference, options):
+    request = mv.MathVerificationRequest(student_expression=student, reference_expression=reference, **options)
+    monkeypatch.setitem(sys.modules, "sympy", None)
+    with pytest.raises(ModuleNotFoundError, match="sympy"):
+        mv._verify_sync(request)
 
 
 @pytest.mark.parametrize("student,reference,kwargs,status", [
@@ -51,6 +83,7 @@ def test_constants_and_precision(student, reference, kwargs, status):
 
 @pytest.mark.parametrize("student,reference,kwargs,status", [
     ("(x+1)^2", "x^2+2*x+1", {}, "supported"),
+    ("(a^2+b^2)*(c^2+d^2)-(a*c+b*d)^2", "(a*d-b*c)^2", {"domain": "real"}, "supported"),
     ("sin(x)^2+cos(x)^2", "1", {}, "supported"),
     ("sqrt(x^2)", "x", {"domain": "real"}, "refuted"),
     ("sqrt(x^2)", "x", {"assumptions": {"x": {"nonnegative": True}}}, "supported"),
@@ -134,6 +167,7 @@ def test_units(student, reference, kwargs, status):
 
 @pytest.mark.parametrize("student,reference,comparison,status", [
     ("Integral(sin(x), (x, 0, pi))", "2", "numeric", "supported"),
+    ("Integral(x^2*sin(x),(x,0,pi))", "pi^2-4", "numeric", "supported"),
     ("integrate(exp(x), (x, 0, 1))", "E-1", "numeric", "supported"),
     ("Integral(I*x, (x, 0, 2))", "2*I", "numeric", "supported"),
     ("Integral(x^2, (x, 1, 0))", "-1/3", "numeric", "supported"),

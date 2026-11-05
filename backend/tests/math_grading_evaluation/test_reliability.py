@@ -23,7 +23,7 @@ def test_raw_boundary_does_not_consult_oracle_or_patch_parser():
     assert 'patch.object(rubric, "structured_llm_call"' not in evaluator_source
     assert 'patch.object(math_grading, "structured_llm_call"' not in evaluator_source
     assert "actual_prepare(*args, **kwargs)" in evaluator_source
-    assert "actual_verify(request)" in evaluator_source
+    assert "actual_verify(request, **kwargs)" in evaluator_source
 
 
 def test_real_raw_json_to_verifier_feedback_ledger_and_public_result():

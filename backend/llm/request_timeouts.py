@@ -63,7 +63,8 @@ class ResponseDeadlineScope:
         deadline = asyncio.timeout(self.local_wait_remaining)
         try:
             async with deadline:
-                return await awaitable
+                from backend.services.submission_work_budget import wait_for_admission
+                return await wait_for_admission(awaitable)
         except TimeoutError as exc:
             if not deadline.expired():
                 raise
@@ -85,28 +86,41 @@ class ResponseDeadlineScope:
         from backend.llm.providers import ProviderRequestError
         if self.submission_may_exist:
             raise ProviderRequestError("provider_submit_uncertain")
+        from backend.services.submission_work_budget import current_budget
+        budget = current_budget()
+        if budget is not None:
+            budget.check()
         if before_request is not None:
             await before_request()
-        if not self._authorized:
-            if self.before_send is not None:
-                await self.before_send()
-            self._authorized = True
-        if not self._reserved:
-            if self.on_send is not None:
-                self.on_send()
-            self._reserved = True
         seconds = self.seconds if timeout_seconds is None else min(self.seconds, _positive_seconds(timeout_seconds))
-        self.attempt_count += 1
-        self.submission_may_exist = True
-        self.last_attempt_rejected = False
-        deadline = asyncio.timeout(seconds)
+        if budget is not None:
+            budget.start()
+        deadline = None
         try:
+            # Admission precedes the durable pending marker. Once admitted,
+            # finish this bounded authorization/send even if the batch drains;
+            # otherwise a never-sent request could be left marked uncertain.
+            if not self._authorized:
+                if self.before_send is not None:
+                    await self.before_send()
+                self._authorized = True
+            if not self._reserved:
+                if self.on_send is not None:
+                    self.on_send()
+                self._reserved = True
+            self.attempt_count += 1
+            self.submission_may_exist = True
+            self.last_attempt_rejected = False
+            deadline = asyncio.timeout(seconds)
             async with deadline:
                 result = await invoke()
         except TimeoutError as exc:
-            if not deadline.expired():
+            if deadline is None or not deadline.expired():
                 raise
             raise ProviderRequestError("provider_timeout") from exc
+        finally:
+            if budget is not None:
+                budget.finish()
         # Finish before progress/persistence awaits, which cannot turn a
         # complete response into an unknown upstream request.
         self.submission_may_exist = False

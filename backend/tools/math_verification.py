@@ -25,8 +25,8 @@ MAX_AST_NODES = 256
 MAX_AST_DEPTH = 32
 MAX_SYMBOLS = 8
 MAX_POWER = 128
-WALL_SECONDS = 5.0
-CPU_SECONDS = 4
+WALL_SECONDS = 30.0
+CPU_SECONDS = 16
 MAX_OUTPUT_BYTES = 32768
 _CONSTANT_NAMES = {"pi", "E", "e", "I", "i"}
 _INTEGRATION_CONSTANTS = {"C", "c", "C1", "C2", "c1", "c2"}
@@ -73,7 +73,7 @@ def _unknown(reason: str, *, method: str = "unavailable") -> MathVerificationEvi
 
 
 async def verify_math(request: MathVerificationRequest) -> MathVerificationEvidence:
-    """Run a fixed worker with a hard wall deadline, killing it on cancellation.
+    """Wait for capacity, then run a bounded fixed worker and reap it.
 
     No shell, eval, sympify(string), generated program, or model is involved.
     The existing sandbox concurrency gate is shared; programming sandbox policy
@@ -86,34 +86,70 @@ async def verify_math(request: MathVerificationRequest) -> MathVerificationEvide
         request = MathVerificationRequest.model_validate(request.model_dump())
     except Exception:
         return _unknown("Invalid mathematical verification request.", method="input")
-    process = None
     try:
-        async with asyncio.timeout(WALL_SECONDS):
-            async with get_sandbox_semaphore():
-                process = await asyncio.create_subprocess_exec(
-                    sys.executable, "-I", str(Path(__file__).resolve()), "--worker",
-                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL,
-                    env={"LANG": "C.UTF-8", "PYTHONHASHSEED": "0"},
-                    cwd=os.path.dirname(os.path.abspath(__file__)),
-                )
-                output, _ = await process.communicate(request.model_dump_json().encode())
-                if process.returncode != 0 or len(output) > MAX_OUTPUT_BYTES:
-                    return _unknown("Worker failed or exceeded its resource limit.", method="resource_limit")
-                return MathVerificationEvidence.model_validate_json(output)
-    except TimeoutError:
-        return _unknown("Mathematical verification exceeded its time limit.", method="timeout")
+        # Each admitted check gets its own deadline, including worker startup.
+        # Keep the slot until the child has been reaped, including on cancellation.
+        async with get_sandbox_semaphore():
+            async with asyncio.timeout(WALL_SECONDS):
+                return await _run_worker(request)
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        # A cleanup error must not turn a parent's cancellation into evidence.
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            raise asyncio.CancelledError from None
+        if isinstance(exc, TimeoutError):
+            return _unknown("Mathematical verification exceeded its time limit.", method="timeout")
         return _unknown("Mathematical verification could not be completed.")
+
+
+async def _run_worker(request: MathVerificationRequest) -> MathVerificationEvidence:
+    # Keep ownership even if cancellation arrives before process creation
+    # returns its handle. The enclosing call budget still bounds startup.
+    launch = asyncio.create_task(asyncio.create_subprocess_exec(
+        sys.executable, "-I", str(Path(__file__).resolve()), "--worker",
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        env={"LANG": "C.UTF-8", "PYTHONHASHSEED": "0"},
+        cwd=os.path.dirname(os.path.abspath(__file__)),
+    ))
+    try:
+        process = await asyncio.shield(launch)
+        output, _ = await process.communicate(request.model_dump_json().encode())
+        if process.returncode != 0 or len(output) > MAX_OUTPUT_BYTES:
+            return _unknown("Worker failed or exceeded its resource limit.", method="resource_limit")
+        return MathVerificationEvidence.model_validate_json(output)
     finally:
-        if process is not None and process.returncode is None:
+        await _reap_worker(launch)
+
+
+async def _reap_worker(launch: asyncio.Task) -> None:
+    async def cleanup():
+        try:
+            process = await launch
+        except (Exception, asyncio.CancelledError):
+            return
+        if process.returncode is None:
             try:
                 process.kill()
             except ProcessLookupError:
                 pass
+        try:
+            await process.communicate()
+        finally:
             await process.wait()
+
+    cleanup_task = asyncio.create_task(cleanup())
+    cancelled = False
+    while not cleanup_task.done():
+        try:
+            await asyncio.shield(cleanup_task)
+        except asyncio.CancelledError:
+            cancelled = True
+    await cleanup_task
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 class _Unsupported(ValueError):
@@ -565,7 +601,54 @@ def _verify_equations(sp, req, symbols, constraints, real, trees):
     return result("unknown", "The candidate root sets could not be compared exactly.")
 
 
+_NO_UNITS = "No physical units were asserted or checked."
+_SMALL_INTEGER = r"(0|[1-9][0-9]{0,8})"
+_SMALL_ARITHMETIC = re.compile(_SMALL_INTEGER + r"(?: *([+*-]) *" + _SMALL_INTEGER + r")?")
+
+
+def _expression_conditions():
+    return [
+        "Evidence applies only to this requested relation and supplied conditions.",
+        "The caller must check the conditions against the original problem.",
+        "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
+    ]
+
+
+def _exact_constant(equal, conditions, details):
+    return MathVerificationEvidence(
+        status="supported" if equal else "refuted", method="exact",
+        reason=("The finite constant expressions are exactly equal." if equal else
+                "The constants are not exactly equal; approximation was not permitted."),
+        conditions=conditions, details=details,
+    )
+
+
+def _small_integer_value(text: str) -> int | None:
+    """Evaluate a literal or one bounded integer operation inside the worker."""
+    match = _SMALL_ARITHMETIC.fullmatch(text)
+    if match is None:
+        return None
+    first, operator, second = match.groups()
+    left = int(first)
+    if operator is None:
+        return left
+    right = int(second)
+    if operator == "+":
+        return left + right
+    if operator == "-":
+        return left - right
+    return left * right
+
+
 def _verify_sync(req):
+    # Only default exact comparisons can skip symbolic context and unit checks.
+    if not req.model_dump(exclude={"student_expression", "reference_expression"}, exclude_defaults=True):
+        left = _small_integer_value(req.student_expression)
+        right = _small_integer_value(req.reference_expression)
+        if left is not None and right is not None:
+            return _exact_constant(left == right, [*_expression_conditions(), _NO_UNITS], {
+                "comparison": "equivalence", "student_domain_requirements": [], "reference_domain_requirements": [],
+            })
     import sympy as sp
 
     symbols, constraints, real = _make_context(sp, req)
@@ -577,11 +660,7 @@ def _verify_sync(req):
         parsers, (req.student_expression, req.reference_expression)
     )]
     guards = [p.guards for p in parsers]
-    conditions = [
-        "Evidence applies only to this requested relation and supplied conditions.",
-        "The caller must check the conditions against the original problem.",
-        "Unspecified variables are finite complex numbers; ordered domains constrain their variable to real numbers.",
-    ]
+    conditions = _expression_conditions()
     if req.domain:
         conditions.append("Requested domain: " + req.domain)
     conditions.extend(f"{name}: {key}={value}" for name, flags in req.assumptions.items() for key, value in flags.items())
@@ -623,7 +702,7 @@ def _verify_sync(req):
         left = (a / b) * left
         conditions.append("Student magnitude converted to the reference unit; absolute tolerance is in that reference unit.")
     else:
-        conditions.append("No physical units were asserted or checked.")
+        conditions.append(_NO_UNITS)
 
     free = left.free_symbols | right.free_symbols
     # Do not erase a syntactically present unbound variable by cancellation.
@@ -638,7 +717,7 @@ def _verify_sync(req):
             return result("unknown", "domain", "The constant expressions are not both real on the requested real domain.")
         difference = sp.simplify(left - right)
         if difference == 0:
-            return result("supported", "exact", "The finite constant expressions are exactly equal.")
+            return _exact_constant(True, conditions, details)
         if req.allow_approximation:
             if req.absolute_tolerance is None and req.relative_tolerance is None:
                 return result("unknown", "numeric", "Approximation needs an explicitly supplied tolerance.")
@@ -657,7 +736,7 @@ def _verify_sync(req):
             return result("supported" if within else "refuted", "numeric",
                           "The constants meet the supplied tolerance." if within else "The constants exceed the supplied tolerance.")
         if difference.is_zero is False:
-            return result("refuted", "exact", "The constants are not exactly equal; approximation was not permitted.")
+            return _exact_constant(False, conditions, details)
         return result("unknown", "symbolic", "Exact equality could not be established.")
 
     if req.comparison == "antiderivative":

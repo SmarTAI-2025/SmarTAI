@@ -52,6 +52,11 @@ export function getSubmissionPageErrorLabel(source: SubmissionSourceOutcome, err
 }
 
 const REASON_COPY: Record<string, ReasonFactory> = {
+  submission_time_limit_reached: (locale) => ({
+    title: tx(locale, "本次识别已达到处理时限", "This recognition run reached its processing limit"),
+    description: tx(locale, "本次有效处理时间已达到 3 小时，排队不计时；已完成的识别和结构化作答已保留。", "This run reached 3 hours of active processing, excluding queue time. Completed recognition and structured answers are retained."),
+    nextStep: tx(locale, "重试失败项可继续补充未完成内容；也可选择人工继续处理，核对已有作答并补齐其余内容。", "Retry failed files to complete unfinished content, or continue manually to review saved answers and fill the gaps."),
+  }),
   operation_cancelled: (locale) => ({
     title: tx(locale, "已手动暂停，尚未完成识别", "Manually paused before recognition completed"),
     description: tx(locale, "原文件和已完成识别已保留。可以继续识别未完成部分，也可以人工继续处理。", "Originals and completed recognition are preserved. Resume the unfinished work or continue manually."),
@@ -133,8 +138,9 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   material_recognition_review_required: recognitionReviewCopy,
   pdf_encrypted: recognitionFileCopy,
   pdf_evidence_busy: (locale) => ({
-    title: tx(locale, "服务器正忙", "The server is busy"),
-    description: tx(locale, "请稍后重试。", "Please try again later."),
+    title: tx(locale, "PDF 读取队列繁忙", "The PDF reading queue is busy"),
+    description: tx(locale, "服务器尚未取得本次 PDF 读取所需的处理名额，不是模型服务报错。", "The server could not obtain a local PDF processing slot. This is not a model-service error."),
+    nextStep: tx(locale, "稍后点击重试失败项；已保存结果会保留，无需重新上传或打包。", "Retry failed files later. Saved results are retained; no re-uploading or repacking is needed."),
   }),
   pdf_evidence_protocol_invalid: recognitionProcessingCopy,
   pdf_evidence_timeout: (locale) => ({
@@ -182,6 +188,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   recognition_already_running: recognitionStateCopy,
   recognition_artifact_invalid: recognitionStorageCopy,
   recognition_artifact_limit: recognitionLimitCopy,
+  recognition_assembly_limit: recognitionLimitCopy,
   recognition_artifact_scope_unsupported: recognitionStateCopy,
   recognition_artifact_unavailable: recognitionStorageCopy,
   recognition_budget_exhausted: recognitionLimitCopy,
@@ -192,7 +199,16 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   recognition_input_unsupported: recognitionFileCopy,
   recognition_plan_changed: recognitionStateCopy,
   recognition_request_invalid: recognitionStateCopy,
-  recognition_response_invalid: recognitionReviewCopy,
+  recognition_response_invalid: (locale) => ({
+    title: tx(locale, "识别结果无法使用", "The recognition response could not be used"),
+    description: tx(locale, "本次返回的识别结果未通过有效性检查，不表示学生答错。", "The recognition response failed validation. This does not mean the student's answer is wrong."),
+    nextStep: tx(locale, "先重试失败项；若反复出现，可更换识别模型，并对照原文件核对已读取内容。", "Retry failed files. If it recurs, try another recognition model and check the recovered text against the original."),
+  }),
+  source_extent_unavailable: (locale) => ({
+    title: tx(locale, "PDF 页面范围未读取完成", "The PDF page range could not be read"),
+    description: tx(locale, "未能取得本次读取所需的页数信息，文件尚未完整识别。", "The page-count information needed for this read was unavailable, so recognition is incomplete."),
+    nextStep: tx(locale, "先重试失败项；原文件和已保存结果会保留。若持续失败，请尝试重新导出 PDF。", "Retry failed files first; originals and saved results are retained. If it persists, try exporting the PDF again."),
+  }),
   recognition_response_too_large: recognitionLimitCopy,
   recognition_route_changed: recognitionStateCopy,
   recognition_source_mismatch: recognitionStorageCopy,
@@ -335,10 +351,10 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     title: tx(locale, "逐文件识别结果保存未完成", "Per-file outcomes were not fully saved"),
     description: tx(
       locale,
-      "部分文件的识别结果未能保存，请联系管理员。",
-      "Recognition results for some files could not be saved. Contact your administrator.",
+      "系统未能完整保存逐文件识别结果，原文件仍保留。这不表示文件内容有误或模型服务报错。",
+      "The system could not save all per-file recognition results. Originals are retained. This does not indicate incorrect file contents or a model-service error.",
     ),
-    nextStep: tx(locale, "携带任务编号让管理员检查数据库后重试；无需重新整理原始文件。", "Share the job ID with an administrator to check the database, then retry; the originals do not need to be rebuilt."),
+    nextStep: tx(locale, "先重试失败项；若再次保存失败，请提供任务编号联系管理员排查。无需重新整理原始文件。", "Retry failed files first. If saving fails again, contact an administrator with the task ID. The originals do not need to be rebuilt."),
   }),
   no_answer_content_detected: (locale) => ({
     title: tx(locale, "没有提取到任何作答内容", "No answer content was detected"),

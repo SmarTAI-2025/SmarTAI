@@ -194,7 +194,7 @@ RECOGNITION_ERROR_CODES = frozenset({
     "image_recognition_unconfirmed", "recognition_response_invalid", "recognition_response_too_large", "recognition_timeout",
     "recognition_artifact_invalid", "recognition_artifact_limit", "recognition_artifact_unavailable",
     "recognition_artifact_scope_unsupported",
-    "recognition_source_unavailable",
+    "recognition_source_unavailable", "source_extent_unavailable", "recognition_assembly_limit", "submission_time_limit_reached",
     "recognition_already_running",
     "target_location_needs_hint", "target_selection_limit_exceeded", "visual_capability_unavailable",
     "recognition_cache_not_success", "recognition_cache_corrupt", "recognition_cache_unavailable",
