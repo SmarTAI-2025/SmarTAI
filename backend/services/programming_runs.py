@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import re
+import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
@@ -23,7 +24,7 @@ from backend.db import grading_repository
 from backend.models import ProblemInfo, StudentAnswerInfo, TestCase, is_programming_question_type
 from pydantic import ValidationError
 from backend.services.grading_checkpoints import CheckpointWriteError, current_checkpoints
-from backend.tools.code_interpreter import ExecutionReport, TestResult
+from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCodeExecutionDisabled
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
 
 VERSION = "programming_run_v1"
@@ -54,7 +55,21 @@ class ProgrammingEvidence:
 
 
 def _saved(run_id, manifest, owner):
-    records = dict(manifest.get("programming_artifacts") or {})
+    # Failed-only manifests carry small source references. Keep large output
+    # and every case observation exactly once, in the originating run.
+    records = {}
+    references = manifest.get("programming_artifacts") or {}
+    source_runs = {ref["origin_run"] for ref in references.values()}
+    for source in source_runs:
+        for event in grading_repository.list_events(source, actor_id=owner, messages=(PREPARED, COMPLETED)):
+            row = event["payload"]
+            ref = references.get(row.get("key"), {})
+            if (row.get("owner") == owner and row.get("version") == VERSION
+                    and ref.get("origin_run") == source and ref.get("digest") == row.get("digest")
+                    and ref.get("kind") == row.get("kind")):
+                records[row["key"]] = row
+    if references.keys() - records.keys():
+        raise CheckpointWriteError("programming_retry_evidence_missing")
     for event in grading_repository.list_events(run_id, actor_id=owner, messages=(PREPARED, COMPLETED, STARTED)):
         row = event["payload"]
         if row.get("version") == VERSION and row.get("owner") == owner:
@@ -63,10 +78,10 @@ def _saved(run_id, manifest, owner):
 
 
 def artifacts_for_retry(run_id, manifest, owner):
-    # An interrupted generation has unknown submission status. It can only be
-    # attempted again under the explicit failed-only retry, never lease replay.
-    return {k: row for k, row in _saved(run_id, manifest, owner).items()
-            if row.get("kind") in {PREPARED, COMPLETED}}
+    # An interrupted preparation has unknown submission status and is never
+    # inherited as a success. Only an explicit retry may start it again.
+    return {k: {field: row[field] for field in ("origin_run", "kind", "digest")}
+            for k, row in _saved(run_id, manifest, owner).items() if row.get("kind") in {PREPARED, COMPLETED}}
 
 
 def _runtime():
@@ -81,7 +96,7 @@ class ProgrammingRun:
         self.records = {}
         self.owner = None
         self.assignment = None
-        self.run_id = None
+        self.run_id = uuid.uuid4().hex
         if self.checkpoints:
             cp = self.checkpoints
             run = grading_repository.get_run(cp.run_id)
@@ -159,6 +174,8 @@ def _validate_report(report, cases):
                 or (result.case_index is not None and result.case_index != index)
                 or not math.isfinite(result.duration_ms) or result.duration_ms < 0):
             raise ValueError("programming_execution_contract_invalid")
+        if settings.runtime_environment == "production" and result.isolation_mode != "oci_container":
+            raise ValueError("programming_execution_contract_invalid")
         if result.isolation_mode == "oci_container":
             eid = getattr(result, "execution_id", None)
             if not eid or eid in ids or not re.fullmatch(r"[0-9a-f]{64}", getattr(result, "request_digest", "") or ""):
@@ -187,7 +204,7 @@ def _question_key(state, problem):
         "version": question.version if question else None, "stem": problem.stem,
         "rubric": problem.criterion, "max_score": problem.max_score, "reference": problem.reference_answer,
         "solution": problem.solution_code, "generated_reference_fields": sorted(
-            (problem._math_rubric_source or {}).get("presentation", {}).get("ai_completion_provenance") or {}),
+            ((problem._math_rubric_source or {}).get("presentation") or {}).get("ai_completion_provenance") or {}),
         "cases": [case.model_dump(mode="json") for case in problem.test_cases or ()],
         "config": cp.manifest.get("provider_configuration_fingerprint") if cp else None,
         "runtime": _runtime()})
@@ -249,7 +266,7 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
                 "programming_cases_unavailable", "programming_execution_contract_invalid",
             } else "programming_case_configuration_invalid"
             return key, [], state.failures[key]
-        except IsolatedRunnerUnavailable:
+        except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError):
             state.failures[key] = "programming_execution_unavailable"
             return key, [], state.failures[key]
         state.store(PREPARED, key, {"q_id": problem.q_id, "cases": data, "suite_hash": digest(data),
@@ -308,6 +325,7 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
     if reason:
         return ProgrammingEvidence("unsupported" if reason == "programming_mode_unsupported" else "unavailable",
                                    code, [], reason=reason)
+    case_ids = [digest([plan_key, index, c.model_dump(mode="json")]) for index, c in enumerate(cases)]
     try:
         hints = {f.removeprefix("programming_source_entry:") for f in answer.flag
                  if f.startswith("programming_source_entry:")}
@@ -339,13 +357,17 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
             try:
                 report = await execute(code, cases, language="python", per_case_timeout=10.0)
                 _validate_report(report, cases)
-            except (IsolatedRunnerUnavailable, ValueError):
+            except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError, ValueError):
                 state.failures[key] = "programming_execution_unavailable"
                 return ProgrammingEvidence("unavailable", code, cases, reason=state.failures[key])
             saved = {"identity": identity,
                 "rows": [{k: v for k, v in asdict(r).items() if k != "test"} for r in report.results],
                 "summary": {k: getattr(report, k) for k in ("passed_count", "total_count", "pass_rate", "summary")},
-                "case_ids": [digest([plan_key, index, c.model_dump(mode="json")]) for index, c in enumerate(cases)]}
+                "case_ids": case_ids}
+            saved["evidence_id"] = digest([state.run_id, identity, saved["rows"]])
             state.store(COMPLETED, key, saved)
         _validate_report(report, cases)
-        return ProgrammingEvidence("executed", code, cases, report, evidence_id=key, case_ids=tuple(saved["case_ids"]))
+        if saved["case_ids"] != case_ids:
+            raise CheckpointWriteError("programming_case_identity_invalid")
+        return ProgrammingEvidence("executed", code, cases, report, evidence_id=saved["evidence_id"],
+                                   case_ids=tuple(case_ids))

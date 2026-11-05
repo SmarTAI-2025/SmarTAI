@@ -9,7 +9,7 @@ import pytest
 from backend.models import ProblemInfo, StudentAnswerInfo, TestCase
 from backend.services import programming_runs as runs
 from backend.services.grading_checkpoints import CheckpointWriteError
-from backend.tools.code_interpreter import ExecutionReport, TestResult
+from backend.tools.code_interpreter import ExecutionReport, TestResult as ObservedCase
 
 
 def question(cases=None, **changes):
@@ -26,7 +26,7 @@ def case(expected="5"):
 
 
 def observed(cases, passed=True):
-    rows = [TestResult(test=c, passed=passed, actual_output="5", error="", duration_ms=0.4) for c in cases]
+    rows = [ObservedCase(test=c, passed=passed, actual_output="5", error="", duration_ms=0.4) for c in cases]
     return ExecutionReport(passed_count=len(cases) if passed else 0, total_count=len(cases),
                            pass_rate=float(passed), results=rows, summary="fixture execution")
 
@@ -137,7 +137,9 @@ async def test_leased_checkpoint_reclaim_retry_fresh_and_corruption(monkeypatch)
     assert initial.evidence_id == reclaimed.evidence_id == retried.evidence_id
     assert generate.await_count == execute.await_count == 1
     broken = deepcopy(reused)
-    broken[initial.evidence_id]["value"]["rows"][0]["actual_output"] = "injected"
+    record_key = next(k for k, ref in broken.items() if ref["kind"] == runs.COMPLETED)
+    assert "value" not in broken[record_key]
+    broken[record_key]["digest"] = "wrong evidence"
     cp.manifest = {"programming_artifacts":broken}
     with runs.programming_run(NS(), None), pytest.raises(CheckpointWriteError):
         await grade(question(), "s", generate, execute)
