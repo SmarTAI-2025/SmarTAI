@@ -16,7 +16,7 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Literal
 
 from backend.config import settings
@@ -30,6 +30,7 @@ from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
 VERSION = "programming_run_v1"
 PREPARED = grading_repository.PROGRAMMING_CASES_PREPARED
 STARTED = grading_repository.PROGRAMMING_PREPARATION_STARTED
+PARTIAL = grading_repository.PROGRAMMING_EXECUTION_PARTIAL
 COMPLETED = grading_repository.PROGRAMMING_EXECUTION_COMPLETED
 _current = ContextVar("programming_run", default=None)
 
@@ -61,7 +62,7 @@ def _saved(run_id, manifest, owner):
     references = manifest.get("programming_artifacts") or {}
     source_runs = {ref["origin_run"] for ref in references.values()}
     for source in source_runs:
-        for event in grading_repository.list_events(source, actor_id=owner, messages=(PREPARED, COMPLETED)):
+        for event in grading_repository.list_events(source, actor_id=owner, messages=(PREPARED, PARTIAL, COMPLETED)):
             row = event["payload"]
             ref = references.get(row.get("key"), {})
             if (row.get("owner") == owner and row.get("version") == VERSION
@@ -70,7 +71,7 @@ def _saved(run_id, manifest, owner):
                 records[row["key"]] = row
     if references.keys() - records.keys():
         raise CheckpointWriteError("programming_retry_evidence_missing")
-    for event in grading_repository.list_events(run_id, actor_id=owner, messages=(PREPARED, COMPLETED, STARTED)):
+    for event in grading_repository.list_events(run_id, actor_id=owner, messages=(PREPARED, PARTIAL, COMPLETED, STARTED)):
         row = event["payload"]
         if row.get("version") == VERSION and row.get("owner") == owner:
             records[row["key"]] = row
@@ -81,7 +82,7 @@ def artifacts_for_retry(run_id, manifest, owner):
     # An interrupted preparation has unknown submission status and is never
     # inherited as a success. Only an explicit retry may start it again.
     return {k: {field: row[field] for field in ("origin_run", "kind", "digest")}
-            for k, row in _saved(run_id, manifest, owner).items() if row.get("kind") in {PREPARED, COMPLETED}}
+            for k, row in _saved(run_id, manifest, owner).items() if row.get("kind") in {PREPARED, PARTIAL, COMPLETED}}
 
 
 def runtime_identity():
@@ -301,6 +302,68 @@ async def prepare_pending(state, problems, students, selection, reporter):
         await _prepare(state, problem, state.provider, _generate_test_cases, run_sandbox, reporter)
 
 
+def _report_from_rows(rows):
+    total = len(rows)
+    passed = sum(r.passed for r in rows)
+    return ExecutionReport(passed_count=passed, total_count=total, pass_rate=passed / total,
+                           results=rows, summary=f"Passed {passed}/{total} tests")
+
+
+def _persisted_row(row):
+    return {k: v for k, v in asdict(row).items() if k != "test"}
+
+
+async def _execute_remaining(state, key, identity, code, cases, execute):
+    """Resume only verified cases of this exact submission. Incomplete suites never vote."""
+    rows = {}
+    partial = state.read(key, PARTIAL)
+    if partial:
+        if partial.get("identity") != identity:
+            raise CheckpointWriteError("programming_partial_identity_invalid")
+        for item in partial["rows"]:
+            index = item["case_index"]
+            if type(index) is not int or not 0 <= index < len(cases) or index in rows:
+                raise CheckpointWriteError("programming_partial_identity_invalid")
+            rows[index] = TestResult(test=cases[index], **item)
+    missing = [i for i in range(len(cases)) if i not in rows]
+    subset = [cases[i] for i in missing]
+
+    def restore_index(row, local):
+        original = missing[local]
+        return replace(row, case_index=original, case_id=getattr(cases[original], "case_id", None) or f"case-{original + 1}")
+
+    async def completed(row):
+        local = row.case_index
+        if type(local) is not int or not 0 <= local < len(subset) or missing[local] in rows:
+            raise ValueError("programming_execution_contract_invalid")
+        if row.case_id != (getattr(subset[local], "case_id", None) or f"case-{local + 1}"):
+            raise ValueError("programming_execution_contract_invalid")
+        # Validate the callback before saving any partial evidence. Full reports
+        # also verify unique execution IDs across cases upon assembly.
+        local_row = replace(row, case_index=0)
+        _validate_report(_report_from_rows([local_row]), [subset[local]])
+        rows[missing[local]] = restore_index(row, local)
+
+    options = {"language": "python", "per_case_timeout": 10.0}
+    if getattr(execute, "supports_case_checkpoints", False) is True:
+        options["on_case_complete"] = completed
+    try:
+        result = await execute(code, subset, **options)
+        _validate_report(result, subset)
+    except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError, asyncio.CancelledError):
+        if len(cases) - len(missing) < len(rows) < len(cases):
+            state.store(PARTIAL, key, {"identity": identity,
+                                      "rows": [_persisted_row(rows[i]) for i in sorted(rows)]})
+        raise
+    if not partial:
+        return result
+    for local, row in enumerate(result.results):
+        rows[missing[local]] = restore_index(row, local)
+    report = _report_from_rows([rows[i] for i in range(len(cases))])
+    _validate_report(report, cases)
+    return report
+
+
 async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo, student_id: str,
                               task_id, provider, reporter, generate, execute) -> ProgrammingEvidence:
     from backend.services.programming_test_contract import bind_programming_cases
@@ -355,13 +418,12 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
         else:
             await _notify(reporter, "run_programming_test_cases")
             try:
-                report = await execute(code, cases, language="python", per_case_timeout=10.0)
-                _validate_report(report, cases)
+                report = await _execute_remaining(state, key, identity, code, cases, execute)
             except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError, ValueError):
                 state.failures[key] = "programming_execution_unavailable"
                 return ProgrammingEvidence("unavailable", code, cases, reason=state.failures[key])
             saved = {"identity": identity,
-                "rows": [{k: v for k, v in asdict(r).items() if k != "test"} for r in report.results],
+                "rows": [_persisted_row(row) for row in report.results],
                 "summary": {k: getattr(report, k) for k in ("passed_count", "total_count", "pass_rate", "summary")},
                 "case_ids": case_ids}
             saved["evidence_id"] = digest([state.run_id, identity, saved["rows"]])

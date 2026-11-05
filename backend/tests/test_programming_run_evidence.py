@@ -147,3 +147,43 @@ async def test_leased_checkpoint_reclaim_retry_fresh_and_corruption(monkeypatch)
     with runs.programming_run(NS(), None):
         await grade(question(), "s", generate, execute)
     assert generate.await_count == execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_suite_retains_verified_cases_and_retries_only_the_missing_input(monkeypatch):
+    events = {}
+    cp = NS(run_id="first", worker_id="worker", manifest={}, questions={}, revisions={"s": "rev"})
+    monkeypatch.setattr(runs, "current_checkpoints", lambda: cp)
+    monkeypatch.setattr(runs.grading_repository, "get_run", lambda rid: NS(id=rid, teacher_id="t", assignment_id="a"))
+    monkeypatch.setattr(runs.grading_repository, "list_events", lambda rid, **_: events.get(rid, []))
+
+    def store(run_id, *, message, payload, **_):
+        events.setdefault(run_id, []).append({"message": message, "payload": deepcopy(payload)})
+
+    monkeypatch.setattr(runs.grading_repository, "record_event", store)
+    problem = question([case(), TestCase(function_name="add", function_args=[3, 4], expected_return="7")])
+    batches = []
+
+    async def execute(code, cases, *, on_case_complete, **options):
+        batches.append([c.function_args for c in cases])
+        report = observed(cases)
+        for index, row in enumerate(report.results):
+            row.case_id, row.case_index = f"case-{index + 1}", index
+            if len(batches) == 1 and index == 1:
+                raise runs.IsolatedRunnerUnavailable()
+            await on_case_complete(row)
+        return report
+
+    execute.supports_case_checkpoints = True
+    with runs.programming_run(NS(), None):
+        first = await grade(problem, "s", AsyncMock(), execute)
+    assert first.status == "unavailable" and first.report is None
+    assert [e["message"] for e in events["first"]] == [runs.PREPARED, runs.PARTIAL]
+    cp.manifest = {"programming_artifacts": runs.artifacts_for_retry("first", {}, "t")}
+    cp.run_id = "retry"
+    with runs.programming_run(NS(), None):
+        retry = await grade(problem, "s", AsyncMock(), execute)
+    assert batches == [[[2, 3], [3, 4]], [[3, 4]]]
+    assert retry.status == "executed" and retry.report.passed_count == 2
+    assert [(r.case_index, r.case_id) for r in retry.report.results] == [(0, "case-1"), (1, "case-2")]
+    assert [e["message"] for e in events["retry"]] == [runs.COMPLETED]
