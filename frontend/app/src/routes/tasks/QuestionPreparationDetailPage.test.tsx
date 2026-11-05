@@ -2,10 +2,10 @@ import "fake-indexeddb/auto";
 import { clearPageDrafts, listPageDrafts } from "@/lib/pageDraftStore";
 import { PageDraftSession } from "@/hooks/useDraftProtection";
 import { DraftActions, DraftLeaveProvider } from "@/hooks/useDraftLeave";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SourceFileDescriptor } from "@/types/sourcePreview";
 import type { PreparationIssue } from "@/types";
 import { QuestionPreparationDetailPage } from "./QuestionPreparationDetailPage";
@@ -159,7 +159,7 @@ vi.mock("@/i18n/I18nProvider", async () => {
   };
 });
 
-function renderPage(initialEntry = "/tasks/task-1/questions/Q1/content") {
+async function renderPage(initialEntry = "/tasks/task-1/questions/Q1/content") {
   const router = createMemoryRouter([
     {
       path: "/tasks/:taskId/questions/:questionId/:section",
@@ -176,16 +176,26 @@ function renderPage(initialEntry = "/tasks/task-1/questions/Q1/content") {
   ], { initialEntries: [initialEntry] });
 
   render(<RouterProvider router={router} />);
+  // Every editor reads its real draft transaction on mount. Flush those reads
+  // together before interactions, instead of rerendering between user events.
+  await act(async () => { await listPageDrafts("question-draft-teacher"); });
   return router;
 }
 
-it("keeps exactly one review-confirm button per question", () => {
-  renderPage();
+it("keeps exactly one review-confirm button per question", async () => {
+  await renderPage();
   const cards = document.querySelectorAll("article[data-question-id]");
   expect(cards).toHaveLength(Object.keys(taskData.problem_data).length);
   for (const card of cards) {
     expect(within(card as HTMLElement).getAllByRole("button", { name: /待确认/ })).toHaveLength(1);
   }
+});
+
+afterEach(async () => {
+  // Unmount before draining real draft transactions so detached editors cannot
+  // rerender, and their queued hydration work cannot spill into the next test.
+  cleanup();
+  await act(async () => { await listPageDrafts("question-draft-teacher"); });
 });
 
 beforeEach(() => {
@@ -232,11 +242,11 @@ beforeEach(() => {
   });
 });
 
-it.each(["zh-CN", "en-US"])("explains an ambiguous source match and keeps confirmation available (%s)", (locale) => {
+it.each(["zh-CN", "en-US"])("explains an ambiguous source match and keeps confirmation available (%s)", async (locale) => {
   testState.locale = locale;
   taskData.problem_data.Q2.preparation_issues = [{ issue_id: "ambiguous", q_id: "Q2", field: "rubric",
     code: "ambiguous_question_match", severity: "warning", status: "open" }];
-  renderPage();
+  await renderPage();
   const card = within(document.querySelector('[data-question-id="Q2"]') as HTMLElement);
   expect(card.getByText(locale === "zh-CN"
     ? "资料无法唯一匹配到本题，请对照原件核对内容。"
@@ -248,10 +258,7 @@ it.each(["zh-CN", "en-US"])("explains an ambiguous source match and keeps confir
 it("edits type beside number through the existing versioned field save, including Other", async () => {
   taskData.problem_data.Q1.type = "concept";
   mutateAsync.mockResolvedValue({ workflow_revision: 8 });
-  renderPage();
-  // Drain the real draft hydration transactions before timing the save UI.
-  // Otherwise prior mounted editors can keep fake IndexedDB busy under the full suite.
-  await act(async () => { await listPageDrafts("question-draft-teacher"); });
+  await renderPage();
   const card = within(document.querySelector('[data-question-id="Q1"]') as HTMLElement);
   expect(card.queryByText("short")).not.toBeInTheDocument();
   expect(card.getAllByText("概念题")).toHaveLength(2);
@@ -266,6 +273,8 @@ it("edits type beside number through the existing versioned field save, includin
   await userEvent.type(card.getByRole("textbox", { name: "题号" }), "1.1.5");
   await userEvent.click(card.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(mutateAsync).toHaveBeenLastCalledWith({ taskId: "task-1", qId: "Q1", number: "1.1.5", expectedWorkflowRevision: 8 }));
+  // The API call precedes asynchronous draft cleanup; wait for the completed UI.
+  await waitFor(() => expect(card.queryByRole("textbox", { name: "题号" })).not.toBeInTheDocument());
 });
 
 describe("QuestionPreparationDetailPage navigation", () => {
@@ -277,7 +286,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
       { issue_id: "rubric", code: "generation_failed", field: "rubric", severity: "blocking", status: "open" },
       { issue_id: "answer", code: "generation_failed", field: "answer", severity: "warning", status: "open" },
     ];
-    renderPage("/tasks/task-1/questions/Q2/content");
+    await renderPage("/tasks/task-1/questions/Q2/content");
     const element = document.querySelector('[data-question-id="Q2"]') as HTMLElement;
     const card = within(element);
     expect(card.getAllByText("生成失败")).toHaveLength(1);
@@ -296,13 +305,14 @@ describe("QuestionPreparationDetailPage navigation", () => {
     mutateAsync.mockResolvedValue({ workflow_revision: 8 });
     await userEvent.click(card.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({ taskId: "task-1", qId: "Q2", type: "reasoning", expectedWorkflowRevision: 7 }));
+    await waitFor(() => expect(card.queryByRole("combobox", { name: "题型" })).not.toBeInTheDocument());
   });
   it("opens only the failed question fields for manual completion and blocks early confirmation", async () => {
     taskData.problem_data.Q2.reference_answer = "";
     taskData.problem_data.Q2.criterion = "";
     taskData.problem_data.Q2.preparation_issues = [{ issue_id: "manual-q2", code: "manual_completion_required",
       field: "source", severity: "warning", status: "open", details: { required_fields: ["reference_answer", "criterion"] } }];
-    renderPage("/tasks/task-1/questions/Q2/content?manual=1#question-Q2");
+    await renderPage("/tasks/task-1/questions/Q2/content?manual=1#question-Q2");
     const q2 = document.querySelector('[data-question-id="Q2"]') as HTMLElement;
     await waitFor(() => expect(q2.querySelectorAll("textarea")).toHaveLength(2));
     expect(document.querySelector('[data-question-id="Q1"] textarea')).toBeNull();
@@ -312,7 +322,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
   });
   it("opens the 50/50 workspace with the formal problem_source descriptor", async () => {
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
 
     await user.click(await screen.findByRole("button", { name: "查看题目原文件" }));
     expect(await screen.findByTestId("source-preview-panel")).toBeInTheDocument();
@@ -345,7 +355,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
       return { data: taskData };
     });
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
 
     await waitFor(() => expect(taskRefetch).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(sourcePreviewApi.getTaskSourceFiles).toHaveBeenCalledWith("task-1", 8));
@@ -356,7 +366,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
   });
 
   it("uses a bounded responsive question rail and preserves the full label on hover", async () => {
-    renderPage();
+    await renderPage();
 
     const navigation = await screen.findByRole("complementary", { name: "题目导航" });
     expect(navigation.parentElement).toHaveClass("lg:grid-cols-[clamp(180px,16vw,240px)_minmax(0,1fr)]");
@@ -364,8 +374,9 @@ describe("QuestionPreparationDetailPage navigation", () => {
   });
 
   it("shows and edits the authoritative maximum score", async () => {
+    mutateAsync.mockResolvedValue({ workflow_revision: 8 });
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
 
     expect((await screen.findAllByText("本题满分与评分标准")).length).toBeGreaterThan(0);
     expect(screen.getByText(/系统暂按默认 10 分/)).toBeInTheDocument();
@@ -382,11 +393,12 @@ describe("QuestionPreparationDetailPage navigation", () => {
       max_score: 5,
       criterion: "Rubric one",
     }));
+    await waitFor(() => expect(screen.queryByRole("spinbutton", { name: "第 1 题满分" })).not.toBeInTheDocument());
   });
 
   it.each(["", "0", "-1", "10001", "0.001"])("explains invalid maximum %s and recovers after correction", async (value) => {
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
     await user.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
     const input = screen.getByRole("spinbutton", { name: "第 1 题满分" });
     fireEvent.change(input, { target: { value } });
@@ -401,7 +413,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
   });
 
   it("keeps two subparts inside one major-question card", async () => {
-    renderPage();
+    await renderPage();
 
     await screen.findByText("含 2 个小问 · (a) (b)");
     expect(document.querySelectorAll('[data-question-id="Q1"]')).toHaveLength(1);
@@ -413,7 +425,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
   it("blocks 11/10 and atomically saves matching 11/11 score plus rubric", async () => {
     mutateAsync.mockResolvedValue({ workflow_revision: 8 });
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
 
     await user.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
     const rubric = screen.getByRole("textbox", { name: "第 1 题评分标准" });
@@ -439,6 +451,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
       max_score: 11,
       criterion: "(a) 5 分\n(b) 6 分",
     });
+    await waitFor(() => expect(screen.queryByRole("spinbutton", { name: "第 1 题满分" })).not.toBeInTheDocument());
   });
 
   it("carries the latest workflow revision across different maximum-score edits and final confirmation", async () => {
@@ -447,10 +460,8 @@ describe("QuestionPreparationDetailPage navigation", () => {
       workflow_revision: ++workflowRevision,
     }));
     const user = userEvent.setup();
-    const router = renderPage();
+    const router = await renderPage();
 
-    // Initial reads must finish before timing the formal save's draft cleanup.
-    await act(async () => { await listPageDrafts("question-draft-teacher"); });
     await user.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
     const firstScore = screen.getByRole("spinbutton", { name: "第 1 题满分" });
     await user.clear(firstScore);
@@ -478,7 +489,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
 
   it("confirms unchanged content in one click without rewriting material or navigating", async () => {
     mutateAsync.mockResolvedValue({ workflow_revision: 8 });
-    const router = renderPage();
+    const router = await renderPage();
     await userEvent.click(screen.getAllByRole("button", { name: "第 1 题 · 待确认" })[0]);
     expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({
       taskId: "task-1", qId: "Q1", expectedWorkflowRevision: 7, review_status: "confirmed",
@@ -489,7 +500,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
   it("allows review in a later stage without rewinding to submission upload", async () => {
     taskData.status = "graded";
     mutateAsync.mockResolvedValue({ workflow_revision: 8 });
-    const router = renderPage();
+    const router = await renderPage();
     expect(screen.queryByRole("button", { name: "修改第 1 题满分与评分标准" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "全部确认" }));
     expect(mutateAsync).toHaveBeenCalledTimes(4);
@@ -498,7 +509,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
 
   it("stops bulk review at a stale or busy failure and preserves the page", async () => {
     mutateAsync.mockResolvedValueOnce({ workflow_revision: 8 }).mockRejectedValueOnce(new Error("stale_workflow_revision"));
-    const router = renderPage();
+    const router = await renderPage();
     await userEvent.click(screen.getByRole("button", { name: "全部确认" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("已确认 1 道题；第 2 题未能保存");
     expect(mutateAsync).toHaveBeenCalledTimes(2);
@@ -511,7 +522,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
   it("keeps review buttons busy until confirmation finishes", async () => {
     let finish!: (value: { workflow_revision: number }) => void;
     mutateAsync.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
-    renderPage();
+    await renderPage();
     const button = screen.getAllByRole("button", { name: "第 1 题 · 待确认" })[0];
     const batchButton = screen.getByRole("button", { name: "全部确认" });
     await userEvent.click(button);
@@ -525,7 +536,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
 
   it("opens a failed question outside the current filter directly", async () => {
     mutateAsync.mockResolvedValueOnce({ workflow_revision: 8 }).mockRejectedValueOnce(new Error("workflow_busy"));
-    const router = renderPage("/tasks/task-1/questions/Q1/content?q=Q1");
+    const router = await renderPage("/tasks/task-1/questions/Q1/content?q=Q1");
     await userEvent.click(screen.getByRole("button", { name: "全部确认" }));
     await userEvent.click(await screen.findByRole("button", { name: "前往该题" }));
     expect(router.state.location.pathname).toBe("/tasks/task-1/questions/Q2/content");
@@ -535,7 +546,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
 
   it("points to unsaved edits instead of silently disabling confirmation", async () => {
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
     await user.click(screen.getByRole("button", { name: "修改第 1 题满分与评分标准" }));
     await user.clear(screen.getByRole("spinbutton", { name: "第 1 题满分" }));
     await user.type(screen.getByRole("spinbutton", { name: "第 1 题满分" }), "8");
@@ -549,7 +560,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
 
   it("does not block navigation only because the default maximum score needs review", async () => {
     const user = userEvent.setup();
-    const router = renderPage();
+    const router = await renderPage();
 
     await user.click(await screen.findByRole("link", { name: "返回题目资料总览" }));
 
@@ -560,7 +571,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
 
   it("blocks navigation only after the teacher makes an unsaved maximum-score edit", async () => {
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
 
     await user.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
     const input = screen.getByRole("spinbutton", { name: "第 1 题满分" });
@@ -576,7 +587,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
   it("uses reviewed English copy and returns to the question material overview", async () => {
     testState.locale = "en-US";
     const user = userEvent.setup();
-    const router = renderPage("/tasks/task-1/questions/Q1/content?q=reasoning");
+    const router = await renderPage("/tasks/task-1/questions/Q1/content?q=reasoning");
 
     const backLink = await screen.findByRole("link", { name: "Back to Question Material Overview" });
     expect(backLink).toHaveAttribute("href", "/tasks/task-1/questions?q=reasoning");
@@ -590,7 +601,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
   });
 
   it("switches questions with ArrowDown and ArrowUp but not while an input is focused", async () => {
-    renderPage();
+    await renderPage();
     const firstQuestion = await screen.findByRole("button", { name: "第 1 题" });
     const secondQuestion = screen.getByRole("button", { name: "第 2 题" });
 
@@ -618,7 +629,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
 
   it("keeps the prepared Python and Java questions as language-specific highlighting fixtures", async () => {
     testState.locale = "en-US";
-    renderPage();
+    await renderPage();
 
     const pythonBadge = await screen.findByLabelText("Code language: Python");
     const javaBadge = screen.getByLabelText("Code language: Java");
@@ -634,10 +645,7 @@ it("formal field save clears only its explicit snapshot; failure preserves the o
   await clearPageDrafts();
   const user = userEvent.setup();
   mutateAsync.mockResolvedValue({ workflow_revision: 8 });
-  renderPage();
-  // This read queues behind the editors' initial IndexedDB transactions. Flush
-  // their React updates before exercising saves, rather than polling hydration.
-  await act(async () => { await listPageDrafts("question-draft-teacher"); });
+  await renderPage();
   const card = document.getElementById("question-Q1")!;
   const question = within(card);
   await user.click(question.getByRole("button", { name: "题目 · 修改" }));
