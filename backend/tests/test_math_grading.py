@@ -14,6 +14,7 @@ from backend.skills.concept import ConceptSkill
 from backend.skills import math_grading as grading
 from backend.services.math_rubric_plan import MathRubricPlan, MathRubricRoute, fallback_math_rubric_plan
 from backend.services.math_grading_context import math_plans_context
+from backend.tests.manual_clock import manual_clock
 
 
 def problem(kind="计算题", criterion="Method 8 points, result 2 points."):
@@ -508,42 +509,64 @@ async def test_late_tool_timeout_keeps_earlier_completed_evidence(monkeypatch, p
 @pytest.mark.asyncio
 async def test_verification_queue_does_not_exhaust_call_or_group_budget(monkeypatch, provider):
     import asyncio
-    from backend.tools import math_verification, sandbox_runtime
+    from backend.tools import sandbox_runtime
 
-    slots = asyncio.Semaphore(1)
-    monkeypatch.setattr(sandbox_runtime, "_SEMAPHORE", slots)
-    monkeypatch.setattr(grading, "VERIFICATION_BUDGET_SECONDS", .5)
-    monkeypatch.setattr(math_verification, "CALL_WALL_SECONDS", .25, raising=False)
-    await slots.acquire()
-    children = []
-    payload = json.dumps({"status": "refuted", "method": "fixture", "reason": "41 != 42"})
+    loop = asyncio.get_running_loop()
+    # Only explicit clock advances spend budget, never host scheduling latency.
+    with manual_clock(monkeypatch) as clock:
+        waiting = asyncio.Event()
 
-    async def launch(*args, **kwargs):
-        # The shortened budgets test admission accounting, not host/Python speed.
-        child = SimpleNamespace(returncode=0,
-            communicate=AsyncMock(return_value=(payload.encode(), b"")),
-            wait=AsyncMock(return_value=0))
-        children.append(child)
-        return child
+        class ObservedSemaphore(asyncio.Semaphore):
+            async def acquire(self):
+                if self.locked():
+                    waiting.set()
+                return await super().acquire()
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
-    p, a, plan = problem(), answer(), plan_for()
-    draft = assessment(checks=[grading.Verification(claim_id="s1", context_quote=p.stem,
-        request={"student_expression": "41", "reference_expression": "42"}) for _ in range(2)])
-    task = asyncio.create_task(CalculationSkill(provider)._verify(draft, p, a, plan))
-    try:
-        await asyncio.sleep(.75)
-        queued = not task.done()
-        assert not children
-    finally:
-        slots.release()
-    evidence = await asyncio.wait_for(task, 3)
-    assert queued, evidence
-    assert [entry["status"] for entry in evidence] == ["refuted", "refuted"]
-    assert len(children) == 2 and all(child.returncode == 0 for child in children)
-    for child in children:
-        child.wait.assert_awaited_once()
-    assert slots._value == 1
+        slots = ObservedSemaphore(1)
+        monkeypatch.setattr(sandbox_runtime, "_SEMAPHORE", slots)
+        await slots.acquire()
+        children = []
+        payload = json.dumps({"status": "refuted", "method": "fixture", "reason": "41 != 42"})
+
+        async def launch(*args, **kwargs):
+            # Real subprocess coverage lives in test_math_verification_lifecycle.
+            child = SimpleNamespace(returncode=0,
+                communicate=AsyncMock(return_value=(payload.encode(), b"")),
+                wait=AsyncMock(return_value=0))
+            children.append(child)
+            return child
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+        p, a, plan = problem(), answer(), plan_for()
+        draft = assessment(checks=[grading.Verification(claim_id="s1", context_quote=p.stem,
+            request={"student_expression": "41", "reference_expression": "42"}) for _ in range(2)])
+        task = asyncio.create_task(CalculationSkill(provider)._verify(draft, p, a, plan))
+        waiter = asyncio.create_task(waiting.wait())
+        try:
+            try:
+                done, _ = await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+                assert waiter in done, "Verification returned without waiting for admission"
+                # Cross all production deadlines while admission is still blocked.
+                clock.now += grading.VERIFICATION_BUDGET_SECONDS + 1
+                checkpoint = asyncio.Event()
+                loop.call_later(0, checkpoint.set)
+                await checkpoint.wait()  # Dispatch any incorrectly armed queue timeout.
+                queued = not task.done()
+                assert not children
+            finally:
+                slots.release()
+            evidence = await task
+            assert queued, evidence
+            assert [entry["status"] for entry in evidence] == ["refuted", "refuted"], evidence
+            assert len(children) == 2 and all(child.returncode == 0 for child in children)
+            for child in children:
+                child.wait.assert_awaited_once()
+            assert slots._value == 1
+        finally:
+            for pending in (task, waiter):
+                if not pending.done():
+                    pending.cancel()
+            await asyncio.gather(task, waiter, return_exceptions=True)
 
 
 def test_rounding_preserves_item_total():

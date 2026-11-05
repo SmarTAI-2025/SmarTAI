@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from backend.tools import math_verification as mv, sandbox_runtime
+from backend.tests.manual_clock import manual_clock
 
 
 def request():
@@ -46,21 +47,25 @@ async def test_queued_real_math_worker_gets_full_execution_window(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_slow_process_creation_does_not_spend_calculation_window(monkeypatch):
-    payload = json.dumps({"status": "supported", "method": "fixture", "reason": "ready"})
-    child = SimpleNamespace(returncode=0,
-        communicate=AsyncMock(return_value=(payload.encode(), b"")),
-        wait=AsyncMock(return_value=0))
+    loop = asyncio.get_running_loop()
+    with manual_clock(monkeypatch) as clock:
+        payload = json.dumps({"status": "supported", "method": "fixture", "reason": "ready"})
+        child = SimpleNamespace(returncode=0,
+            communicate=AsyncMock(return_value=(payload.encode(), b"")),
+            wait=AsyncMock(return_value=0))
 
-    async def launch(*args, **kwargs):
-        # Delay only creation; real process startup cannot fit a portable 0.1s test.
-        await asyncio.sleep(.15)
-        return child
+        async def launch(*args, **kwargs):
+            # Exceed the production calculation window without real-time sleeps.
+            clock.now += mv.WALL_SECONDS + 1
+            checkpoint = asyncio.Event()
+            loop.call_later(0, checkpoint.set)
+            await checkpoint.wait()
+            return child
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
-    monkeypatch.setattr(mv, "WALL_SECONDS", .1)
-    result = await mv.verify_math(request())
-    assert result.status == "supported", result
-    child.wait.assert_awaited_once()
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+        result = await mv.verify_math(request())
+        assert result.status == "supported", result
+        child.wait.assert_awaited_once()
 
 
 @pytest.mark.asyncio
