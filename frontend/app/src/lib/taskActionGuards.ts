@@ -1547,7 +1547,7 @@ function fileErrorDescription(
     return tx(locale, "文件声明的类型与扩展名不一致。请从原应用重新导出，并按上传区域支持的格式保存后再上传。", "The file's declared type does not match its extension. Export it again from the original app in a format supported by this upload area.");
   }
   if (code === "submission_source_unsupported") {
-    return tx(locale, "作答支持单文件源码（.py、.c、.cc、.cpp）、DOCX、PDF、TXT、MD、MARKDOWN、JPG、JPEG、PNG、WebP、BMP、TIF、TIFF；压缩包内部也须使用这些格式。", "Responses support single-file source (.py, .c, .cc, .cpp), DOCX, PDF, TXT, MD, MARKDOWN, JPG, JPEG, PNG, WebP, BMP, TIF and TIFF. Files inside archives must also use these formats.");
+    return tx(locale, "作答支持单文件源码（.py、.c、.cc、.cpp）、DOCX、PDF、TXT、MD、MARKDOWN、JPG、JPEG、PNG、WebP、BMP、TIF、TIFF；压缩包内部也须使用这些格式。旧版 .doc 请另存为 .docx。", "Responses support single-file source (.py, .c, .cc, .cpp), DOCX, PDF, TXT, MD, MARKDOWN, JPG, JPEG, PNG, WebP, BMP, TIF and TIFF. Files inside archives must also use these formats. Save legacy .doc files as .docx.");
   }
   if (code === "source_content_type_not_allowed" || code === "submission_source_content_type_mismatch") {
     return tx(locale, "文件内容与扩展名不符，或文件已损坏。请确认能在本地打开，并重新导出为上传区域支持的格式；只修改文件后缀无效。", "The file contents do not match its extension, or the file is damaged. Check that it opens locally and export it in a format supported by this upload area; renaming the extension does not convert it.");
