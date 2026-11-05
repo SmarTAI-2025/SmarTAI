@@ -44,6 +44,18 @@ beforeEach(() => {
 });
 
 describe("submission recognition completion", () => {
+  it("offers retry and manual review with retained results after the active work limit", async () => {
+    snapshot = { ...detail, status: "error", last_failed_job_id: "new-job", error: "submission_time_limit_reached",
+      submission_sources: [{ ...source("failed"), reason_code: "submission_time_limit_reached" }],
+      submission_source_summary: { uploaded: 1, parsed: 0, failed: 1, pending: 0, identity_needs_review: 0 } };
+    show();
+    expect(screen.getByRole("heading", { name: "本次识别已达到处理时限" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "重试失败项" })).toBeInTheDocument();
+    expect(screen.getByText(/排队不计时。已完成的识别和结构化作答已保留/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
+    expect(await screen.findByRole("heading", { name: "作答校对页面" })).toBeVisible();
+  });
+
   it.each(["error", "submissions_paused"] as const)("shows an immediate handoff view during a slow %s request and restores recovery after rejection", async status => {
     snapshot = { ...detail, status, last_failed_job_id: "new-job", error: "operation_cancelled" };
     let reject!: (error: unknown) => void;

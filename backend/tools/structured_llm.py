@@ -202,6 +202,8 @@ def _classify_exception(e: Exception) -> Exception:
     into the default 3-attempt transient path.
     """
     from backend.llm.provider_limits import quota_error_code
+    if getattr(e, "code", None) == "submission_time_limit_reached":
+        return PermanentLLMError("submission_time_limit_reached")
     quota_code = quota_error_code(e)
     if quota_code and quota_code != "provider_rate_limited":
         return DailyQuotaError() if quota_code == "provider_daily_quota_exceeded" else PermanentLLMError(quota_code)

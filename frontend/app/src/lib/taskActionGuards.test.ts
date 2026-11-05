@@ -9,6 +9,15 @@ import {
 } from "./taskActionGuards";
 
 describe("task contract compatibility", () => {
+  it.each(["pdf_evidence_busy", "source_extent_unavailable"])("offers retained-result retry for local PDF failure %s", code => {
+    for (const locale of ["zh-CN", "en-US"] as const) {
+      const info = classifyRecoverableError(code, { locale });
+      expect(info.actionKind).toBe("retry");
+      expect(info.description).toContain(locale === "zh-CN" ? "已保存结果会保留" : "saved results are retained");
+      expect(info.description).not.toMatch(/管理员|administrator/);
+    }
+  });
+
   it.each(["zh-CN", "en-US"] as const)("retires implicit saved-text organization without offering a model retry (%s)", locale => {
     const info = classifyRecoverableError("saved_text_recovery_retired", { locale });
     expect(info.retryUnavailable).toBe(true);

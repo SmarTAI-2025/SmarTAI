@@ -24,6 +24,34 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 }
 
 describe("submission source reason copy", () => {
+  it.each(["zh-CN", "en-US"] as const)("explains work-time exhaustion and both continuation options (%s)", locale => {
+    const copy = getSubmissionSourceReasonCopy(source({ reason_code: "submission_time_limit_reached" }), locale);
+    expect(copy.description).toContain(locale === "zh-CN" ? "3 小时，排队不计时" : "3 hours of active processing, excluding queue time");
+    expect(copy.nextStep).toContain(locale === "zh-CN" ? "人工继续处理" : "continue manually");
+    expect(JSON.stringify(copy)).not.toMatch(/管理员|administrator/);
+  });
+
+  it.each(["zh-CN", "en-US"] as const)("does not diagnose a database outage from a generic save failure (%s)", locale => {
+    const copy = getSubmissionSourceReasonCopy(source({ reason_code: "submission_outcome_persistence_failed" }), locale);
+    expect(copy.nextStep).toContain(locale === "zh-CN" ? "先重试失败项" : "Retry failed files first");
+    expect(copy.nextStep).toContain(locale === "zh-CN" ? "再次保存失败" : "saving fails again");
+    expect(JSON.stringify(copy)).not.toMatch(/数据库|database/);
+  });
+
+  it.each(["zh-CN", "en-US"] as const)("keeps local PDF failures actionable and distinct from model failures (%s)", (locale) => {
+    for (const reason_code of ["pdf_evidence_busy", "source_extent_unavailable", "recognition_response_invalid"]) {
+      const item = source({ reason_code });
+      const copy = getSubmissionSourceReasonCopy(item, locale);
+      expect(copy.nextStep).toContain(locale === "zh-CN" ? "重试失败项" : "Retry failed files");
+      expect(JSON.stringify(copy)).not.toMatch(/管理员|administrator/);
+      expect(getSubmissionPageErrorLabel(item, { page: 1, error_code: reason_code }, locale)).toContain(copy.title);
+    }
+    const local = getSubmissionSourceReasonCopy(source({ reason_code: "pdf_evidence_busy" }), locale);
+    expect(local.description).toContain(locale === "zh-CN" ? "不是模型服务报错" : "not a model-service error");
+    const invalid = getSubmissionSourceReasonCopy(source({ reason_code: "recognition_response_invalid" }), locale);
+    expect(invalid.description).toContain(locale === "zh-CN" ? "不表示学生答错" : "does not mean the student's answer is wrong");
+  });
+
   it("describes incomplete pages in the submission workflow", () => {
     const item = source({ reason_code: "question_source_incomplete" });
     const zh = getSubmissionSourceReasonCopy(item, "zh-CN");

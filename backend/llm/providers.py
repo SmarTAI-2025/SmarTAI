@@ -519,7 +519,15 @@ class BaseProvider(ABC):
     async def _invoke_response(self, invoke, *, timeout_seconds=None):
         scope = current_response_scope()
         if scope is None:
-            return await invoke()
+            from backend.services.submission_work_budget import current_budget
+            budget = current_budget()
+            if budget is not None:
+                budget.start()
+            try:
+                return await invoke()
+            finally:
+                if budget is not None:
+                    budget.finish()
         from backend.progress.recognition_activity import report_provider_state
 
         async def ready():
@@ -581,25 +589,22 @@ class BaseProvider(ABC):
         async with self._call_capacity(messages):
             t0 = time.perf_counter()
             try:
-                if scope is None:
+                async def invoke():
+                    nonlocal t0
+                    t0 = time.perf_counter()
                     response = await client.ainvoke(messages, **generation_kwargs)
-                    self._endpoint_breaker().record_success()
                     content = _response_text(response.content if hasattr(response, "content") else response)
-                else:
-                    async def invoke():
-                        nonlocal t0
-                        t0 = time.perf_counter()
-                        response = await client.ainvoke(messages, **generation_kwargs)
-                        content = _response_text(response.content if hasattr(response, "content") else response)
-                        return content, _response_metadata(response)
+                    return content, _response_metadata(response)
 
-                    content, metadata = await self._invoke_response(invoke)
-                    self._endpoint_breaker().record_success()
+                # Historical policies have no response-only scope, but still
+                # participate in the submission attempt's active-work clock.
+                content, metadata = await self._invoke_response(invoke)
+                self._endpoint_breaker().record_success()
                 duration_ms = (time.perf_counter() - t0) * 1000
                 self._record_duration(duration_ms)
                 logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(content)} chars)")
                 return LLMResponse(content=content, provider=self.provider_id, model=self.model,
-                                   duration_ms=duration_ms, **(_response_metadata(response) if scope is None else metadata))
+                                   duration_ms=duration_ms, **metadata)
             except Exception as e:
                 if _is_overload_failure(e):
                     self._endpoint_breaker().record_failure()
@@ -693,22 +698,25 @@ class GeminiProvider(BaseProvider):
 
                 # Cancellation cannot stop a running sync SDK thread. Keep its
                 # capacity leases until it drains; never start replacement work.
-                call = asyncio.create_task(to_thread.run_sync(
-                    _sync_call, limiter=get_scheduler().thread_limiter,
-                ))
-                try:
-                    response, sdk_duration_ms = await asyncio.shield(call)
-                except asyncio.CancelledError:
-                    while not call.done():
-                        try:
-                            await asyncio.shield(call)
-                        except asyncio.CancelledError:
-                            continue
-                        except Exception:
-                            break
-                    if not call.cancelled():
-                        call.exception()
-                    raise
+                async def invoke():
+                    call = asyncio.create_task(to_thread.run_sync(
+                        _sync_call, limiter=get_scheduler().thread_limiter,
+                    ))
+                    try:
+                        return await asyncio.shield(call)
+                    except asyncio.CancelledError:
+                        while not call.done():
+                            try:
+                                await asyncio.shield(call)
+                            except asyncio.CancelledError:
+                                continue
+                            except Exception:
+                                break
+                        if not call.cancelled():
+                            call.exception()
+                        raise
+
+                response, sdk_duration_ms = await self._invoke_response(invoke)
                 self._endpoint_breaker().record_success()
                 content = _response_text(response.content if hasattr(response, "content") else response)
                 duration_ms = sdk_duration_ms
