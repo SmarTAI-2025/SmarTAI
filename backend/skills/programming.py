@@ -16,7 +16,7 @@ from backend.skills.base import (
     GradingSkill, build_system_prompt, classify_skill_error,
     format_deterministic_feedback, normalize_expert_result, normalize_score_scale, register_skill,
 )
-from backend.skills.programming_evidence import describe_run, unavailable, ungraded_message
+from backend.skills.programming_evidence import describe_run, mark_teacher_case_score_review, unavailable, ungraded_message
 from backend.tools import knowledge as kb_tool
 from backend.tools.code_interpreter import run_sandbox
 from backend.tools.structured_llm import (
@@ -298,6 +298,7 @@ class ProgrammingSkill(GradingSkill):
                     steps=result.steps, raw_output=raw.content, duration_ms=raw.duration_ms,
                     programming_evidence=evidence, knowledge_citations=kb_tool.citations(chunks),
                 ), problem.max_score)
+                mark_teacher_case_score_review(vote, self.language)
                 if evidence.execution_status == "unsupported" and round_ai_score(vote.score, vote.max_score) == 0:
                     # Without a run, code review alone cannot establish a publishable student zero.
                     vote.error_kind = "programming_unverified_zero"

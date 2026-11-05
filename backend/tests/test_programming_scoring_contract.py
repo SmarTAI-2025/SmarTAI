@@ -117,6 +117,7 @@ async def test_mixed_sources_late_failures_and_bounded_distinct_reasons():
     result = await programming.ProgrammingSkill(route).grade(problem, _make_answer(code))
     evidence = result.programming_evidence
     assert result.score == 7 and evidence.teacher_tests.model_dump() == {"passed": 5, "total": 8}
+    assert evidence.score_status == "final" and not evidence.score_review_reason
     assert evidence.generated_tests.model_dump() == {"passed": 0, "total": 1}
     assert evidence.failure_counts == {"wrong_answer": 3, "runtime_error": 1}
     assert "teacher-provided tests: passed 5/8" in result.comment and "AI-generated tests: passed 0/1" in result.comment
@@ -158,11 +159,12 @@ async def test_selected_experts_share_one_execution_and_weighted_real_zero(monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["ai_only_confirm", "ai_only_edit", "code_only", "entry_only", "teacher_zero", "platform", "configuration", "no_submission"])
+@pytest.mark.parametrize("scenario", ["ai_only_confirm", "ai_only_edit", "code_only", "entry_only", "teacher_zero", "platform", "configuration", "no_submission",
+                                      "teacher_deduction", "teacher_full", "later_expert", "later_sample"])
 async def test_run_review_finalization_and_release(monkeypatch, scenario):
     from backend.config import settings
     from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
-    monkeypatch.setattr(settings, "multi_sample_n", 1)
+    monkeypatch.setattr(settings, "multi_sample_n", 2 if scenario == "later_sample" else 1)
     suffix = uuid4().hex[:10]
     teacher, student = f"program-teacher-{suffix}", f"program-student-{suffix}"
     with session_scope() as session:
@@ -186,6 +188,8 @@ async def test_run_review_finalization_and_release(monkeypatch, scenario):
     assignment_repository.publish(assignment_id=assignment.id, teacher_id=teacher, expected_version=1)
     sub = submission_repository.create_submission(assignment_id=assignment.id, student_id=student)
     code = "" if scenario == "no_submission" else "print(0)"
+    if scenario in {"teacher_deduction", "later_expert", "later_sample"}:
+        code = "print(input())"
     if scenario == "entry_only":
         code = "def add(pair): return pair[0] + pair[1]"
     if scenario == "code_only":
@@ -195,8 +199,16 @@ async def test_run_review_finalization_and_release(monkeypatch, scenario):
     if scenario == "platform":
         monkeypatch.setattr(programming, "run_sandbox", AsyncMock(side_effect=IsolatedRunnerUnavailable()))
     ai_score = 7 if scenario in {"ai_only_edit", "code_only", "entry_only"} else 0
-    route = fixed_provider(response(award(ai_score)))
-    registry = SimpleNamespace(count=lambda: 1, list_available=lambda: [route], pick_default=lambda: route)
+    if scenario in {"teacher_deduction", "teacher_full", "later_expert", "later_sample"}:
+        ai_score = {"teacher_deduction": 8, "teacher_full": 10, "later_expert": 9, "later_sample": 9}[scenario]
+    route = fixed_provider(response(award(10 if scenario in {"later_expert", "later_sample"} else ai_score)))
+    routes = [route]
+    if scenario == "later_expert":
+        routes.append(fixed_provider(response(award(8)), name="second"))
+    if scenario == "later_sample":
+        route = fixed_provider(response(award(10)), response(award(8)))
+        routes = [route]
+    registry = SimpleNamespace(count=lambda: len(routes), list_available=lambda: routes, pick_default=lambda: route)
     run = grading_runs.create_run(teacher_id=teacher, assignment_id=assignment.id)
     await grading_runs.process_run(run_id=run.id, worker_id="worker", registry=registry)
     row, = grading_repository.list_results_for_run(run.id)
@@ -221,12 +233,23 @@ async def test_run_review_finalization_and_release(monkeypatch, scenario):
         with pytest.raises(ResultNotReleasable):
             grading_runs.release(teacher_id=teacher, run_id=run.id)
         assert not grading_runs.student_results(student_id=student, assignment_id=assignment.id)
-    elif scenario in {"ai_only_confirm", "ai_only_edit", "code_only", "entry_only"}:
-        reason = {"code_only": "programming_code_review_only", "entry_only": "programming_interface_only"}.get(scenario, "programming_ai_only")
+    elif scenario in {"ai_only_confirm", "ai_only_edit", "code_only", "entry_only", "teacher_deduction", "teacher_full", "later_expert", "later_sample"}:
+        reason = {"code_only": "programming_code_review_only", "entry_only": "programming_interface_only",
+                  "teacher_full": "programming_teacher_tests_failed_full_credit",
+                  **dict.fromkeys(("teacher_deduction", "later_expert", "later_sample"), "programming_teacher_tests_passed_deduction"),
+                  }.get(scenario, "programming_ai_only")
         if scenario == "entry_only":
             assert evidence["primary_reason"] == "signature_mismatch" and evidence["teacher_tests"]["total"] == 1
+        flagged = row.ai_expert_results[-1]["programming_evidence"]
+        if scenario in {"later_expert", "later_sample"}:
+            assert len(row.ai_expert_results) == 2
+            assert [e["score"] for e in row.ai_expert_results] == [10, 8]
+            assert evidence["score_status"] == "final" and "score_review_reason" not in evidence
+        if scenario.startswith("teacher_") or scenario in {"later_expert", "later_sample"}:
+            assert flagged["score_review_reason"] == reason and row.ai_comment.startswith(flagged["safe_summary"])
+            assert flagged["primary_reason"] == ("teacher_case_failed" if scenario == "teacher_full" else "none")
         assert public["provisional_score"] == public["score"] == ai_score
-        assert evidence["score_status"] == "provisional" and reason in row.initial_review_reasons
+        assert flagged["score_status"] == "provisional" and reason in row.initial_review_reasons
 
         def assert_blocked():
             state = task_facade.finalization(**args)
@@ -251,7 +274,7 @@ async def test_run_review_finalization_and_release(monkeypatch, scenario):
             assert task_facade.finalization(**args)["ready_for_confirmation"]
             grading_repository.add_teacher_review(row.id, teacher_id=teacher, new_score=ai_score, confirm=False)
             assert_blocked()  # Reverting to the provisional vote restores its original requirement.
-        confirmed = scenario == "ai_only_confirm"
+        confirmed = scenario in {"ai_only_confirm", "teacher_deduction", "later_expert"}
         resolved = ai_score if confirmed else 8.5
         grading_repository.add_teacher_review(row.id, teacher_id=teacher, new_score=resolved,
                                              new_comment="Teacher decision", confirm=confirmed)
@@ -274,6 +297,26 @@ async def test_run_review_finalization_and_release(monkeypatch, scenario):
         grading_runs.release(teacher_id=teacher, run_id=run.id)
         seen, = grading_runs.student_results(student_id=student, assignment_id=assignment.id)
         assert seen.effective_score == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["zh", "en"])
+async def test_s10_equivalent_sum_keeps_disputed_rationale_separate_from_observations(language):
+    # Accepting zero leaves a sum unchanged. A plausible model-only deduction
+    # must remain reviewable instead of becoming evidence that the output was wrong.
+    cases = [TestCase(function_name="sum_positive", function_args=[values], expected_return=str(total)) for values, total in
+             [([], 0), ([0], 0), ([-2, 3, 3], 6), ([5, -5, 0], 5), ([-1], 0)]]
+    problem = _make_problem(stem="Implement def sum_positive(nums):", test_cases=cases)
+    problem.criterion = "Award 10 for the correct sum; accept equivalent implementations."
+    output = {**award(8), "comment": "Incorrect: zero changes the sum."}
+    result = await programming.ProgrammingSkill(fixed_provider(response(output)), language=language).grade(
+        problem, _make_answer("def sum_positive(nums): return sum(x for x in nums if x >= 0)"))
+    facts = result.programming_evidence
+    assert facts.teacher_tests.passed == facts.teacher_tests.total == 5 and facts.failure_counts == {}
+    assert result.score == 8 and facts.requires_human_review and facts.score_status == "provisional"
+    assert result.comment.startswith(facts.safe_summary)
+    label = "模型评分意见" if language == "zh" else "Model scoring opinion"
+    assert result.comment.index("5/5") < result.comment.index(label) < result.comment.index(output["comment"])
 
 
 @pytest.mark.asyncio

@@ -153,14 +153,17 @@ async def run_multi_expert(**kwargs) -> Correction:
         from backend.services.programming_runs import programming_run
         with programming_run(kwargs["registry"], kwargs.get("grading_setup")):
             correction = await _run_multi_expert(**kwargs)
-        return _project_programming_result(correction)
+        return _project_programming_result(correction, kwargs.get("language", "en"))
     with math_review_scope():
         return _apply_math_review_advisory(await _run_multi_expert(**kwargs))
 
 
-def _project_programming_result(correction: Correction) -> Correction:
+def _project_programming_result(correction: Correction, language: str) -> Correction:
     """Project the one shared execution after expert weights and disagreement are final."""
+    from backend.skills.programming_evidence import mark_teacher_case_score_review
     votes = [e for e in correction.expert_results if not e.error_kind]
+    for vote in votes:
+        mark_teacher_case_score_review(vote, language)  # Includes prior checkpoints.
     evidence = next((e.programming_evidence for e in votes if e.programming_evidence), None)
     if evidence is None:
         return correction
@@ -173,13 +176,22 @@ def _project_programming_result(correction: Correction) -> Correction:
         desc = "\n".join(f"{e.provider}: {e.score:g}/{e.max_score:g}" for e in votes)
         correction.steps = [StepScore(step_no=1, desc=desc, score=correction.score,
                                       is_correct=correction.score == correction.max_score)]
-    if correction.synthesis_method == "judge_agent":
-        # The optional judge owns prose only. Always display verified counts.
+    disputed = next((v.programming_evidence for v in votes
+                     if v.programming_evidence and v.programming_evidence.score_review_reason), None)
+    if disputed:
+        # Selected/first expert and aggregate can agree with the tests while a
+        # later vote disagrees. Make its pending interpretation explicit.
+        label = "模型评分意见" if language == "zh" else "Model scoring opinion"
+        if not correction.comment.startswith(disputed.safe_summary):
+            correction.comment = f"{disputed.safe_summary}\n\n{label} · {correction.comment}"
+    elif correction.synthesis_method == "judge_agent":
         correction.comment += "\n\n" + evidence.safe_summary
-    if evidence.requires_human_review:
-        reason = programming_evidence_review_reason(evidence.model_dump())
-        correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, reason]))
-        correction.requires_human_review = True
+    for vote in votes:
+        facts = vote.programming_evidence
+        if facts and facts.requires_human_review:
+            reason = programming_evidence_review_reason(facts.model_dump())
+            correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, reason]))
+            correction.requires_human_review = True
     return correction
 
 

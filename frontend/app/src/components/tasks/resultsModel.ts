@@ -289,19 +289,20 @@ export function correctionReviewAttention(correction: Correction): ReviewAttenti
     || correctionReviewReasonIds(correction).some(reason => MATH_REVIEW_REASONS.includes(reason))) ? "advisory" : "none";
 }
 
+const programmingReviewReasons = ["programming_teacher_tests_passed_deduction", "programming_teacher_tests_failed_full_credit",
+  "programming_ai_only", "programming_code_review_only", "programming_interface_only"];
+
 export function pendingProgrammingReview(correction: Correction): string | undefined {
-  const reasons = correctionReviewReasonIds(correction);
-  let reason = ["programming_ai_only", "programming_code_review_only", "programming_interface_only"].find((id) => reasons.includes(id));
-  if (!reason) {
-    const evidence = correction.expert_results?.find((expert) =>
-      !expert.error_kind && expert.programming_evidence?.contract === "smartai.programming_evidence" &&
-      expert.programming_evidence.score_status === "provisional")?.programming_evidence;
-    if (evidence) {
-      if (evidence.execution_status !== "executed") reason = "programming_code_review_only";
-      else if ((evidence.teacher_tests?.total ?? 0) > 0 && ["target_function_missing", "signature_mismatch"].includes(evidence.primary_reason ?? "")) reason = "programming_interface_only";
-      else reason = "programming_ai_only";
-    }
+  const reasons = new Set(correctionReviewReasonIds(correction));
+  for (const expert of correction.expert_results ?? []) {
+    const evidence = expert.programming_evidence;
+    if (expert.error_kind || evidence?.contract !== "smartai.programming_evidence" || evidence.score_status !== "provisional") continue;
+    if (evidence.score_review_reason && programmingReviewReasons.includes(evidence.score_review_reason)) reasons.add(evidence.score_review_reason);
+    else if (evidence.execution_status !== "executed") reasons.add("programming_code_review_only");
+    else if ((evidence.teacher_tests?.total ?? 0) > 0 && ["target_function_missing", "signature_mismatch"].includes(evidence.primary_reason ?? "")) reasons.add("programming_interface_only");
+    else reasons.add("programming_ai_only");
   }
+  const reason = programmingReviewReasons.find((id) => reasons.has(id));
   if (!reason || (validReviewScore(correction.teacher_score, correction.max_score) &&
       (correction.review_status === "confirmed" || correction.teacher_score !== aiCorrectionScore(correction)))) return undefined;
   return reason;
@@ -360,6 +361,8 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
   const english: Record<string, string> = {
     grading_paused: "Paused before grading finished", partial_experts: "Some experts completed",
     high_indecisiveness: "Experts disagree", low_confidence: "Low confidence", score_spread_high: "Large score difference",
+    programming_teacher_tests_passed_deduction: "All teacher tests passed. Review the suggested deduction against the rubric.",
+    programming_teacher_tests_failed_full_credit: "A teacher test failed. Review the suggestion of full credit against the rubric.",
     programming_interface_only: "The required function could not be called. Check the score for the implementation.",
     programming_ai_only: "Only AI-generated tests were run. Confirm or adjust the score.",
     programming_code_review_only: "Code review only. Confirm or adjust the score.",
@@ -378,6 +381,8 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     high_indecisiveness: "专家分歧较大",
     minority_veto: "个别模型评分偏离较大",
     low_confidence: "置信度偏低",
+    programming_teacher_tests_passed_deduction: "教师用例全部通过，请按评分标准复核模型建议的扣分。",
+    programming_teacher_tests_failed_full_credit: "有教师用例未通过，请按评分标准复核模型建议的满分。",
     programming_interface_only: "无法按题目要求调用函数，请核对实现思路应得的分数。",
     programming_ai_only: "仅执行了 AI 生成的用例，请确认或修改分数。",
     programming_code_review_only: "仅有源码审查结果，请确认或修改分数。",

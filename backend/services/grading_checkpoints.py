@@ -10,7 +10,7 @@ from backend.db import grading_repository as repository
 from backend.db.models import AssignmentQuestionRecord, GradeResultRecord, GradingRunEventRecord, GradingRunSubmissionRecord, ProviderConfigRecord
 from backend.db.workflow_repository import GradingRunSetupRecord
 from backend.domain.education import QuestionDTO
-from backend.models import Correction, ExpertResult, ProblemInfo, TaskGradingSetup
+from backend.models import Correction, ExpertResult, ProblemInfo, TaskGradingSetup, is_programming_question_type
 from backend.services.math_grading_context import (
     MATH_GRADING_ENGINE_VERSION, PLAN_EVENT, expert_matches_plan,
     matching_math_plans, plans_from_snapshots, problem_from_question, uses_math_grading,
@@ -279,7 +279,9 @@ def persist_paused_results(session, run):
     a review row, including pairs with no model result. Late workers cannot add
     checkpoints after this transaction commits.
     """
-    from backend.agents.multi_expert import _is_successful_expert, _weighted_average_fallback, _expert_to_correction
+    from backend.agents.multi_expert import (
+        _expert_to_correction, _is_successful_expert, _project_programming_result, _weighted_average_fallback,
+    )
     from backend.services.grading_adapter import correction_to_result
 
     setup = session.get(GradingRunSetupRecord, run.id)
@@ -355,6 +357,8 @@ def persist_paused_results(session, run):
                     max_score=question.max_score, confidence=0, comment="已暂停，尚未批改", steps=[],
                     synthesis_method="paused")
             correction.expert_results = experts
+            if successes and is_programming_question_type(question.type):
+                correction = _project_programming_result(correction, config.feedback_language)
             correction.requires_human_review = True
             correction.review_reasons = list(dict.fromkeys([*correction.review_reasons,
                 "grading_paused" if run.status not in {"failed", "partial_failed"} else "grading_incomplete",
