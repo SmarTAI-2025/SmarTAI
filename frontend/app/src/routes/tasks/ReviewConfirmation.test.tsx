@@ -310,6 +310,23 @@ describe("one-click grading review", () => {
     expect(details).not.toHaveTextContent(/模型出错|Model error|0\/10|programming_execution_unavailable/);
   });
 
+  it("puts both teacher-test score conflicts in the existing red required queue", () => {
+    state.locale = "zh-CN";
+    state.result.results = [{student_id: "S1", corrections: [
+      correction("Q1", {score: 8, provisional_score: 8, review_reasons: ["programming_teacher_tests_passed_deduction"]}),
+      correction("Q2", {score: 10, provisional_score: 10, review_reasons: ["programming_teacher_tests_failed_full_credit"]}),
+    ]}];
+    show();
+    const tab = screen.getByRole("tab", {name: "需要处理 (2)"});
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab).toHaveClass("text-red-700");
+    const panel = screen.getByRole("tabpanel", {name: "需要处理 (2)"});
+    for (const explanation of [/教师用例全部通过/, /有教师用例未通过/]) {
+      expect(within(panel).getByText(explanation)).toHaveClass("text-red-700");
+    }
+    expect(screen.getByRole("tab", {name: "建议处理 (0)"})).toBeInTheDocument();
+  });
+
   it.each([
     ["zh-CN", "SmarTAI 批改结果", "建议 9 / 10，待复核", "教师用例 5/5 通过。模型建议扣分，待核对。"],
     ["en-US", "SmarTAI Grading Result", "Suggested 9 / 10, pending review", "All 5/5 teacher tests passed. Review the proposed deduction."],
