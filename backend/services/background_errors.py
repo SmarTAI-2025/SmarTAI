@@ -132,7 +132,6 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
 }) | SAFE_SOURCE_REASON_CODES | RECOGNITION_ERROR_CODES
 
 RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
-    "submission_archive_processing_unavailable",
     "provider_capacity_unavailable",
     "provider_overloaded",
     "provider_timeout",
@@ -151,6 +150,7 @@ RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
     "submission_persistence_failed",
     "submission_outcome_persistence_failed",
     "submission_source_persistence_failed",
+    "submission_archive_processing_unavailable",
     "source_storage_reservation_conflict",
     "source_storage_write_failed",
     "source_storage_integrity_failed",
