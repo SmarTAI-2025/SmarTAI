@@ -396,6 +396,18 @@ async def test_function_failure_phase(source, args, kwargs, reason, record_prope
         assert not result.passed and result.process_exit_code == 1 and result.return_value is None
 
 
+@pytest.mark.parametrize("io_mode", ["function", "stdin"])
+async def test_saved_teacher_edit_reaches_real_oci(monkeypatch, io_mode):
+    from backend.tests.test_programming_saved_grading_flow import exercise_saved_grading_flow
+
+    # The shared synchronous API test runs its own grading event loop.
+    row = await asyncio.to_thread(exercise_saved_grading_flow, monkeypatch, io_mode=io_mode)
+    assert (row["isolation_mode"], row["process_exit_code"]) == ("oci_container", 0)
+    assert (row["case_id"], row["case_index"]) == ("case-1", 0)
+    assert re.fullmatch(r"[0-9a-f]{32}", row["execution_id"])
+    assert re.fullmatch(r"[0-9a-f]{64}", row["request_digest"])
+
+
 async def test_real_oci_callbacks_follow_completion_order(monkeypatch):
     from backend.tools import code_interpreter
 

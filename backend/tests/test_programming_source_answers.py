@@ -247,7 +247,8 @@ def test_source_mapping_respects_the_shared_teacher_entry_contract(stem, expecte
 
 
 @pytest.mark.parametrize("enclosed", [False, True])
-def test_module_docstring_and_markdown_in_python_strings_survive_import(enclosed):
+def test_module_docstring_and_markdown_in_python_strings_survive_import_and_execution_input(enclosed):
+    from backend.services.programming_runs import _source
     known = questions("Implement solve(x).")
     module = ('"""Student module documentation."""\n'
               'EXAMPLE = """Below is a Markdown example.\n```python\nprint(1)\n```\n"""\n'
@@ -255,12 +256,16 @@ def test_module_docstring_and_markdown_in_python_strings_survive_import(enclosed
     text = "```python\n" + module + "```\n" if enclosed else module
     answer, = source_answers("work.txt", text, known, set(known))
     assert not answer["flag"] and answer["content"] == module
+    assert _source(answer["content"]) == _source(text) == module
 
 
 def test_real_fences_and_prose_outside_module_still_require_review():
+    from backend.services.programming_runs import _source
     known = questions("Implement solve(x).")
     blocks = '```python\ndef helper(x): return x\n```\n\n```python\ndef solve(x): return helper(x)\n```\n'
     assert source_answers("work.txt", blocks, known, set(known)) is None
+    with pytest.raises(ValueError, match="programming_ambiguous_code_blocks"):
+        _source(blocks)
     commentary = '"""Module docstring"""\ndef solve(x): return x\n"Another explanation."\n'
     assert source_answers("work.txt", commentary, known, set(known)) is None
 

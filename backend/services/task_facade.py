@@ -62,6 +62,7 @@ from backend.db.models import (
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
+from backend.domain.grading_review import result_programming_review_reason, teacher_resolved_programming_score
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
 from backend.domain.errors import (
@@ -70,7 +71,6 @@ from backend.domain.errors import (
     InvalidTransition,
     LeaseLost,
     NotFound,
-    ResultNotReleasable,
     ValidationError,
     VersionConflict,
 )
@@ -5228,6 +5228,12 @@ def start_task_grading(
             question.q_id: math_rubric_fingerprint(problem_from_question(question))
             for question in questions if question.q_id in math_qids
         }
+    from backend.models import is_programming_question_type
+    from backend.services.programming_runs import VERSION as programming_version, artifacts_for_retry, runtime_identity
+    programming_qids = {q.q_id for q in questions if is_programming_question_type(q.type)}
+    if programming_qids:
+        input_manifest["programming_grading_version"] = programming_version
+        input_manifest["programming_runtime"] = runtime_identity()
     fingerprint_manifest = deepcopy(input_manifest)
     for row in fingerprint_manifest["questions"]:
         # Semantic input already has its own fingerprint. Persisting an internal
@@ -5274,10 +5280,20 @@ def start_task_grading(
         # a model to redistribute the same question's points. Old-engine or
         # missing-plan mathematical results are rerun in this new run.
         plans = saved_math_plans(latest.id, questions=questions) if math_qids else {}
+        compatible_programming = old.get("programming_grading_version") == programming_version
+        if programming_qids and compatible_programming:
+            if old.get("programming_runtime") != input_manifest["programming_runtime"]:
+                raise VersionConflict("Programming runtime changed; start a new run.", code="grading_inputs_changed")
+            # Retain the class's accepted test basis even when a provider
+            # credential was rotated between the failed item and its retry.
+            input_manifest["programming_preparation_config"] = old.get(
+                "programming_preparation_config", old.get("provider_configuration_fingerprint"))
+            input_manifest["programming_artifacts"] = artifacts_for_retry(latest.id, old, owner_id)
         previous_results = grading_repository.list_results_for_run(latest.id)
         reusable = [result.model_dump(mode="json") for result in previous_results
                     if result.effective_score is not None and math.isfinite(result.effective_score)
                     and (result.q_id not in math_qids or result.q_id in plans)
+                    and (result.q_id not in programming_qids or compatible_programming or result.teacher_review)
                     and ("grading_paused" not in result.initial_review_reasons or result.teacher_review)]
         if len(reusable) == len(questions) * len(frozen_revision_ids):
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
@@ -5292,6 +5308,9 @@ def start_task_grading(
         # but partial expert votes from its previous configuration cannot mix in.
         input_manifest["reused_experts"] = (saved_experts(latest.id)
             if old.get("provider_configuration_fingerprint") == input_manifest.get("provider_configuration_fingerprint") else [])
+        if programming_qids and not compatible_programming:
+            input_manifest["reused_experts"] = [item for item in input_manifest["reused_experts"]
+                                                  if item.get("q_id") not in programming_qids]
         if math_qids:
             from backend.services.math_grading_context import expert_matches_plan
             input_manifest["reused_experts"] = [
@@ -6086,14 +6105,16 @@ def update_correction_review(
 
 
 def _correction_review_blocks_finalization(result) -> bool:
-    """Only a missing or invalid effective score prevents finalization."""
+    """A provisional programming score also needs a recorded teacher decision."""
     def valid_score(value):
         return (value is not None and math.isfinite(value)
                 and 0 <= value <= result.ai_max_score)
 
-    return (
-        result.result_status in education.NON_SCOREABLE_RESULT_STATUSES
-        or not valid_score(result.effective_score)
+    if result.result_status in education.NON_SCOREABLE_RESULT_STATUSES or not valid_score(result.effective_score):
+        return True
+    review = result.teacher_review or {}
+    return bool(result_programming_review_reason(result)) and not teacher_resolved_programming_score(
+        result.ai_score, review.get("new_score"), result.ai_max_score, review.get("confirmed"),
     )
 
 
@@ -6116,8 +6137,9 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
     confirmed_required_count = 0
     if run is not None:
         for result in grading_repository.list_results_for_run(run.id, include_missing=True):
-            if (_correction_review_blocks_finalization(result)
-                    or result.ai_score is None):
+            blocked = _correction_review_blocks_finalization(result)
+            programming_reason = result_programming_review_reason(result)
+            if blocked or result.ai_score is None or programming_reason:
                 required_review_count += 1
                 review = result.teacher_review or {}
                 if (
@@ -6126,12 +6148,12 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
                     and review.get("confirmed") is True
                 ):
                     confirmed_required_count += 1
-            if _correction_review_blocks_finalization(result):
+            if blocked:
                 presentation = workflow_repository.list_student_presentations(task_id).get(result.student_id)
                 remaining.append({
                     "student_id": presentation.display_student_id if presentation else result.student_id,
                     "q_id": result.q_id,
-                    "reasons": list(result.review_reasons or []),
+                    "reasons": list(result.review_reasons or ([programming_reason] if programming_reason else [])),
                     "confirmed": False,
                 })
     released = bool(run and run.released_at is not None)
@@ -6316,9 +6338,6 @@ def generate_artifacts(
     def render_manifest(version: int, released_at: float, task_name: str) -> dict:
         # Called under the run/workflow locks before either snapshot or report
         # metadata is written. No provider calls, storage writes or mutations.
-        if any(_correction_review_blocks_finalization(result)
-               for result in grading_repository.list_results_for_run(run.id)):
-            raise ResultNotReleasable("unresolved_failures")
         snapshot = result_snapshot(
             task_id=task_id, owner_id=owner_id, result_version=version,
             grading_run_id=run.id,

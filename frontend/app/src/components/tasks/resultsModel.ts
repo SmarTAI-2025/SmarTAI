@@ -289,9 +289,23 @@ export function correctionReviewAttention(correction: Correction): ReviewAttenti
     || correctionReviewReasonIds(correction).some(reason => MATH_REVIEW_REASONS.includes(reason))) ? "advisory" : "none";
 }
 
-/** Only an unusable saved score blocks the next stage. */
+export function pendingProgrammingReview(correction: Correction): string | undefined {
+  const reasons = correctionReviewReasonIds(correction);
+  let reason = ["programming_ai_only", "programming_code_review_only"].find((id) => reasons.includes(id));
+  if (!reason) {
+    const evidence = correction.expert_results?.find((expert) =>
+      !expert.error_kind && expert.programming_evidence?.contract === "smartai.programming_evidence" &&
+      expert.programming_evidence.score_status === "provisional")?.programming_evidence;
+    if (evidence) reason = evidence.execution_status === "executed" ? "programming_ai_only" : "programming_code_review_only";
+  }
+  if (!reason || (validReviewScore(correction.teacher_score, correction.max_score) &&
+      (correction.review_status === "confirmed" || correction.teacher_score !== aiCorrectionScore(correction)))) return undefined;
+  return reason;
+}
+
+
 export function correctionReviewNextBlocked(correction: Correction): boolean {
-  return correctionReviewBlocked(correction);
+  return correctionReviewBlocked(correction) || Boolean(pendingProgrammingReview(correction));
 }
 
 export function validExpertResults(correction: Correction) {
@@ -342,6 +356,8 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
   const english: Record<string, string> = {
     grading_paused: "Paused before grading finished", partial_experts: "Some experts completed",
     high_indecisiveness: "Experts disagree", low_confidence: "Low confidence", score_spread_high: "Large score difference",
+    programming_ai_only: "Only AI-generated tests were run. Confirm or adjust the score.",
+    programming_code_review_only: "Code review only. Confirm or adjust the score.",
     math_scoring_uncertainty: "Scoring evidence needs checking",
     math_expert_disagreement: "Expert disagreement; review suggested.",
     math_verification_conflict: "Verification evidence still needs checking.",
@@ -357,6 +373,8 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     high_indecisiveness: "专家分歧较大",
     minority_veto: "个别模型评分偏离较大",
     low_confidence: "置信度偏低",
+    programming_ai_only: "仅执行了 AI 生成的用例，请确认或修改分数。",
+    programming_code_review_only: "仅有源码审查结果，请确认或修改分数。",
     math_scoring_uncertainty: "评分依据仍有疑点，建议核对",
     math_expert_disagreement: "专家分歧，建议复核。",
     math_verification_conflict: "核验结果与评分依据待核对。",

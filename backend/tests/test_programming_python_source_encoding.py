@@ -77,6 +77,39 @@ async def test_authored_program_reaches_real_function_or_stdin_process(name,code
     assert report.passed_count==report.total_count==1, (name,report.results)
 
 
+@pytest.mark.asyncio
+async def test_run_keeps_original_unicode_source_and_binds_only_affected_execution_keys():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from backend.services import programming_runs as runs
+    from backend.tests.test_programming_run_evidence import grade, question, submission
+
+    source="# coding: gbk\ndef add(a,b): return '中文'\n"
+    original_bytes=source.encode("gbk")
+    decoded=decode_python_submission(original_bytes)
+    copied=python_execution_source(decoded)
+    tc=Case(io_mode="function",function_name="add",function_args=[2,3],expected_return="'中文'")
+    problem=question([tc],solution_code=decoded)
+    with runs.programming_run(SimpleNamespace(),None) as state:
+        evidence=await grade(problem,"student",AsyncMock(),run_sandbox,submission(decoded))
+        executed=next(item["value"] for item in state.records.values() if item["kind"]==runs.COMPLETED)
+    assert evidence.status=="executed" and evidence.code==source and evidence.report.passed_count==1
+    assert executed["identity"]["source_sha256"]==runs.source_hash(source)
+    assert executed["identity"]["execution_source_sha256"]==runs.source_hash(copied)
+    assert runs._reference_execution_identity(problem)["execution_source_sha256"]==runs.source_hash(copied)
+    assert runs._reference_execution_identity(question([tc],solution_code="def add(a,b): return a+b"))==runs.runtime_identity()
+
+
+@pytest.mark.asyncio
+async def test_unverified_encoding_never_becomes_a_student_vote():
+    from unittest.mock import AsyncMock
+    from backend.tests.test_programming_run_evidence import grade,question,case,submission
+    execute=AsyncMock(side_effect=AssertionError("unverifiable encoding must not run"))
+    evidence=await grade(question([case()]),"student",AsyncMock(),execute,submission("# coding: unicode_escape\ndef add(a,b): return a+b"))
+    assert evidence.status=="unavailable" and not evidence.report
+    execute.assert_not_awaited()
+
+
 def test_source_with_student_syntax_error_is_still_receivable():
     body="# coding: latin-1 # café\ndef broken(:".encode("latin-1")
     assert decode_python_submission(body)=="# coding: latin-1 # café\ndef broken(:"
