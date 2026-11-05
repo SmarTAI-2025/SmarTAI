@@ -1,6 +1,7 @@
 """A partial award is not a discrepancy. Verify its cited grounds at most once."""
 import asyncio
 from copy import deepcopy
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -100,7 +101,7 @@ async def test_confirmation_requires_independent_witness(kind, first, second, ru
 ])
 async def test_optional_call_failure_or_unresolved_claim_keeps_original_score(reply, status):
     problem, answer = materials()
-    provider = fixed_provider(award({"failed_teacher_cases":[1]}), reply)
+    provider = fixed_provider(award({"rubric_quote":"unquoted method"}), reply)
     corr = await grade(registry(provider), problem, answer)
     assert provider.ainvoke.await_count == 2
     facts = corr.expert_results[0].programming_evidence
@@ -145,8 +146,9 @@ async def test_one_auxiliary_request_across_experts_concurrent_projection_and_fa
             check = copied.expert_results[1].programming_evidence.partial_check
             check["status"] = "suspected"
             await review_partial_score(copied, state=retried, **options)
-            assert check["status"] == ("unavailable" if interrupted else "confirmed")
-            assert (REVIEW_REASON in copied.review_reasons) != interrupted
+            assert check["status"] == "confirmed" and REVIEW_REASON in copied.review_reasons
+            assert check["model_check_status"] == ("interrupted" if interrupted else "completed")
+            assert check["issues"][0]["verification_source"] == "teacher_execution"
             never.ainvoke.assert_not_awaited()
 
 
@@ -196,7 +198,8 @@ async def test_confirmed_deduction_conflict_blocks_release_until_the_teacher_res
 
 
 @pytest.mark.asyncio
-async def test_stop_between_verification_and_question_write_restores_exact_result(case):
+@pytest.mark.parametrize("verified", [False, True], ids=["before_call", "after_call"])
+async def test_stop_between_verification_and_question_write_restores_exact_result(case, verified):
     from sqlalchemy import select
     from backend.db import grading_repository
     from backend.db.models import AssignmentQuestionRecord
@@ -212,15 +215,25 @@ async def test_stop_between_verification_and_question_write_restores_exact_resul
     model_id = setup.setup["selected_provider_ids"][0]
     provider = fixed_provider(award({"failed_teacher_cases":[1]}), response({"confirmed":[1]}), name=model_id)
     problem, answer = materials()
-    corr = await cp.run(run_multi_expert(problem=problem, answer=answer, registry=registry(provider),
-        student_id=revisions[0][1], multi_sample_n=1, language="zh"))
-    assert REVIEW_REASON in corr.review_reasons and not grading_repository.list_results_for_run(run_id)
+    if verified:
+        corr = await cp.run(run_multi_expert(problem=problem, answer=answer, registry=registry(provider),
+            student_id=revisions[0][1], multi_sample_n=1, language="zh"))
+        assert REVIEW_REASON in corr.review_reasons
+    else:
+        # The teacher can stop after the vote checkpoint but before the extra
+        # request starts. Preserve a proven test contradiction without dispatch.
+        from backend.skills.programming import ProgrammingSkill
+        vote = await cp.run(ProgrammingSkill(provider, language="zh").grade(problem, answer, student_id=revisions[0][1]))
+        cp.save_expert(revisions[0][1], "q1", model_id, 0, vote)
+    assert not grading_repository.list_results_for_run(run_id)
     stop(case, run_id)
     result = next(item for item in grading_repository.list_results_for_run(run_id) if item.q_id == "q1")
     assert result.ai_score == 6 and REVIEW_REASON in result.initial_review_reasons
-    assert result.ai_expert_results[0]["programming_evidence"]["partial_check"]["status"] == "confirmed"
+    stored = result.ai_expert_results[0]["programming_evidence"]["partial_check"]
+    assert stored["status"] == "confirmed" and stored["issues"][0]["verification_source"] == "teacher_execution"
+    assert stored["model_check_status"] == ("completed" if verified else "not_requested")
     assert task_facade._correction_review_blocks_finalization(result)
-    assert provider.ainvoke.await_count == 2
+    assert provider.ainvoke.await_count == (2 if verified else 1)
 
 
 @pytest.mark.asyncio
@@ -264,3 +277,50 @@ async def test_cancelled_verification_is_not_dispatched_again():
         assert retried.score == 6 and REVIEW_REASON not in retried.review_reasons
         assert retried.expert_results[0].programming_evidence.partial_check["status"] == "unavailable"
         assert sum(c.kwargs.get("max_output_tokens") == 160 for c in model.ainvoke.await_args_list) == 1
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply,model_status,assessment", [
+    (response({"confirmed":[]}), "completed", "not_confirmed"),
+    (SimpleNamespace(content='{"confirmed":[1'), "unavailable", "unknown"),
+    (TimeoutError(), "unavailable", "unknown"),
+])
+@pytest.mark.parametrize("cap", [False, True], ids=["actual_teacher_pass", "closed_teacher_cap"])
+async def test_local_proof_survives_inconclusive_review_and_prompt_contains_full_witness(reply, model_status, assessment, cap):
+    import json
+    rule = "每个未通过的教师用例只扣 2 分。" if cap else "Assess output accuracy and method."
+    problem, answer = materials(rule)
+    basis = {"failed_teacher_cases":[5 if cap else 1], "rubric_quote":rule}
+    provider = fixed_provider(award(basis, basis if cap else None), reply)
+    corr = await grade(registry(provider), problem, answer)
+    assert corr.score == 6 and REVIEW_REASON in corr.review_reasons and provider.ainvoke.await_count == 2
+    check = corr.expert_results[0].programming_evidence.partial_check
+    issue, = check["issues"]
+    assert issue["confirmed"] and check["status"] == "confirmed"
+    assert check["model_check_status"] == model_status and issue["model_assessment"] == assessment
+    assert issue["verification_source"] == ("teacher_rubric_and_awards" if cap else "teacher_execution")
+    prompt = json.loads(provider.ainvoke.await_args.args[0][1].content)
+    witness, = prompt["issues"]
+    assert prompt["rubric"] == rule and witness["observed_cases"] == [
+        {"number": 5 if cap else 1, "source":"teacher", "passed": not cap}]
+    assert witness["awards"][0] == {"step":1, "available":5, "earned":3,"deducted":"2.0","claimed_rubric_quote":rule}
+    if cap:
+        assert witness["awards"][1]["deducted"] == "2.0"
+        assert witness["governing_rule"] == rule and Decimal(witness["deducted"]) == 4 and Decimal(witness["allowed"]) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw,accepted", [
+    ('```json\n{"confirmed":[1]}\n```', True),
+    ('```json\n{"confirmed":[1,]}\n```', False),
+    ('{"confirmed":[1', False), ('{"confirmed":[]} {"confirmed":[1]}', False),
+    ('{"confirmed":[],"confirmed":[1]}', False),
+])
+async def test_fenced_json_has_one_local_parse_and_corrupt_semantic_verdict_never_confirms(raw, accepted):
+    problem, answer = materials()
+    model = fixed_provider(award({"source_quote":"return -99"}), SimpleNamespace(content=raw))
+    corr = await grade(registry(model), problem, answer)
+    assert model.ainvoke.await_count == 2 and corr.score == 6
+    assert (REVIEW_REASON in corr.review_reasons) == accepted
+    check = corr.expert_results[0].programming_evidence.partial_check
+    assert check["issues"][0]["verification_source"] == ("frozen_source_and_model_review" if accepted else None)
+    assert check["model_check_status"] == ("completed" if accepted else "unavailable")

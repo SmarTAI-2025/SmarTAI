@@ -14,8 +14,13 @@ from backend.services.programming_runs import AUXILIARY, digest
 
 REVIEW_REASON = "programming_partial_evidence_conflict"
 MAX_ISSUES = 6
-_CONFIRMED_BY_LOCAL_EVIDENCE = {
-    "passed_case_cited_as_failed", "rubric_quote_missing", "source_quote_missing", "per_case_deduction_exceeded",
+_DIRECT_PROOF = {
+    "passed_case_cited_as_failed": "teacher_execution",
+    "per_case_deduction_exceeded": "teacher_rubric_and_awards",
+}
+_REVIEWED_PROOF = {
+    "rubric_quote_missing": "frozen_material_and_model_review",
+    "source_quote_missing": "frozen_source_and_model_review",
 }
 
 
@@ -64,7 +69,7 @@ def record_deduction_basis(vote, awards, run, problem):
             or evidence.execution_status != "executed" or evidence.mapping_status != "valid"
             or not evidence.teacher_tests.total or not evidence.evidence_id):
         return
-    issues, cited = [], defaultdict(list)
+    issues, cited, allocations = [], defaultdict(list), {}
     rule = problem.criterion or ""
     for step in awards:
         if getattr(step, "max_points", None) is None or step.score >= step.max_points:
@@ -74,6 +79,14 @@ def record_deduction_basis(vote, awards, run, problem):
             basis = DeductionBasis.model_validate(raw or {})
         except ValidationError:
             basis = DeductionBasis()  # Bad optional metadata never discards the grade.
+        allocations[step.step_no] = {
+            "step": step.step_no, "available": step.max_points, "earned": step.score,
+            "deducted": str(Decimal(str(step.max_points)) - Decimal(str(step.score))),
+        }
+        if basis.rubric_quote.strip():
+            allocations[step.step_no]["claimed_rubric_quote"] = basis.rubric_quote
+        if basis.source_quote.strip():
+            allocations[step.step_no]["claimed_source_quote"] = basis.source_quote
         cases = sorted(set(basis.failed_teacher_cases or _explicit_failure(step.desc)))
         detail = {"steps": [step.step_no], "cases": [], "descriptions": [step.desc[:240]]}
         valid = [n for n in cases if 1 <= n <= len(run.cases)]
@@ -112,7 +125,13 @@ def record_deduction_basis(vote, awards, run, problem):
     if issues:
         bounded = issues[:MAX_ISSUES]
         for issue in bounded:
+            # Keep existing checkpoint IDs stable when enriching the audit prompt.
             issue["id"] = digest([evidence.evidence_id, issue])
+            issue["awards"] = [allocations[n] for n in issue["steps"]]
+            if issue["kind"] == "per_case_deduction_exceeded":
+                issue["governing_rule"] = rule
+            issue["observed_cases"] = [{"number": n, "source": "teacher", "passed": run.report.results[n-1].passed}
+                                       for n in issue["cases"]]
         evidence.partial_check = {"status": "suspected", "issues": bounded}
 
 
@@ -136,19 +155,33 @@ def review_inputs(correction, student_id):
 
 
 def apply_partial_review(correction, inputs, saved, language):
-    if not inputs or not saved:
+    if not inputs:
         return
     _, votes, _ = inputs
-    reviewed = set(saved.get("reviewed", []))
-    confirmed = set(saved.get("confirmed", [])) if saved.get("status") == "done" else set()
+    receipt = saved or {}
+    model_status = {"started": "interrupted", "done": "completed", "unavailable": "unavailable"}.get(
+        receipt.get("status"), "not_requested")
+    reviewed = set(receipt.get("reviewed", []))
+    # Older receipts stored the model's evidence-filtered choices under confirmed.
+    agreed = reviewed.intersection(receipt.get("model_confirmed", receipt.get("confirmed", []))) if model_status == "completed" else set()
     for vote in votes:
         evidence = vote.programming_evidence
         check = evidence.partial_check
+        check["model_check_status"] = model_status
         for issue in check["issues"]:
-            issue["confirmed"] = issue["id"] in confirmed and issue["kind"] in _CONFIRMED_BY_LOCAL_EVIDENCE
+            source = _DIRECT_PROOF.get(issue["kind"])
+            if issue["id"] in agreed:
+                issue["model_assessment"] = "agreed"
+                source = source or _REVIEWED_PROOF.get(issue["kind"])
+            elif issue["id"] in reviewed and model_status == "completed":
+                issue["model_assessment"] = "not_confirmed"
+            else:
+                issue["model_assessment"] = "unknown"
+            issue["verification_source"] = source
+            issue["confirmed"] = source is not None
         matches = [issue for issue in check["issues"] if issue["confirmed"]]
         if not matches:
-            check["status"] = "unconfirmed" if saved.get("status") == "done" and all(
+            check["status"] = "unconfirmed" if model_status == "completed" and all(
                 issue["id"] in reviewed for issue in check["issues"]) else "unavailable"
             continue
         check["status"] = "confirmed"
@@ -178,6 +211,7 @@ async def review_partial_score(correction, *, state, problem, answer, student_id
     from backend.progress.grading_activity import observe_auxiliary_request
     from backend.services.programming_runs import _notify
     from backend.skills.math_grading import _critical_failure
+    from backend.tools.structured_llm import extract_and_parse_json
     inputs = review_inputs(correction, student_id)
     if not inputs:
         return
@@ -205,14 +239,11 @@ async def review_partial_score(correction, *, state, problem, answer, student_id
                         raw = await state.provider.ainvoke(prompt, max_output_tokens=160)
                     if not isinstance(raw.content, str) or len(raw.content) > 2048:
                         raise ValueError("invalid verification response")
-                    result = Recheck.model_validate_json(raw.content)
+                    result = extract_and_parse_json(raw.content, Recheck, require_complete=True)
                     if any(n < 1 or n > len(issues) for n in result.confirmed):
                         raise ValueError("invalid verification reference")
-                    # A model agreeing that two deductions look similar is not
-                    # evidence of a double charge. Only a checked fact qualifies.
                     saved = {"status": "done", "reviewed": [issue["id"] for issue in issues],
-                             "confirmed": [issues[n-1]["id"] for n in sorted(set(result.confirmed))
-                                           if issues[n-1]["kind"] in _CONFIRMED_BY_LOCAL_EVIDENCE]}
+                             "model_confirmed": [issues[n-1]["id"] for n in sorted(set(result.confirmed))]}
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
