@@ -233,3 +233,61 @@ with fitz.open() as doc:
                              capture_output=True, timeout=20)
     assert process.returncode == 0
     assert json.loads(process.stdout)["status"] == "ok"
+
+
+@pytest.mark.parametrize("error", [MemoryError, OverflowError, RecursionError])
+@pytest.mark.parametrize("stage", ["open", "load", "convert", "encode"])
+def test_image_resource_failures_do_not_claim_immutable_pixel_limit(monkeypatch, error, stage):
+    from backend.domain.source_outcomes import source_requires_reupload
+
+    body = encoded_image()
+
+    def unavailable(*args, **kwargs):
+        raise error("private resource diagnostic")
+
+    target, name = {
+        "open": (Image, "open"), "load": (PngImagePlugin.PngImageFile, "load"),
+        "convert": (image_worker, "_clean_rgb"), "encode": (image_worker, "png_payload"),
+    }[stage]
+    monkeypatch.setattr(target, name, unavailable)
+    result = prepare(body)
+    assert_image_error(result, "image_processing_failed")
+    assert not source_requires_reupload(result["code"], retryable=False)
+
+
+@pytest.mark.parametrize("error", [MemoryError, OverflowError, RecursionError])
+@pytest.mark.parametrize("stage", ["open", "load"])
+def test_upload_inspection_reports_image_resources_without_reupload(monkeypatch, error, stage):
+    resource = pytest.importorskip("resource")
+    from types import SimpleNamespace
+    from backend.tools import _pdf_worker
+    from backend.domain.source_outcomes import source_requires_reupload
+
+    body = encoded_image()
+
+    def unavailable(*args, **kwargs):
+        raise error("private resource diagnostic")
+
+    monkeypatch.setattr(Image if stage == "open" else PngImagePlugin.PngImageFile,
+        "open" if stage == "open" else "load", unavailable)
+    monkeypatch.setattr(resource, "setrlimit", lambda *_: None)
+    monkeypatch.setitem(sys.modules, "image_evidence_worker", image_worker)
+    monkeypatch.setattr(sys, "stdin", SimpleNamespace(buffer=io.BytesIO(body)))
+    result = _pdf_worker._inspect_upload("image/png", 0)
+    assert result == {"status": "error", "code": "media_inspection_resource_limit"}
+    assert not source_requires_reupload(result["code"], retryable=False)
+
+
+@pytest.mark.parametrize("error", [RuntimeError, OSError])
+@pytest.mark.parametrize("stage", ["convert", "encode"])
+def test_postdecode_worker_failures_do_not_misclassify_valid_originals(monkeypatch, error, stage):
+    from backend.domain.source_outcomes import source_requires_reupload
+    body = encoded_image()
+
+    def broken_worker(*args, **kwargs):
+        raise error("private worker diagnostic")
+
+    monkeypatch.setattr(image_worker, "_clean_rgb" if stage == "convert" else "png_payload", broken_worker)
+    result = prepare(body)
+    assert_image_error(result, "image_processing_failed")
+    assert not source_requires_reupload(result["code"], retryable=False)

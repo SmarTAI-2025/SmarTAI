@@ -163,7 +163,8 @@ describe("submission recognition completion", () => {
     fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
     expect(await screen.findByRole("heading", { name: "作答校对页面" })).toBeVisible();
   });
-  it.each(["provider_timeout", "provider_auth_failed"])("still retries mixed failures after %s, including when switching a model is needed", async reason => {
+  it.each(["provider_timeout", "provider_auth_failed", "media_inspection_busy", "media_inspection_timeout",
+    "media_inspection_unavailable", "media_inspection_failed", "media_inspection_resource_limit", "image_processing_failed"])("still retries mixed failures after recoverable %s", async reason => {
     snapshot = { ...detail, status: "error", last_failed_job_id: "new-job", error: "submission_archive_nested_unsupported",
       submission_recognition_provider_id: "test-provider", submission_sources: [archiveFailure(), {
         ...source("failed"), source_id: "model-source", reason_code: reason, failure_phase: "recognition",
@@ -196,7 +197,9 @@ describe("submission recognition completion", () => {
     show();
     expect(screen.getByRole("button", { name: "继续识别" })).toBeEnabled();
   });
-  it.each(["submission_source_empty", "submission_source_content_type_mismatch", "submission_source_unsupported"])("requires reupload for an inner ZIP mixed with %s", async reason => {
+  it.each(["submission_source_empty", "submission_source_content_type_mismatch", "submission_source_unsupported",
+    "image_mode_unsupported", "image_orientation_invalid", "image_multiframe_unsupported",
+    "image_pixel_limit_exceeded", "image_input_too_large"])("requires reupload for an inner ZIP mixed with %s", async reason => {
     snapshot = { ...detail, status: "error", last_failed_job_id: "new-job", error: "submission_archive_nested_unsupported",
       submission_recognition_provider_id: "test-provider", submission_sources: [
         { ...archiveFailure(), requires_reupload: true },

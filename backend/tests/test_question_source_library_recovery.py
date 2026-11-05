@@ -73,3 +73,31 @@ def test_library_selected_source_keeps_material_identity_in_fingerprint():
     assert task_preparation._source_fingerprint(source) != task_preparation._source_fingerprint(
         {**source, "library_material_id": "material-two"}
     )
+
+
+def test_library_original_identity_is_opt_in_and_does_not_change_legacy_hashes():
+    source = {"source_kind": "library", "library_material_id": "material-one", "sha256": "same-bytes", "filename": "Lecture 1"}
+    legacy = task_preparation._source_fingerprint(source)
+    assert task_preparation._source_fingerprint({**source, "original_filename": None}) == legacy
+    assert task_preparation._source_fingerprint({**source, "original_filename": "lecture.pdf"}) != legacy
+    uploaded = {**source, "source_kind": "upload"}
+    assert task_preparation._source_fingerprint({**uploaded, "original_filename": "lecture.pdf"}) == task_preparation._source_fingerprint(uploaded)
+
+
+def test_original_reuse_requires_matching_media_but_still_deduplicates_compatible_names():
+    from backend.db import file_repository
+    from backend.services.source_files import persist_problem_source
+    from backend.storage import get_storage
+    from backend.tests.test_recognition_agent import pdf
+
+    owner, task = _seed_task()
+    body = pdf(["Question 1. Explain the source identity."])
+    storage = get_storage()
+    legacy = file_repository.save_file(storage=storage, owner_id=owner, assignment_id=task,
+        kind="problem_source", original_name="lecture.pdf", content=body, content_type="text/plain")
+    fixed, created = persist_problem_source(storage=storage, owner_id=owner, task_id=task,
+        original_name="lecture.pdf", content=body, content_type="application/pdf")
+    assert created and fixed.id != legacy.id and fixed.content_type == "application/pdf"
+    duplicate, created = persist_problem_source(storage=storage, owner_id=owner, task_id=task,
+        original_name="another-title.PDF", content=body, content_type="application/pdf")
+    assert not created and duplicate.id == fixed.id

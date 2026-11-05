@@ -721,6 +721,8 @@ async def preflight_problem_source(
                 owner_id=current.id, route=route, registry=registry,
             ),
         }
+        if descriptor.get("_original_filename"):
+            provisional_payload["original_filename"] = descriptor["_original_filename"]
         # Preserve identities of older prepared sources. Only new upload-only
         # requests opt into recognition by the existing durable progress job.
         if defer_recognition:
@@ -796,7 +798,7 @@ async def preflight_problem_source(
                         storage=get_storage(),
                         owner_id=current.id,
                         task_id=task_id,
-                        original_name=descriptor["filename"],
+                        original_name=descriptor.get("_original_filename", descriptor["filename"]),
                         content=descriptor["_body"],
                         content_type=descriptor["content_type"],
                         replacement_file_ids=replacement_file_ids,
@@ -882,7 +884,8 @@ async def preflight_problem_source(
                 try:
                     read = await read_question_source(
                         owner_id=current.id, task_id=task_id, content=descriptor["_body"],
-                        filename=descriptor["filename"], content_type=descriptor.get("content_type"),
+                        filename=descriptor.get("_original_filename", descriptor["filename"]),
+                        content_type=descriptor.get("content_type"),
                         route=route, registry=registry, stored_file_id=stored.id if stored else None,
                         extraction_hint=extraction_hint, options=parsed_recognition_options.model_dump(),
                         purpose=_source_role_ocr_purpose(role),
@@ -1229,7 +1232,11 @@ async def _select_source(
             body = await run_in_threadpool(read_original)
             if len(body) > maximum or hashlib.sha256(body).hexdigest() != material.sha256:
                 raise HTTPException(422, detail={"code": "recognition_source_mismatch"})
-            descriptor.update(_body=body, _recognition_original=True)
+            # A library title is editable and need not have a file extension.
+            # Decode and persist copies using the owner-bound original's name,
+            # while keeping the title in UI/source-reference metadata.
+            descriptor.update(_body=body, _recognition_original=True,
+                              _original_filename=original.original_name)
     else:
         text = (inline_text or "").strip()
         descriptor = {
@@ -1282,7 +1289,8 @@ async def _read_source(
     )
     if descriptor["kind"] == "upload" or descriptor.get("_recognition_original"):
         result = await read_question_source(
-            owner_id=owner_id, task_id=task_id, content=descriptor["_body"], filename=descriptor["filename"],
+            owner_id=owner_id, task_id=task_id, content=descriptor["_body"],
+            filename=descriptor.get("_original_filename", descriptor["filename"]),
             content_type=descriptor.get("content_type"), route=route, registry=registry,
             stored_file_id=descriptor.get("stored_file_id") if descriptor["kind"] == "upload" else None,
             purpose=_source_role_ocr_purpose(role), extraction_hint=extraction_hint, reporter=reporter,
@@ -2362,9 +2370,25 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
         body = await run_in_threadpool(read_original)
         if len(body) != stored.size_bytes or hashlib.sha256(body).hexdigest() != draft.content_sha256:
             raise RecognitionError("recognition_source_mismatch")
+        filename = ((payload.get("original_filename") if draft.source_kind == "library" else None)
+                    or stored.original_name)
+        content_type = draft.content_type
+        if (draft.source_kind == "library"
+                and content_type not in _SOURCE_MIME_TYPES.get(Path(filename).suffix.lower(), ())):
+            from backend.db import course_library_repository
+
+            material = course_library_repository.get_material(draft.library_material_id, operation.owner_id)
+            original = (file_repository.get_file(file_id=material.stored_file_id, owner_id=operation.owner_id)
+                        if material is not None else None)
+            if (original is None or original.knowledge_document_id != material.document_id
+                    or original.sha256 != draft.content_sha256 or material.sha256 != draft.content_sha256):
+                raise RecognitionError("recognition_source_unavailable")
+            filename, content_type = original.original_name, original.content_type
+        # Only legacy, wrongly named clones need their owner/hash-bound library
+        # original. New sources use frozen metadata, not a live library lookup.
         result = await read_question_source(
             owner_id=operation.owner_id, task_id=operation.assignment_id,
-            content=body, filename=draft.filename, content_type=draft.content_type,
+            content=body, filename=filename, content_type=content_type,
             route=route, registry=registry, stored_file_id=stored.id,
             extraction_hint=draft.extraction_hint, options=payload.get("recognition_options"),
             purpose=_source_role_ocr_purpose(draft.role), reporter=reporter,

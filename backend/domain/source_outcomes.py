@@ -142,6 +142,11 @@ SOURCE_REUPLOAD_REASON_CODES = frozenset({
     "pdf_encrypted",
     "image_invalid",
     "image_format_mismatch",
+    "image_input_too_large",
+    "image_multiframe_unsupported",
+    "image_mode_unsupported",
+    "image_orientation_invalid",
+    "image_pixel_limit_exceeded",
 })
 
 

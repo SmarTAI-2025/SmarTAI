@@ -90,32 +90,40 @@ def _validated_image(body: bytes, content_type: str):
         raise ImageFailure("image_input_too_large")
     ImageFile.LOAD_TRUNCATED_IMAGES = False
     Image.MAX_IMAGE_PIXELS = MAX_PIXELS
+    original = None
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(body)) as probe:
-                if probe.format != FORMATS.get(content_type):
-                    raise ImageFailure("image_format_mismatch")
-                if getattr(probe, "n_frames", 1) != 1:
-                    raise ImageFailure("image_multiframe_unsupported")
-                _pixel_limit(*probe.size)
-                probe.verify()
-            with Image.open(io.BytesIO(body)) as original:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(io.BytesIO(body)) as probe:
+                    if probe.format != FORMATS.get(content_type):
+                        raise ImageFailure("image_format_mismatch")
+                    if getattr(probe, "n_frames", 1) != 1:
+                        raise ImageFailure("image_multiframe_unsupported")
+                    _pixel_limit(*probe.size)
+                    probe.verify()
+                original = Image.open(io.BytesIO(body))
                 if original.mode not in {"1", "L", "LA", "P", "RGB", "RGBA", "CMYK"}:
                     raise ImageFailure("image_mode_unsupported")
                 orientation = original.getexif().get(274, 1)
                 if type(orientation) is not int or orientation not in range(1, 9):
                     raise ImageFailure("image_orientation_invalid")
                 original.load()
-                yield original
-    except ImageFailure:
-        raise
-    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
-        raise ImageFailure("image_pixel_limit_exceeded") from None
-    except (MemoryError, OverflowError):
-        raise ImageFailure("image_pixel_limit_exceeded") from None
-    except Exception:
-        raise ImageFailure("image_invalid") from None
+        except ImageFailure:
+            raise
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+            raise ImageFailure("image_pixel_limit_exceeded") from None
+        except (MemoryError, OverflowError, RecursionError):
+            # Resource exhaustion does not establish an immutable input defect.
+            raise
+        except Exception:
+            raise ImageFailure("image_invalid") from None
+        # Conversion/encoding failures belong to the worker, not the original
+        # decoder. Do not turn exceptions from this consumer into image_invalid.
+        yield original
+    finally:
+        if original is not None:
+            original.close()
 
 
 def inspect_image(body: bytes, content_type: str) -> dict:

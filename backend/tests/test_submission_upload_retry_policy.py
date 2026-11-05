@@ -184,7 +184,9 @@ async def test_mixed_upload_recovers_model_failure_keeps_success_and_then_blocks
 
 @pytest.mark.parametrize("reason", [None, "unknown_failure", "provider_submit_uncertain", "provider_auth_failed",
     "provider_rate_limited", "ocr_empty_result", "pdf_evidence_timeout", "pdf_processing_failed",
-    "media_inspection_failed", "submission_source_persistence_failed", "no_matching_answer"])
+    "media_inspection_failed", "media_inspection_unavailable", "media_inspection_busy",
+    "media_inspection_timeout", "media_inspection_resource_limit", "image_processing_failed",
+    "image_response_too_large", "submission_source_persistence_failed", "no_matching_answer"])
 def test_non_input_failures_are_not_inferred_to_require_reupload(reason):
     from backend.domain.source_outcomes import source_requires_reupload
     assert not source_requires_reupload(reason, retryable=False)
@@ -194,3 +196,135 @@ def test_reupload_policy_only_classifies_public_diagnostics_and_honors_retryabil
     from backend.domain.source_outcomes import SAFE_SOURCE_REASON_CODES, SOURCE_REUPLOAD_REASON_CODES, source_requires_reupload
     assert SOURCE_REUPLOAD_REASON_CODES <= SAFE_SOURCE_REASON_CODES
     assert not any(source_requires_reupload(code, retryable=True) for code in SOURCE_REUPLOAD_REASON_CODES)
+
+
+def invalid_image(code):
+    """Small real images exercise the isolated validator, not a mocked error."""
+    import io
+    import struct
+    import zlib
+    from PIL import Image
+
+    output = io.BytesIO()
+    if code == "image_mode_unsupported":
+        Image.new("I;16", (8, 8), 20).save(output, "PNG")
+        return "answer.png", output.getvalue()
+    if code == "image_orientation_invalid":
+        image = Image.new("RGB", (8, 8), "white")
+        exif = image.getexif()
+        exif[274] = 0
+        image.save(output, "JPEG", exif=exif)
+        return "answer.jpg", output.getvalue()
+    if code == "image_multiframe_unsupported":
+        Image.new("RGB", (8, 8), "white").save(output, "TIFF", save_all=True,
+            append_images=[Image.new("RGB", (8, 8), "black")])
+        return "answer.tiff", output.getvalue()
+    if code == "image_input_too_large":
+        # A correctly signed image exceeding the byte limit is rejected before
+        # decoding, without allocating a huge pixel array.
+        from backend.tools.image_evidence_worker import MAX_INPUT_BYTES
+        Image.new("RGB", (8, 8), "white").save(output, "PNG")
+        return "answer.png", output.getvalue().ljust(MAX_INPUT_BYTES + 1, b"\0")
+    assert code == "image_pixel_limit_exceeded"
+    Image.new("RGB", (8, 8), "white").save(output, "PNG")
+    body = bytearray(output.getvalue())
+    body[16:24] = struct.pack(">II", 8193, 8)
+    body[29:33] = struct.pack(">I", zlib.crc32(body[12:29]) & 0xFFFFFFFF)
+    return "answer.png", bytes(body)
+
+
+PERMANENT_IMAGE_CODES = ["image_multiframe_unsupported", "image_mode_unsupported",
+    "image_orientation_invalid", "image_pixel_limit_exceeded", "image_input_too_large"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", PERMANENT_IMAGE_CODES[:-1])
+async def test_real_image_constraints_require_reupload_across_all_restart_entries(monkeypatch, code):
+    from backend.services import question_sources, workflow_inputs
+    from backend.db import file_repository
+
+    owner, task = _seed_task(with_question=True)
+    image_name, image_body = invalid_image(code)
+    body, filename = archive_bytes("zip", {image_name: image_body})
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: _Registry())
+
+    def no_provider(*args, **kwargs):
+        pytest.fail("Invalid original images must fail before a provider can be created")
+
+    monkeypatch.setattr(question_sources, "recognition_engine", no_provider)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename=filename, content=body, content_type="application/zip", registry=_Registry())
+    await finish(queued["job_id"], owner)
+    before = task_facade.get_task(task_id=task, owner_id=owner)
+    assert before["status"] == "error"
+    assert len(before["submission_sources"]) == 1
+    source = before["submission_sources"][0]
+    assert source["reason_code"] == code
+    assert not source["retryable"] and source["requires_reupload"]
+    async_state = await task_facade.async_task_state(task_id=task, owner_id=owner)
+    assert async_state["submission_sources"][0]["requires_reupload"]
+    saved = workflow_inputs.submission_inputs(task_id=task, owner_id=owner)["input"]
+    before_files = {row.id for row in file_repository.list_files(owner_id=owner, assignment_id=task)}
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Immutable input must be rejected before original storage reads or requeueing")
+
+    with monkeypatch.context() as guard:
+        guard.setattr(task_facade, "get_storage", forbidden)
+        guard.setattr(workflow_inputs, "get_storage", forbidden)
+        guard.setattr(task_facade, "queue_task_submission_parsing", forbidden)
+        responses = [await retry(task, owner, before)]
+        for field in ("stored_file_id", "reuse_input_from_job_id"):
+            responses.append(await tasks.parse_submissions_endpoint(task_id=task,
+                background_tasks=_BackgroundTasks(), file=None,
+                **{field: saved["stored_file_id"] if field == "stored_file_id" else queued["job_id"]},
+                identity_mode="filename", roster_file=None, recognition_provider_id="test-provider",
+                replace_confirmed=False, expected_workflow_revision=before["workflow_revision"],
+                current=SimpleNamespace(id=owner), registry=_Registry()))
+    for response in responses:
+        assert response.status_code == 409
+        assert json.loads(response.body)["error"]["code"] == "submission_retry_requires_reupload"
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    for key in ("workflow_revision", "parse_job_id", "submission_sources"):
+        assert before[key] == after[key]
+    assert {row.id for row in file_repository.list_files(owner_id=owner, assignment_id=task)} == before_files
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["media_inspection_busy", "media_inspection_timeout", "media_inspection_unavailable",
+    "media_inspection_failed", "media_inspection_resource_limit", "image_processing_failed"])
+async def test_temporary_media_failures_can_retry_the_persisted_original(monkeypatch, code):
+    from fastapi import HTTPException
+    from backend.services import question_sources
+    from backend.tests.test_library_image_ingestion import pixels
+
+    owner, task = _seed_task(with_question=True)
+    body, filename = archive_bytes("zip", {"answer.png": pixels()})
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: _Registry())
+
+    async def temporary_failure(*args, **kwargs):
+        raise HTTPException(503, detail={"code": code})
+
+    monkeypatch.setattr(question_sources, "validate_upload_content", temporary_failure)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename=filename, content=body, content_type="application/zip", registry=_Registry())
+    await finish(queued["job_id"], owner)
+    before = task_facade.get_task(task_id=task, owner_id=owner)
+    assert before["submission_sources"][0]["reason_code"] == code
+    assert not before["submission_sources"][0]["requires_reupload"]
+    restarted = await retry(task, owner, before)
+    assert isinstance(restarted, dict), getattr(restarted, "body", restarted)
+    assert restarted["status"] == "started" and restarted["reused_original_upload"]
+
+
+@pytest.mark.asyncio
+async def test_real_image_byte_limit_is_an_immutable_input_failure():
+    from fastapi import HTTPException
+    from backend.tools.file_processing import validate_upload_content
+    from backend.domain.source_outcomes import source_requires_reupload
+
+    filename, body = invalid_image("image_input_too_large")
+    with pytest.raises(HTTPException) as caught:
+        await validate_upload_content(body, filename, purpose="submissions")
+    assert caught.value.detail["code"] == "image_input_too_large"
+    assert source_requires_reupload(caught.value.detail["code"], retryable=False)

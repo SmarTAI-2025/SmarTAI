@@ -39,6 +39,8 @@ def _inspect_upload(content_type: str, max_pdf_pages: int) -> dict:
             return {"status": "ok", **image_evidence_worker.inspect_image(body, content_type)}
         except image_evidence_worker.ImageFailure as exc:
             return {"status": "error", "code": exc.code}
+        except (MemoryError, OverflowError, RecursionError):
+            return {"status": "error", "code": "media_inspection_resource_limit"}
     if content_type != "application/pdf":
         return {"status": "error", "code": "media_inspection_failed"}
     fitz.TOOLS.mupdf_display_errors(False)

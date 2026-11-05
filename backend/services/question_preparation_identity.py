@@ -28,6 +28,11 @@ def source_fingerprint(payload: dict) -> str:
             "recognition_configuration_fingerprint",
         )
     }
+    # New library references distinguish the immutable original from its
+    # editable title. Preserve old hashes while allowing a failed legacy
+    # preflight to be prepared again with the corrected file identity.
+    if payload.get("source_kind") == "library" and payload.get("original_filename"):
+        selected["original_filename"] = payload["original_filename"]
     if payload.get("defer_recognition") is True:
         selected["defer_recognition"] = True
     # For an upload/inline source, this ID is an output of optional library
