@@ -80,7 +80,7 @@ function renderPage(taskId = "task-1", owner = "submission-teacher") {
 }
 
 describe("AddSubmissionsPage OCR uploads", () => {
-  it.each(["answer.markdown", "answer.rst", "answer.bmp", "answer.tif", "answer.tiff", "answer.jpeg"])("accepts the existing backend-supported submission suffix %s", async filename => {
+  it.each(["answer.txt", "answer.md", "answer.markdown", "answer.pdf", "answer.bmp", "answer.tif", "answer.tiff", "answer.jpeg", "answers.tar.gz"])("accepts the supported submission suffix %s", async filename => {
     const { container } = renderPage();
     const input = container.querySelector('input[type="file"]')!;
     expect(input.getAttribute("accept")).toContain(filename.slice(filename.lastIndexOf(".")));
@@ -90,6 +90,61 @@ describe("AddSubmissionsPage OCR uploads", () => {
     fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledOnce());
     expect(mutateAsync.mock.calls[0][0].file.name).toBe(filename);
+  });
+
+  it.each(["csv", "rst", "tsv"])("rejects .%s submissions from selection and drag/drop without changing roster formats", async suffix => {
+    const { container } = renderPage();
+    const input = container.querySelector('input[type="file"]')!;
+    expect(input.getAttribute("accept")).not.toContain(`.${suffix}`);
+    fireEvent.change(input, { target: { files: [new File(["valid answer"], "answer.txt")] } });
+    const invalid = new File(["not a supported submission"], `answer.${suffix}`);
+    fireEvent.change(input, { target: { files: [invalid] } });
+    expect(screen.getByRole("alert")).toHaveTextContent("submissionUploadUnsupported");
+    expect(screen.getByText("answer.txt")).toBeInTheDocument();
+    fireEvent.drop(screen.getByRole("button", { name: "submissionUploadChoose" }), { dataTransfer: { files: [invalid] } });
+    expect(screen.getByRole("alert")).toHaveTextContent("submissionUploadUnsupported");
+    expect(screen.queryByText(`answer.${suffix}`)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "submissionUploadIdentityRoster" }));
+    expect(container.querySelectorAll('input[type="file"]')[1]).toHaveAttribute("accept", ".csv,.tsv,.txt");
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it.each(["csv", "rst"])("does not submit restored .%s draft bytes under the new format contract", async suffix => {
+    const owner = "submission-teacher", scope = "submissions:task-1";
+    const saved = { ...initialSubmissionDraft(), recognitionProviderId: "provider-default",
+      selectedFile: new File(["legacy submission"], `legacy.${suffix}`) };
+    const prior = await readPageDraft(owner, scope, submissionDraftCodec);
+    await writePageDrafts([preparePageDraft(owner, scope, "older-input-version", saved, submissionDraftCodec, prior.epoch, null)]);
+    const { container } = renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "恢复保留的内容" }));
+    await screen.findByText(`legacy.${suffix}`);
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("submissionUploadUnsupported");
+    expect(mutateAsync).not.toHaveBeenCalled();
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["replacement"], "fixed.txt")] } });
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledOnce());
+    expect(mutateAsync.mock.calls[0][0].file.name).toBe("fixed.txt");
+  });
+
+  it.each(["csv", "rst"])("requires replacement of saved .%s server input before a fresh recognition run", async suffix => {
+    inputState.input = { job_id: "prior", stored_file_id: "saved-source", filename: `saved.${suffix}`, available: true,
+      identity_mode: "filename", roster_count: 0, recognition_provider_id: "provider-default" };
+    renderPage();
+    await screen.findByText(`saved.${suffix}`);
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("submissionUploadUnsupported");
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("shows the same supported-format guidance when the server rejects a submission", async () => {
+    const { container } = renderPage();
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["synthetic archive"], "answers.zip")] } });
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    mutateAsync.mockRejectedValueOnce(new APIError(422, "submission_source_unsupported", { detail: { code: "submission_source_unsupported" } }));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    expect(await screen.findByText("submissionUploadUnsupported", { selector: "p[role='alert']" })).toBeInTheDocument();
+    expect(screen.getByText("answers.zip")).toBeInTheDocument();
   });
 
   it.each(["choose", "drop"])("rejects files over 100 MiB via %s while keeping the previous selection", async method => {

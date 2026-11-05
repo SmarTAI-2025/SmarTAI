@@ -33,7 +33,7 @@ import type { SubmissionIdentityMode } from "@/types";
 
 const SUBMISSION_SUFFIXES = [
   ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
-  ".txt", ".md", ".markdown", ".rst", ".csv", ".pdf", ".jpg", ".jpeg", ".png",
+  ".txt", ".md", ".markdown", ".pdf", ".jpg", ".jpeg", ".png",
   ".bmp", ".tif", ".tiff", ".webp",
 ] as const;
 const SUBMISSION_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
@@ -151,7 +151,14 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
     draft.adoptDefault("recognitionProviderId", defaultProvider);
   }, [draft.protection.loaded, expertsQuery.data, expertsQuery.isError, expertsQuery.isLoading, task?.submission_recognition_provider_id]);
 
-  const uploadDisabledReason = isRecognitionRunning
+  const sourceFileError = selectedFile
+    ? submissionFileError(selectedFile)
+    : visibleFileName && !hasSuffix(visibleFileName, SUBMISSION_SUFFIXES)
+      ? t("submissionUploadUnsupported")
+      : null;
+  const uploadDisabledReason = sourceFileError
+    ? sourceFileError
+    : isRecognitionRunning
     ? null
     : taskQuery.isLoading
       ? t("submissionUploadTaskLoading")
@@ -171,18 +178,24 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
               ? missingRosterMessage
               : null;
 
-  function selectSubmission(file: File | undefined) {
-    if (!file || isPending) return;
+  function submissionFileError(file: File): string | null {
     if (!hasSuffix(file.name, SUBMISSION_SUFFIXES)) {
-      setFormError(t("submissionUploadUnsupported"));
-      return;
+      return t("submissionUploadUnsupported");
     }
     if (file.size === 0) {
-      setFormError(localText(locale, "所选作答文件为空（0 字节），请打开文件确认有内容后重新上传。", "The selected submission is empty (0 bytes). Check that it contains content before uploading again."));
-      return;
+      return localText(locale, "所选作答文件为空（0 字节），请打开文件确认有内容后重新上传。", "The selected submission is empty (0 bytes). Check that it contains content before uploading again.");
     }
     if (file.size > SUBMISSION_UPLOAD_MAX_BYTES) {
-      setFormError(localText(locale, "所选作答文件超过 100 MiB 上传上限。请拆分或压缩后重新选择。", "The selected submission exceeds the 100 MiB upload limit. Split or compress it before selecting it again."));
+      return localText(locale, "所选作答文件超过 100 MiB 上传上限。请拆分或压缩后重新选择。", "The selected submission exceeds the 100 MiB upload limit. Split or compress it before selecting it again.");
+    }
+    return null;
+  }
+
+  function selectSubmission(file: File | undefined) {
+    if (!file || isPending) return;
+    const error = submissionFileError(file);
+    if (error) {
+      setFormError(error);
       return;
     }
     setSelectedFile(file);
@@ -562,7 +575,8 @@ function localizeSubmissionError(
   const normalized = normalizeAPIError(error);
   const code = submissionErrorCode(error);
   if (code === "submission_retry_requires_reupload") return userFacingError(error, locale);
-  if (["submission_source_unsupported", "submission_source_empty", "submission_archive_empty", "submission_archive_invalid"].includes(code)) {
+  if (code === "submission_source_unsupported") return t("submissionUploadUnsupported");
+  if (["submission_source_empty", "submission_archive_empty", "submission_archive_invalid"].includes(code)) {
     return t("submissionUploadErrorInvalid");
   }
   if (["submission_source_too_large", "pdf_page_limit_exceeded", "pdf_character_limit_exceeded"].includes(code)) {
