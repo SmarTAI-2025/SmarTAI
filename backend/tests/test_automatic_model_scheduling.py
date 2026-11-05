@@ -124,6 +124,7 @@ async def test_ocr_and_text_requests_share_byok_admission_without_fixed_two_call
     from backend.recognition.runtime import RecognitionCapacity
     from backend.skills.recognition_reader import LLMRecognitionEngine
     from backend.tests.test_recognition_agent import pdf, request
+    from backend.tools.pdf_evidence import PdfIndexRequest, PdfPagesRequest, PdfRenderRequest, read_pdf_evidence
 
     monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
     release, started = asyncio.Event(), asyncio.Event()
@@ -143,6 +144,19 @@ async def test_ocr_and_text_requests_share_byok_admission_without_fixed_two_call
     capacity = RecognitionCapacity()
     data = pdf([None])
     req = request(data, policy=RecognitionPolicyV1(enable_repair=False))
+    # Prepare real evidence once, before measuring model concurrency. Repeating
+    # index/detail/render for four OCR reads tests the separate CPU worker gate,
+    # not whether OCR and text share BYOK admission.
+    evidence = {}
+    for command in (PdfIndexRequest(), PdfPagesRequest(pages=[1]), PdfRenderRequest(page_number=1)):
+        evidence[command.model_dump_json()] = await read_pdf_evidence(data, command)
+
+    async def prepared_pdf(source_bytes, command, **kwargs):
+        assert source_bytes == data
+        return evidence[command.model_dump_json()].model_copy(deep=True)
+
+    monkeypatch.setattr("backend.agents.recognition_agent.read_pdf_evidence", prepared_pdf)
+    monkeypatch.setattr("backend.recognition.executor.read_pdf_evidence", prepared_pdf)
     jobs = [asyncio.create_task(RecognitionAgent(engine, capacity=capacity).read(
         req, data, authorized_owner_id="owner")) for _ in range(4)]
     jobs.append(asyncio.create_task(provider.ainvoke([HumanMessage(content="Extract or grade.")])))
