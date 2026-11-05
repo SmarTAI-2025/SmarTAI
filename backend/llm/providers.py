@@ -22,7 +22,7 @@ import ssl
 import time
 from abc import ABC, abstractmethod
 from collections import deque
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import List, Optional, Dict, Any, Deque, Callable
 from dataclasses import dataclass
 
@@ -47,6 +47,18 @@ from backend.llm.request_timeouts import (
 from backend.models import ProviderConfig
 
 logger = logging.getLogger(__name__)
+_client_owner_tasks: set[asyncio.Task] = set()
+_UNUSED_CLIENT_CLOSE_SECONDS = 10.0
+
+
+def _retain_client_owner(task: asyncio.Task) -> None:
+    """Cancellation of a waiter must not discard a still-owned client."""
+    _client_owner_tasks.add(task)
+    def finished(done):
+        _client_owner_tasks.discard(done)
+        if not done.cancelled():
+            done.exception()
+    task.add_done_callback(finished)
 
 
 
@@ -415,6 +427,7 @@ class BaseProvider(ABC):
         self.model = config.model
         self._client = None
         self._client_lock = None
+        self._client_initialization = None
 
     @property
     def provider_id(self) -> str:
@@ -557,20 +570,30 @@ class BaseProvider(ABC):
     async def _get_client(self) -> Any:
         """Get or create a shared client (for native async providers)."""
         self._ensure_async_primitives()
+        if self._client is None and is_user_defined_provider_endpoint(
+            self.config.provider_type, self.config.base_url, self.config.wire_protocol,
+        ):
+            async def initialize():
+                async with self._client_lock:
+                    if self._client is None:
+                        self._client = await asyncio.to_thread(self._build_client_sync)
+                    return self._client
+            return await self._owned_client_initialization(initialize)
         if self._client is None:
             async with self._client_lock:
                 if self._client is None:
-                    if is_user_defined_provider_endpoint(
-                        self.config.provider_type,
-                        self.config.base_url,
-                        self.config.wire_protocol,
-                    ):
-                        self._client = await asyncio.to_thread(
-                            self._build_client_sync
-                        )
-                    else:
-                        self._client = self._build_client_sync()
+                    self._client = self._build_client_sync()
         return self._client
+
+    async def _owned_client_initialization(self, initialize):
+        # The task owns both construction and cache publication. A cancelled
+        # waiter releases neither that ownership nor the initialization lock.
+        task = self._client_initialization
+        if task is None or task.done():
+            task = asyncio.create_task(initialize())
+            self._client_initialization = task
+            _retain_client_owner(task)
+        return await asyncio.shield(task)
 
     def _generation_kwargs(self, max_output_tokens: int | None) -> dict[str, Any]:
         _validate_output_limit(max_output_tokens)
@@ -672,18 +695,46 @@ class GeminiProvider(BaseProvider):
             # Cloud mode: native async, shared client
             return await super().ainvoke(messages, max_output_tokens=max_output_tokens)
 
-        # Local proxy mode: sync invoke in threadpool, fresh client per call
-        scope = current_response_scope()
-        slots = get_scheduler().proxy_slots
-        async with scope.local_admission(slots) if scope is not None else slots:
-            return await self._invoke_proxy(messages, generation_kwargs)
+        return await self._invoke_proxy(messages, generation_kwargs)
 
     async def _invoke_proxy(self, messages: List[BaseMessage], generation_kwargs: dict[str, Any]) -> LLMResponse:
         from anyio import to_thread
 
         # Prepare before RPM admission; at most 50 per-call clients can wait.
         # Preparation uses the default pool, separate from the 50 SDK workers.
-        local_client = await _wait_provider_local(to_thread.run_sync(self._build_client_sync))
+        stack = AsyncExitStack()
+        construction = None
+        try:
+            scope = current_response_scope()
+            slots = get_scheduler().proxy_slots
+            await stack.enter_async_context(scope.local_admission(slots) if scope is not None else slots)
+            construction = asyncio.create_task(to_thread.run_sync(self._build_client_sync))
+            local_client = await _wait_provider_local(asyncio.shield(construction))
+            construction = None  # Existing invocation/close policy now owns it.
+            return await self._invoke_prepared_proxy(messages, generation_kwargs, local_client)
+        finally:
+            if construction is not None:
+                owned = stack.pop_all()
+                async def close_late_client():
+                    try:
+                        try:
+                            client = await construction
+                        except Exception:
+                            return
+                        try:
+                            async with asyncio.timeout(_UNUSED_CLIENT_CLOSE_SECONDS):
+                                await client.aclose()
+                        except Exception:
+                            logger.warning("Unused Gemini client cleanup did not complete")
+                    finally:
+                        await owned.aclose()
+                cleanup = asyncio.create_task(close_late_client())
+                _retain_client_owner(cleanup)
+            await stack.aclose()
+
+    async def _invoke_prepared_proxy(self, messages, generation_kwargs, local_client):
+        from anyio import to_thread
+
         if current_response_scope() is not None:
             return await self._invoke_proxy_async(messages, generation_kwargs, local_client)
         self._ensure_async_primitives()
@@ -1214,9 +1265,12 @@ class SafeRelayProvider(BaseProvider):
     async def _relay_client(self) -> httpx.AsyncClient:
         self._ensure_async_primitives()
         if self._safe_async_client is None:
-            async with self._client_lock:
-                if self._safe_async_client is None:
-                    await asyncio.to_thread(self._build_client_sync)
+            async def initialize():
+                async with self._client_lock:
+                    if self._safe_async_client is None:
+                        await asyncio.to_thread(self._build_client_sync)
+                    return self._safe_async_client
+            return await self._owned_client_initialization(initialize)
         assert self._safe_async_client is not None
         return self._safe_async_client
 
