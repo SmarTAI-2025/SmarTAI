@@ -228,6 +228,11 @@ export interface StepScore {
 }
 
 export interface ExpertResult {
+  programming_evidence?: {
+    contract: string;
+    score_status: string;
+    execution_status: string;
+  } | null;
   provider_id?: string | null;
   knowledge_citations?: import("./knowledgeCitation").KnowledgeCitation[];
   provider: string;

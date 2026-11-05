@@ -62,6 +62,7 @@ from backend.db.models import (
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
+from backend.domain.grading_review import result_programming_review_reason, teacher_resolved_programming_score
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
 from backend.domain.errors import (
@@ -70,7 +71,6 @@ from backend.domain.errors import (
     InvalidTransition,
     LeaseLost,
     NotFound,
-    ResultNotReleasable,
     ValidationError,
     VersionConflict,
 )
@@ -6044,14 +6044,16 @@ def update_correction_review(
 
 
 def _correction_review_blocks_finalization(result) -> bool:
-    """Only a missing or invalid effective score prevents finalization."""
+    """A provisional programming score also needs a recorded teacher decision."""
     def valid_score(value):
         return (value is not None and math.isfinite(value)
                 and 0 <= value <= result.ai_max_score)
 
-    return (
-        result.result_status in education.NON_SCOREABLE_RESULT_STATUSES
-        or not valid_score(result.effective_score)
+    if result.result_status in education.NON_SCOREABLE_RESULT_STATUSES or not valid_score(result.effective_score):
+        return True
+    review = result.teacher_review or {}
+    return bool(result_programming_review_reason(result)) and not teacher_resolved_programming_score(
+        result.ai_score, review.get("new_score"), result.ai_max_score, review.get("confirmed"),
     )
 
 
@@ -6074,8 +6076,9 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
     confirmed_required_count = 0
     if run is not None:
         for result in grading_repository.list_results_for_run(run.id, include_missing=True):
-            if (_correction_review_blocks_finalization(result)
-                    or result.ai_score is None):
+            blocked = _correction_review_blocks_finalization(result)
+            programming_reason = result_programming_review_reason(result)
+            if blocked or result.ai_score is None or programming_reason:
                 required_review_count += 1
                 review = result.teacher_review or {}
                 if (
@@ -6084,12 +6087,12 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
                     and review.get("confirmed") is True
                 ):
                     confirmed_required_count += 1
-            if _correction_review_blocks_finalization(result):
+            if blocked:
                 presentation = workflow_repository.list_student_presentations(task_id).get(result.student_id)
                 remaining.append({
                     "student_id": presentation.display_student_id if presentation else result.student_id,
                     "q_id": result.q_id,
-                    "reasons": list(result.review_reasons or []),
+                    "reasons": list(result.review_reasons or ([programming_reason] if programming_reason else [])),
                     "confirmed": False,
                 })
     released = bool(run and run.released_at is not None)
@@ -6274,9 +6277,6 @@ def generate_artifacts(
     def render_manifest(version: int, released_at: float, task_name: str) -> dict:
         # Called under the run/workflow locks before either snapshot or report
         # metadata is written. No provider calls, storage writes or mutations.
-        if any(_correction_review_blocks_finalization(result)
-               for result in grading_repository.list_results_for_run(run.id)):
-            raise ResultNotReleasable("unresolved_failures")
         snapshot = result_snapshot(
             task_id=task_id, owner_id=owner_id, result_version=version,
             grading_run_id=run.id,

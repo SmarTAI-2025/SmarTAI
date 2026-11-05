@@ -1,5 +1,7 @@
 """Programming votes, source provenance and the released grade use the same execution facts."""
 import asyncio
+import csv
+from io import StringIO
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -154,7 +156,7 @@ async def test_selected_experts_share_one_execution_and_weighted_real_zero(monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["ai_only", "teacher_zero", "platform", "configuration", "no_submission"])
+@pytest.mark.parametrize("scenario", ["ai_only_confirm", "ai_only_edit", "code_only", "teacher_zero", "platform", "configuration", "no_submission"])
 async def test_run_review_finalization_and_release(monkeypatch, scenario):
     from backend.config import settings
     from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
@@ -164,10 +166,12 @@ async def test_run_review_finalization_and_release(monkeypatch, scenario):
     with session_scope() as session:
         for uid, role in [(teacher, "teacher"), (student, "student")]:
             session.add(UserRecord(id=uid, username=uid, password_hash="h", role=role, is_active=True))
-    course = course_repository.create_course(teacher_id=teacher, name="Programming")
-    course_repository.enroll(course_id=course.id, student_id=student)
-    assignment = assignment_repository.create_assignment(teacher_id=teacher, course_id=course.id, name="Echo")
-    source = "llm_generated" if scenario == "ai_only" else "teacher"
+    task = task_facade.create_task(owner_id=teacher, name="Programming", semester_id=None,
+                                   course_id=None, idempotency_key=suffix)
+    assignment = assignment_repository.get_assignment(task["task_id"], actor_id=teacher)
+    args = {"task_id": assignment.id, "owner_id": teacher}
+    course_repository.enroll(course_id=assignment.course_id, student_id=student)
+    source = "llm_generated" if scenario.startswith("ai_only") else "teacher"
     cases = [{"input":"4", "expected_output":"4", "source":source}]
     if scenario == "configuration":
         cases += [{"input":"4", "expected_output":"5", "source":"teacher"}]
@@ -176,11 +180,14 @@ async def test_run_review_finalization_and_release(monkeypatch, scenario):
     assignment_repository.publish(assignment_id=assignment.id, teacher_id=teacher, expected_version=1)
     sub = submission_repository.create_submission(assignment_id=assignment.id, student_id=student)
     code = "" if scenario == "no_submission" else "print(0)"
+    if scenario == "code_only":
+        code = "#include <iostream>\nint main(){return 0;}"
     submission_repository.add_revision(submission_id=sub.id, student_id=student, source="online",
         answers=[{"question_id":q.id, "q_id":q.q_id, "type":q.type, "content":code}])
     if scenario == "platform":
         monkeypatch.setattr(programming, "run_sandbox", AsyncMock(side_effect=IsolatedRunnerUnavailable()))
-    route = fixed_provider(response(award(0)))
+    ai_score = 7 if scenario in {"ai_only_edit", "code_only"} else 0
+    route = fixed_provider(response(award(ai_score)))
     registry = SimpleNamespace(count=lambda: 1, list_available=lambda: [route], pick_default=lambda: route)
     run = grading_runs.create_run(teacher_id=teacher, assignment_id=assignment.id)
     await grading_runs.process_run(run_id=run.id, worker_id="worker", registry=registry)
@@ -195,14 +202,54 @@ async def test_run_review_finalization_and_release(monkeypatch, scenario):
         with pytest.raises(ResultNotReleasable):
             grading_runs.release(teacher_id=teacher, run_id=run.id)
         assert not grading_runs.student_results(student_id=student, assignment_id=assignment.id)
+    elif scenario in {"ai_only_confirm", "ai_only_edit", "code_only"}:
+        reason = "programming_code_review_only" if scenario == "code_only" else "programming_ai_only"
+        assert public["provisional_score"] == public["score"] == ai_score
+        assert evidence["score_status"] == "provisional" and reason in row.initial_review_reasons
+
+        def assert_blocked():
+            state = task_facade.finalization(**args)
+            assert not state["ready_for_confirmation"] and state["remaining_review_count"] == 1
+            assert reason in state["remaining_reviews"][0]["reasons"]
+            assert state["required_review_count"] == 1 and state["confirmed_required_count"] == 0
+            with pytest.raises(ResultNotReleasable, match="programming_review_required"):
+                grading_runs.release(teacher_id=teacher, run_id=run.id)
+            with pytest.raises(ResultNotReleasable, match="programming_review_required"):
+                task_facade.generate_artifacts(**args, expected_revision=state["workflow_revision"])
+            assert not task_facade.artifact_index(**args)["versions"]
+            assert not grading_runs.student_results(student_id=student, assignment_id=assignment.id)
+
+        assert_blocked()
+        grading_repository.add_teacher_review(row.id, teacher_id=teacher, new_score=ai_score,
+                                             new_comment="Comment-only edit", confirm=False)
+        assert_blocked()
+        queue = grading_runs.list_review_queue(assignment_id=assignment.id, teacher_id=teacher)
+        assert [r.id for r in queue] == [row.id]
+        if scenario == "ai_only_edit":
+            grading_repository.add_teacher_review(row.id, teacher_id=teacher, new_score=8, confirm=False)
+            assert task_facade.finalization(**args)["ready_for_confirmation"]
+            grading_repository.add_teacher_review(row.id, teacher_id=teacher, new_score=ai_score, confirm=False)
+            assert_blocked()  # Reverting to the provisional vote restores its original requirement.
+        confirmed = scenario == "ai_only_confirm"
+        resolved = ai_score if confirmed else 8.5
+        grading_repository.add_teacher_review(row.id, teacher_id=teacher, new_score=resolved,
+                                             new_comment="Teacher decision", confirm=confirmed)
+        state = task_facade.finalization(**args)
+        assert state["ready_for_confirmation"] and not state["remaining_reviews"]
+        assert state["required_review_count"] == 1 and state["confirmed_required_count"] == int(confirmed)
+        if confirmed:
+            grading_runs.release(teacher_id=teacher, run_id=run.id)
+        task_facade.generate_artifacts(**args, expected_revision=state["workflow_revision"])
+        data, _, _ = task_facade.artifact_bytes(**args, version=1, artifact_id="grades_csv")
+        csv_row, = csv.DictReader(StringIO(data.decode("utf-8-sig")))
+        assert float(csv_row["q1_score"]) == resolved
+        seen, = grading_runs.student_results(student_id=student, assignment_id=assignment.id)
+        assert seen.effective_score == resolved and seen.ai_score == ai_score
+        assert seen.ai_expert_results[0]["programming_evidence"] == evidence
     else:
         assert public["score"] == 0 and not task_facade._correction_review_blocks_finalization(row)
-        if scenario == "ai_only":
-            assert row.result_status == "needs_review" and public["requires_human_review"]
-            assert evidence["score_status"] == "provisional" and "programming_ai_only" in row.review_reasons
-        else:
-            assert evidence["primary_reason"] == ("no_submission" if scenario == "no_submission" else "teacher_case_failed")
-            assert row.result_status == "graded"
+        assert evidence["primary_reason"] == ("no_submission" if scenario == "no_submission" else "teacher_case_failed")
+        assert row.result_status == "graded"
         grading_runs.release(teacher_id=teacher, run_id=run.id)
         seen, = grading_runs.student_results(student_id=student, assignment_id=assignment.id)
         assert seen.effective_score == 0

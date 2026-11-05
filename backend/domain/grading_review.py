@@ -8,6 +8,7 @@ import math
 from typing import Any
 
 from backend.domain.confidence_policy import confidence_needs_attention
+from backend.services.grading_scores import round_ai_score
 
 EXPERT_DISAGREEMENT_THRESHOLD = 0.15
 
@@ -26,6 +27,38 @@ def number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value) if math.isfinite(value) else None
+
+
+PROGRAMMING_REVIEW_REASONS = ("programming_ai_only", "programming_code_review_only")
+
+
+def programming_review_reason(reasons, experts) -> str | None:
+    """Read the frozen programming review requirement, including restored expert votes."""
+    for reason in PROGRAMMING_REVIEW_REASONS:
+        if reason in reasons:
+            return reason
+    for expert in experts or ():
+        evidence = expert.get("programming_evidence") if isinstance(expert, dict) else None
+        if (isinstance(evidence, dict) and not expert.get("error_kind")
+                and evidence.get("contract") == "smartai.programming_evidence"
+                and evidence.get("score_status") == "provisional"):
+            return ("programming_ai_only" if evidence.get("execution_status") == "executed"
+                    else "programming_code_review_only")
+    return None
+
+
+def teacher_resolved_programming_score(ai_score, teacher_score, maximum, confirmed) -> bool:
+    value = number(teacher_score)
+    if value is None or not 0 <= value <= maximum:
+        return False
+    return confirmed is True or value != round_ai_score(number(ai_score), maximum)
+
+
+def result_programming_review_reason(result) -> str | None:
+    return programming_review_reason(
+        [*(getattr(result, "initial_review_reasons", None) or ()), *(getattr(result, "review_reasons", None) or ())],
+        getattr(result, "ai_expert_results", None),
+    )
 
 
 def score(correction: dict) -> float | None:
@@ -73,7 +106,11 @@ def review_state(correction: dict) -> tuple[bool, bool]:
     reasons = {part.strip() for reason in [*(correction.get("review_reasons") or []),
                                           *(correction.get("initial_review_reasons") or [])]
                for part in reason.split(",")}
-    pending = blocked or (not reviewed and (low_confidence or (not expert_scores and confidence_needs_attention(conf))
+    programming = programming_review_reason(reasons, experts)
+    program_pending = programming and not teacher_resolved_programming_score(
+        correction.get("provisional_score"), correction.get("teacher_score"), maximum or 0, confirmed,
+    )
+    pending = blocked or bool(program_pending) or (not reviewed and (low_confidence or (not expert_scores and confidence_needs_attention(conf))
                                             or disagreement or partial or bool(reasons & {
                                                 "partial_experts", "degraded_to_single", "math_scoring_uncertainty",
                                                 "math_expert_disagreement", "math_verification_conflict",

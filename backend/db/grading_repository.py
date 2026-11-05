@@ -12,9 +12,8 @@ invariants in SQL plus conditional UPDATEs:
   the ``lease_owner`` predicate so a late worker cannot overwrite another.
 
 AI-original ``grade_results`` columns are immutable once written; a teacher
-review is a separate ``teacher_reviews`` row, never an overwrite. Only hard
-failures block release; scored soft-review rows keep their warning and use the
-AI score by default.
+review is a separate ``teacher_reviews`` row. Release requires a valid score
+and a teacher decision for provisional programming grades.
 """
 from __future__ import annotations
 
@@ -38,6 +37,7 @@ from backend.db.models import (
 )
 from backend.db.session import session_scope
 from backend.domain import education
+from backend.domain.grading_review import result_programming_review_reason, teacher_resolved_programming_score
 from backend.domain.errors import (
     DuplicateActiveRun,
     InvalidTransition,
@@ -1185,8 +1185,14 @@ def persisted_result_counters(run_id: str) -> tuple[int, int]:
         return completed, failed
 
 
-def _apply_teacher_review_state(result) -> None:
+def _apply_teacher_review_state(result, score, confirmed) -> None:
     """Apply the same current state for a fresh or inherited human judgment."""
+    reason = result_programming_review_reason(result)
+    if reason and not teacher_resolved_programming_score(result.ai_score, score, result.ai_max_score, confirmed):
+        result.result_status = education.GradeResultStatus.NEEDS_REVIEW.value
+        result.requires_review = True
+        result.review_reasons = [reason]
+        return
     result.result_status = education.GradeResultStatus.GRADED.value
     result.requires_review = False
     result.review_reasons = []
@@ -1313,7 +1319,7 @@ def upsert_result(run_id: str, *, worker_id: str,
             score = inherited_review["new_score"]
             if not math.isfinite(score) or not 0 <= score <= record.ai_max_score:
                 raise ValidationError("review_score_out_of_range")
-            _apply_teacher_review_state(record)
+            _apply_teacher_review_state(record, score, inherited_review.get("confirmed"))
             session.add(TeacherReviewRecord(
                 id=_new_review_id(), grade_result_id=record.id, teacher_id=run.teacher_id,
                 previous_score=record.ai_score, previous_comment=record.ai_comment,
@@ -1554,7 +1560,7 @@ def _add_teacher_review_in_session(
         created_at=now,
     )
     session.add(review)
-    _apply_teacher_review_state(result)
+    _apply_teacher_review_state(result, new_score, confirm)
     result.updated_at = now
     session.flush()
     return _review_to_dto(review)
@@ -1609,17 +1615,39 @@ def has_unresolved_failures(run_id: str) -> bool:
         ) > 0
 
 
+def _ensure_releasable_scores(session, run_id: str) -> None:
+    """Check the latest teacher decisions under the same run lock as publication."""
+    rows = session.scalars(select(GradeResultRecord).where(GradeResultRecord.grading_run_id == run_id)).all()
+    reviews = _latest_reviews_by_result(session, [row.id for row in rows])
+    for row in rows:
+        if row.result_status in education.NON_SCOREABLE_RESULT_STATUSES:
+            raise ResultNotReleasable("unresolved_failures")
+        review = reviews.get(row.id)
+        effective = review.new_score if review else row.ai_score
+        if effective is None or not math.isfinite(effective) or not 0 <= effective <= row.ai_max_score:
+            raise ResultNotReleasable("missing_or_invalid_score")
+        if result_programming_review_reason(row) and (review is None or not teacher_resolved_programming_score(
+            row.ai_score, review.new_score, row.ai_max_score, review.confirmed,
+        )):
+            raise ResultNotReleasable("programming_review_required")
+
+
 def release(run_id: str, *, teacher_id: str) -> education.GradingRunDTO:
     """Mark a completed run released so students see results.
 
-    Blocking: a run with a hard failure cannot be released until the teacher
-    supplies a valid score. A scored ``needs_review`` row remains visible in the
-    review queue but uses its AI score by default. The release is a single
+    Invalid scores and unresolved provisional programming grades block release.
+    Other scored advisories keep their AI default. The release is a single
     conditional UPDATE that requires a terminal status AND no prior release; it
     stamps ``released_at`` so the student read model can gate visibility on it.
     """
     now = time.time()
     with session_scope() as session:
+        if session.bind.dialect.name == "sqlite":
+            # SQLite ignores FOR UPDATE. Take the same writer gate as report generation
+            # before deciding whether the teacher has resolved provisional scores.
+            session.execute(update(GradingRunRecord).where(
+                GradingRunRecord.id == run_id, GradingRunRecord.teacher_id == teacher_id,
+            ).values(created_at=GradingRunRecord.created_at))
         # Serialize release against teacher-review inserts.  Without this row
         # lock, PostgreSQL could let a review transaction pass the
         # ``released_at`` check and commit immediately after release.
@@ -1640,25 +1668,7 @@ def release(run_id: str, *, teacher_id: str) -> education.GradingRunDTO:
         if run.status not in (education.GradingRunStatus.COMPLETED.value,
                               education.GradingRunStatus.PARTIAL_FAILED.value):
             raise InvalidTransition("run_not_complete")
-        unresolved = exists(
-            select(GradeResultRecord.id).where(
-                GradeResultRecord.grading_run_id == run_id,
-                GradeResultRecord.result_status.in_(
-                    education.NON_SCOREABLE_RESULT_STATUSES
-                ),
-            )
-        )
-        if session.scalar(select(unresolved)):
-            raise ResultNotReleasable("unresolved_failures")
-        records = session.scalars(select(GradeResultRecord).where(GradeResultRecord.grading_run_id == run_id)).all()
-        reviews = _latest_reviews_by_result(session, [row.id for row in records])
-        for row in records:
-            review = reviews.get(row.id)
-            def valid_score(value):
-                return value is not None and math.isfinite(value) and 0 <= value <= row.ai_max_score
-            effective = review.new_score if review is not None else row.ai_score
-            if not valid_score(effective):
-                raise ResultNotReleasable("missing_or_invalid_score")
+        _ensure_releasable_scores(session, run_id)
         revision_ids, question_ids = _result_matrix_axes(session, run)
         actual_pairs = {
             (revision_id, question_id)
@@ -1679,6 +1689,10 @@ def release(run_id: str, *, teacher_id: str) -> education.GradingRunDTO:
                 "The grading result matrix is incomplete.",
                 code="incomplete_result_matrix",
             )
+        unresolved = exists(select(GradeResultRecord.id).where(
+            GradeResultRecord.grading_run_id == run_id,
+            GradeResultRecord.result_status.in_(education.NON_SCOREABLE_RESULT_STATUSES),
+        ))
         result = session.execute(
             update(GradingRunRecord)
             .where(
