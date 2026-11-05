@@ -6,7 +6,7 @@
     "sections": [
       {
         "title": "第一次使用，先准备这些",
-        "body": "<ul><li>准备教师账号和一个可用模型。</li><li>准备题目。可一并提供标答、评分标准和编程测试材料。</li><li>每位学生准备一份作答；全班文件可打成一个 ZIP。按名单匹配时，再准备一份含学号的名单。</li></ul><p><a href=\"#upload-formats\">上传格式速查</a> · <a href=\"#submissions-2\">名单示例</a></p>"
+        "body": "<ul><li>准备教师账号和一个可用模型。</li><li>准备题目。可一并提供标答、评分标准和编程测试材料。</li><li>每位学生准备一份作答。编程题每人交一个 Python 文件（.py），全班打成一个 ZIP 上传。按名单匹配时，再准备一份含学号的名单。</li></ul><p><a href=\"#upload-formats\">上传格式速查</a> · <a href=\"#submissions-2\">名单示例</a></p>"
       },
       {
         "title": "完成一轮批改",
@@ -19,7 +19,7 @@
       {
         "id": "upload-formats",
         "title": "上传格式速查",
-        "body": "<p><strong>文档</strong>：PDF、文字型 Word（.docx）、TXT、Markdown（.md、.markdown）。<br><strong>静态图片</strong>：JPG、JPEG、PNG、WebP、BMP、TIF、TIFF。</p><div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">上传到哪里</th><th scope=\"col\">可以选什么</th></tr></thead><tbody><tr><td><a href=\"#questions-1\">题目</a></td><td>文档或图片</td></tr><tr><td><a href=\"#questions-1\">标准答案</a></td><td>文档或图片</td></tr><tr><td><a href=\"#questions-1\">评分标准</a></td><td>文档、图片，或直接输入文字</td></tr><tr><td><a href=\"#questions-1\">编程测试材料</a></td><td>文档、图片、JSON、CSV</td></tr><tr><td><a href=\"#submissions-1\">学生作答</a></td><td>文档、图片或单文件源码（.py、.c、.cc、.cpp）。全班可传一个压缩包。每次上传最多 100 MiB。</td></tr><tr><td><a href=\"#submissions-2\">学生名单</a></td><td>CSV、TSV、TXT。学号必填，姓名可选。</td></tr><tr><td><a href=\"#library-1\">课程资料库</a></td><td>文档或图片。每份文档最多 64 MiB，每张图片最多 10 MiB。</td></tr><tr><td><a href=\"#grading-2\">任务知识资料</a></td><td>格式和大小与课程资料库相同。每个任务最多 20 份。</td></tr><tr><td><a href=\"#question-review-3\">已有题目的补充资料</a></td><td>按用途选择，每次一份。勾选“测试样例”时可选 JSON 或 CSV。</td></tr></tbody></table></div><p>首次准备题目时，前四类各选一份来源；每个新文件最多 5 MiB，提取的正文最多 40 万字符。</p>",
+        "body": "<p><strong>文档</strong>：PDF、文字型 Word（.docx）、TXT、Markdown（.md、.markdown）。<br><strong>静态图片</strong>：JPG、JPEG、PNG、WebP、BMP、TIF、TIFF。</p><div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">上传到哪里</th><th scope=\"col\">可以选什么</th></tr></thead><tbody><tr><td><a href=\"#questions-1\">题目</a></td><td>文档或图片</td></tr><tr><td><a href=\"#questions-1\">标准答案</a></td><td>文档或图片</td></tr><tr><td><a href=\"#questions-1\">评分标准</a></td><td>文档、图片，或直接输入文字</td></tr><tr><td><a href=\"#questions-1\">编程测试材料</a></td><td>文档、图片、JSON、CSV</td></tr><tr><td><a href=\"#submissions-1\">普通题作答</a></td><td>文档或静态图片。可直接传单份作答，也可上传全班压缩包，每次最多 100 MiB。</td></tr><tr><td><a href=\"#submissions-1\">编程题作答</a></td><td>目前仅支持 Python：每位学生交一个 .py 文件，全班文件放在同一压缩包的根目录，一次上传。</td></tr><tr><td><a href=\"#submissions-2\">学生名单</a></td><td>CSV、TSV、TXT。学号必填，姓名可选。</td></tr><tr><td><a href=\"#library-1\">课程资料库</a></td><td>文档或图片。每份文档最多 64 MiB，每张图片最多 10 MiB。</td></tr><tr><td><a href=\"#grading-2\">任务知识资料</a></td><td>格式和大小与课程资料库相同。每个任务最多 20 份。</td></tr><tr><td><a href=\"#question-review-3\">已有题目的补充资料</a></td><td>按用途选择，每次一份。勾选“测试样例”时可选 JSON 或 CSV。</td></tr></tbody></table></div><p>首次准备题目时，前四类各选一份来源；每个新文件最多 5 MiB，提取的正文最多 40 万字符。</p>",
         "details": [
           {
             "title": "图片尺寸与 Word 读取范围",
@@ -221,11 +221,11 @@
     "sections": [
       {
         "title": "整理并上传作答",
-        "body": "<p>每位学生准备一份文件，例如 <code>00123_张同学.pdf</code>。单份作答直接拖入上传区；全班作答打成一个 ZIP 再上传。每次选一个文件，最多 100 MiB。</p><ul><li><strong>文档或图片</strong>：可交 PDF、文字型 DOCX、TXT、Markdown 或静态图片。图片每张最多 10 MiB；图片和扫描 PDF 请选择视觉/OCR 模型。</li><li><strong>编程作答</strong>：每位学生可交一个 .py、.c、.cc 或 .cpp 文件。Python 可按测试样例隔离运行；C/C++ 用于源码审查。</li></ul><p>选择身份匹配方式后，点击“开始识别作答”。</p>",
+        "body": "<p><strong>编程题目前仅支持 Python。</strong>每位学生交一个 <code>.py</code> 文件，以学号和姓名命名，例如 <code>00123_张同学.py</code>。收齐后，把全班文件直接放在同一个压缩包的根目录，一次上传，推荐使用 ZIP。暂不支持嵌套文件夹或手写代码识别。后续支持范围会持续更新。</p><p><strong>普通题作答：</strong>每位学生准备一份文档或静态图片，例如 <code>00123_张同学.pdf</code>。可直接上传一份作答，也可上传全班压缩包。图片和扫描 PDF 请选择视觉/OCR 模型。</p><p>每次选一个文件，最多 100 MiB；单张图片最多 10 MiB。选择身份匹配方式后，点击“开始识别作答”。</p>",
         "details": [
           {
-            "title": "班级压缩包怎么整理？",
-            "body": "<p>支持 ZIP、RAR、7Z、TAR、TAR.GZ、TGZ、TAR.BZ2、TBZ2。可保留文件夹，例如 <code>00123_张同学/main.py</code>；内层压缩包请先解开。包内作答格式与直接上传相同，最多 500 个文件，每个最多 5 MiB，展开后合计最多 100 MiB。全班合在一个 PDF 中时，请先按学生拆分。</p>"
+            "title": "班级压缩包的格式与大小",
+            "body": "<p>支持 ZIP、RAR、7Z、TAR、TAR.GZ、TGZ、TAR.BZ2、TBZ2。每包最多 500 个文件，每个最多 5 MiB，展开后合计最多 100 MiB。编程题压缩包打开后应直接看到每位学生的 .py 文件。普通题可保留文件夹，内层压缩包请先解开；全班合在一个 PDF 中时，先按学生拆分。</p>"
           },
           {
             "title": "已有作答时重新上传",
