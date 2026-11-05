@@ -10,6 +10,11 @@ import type { SourceFileDescriptor } from "@/types/sourcePreview";
 import type { PreparationIssue } from "@/types";
 import { QuestionPreparationDetailPage } from "./QuestionPreparationDetailPage";
 
+// These integration cases hydrate 24 real IndexedDB-backed editors and perform
+// multi-step saves. Allow a bounded budget on busy workers without extending
+// waitFor assertion deadlines or changing any production timeout.
+vi.setConfig({ testTimeout: 20_000 });
+
 const testState = vi.hoisted(() => ({ locale: "zh-CN" }));
 const mutateAsync = vi.hoisted(() => vi.fn());
 const taskRefetch = vi.hoisted(() => vi.fn());
