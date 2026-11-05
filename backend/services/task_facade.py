@@ -87,9 +87,10 @@ from backend.llm.registry import (
 )
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import grading_runs
-from backend.services.programming_submission_mapping import SOURCE_LANGUAGE_FLAGS, NATIVE_SOURCE_MAPPING_VERSION, may_contain_source
+from backend.services.programming_submission_mapping import SOURCE_LANGUAGE_FLAGS, NATIVE_SOURCE_MAPPING_VERSION, is_source_file, may_contain_source
 from backend.services.question_sources import read_question_source
 from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE
+from backend.services.submission_archive_ownership import MULTIPLE_SOURCE_FILES, reconcile_archive_results
 from backend.services.submission_work_budget import submission_work_budget, current_budget
 from backend.services.background_errors import (
     SAFE_BACKGROUND_ERROR_CODES,
@@ -671,7 +672,8 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
             ),
             "failure_phase": safe_phase,
             "requires_reupload": (
-                external_status == "failed" and outcome is not None
+                outcome is not None and (external_status == "failed" or
+                    (external_status == "manual_review" and outcome.stable_error_code == MULTIPLE_SOURCE_FILES))
                 and source_requires_reupload(outcome.stable_error_code, outcome.retryable)
             ),
             "retryable": (
@@ -3239,6 +3241,16 @@ async def run_task_submission_parsing(
         questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
         await reporter.set_totals(students=0, questions=len(questions))
         problem_data = {q.q_id: _serialize_problem(q) for q in questions}
+        programming = any(is_programming_question_type(q.type) for q in questions)
+
+        def finalize_identities(values, *, restored=False):
+            if filename.lower().endswith(ARCHIVE_EXTENSIONS) and (programming or any(is_source_file(r.filename) for r in values)):
+                values = reconcile_archive_results(values, identity_mode, roster_entries if identity_mode == "roster" else [],
+                                                   programming=programming)
+            elif restored:
+                return values
+            return normalize_submission_source_identities(values)
+
         results = None
         if leased_operation is not None:
             parsed_artifact = _submission_result_artifact(
@@ -3250,6 +3262,7 @@ async def run_task_submission_parsing(
             if parsed_artifact is not None:
                 results = [await _restore_legacy_native_result(r, problem_data, task_id, owner_id)
                            for r in _load_submission_results(parsed_artifact)]
+                results = finalize_identities(results, restored=True)
                 # Recovery must not publish an old partial parse or dispatch
                 # another paid read. Leave it failed for the explicit retry.
                 results = [replace(result, status="parse_failed",
@@ -3666,7 +3679,7 @@ async def run_task_submission_parsing(
                         task.cancel()
                 await asyncio.gather(*pending_tasks, return_exceptions=True)
             by_source = {**reused, **{result.source_id: result for result in values}}
-            results = normalize_submission_source_identities([by_source[source.source_id] for source in all_sources])
+            results = finalize_identities([by_source[source.source_id] for source in all_sources])
             await reporter.set_current_step("consolidating_submission_results", message="Saving submission results.")
             if leased_operation is not None:
                 current_failure_phase = "outcome_persistence"

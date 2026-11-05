@@ -6,6 +6,11 @@ export function submissionRequiresReupload(sources: SubmissionSourceOutcome[] | 
   return unfinished.length > 0 && unfinished.every(source => source.status === "failed" && source.requires_reupload === true);
 }
 
+export function programmingArchiveGuidance(locale: Locale): string {
+  return tx(locale, "请按每名学生一份完整源码重新打包，用学号和姓名标记文件或学生目录。多文件工程请先整理成独立单文件。",
+    "Repack one self-contained source file per student. Label each file or student folder with the student ID and name. Combine multi-file projects before uploading.");
+}
+
 export interface SubmissionSourceReasonCopy {
   title: string;
   description: string;
@@ -20,6 +25,9 @@ export function getSubmissionSourceReasonCopy(
     title: tx(locale, "教师已完成处理", "Resolved by the teacher"),
     description: tx(locale, "原文件和识别记录已保留。", "Original files and recognition records are retained."),
   };
+  if (source.status === "manual_review" && source.reason_code === "submission_programming_multiple_files") {
+    return REASON_COPY[source.reason_code](locale, source);
+  }
   if (source.status === "manual_review") return {
     title: tx(locale, "识别未完成，等待人工处理", "Recognition incomplete; awaiting manual review"),
     description: tx(locale, "原文件和已完成识别已保留。请逐题补齐作答或确认未作答。", "Originals and completed recognition are preserved. Complete each answer or confirm it is blank."),
@@ -450,6 +458,10 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     nextStep: tx(locale, "稍后重试；持续失败时联系管理员，或改用 ZIP 上传。", "Retry later. If it persists, contact an administrator or upload a ZIP instead."),
   }),
   submission_archive_empty: (locale) => archiveCopy(locale, "压缩包中没有学生文件", "The archive contains no student files", "确认压缩包不是空的，且文件没有全部放在系统隐藏目录中。", "Make sure the archive is not empty and files are not all in hidden system folders."),
+  submission_programming_multiple_files: (locale) => ({
+    title: tx(locale, "多份源码的学生归属需要核对", "Check which source files belong to each student"),
+    description: programmingArchiveGuidance(locale),
+  }),
   submission_archive_directories_only: (locale) => archiveCopy(locale, "压缩包中只找到目录，没有学生文件", "The archive contains folders but no student files", "普通多层文件夹可以读取；请确认文件夹中包含 PDF 等受支持文件后重新打包上传。", "Ordinary nested folders are supported. Include supported files such as PDFs inside the folders, then repack and upload."),
   submission_archive_nested_unsupported: (locale) => archiveMemberCopy(locale, "压缩包内仍是压缩包，暂不支持继续解压", "This archive member is another archive and cannot be unpacked", "请先解压内层压缩包，再将其中的 PDF 等受支持文件重新打包上传；可以保留普通文件夹。", "Unpack the inner archive first, then repack its supported files, such as PDFs, and upload again. Ordinary folders can be retained."),
   submission_archive_invalid: (locale) => archiveCopy(locale, "压缩包损坏或结构不安全", "The archive is damaged or unsafe", "请重新打包为未加密的 ZIP 后上传。", "Create a new, unencrypted ZIP and upload it again."),
