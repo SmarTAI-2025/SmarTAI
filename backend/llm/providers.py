@@ -588,12 +588,21 @@ class BaseProvider(ABC):
     async def _owned_client_initialization(self, initialize):
         # The task owns both construction and cache publication. A cancelled
         # waiter releases neither that ownership nor the initialization lock.
-        task = self._client_initialization
-        if task is None or task.done():
-            task = asyncio.create_task(initialize())
-            self._client_initialization = task
-            _retain_client_owner(task)
-        return await asyncio.shield(task)
+        while True:
+            task = self._client_initialization
+            owns_attempt = task is None or task.done()
+            if owns_attempt:
+                task = asyncio.create_task(initialize())
+                self._client_initialization = task
+                _retain_client_owner(task)
+            try:
+                return await asyncio.shield(task)
+            except Exception:
+                if owns_attempt:
+                    raise
+                # Preserve the old lock waiter's chance to initialize after
+                # another caller's failed attempt. Do not broadcast that failure
+                # to callers that have not attempted construction themselves.
 
     def _generation_kwargs(self, max_output_tokens: int | None) -> dict[str, Any]:
         _validate_output_limit(max_output_tokens)

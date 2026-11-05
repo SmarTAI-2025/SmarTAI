@@ -279,3 +279,40 @@ async def test_official_constructor_stays_synchronous_and_cached(kind, provider_
     assert await provider._get_client() is client
     assert await provider._get_client() is client
     assert builds == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("relay", [False, True])
+@pytest.mark.parametrize("failures", [1, 3])
+async def test_waiting_callers_keep_their_attempt_after_prior_constructor_failure(relay, failures, monkeypatch):
+    provider = (providers.SafeRelayProvider if relay else providers.OpenAIProvider)(ProviderConfig(
+        provider_type="openai", model="fixture", api_key="fake", base_url="https://relay.example/v1"))
+    entered, release = threading.Event(), threading.Event()
+    client, builds = object(), []
+    def build():
+        builds.append(True)
+        if len(builds) == 1:
+            entered.set()
+            assert release.wait(5)
+        if len(builds) <= failures:
+            raise RuntimeError(f"construction {len(builds)} failed")
+        if relay:
+            provider._safe_async_client = client
+        return client
+    monkeypatch.setattr(provider, "_build_client_sync", build)
+    get_client = provider._relay_client if relay else provider._get_client
+    first = asyncio.create_task(get_client())
+    waiters = []
+    try:
+        await wait_thread_event(entered)
+        waiters = [asyncio.create_task(get_client()) for _ in range(3)]
+        await asyncio.sleep(.01)
+        assert len(builds) == 1
+    finally:
+        release.set()
+    outcomes = await asyncio.gather(first, *waiters, return_exceptions=True)
+    await wait_cleanup()
+    assert isinstance(outcomes[0], RuntimeError)
+    assert sum(isinstance(result, RuntimeError) for result in outcomes) == failures
+    assert sum(result is client for result in outcomes) == 4 - failures
+    assert len(builds) == failures + 1
