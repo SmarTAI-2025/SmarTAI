@@ -286,7 +286,14 @@ def infer_upload_content_type(
     content: bytes | None = None,
 ) -> str:
     if content is not None:
-        return inspect_upload_content(content, filename, supplied).content_type
+        inspection = inspect_upload_content(content, filename, supplied)
+        if (_ext(filename) in PROGRAMMING_SOURCE_SUFFIXES and inspection.content_type == "application/pdf"
+                and inspection.declared_content_type in {"text/plain", "application/pdf"}
+                and _decodable_text(content, _ext(filename))):
+            # Preserve the accepted source MIME when saving or reopening the
+            # original. Actual PDF candidates still go through the bounded reader.
+            return "text/plain"
+        return inspection.content_type
     if supplied and supplied.strip() and supplied != "application/octet-stream":
         return _normalized_content_type(supplied)
     guessed, _encoding = mimetypes.guess_type(filename)
@@ -307,7 +314,8 @@ def submission_source_error(filename: str, inspection: ContentInspection, conten
     if inspection.mismatch:
         if (content is not None and inspection.content_type == "application/pdf"
                 and suffix in SUBMISSION_TEXT_EXTENSIONS and _decodable_text(content, suffix)
-                and (suffix not in PROGRAMMING_SOURCE_SUFFIXES or inspection.declared_content_type == "text/plain")):
+                and (suffix not in PROGRAMMING_SOURCE_SUFFIXES
+                     or inspection.declared_content_type in {"text/plain", "application/pdf"})):
             return None  # The bounded decoder will distinguish a real PDF from quoted text.
         return "submission_source_content_type_mismatch"
     return None

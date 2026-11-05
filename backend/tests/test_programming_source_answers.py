@@ -66,7 +66,7 @@ def test_teacher_cases_and_duplicate_contracts_checked_assignment_wide():
         known[qid]["test_cases"] = [{"source": "teacher", "function_name": name}]
     code = "def add(a): return a\ndef count(a): return 0\n"
     assert [row["flag"] for row in source_answers("x.py", code, known, set(known))] == [
-        ["recognition_manual_pending", PYTHON_FLAG], ["recognition_manual_pending", PYTHON_FLAG], []]
+        ["recognition_manual_pending", PYTHON_FLAG], ["recognition_manual_pending", PYTHON_FLAG], [PYTHON_FLAG]]
 
 
 @pytest.mark.asyncio
@@ -268,3 +268,54 @@ def test_real_fences_and_prose_outside_module_still_require_review():
         _source(blocks)
     commentary = '"""Module docstring"""\ndef solve(x): return x\n"Another explanation."\n'
     assert source_answers("work.txt", commentary, known, set(known)) is None
+
+
+def test_photo_of_code_can_be_reviewed_and_then_executed(client_registry, monkeypatch):
+    """Real image/upload/storage/review; the visual transcription is a fixed response."""
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    from PIL import Image, ImageDraw
+    from backend.llm.providers import LLMResponse
+    from backend.models import TestCase
+    from backend.tests.test_ocr_mounted_routes import headers
+    from backend.tools.code_interpreter import run_sandbox
+
+    owner, task = seed(SUM)
+    client, registry = client_registry
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
+    correct = "def sum_positive(nums):\n    return sum(x for x in nums if x > 0)"
+    transcription = correct.replace("> 0", "< 0")
+    with Image.new("RGB", (520, 80), "white") as photo:
+        ImageDraw.Draw(photo).multiline_text((8, 8), correct, fill="black")
+        data = io.BytesIO()
+        photo.save(data, "PNG")
+    async def fixed_vision(*args, **kwargs):
+        from backend.llm.request_timeouts import current_response_scope
+        async def response():
+            return LLMResponse(content=transcription, provider="test-provider", model="test-model",
+                               duration_ms=1, input_tokens=50, output_tokens=25)
+        return await current_response_scope().run_response(response)
+    vision = AsyncMock(side_effect=fixed_vision)
+    monkeypatch.setattr(registry.provider, "supports_vision", True, raising=False)
+    monkeypatch.setattr(registry.provider, "ainvoke_vision", vision, raising=False)
+    structured = dict(stu_id="S1", stu_name="Alice", stu_ans=[dict(q_id="q2", number="2",
+        type="programming", content=transcription, flag=[])])
+    monkeypatch.setattr(registry.provider, "ainvoke", AsyncMock(return_value=SimpleNamespace(content=json.dumps(structured))), raising=False)
+    upload = client.post(f"/tasks/{task}/parse_submissions", headers=headers(owner),
+                         files={"file": ("S1_Alice.png", data.getvalue(), "image/png")})
+    assert upload.status_code == 200, upload.text
+    asyncio.run(task_facade.run_durable_submission_recognition(_claim(owner, upload.json()["job_id"])))
+    snapshot = client.get(f"/tasks/{task}", headers=headers(owner)).json()
+    row, = snapshot["student_data"]["S1"]["stu_ans"]
+    vision.assert_awaited_once()
+    assert row["content"] == transcription and "recognition_manual_pending" in row["flag"]
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+    task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id="S1", q_id="q2",
+        patch={"answer_id": row["answer_id"], "target_q_id": "q2", "content": correct, "review_status": "confirmed"},
+        expected_revision=snapshot["workflow_revision"])
+    reviewed, = client.get(f"/tasks/{task}", headers=headers(owner)).json()["student_data"]["S1"]["stu_ans"]
+    assert reviewed["content"] == correct and "recognition_manual_pending" not in reviewed["flag"]
+    case = TestCase(io_mode="function", function_name="sum_positive", function_args=[[-2, 3, 4]], expected_return="7")
+    assert asyncio.run(run_sandbox(reviewed["content"], [case])).passed_count == 1
