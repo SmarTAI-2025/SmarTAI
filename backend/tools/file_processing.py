@@ -280,6 +280,17 @@ def inspect_upload_content(
     )
 
 
+def _stored_content_type(filename: str, content: bytes, inspection: ContentInspection) -> str:
+    suffix = _ext(filename)
+    if (suffix in PROGRAMMING_SOURCE_SUFFIXES and inspection.content_type == "application/pdf"
+            and inspection.declared_content_type in {"text/plain", "application/pdf"}
+            and _decodable_text(content, suffix)):
+        # Filename and source bytes indicate code quoting a PDF header. Before
+        # any text is consumed, the reader still checks the bounded PDF parser.
+        return "text/plain"
+    return inspection.content_type
+
+
 def infer_upload_content_type(
     filename: str,
     supplied: str | None = None,
@@ -287,13 +298,7 @@ def infer_upload_content_type(
 ) -> str:
     if content is not None:
         inspection = inspect_upload_content(content, filename, supplied)
-        if (_ext(filename) in PROGRAMMING_SOURCE_SUFFIXES and inspection.content_type == "application/pdf"
-                and inspection.declared_content_type in {"text/plain", "application/pdf"}
-                and _decodable_text(content, _ext(filename))):
-            # Preserve the accepted source MIME when saving or reopening the
-            # original. Actual PDF candidates still go through the bounded reader.
-            return "text/plain"
-        return inspection.content_type
+        return _stored_content_type(filename, content, inspection)
     if supplied and supplied.strip() and supplied != "application/octet-stream":
         return _normalized_content_type(supplied)
     guessed, _encoding = mimetypes.guess_type(filename)
@@ -1039,7 +1044,7 @@ def _extract_raw_files_from_archive(
         sources.append(RawUploadSource(
             filename=clean,
             content=data,
-            content_type=inspection.content_type,
+            content_type=inspection.content_type if error_code else _stored_content_type(clean, data, inspection),
             pre_error_code=error_code,
             failure_phase=("archive" if error_code == "submission_archive_nested_unsupported" else "source_read") if error_code else None,
         ))
@@ -1214,7 +1219,8 @@ def _extract_raw_files_from_archive(
     error_code = submission_source_error(filename, container_inspection, file_bytes)
     return [RawUploadSource(
         filename=_bounded_source_name(filename), content=file_bytes,
-        content_type=container_inspection.content_type, pre_error_code=error_code,
+        content_type=container_inspection.content_type if error_code else _stored_content_type(filename, file_bytes, container_inspection),
+        pre_error_code=error_code,
         failure_phase="source_read" if error_code else None,
     )]
 

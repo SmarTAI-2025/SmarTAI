@@ -145,6 +145,7 @@ async def test_text_materials_can_quote_a_pdf_marker(name, content):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name,mime,data", [
     ("S001.PY", "text/x-python", b'print("%PDF-1.7 example")\r\n'),
+    ("S005.py", "text/x-python", b'# coding: latin-1\nprint("%PDF-1.7 caf\xe9")\n'),
     ("S002.c", "text/x-csrc", b"int main(void) {return 0;}\n"),
     ("S003.CC", "text/x-c++", b"// student source\n"),
     ("S004.CpP", "text/x-c++src", b"int main(){}"),
@@ -154,9 +155,9 @@ async def test_native_submission_direct_and_archived_keep_source_bytes(name, mim
     assert validate_upload("student_submission", name, data, content_type=mime).media_type == "text/plain"
     for filename, body in ((name, data), ("responses.zip", archive({"class/" + name: data}))):
         leaf, = extract_raw_files_from_archive(body, filename)
-        assert leaf.pre_error_code is None and leaf.content == data
+        assert leaf.pre_error_code is None and leaf.content == data and leaf.content_type == "text/plain"
         assert await extract_text_from_upload(leaf.content, leaf.filename, purpose="submissions",
-                                              content_type=leaf.content_type) == data.decode()
+                                              content_type=leaf.content_type) == data.decode("latin-1")
 
 
 @pytest.mark.asyncio
