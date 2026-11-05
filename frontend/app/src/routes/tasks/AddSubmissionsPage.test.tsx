@@ -80,6 +80,46 @@ function renderPage(taskId = "task-1", owner = "submission-teacher") {
 }
 
 describe("AddSubmissionsPage OCR uploads", () => {
+  it.each([
+    ["submission_source_empty", "文件为空", "empty"],
+    ["submission_source_content_type_mismatch", "内容与扩展名", "contents do not match"],
+    ["submission_archive_empty", "没有可处理文件", "no processable files"],
+    ["submission_archive_invalid", "重新打包", "clean ZIP"],
+    ["submission_archive_member_too_large", "5 MiB", "5 MiB"],
+    ["submission_archive_member_unreadable", "未加密", "unencrypted"],
+    ["submission_archive_limit_exceeded", "安全上限", "safe file-count"],
+    ["pdf_encrypted", "本地解锁", "Unlock it locally"],
+    ["source_json_invalid", "JSON", "JSON"],
+    ["submission_archive_processing_unavailable", "尚不能判定压缩包损坏", "does not establish"],
+    ["media_inspection_unavailable", "不代表文件格式不支持", "does not mean"],
+  ].flatMap(([code, zh, en]) => [[code, "zh-CN", zh], [code, "en-US", en]]))(
+    "preserves actionable HTTP guidance for %s (%s)", async (code, locale, fragment) => {
+      copy.locale = locale;
+      try {
+        const { container } = renderPage();
+        fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["synthetic source"], "answers.zip")] } });
+        await waitFor(() => expect(screen.getByLabelText(locale === "zh-CN" ? "作答识别模型" : "Submission recognition model")).toHaveValue("provider-default"));
+        const error = new APIError(422, "private provider stack trace", { error: { code, message: "private provider stack trace" } });
+        mutateAsync.mockRejectedValueOnce(error);
+        fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+        const alert = await screen.findByText(userFacingError(error, locale), { selector: "p[role='alert']" });
+        expect(alert).toHaveTextContent(fragment);
+        expect(alert).not.toHaveTextContent("private provider stack trace");
+        expect(screen.getByText("answers.zip")).toBeInTheDocument();
+      } finally { copy.locale = "zh-CN"; }
+    },
+  );
+
+  it("keeps unknown HTTP failures generic instead of exposing raw server details", async () => {
+    const { container } = renderPage();
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["synthetic source"], "answer.txt")] } });
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    mutateAsync.mockRejectedValueOnce(new APIError(500, "private server path", { error: { code: "unknown_backend_failure", message: "private server path" } }));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    const alert = await screen.findByText("submissionUploadErrorGeneric", { selector: "p[role='alert']" });
+    expect(alert).not.toHaveTextContent("private server path");
+    expect(screen.getByText("answer.txt")).toBeInTheDocument();
+  });
   it.each(["answer.txt", "answer.md", "answer.markdown", "answer.pdf", "answer.bmp", "answer.tif", "answer.tiff", "answer.jpeg", "answers.tar.gz"])("accepts the supported submission suffix %s", async filename => {
     const { container } = renderPage();
     const input = container.querySelector('input[type="file"]')!;

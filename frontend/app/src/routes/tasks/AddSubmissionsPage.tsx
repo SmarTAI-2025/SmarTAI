@@ -576,13 +576,15 @@ function localizeSubmissionError(
   const code = submissionErrorCode(error);
   if (code === "submission_retry_requires_reupload") return userFacingError(error, locale);
   if (code === "submission_source_unsupported") return t("submissionUploadUnsupported");
-  if (["submission_source_empty", "submission_archive_empty", "submission_archive_invalid"].includes(code)) {
-    return t("submissionUploadErrorInvalid");
-  }
-  if (["submission_source_too_large", "pdf_page_limit_exceeded", "pdf_character_limit_exceeded"].includes(code)) {
-    return t("submissionUploadErrorTooLarge");
-  }
   if (code.startsWith("submission_roster_")) return userFacingError(error, locale);
+  // Keep immediate HTTP validation consistent with background file failures.
+  // Only known file repairs and processing retries use the shared guidance;
+  // unknown HTTP errors retain the safe generic fallback below.
+  const recovery = classifyRecoverableError(error, { locale });
+  if (recovery.actionKind === "reupload" || [
+    "media_inspection_unavailable", "media_inspection_busy", "media_inspection_timeout",
+    "pdf_processing_unavailable", "pdf_ocr_render_failed", "submission_archive_processing_unavailable",
+  ].includes(code)) return recovery.description;
   if (["no_provider_configured", "recognition_provider_not_enabled"].includes(code)) {
     return t("submissionUploadErrorProvider");
   }
