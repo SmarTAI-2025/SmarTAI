@@ -25,8 +25,8 @@ MAX_AST_NODES = 256
 MAX_AST_DEPTH = 32
 MAX_SYMBOLS = 8
 MAX_POWER = 128
-WALL_SECONDS = 5.0
-CPU_SECONDS = 4
+WALL_SECONDS = 30.0
+CPU_SECONDS = 16
 MAX_OUTPUT_BYTES = 32768
 _CONSTANT_NAMES = {"pi", "E", "e", "I", "i"}
 _INTEGRATION_CONSTANTS = {"C", "c", "C1", "C2", "c1", "c2"}
@@ -73,7 +73,7 @@ def _unknown(reason: str, *, method: str = "unavailable") -> MathVerificationEvi
 
 
 async def verify_math(request: MathVerificationRequest) -> MathVerificationEvidence:
-    """Run a fixed worker with a hard wall deadline, killing it on cancellation.
+    """Wait for capacity, then run a bounded fixed worker and reap it.
 
     No shell, eval, sympify(string), generated program, or model is involved.
     The existing sandbox concurrency gate is shared; programming sandbox policy
@@ -86,34 +86,70 @@ async def verify_math(request: MathVerificationRequest) -> MathVerificationEvide
         request = MathVerificationRequest.model_validate(request.model_dump())
     except Exception:
         return _unknown("Invalid mathematical verification request.", method="input")
-    process = None
     try:
-        async with asyncio.timeout(WALL_SECONDS):
-            async with get_sandbox_semaphore():
-                process = await asyncio.create_subprocess_exec(
-                    sys.executable, "-I", str(Path(__file__).resolve()), "--worker",
-                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL,
-                    env={"LANG": "C.UTF-8", "PYTHONHASHSEED": "0"},
-                    cwd=os.path.dirname(os.path.abspath(__file__)),
-                )
-                output, _ = await process.communicate(request.model_dump_json().encode())
-                if process.returncode != 0 or len(output) > MAX_OUTPUT_BYTES:
-                    return _unknown("Worker failed or exceeded its resource limit.", method="resource_limit")
-                return MathVerificationEvidence.model_validate_json(output)
-    except TimeoutError:
-        return _unknown("Mathematical verification exceeded its time limit.", method="timeout")
+        # Each admitted check gets its own deadline, including worker startup.
+        # Keep the slot until the child has been reaped, including on cancellation.
+        async with get_sandbox_semaphore():
+            async with asyncio.timeout(WALL_SECONDS):
+                return await _run_worker(request)
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        # A cleanup error must not turn a parent's cancellation into evidence.
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            raise asyncio.CancelledError from None
+        if isinstance(exc, TimeoutError):
+            return _unknown("Mathematical verification exceeded its time limit.", method="timeout")
         return _unknown("Mathematical verification could not be completed.")
+
+
+async def _run_worker(request: MathVerificationRequest) -> MathVerificationEvidence:
+    # Keep ownership even if cancellation arrives before process creation
+    # returns its handle. The enclosing call budget still bounds startup.
+    launch = asyncio.create_task(asyncio.create_subprocess_exec(
+        sys.executable, "-I", str(Path(__file__).resolve()), "--worker",
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        env={"LANG": "C.UTF-8", "PYTHONHASHSEED": "0"},
+        cwd=os.path.dirname(os.path.abspath(__file__)),
+    ))
+    try:
+        process = await asyncio.shield(launch)
+        output, _ = await process.communicate(request.model_dump_json().encode())
+        if process.returncode != 0 or len(output) > MAX_OUTPUT_BYTES:
+            return _unknown("Worker failed or exceeded its resource limit.", method="resource_limit")
+        return MathVerificationEvidence.model_validate_json(output)
     finally:
-        if process is not None and process.returncode is None:
+        await _reap_worker(launch)
+
+
+async def _reap_worker(launch: asyncio.Task) -> None:
+    async def cleanup():
+        try:
+            process = await launch
+        except (Exception, asyncio.CancelledError):
+            return
+        if process.returncode is None:
             try:
                 process.kill()
             except ProcessLookupError:
                 pass
+        try:
+            await process.communicate()
+        finally:
             await process.wait()
+
+    cleanup_task = asyncio.create_task(cleanup())
+    cancelled = False
+    while not cleanup_task.done():
+        try:
+            await asyncio.shield(cleanup_task)
+        except asyncio.CancelledError:
+            cancelled = True
+    await cleanup_task
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 class _Unsupported(ValueError):

@@ -97,14 +97,14 @@ async def evaluate_group(cases, provider=None, *, student_names=None):
         return parsed, SimpleNamespace(duration_ms=0, content="{}")
 
     actual_verify = math_verification.verify_math
-    async def verification(request):
+    async def verification(request, **kwargs):
         faults = {c["replay"]["tool_fault"] for c in cases}
         if "unknown" in faults:
             return math_verification.MathVerificationEvidence(status="unknown", method="injected",
                                                               reason="Synthetic unsupported tool.")
         if "timeout" in faults:
             raise TimeoutError("synthetic tool timeout")
-        return await actual_verify(request)
+        return await actual_verify(request, **kwargs)
 
     problem_store = {problem_data(c)["q_id"]: problem_data(c) for c in cases}
     students = {

@@ -14,6 +14,7 @@ from backend.skills.concept import ConceptSkill
 from backend.skills import math_grading as grading
 from backend.services.math_rubric_plan import MathRubricPlan, MathRubricRoute, fallback_math_rubric_plan
 from backend.services.math_grading_context import math_plans_context
+from backend.tests.manual_clock import manual_clock
 
 
 def problem(kind="计算题", criterion="Method 8 points, result 2 points."):
@@ -481,27 +482,110 @@ async def test_actual_math_tool_evidence_is_consumed_before_final_ledger(
 
 
 @pytest.mark.asyncio
-async def test_late_tool_timeout_keeps_earlier_completed_evidence(monkeypatch, provider):
+async def test_middle_timeout_retains_grade_and_evidence_from_earlier_and_later_checks(monkeypatch, provider):
     import asyncio
     from backend.tools import math_verification
-    monkeypatch.setattr(grading, "VERIFICATION_BUDGET_SECONDS", .03)
-    calls = 0
 
-    async def verify(_):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return math_verification.MathVerificationEvidence(
-                status="supported", method="exact", reason="First check completed.")
-        await asyncio.sleep(60)
-
-    monkeypatch.setattr(math_verification, "verify_math", verify)
     p, a, plan = problem(), answer(), plan_for()
     draft = assessment(checks=[grading.Verification(claim_id="s1", context_quote=p.stem,
-        request={"student_expression": "41", "reference_expression": "42"}) for _ in range(3)])
-    evidence = await CalculationSkill(provider)._verify(draft, p, a, plan)
-    assert [entry["status"] for entry in evidence] == ["supported", "unknown", "unknown"]
-    assert calls == 2  # No third launch after the total budget expires.
+        request={"student_expression": "41", "reference_expression": "42", "comparison": mode})
+        for mode in ("equivalence", "numeric")])
+    # The scheduler also checks the student's own multiplication against their result.
+    reviewed = draft.model_copy(update={"evidence_judgments": [
+        grading.EvidenceJudgment(evidence_id=eid, applicability="applies", reason="Incorrect product.")
+        for eid in ("v1", "v3")
+    ]})
+    model = AsyncMock(side_effect=[(draft, response()), (reviewed, response())])
+    monkeypatch.setattr(grading, "structured_llm_call", model)
+
+    with manual_clock(monkeypatch) as clock:
+        calls = 0
+
+        async def verify(_):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                clock.now += 31  # One second past the independent execution deadline.
+                await asyncio.Event().wait()  # The real per-check timeout cancels this call.
+            return math_verification.MathVerificationEvidence(
+                status="refuted", method="exact", reason=f"Completed check {calls}.")
+
+        monkeypatch.setattr(math_verification, "_run_worker", verify)
+        with math_plans_context({"q1": plan}), grading.math_review_scope():
+            result = await CalculationSkill(provider).grade(p, a)
+
+    assert result.score == 8 and not result.error_kind
+    assert result.comment == draft.comment
+    assert sum(step.score for step in result.steps) == result.score
+    assert model.await_count == 2
+    evidence = grading.read_math_trace(result)["evidence"]
+
+    assert [entry["method"] for entry in evidence] == ["exact", "timeout", "exact"]
+    assert [entry["status"] for entry in evidence] == ["refuted", "unknown", "refuted"]
+    assert [evidence[i]["reason"] for i in (0, 2)] == ["Completed check 1.", "Completed check 3."]
+
+
+@pytest.mark.asyncio
+async def test_verification_queue_does_not_consume_check_deadline(monkeypatch, provider):
+    import asyncio
+    from backend.tools import math_verification, sandbox_runtime
+
+    loop = asyncio.get_running_loop()
+    # Only explicit clock advances spend budget, never host scheduling latency.
+    with manual_clock(monkeypatch) as clock:
+        waiting = asyncio.Event()
+
+        class ObservedSemaphore(asyncio.Semaphore):
+            async def acquire(self):
+                if self.locked():
+                    waiting.set()
+                return await super().acquire()
+
+        slots = ObservedSemaphore(1)
+        monkeypatch.setattr(sandbox_runtime, "_SEMAPHORE", slots)
+        await slots.acquire()
+        children = []
+        payload = json.dumps({"status": "refuted", "method": "fixture", "reason": "41 != 42"})
+
+        async def launch(*args, **kwargs):
+            # Real subprocess coverage lives in test_math_verification_lifecycle.
+            child = SimpleNamespace(returncode=0,
+                communicate=AsyncMock(return_value=(payload.encode(), b"")),
+                wait=AsyncMock(return_value=0))
+            children.append(child)
+            return child
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", launch)
+        p, a, plan = problem(), answer(), plan_for()
+        draft = assessment(checks=[grading.Verification(claim_id="s1", context_quote=p.stem,
+            request={"student_expression": "41", "reference_expression": "42"}) for _ in range(2)])
+        task = asyncio.create_task(CalculationSkill(provider)._verify(draft, p, a, plan))
+        waiter = asyncio.create_task(waiting.wait())
+        try:
+            try:
+                done, _ = await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+                assert waiter in done, "Verification returned without waiting for admission"
+                # Cross the production deadline while admission is still blocked.
+                clock.now += math_verification.WALL_SECONDS + 1
+                checkpoint = asyncio.Event()
+                loop.call_later(0, checkpoint.set)
+                await checkpoint.wait()  # Dispatch any incorrectly armed queue timeout.
+                queued = not task.done()
+                assert not children
+            finally:
+                slots.release()
+            evidence = await task
+            assert queued, evidence
+            assert [entry["status"] for entry in evidence] == ["refuted", "refuted"], evidence
+            assert len(children) == 2 and all(child.returncode == 0 for child in children)
+            for child in children:
+                child.wait.assert_awaited_once()
+            assert slots._value == 1
+        finally:
+            for pending in (task, waiter):
+                if not pending.done():
+                    pending.cancel()
+            await asyncio.gather(task, waiter, return_exceptions=True)
 
 
 def test_rounding_preserves_item_total():
