@@ -25,6 +25,7 @@ from backend.models import ProblemInfo, StudentAnswerInfo, TestCase, is_programm
 from pydantic import ValidationError
 from backend.services.grading_checkpoints import CheckpointWriteError, current_checkpoints
 from backend.services.programming_submission_mapping import C_FAMILY_FLAG, NATIVE_LANGUAGES, PYTHON_FLAG, has_markup_fence
+from backend.services.programming_test_contract import native_standard_supported
 from backend.services.python_source_encoding import PythonSourceEncodingError, python_execution_source
 from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCodeExecutionDisabled
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable, NativeBuildUnavailable
@@ -291,6 +292,8 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
             if reference:
                 from backend.services.programming_test_contract import bind_programming_cases
                 language = _reference_language(problem, reference)
+                if language != "python" and not native_standard_supported(problem.stem + "\n" + problem.criterion, language, reference=True):
+                    raise ValueError("native_standard_unsupported")
                 executable = python_execution_source(reference) if language == "python" else reference
                 ref_cases = (bind_programming_cases(problem.stem, cases, executable) if language == "python"
                              else bind_stdin_cases(problem.stem, cases))
@@ -306,7 +309,7 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
         except ValueError as exc:
             state.failures[key] = str(exc) if str(exc) in {
                 "programming_conflicting_expectations", "programming_reference_conflict",
-                "programming_cases_unavailable", "programming_execution_contract_invalid",
+                "programming_cases_unavailable", "programming_execution_contract_invalid", "native_standard_unsupported",
             } else "programming_case_configuration_invalid"
             return key, [], state.failures[key]
         except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError) as exc:
@@ -354,7 +357,12 @@ async def prepare_pending(state, problems, students, selection, reporter):
             if not content.strip() or "recognition_manual_pending" in flags or C_FAMILY_FLAG in flags:
                 continue
             if any(f in NATIVE_LANGUAGES for f in flags):
-                eligible = has_native_main(content)
+                question = problems[qid]
+                material = (str(question.get("stem") or "") + "\n" + str(question.get("criterion") or "")
+                            if isinstance(question, dict) else question.stem + "\n" + question.criterion)
+                eligible = has_native_main(content) and all(
+                    native_standard_supported(material, NATIVE_LANGUAGES[f]) for f in flags if f in NATIVE_LANGUAGES
+                )
             else:
                 eligible = PYTHON_FLAG in flags or _detect_language(content) not in {"cpp", "java"}
             if eligible:
@@ -457,6 +465,8 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
     native = [NATIVE_LANGUAGES[flag] for flag in answer.flag if flag in NATIVE_LANGUAGES]
     if native and (len(native) != 1 or PYTHON_FLAG in answer.flag or C_FAMILY_FLAG in answer.flag):
         return ProgrammingEvidence("unavailable", code, [], reason="programming_mapping_invalid")
+    if native and not native_standard_supported(problem.stem + "\n" + problem.criterion, native[0]):
+        return ProgrammingEvidence("unavailable", code, [], reason="native_standard_unsupported")
     if native and not has_native_main(code):
         return ProgrammingEvidence("unavailable", code, [], reason="native_main_required")
     if C_FAMILY_FLAG in answer.flag:

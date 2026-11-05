@@ -25,6 +25,7 @@ _STUDENT_FAILURES = {
 # These fixed explanations may enter a teacher's saved result. Unknown codes
 # and exception strings stay out of public text.
 _UNGRADED_REASONS = {
+    "native_standard_unsupported": ("本题要求的语言标准超出 C11 / C++17 支持范围，请按题目要求人工复核。", "The requested standard is outside C11 / C++17. Review the submission using the required standard."),
     "native_main_required": ("请教师复核函数片段，或提交含 main 的单文件标准输入程序。", "Review the function fragment or submit one stdin program with main."),
     "toolchain_unavailable": ("请管理员修复镜像中的编译器、头文件或链接器，再重试。", "Ask the administrator to repair the compiler, headers or linker in the image, then retry."),
     "native_runner_unavailable": ("请管理员检查隔离运行时和镜像，再重试。", "Ask the administrator to check the OCI runtime and image, then retry."),

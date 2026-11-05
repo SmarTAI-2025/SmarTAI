@@ -382,7 +382,7 @@ def _build_native(language, source, memory_mb):
     resources, abnormal exits and ambiguous linker failures stay ungraded.
     """
     compiler = "/usr/bin/gcc" if language == "c" else "/usr/bin/g++"
-    standard = "-std=c17" if language == "c" else "-std=c++17"
+    standard = "-std=c11" if language == "c" else "-std=c++17"
     obj = source.with_suffix(".o")
     stages = [
         ([compiler, standard, "-fdiagnostics-format=json", "-fmax-errors=2", "-c", str(source), "-o", str(obj)], "compile_error"),

@@ -122,3 +122,27 @@ async def test_native_failures_cancellation_and_isolation(monkeypatch):
     monkeypatch.setattr(settings, "program_runner_mode", "disabled")
     with pytest.raises(IsolatedRunnerUnavailable):
         await run_sandbox("int main(void){return 0;}", [Case(input="", expected_output="")], language="c")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language,header,macro,expected", [
+    ("c", "stdio.h", "__STDC_VERSION__", "201112"),
+    ("cpp", "cstdio", "__cplusplus", "201703"),
+])
+async def test_native_compiler_standards(language, header, macro, expected):
+    source = f'#include <{header}>\nint main(void){{printf("%ld", (long){macro});}}'
+    report = await run_sandbox(source, [Case(input="", expected_output=expected)], language=language)
+    assert report.passed_count == 1 and report.results[0].actual_output == expected
+
+
+@pytest.mark.asyncio
+async def test_merged_python_reference_and_interface_review(monkeypatch):
+    problem = ProblemInfo(q_id="q1", number="1", type="编程题", stem="首个整数 n，其后有 n 个整数，输出它们之和。",
+                          criterion="Sum.", solution_code="print(-2)", test_cases=[Case(input="1 -2", expected_output="-2")])
+    answer = StudentAnswerInfo(q_id="q1", number="1", type="编程题", content="print(sum([1,2])")
+    run = await evidence_for_answer(problem=problem, answer=answer, student_id="synthetic", task_id="merged",
+                                   provider=None, reporter=None, generate=None, execute=run_sandbox)
+    assert run.report.results[0].exit_reason == "syntax_error"
+    assert run.report.results[0].isolation_mode == "oci_container"
+    from backend.tests.test_programming_scoring_contract import exercise_review_and_release
+    await exercise_review_and_release(monkeypatch, "entry_only")

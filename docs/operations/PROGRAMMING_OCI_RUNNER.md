@@ -4,12 +4,15 @@ This adapter connects the existing Python grading tool to Docker/Podman. It keep
 stdin/stdout comparison, explicit function-name/argument mapping, per-test results,
 and the existing grading/aggregation logic. Each test case runs in its own container.
 SymPy uses the same execution transport and reports its actual isolation mode.
-Native uploads with an identified single-file main use C17 (gcc) or C++17 (g++).
+Native uploads with an identified single-file main use C11 (gcc) or C++17 (g++).
 Every stdin case compiles and links inside its own container, with 12 seconds per
 build stage and a separate execution deadline. Only native cases mount an 8 MiB
 executable tmpfs at /binary. The /work scratch mount stays noexec. Compiler and
 linker diagnostics are classified inside the worker. Recognized source errors
 require a successful toolchain control build and run before they can affect scoring.
+Questions that specify a different standard for the submitted language require
+teacher review. The native acceptance test checks the actual compiler macros
+(`__STDC_VERSION__ == 201112L` and `__cplusplus == 201703L`).
 Unknown failures leave the submission ungraded. Rebuild and pin the candidate
 image before enabling native execution. Teacher scoring uses the existing rubric.
 

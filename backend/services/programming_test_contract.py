@@ -386,6 +386,34 @@ def adapt_programming_cases(stem: str, cases, *, edited=False) -> list[TestCase]
     return result
 
 
+# Recognize course standards independently per language (e.g. "C11 or C++17").
+_NATIVE_STANDARD = re.compile(
+    r"(?<![A-Za-z0-9_])(?P<family>gnu\+\+|c\+\+|gnu|c)[ -]?"
+    r"(?P<version>89|90|95|99|98|03|11|14|17|18|20|23|26|2[abxy]|1[xyz]|0x)(?![A-Za-z0-9_])", re.I,
+)
+
+
+def native_standard_supported(material: str, language: str, *, reference=False) -> bool:
+    family, supported = ("c", "11") if language == "c" else ("c++", "17")
+    requested = set()
+    other_family = False
+    for match in _NATIVE_STANDARD.finditer(material):
+        named = match["family"].lower()
+        # A prohibition does not require that dialect.
+        if re.search(r"(?:不要|禁止|不得|不可|不允许|must not|do not|avoid|without)\s*(?:使用|用|use)?\s*$",
+                     material[max(0, match.start()-40):match.start()], re.I):
+            continue
+        if ("++" in named) != (language == "cpp"):
+            other_family = True
+        else:
+            requested.add((named, match["version"].lower()))
+    # A separately identified reference may intentionally use a different
+    # language. For submissions, defer an explicit language mismatch to review.
+    if not requested:
+        return reference or not other_family
+    return requested == {(family, supported)}
+
+
 def bind_stdin_cases(stem, cases):
     # Existing stdin payloads (including spaces, line endings and CSV) are
     # literal. Only translate a natural numeric enumeration for a stated

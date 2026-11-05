@@ -215,3 +215,18 @@ def test_teacher_reference_language_is_independent_of_student_language():
     assert runs._reference_language(problem, runs._reference(problem)) == "c"
     problem.solution_code = "def main():\n    values = {1: 2}\n    print(values[1])\nmain()"
     assert runs._reference_language(problem, runs._reference(problem)) == "python"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filename,standard", [("answer.c", "C17"), ("answer.cpp", "C++20"), ("answer.cc", "GNU++17"), ("answer.c", "C++20")])
+async def test_incompatible_native_standard_stays_ungraded(filename, standard):
+    from backend.services.programming_submission_mapping import source_answers
+    from backend.skills.programming_evidence import describe_run
+    problem = question().model_copy(update={"stem": f"Read stdin. Required standard: {standard}."})
+    raw, = source_answers(filename, "int main(void){return 0;}", {"q7": problem.model_dump()}, {"q7"})
+    generate, execute = AsyncMock(), AsyncMock()
+    result = await grade(problem, "s", generate, execute, answer=StudentAnswerInfo.model_validate(raw))
+    public, _ = describe_run(result, "en", problem)
+    assert public.score_status == "unavailable" and public.primary_reason == "native_standard_unsupported"
+    generate.assert_not_awaited()
+    execute.assert_not_awaited()
