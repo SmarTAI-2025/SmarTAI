@@ -67,7 +67,16 @@ class TestCaseList(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def accept_case_list(cls, value):
-        return {"cases": value} if isinstance(value, list) else value
+        value = {"cases": value} if isinstance(value, list) else value
+        if isinstance(value, dict):
+            for field in ("inputs", "single_arguments"):
+                draft = value.get(field)
+                if isinstance(draft, list) and MAX_LLM_GENERATED_CASES < len(draft) <= 2 * MAX_LLM_GENERATED_CASES:
+                    # A modest overrun in an *unfrozen input proposal* is a format
+                    # mistake eligible for one repair. Preserve the hard bound for
+                    # excessive responses; never truncate or execute an oversized suite.
+                    raise ValueError("Propose no more than eight legal inputs.")
+        return value
 
 
 # Hints in the frozen question for workloads outside the configured sandbox.

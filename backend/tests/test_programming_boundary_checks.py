@@ -154,3 +154,16 @@ async def test_fresh_generated_inputs_obtain_expected_values_from_teacher_refere
             if case.function_name:
                 assert bool(ev.report.passed_count) == (sid == "a")
     assert provider.ainvoke.await_count == 1 and execute.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_oversized_input_proposal_uses_one_repair_without_dropping_existing_cases():
+    problem, _ = setup()
+    problem.test_cases = []
+    too_many = response({"single_arguments":list(range(9))})
+    valid = response({"single_arguments":[0, -1, 8]})
+    route = fixed_provider(too_many, valid)
+    cases, error = await programming._generate_test_cases(route, problem)
+    assert route.ainvoke.await_count == 2 and error is None
+    assert [c.function_args for c in cases] == [[0], [-1], [8]]
+    assert not problem.test_cases and all(c.expected_return is None for c in cases)
