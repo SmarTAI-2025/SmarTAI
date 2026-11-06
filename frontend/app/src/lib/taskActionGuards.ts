@@ -1403,10 +1403,10 @@ function providerConfigurationErrorCopy(
       "Return to Models & BYOK, save the Baidu OCR API Key / Secret Key again, then reselect the recognition service.",
     ],
     provider_permission_denied: [
-      "OCR 账号没有服务权限",
-      "The OCR account lacks service permission",
-      "请在百度控制台确认已开通文档解析权限，或替换为有权限的 API Key / Secret Key。",
-      "Confirm Document Parsing access in the Baidu console or replace the API Key / Secret Key with an authorized pair.",
+      "服务商账号没有所需权限",
+      "The provider account lacks the required permission",
+      "请在对应服务商控制台检查当前服务或模型的访问权限，或更换有权限的凭据。",
+      "Check access to this service or model in the provider console, or use authorized credentials.",
     ],
     provider_region_unsupported: [
       "模型服务不支持当前网络地区",
@@ -1416,12 +1416,6 @@ function providerConfigurationErrorCopy(
     ],
     shared_pool_daily_limit_reached: ["共享模型日额度已用完。", "Shared model daily allowance exhausted.", "请等待 UTC 00:00 重置、联系管理员调整，或在模型与 BYOK 页面配置自己的模型。", "Wait for UTC midnight, contact an administrator, or use your own BYOK model."],
     shared_pool_disabled: ["平台共享模型当前关闭。", "The shared model pool is disabled.", "请在模型与 BYOK 页面配置自己的模型。", "Configure your own BYOK model."],
-    provider_quota_exceeded: [
-      "OCR 额度已用完",
-      "The OCR quota is exhausted",
-      "请在百度控制台检查当前活动额度与用量，额度恢复后再重试。",
-      "Check the current campaign quota and usage in the Baidu console, then retry after quota is available.",
-    ],
     provider_message_payload_not_supported: [
       "当前协议无法发送这类输入",
       "The selected protocol cannot encode this input",

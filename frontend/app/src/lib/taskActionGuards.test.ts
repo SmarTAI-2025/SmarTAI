@@ -9,6 +9,22 @@ import {
 } from "./taskActionGuards";
 
 describe("task contract compatibility", () => {
+  it.each(["zh-CN", "en-US"] as const)("keeps shared provider quota and permission failures provider-neutral (%s)", locale => {
+    for (const code of ["provider_quota_exceeded", "provider_permission_denied"]) {
+      for (const error of [code, new APIError(422, "private diagnostic", { detail: { code } })]) {
+        const info = classifyRecoverableError(error, { locale });
+        expect(info.actionKind).toBe("byok");
+        expect(info.title + info.description).not.toMatch(/OCR|百度|Baidu|private diagnostic/i);
+        expect(info.description).toMatch(locale === "zh-CN" ? /服务商/ : /provider/);
+        if (code === "provider_quota_exceeded") {
+          expect(info.description).toMatch(locale === "zh-CN" ? /切换模型/ : /switch models/);
+          expect(info.showUsageLinks).toBe(true);
+        }
+      }
+    }
+    const ocr = classifyRecoverableError("ocr_credential_not_found", { locale });
+    expect(ocr.description).toMatch(locale === "zh-CN" ? /百度 OCR/ : /Baidu OCR/);
+  });
   it.each(["pdf_evidence_busy", "source_extent_unavailable"])("offers retained-result retry for local PDF failure %s", code => {
     for (const locale of ["zh-CN", "en-US"] as const) {
       const info = classifyRecoverableError(code, { locale });
