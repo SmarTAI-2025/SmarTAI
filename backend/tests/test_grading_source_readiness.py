@@ -530,7 +530,7 @@ def test_saved_question_repair_releases_next_stage_without_confirmation(field, r
         assert repaired["problem"]["preparation_issues"][0]["status"] == "resolved"
     # The real upload endpoint's server guard must use the same saved facts.
     from fastapi.testclient import TestClient
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.main import app
     response = TestClient(app).post(f"/tasks/{args['task_id']}/parse_submissions",
         headers={"Authorization": f"Bearer {create_token(args['owner_id'], 'teacher')}"},
@@ -541,7 +541,7 @@ def test_saved_question_repair_releases_next_stage_without_confirmation(field, r
 
 def test_grade_endpoint_accepts_uncertain_answers_and_preserves_pending_review():
     from fastapi.testclient import TestClient
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.main import app
     from backend.services import task_facade
 
@@ -618,7 +618,7 @@ def test_stale_preflight_revision_cannot_create_grading_run():
 def test_legacy_structured_inputs_without_source_evidence_can_start_through_grade_endpoint():
     from fastapi.testclient import TestClient
 
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.main import app
     from backend.services import task_facade
 
@@ -708,7 +708,7 @@ def test_legacy_needs_review_without_source_id_does_not_block_saved_answers():
 def test_changed_grading_setup_stays_revision_locked_during_active_grading():
     from fastapi.testclient import TestClient
 
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.main import app
     from backend.services import task_facade
 
@@ -755,7 +755,7 @@ def test_changed_grading_setup_stays_revision_locked_during_active_grading():
 def test_changed_grading_setup_stays_revision_locked_while_workflow_is_busy():
     from fastapi.testclient import TestClient
 
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.main import app
 
     seeded = _seed_legacy_structured_case()

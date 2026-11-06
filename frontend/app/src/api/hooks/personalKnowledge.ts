@@ -1,13 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import * as personalKnowledgeApi from "@/api/personalKnowledge";
-import type { UploadOptions } from "@/api/client";
 import { personalKnowledgeKeys } from "./keys";
-
-export function usePersonalKnowledge() {
-  return useQuery({ queryKey: personalKnowledgeKeys.list(), queryFn: personalKnowledgeApi.listPersonalKnowledge,
-    refetchInterval: (query) => query.state.data?.documents.some((doc) => ["queued", "processing"].includes(doc.ingestion?.status ?? "")) ? 5_000 : false,
-  });
-}
 
 export function useKnowledgeStorageUsage() {
   return useQuery({
@@ -19,32 +12,5 @@ export function useKnowledgeStorageUsage() {
         ? 3_000
         : false;
     },
-  });
-}
-
-function invalidatePersonalKnowledge(queryClient: ReturnType<typeof useQueryClient>) {
-  queryClient.invalidateQueries({ queryKey: personalKnowledgeKeys.list() });
-}
-
-function invalidateStorageUsage(queryClient: ReturnType<typeof useQueryClient>) {
-  queryClient.invalidateQueries({ queryKey: personalKnowledgeKeys.usage() });
-}
-
-export function useUploadPersonalKnowledge() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ file, onProgress }: { file: File; onProgress?: UploadOptions["onProgress"] }) =>
-      personalKnowledgeApi.uploadPersonalKnowledge(file, { onProgress }),
-    onSuccess: () => invalidatePersonalKnowledge(queryClient),
-    onSettled: () => invalidateStorageUsage(queryClient),
-  });
-}
-
-export function useDeletePersonalKnowledge() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (documentId: string) => personalKnowledgeApi.deletePersonalKnowledge(documentId),
-    onSuccess: () => invalidatePersonalKnowledge(queryClient),
-    onSettled: () => invalidateStorageUsage(queryClient),
   });
 }

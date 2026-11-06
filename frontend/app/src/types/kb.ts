@@ -7,7 +7,7 @@ export interface KBDoc {
   chunk_count: number;
   status?: string;
   ingestion?: KnowledgeIngestionSummary;
-  content_version?: string;
+  content_version?: string | null;
   embedder?: string;
   uploaded_at?: number;
   source_kind?: "upload" | "library";

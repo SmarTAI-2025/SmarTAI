@@ -279,7 +279,7 @@ async def test_explicit_deduction_amount_cannot_be_scaled_by_an_ai_default():
 
 def test_real_api_save_reload_and_run_freeze_preserve_slider_values():
     from backend.api import tasks
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.db import workflow_repository
     from backend.services import task_facade
     from backend.tests.test_grading_source_readiness import _seed_legacy_structured_case

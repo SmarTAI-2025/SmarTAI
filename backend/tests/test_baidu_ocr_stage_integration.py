@@ -500,8 +500,7 @@ async def test_submission_inflight_without_artifact_never_resubmits(monkeypatch)
     registry = _StageRegistry()
     skill = _FakeDocumentOCRSkill("must not be submitted")
     monkeypatch.setattr(
-        task_facade,
-        "build_owner_baidu_ocr_skill",
+        "backend.services.question_sources.build_owner_baidu_ocr_skill",
         lambda _owner, _route: skill,
     )
     monkeypatch.setattr(

@@ -14,7 +14,7 @@ from PIL import Image
 import pytest
 from sqlalchemy import select
 
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.db import course_library_repository, knowledge_ingestion_repository as repo
 from backend.db.knowledge_repository import get_document, list_chunks, set_task_documents
 from backend.db.models import KnowledgeDocumentRecord, KnowledgeEvidenceRecord
@@ -166,9 +166,11 @@ def test_course_library_http_upload_keeps_model_selection_and_original_bytes(off
             from backend.db.models import KnowledgeIngestionRecord
             job = session.get(KnowledgeIngestionRecord, doc.ingestion_summary["id"])
             assert job.configuration["route_id"] == registry.provider.provider_id
-        download = client.get(f"/knowledge/documents/{doc.id}/download", headers=headers)
-        assert download.status_code == 200 and download.content == body
-        assert download.headers["content-type"].startswith("image/png")
+        stored = service.document_file(doc, who)
+        from backend.storage import get_storage
+        with get_storage().open(stored.storage_key) as stream:
+            assert stream.read() == body
+        assert stored.content_type == "image/png"
         assert client.get("/course-materials/", headers=headers).json()["capabilities"]["accepted_types"] == sorted(ext[1:] for ext in service.KNOWLEDGE_UPLOAD_EXTENSIONS)
 
 

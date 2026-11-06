@@ -164,20 +164,6 @@ for (const width of [1280, 390]) {
   });
 }
 
-test("upload guidance explains a missing supplemental material without starting work", async ({ page }) => {
-  const { calls, errors } = await fixture(page, "problems");
-  await page.route("**/tasks/recovery-task", route => route.fulfill({ json: { task_id: "recovery-task", name: "Synthetic import", status: "problems_ready", problem_count: 1, workflow_revision: 7 } }));
-  await page.goto("/tasks/recovery-task/questions/import");
-  const start = page.getByRole("button", { name: "开始导入并匹配到题目" });
-  await expect(start).toBeEnabled();
-  await expect(page.locator("#material-import-action-message")).toHaveText("请选择课程资料或上传新文件。");
-  const dialog = page.waitForEvent("dialog");
-  await start.click();
-  expect((await dialog).message()).toBe("请选择课程资料或上传新文件。");
-  expect(calls).toHaveLength(0);
-  expect(errors).toEqual([]);
-});
-
 test("restored question inputs can start a new job only after manual continuation", async ({ page }) => {
   const { calls, errors } = await fixture(page, "problems", "provider_timeout", true);
   // Form fields can restore before the saved-file availability check finishes.

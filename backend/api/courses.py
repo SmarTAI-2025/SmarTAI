@@ -6,7 +6,7 @@ to the stable ``{"error": {"code": ..., "message": ...}}`` envelope.
 """
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -23,7 +23,6 @@ from backend.tools.catalog_matching import (
     normalize_catalog_text,
 )
 
-router = APIRouter(prefix="/courses", tags=["courses"])
 # Public courses are owner-scoped teacher labels, not enrollment resources.
 # Explicit paths keep future normalized-workspace handlers out of the public app.
 public_router = APIRouter(prefix="/courses", tags=["courses"], dependencies=[Depends(require_teacher)])
@@ -34,10 +33,6 @@ class CreateCourseRequest(BaseModel):
     code: str = Field(default="", max_length=80)
     description: str = Field(default="", max_length=4000)
     force_create: bool = False
-
-
-class EnrollRequest(BaseModel):
-    student_ids: List[str] = []
 
 
 class CourseLabelResponse(BaseModel):
@@ -69,7 +64,6 @@ class CourseLabelSearchResponse(BaseModel):
 
 
 @public_router.post("", response_model=CreatedCourseLabelResponse)
-@router.post("")
 def create_course(req: CreateCourseRequest, current: User = Depends(require_teacher)):
     name, normalized_name = normalize_catalog_text(req.name)
     code, normalized_code = normalize_catalog_text(req.code)
@@ -125,7 +119,6 @@ def create_course(req: CreateCourseRequest, current: User = Depends(require_teac
 
 
 @public_router.get("", response_model=list[CourseLabelResponse])
-@router.get("")
 def list_courses(current: User = Depends(get_current_user)):
     try:
         items = course_service.list_courses_for(actor_id=current.id, role=current.role)
@@ -135,7 +128,6 @@ def list_courses(current: User = Depends(get_current_user)):
 
 
 @public_router.get("/search", response_model=CourseLabelSearchResponse)
-@router.get("/search")
 def search_courses(
     q: str = Query(min_length=1, max_length=120),
     page: int = Query(default=1, ge=1),
@@ -163,7 +155,6 @@ def search_courses(
 
 
 @public_router.get("/{course_id}", response_model=CourseLabelResponse)
-@router.get("/{course_id}")
 def get_course(course_id: str, current: User = Depends(get_current_user)):
     try:
         course = course_service.get_course(course_id=course_id, actor_id=current.id, role=current.role)
@@ -172,28 +163,7 @@ def get_course(course_id: str, current: User = Depends(get_current_user)):
     return _serialize(course)
 
 
-@router.get("/{course_id}/students")
-def get_course_students(course_id: str, current: User = Depends(require_teacher)):
-    try:
-        course = course_service.get_course(course_id=course_id, actor_id=current.id, role=current.role)
-    except DomainError as exc:
-        return domain_error_response(exc)
-    return [{"id": sid} for sid in course.student_ids]
-
-
-@router.post("/{course_id}/enroll")
-def enroll_students(course_id: str, req: EnrollRequest, current: User = Depends(require_teacher)):
-    try:
-        course = course_service.enroll_students(
-            course_id=course_id, teacher_id=current.id, student_ids=req.student_ids
-        )
-    except DomainError as exc:
-        return domain_error_response(exc)
-    return {"status": "success", "student_ids": course.student_ids, "student_count": len(course.student_ids)}
-
-
 @public_router.delete("/{course_id}")
-@router.delete("/{course_id}")
 def delete_course(course_id: str, current: User = Depends(require_teacher)):
     try:
         course_service.delete_course(course_id=course_id, teacher_id=current.id)
@@ -209,8 +179,6 @@ def _serialize(c) -> dict:
         "code": c.code,
         "description": c.description,
         "teacher_id": c.teacher_id,
-        "student_ids": list(c.student_ids),
-        "student_count": len(c.student_ids),
         "created_at": c.created_at,
         "updated_at": c.updated_at,
     }

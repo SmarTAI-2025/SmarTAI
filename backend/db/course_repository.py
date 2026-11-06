@@ -87,24 +87,6 @@ def list_courses(*, actor_id: str) -> list[education.CourseDTO]:
         return [_to_dto(r, _load_student_ids(session, r.id)) for r in records]
 
 
-def list_all_courses() -> list[education.CourseDTO]:
-    """Admin unscoped read of every course with its enrolled students."""
-    with session_scope() as session:
-        records = session.scalars(
-            select(CourseRecord).order_by(CourseRecord.created_at)
-        ).all()
-        return [_to_dto(r, _load_student_ids(session, r.id)) for r in records]
-
-
-def get_course_unscoped(course_id: str) -> education.CourseDTO:
-    """Admin unscoped read of a single course."""
-    with session_scope() as session:
-        record = session.get(CourseRecord, course_id)
-        if record is None:
-            raise NotFound("course")
-        return _to_dto(record, _load_student_ids(session, course_id))
-
-
 def delete_course(course_id: str, *, actor_id: str) -> None:
     with session_scope() as session:
         # A course cascade would bypass the assignment storage-lifecycle gate.
@@ -188,15 +170,3 @@ def is_enrolled(course_id: str, *, student_id: str) -> bool:
                 CourseEnrollmentRecord.student_id == student_id,
             )
         ) is not None
-
-
-def list_student_courses(student_id: str) -> list[education.CourseDTO]:
-    """Courses a student is enrolled in (authorization source for student reads)."""
-    with session_scope() as session:
-        records = session.scalars(
-            select(CourseRecord)
-            .join(CourseEnrollmentRecord, CourseEnrollmentRecord.course_id == CourseRecord.id)
-            .where(CourseEnrollmentRecord.student_id == student_id)
-            .order_by(CourseRecord.created_at)
-        ).all()
-        return [_to_dto(r, [student_id]) for r in records]

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import time
-import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import delete, select, func
+from sqlalchemy import delete, select
 
 from backend.db.models import (
     AssignmentKnowledgeDocumentRecord,
@@ -49,7 +48,7 @@ class KnowledgeDocument:
             "error_code": self.error_code,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
-            "content_version": self.active_version or "legacy",
+            "content_version": self.active_version,
             "ingestion": self.ingestion_summary or {},
         }
 
@@ -59,22 +58,6 @@ def _document(record: KnowledgeDocumentRecord) -> KnowledgeDocument:
         column.name: getattr(record, column.name)
         for column in KnowledgeDocumentRecord.__table__.columns
     })
-
-
-def create_document(*, document_id: str | None = None, owner_id: str, stored_file_id: str | None,
-                    title: str, original_name: str, content_type: str | None, size_bytes: int,
-                    sha256: str, status: str = "processing", parser_version: str = "v1") -> KnowledgeDocument:
-    now = time.time()
-    record = KnowledgeDocumentRecord(
-        id=document_id or f"doc_{uuid.uuid4().hex[:16]}", owner_id=owner_id,
-        stored_file_id=stored_file_id, title=title, original_name=original_name,
-        content_type=content_type, size_bytes=size_bytes, sha256=sha256,
-        status=status, parser_version=parser_version, chunk_count=0,
-        created_at=now, updated_at=now,
-    )
-    with session_scope() as session:
-        session.add(record)
-    return _document(record)
 
 
 def get_document(document_id: str, owner_id: str) -> KnowledgeDocument | None:
@@ -103,23 +86,6 @@ def list_documents(owner_id: str) -> list[KnowledgeDocument]:
         return [_document(record) for record in records]
 
 
-def list_visible_documents(owner_id: str) -> list[KnowledgeDocument]:
-    """Return the retained, available documents shown in the personal library."""
-    from backend.db.knowledge_storage_repository import visible_document_ids
-
-    visible = set(visible_document_ids(owner_id, include_task_only=False))
-    if not visible:
-        return []
-    with session_scope() as session:
-        records = list(session.scalars(
-            select(KnowledgeDocumentRecord).where(
-                KnowledgeDocumentRecord.owner_id == owner_id,
-                KnowledgeDocumentRecord.id.in_(visible),
-            ).order_by(KnowledgeDocumentRecord.created_at.desc())
-        ))
-        return [_document(record) for record in records]
-
-
 def update_document(document_id: str, owner_id: str, **fields) -> KnowledgeDocument | None:
     allowed = {"status", "chunk_count", "error_code", "stored_file_id", "title"}
     values = {key: value for key, value in fields.items() if key in allowed}
@@ -134,28 +100,6 @@ def update_document(document_id: str, owner_id: str, **fields) -> KnowledgeDocum
             setattr(record, key, value)
         session.flush()
         return _document(record)
-
-
-def replace_document_chunks(document_id: str, chunks: list[str]) -> None:
-    with session_scope() as session:
-        record = session.get(KnowledgeDocumentRecord, document_id)
-        if record is None:
-            return
-        from backend.db.knowledge_storage_repository import lock_knowledge_owner_in_session
-        lock_knowledge_owner_in_session(session, record.owner_id)
-        version = "native_" + uuid.uuid4().hex
-        session.add_all([
-            KnowledgeChunkRecord(id=f"chunk_{uuid.uuid4().hex[:16]}", document_id=document_id,
-                                 content_version=version, chunk_index=index, content=content,
-                                 chunk_metadata=dict(content_version=version, source_sha256=record.sha256), token_count=len(content.split()))
-            for index, content in enumerate(chunks)
-        ])
-        if record:
-            record.active_version = version
-            record.chunk_count = len(chunks)
-            record.status = "ready"
-            record.error_code = None
-            record.updated_at = time.time()
 
 
 def list_selected_documents(assignment_id: str, owner_id: str, *, include_pending=False) -> list[KnowledgeDocument]:
@@ -256,15 +200,15 @@ def list_chunks(document_ids: list[str]) -> list[KnowledgeChunkRecord]:
         return list(session.scalars(select(KnowledgeChunkRecord).join(KnowledgeDocumentRecord,
             KnowledgeDocumentRecord.id == KnowledgeChunkRecord.document_id).where(
             KnowledgeChunkRecord.document_id.in_(document_ids),
-            KnowledgeChunkRecord.content_version == func.coalesce(KnowledgeDocumentRecord.active_version, "legacy")
+            KnowledgeChunkRecord.content_version == KnowledgeDocumentRecord.active_version
         ).order_by(KnowledgeChunkRecord.document_id, KnowledgeChunkRecord.chunk_index)))
 
 
 def set_task_documents(*, assignment_id: str, owner_id: str, document_ids: list[str]) -> list[KnowledgeDocument]:
     """Select up to twenty owned documents for an assignment, including pending.
 
-    Name kept for import compatibility while the retriever/API migrate to the
-    assignment scope (Task 6). Ownership is checked through the assignment.
+    Task attachments use the normalized assignment records. Ownership is
+    checked through the assignment before changing the selected documents.
     """
     with session_scope() as session:
         from backend.db.knowledge_storage_repository import (
@@ -366,15 +310,6 @@ def assert_document_not_frozen_by_active_run(
             "Knowledge document is frozen by an active grading run.",
             code="knowledge_document_in_active_grading_run",
         )
-
-
-def delete_document(document_id: str, owner_id: str) -> KnowledgeDocument | None:
-    """Compatibility wrapper for durable explicit document cleanup."""
-    result = get_document(document_id, owner_id)
-    if result is None:
-        return None
-    request_document_deletion(document_id, owner_id)
-    return result
 
 
 def request_document_deletion(document_id: str, owner_id: str):

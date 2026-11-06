@@ -162,7 +162,6 @@ def test_saved_missing_score_repair_releases_results_without_confirmation():
     from backend.db import grading_repository
     from backend.db.models import GradeResultRecord
     from backend.db.session import session_scope
-    from backend.domain.errors import ResultNotReleasable
     from backend.services import task_facade
 
     seeded = _prepared_task()
@@ -360,7 +359,7 @@ def test_paused_json_exports_keep_current_format_reports_downloadable(monkeypatc
 @pytest.mark.parametrize("schema_version", [None, 1, 999])
 def test_retired_report_formats_are_hidden_blocked_and_never_reused(monkeypatch, schema_version):
     from fastapi.testclient import TestClient
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.db import workflow_repository
     from backend.db.session import session_scope
     from backend.main import app
@@ -451,7 +450,7 @@ def test_readable_names_are_shared_by_indexes_downloads_and_zip_members(stored_o
     from urllib.parse import unquote
     from zipfile import ZipFile
     from fastapi.testclient import TestClient
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.db import workflow_repository
     from backend.db.models import AssignmentRecord
     from backend.db.session import session_scope
@@ -560,7 +559,7 @@ def test_upstream_answer_edit_marks_detached_formal_result_and_artifacts_stale()
 @pytest.mark.parametrize("generate_latest", [False, True])
 def test_history_download_and_delete_preserve_scores_and_latest_report(generate_latest):
     from fastapi.testclient import TestClient
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.db import workflow_repository
     from backend.domain.errors import VersionConflict
     from backend.main import app

@@ -15,19 +15,8 @@ const scanEntries = [
   { relativePath: "src/i18n/messages.ts", required: false },
 ];
 
-// These normalized workspaces are intentionally retained as dormant source so
-// they can continue to typecheck while the Figma presentation remains the only
-// production surface. They are audited by the router/import checks below, not
-// as user-visible copy, because the default entry point must never import them.
-const dormantVisibleSourcePrefixes = [
-  "src/routes/admin/",
-  "src/routes/student/",
-  "src/routes/teacher/",
-];
-const dormantVisibleSourceFiles = new Set([
-  "src/components/auth/RequireRoleSession.tsx",
-  "src/components/layout/nav.ts",
-]);
+// Private administrator pages are checked by the separate admin build.
+const privateVisibleSourcePrefixes = ["src/routes/admin/"];
 
 const hiddenDisclaimerPattern =
   /保持隐藏|隐藏预留|暂未开放|尚未开放|未开放|不可用|不展示|不提供|not available|hidden|unavailable/i;
@@ -135,10 +124,9 @@ async function collectVisibleFiles() {
     for (const filePath of await walkFiles(absolutePath)) {
       const relativePath = toRelative(filePath);
       const isTestSource = /\.test\.(?:tsx?|jsx?)$/.test(relativePath);
-      const isDormantSource =
-        dormantVisibleSourceFiles.has(relativePath) ||
-        dormantVisibleSourcePrefixes.some((prefix) => relativePath.startsWith(prefix));
-      if (!isTestSource && !isDormantSource) {
+      const isPrivateSource =
+        privateVisibleSourcePrefixes.some((prefix) => relativePath.startsWith(prefix));
+      if (!isTestSource && !isPrivateSource) {
         files.add(filePath);
       }
     }
@@ -172,7 +160,6 @@ function isAllowedVisibleText(relativePath, line, rule) {
     rule.id === "visible-course-management" &&
     (
       relativePath === "src/routes/tasks/AddProblemsPage.tsx"
-      || relativePath === "src/routes/tasks/QuestionMaterialImportPage.tsx"
       || relativePath === "src/routes/tasks/GradingSetupPage.tsx"
       || relativePath.startsWith("src/api/problemSources")
       || relativePath.startsWith("src/api/hooks/problemSources")
@@ -180,7 +167,7 @@ function isAllowedVisibleText(relativePath, line, rule) {
       || (relativePath === "src/i18n/messages.ts" && /^\s*addProblems/.test(line))
     )
   ) {
-    // Q-01, Q-08, and grading setup may select real owner-scoped course-library
+    // Question preparation and grading setup may select real owner-scoped course-library
     // material for the current task. They do not expose enrollment or publishing.
     return true;
   }

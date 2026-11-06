@@ -343,8 +343,8 @@ def test_failed_grading_manual_handoff_survives_task_reads_and_teacher_edit(case
     assert client.get(url).json()["status"] == "grading_paused"
 
 @pytest.mark.parametrize("replacement", [None, 0, 7])
-def test_release_api_requires_valid_score_but_not_confirmation(replacement):
-    from backend.api.grading_runs import release_run
+def test_release_requires_valid_score_but_not_confirmation(replacement):
+    from backend.domain.errors import ResultNotReleasable
     from backend.db.models import GradeResultRecord
     from backend.db.session import session_scope
     from backend.tests.test_task_finalization_contract import _prepared_task
@@ -360,14 +360,14 @@ def test_release_api_requires_valid_score_but_not_confirmation(replacement):
     assert task_facade.finalization(**args)["remaining_review_count"] == (1 if replacement is None else 0)
     assert task_facade.task_results(**args)["results"]  # Review data remains readable.
     if replacement is None:
-        blocked = release_run(seeded["run_id"], current=SimpleNamespace(id=seeded["owner_id"]))
-        assert blocked.status_code == 409
+        with pytest.raises(ResultNotReleasable):
+            grades.release(seeded["run_id"], teacher_id=seeded["owner_id"])
         assert grades.get_run(seeded["run_id"]).released_at is None
         grades.add_teacher_review(seeded["required_result_id"], teacher_id=seeded["owner_id"],
             new_score=7, new_comment="Saved repair", confirm=False)
     assert task_facade.finalization(**args)["remaining_review_count"] == 0
-    released = release_run(seeded["run_id"], current=SimpleNamespace(id=seeded["owner_id"]))
-    assert released["released_at"] is not None
+    released = grades.release(seeded["run_id"], teacher_id=seeded["owner_id"])
+    assert released.released_at is not None
 
 
 @pytest.mark.parametrize("missing_all", [False, True])

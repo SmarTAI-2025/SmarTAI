@@ -8,10 +8,9 @@ import type { AdminUser } from "@/types/education";
 
 vi.mock("@/api/hooks/admin", () => ({
   useAdminUsers: vi.fn(),
-  useAdminSetActive: vi.fn(),
 }));
 
-const { useAdminUsers, useAdminSetActive } = await import("@/api/hooks/admin");
+const { useAdminUsers } = await import("@/api/hooks/admin");
 
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -34,10 +33,6 @@ function mockUsers(data: AdminUser[] | null, state: "loading" | "error" | "ok" =
     data: state === "ok" ? data : undefined,
     isLoading: state === "loading",
     isError: state === "error",
-  });
-  (useAdminSetActive as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-    mutate: vi.fn(),
-    isPending: false,
   });
 }
 

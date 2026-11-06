@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as tasksApi from "@/api/tasks";
-import type { UploadOptions } from "@/api/client";
 import type {
   Task,
   TaskHistoryQuery,
@@ -187,10 +186,6 @@ export function useDeleteTask() {
   });
 }
 
-export function useExtractProblems() {
-  return useTaskUploadMutation((taskId, file, options) => tasksApi.extractProblems(taskId, file, options));
-}
-
 export function useParseSubmissions() {
   const queryClient = useQueryClient();
 
@@ -285,13 +280,7 @@ export function useManuallyCompleteQuestionPreparation() {
     onSuccess: (_data, variables) => invalidateTask(queryClient, variables.taskId) });
 }
 
-export function useUploadReference() {
-  return useTaskUploadMutation((taskId, file, options) => tasksApi.uploadReference(taskId, file, options));
-}
 
-export function useUploadTestCases() {
-  return useTaskUploadMutation((taskId, file, options) => tasksApi.uploadTestCases(taskId, file, options));
-}
 
 export function useStartGrading() {
   const queryClient = useQueryClient();
@@ -530,20 +519,6 @@ export function useUpdateCorrectionReview() {
       queryClient.invalidateQueries({ queryKey: taskKeys.state(variables.taskId) });
       queryClient.invalidateQueries({ queryKey: taskKeys.comments(variables.taskId) });
       queryClient.invalidateQueries({ queryKey: taskKeys.finalization(variables.taskId) });
-    },
-  });
-}
-
-function useTaskUploadMutation(
-  uploadFn: (taskId: string, file: File, options?: UploadOptions) => ReturnType<typeof tasksApi.extractProblems>,
-) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: ({ taskId, file, onProgress }: { taskId: string; file: File; onProgress?: UploadOptions["onProgress"] }) =>
-      uploadFn(taskId, file, { onProgress }),
-    onSuccess: (_data, variables) => {
-      return invalidateTask(queryClient, variables.taskId);
     },
   });
 }

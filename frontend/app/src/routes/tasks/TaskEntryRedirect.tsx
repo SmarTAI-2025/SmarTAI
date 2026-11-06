@@ -5,7 +5,7 @@ import { useTask } from "@/api/hooks";
 import { useI18n } from "@/i18n/I18nProvider";
 import { getTaskDestination } from "@/lib/taskFlow";
 
-/** Canonical, status-aware entry for task links and legacy task bookmarks. */
+/** Canonical, status-aware entry for task links. */
 export function TaskEntryRedirect() {
   const { taskId } = useParams();
   const { t } = useI18n();

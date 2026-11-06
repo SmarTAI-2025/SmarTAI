@@ -1,8 +1,8 @@
 /**
- * Admin API client: user management + invitations. Mirrors backend/api/admin.py.
+ * Admin API client: user management, usage and audit. Mirrors backend/api/admin.py.
  */
 import { apiClient } from "./client";
-import type { AdminUser, Invite } from "@/types/education";
+import type { AdminUser } from "@/types/education";
 
 export interface AdminUsersPage {
   items: AdminUser[];
@@ -20,25 +20,6 @@ export async function adminListUsers(params?: {
   page_size?: number;
 }): Promise<AdminUser[] | AdminUsersPage> {
   const { data } = await apiClient.get<AdminUser[] | AdminUsersPage>("/admin/users", { params });
-  return data;
-}
-
-export async function adminSetActive(userId: string, isActive: boolean, reason = "manual_review", note = ""): Promise<AdminUser> {
-  const { data } = await apiClient.patch<AdminUser>(
-    `/admin/users/${userId}/status`,
-    { is_active: isActive, reason, note },
-    { headers: { "Idempotency-Key": crypto.randomUUID() } },
-  );
-  return data;
-}
-
-export async function adminRevokeSessions(userId: string, reason = "manual_review"): Promise<{ status: string; user_id: string }> {
-  const { data } = await apiClient.post(`/admin/users/${userId}/sessions/revoke`, { reason }, { headers: { "Idempotency-Key": crypto.randomUUID() } });
-  return data;
-}
-
-export async function adminRequestPasswordReset(userId: string, reason = "account_support"): Promise<{ status: string; user_id: string }> {
-  const { data } = await apiClient.post(`/admin/users/${userId}/password-reset`, { reason }, { headers: { "Idempotency-Key": crypto.randomUUID() } });
   return data;
 }
 
@@ -89,37 +70,7 @@ export async function adminOverview(): Promise<AdminOverview> {
   return data;
 }
 
-export async function adminMetricsCatalog(): Promise<{ metrics: AdminMetricDefinition[] }> {
-  const { data } = await apiClient.get<{ metrics: AdminMetricDefinition[] }>("/admin/metrics/catalog");
-  return data;
-}
-
-export async function adminMetricsQuery(input: {
-  start?: number;
-  end?: number;
-  granularity?: "day" | "week";
-  metrics?: string[];
-} = {}): Promise<AdminMetricsResult> {
-  const { data } = await apiClient.post<AdminMetricsResult>("/admin/metrics/query", input);
-  return data;
-}
-
 export async function adminListAudit(): Promise<AdminAuditEntry[]> {
   const { data } = await apiClient.get<AdminAuditEntry[]>("/admin/audit");
-  return data;
-}
-
-export async function adminCreateInvite(input: {
-  email?: string;
-  role: "teacher" | "student" | "admin";
-  course_id?: string | null;
-  expires_in_hours?: number;
-}): Promise<{ invite_code: string; role: string; expires_at: number }> {
-  const { data } = await apiClient.post("/admin/invites", input);
-  return data;
-}
-
-export async function adminListInvites(): Promise<Invite[]> {
-  const { data } = await apiClient.get<Invite[]>("/admin/invites");
   return data;
 }

@@ -488,7 +488,7 @@ async def test_teacher_identity_confirmation_resolves_current_attention_without_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error_code", ["provider_vision_not_supported", "provider_capacity_unavailable"])
-async def test_ocr_rejection_reaches_teacher_with_specific_reason(monkeypatch, error_code):
+async def test_ocr_rejection_reaches_teacher_with_specific_reason(error_code):
     owner_id, task_id = _seed_task()
     old_run = grading_repository.create_run(
         task_id,
@@ -524,16 +524,6 @@ async def test_ocr_rejection_reaches_teacher_with_specific_reason(monkeypatch, e
         replace_confirmed=True,
     )
 
-    class UnsupportedVisionSkill:
-        async def recognize_images(self, _images, _purpose):
-            from backend.llm.providers import ProviderRequestError
-            raise ProviderRequestError(error_code)
-
-    monkeypatch.setattr(
-        task_facade,
-        "LLMVisionOCRSkill",
-        lambda _provider: UnsupportedVisionSkill(),
-    )
     registry = _VisionRegistry()
     from unittest.mock import AsyncMock
     from backend.llm.providers import ProviderRequestError
@@ -555,6 +545,7 @@ async def test_ocr_rejection_reaches_teacher_with_specific_reason(monkeypatch, e
         claimed_workflow_revision=queued["workflow_revision"],
     )
 
+    registry.provider.ainvoke_vision.assert_awaited()
     task = task_facade.get_task(task_id=task_id, owner_id=owner_id)
     assert task["status"] == "error"
     assert task["error"] == error_code

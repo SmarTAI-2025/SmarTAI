@@ -1,14 +1,14 @@
 """Protected button uses disposable resources in every environment label."""
 from dataclasses import replace
-import json
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.config import settings
 from backend.services import admin_reset as reset
-from backend.tests.test_admin_reset import scope, rows
+from backend.tests.test_admin_reset import rows
 from backend.api import admin_maintenance as api
+from backend.tests.test_admin_reset import scope  # noqa: F401 - pytest fixture
 
 @pytest.fixture
 def maintenance(scope, monkeypatch):

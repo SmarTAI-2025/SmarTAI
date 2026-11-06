@@ -3,7 +3,6 @@ import pytest
 from backend.agents.ingest_agent import (
     MATERIAL_IMPORT_SYSTEM_PROMPT,
     PROB_SYSTEM_PROMPT,
-    REFERENCE_SYSTEM_PROMPT,
 )
 
 
@@ -13,10 +12,6 @@ from backend.agents.ingest_agent import (
         (
             PROB_SYSTEM_PROMPT,
             "never leave commands such as `\\int`, `\\mu`, or `\\times` bare in prose",
-        ),
-        (
-            REFERENCE_SYSTEM_PROMPT,
-            "never leave LaTeX commands bare or add math delimiters inside code",
         ),
         (
             MATERIAL_IMPORT_SYSTEM_PROMPT,

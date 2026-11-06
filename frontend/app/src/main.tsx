@@ -64,15 +64,6 @@ const QuestionPreparationOverviewPage = React.lazy(() =>
 const QuestionPreparationDetailPage = React.lazy(() =>
   import("@/routes/tasks/QuestionPreparationDetailPage").then((module) => ({ default: module.QuestionPreparationDetailPage })),
 );
-const QuestionMaterialImportPage = React.lazy(() =>
-  import("@/routes/tasks/QuestionMaterialImportPage").then((module) => ({ default: module.QuestionMaterialImportPage })),
-);
-const QuestionMaterialImportProgressPage = React.lazy(() =>
-  import("@/routes/tasks/QuestionMaterialImportProgressPage").then((module) => ({ default: module.QuestionMaterialImportProgressPage })),
-);
-const QuestionMaterialImportReviewPage = React.lazy(() =>
-  import("@/routes/tasks/QuestionMaterialImportReviewPage").then((module) => ({ default: module.QuestionMaterialImportReviewPage })),
-);
 const QuestionAICompletionPage = React.lazy(() =>
   import("@/routes/tasks/QuestionAICompletionPage").then((module) => ({ default: module.QuestionAICompletionPage })),
 );
@@ -138,21 +129,17 @@ const router = createBrowserRouter([{ element: <DraftLeaveProvider><Outlet /></D
       { path: "tasks/new", element: routeElement(<NewTaskPage />) },
       { path: "tasks/:taskId/edit", element: routeElement(<NewTaskPage />) },
       { path: "tasks/:taskId", element: routeElement(<TaskEntryRedirect />) },
-      { path: "tasks/:taskId/setup", element: routeElement(<TaskEntryRedirect />) },
       { path: "tasks/:taskId/upload/problems", element: routeElement(<AddProblemsPage />) },
       { path: "tasks/:taskId/submissions/upload", element: routeElement(<AddSubmissionsPage />) },
       { path: "tasks/:taskId/submissions/progress", element: routeElement(<SubmissionRecognitionProgressPage />) },
       { path: "tasks/:taskId/submissions", element: routeElement(<SubmissionReviewOverviewPage />) },
       { path: "tasks/:taskId/students/:studentId", element: routeElement(<StudentAnswerReviewPage />) },
-      { path: "tasks/:taskId/upload/submissions", element: routeElement(<TaskEntryRedirect />) },
-      { path: "tasks/:taskId/upload/:kind", element: routeElement(<TaskEntryRedirect />) },
       { path: "tasks/:taskId/problems/progress", element: routeElement(<ProblemRecognitionProgressPage />) },
       { path: "tasks/:taskId/questions", element: routeElement(<QuestionPreparationOverviewPage />) },
-      { path: "tasks/:taskId/questions/import", element: routeElement(<QuestionMaterialImportPage />) },
-      { path: "tasks/:taskId/questions/import/progress/:jobId", element: routeElement(<QuestionMaterialImportProgressPage />) },
-      { path: "tasks/:taskId/questions/import/review/:jobId", element: routeElement(<QuestionMaterialImportReviewPage />) },
       { path: "tasks/:taskId/questions/ai-complete", element: routeElement(<QuestionAICompletionPage />) },
       { path: "tasks/:taskId/questions/ai-complete/progress/:jobId", element: routeElement(<QuestionAICompletionProgressPage />) },
+      // A retired bookmark must not be interpreted as questionId="import".
+      { path: "tasks/:taskId/questions/import/*", element: routeElement(<NotFoundPage />) },
       { path: "tasks/:taskId/questions/:questionId", element: <Navigate to="content" replace /> },
       { path: "tasks/:taskId/questions/:questionId/:section", element: routeElement(<QuestionPreparationDetailPage />) },
       { path: "tasks/:taskId/grading-setup", element: routeElement(<GradingSetupPage />) },

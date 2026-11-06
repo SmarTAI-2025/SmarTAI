@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.experts import verify_provider
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.config import settings
 from backend.db.models import UserRecord
 from backend.db.provider_repository import get_provider_config, list_provider_configs, upsert_provider_config

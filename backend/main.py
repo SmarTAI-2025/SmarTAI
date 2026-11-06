@@ -55,22 +55,18 @@ def create_app() -> FastAPI:
         # without copying the configured value into ordinary logs.
         logger.info("HTTP proxy enabled")
 
-    # ── Wire up task-scoped knowledge retriever (RAG MVP) ─────────────
-    # Replaces the default NoOpRetriever set in backend/tools/knowledge.py.
-    # Pure in-memory; chunks + vectors live keyed by task_id so grading
-    # skills can scope retrieval via `scope=self.task_id`. State is lost
-    # on process restart — by design (matches "测一两个 task 退出失效").
-    from backend.knowledge.retriever import CombinedKnowledgeRetriever
+    # Retrieve only persisted, owner-scoped knowledge with versioned citations.
+    from backend.knowledge.retriever import PersistentKnowledgeRetriever
     from backend.tools.knowledge import set_retriever
-    set_retriever(CombinedKnowledgeRetriever())
+    set_retriever(PersistentKnowledgeRetriever())
 
     # ── V2: new agents/skills/tools architecture ──────────────────────
     # The /tasks façade uses the normalized repositories/services directly.
-    # Retained course-enrollment/student/assignment HTTP workflows are never
-    # mounted here. Their contract tests use a separate, test-only app.
+    # Retired enrollment/student/assignment HTTP implementations are removed.
+    # Shared repositories still serve the current teacher task workflow.
     from backend.api.auth import router as auth_router
     from backend.api.courses import public_router as courses_router
-    from backend.api.knowledge import router as knowledge_router, assignment_router as assignment_knowledge_router
+    from backend.api.knowledge import router as knowledge_router
     from backend.api.experts import router as experts_router
     from backend.api.ocr_providers import router as ocr_providers_router
     from backend.api.tasks import router as tasks_router
@@ -80,9 +76,6 @@ def create_app() -> FastAPI:
     from backend.api.analytics import router as analytics_router
 
     app.include_router(auth_router)
-    if settings.runtime_environment != "production":
-        from backend.api.users import router as users_router
-        app.include_router(users_router)
     app.include_router(courses_router)
     # The public production app deliberately has no administrator surface.
     # Tests/local development may opt in to exercise the API contract; the
@@ -93,7 +86,6 @@ def create_app() -> FastAPI:
         from backend.api.admin_accounts import router as admin_accounts_router
         app.include_router(admin_accounts_router)
     app.include_router(knowledge_router)
-    app.include_router(assignment_knowledge_router)
     app.include_router(experts_router)
     app.include_router(ocr_providers_router)
     app.include_router(tasks_router)
@@ -246,19 +238,15 @@ def create_app() -> FastAPI:
         )
         from backend.services.task_deletion import run_task_deletion
         from backend.services.task_facade import (
-            run_durable_problem_extraction,
             run_durable_submission_recognition,
         )
         from backend.api.task_preparation import (
             run_durable_ai_completion,
-            run_durable_material_import,
             run_durable_question_preparation,
         )
 
         worker = WorkflowWorker(handlers={
-            "problem_extraction": run_durable_problem_extraction,
             "submission_recognition": run_durable_submission_recognition,
-            "material_import": run_durable_material_import,
             "ai_completion": run_durable_ai_completion,
             "question_preparation": run_durable_question_preparation,
             "source_cleanup": run_source_cleanup,

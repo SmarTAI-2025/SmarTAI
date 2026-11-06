@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getJSON, postJSON } from "./client";
-import { getPerQuestionBreakdown, interpretFilterIntent, runAnalyticsQuery } from "./analytics";
+import { postJSON } from "./client";
+import { interpretFilterIntent, runAnalyticsQuery } from "./analytics";
 import { interpretTaskHistoryQuery } from "./tasks";
 
 vi.mock("./client", () => ({ postJSON: vi.fn(), getJSON: vi.fn(), deleteJSON: vi.fn(), putJSON: vi.fn() }));
@@ -30,8 +30,4 @@ describe("model request deadlines", () => {
     expect(postJSON).toHaveBeenCalledExactlyOnceWith("/analytics/ask", { question: "unfinished tasks", surface: "history" }, { timeout: 300_000 });
   });
 
-  it("retains the existing per-question detail request contract", async () => {
-    await getPerQuestionBreakdown("task-demo", "Q1");
-    expect(getJSON).toHaveBeenCalledExactlyOnceWith("/analytics/task-demo/per_question/Q1");
-  });
 });

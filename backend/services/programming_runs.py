@@ -26,7 +26,7 @@ from pydantic import ValidationError
 from backend.services.grading_checkpoints import CheckpointWriteError, current_checkpoints
 from backend.services.programming_reference_inputs import ReferenceInputCase, expectations_from_reference
 from backend.services.programming_submission_mapping import C_FAMILY_FLAG, NATIVE_LANGUAGES, PYTHON_FLAG, has_markup_fence
-from backend.services.programming_test_contract import has_function_only_contract, native_standard_supported
+from backend.services.programming_test_contract import native_standard_supported
 from backend.services.python_source_encoding import PythonSourceEncodingError, python_execution_source
 from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCodeExecutionDisabled
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable, NativeBuildUnavailable
@@ -251,9 +251,6 @@ def _reference_execution_identity(problem):
     runtime = runtime_identity()
     try:
         source = _reference(problem)
-        if source and not has_function_only_contract(problem.stem, problem.test_cases):
-            # Prior validations may have run a rewritten numeric stdin payload.
-            runtime["reference_stdin_binding_version"] = 2
         copied = python_execution_source(source) if source else source
         if copied != source:
             runtime["execution_source_sha256"] = source_hash(copied)
@@ -267,7 +264,7 @@ def _reference_execution_identity(problem):
 def _question_key(state, problem):
     cp = state.checkpoints
     question = cp.questions.get(problem.q_id) if cp else None
-    return digest({**({"generated_input_domain_version": 1} if not problem.test_cases or any(c.source == "llm_generated" for c in problem.test_cases) else {}),
+    return digest({
         "engine": VERSION, "owner": state.owner, "assignment": state.assignment,
         "question": question.id if question else problem.q_id, "q_id": problem.q_id,
         "version": question.version if question else None, "stem": problem.stem,

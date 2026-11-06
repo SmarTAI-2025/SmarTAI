@@ -350,7 +350,6 @@ export interface TaskStateSnapshot extends TaskLite {
     | "problem_extraction"
     | "submission_recognition"
     | "grading"
-    | "material_import"
     | "ai_completion"
     | null;
 }

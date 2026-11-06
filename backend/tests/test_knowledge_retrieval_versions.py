@@ -1,4 +1,3 @@
-import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -6,11 +5,12 @@ import pytest
 from sqlalchemy import select
 
 from backend.db import grading_repository, workflow_repository
-from backend.db.knowledge_repository import get_document, replace_document_chunks, set_task_documents
+from backend.tests.knowledge_helpers import replace_document_chunks
+from backend.db.knowledge_repository import set_task_documents
 from backend.db.models import AssignmentRecord, CourseRecord, KnowledgeChunkRecord
 from backend.db.session import session_scope
 from backend.knowledge.index import KnowledgeIndex, KnowledgeIndexCache, IndexedChunk, tokenize
-from backend.knowledge.retriever import PersistentKnowledgeRetriever, _reference
+from backend.knowledge.retriever import PersistentKnowledgeRetriever
 from backend.knowledge.snapshots import freeze_documents
 from backend.tests.test_knowledge_ingestion import owner
 from backend.tests.test_personal_knowledge import _persist_ready_document
@@ -128,32 +128,47 @@ def test_adjacent_span_keeps_separate_source_identity():
 
 
 @pytest.mark.asyncio
-async def test_index_upgrade_preserves_legacy_frozen_runs_and_separates_cache():
-    from backend.knowledge.snapshots import INDEX_VERSION, LEGACY_INDEX_VERSION, freeze_in_session
+@pytest.mark.parametrize("retired_version", ["bm25-cjk2-ids-v1", "bm25-cjk2-terms-v2"])
+async def test_only_current_index_format_can_be_frozen_or_loaded(retired_version):
+    from backend.knowledge.snapshots import INDEX_VERSION, freeze_in_session
     who = owner()
     doc = document(who, ["特征值满足 Av=lambda v"])
     current = freeze_documents(who, [doc.id])
-    legacy = [{**ref, "index_version":LEGACY_INDEX_VERSION} for ref in current]
-    with session_scope() as session:
-        assert freeze_in_session(session, who, [doc.id], expected=legacy) == legacy
+    legacy = [{**ref, "index_version":retired_version} for ref in current]
+    from backend.domain.errors import ValidationError, InvalidTransition
+    from backend.knowledge.index import load_index
+    with session_scope() as session, pytest.raises(ValidationError):
+        freeze_in_session(session, who, [doc.id], expected=legacy)
+    with pytest.raises(InvalidTransition):
+        load_index(legacy)
     cache = KnowledgeIndexCache()
     retriever = PersistentKnowledgeRetriever(cache=cache)
-    old = await retriever.retrieve_documents("特征值", owner_id=who, documents=[doc], refs=legacy)
-    assert old[0].citation["index_version"] == LEGACY_INDEX_VERSION
-    assert await retriever.retrieve_documents("eigenvalues", owner_id=who, documents=[doc], refs=legacy) == []
     new = await retriever.retrieve_documents("eigenvalues", owner_id=who, documents=[doc], refs=current)
     assert new[0].citation["index_version"] == INDEX_VERSION
-    assert cache.builds == 2
+    assert cache.builds == 1
 
 
 def test_unknown_or_mixed_index_versions_are_not_silently_upgraded():
     from backend.knowledge.index import load_index
-    from backend.knowledge.snapshots import INDEX_VERSION, LEGACY_INDEX_VERSION
+    from backend.knowledge.snapshots import INDEX_VERSION
     from backend.domain.errors import InvalidTransition
     with pytest.raises(InvalidTransition):
         load_index([dict(index_version="unknown")])
     with pytest.raises(InvalidTransition):
-        load_index([dict(index_version=INDEX_VERSION), dict(index_version=LEGACY_INDEX_VERSION)])
+        load_index([dict(index_version=INDEX_VERSION), dict(index_version="bm25-cjk2-ids-v1")])
+
+
+def test_missing_index_version_cannot_reuse_a_warm_current_index():
+    from backend.domain.errors import InvalidTransition
+    who = owner()
+    doc = document(who, ["field extension theorem"])
+    refs = freeze_documents(who, [doc.id])
+    cache = KnowledgeIndexCache()
+    assert cache.get(who, refs).search("field", 1)
+    missing_version = [{key: value for key, value in refs[0].items() if key != "index_version"}]
+    with pytest.raises(InvalidTransition):
+        cache.get(who, missing_version)
+    assert cache.hits == 0
 
 
 @pytest.mark.asyncio
@@ -172,7 +187,7 @@ async def test_unavailable_original_revokes_cached_index():
 
 def test_search_citation_api_is_owner_scoped_and_read_only(monkeypatch):
     from fastapi.testclient import TestClient
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.main import app
     from backend.knowledge import ingestion
     def forbidden(*args, **kwargs):
@@ -233,3 +248,22 @@ async def test_five_books_2500_pages_capacity_and_exact_page_recall():
     print("KNOWLEDGE_CAPACITY " + json.dumps(report, sort_keys=True))
     assert cache.builds == 1 and cache.bytes <= cache.max_bytes
     assert report["hot_p95_seconds"] < 2
+
+
+@pytest.mark.parametrize("active_version", [None, "legacy"])
+def test_legacy_content_is_not_frozen_or_loaded_as_current(active_version):
+    from backend.db.models import KnowledgeDocumentRecord
+    from backend.domain.errors import InvalidTransition
+    from backend.knowledge.index import load_index
+    from backend.knowledge.snapshots import INDEX_VERSION
+    who = owner()
+    doc = document(who, ["old unversioned content"])
+    with session_scope() as session:
+        session.get(KnowledgeDocumentRecord, doc.id).active_version = active_version
+        chunk = session.scalar(select(KnowledgeChunkRecord).where(KnowledgeChunkRecord.document_id == doc.id))
+        chunk.content_version = "legacy"
+    with pytest.raises(InvalidTransition):
+        freeze_documents(who, [doc.id])
+    with pytest.raises(InvalidTransition):
+        load_index([dict(document_id=doc.id, content_version="legacy", chunk_count=1,
+                         source_sha256=doc.sha256, index_version=INDEX_VERSION)])

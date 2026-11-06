@@ -126,7 +126,7 @@ async def test_capacity_failure_clears_waiting_response_without_success_event(mo
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["question_preparation", "submission_recognition", "problem_extraction"])
+@pytest.mark.parametrize("kind", ["question_preparation", "submission_recognition", "question_preparation"])
 async def test_parallel_requests_keep_completed_progress_and_do_not_fake_completed_units(kind):
     op = Obj(operation_id="recognition-test", operation_type=kind, update_progress=AsyncMock())
     reporter = get_or_create_reporter(op.operation_id)

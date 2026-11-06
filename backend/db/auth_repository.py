@@ -11,7 +11,7 @@ from typing import Iterator, Literal
 from sqlalchemy import func, select
 
 from backend.auth import create_token, verify_password
-from backend.db.models import InviteCodeRecord, RefreshSessionRecord, UserRecord
+from backend.db.models import RefreshSessionRecord, UserRecord
 from backend.db.session import session_scope as database_session
 from backend.analytics.admin_usage import record_usage_event_in_session
 from backend.models import User
@@ -99,19 +99,6 @@ def revoke_access_session(session_id: str, user_id: str) -> None:
                 record.revoked_at = time.time()
 
 
-def adopt_legacy_session(user: User, *, days: int, session_scope: Literal["public", "private-admin"]) -> tuple[str, str] | None:
-    """Upgrade an unexpired, already authenticated pre-idle JWT on real input."""
-    with user_auth_lock(user.id):
-        with database_session() as session:
-            current = _locked_user(session, user.id)
-            if (current is None or not current.is_active or current.auth_version != user.auth_version
-                    or current.auth_invalid_before != user.auth_invalid_before):
-                return None
-            now = time.time()
-            raw = _add_refresh_session(session, user_id=user.id, days=days, now=now, session_scope=session_scope)
-            return raw, _session_access(_user_from_record(current), _hash_token(raw), now, session_scope)
-
-
 def _canonical_email(email: str | None) -> str:
     if not email:
         return ""
@@ -136,17 +123,6 @@ def _user_from_record(record: UserRecord) -> User:
         auth_invalid_before=record.auth_invalid_before,
         auth_version=record.auth_version,
     )
-
-
-def create_invite(*, invited_by: str, email: str | None, role: str, course_id: str | None, expires_in_hours: int) -> InviteCodeRecord:
-    now = time.time()
-    code = secrets.token_urlsafe(9).upper()
-    normalized_email = _canonical_email(email)
-    record = InviteCodeRecord(code=code, email=normalized_email or None, role=role, course_id=course_id,
-                              invited_by=invited_by, created_at=now, expires_at=now + expires_in_hours * 3600)
-    with database_session() as session:
-        session.add(record)
-    return record
 
 
 def _ensure_unique_identity(session, *, username: str, email: str) -> None:
@@ -192,49 +168,6 @@ def register_without_invite(*, username: str, email: str, password_hash: str,
         _ensure_unique_identity(session, username=username, email=email)
         return _persist_user(session=session, username=username, email=email,
                              password_hash=password_hash, role=role, now=now)
-
-
-def register_with_invite(*, username: str, email: str, role: str, password_hash: str, invite_code: str | None) -> User:
-    email = _canonical_email(email)
-    now = time.time()
-    with database_session() as session:
-        _ensure_unique_identity(session, username=username, email=email)
-        if not invite_code:
-            raise AuthRepositoryError("Invitation code required")
-        invite = session.scalar(select(InviteCodeRecord).where(InviteCodeRecord.code == invite_code).with_for_update())
-        if invite is None or invite.used_at is not None or invite.expires_at <= now:
-            raise AuthRepositoryError("Invalid or expired invite code")
-        if invite.email and _canonical_email(invite.email) != email:
-            raise AuthRepositoryError("Invite email does not match")
-        effective_role = invite.role
-        if effective_role not in ("teacher", "student", "admin"):
-            raise AuthRepositoryError("Invalid invite role")
-        user = _persist_user(session=session, username=username, email=email,
-                             password_hash=password_hash, role=effective_role, now=now)
-        # Flush the new user row before pointing the invite at it, so SQLite's
-        # immediate foreign-key check on the subsequent UPDATE sees the parent.
-        session.flush()
-        invite.used_at = now
-        invite.used_by = user.id
-        # A student invite with a pre-bound course enrolls the new user on
-        # registration. Done in THIS session (not via course_repository.enroll,
-        # which opens a separate session that cannot see the uncommitted user
-        # row) so the enrollment commits atomically with the user + invite use.
-        if effective_role == "student" and invite.course_id:
-            from backend.db.models import CourseEnrollmentRecord, CourseRecord
-            course = session.get(CourseRecord, invite.course_id)
-            if course is not None:
-                existing = session.scalar(
-                    select(CourseEnrollmentRecord).where(
-                        CourseEnrollmentRecord.course_id == invite.course_id,
-                        CourseEnrollmentRecord.student_id == user.id,
-                    )
-                )
-                if existing is None:
-                    session.add(CourseEnrollmentRecord(
-                        course_id=invite.course_id, student_id=user.id, enrolled_at=now
-                    ))
-        return user
 
 
 def _locked_user(session, user_id: str) -> UserRecord | None:
@@ -349,7 +282,7 @@ def authenticate_and_create_session(
 
 
 def refresh_session_matches_scope(raw: str, session_scope: str) -> bool:
-    return raw.startswith(session_scope + ".") or (session_scope == "public" and "." not in raw)
+    return raw.startswith(session_scope + ".")
 
 
 def rotate_refresh_session(raw: str, days: int, *, session_scope: Literal["public", "private-admin"] = "public") -> tuple[str, User, str] | None:
@@ -371,8 +304,6 @@ def rotate_refresh_session(raw: str, days: int, *, session_scope: Literal["publi
         with database_session() as session:
             user_record = _locked_user(session, user_id)
             if user_record is None or not user_record.is_active:
-                return None
-            if "." not in raw and user_record.role != "teacher":
                 return None
             record = session.scalar(
                 select(RefreshSessionRecord)

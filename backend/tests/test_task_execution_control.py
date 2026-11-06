@@ -71,7 +71,7 @@ def test_one_user_cannot_overlap_recognition_and_grading_but_other_users_can(mon
 
 @pytest.mark.parametrize("running", [False, True])
 def test_stop_preserves_inputs_fences_late_writes_and_continues_at_end_of_queue(running):
-    owner, task, op = _seed_operation("material_import")
+    owner, task, op = _seed_operation("ai_completion")
     flows.update_operation(op.id, owner_id=owner, expected_attempt=op.attempt,
                            payload={"source_token": "saved-source", "provider_id": "saved-provider"})
     workflow = activate(owner, task, op)
@@ -85,13 +85,13 @@ def test_stop_preserves_inputs_fences_late_writes_and_continues_at_end_of_queue(
         with pytest.raises((LeaseLost, InvalidTransition)):
             flows.update_operation(op.id, owner_id=owner, expected_attempt=leased.attempt,
                                    expected_lease_token=leased.lease_token, status="done")
-    _, queued = another_task(owner, task, "material_import")
+    _, queued = another_task(owner, task, "ai_completion")
     revision = flows.get_workflow(task, owner_id=owner).workflow_revision
     assert continue_auxiliary_run(task_id=task, owner_id=owner, job_id=op.id, expected_revision=revision)["status"] == "started"
     resumed = flows.get_operation(op.id, owner_id=owner)
     assert resumed.attempt == op.attempt + 1
     assert resumed.payload["provider_id"] == "saved-provider"
-    order = [row.id for row in flows.list_claimable_operations(["material_import"])]
+    order = [row.id for row in flows.list_claimable_operations(["ai_completion"])]
     assert order.index(queued.id) < order.index(op.id)
     resumed_claim = claim(owner, resumed)
     flows.update_operation(op.id, owner_id=owner, expected_attempt=resumed_claim.attempt,
@@ -247,7 +247,7 @@ async def test_stop_during_backoff_persists_wait_and_never_sends_second_attempt(
     async def handler(ctx):
         get_or_create_reporter(ctx.operation_id)
         await llm.ainvoke_with_retry(provider, [])
-    worker = _make_worker({"problem_extraction": handler})
+    worker = _make_worker({"question_preparation": handler})
     try:
         assert await worker.poll_once() == 1
         await asyncio.wait_for(waiting.wait(), 2)

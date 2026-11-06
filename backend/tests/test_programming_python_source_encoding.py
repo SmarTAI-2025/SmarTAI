@@ -122,7 +122,7 @@ def test_source_with_student_syntax_error_is_still_receivable():
     ("Add two integers.", [Case(io_mode="function", input="2,3", expected_return="5")]),
     ("Add two integers.", [Case(function_args=[2, 3], expected_return="5")]),
 ])
-def test_function_reference_keeps_its_pre_stdin_change_identity(stem, cases):
+def test_function_reference_uses_current_runtime_identity(stem, cases):
     from backend.services import programming_runs as runs
     from backend.tests.test_programming_run_evidence import question
 
@@ -135,18 +135,18 @@ def test_function_reference_keeps_its_pre_stdin_change_identity(stem, cases):
     "Count the bytes in the supplied record.",
     "Either write a function or read from stdin.",
 ])
-def test_stdin_or_ambiguous_reference_disallows_old_cached_validation(stem):
+def test_stdin_or_ambiguous_reference_uses_current_runtime_identity(stem):
     from backend.services import programming_runs as runs
     from backend.tests.test_programming_run_evidence import question
 
     case = Case(input="-2,0,+3\r\n", expected_output="9")
     problem = question([case], solution_code="import sys\nprint(len(sys.stdin.buffer.read()))").model_copy(update={"stem": stem})
-    assert runs._reference_execution_identity(problem) == {**runs.runtime_identity(), "reference_stdin_binding_version": 2}
+    assert runs._reference_execution_identity(problem) == runs.runtime_identity()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stdin", [False, True], ids=["reuse-function", "revalidate-stdin"])
-async def test_retry_of_pre_binding_change_reference_validation(monkeypatch, stdin):
+@pytest.mark.parametrize("stdin", [False, True], ids=["reuse-function", "reuse-stdin"])
+async def test_current_retry_reuses_validated_reference(monkeypatch, stdin):
     from unittest.mock import AsyncMock
     from backend.services import programming_runs as runs
     from backend.tests.test_programming_run_evidence import question
@@ -160,18 +160,12 @@ async def test_retry_of_pre_binding_change_reference_validation(monkeypatch, std
         problem = question([case], solution_code="def add(a,b): return a+b")
         problem.stem = "Return the sum."
     state = runs.ProgrammingRun()
-    with monkeypatch.context() as prior:
-        prior.setattr(runs, "_reference_execution_identity", lambda _: runs.runtime_identity())
-        old_key = runs._question_key(state, problem)
+    saved_key = runs._question_key(state, problem)
     data = [case.model_dump(mode="json")]
-    state.store(runs.PREPARED, old_key, {"q_id": problem.q_id, "cases": data,
+    state.store(runs.PREPARED, saved_key, {"q_id": problem.q_id, "cases": data,
                                        "suite_hash": runs.digest(data), "reference_checked": True})
     execute = AsyncMock(wraps=run_sandbox)
     key, cases, reason = await runs._prepare(state, problem, None, None, execute, None)
     assert not reason and len(cases) == 1
-    if stdin:
-        assert key != old_key and execute.await_count == 1
-        assert execute.await_args.args[1][0].input == case.input
-    else:
-        assert key == old_key
-        execute.assert_not_awaited()
+    assert key == saved_key
+    execute.assert_not_awaited()

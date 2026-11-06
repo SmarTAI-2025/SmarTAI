@@ -2,8 +2,8 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
 import pytest
-from sqlalchemy import create_engine, text
-from backend.tests.test_postgres_integration import pg_database
+from sqlalchemy import text
+from backend.tests.test_postgres_integration import pg_database  # noqa: F401 - pytest fixture
 
 pytestmark = pytest.mark.skipif(not os.environ.get("SMARTAI_TEST_POSTGRES_URL"), reason="Requires disposable PostgreSQL")
 
@@ -66,7 +66,7 @@ def test_existing_postgres_branches_upgrade_with_legacy_identity(pg_database, mo
         result = client.post("/auth/login", json={"username": "legacy", "password": "legacy-test-password"})
         assert result.status_code == 200, result.text
         assert result.json()["user"]["is_read_only"] is False
-        from backend.auth import create_token
+        from backend.tests.auth_helpers import create_session_token as create_token
         token = create_token("legacy", "teacher")
         assert client.get("/auth/me", headers={"Authorization": f"Bearer {token}"}).status_code == 200
 
@@ -100,7 +100,7 @@ def test_business_config_concurrency_live_quota_and_private_permissions(pg_datab
     from backend.db.knowledge_storage_repository import knowledge_storage_usage
     _, user, admin, teacher = accounts()
     client = private_app(monkeypatch, tmp_path)
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     admin = client.post("/api/auth/login", json={"username": "manager", "password": "admin-test-password"}).json()["token"]
     path = "/api/admin/business-config"
     assert client.get(path, headers=headers(teacher)).status_code == 401

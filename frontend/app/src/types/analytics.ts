@@ -76,29 +76,6 @@ export type AnalyticsResult =
   | ChartAnalyticsResult
   | { mode: "query"; execution: GroundedAskExecution };
 
-export interface QuestionBreakdownRow {
-  student_id: string;
-  student_name?: string;
-  answer?: string;
-  score: number;
-  max_score: number;
-  comment?: string;
-  requires_human_review?: boolean;
-  review_reasons?: string[];
-}
-
-export interface PerQuestionBreakdown {
-  q_id: string;
-  question?: string;
-  stem?: string;
-  max_score?: number;
-  avg_score?: number;
-  rows: QuestionBreakdownRow[];
-  common_mistakes_md: string;
-  [key: string]: unknown;
-}
-
-
 export interface GroundedAskExecution {
   recognized: boolean;
   kind: "students" | "questions" | "tasks" | "table" | "chart" | "clarification";

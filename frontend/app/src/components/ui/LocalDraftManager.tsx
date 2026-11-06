@@ -16,13 +16,13 @@ export function draftDestination(scope: string) {
   }
   if (scope === "new-task") return "/tasks/new";
   if (kind.startsWith("library-")) return `/knowledge-base?localDraft=${encodeURIComponent(scope)}`;
-  const routes: Record<string, string> = { metadata: `${task}/edit`, problems: `${task}/upload/problems`, submissions: `${task}/submissions/upload`, grading: `${task}/grading-setup`, "ai-completion": `${task}/questions/ai-complete`, "material-import": `${task}/questions/import`, "material-review": `${task}/questions/import/review/${encodeURIComponent(objectId ?? "")}`, question: `${task}/questions/${encodeURIComponent(objectId ?? "")}/content`, answers: `${task}/students/${encodeURIComponent(parts.slice(2).join(":"))}`, identity: `${task}/students/${encodeURIComponent(parts.slice(2).join(":"))}?identity=edit`, "results-review": `${task}/review/${encodeURIComponent(parts.slice(2).join(":"))}/all`, charts: `${task}/results/visualizations`, "history-tags": "/history" };
+  const routes: Record<string, string> = { metadata: `${task}/edit`, problems: `${task}/upload/problems`, submissions: `${task}/submissions/upload`, grading: `${task}/grading-setup`, "ai-completion": `${task}/questions/ai-complete`, question: `${task}/questions/${encodeURIComponent(objectId ?? "")}/content`, answers: `${task}/students/${encodeURIComponent(parts.slice(2).join(":"))}`, identity: `${task}/students/${encodeURIComponent(parts.slice(2).join(":"))}?identity=edit`, "results-review": `${task}/review/${encodeURIComponent(parts.slice(2).join(":"))}/all`, charts: `${task}/results/visualizations`, "history-tags": "/history" };
   return routes[kind] ?? null;
 }
 function draftLabel(row: DraftSummary, taskNames: Record<string, string>, zh: boolean) {
   const [kind, taskId] = row.scope.split(":").map(part => { try { return decodeURIComponent(part); } catch { return part; } });
   const names: Record<string, [string, string]> = {
-    "new-task": ["新建任务", "New task"], metadata: ["任务信息", "Task details"], problems: ["题目文件", "Question sources"], submissions: ["学生作答上传", "Submission upload"], grading: ["批改设置", "Grading setup"], question: ["题目资料编辑", "Question materials"], answers: ["学生作答编辑", "Student answer"], identity: ["学生身份", "Student identity"], "results-review": ["教师改分与评语", "Teacher review"], "material-import": ["资料导入", "Material import"], "material-review": ["资料导入核对", "Import review"], "ai-completion": ["AI 补全选项", "AI completion options"], charts: ["图表分析", "Chart analysis"], "history-tags": ["任务标签", "Task tags"], "library-upload": ["资料库上传", "Library upload"], "library-group": ["资料分组", "Library group"], "library-material": ["资料信息", "Material details"], "admin-config": ["管理业务设置", "Administrative settings"],
+    "new-task": ["新建任务", "New task"], metadata: ["任务信息", "Task details"], problems: ["题目文件", "Question sources"], submissions: ["学生作答上传", "Submission upload"], grading: ["批改设置", "Grading setup"], question: ["题目资料编辑", "Question materials"], answers: ["学生作答编辑", "Student answer"], identity: ["学生身份", "Student identity"], "results-review": ["教师改分与评语", "Teacher review"], "ai-completion": ["AI 补全选项", "AI completion options"], charts: ["图表分析", "Chart analysis"], "history-tags": ["任务标签", "Task tags"], "library-upload": ["资料库上传", "Library upload"], "library-group": ["资料分组", "Library group"], "library-material": ["资料信息", "Material details"], "admin-config": ["管理业务设置", "Administrative settings"],
   };
   const title = names[kind]?.[zh ? 0 : 1] ?? (zh ? "业务草稿" : "Business draft");
   if (!taskId || kind.startsWith("library-") || kind === "admin-config") return [row.title, title].filter(Boolean).join(" · ");
@@ -82,7 +82,7 @@ export function LocalDraftManager({ libraryOnly = false, maxItems, showViewAll =
     return () => window.clearTimeout(timer);
   }, [rows, now]);
   const currentTime = Math.max(now, Date.now());
-  const sorted = rows.filter(row => row.expires > currentTime && (!libraryOnly || row.scope.startsWith("library-"))).sort((a, b) => {
+  const sorted = rows.filter(row => draftDestination(row.scope) !== null && row.expires > currentTime && (!libraryOnly || row.scope.startsWith("library-"))).sort((a, b) => {
     const aSoon = a.expires - currentTime <= EXPIRING_SOON_MS;
     const bSoon = b.expires - currentTime <= EXPIRING_SOON_MS;
     if (aSoon !== bSoon) return aSoon ? -1 : 1;

@@ -35,13 +35,7 @@ from pydantic import BaseModel, Field, ValidationError as PydanticValidationErro
 from backend.api.errors import domain_error_response
 from backend.analytics.admin_usage import track_usage_event
 from backend.auth import require_task_teacher as require_teacher
-from backend.db import (
-    assignment_repository,
-    grading_repository,
-    source_outcome_repository,
-    source_storage_repository,
-    workflow_repository,
-)
+from backend.db import assignment_repository, source_outcome_repository, source_storage_repository, workflow_repository
 from backend.domain.errors import DomainError, InvalidTransition, NotFound, ValidationError, VersionConflict
 from backend.knowledge.service import ingest_document
 from backend.llm.registry import (
@@ -404,58 +398,6 @@ def delete_task(task_id: str, current: User = Depends(require_teacher)):
         return domain_error_response(exc)
 
 
-@router.post("/{task_id}/extract_problems")
-async def extract_problems_endpoint(
-    task_id: str,
-    background_tasks: BackgroundTasks,
-    file: UploadFile | None = File(default=None),
-    source_token: str | None = Form(default=None),
-    confirmed_candidate_ids: str = Form(default="[]"),
-    replace_confirmed: bool = Form(default=False),
-    current: User = Depends(require_teacher),
-    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
-):
-    try:
-        selected_candidates = json.loads(confirmed_candidate_ids)
-        if not isinstance(selected_candidates, list) or not all(
-            isinstance(item, str) for item in selected_candidates
-        ):
-            raise ValueError
-    except (json.JSONDecodeError, ValueError):
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "invalid_confirmed_candidate_ids"},
-        )
-    if source_token and file is None:
-        return await _extract_from_source_token(
-            task_id, source_token, selected_candidates, replace_confirmed,
-            current, registry, background_tasks,
-        )
-    if file is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": "source_required"})
-    # Keep legacy format compatibility while sharing the preparation byte limit.
-    from backend.api.task_preparation import MAX_SOURCE_BYTES
-
-    from backend.services.upload_contract import upload_limit
-    max_bytes = upload_limit("question_source_max_bytes", MAX_SOURCE_BYTES)
-    content = await file.read(max_bytes + 1)
-    if not content:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"code": "source_empty"})
-    if len(content) > max_bytes:
-        raise HTTPException(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail={"code": "source_too_large", "max_bytes": max_bytes},
-        )
-    try:
-        queued = task_facade.queue_task_problem_extraction(
-            task_id=task_id, owner_id=current.id,
-            filename=file.filename or "problems", content=content,
-            content_type=file.content_type, registry=registry,
-            replace_confirmed=replace_confirmed,
-        )
-        return queued
-    except DomainError as exc:
-        return domain_error_response(exc)
 
 
 @router.post("/{task_id}/parse_submissions")
@@ -1243,63 +1185,3 @@ def _knowledge_document(document_id: str, owner_id: str):
     if document is None or document.status not in {"ready", "partial", "processing", "failed"}:
         raise NotFound("knowledge_document")
     return document
-
-
-# Source-token implementation is added below the router endpoints so the core
-# task contract remains readable.
-async def _extract_from_source_token(
-    task_id: str, source_token: str, confirmed_candidate_ids: list[str],
-    replace_confirmed: bool, current: User, registry: ExpertRegistry,
-    background_tasks: BackgroundTasks,
-):
-    try:
-        operation = workflow_repository.get_operation(source_token, owner_id=current.id)
-        if operation.assignment_id != task_id or operation.operation_type != "problem_source":
-            raise NotFound("problem_source")
-        if operation.expires_at is not None and operation.expires_at <= time.time():
-            raise InvalidTransition("Problem source expired.", code="stale_revision")
-        payload = dict(operation.payload or {})
-        candidates = list(payload.get("candidates") or [])
-        available = {
-            str(candidate.get("candidate_id"))
-            for candidate in candidates
-            if candidate.get("candidate_id")
-        }
-        selected = set(confirmed_candidate_ids)
-        if not selected.issubset(available):
-            raise ValidationError(
-                "One or more selected problem candidates are unknown.",
-                code="stale_revision",
-            )
-        if (
-            payload.get("structure_mode") == "extract_from_source"
-            and candidates
-            and not selected
-        ):
-            raise InvalidTransition(
-                "Problem candidates must be confirmed before extraction.",
-                code="replacement_confirmation_required",
-            )
-        content = str(payload.get("text") or "").encode("utf-8")
-        extraction_options = {
-            "structure_mode": payload.get("structure_mode", "organized"),
-            "extraction_hint": payload.get("extraction_hint", ""),
-            "confirmed_candidates": [
-                candidate for candidate in candidates
-                if not selected or candidate.get("candidate_id") in selected
-            ],
-        }
-        queued = task_facade.queue_task_problem_extraction(
-            task_id=task_id, owner_id=current.id,
-            filename=str(payload.get("filename") or "source.txt"),
-            content=content,
-            content_type=str(payload.get("content_type") or "text/plain"),
-            registry=registry,
-            input_hash=operation.input_hash,
-            expected_workflow_revision=int(payload.get("base_workflow_revision") or 0),
-            replace_confirmed=replace_confirmed,
-            extraction_options=extraction_options,
-        )
-        return queued
-    except DomainError as exc:
-        return domain_error_response(exc)

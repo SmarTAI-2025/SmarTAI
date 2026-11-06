@@ -1,5 +1,5 @@
 """No provider/SMTP calls: temporary SQLite, synthetic accounts and fake sender."""
-from backend.tests.registration_invite_helpers import invite_code, invite_digest
+from backend.tests.registration_invite_helpers import invite_code
 import hashlib
 import re
 import time
@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 
 from backend.api.admin_business_config import router
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.config import settings
 from backend.db.business_config_models import BusinessConfigRecord, UserStorageConfigRecord
 from backend.db.models import AdminAuditLogRecord, EmailVerificationRequestRecord, PasswordResetRateEventRecord, PasswordResetRequestRecord, UserRecord

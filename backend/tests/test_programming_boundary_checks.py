@@ -203,25 +203,3 @@ async def test_missing_award_list_remains_a_repairable_schema_error():
     provider = fixed_provider(malformed, response(award(10)))
     result = await programming.ProgrammingSkill(provider).grade(problem, answer)
     assert provider.ainvoke.await_count == 2 and result.score == 10 and not result.error_kind
-
-
-@pytest.mark.asyncio
-async def test_recovery_hides_legacy_observation_without_domain_validation(monkeypatch):
-    from backend.services import programming_runs as runs
-
-    question, answer = setup()
-    question.stem = "实现 double(n)，参数 n 为正整数，返回它的两倍。"
-    execute = AsyncMock(wraps=programming.run_sandbox)
-    monkeypatch.setattr(programming, "run_sandbox", execute)
-    scorer = programming.ProgrammingSkill(fixed_provider(response(award(10)), response(award(10))))
-    with programming_run(None, None) as state:
-        first = await scorer.grade(question, answer, student_id="s")
-        key = runs.digest(["boundary_check_v2", first.programming_evidence.evidence_id])
-        state.store(runs.AUXILIARY, key, {
-            "status": "done",
-            "observation": {"input": "-1", "expected": "-2", "actual": "0"},
-        })
-        calls_before_resume = execute.await_count
-        resumed = await scorer.grade(question, answer, student_id="s")
-    assert resumed.score == 10 and not resumed.programming_evidence.boundary_note
-    assert "-1" not in resumed.comment and execute.await_count == calls_before_resume

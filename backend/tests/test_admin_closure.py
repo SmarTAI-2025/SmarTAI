@@ -3,9 +3,8 @@ from sqlalchemy import select
 from backend.tests.test_admin_account_lifecycle import accounts, headers
 from backend.db.auth_repository import AuthRepositoryError, register_without_invite
 from backend.db.session import session_scope
-from backend.db.models import AccountClosureRecord, BlockedRegistrationEmailRecord, UserRecord
+from backend.db.models import AccountClosureRecord, UserRecord
 from backend.services.account_closure import process_one_closure
-from backend.auth import hash_password
 from backend.storage.local import LocalStorage
 
 
@@ -85,7 +84,6 @@ def test_wrong_confirmation_and_self_closure_make_no_changes():
 async def test_closure_drains_real_task_and_knowledge_workers_before_releasing_identity(tmp_path, monkeypatch):
     from backend.services import task_facade, task_deletion
     from backend.db import file_repository
-    from backend.storage import get_storage
     from backend.services.knowledge_storage import KnowledgeStorageWorker
     from backend.tests.test_source_cleanup import _finish_task_delete, _task_delete_worker
     from backend.db.models import AssignmentRecord, StoredFileRecord, KnowledgeDocumentRecord, AdminUsageEventRecord
@@ -93,12 +91,12 @@ async def test_closure_drains_real_task_and_knowledge_workers_before_releasing_i
     storage = LocalStorage(tmp_path / "dedicated")
     monkeypatch.setattr("backend.services.account_closure.get_storage", lambda: storage)
     monkeypatch.setattr(task_deletion, "get_storage", lambda: storage)
-    monkeypatch.setattr("backend.api.knowledge.get_storage", lambda: storage)
+    monkeypatch.setattr("backend.knowledge.service.get_storage", lambda: storage)
     monkeypatch.setattr("backend.services.knowledge_storage.get_storage", lambda: storage)
     task = task_facade.create_task(owner_id=user.id, name="owned task", semester_id=None, course_id=None, idempotency_key="close-task")
     original = file_repository.save_file(storage=storage, owner_id=user.id, kind="problem_source", original_name="test.pdf", content=b"fake source", content_type="application/pdf", assignment_id=task["task_id"])
-    uploaded = client.post("/knowledge/documents", headers=headers(teacher), files={"file": ("notes.txt", b"synthetic notes", "text/plain")})
-    assert uploaded.status_code == 201, uploaded.text
+    uploaded = client.post("/course-materials/", headers=headers(teacher), files={"file": ("notes.txt", b"synthetic notes", "text/plain")})
+    assert uploaded.status_code == 200, uploaded.text
     response = client.post(f"/admin/users/{user.id}/closure", json={"mode": "normal", "confirm_username": "teacher"}, headers=headers(admin))
     assert response.status_code == 202
     process_one_closure(raise_errors=True)

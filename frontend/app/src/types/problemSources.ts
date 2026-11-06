@@ -89,15 +89,6 @@ export interface ProblemSourcePreflightInput {
   replaceConfirmed?: boolean;
 }
 
-export interface StartProblemExtractionInput {
-  taskId: string;
-  sourceToken: string;
-  confirmedCandidateIds?: string[];
-  replaceConfirmed?: boolean;
-}
-
-export type StartProblemExtractionResponse = TaskMutationResponse;
-
 export interface StartQuestionPreparationInput {
   generationLanguage?: "zh" | "en";
   taskId: string;

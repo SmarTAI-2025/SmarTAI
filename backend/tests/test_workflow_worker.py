@@ -29,7 +29,7 @@ from backend.domain.errors import LeaseLost, VersionConflict
 from backend.services.workflow_worker import WorkflowWorker
 
 
-def _seed_operation(operation_type: str = "problem_extraction"):
+def _seed_operation(operation_type: str = "question_preparation"):
     suffix = uuid.uuid4().hex[:10]
     owner_id = f"worker_owner_{suffix}"
     course_id = f"worker_course_{suffix}"
@@ -121,9 +121,9 @@ def _make_worker(
 
 @pytest.mark.asyncio
 async def test_polls_only_registered_operation_types():
-    owner_id, _assignment_id, registered_op = _seed_operation("problem_extraction")
-    other_owner, _other_assignment, unregistered_op = _seed_operation("material_import")
-    worker = _make_worker({"problem_extraction": _noop_handler})
+    owner_id, _assignment_id, registered_op = _seed_operation("question_preparation")
+    other_owner, _other_assignment, unregistered_op = _seed_operation("unregistered_operation")
+    worker = _make_worker({"question_preparation": _noop_handler})
 
     assert await worker.poll_once() == 1
     await _drain(worker)
@@ -148,7 +148,7 @@ async def test_unknown_operation_type_is_not_dispatched():
     async def handler(ctx):
         calls.append(ctx.operation_id)
 
-    worker = _make_worker({"problem_extraction": handler})
+    worker = _make_worker({"question_preparation": handler})
     assert await worker.poll_once() == 0
     await _drain(worker)
 
@@ -171,7 +171,7 @@ async def test_live_leased_row_is_not_listed_or_dispatched():
     async def handler(ctx):
         calls.append(ctx.operation_id)
 
-    worker = _make_worker({"problem_extraction": handler}, worker_id="worker-a")
+    worker = _make_worker({"question_preparation": handler}, worker_id="worker-a")
     assert await worker.poll_once() == 0
     await _drain(worker)
 
@@ -197,7 +197,7 @@ async def test_claim_race_with_another_worker_is_tolerated(monkeypatch):
     async def handler(ctx):
         calls.append(ctx.operation_id)
 
-    worker = _make_worker({"problem_extraction": handler}, worker_id="worker-a")
+    worker = _make_worker({"question_preparation": handler}, worker_id="worker-a")
     monkeypatch.setattr(
         workflow_repository,
         "list_claimable_operations",
@@ -216,7 +216,7 @@ async def test_claim_race_with_another_worker_is_tolerated(monkeypatch):
 async def test_claim_uses_worker_identity():
     owner_id, _assignment_id, operation = _seed_operation()
     worker = _make_worker(
-        {"problem_extraction": _noop_handler}, worker_id="worker-z"
+        {"question_preparation": _noop_handler}, worker_id="worker-z"
     )
 
     assert await worker.poll_once() == 1
@@ -234,11 +234,11 @@ async def _async_noop(ctx):
 
 
 def test_handler_mapping_is_immutable():
-    worker = _make_worker({"problem_extraction": _async_noop})
+    worker = _make_worker({"question_preparation": _async_noop})
 
     with pytest.raises(TypeError):
-        worker.handlers["problem_extraction"] = _async_noop  # type: ignore[misc]
-    assert set(worker.handlers) == {"problem_extraction"}
+        worker.handlers["question_preparation"] = _async_noop  # type: ignore[misc]
+    assert set(worker.handlers) == {"question_preparation"}
 
 
 def test_worker_rejects_invalid_construction():
@@ -266,7 +266,7 @@ async def test_handler_success_writes_terminal_state():
     async def handler(ctx):
         await ctx.complete(status="done", summary={"ok": True})
 
-    worker = _make_worker({"problem_extraction": handler})
+    worker = _make_worker({"question_preparation": handler})
     assert await worker.poll_once() == 1
     await _drain(worker)
 
@@ -290,7 +290,7 @@ async def test_handler_checkpoint_advances_revision():
         revisions.append(await ctx.checkpoint(stage="parsed", checkpoint={"sources": 2}))
         await ctx.complete(status="done", summary={"sources": 2})
 
-    worker = _make_worker({"problem_extraction": handler})
+    worker = _make_worker({"question_preparation": handler})
     assert await worker.poll_once() == 1
     await _drain(worker)
 
@@ -314,7 +314,7 @@ async def test_handler_can_heartbeat_explicitly():
         assert before is not None
         assert after > before
 
-    worker = _make_worker({"problem_extraction": handler}, heartbeat_seconds=1000)
+    worker = _make_worker({"question_preparation": handler}, heartbeat_seconds=1000)
     assert await worker.poll_once() == 1
     await _drain(worker)
 
@@ -332,7 +332,7 @@ async def test_background_heartbeat_renews_lease():
         ).lease_expires_at
 
     worker = _make_worker(
-        {"problem_extraction": handler},
+        {"question_preparation": handler},
         lease_seconds=10,
         heartbeat_seconds=0.05,
     )
@@ -363,7 +363,7 @@ async def test_heartbeat_errors_fence_handler_after_local_lease_deadline(monkeyp
 
     monkeypatch.setattr(workflow_repository, "heartbeat_operation", unavailable)
     worker = _make_worker(
-        {"problem_extraction": handler},
+        {"question_preparation": handler},
         lease_seconds=0.1,
         heartbeat_seconds=0.03,
     )
@@ -384,7 +384,7 @@ async def test_domain_failure_records_stable_code():
     async def handler(ctx):
         raise VersionConflict("stale", code="workflow_revision_conflict")
 
-    worker = _make_worker({"problem_extraction": handler})
+    worker = _make_worker({"question_preparation": handler})
     assert await worker.poll_once() == 1
     await _drain(worker)
 
@@ -401,7 +401,7 @@ async def test_unexpected_failure_records_fallback_code():
     async def handler(ctx):
         raise RuntimeError("boom")
 
-    worker = _make_worker({"problem_extraction": handler})
+    worker = _make_worker({"question_preparation": handler})
     assert await worker.poll_once() == 1
     await _drain(worker)
 
@@ -418,7 +418,7 @@ async def test_failure_logging_does_not_expose_payload(caplog):
     async def handler(ctx):
         raise RuntimeError(f"handler crashed with {secret}")
 
-    worker = _make_worker({"problem_extraction": handler})
+    worker = _make_worker({"question_preparation": handler})
     with caplog.at_level(
         logging.WARNING, logger="backend.services.workflow_worker"
     ):
@@ -450,7 +450,7 @@ async def test_lease_loss_cancels_handler():
             raise
 
     worker = _make_worker(
-        {"problem_extraction": handler},
+        {"question_preparation": handler},
         lease_seconds=60,
         heartbeat_seconds=0.05,
     )
@@ -482,7 +482,7 @@ async def test_lease_loss_stops_handler_mutation():
             saw["lease_lost"] = True
 
     worker = _make_worker(
-        {"problem_extraction": handler},
+        {"question_preparation": handler},
         lease_seconds=60,
         heartbeat_seconds=1000,
     )
@@ -511,7 +511,7 @@ async def test_duplicate_dispatch_is_prevented():
         calls.append(ctx.operation_id)
         await asyncio.sleep(0.2)
 
-    worker = _make_worker({"problem_extraction": handler})
+    worker = _make_worker({"question_preparation": handler})
     assert await worker.poll_once() == 1
     assert await worker.poll_once() == 0
     await _drain(worker)
@@ -535,7 +535,7 @@ async def test_in_flight_is_bounded():
         await ctx.complete(status="done", summary={})
 
     worker = _make_worker(
-        {"problem_extraction": handler},
+        {"question_preparation": handler},
         max_in_flight=2,
         claim_batch_size=3,
     )
@@ -563,7 +563,7 @@ async def test_shutdown_cancels_and_awaits_in_flight_handlers():
             saw["cancelled"] = True
             raise
 
-    worker = _make_worker({"problem_extraction": handler})
+    worker = _make_worker({"question_preparation": handler})
     assert await worker.poll_once() == 1
     assert worker.in_flight_count == 1
     await asyncio.sleep(0)
@@ -591,7 +591,7 @@ async def test_shutdown_is_bounded_when_handler_swallows_cancellation():
             await release.wait()
 
     worker = _make_worker(
-        {"problem_extraction": stubborn_handler}, shutdown_seconds=0.05
+        {"question_preparation": stubborn_handler}, shutdown_seconds=0.05
     )
     assert await worker.poll_once() == 1
     await asyncio.wait_for(started.wait(), timeout=1)
@@ -624,7 +624,7 @@ async def test_run_forever_stops_on_stop():
 @pytest.mark.asyncio
 async def test_poll_returns_zero_after_stop():
     owner_id, _assignment_id, operation = _seed_operation()
-    worker = _make_worker({"problem_extraction": _noop_handler})
+    worker = _make_worker({"question_preparation": _noop_handler})
     worker.stop()
 
     assert await worker.poll_once() == 0
@@ -646,7 +646,7 @@ async def test_reclaim_after_simulated_process_death():
             raise
 
     worker_a = _make_worker(
-        {"problem_extraction": handler_a}, worker_id="worker-a"
+        {"question_preparation": handler_a}, worker_id="worker-a"
     )
     assert await worker_a.poll_once() == 1
     assert workflow_repository.get_operation(
@@ -667,7 +667,7 @@ async def test_reclaim_after_simulated_process_death():
         await ctx.complete(status="done", summary={"ok": True})
 
     worker_b = _make_worker(
-        {"problem_extraction": handler_b}, worker_id="worker-b"
+        {"question_preparation": handler_b}, worker_id="worker-b"
     )
     assert await worker_b.poll_once() == 1
     await _drain(worker_b)

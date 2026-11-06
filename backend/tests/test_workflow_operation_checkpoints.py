@@ -88,7 +88,7 @@ def test_legacy_operation_json_payloads_are_bounded_before_write():
         workflow_repository.create_operation(
             assignment_id=assignment_id,
             owner_id=owner_id,
-            operation_type="problem_extraction",
+            operation_type="question_preparation",
             input_hash=uuid.uuid4().hex,
             payload=oversized_payload,
         )
@@ -107,7 +107,7 @@ def test_legacy_operation_json_payloads_are_bounded_before_write():
         workflow_repository.create_operation(
             assignment_id=assignment_id,
             owner_id=owner_id,
-            operation_type="material_import",
+            operation_type="ai_completion",
             input_hash=uuid.uuid4().hex,
             progress=oversized_progress,
         )

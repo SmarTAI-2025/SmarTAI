@@ -23,7 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from backend.db import workflow_repository
 from backend.db.models import AssignmentRecord, CourseRecord, UserRecord
 from backend.db.session import session_scope
-from backend.domain.errors import InvalidTransition, LeaseLost, NotFound, ValidationError
+from backend.domain.errors import LeaseLost, NotFound, ValidationError
 
 
 def _seed_operation(operation_type: str = "submission_recognition"):
@@ -555,7 +555,7 @@ def test_new_attempt_resets_lease_fields():
 
 
 def test_list_claimable_operations_filters_status_lease_and_type():
-    owner_id, _assignment_id, pending_op = _seed_operation("problem_extraction")
+    owner_id, _assignment_id, pending_op = _seed_operation("question_preparation")
     running_owner, _running_assignment, running_op = _seed_operation("submission_recognition")
     workflow_repository.update_operation(
         running_op.id,
@@ -578,10 +578,10 @@ def test_list_claimable_operations_filters_status_lease_and_type():
         lease_seconds=60,
     )
     _expire_lease(expired_op.id)
-    _unknown_owner, _unknown_assignment, unknown_op = _seed_operation("material_import")
+    _unknown_owner, _unknown_assignment, unknown_op = _seed_operation("unregistered_operation")
 
     claimable = workflow_repository.list_claimable_operations(
-        ["problem_extraction", "submission_recognition", "ai_completion"]
+        ["question_preparation", "submission_recognition", "ai_completion"]
     )
     ids = {row.id for row in claimable}
 

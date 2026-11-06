@@ -1,8 +1,8 @@
 import { EMPTY_FILTER_INTENT } from "@/lib/taskFilterIntent";
 import { isGroundedExecution } from "@/lib/groundedAsk";
 import type { GroundedAskExecution } from "@/types";
-import { deleteJSON, getJSON, postJSON } from "./client";
-import type { AnalyticsMode, AnalyticsResult, FilterIntentResult, FilterIntentSurface, PerQuestionBreakdown } from "@/types";
+import { postJSON } from "./client";
+import type { AnalyticsMode, AnalyticsResult, FilterIntentResult, FilterIntentSurface } from "@/types";
 
 export const ANALYTICS_REQUEST_TIMEOUT_MS = 300_000;
 
@@ -30,12 +30,4 @@ export async function interpretFilterIntent(taskId: string, question: string,
   surface: FilterIntentSurface, signal?: AbortSignal, context?: AskContext): Promise<FilterIntentResult> {
   const execution = await runGroundedAsk(taskId, question, surface, signal, context);
   return { ...EMPTY_FILTER_INTENT, recognized: execution.recognized, explanation: execution.explanation, execution };
-}
-
-export function getPerQuestionBreakdown(taskId: string, qId: string): Promise<PerQuestionBreakdown> {
-  return getJSON<PerQuestionBreakdown>(`/analytics/${taskId}/per_question/${qId}`);
-}
-
-export function resetPerQuestionCache(taskId: string, qId: string): Promise<{ status: "cleared" }> {
-  return deleteJSON<{ status: "cleared" }>(`/analytics/${taskId}/per_question/${qId}/cache`);
 }

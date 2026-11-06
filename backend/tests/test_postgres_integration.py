@@ -12,7 +12,7 @@ differ between SQLite and PostgreSQL against a live database:
 * role-scoped assignment/submission reads hide other owners.
 """
 from __future__ import annotations
-from backend.tests.registration_invite_helpers import invite_code, invite_digest
+from backend.tests.registration_invite_helpers import invite_code
 
 import asyncio
 import hashlib
@@ -157,7 +157,7 @@ def test_postgres_task_identity_migration_preserves_existing_results(pg_database
     from backend.db.session import get_engine, session_scope
     from backend.db.models import UserRecord
     from backend.tests.test_task_student_identities import _seed_legacy_imports, _business_snapshot
-    from backend.api.analytics import _load_facts
+    from backend.analytics.ask_workspace import load_snapshot
 
     config = Config("alembic.ini")
     config.attributes.update(database_url=PG_URL, database_heavy=True)
@@ -177,7 +177,8 @@ def test_postgres_task_identity_migration_preserves_existing_results(pg_database
         assert session.get(UserRecord, protected) is not None
         assert session.get(UserRecord, real) is not None
         owner = session.scalar(select(UserRecord.id).where(UserRecord.role == "teacher"))
-    assert _load_facts(seeded["task_id"], owner).student_names[removable] == seeded["students"][0].username
+    snapshot = load_snapshot(seeded["task_id"], owner)
+    assert next(row["student_name"] for row in snapshot.tables["students"] if row["student_id"] == removable) == seeded["students"][0].username
     command.downgrade(config, "0026_image_capability")
     assert _business_snapshot(engine) == before
     command.upgrade(config, "head")
@@ -267,7 +268,6 @@ def test_postgres_registration_waits_for_cross_worker_flow_lock(pg_database, mon
 
 def test_postgres_single_active_run(pg_database):
     from backend.db import course_repository, assignment_repository, grading_repository
-    from backend.domain import education
     from backend.domain.errors import DuplicateActiveRun
 
     teacher = _seed_user("teacher")
@@ -1393,7 +1393,7 @@ def test_postgres_grading_knowledge_fence_and_cleanup_are_mutually_exclusive(
         original_name="frozen.txt",
         content=b"frozen",
     )
-    from backend.db.knowledge_repository import replace_document_chunks
+    from backend.tests.knowledge_helpers import replace_document_chunks
     replace_document_chunks(uploaded.document_id, ["frozen"])
     barrier = threading.Barrier(2)
 
@@ -1461,7 +1461,7 @@ def test_postgres_grading_and_source_admission_share_workflow_first_order(
         original_name="frozen.txt",
         content=b"frozen",
     )
-    from backend.db.knowledge_repository import replace_document_chunks
+    from backend.tests.knowledge_helpers import replace_document_chunks
     replace_document_chunks(uploaded.document_id, ["frozen"])
     barrier = threading.Barrier(2)
 

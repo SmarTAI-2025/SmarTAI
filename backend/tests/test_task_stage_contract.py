@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.api import tasks
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.db import grading_repository, workflow_repository
 from backend.models import TaskStatus
 from backend.services import task_facade

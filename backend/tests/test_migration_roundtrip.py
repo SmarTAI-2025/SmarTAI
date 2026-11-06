@@ -54,7 +54,7 @@ def test_admin_knowledge_merge_preserves_existing_users(previous_head, tmp_path,
     command.upgrade(cfg, "head")
     with engine.connect() as connection:
         assert connection.execute(text("SELECT password_hash, auth_version FROM users WHERE id='existing'")).one() == ("legacy-hash", 0)
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == ["0031_registration_invites"]
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == ["0032_knowledge_version_required"]
     assert {"admin_audit_logs", "admin_usage_events", "knowledge_ingestions", "business_configuration", "user_storage_configuration"} <= set(inspect(engine).get_table_names())
 
 
@@ -256,7 +256,7 @@ def test_mail_migrations_extend_provider_routing_as_one_head(tmp_path, monkeypat
     script = ScriptDirectory.from_config(cfg)
 
     assert [revision.revision for revision in script.get_revisions("heads")] == [
-        "0031_registration_invites"
+        "0032_knowledge_version_required"
     ]
 
     command.upgrade(cfg, "0012_provider_routing_pref")
@@ -1381,3 +1381,30 @@ def test_postgresql_source_diagnostics_ddl_is_portable(monkeypatch):
     assert "fk_assignment_student_presentations_source" in sql
     assert "ON DELETE SET NULL" in sql
     assert "ix_assignment_student_presentations_source_id" in sql
+
+
+def test_knowledge_chunks_require_explicit_version_after_upgrade(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, inspect, text
+    from sqlalchemy.exc import IntegrityError
+
+    url = f"sqlite:///{tmp_path / 'knowledge-version-required.db'}"
+    cfg = _alembic_config(url, monkeypatch)
+    command.upgrade(cfg, "0031_registration_invites")
+    engine = create_engine(url)
+    # Isolated migration fixture, like the existing answer migration fixture:
+    # no application request or current writer creates this old-format row.
+    insert = text("INSERT INTO knowledge_chunks (id, document_id, chunk_index, content, chunk_metadata, token_count, created_at) VALUES (:id, 'fixture-document', :position, 'retained text', '{}', 2, 1)")
+    with engine.begin() as connection:
+        connection.execute(insert, {"id": "existing", "position": 0})
+    command.upgrade(cfg, "head")
+    version_column = next(column for column in inspect(engine).get_columns("knowledge_chunks") if column["name"] == "content_version")
+    assert version_column["default"] is None
+    assert version_column["nullable"] is False
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT content FROM knowledge_chunks WHERE id='existing'")).scalar_one() == "retained text"
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(insert, {"id": "missing-version", "position": 1})
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO knowledge_chunks (id, document_id, content_version, chunk_index, content, chunk_metadata, token_count, created_at) VALUES ('current', 'fixture-document', 'ki_current', 1, 'current text', '{}', 2, 1)"))
+    engine.dispose()

@@ -37,7 +37,6 @@ from backend.db.models import (
 )
 from backend.db.session import session_scope
 from backend.domain.errors import (
-    InvalidTransition,
     LeaseLost,
     NotFound,
     SourceStorageReservationConflict,
@@ -870,10 +869,8 @@ async def test_task_delete_removes_only_knowledge_link_and_retains_library_objec
     seeded = _prepared_task()
     storage = LocalStorage(tmp_path / "retained-knowledge")
     content = b"long-lived-knowledge"
-    from backend.db.knowledge_repository import (
-        replace_document_chunks,
-        set_task_documents,
-    )
+    from backend.tests.knowledge_helpers import replace_document_chunks
+    from backend.db.knowledge_repository import set_task_documents
     from backend.services.knowledge_storage import persist_knowledge_upload
 
     upload = persist_knowledge_upload(
@@ -923,10 +920,8 @@ async def test_task_delete_enqueues_last_reference_task_only_knowledge_cleanup(
     seeded = _prepared_task()
     storage = LocalStorage(tmp_path / "task-only-knowledge")
     content = b"temporary-task-knowledge"
-    from backend.db.knowledge_repository import (
-        replace_document_chunks,
-        set_task_documents,
-    )
+    from backend.tests.knowledge_helpers import replace_document_chunks
+    from backend.db.knowledge_repository import set_task_documents
     from backend.db.knowledge_storage_repository import get_document_storage
     from backend.services.knowledge_storage import (
         KnowledgeStorageWorker,
@@ -1288,7 +1283,7 @@ async def test_preparing_artifact_fence_leaves_late_delete_failure_recoverable(
     draft, _ = workflow_repository.create_operation(
         assignment_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
-        operation_type="material_source",
+        operation_type="problem_source",
         input_hash=hashlib.sha256(b"material-preparing-fence").hexdigest(),
         payload={"state": "preparing_artifact"},
         expires_at=time.time() + 60,
@@ -1297,7 +1292,7 @@ async def test_preparing_artifact_fence_leaves_late_delete_failure_recoverable(
     tracked = file_repository.save_file(
         storage=storage,
         owner_id=seeded["owner_id"],
-        kind="material_import_text",
+        kind="problem_source_text",
         original_name="tracked.txt",
         content=b"tracked before delete",
         content_type="text/plain",
@@ -1316,7 +1311,7 @@ async def test_preparing_artifact_fence_leaves_late_delete_failure_recoverable(
         file_repository.save_file(
             storage=storage,
             owner_id=seeded["owner_id"],
-            kind="material_import_text",
+            kind="problem_source_text",
             original_name="late.txt",
             content=b"late after delete",
             content_type="text/plain",

@@ -12,12 +12,11 @@ from backend.domain.errors import DomainError
 from backend.knowledge.index import INDEX_CACHE
 from backend.knowledge.snapshots import INDEX_VERSION, SUPPORTED_INDEX_VERSIONS
 from backend.db.knowledge_ingestion_repository import live_document
-from backend.rag.store import InMemoryTaskRetriever
 from backend.tools.knowledge import KnowledgeChunk, KnowledgeRetriever
 
 
 def _reference(doc):
-    return dict(document_id=doc.id, content_version=doc.active_version or "legacy", chunk_count=doc.chunk_count,
+    return dict(document_id=doc.id, content_version=doc.active_version, chunk_count=doc.chunk_count,
         source_sha256=doc.sha256, index_version=INDEX_VERSION,
         coverage_complete=(doc.ingestion_summary or {}).get("coverage_complete", doc.status == "ready"),
         warning_pages=(doc.ingestion_summary or {}).get("warning_pages", 0))
@@ -48,12 +47,11 @@ def resolve_scope(scope):
             refs = [dict(ref) for ref in manifest["knowledge_content_versions"] if isinstance(ref, dict)
                     and ref.get("document_id") in allowed and ref.get("index_version") in SUPPORTED_INDEX_VERSIONS
                     and ref.get("source_sha256") == allowed[ref["document_id"]].sha256
-                    and isinstance(ref.get("content_version"), str) and type(ref.get("chunk_count")) is int
+                    and isinstance(ref.get("content_version"), str) and ref["content_version"] not in {"", "legacy"}
+                    and type(ref.get("chunk_count")) is int
                     and ref["chunk_count"] > 0]
         else:
-            # Pre-version manifests cannot authorize a subsequently replaced
-            # book. Legacy content remains readable only while still legacy.
-            refs = [_reference(doc) for doc in documents if doc.active_version is None and doc.status == "ready"]
+            refs = []
     else:
         assignment_id = scope
         with session_scope() as session:
@@ -62,7 +60,7 @@ def resolve_scope(scope):
                 return None, [], []
             owner_id = assignment.teacher_id
         documents = list_selected_documents(assignment_id, owner_id)
-        refs = [_reference(doc) for doc in documents if doc.chunk_count > 0]
+        refs = [_reference(doc) for doc in documents if doc.chunk_count > 0 and doc.active_version not in {None, "", "legacy"}]
     with session_scope() as session:
         active = session.scalar(select(AssignmentRecord.id).where(AssignmentRecord.id == assignment_id,
             AssignmentRecord.teacher_id == owner_id, AssignmentRecord.deletion_requested_at.is_(None)))
@@ -137,14 +135,3 @@ class PersistentKnowledgeRetriever(KnowledgeRetriever):
                 label += f" ({citation['unit']} {citation['page_number']})"
             output.append(KnowledgeChunk(content=chunk.content, source=label, score=score, citation=citation))
         return output
-
-
-class CombinedKnowledgeRetriever(InMemoryTaskRetriever):
-    def __init__(self) -> None:
-        super().__init__()
-        self._persistent = PersistentKnowledgeRetriever()
-
-    async def retrieve(self, query: str, k: int = 5, *, scope: Optional[str] = None) -> list[KnowledgeChunk]:
-        transient = [] if scope and scope.startswith("grading-run:") else await super().retrieve(query, k, scope=scope)
-        persistent = await self._persistent.retrieve(query, k, scope=scope)
-        return sorted(transient + persistent, key=lambda item: item.score, reverse=True)[:max(0, int(k))]

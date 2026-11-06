@@ -1,10 +1,4 @@
-from io import BytesIO
-
-import fitz
 import pytest
-from docx import Document
-from pptx import Presentation
-from pptx.util import Inches
 from fastapi.testclient import TestClient
 
 
@@ -12,7 +6,8 @@ def _persist_ready_document(
     *, owner_id: str, filename: str, content: bytes, chunks: list[str]
 ):
     """Create test knowledge through the quota-managed production boundary."""
-    from backend.db.knowledge_repository import get_document, replace_document_chunks
+    from backend.tests.knowledge_helpers import replace_document_chunks
+    from backend.db.knowledge_repository import get_document
     from backend.services.knowledge_storage import persist_knowledge_upload
     from backend.storage import get_storage
 
@@ -30,62 +25,6 @@ def _persist_ready_document(
     return document
 
 
-def _docx_bytes() -> bytes:
-    document = Document()
-    document.add_paragraph("DOCX knowledge content")
-    stream = BytesIO()
-    document.save(stream)
-    return stream.getvalue()
-
-
-def _pptx_bytes() -> bytes:
-    presentation = Presentation()
-    slide = presentation.slides.add_slide(presentation.slide_layouts[5])
-    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(5), Inches(1))
-    box.text = "PPTX knowledge content"
-    stream = BytesIO()
-    presentation.save(stream)
-    return stream.getvalue()
-
-
-def _pdf_bytes() -> bytes:
-    document = fitz.open()
-    page = document.new_page()
-    page.insert_text((72, 72), "PDF knowledge content")
-    content = document.tobytes()
-    document.close()
-    return content
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "filename,body,expected",
-    [
-        ("notes.txt", b"TXT knowledge content", "TXT knowledge content"),
-        ("notes.md", b"# Markdown knowledge content", "Markdown knowledge content"),
-        ("notes.pdf", _pdf_bytes(), "PDF knowledge content"),
-        ("notes.docx", _docx_bytes(), "DOCX knowledge content"),
-        ("notes.pptx", _pptx_bytes(), "PPTX knowledge content"),
-    ],
-    ids=["txt", "md", "pdf", "docx", "pptx"],
-)
-async def test_extract_text_supports_personal_knowledge_formats(filename, body, expected):
-    from backend.rag.chunker import extract_text
-
-    text = await extract_text(filename, body)
-    assert expected in text
-
-
-@pytest.mark.asyncio
-async def test_extract_text_rejects_unsupported_personal_knowledge_format():
-    from fastapi import HTTPException
-    from backend.rag.chunker import extract_text
-
-    with pytest.raises(HTTPException) as exc:
-        await extract_text("notes.png", b"not supported")
-    assert exc.value.status_code == 400
-
-
 @pytest.mark.asyncio
 async def test_task_only_parse_failure_stays_recoverable_until_attach_or_grace_cleanup(monkeypatch):
     from sqlalchemy import select
@@ -97,9 +36,6 @@ async def test_task_only_parse_failure_stays_recoverable_until_attach_or_grace_c
         UserRecord,
     )
     from backend.db.session import session_scope
-    from backend.domain.knowledge_storage import (
-        KNOWLEDGE_CLEANUP_TASK_ATTACH_FAILED,
-    )
     from backend.knowledge.service import ingest_document
 
     owner_id = "task-parse-failure-owner"
@@ -310,7 +246,7 @@ async def test_persistent_bm25_retriever_only_uses_selected_documents():
 async def test_grading_run_retriever_uses_frozen_owner_scoped_selection():
     from backend.db import grading_repository, workflow_repository
     from backend.db.knowledge_repository import (
-        delete_document,
+        request_document_deletion,
         set_task_documents,
     )
     from backend.db.models import AssignmentRecord, CourseRecord, UserRecord
@@ -377,16 +313,16 @@ async def test_grading_run_retriever_uses_frozen_owner_scoped_selection():
     assert all("later" not in item.content for item in results)
 
     with pytest.raises(InvalidTransition) as exc:
-        delete_document(frozen.id, owner_id)
+        request_document_deletion(frozen.id, owner_id)
     assert exc.value.code == "knowledge_document_in_active_grading_run"
     grading_repository.cancel(run.id, teacher_id=owner_id)
-    assert delete_document(frozen.id, owner_id) is not None
+    assert request_document_deletion(frozen.id, owner_id) is not None
 
 
-def test_personal_knowledge_api_upload_list_download_and_delete():
+def test_current_library_upload_list_citation_and_delete():
     from sqlalchemy import select
 
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.db.knowledge_repository import (
         list_selected_documents,
         set_task_documents,
@@ -402,11 +338,11 @@ def test_personal_knowledge_api_upload_list_download_and_delete():
 
     client = TestClient(app)
     headers = {"Authorization": f"Bearer {create_token('demo_api-kb-owner', 'teacher')}"}
-    uploaded = client.post("/knowledge/documents", headers=headers,
+    uploaded = client.post("/course-materials/", headers=headers,
                            files={"file": ("api-notes.txt", b"persistent API knowledge", "text/plain")})
-    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.status_code == 200, uploaded.text
     document = uploaded.json()
-    assert document["status"] == "ready"
+    assert document["parse_status"] == "ready"
     task = task_facade.create_task(
         owner_id="demo_api-kb-owner",
         name="Personal knowledge deletion",
@@ -417,35 +353,38 @@ def test_personal_knowledge_api_upload_list_download_and_delete():
     set_task_documents(
         assignment_id=task["task_id"],
         owner_id="demo_api-kb-owner",
-        document_ids=[document["id"]],
+        document_ids=[document["document_id"]],
     )
 
-    listed = client.get("/knowledge/documents", headers=headers)
+    listed = client.get("/course-materials/", headers=headers)
     assert listed.status_code == 200
-    assert [item["id"] for item in listed.json()["documents"]] == [document["id"]]
+    assert [item["document_id"] for item in listed.json()["items"]] == [document["document_id"]]
 
-    downloaded = client.get(f"/knowledge/documents/{document['id']}/download", headers=headers)
+    from backend.db.knowledge_repository import list_chunks
+    chunk = list_chunks([document["document_id"]])[0]
+    citation_url = f"/knowledge/documents/{document['document_id']}/citations/{chunk.id}/download"
+    downloaded = client.get(citation_url, headers=headers)
     assert downloaded.status_code == 200
     assert downloaded.content == b"persistent API knowledge"
 
-    assert client.get(f"/knowledge/documents/{document['id']}").status_code == 401
-    removed = client.delete(f"/knowledge/documents/{document['id']}", headers=headers)
+    assert client.get(citation_url).status_code == 401
+    removed = client.delete(f"/course-materials/{document['material_id']}", headers=headers, params={"confirm_referenced": "true"})
     assert removed.status_code == 202
     assert removed.json()["status"] == "deletion_pending"
     assert removed.json()["cleanup_operation_id"]
-    assert client.get(f"/knowledge/documents/{document['id']}", headers=headers).status_code == 404
+    assert client.get(citation_url, headers=headers).status_code == 404
     assert list_selected_documents(task["task_id"], "demo_api-kb-owner") == []
     with session_scope() as session:
         assert session.scalar(select(AssignmentKnowledgeDocumentRecord).where(
             AssignmentKnowledgeDocumentRecord.assignment_id == task["task_id"],
-            AssignmentKnowledgeDocumentRecord.document_id == document["id"],
+            AssignmentKnowledgeDocumentRecord.document_id == document["document_id"],
         )) is None
 
 
 def test_knowledge_storage_usage_api_reports_pending_retrying_and_reserved_bytes():
     import hashlib
 
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.db.knowledge_storage_repository import (
         claim_next_cleanup,
         finish_cleanup,

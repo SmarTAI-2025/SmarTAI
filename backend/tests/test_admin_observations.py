@@ -12,7 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from backend.analytics.admin_adoption import AnalyticsRangeTooLarge, query_adoption
 from backend.api.admin_monitoring import router
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.config import settings
 from backend.db.models import AdminUsageEventRecord as Event, KnowledgeStorageRecord, StoredFileRecord, UserRecord
 from backend.db.session import session_scope

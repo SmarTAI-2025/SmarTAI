@@ -53,7 +53,7 @@ def test_concurrent_generation_and_replay_only_create_one_report(monkeypatch):
 
 def test_retired_snapshot_routes_and_read_only_pages_cannot_create_versions():
     from fastapi.testclient import TestClient
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.main import app
     from backend.db import workflow_repository
     from backend.services import result_artifacts, task_facade

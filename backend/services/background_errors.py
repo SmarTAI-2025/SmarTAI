@@ -77,7 +77,6 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "media_inspection_timeout",
     "media_inspection_failed",
     "ocr_provider_grading_not_supported",
-    "material_import_failed",
     "ai_completion_failed",
     "replacement_confirmation_required",
     "stale_revision",

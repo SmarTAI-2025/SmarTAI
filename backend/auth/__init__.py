@@ -45,8 +45,7 @@ def _password_digest(password: str) -> bytes:
 
     bcrypt only accepts 72 input bytes. UTF-8 passwords can cross that limit
     well before 72 characters, so new hashes use a SHA-256 pre-hash encoded as
-    base64 (44 bytes). The scheme is explicitly tagged; legacy raw bcrypt
-    hashes remain verifiable below.
+    base64 (44 bytes). Only this explicitly tagged current format is accepted.
     """
     return base64.b64encode(hashlib.sha256(password.encode("utf-8")).digest())
 
@@ -57,19 +56,11 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    if not hashed:
+    if not hashed or not hashed.startswith(_BCRYPT_SHA256_PREFIX):
         return False
     try:
-        if hashed.startswith(_BCRYPT_SHA256_PREFIX):
-            encoded_hash = hashed[len(_BCRYPT_SHA256_PREFIX):]
-            return bcrypt.checkpw(_password_digest(password), encoded_hash.encode("utf-8"))
-        # Backward compatibility for accounts created before the tagged
-        # bcrypt-SHA256 scheme. bcrypt 5 rejects values longer than 72 bytes;
-        # returning False is the safe legacy behavior for such a credential.
-        raw_password = password.encode("utf-8")
-        if len(raw_password) > 72:
-            return False
-        return bcrypt.checkpw(raw_password, hashed.encode("utf-8"))
+        encoded_hash = hashed[len(_BCRYPT_SHA256_PREFIX):]
+        return bcrypt.checkpw(_password_digest(password), encoded_hash.encode("utf-8"))
     except Exception:
         return False
 
@@ -171,7 +162,7 @@ def get_optional_user(
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
         return None
     token_scope = payload.get("session_scope")
-    if token_scope != expected_scope and not (expected_scope == "public" and token_scope is None):
+    if token_scope != expected_scope:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Session belongs to a different service; sign in again")
     user_id = payload.get("sub")
     user = user_store.get(user_id) if user_id else None
@@ -191,8 +182,7 @@ def get_optional_user(
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"code": "frontier_demo_session_expired"})
     elif is_frontier_user(user):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token scope")
-    # Only existing teacher sessions may retain the pre-scope public format.
-    if token_scope is None and user is not None and user.role != "teacher":
+    if auth_scope == "user" and (not payload.get("sid") or payload.get("auth_version") is None):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Sign in again")
     if user is not None and not user.is_active:
         user = None

@@ -20,7 +20,6 @@ from backend.db.auth_repository import (
     refresh_session_matches_scope,
     renew_active_session,
     revoke_access_session,
-    adopt_legacy_session,
 )
 from backend.models import User
 from backend.db.auth_repository import user_auth_lock, revoke_all_refresh_sessions
@@ -326,11 +325,6 @@ def logout(request: Request, response: Response, current: User = Depends(get_cur
 def activity(request: Request, response: Response, current: User = Depends(get_current_user)):
     session_id = _session_id(request)
     access = renew_active_session(session_id, current, session_scope=request_session_scope(request)) if session_id else None
-    if not session_id:
-        upgraded = adopt_legacy_session(current, days=settings.refresh_session_days, session_scope=request_session_scope(request))
-        if upgraded:
-            raw, access = upgraded
-            _set_refresh_cookie(response, raw, request)
     if access is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Session expired or revoked; sign in again")
     response.headers["Cache-Control"] = "no-store"

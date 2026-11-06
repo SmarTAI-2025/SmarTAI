@@ -345,103 +345,26 @@ def _clear_derived_state():
     yield
 
 
-def test_per_question_uses_effective_results_without_retaining_derived_prose():
-    owner = _user("teacher", "analytics-owner")
-    other = _user("teacher", "analytics-other")
-    seeded = _seed_graded_assignment(owner)
-    other_seeded = _seed_graded_assignment(other, "other")
-    provider = _Provider()
-    owner_registry = _Registry(provider)
-    owner_client = _client(owner, owner_registry)
-    other_provider = _Provider()
-    other_client = _client(other, _Registry(other_provider))
-
-    response = owner_client.get(
-        f"/analytics/{seeded['task_id']}/per_question/Q1"
-    )
-    assert response.status_code == 200, response.text
-    breakdown = response.json()
-    assert breakdown["q_id"] == "Q1"
-    assert breakdown["stem"] == "Differentiate x squared"
-    assert breakdown["avg_score"] == 6.25
-    assert breakdown["stats"]["n"] == 2
-    assert breakdown["stats"]["total_results"] == 3
-    assert breakdown["stats"]["unavailable"] == 1
-    assert [row["score"] for row in breakdown["rows"]] == [8.5, 4.0]
-    assert breakdown["rows"][0]["comment"] == "Reviewed comment"
-    assert breakdown["rows"][1]["review_reasons"] == [
-        "minority_veto",
-        "high_indecisiveness",
-    ]
-    assert breakdown["common_mistakes_md"] == "- Check signs"
-    assert [mode for mode, _messages in provider.calls] == ["mistakes"]
-
-    # Changing the owner's default model must not reuse the previous model's
-    # Ask SmarTAI result.
-    replacement_provider = _Provider()
-    replacement_provider.provider_id = "provider-replacement"
-    owner_registry.provider = replacement_provider
-    assert owner_client.get(
-        f"/analytics/{seeded['task_id']}/per_question/Q1"
-    ).status_code == 200
-    assert [mode for mode, _messages in replacement_provider.calls] == ["mistakes"]
-    owner_registry.provider = provider
-
-    # Returning to the first provider recomputes instead of retaining task
-    # content in this web worker.
-    assert owner_client.get(
-        f"/analytics/{seeded['task_id']}/per_question/{seeded['question_id']}"
-    ).status_code == 200
-    assert [mode for mode, _messages in provider.calls].count("mistakes") == 2
-
-    hidden = other_client.get(
-        f"/analytics/{seeded['task_id']}/per_question/Q1"
-    )
-    assert hidden.status_code == 404
-    assert hidden.json()["detail"] == {"code": "analytics_task_not_found"}
-    assert other_provider.calls == []
-
-    # Existing Figma per-question clear path and canonical task-level clear both work.
-    cleared = owner_client.delete(
-        f"/analytics/{seeded['task_id']}/per_question/Q1/cache"
-    )
-    assert cleared.status_code == 200
-    assert owner_client.get(
-        f"/analytics/{seeded['task_id']}/per_question/Q1"
-    ).status_code == 200
-    assert [mode for mode, _messages in provider.calls].count("mistakes") == 3
-    assert owner_client.delete(
-        f"/analytics/{seeded['task_id']}/cache"
-    ).json() == {"status": "cleared"}
-
-    # Clearing or reading one owner never touches the other owner's facts/cache.
-    assert other_client.get(
-        f"/analytics/{other_seeded['task_id']}/per_question/Q1"
-    ).status_code == 200
 
 
-def test_task_deletion_tombstone_hides_analytics_and_cache_controls():
+def test_task_deletion_tombstone_hides_current_analytics():
     owner = _user("teacher", "analytics-deleted")
     seeded = _seed_graded_assignment(owner)
     client = _client(owner, _Registry(_Provider()))
 
-    assert client.get(
-        f"/analytics/{seeded['task_id']}/per_question/Q1"
+    assert client.post(
+        f"/analytics/{seeded['task_id']}/query", json={"question": "Summarize", "mode": "summary"}
     ).status_code == 200
     assert not hasattr(analytics, "_cache")
     task_facade.delete_task(
         task_id=seeded["task_id"], owner_id=owner.id
     )
 
-    hidden = client.get(
-        f"/analytics/{seeded['task_id']}/per_question/Q1"
+    hidden = client.post(
+        f"/analytics/{seeded['task_id']}/query", json={"question": "Summarize", "mode": "summary"}
     )
     assert hidden.status_code == 404
     assert hidden.json()["detail"] == {"code": "analytics_task_not_found"}
-    cache = client.delete(f"/analytics/{seeded['task_id']}/cache")
-    assert cache.status_code == 404
-    assert cache.json()["detail"] == {"code": "analytics_task_not_found"}
-
 
 def test_nl_query_filters_hallucinated_ids_and_emits_only_safe_chart_fields():
     owner, other = _user("teacher", "query-owner"), _user("teacher", "query-other")
@@ -616,11 +539,8 @@ def test_chart_prompt_contains_real_confidence_and_review_metrics_with_unknowns(
 
 def test_analytics_readiness_and_generation_errors_are_stable_and_redacted():
     owner = _user("teacher", "error-owner")
-    ungraded_id = _seed_ungraded_assignment(owner)
     provider = _PlanProvider({}, *[{"result_kind":"chart","traces":[{"y":[99]}]}]*3)
     client = _client(owner, _Registry(provider))
-    not_ready = client.get(f"/analytics/{ungraded_id}/per_question/Q1")
-    assert not_ready.status_code == 409 and provider.calls == []
     seeded = _seed_graded_assignment(owner,"error")
     invalid = client.post(f"/analytics/{seeded['task_id']}/query",json={"question":"Make a chart","mode":"chart"})
     assert invalid.status_code == 200

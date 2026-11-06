@@ -36,11 +36,6 @@ METRIC_CATALOG: tuple[dict[str, Any], ...] = (
     {"key": "assignments_created", "label": "作业创建", "description": "创建作业的次数", "event_names": ["assignment_created"]},
     {"key": "grading_runs_started", "label": "批改启动", "description": "启动批改运行的次数", "event_names": ["grading_run_started"]},
     {"key": "submissions_created", "label": "提交次数", "description": "学生提交作业的次数", "event_names": ["submission_created"]},
-    {"key": "ai_calls", "label": "AI 调用", "description": "已接入流水的 AI 调用次数", "event_names": ["ai_call"]},
-    {"key": "ai_failures", "label": "AI 失败", "description": "已接入流水的 AI 调用失败次数", "event_names": ["ai_call"]},
-    {"key": "input_tokens", "label": "输入 token", "description": "已接入流水的输入 token 总数", "event_names": ["ai_call"]},
-    {"key": "output_tokens", "label": "输出 token", "description": "已接入流水的输出 token 总数", "event_names": ["ai_call"]},
-    {"key": "estimated_cost_usd", "label": "估算费用（美元）", "description": "已接入流水且带费用字段的调用成本", "event_names": ["ai_call"]},
 )
 _CATALOG_BY_KEY = {item["key"]: item for item in METRIC_CATALOG}
 
@@ -104,10 +99,6 @@ def track_usage_event(**kwargs: Any) -> None:
         logger.exception("usage_event_write_failed", extra={"event_name": kwargs.get("event_name")})
 
 
-def metrics_catalog() -> list[dict[str, Any]]:
-    return [dict(item) for item in METRIC_CATALOG]
-
-
 def _bucket_start(timestamp: float, granularity: str) -> datetime:
     current = datetime.fromtimestamp(timestamp, tz=timezone.utc)
     if granularity == "week":
@@ -138,16 +129,6 @@ def _metric_value(metric: str, rows: Iterable[AdminUsageEventRecord]) -> int | f
         return sum(row.event_name == "grading_run_started" and row.success for row in rows)
     if metric == "submissions_created":
         return sum(row.event_name == "submission_created" and row.success for row in rows)
-    if metric == "ai_calls":
-        return sum(row.event_name == "ai_call")
-    if metric == "ai_failures":
-        return sum(row.event_name == "ai_call" and not row.success for row in rows)
-    if metric == "input_tokens":
-        return sum((row.input_tokens or 0) for row in rows if row.event_name == "ai_call")
-    if metric == "output_tokens":
-        return sum((row.output_tokens or 0) for row in rows if row.event_name == "ai_call")
-    if metric == "estimated_cost_usd":
-        return round(sum((row.cost_usd or 0.0) for row in rows if row.event_name == "ai_call"), 6)
     raise ValueError(f"Unsupported metric: {metric}")
 
 
@@ -184,12 +165,6 @@ def query_usage_metrics(
     for metric in metrics:
         supported = set(_CATALOG_BY_KEY[metric]["event_names"])
         available = bool(event_names & supported)
-        if metric == "input_tokens":
-            available = any(row.event_name == "ai_call" and row.input_tokens is not None for row in rows)
-        elif metric == "output_tokens":
-            available = any(row.event_name == "ai_call" and row.output_tokens is not None for row in rows)
-        elif metric == "estimated_cost_usd":
-            available = any(row.event_name == "ai_call" and row.cost_usd is not None for row in rows)
         availability[metric] = "available" if available else "not_collected"
     series = [
         {

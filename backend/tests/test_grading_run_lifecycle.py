@@ -589,34 +589,6 @@ def test_release_uses_scored_soft_review_without_teacher_action(setup_assignment
     )
     assert [row.id for row in review_queue] == [seen[0].id]
 
-    # The normalized result API must use the same effective-score semantics:
-    # the warning stays countable as review work while the real zero remains a
-    # score in totals instead of being dropped as a falsy value.
-    from types import SimpleNamespace
-
-    from backend.api.results import _summary, per_question_aggregates
-
-    summary = _summary(
-        setup_assignment["assignment_id"],
-        setup_assignment["teacher_id"],
-    )
-    assert summary["graded_count"] == 1
-    assert summary["needs_review_count"] == 1
-    assert summary["students"] == [{
-        "student_id": setup_assignment["student_id"],
-        "total": 0.0,
-    }]
-    assert per_question_aggregates(
-        setup_assignment["assignment_id"],
-        current=SimpleNamespace(id=setup_assignment["teacher_id"]),
-    ) == [{
-        "q_id": "q1",
-        "count": 1,
-        "max_score": 10.0,
-        "mean": 0.0,
-        "min": 0.0,
-        "max": 0.0,
-    }]
 
 
 def test_student_visibility_only_after_release(setup_assignment):
@@ -1159,12 +1131,9 @@ def test_task_tombstone_hides_direct_grading_reads_and_rejects_review_release(
 
     from sqlalchemy import select
 
-    from backend.api import grading_runs as grading_api
-    from backend.api import results as results_api
     from backend.db.models import AssignmentRecord, GradingRunRecord, TeacherReviewRecord
     from backend.db.session import session_scope
     from backend.domain.errors import NotFound
-    from backend.models import User
 
     teacher_id = setup_assignment["teacher_id"]
     run = grading_runs.create_run(
@@ -1249,32 +1218,6 @@ def test_task_tombstone_hides_direct_grading_reads_and_rejects_review_release(
         )
     with pytest.raises(NotFound):
         grading_repository.release(run.id, teacher_id=teacher_id)
-
-    current = User(id=teacher_id, username=teacher_id, role="teacher")
-    assert grading_api.get_run(run.id, current=current).status_code == 404
-    assert grading_api.list_runs(
-        setup_assignment["assignment_id"], current=current
-    ) == []
-    assert grading_api.review_queue(
-        setup_assignment["assignment_id"], current=current
-    ).status_code == 404
-    assert grading_api.add_review(
-        result_id,
-        grading_api.ReviewRequest(new_score=9.0),
-        current=current,
-    ).status_code == 404
-    assert grading_api.release_run(run.id, current=current).status_code == 404
-    assert results_api.teacher_summary(
-        setup_assignment["assignment_id"], current=current
-    ).status_code == 404
-    student = User(
-        id=setup_assignment["student_id"],
-        username=setup_assignment["student_id"],
-        role="student",
-    )
-    assert results_api.student_result(
-        setup_assignment["assignment_id"], current=student
-    ).status_code == 404
 
     with session_scope() as session:
         persisted_run = session.get(GradingRunRecord, run.id)
