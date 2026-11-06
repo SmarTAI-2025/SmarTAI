@@ -187,3 +187,85 @@ assert c.try_start('independent', 0)
     monkeypatch.setattr(os, "replace", replacing)
     assert capacity.defer_start("key", 65) > 64
     assert checked == [True]
+
+
+def test_damaged_cooldown_preserves_current_longer_429_wait(tmp_path, monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(host_capacity.time, "monotonic", lambda: now[0])
+    capacity = HostCapacity(tmp_path / "permits")
+    path = state_path(capacity, "cooldown")
+    path.write_bytes(b"[")
+    path.chmod(0o600)
+    assert capacity.defer_start("key", 120, started_at=99) == 120
+    now[0] = 165
+    assert not HostCapacity(capacity.directory).try_start("key", 0)
+    now[0] = 220
+    assert HostCapacity(capacity.directory).try_start("key", 0)
+
+
+@pytest.mark.parametrize("kind", ["rpm", "cooldown"])
+@pytest.mark.parametrize("sign", [1, -1])
+def test_unrepresentable_json_timestamp_is_repaired(tmp_path, monkeypatch, kind, sign):
+    now = [100.0]
+    monkeypatch.setattr(host_capacity.time, "monotonic", lambda: now[0])
+    capacity = HostCapacity(tmp_path / "permits")
+    huge = sign * int("9" * 400)
+    path = state_path(capacity, kind)
+    path.write_text(json.dumps([huge] if kind == "rpm" else [100, huge]))
+    path.chmod(0o600)
+    assert not capacity.try_start("key", 6)
+    assert not capacity.try_start("key", 6)
+    assert capacity.try_start("healthy", 6)
+    now[0] = 165
+    assert HostCapacity(capacity.directory).try_start("key", 6)
+
+
+@pytest.mark.parametrize("kind", ["rpm", "cooldown"])
+@pytest.mark.parametrize("read_first", [False, True])
+def test_configured_recovery_wait_is_used_by_actual_scheduler(tmp_path, monkeypatch, kind, read_first):
+    from backend.config import settings
+    from backend.llm.concurrency import ModelScheduler
+    now = [100.0]
+    monkeypatch.setattr(settings, "llm_rate_limit_retry_seconds", 120)
+    monkeypatch.setattr(host_capacity, "_default_directory", lambda: tmp_path / "permits")
+    monkeypatch.setattr(host_capacity.time, "monotonic", lambda: now[0])
+    capacity = ModelScheduler().host_capacity
+    path = state_path(capacity, kind)
+    path.write_bytes(b"[")
+    path.chmod(0o600)
+    if read_first:
+        capacity.cooldown_remaining("key")
+    assert not capacity.try_start("key", 6)
+    assert capacity.cooldown_remaining("key") == 120
+    now[0] = 165
+    assert not ModelScheduler().host_capacity.try_start("key", 6)
+    now[0] = 220
+    assert ModelScheduler().host_capacity.try_start("key", 6)
+
+
+@pytest.mark.asyncio
+async def test_huge_timestamp_does_not_fail_other_queued_groups(tmp_path, monkeypatch):
+    import asyncio
+    from backend.llm.concurrency import ModelScheduler
+    from backend.tests.test_automatic_model_scheduling import FakeClock, call, turns
+    clock = FakeClock()
+    monkeypatch.setattr(host_capacity.time, "monotonic", clock)
+    capacity = HostCapacity(tmp_path / "permits")
+    path = state_path(capacity, "rpm")
+    path.write_text(json.dumps([int("9" * 400)]))
+    path.chmod(0o600)
+    scheduler = ModelScheduler(clock=clock, host_capacity=capacity, memory_reader=lambda: None)
+    damaged = asyncio.create_task(scheduler.acquire(**call("key", rpm=6)))
+    healthy = asyncio.create_task(scheduler.acquire(**call("healthy", rpm=6)))
+    try:
+        await turns()
+        assert not damaged.done()
+        lease = await asyncio.wait_for(healthy, 1)
+        lease.release()
+        clock.advance(65, scheduler)
+        lease = await asyncio.wait_for(damaged, 1)
+        lease.release()
+    finally:
+        for task in (damaged, healthy):
+            task.cancel()
+        await asyncio.gather(damaged, healthy, return_exceptions=True)

@@ -144,7 +144,9 @@ class HostLease:
 class HostCapacity:
     """Try an OS permit without waiting, clamping all callers to 50 slots."""
 
-    def __init__(self, directory: str | os.PathLike[str] | None = None):
+    def __init__(self, directory: str | os.PathLike[str] | None = None, *,
+                 recovery_seconds: float = 65.0):
+        self.recovery_seconds = max(65.0, recovery_seconds)
         self.directory = Path(directory) if directory is not None else _default_directory()
         self._directory_fd: int | None = None
         try:
@@ -288,11 +290,11 @@ class HostCapacity:
                         type(t) not in (int, float) or not math.isfinite(t) for t in starts
                     ):
                         raise ValueError("invalid quota window")
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, OverflowError):
                     # Old unjournaled writes may already be torn. Persist a
                     # bounded quiet period rather than fail forever or burst.
                     # Commit that protection BEFORE clearing the damaged RPM.
-                    repair(max(65.0, interval))
+                    repair(max(self.recovery_seconds, interval))
                     self._write_state(fd, name, [])
                     return False
                 # A reset invalidates the whole prior clock epoch. Do not
@@ -340,8 +342,8 @@ class HostCapacity:
                     if (not isinstance(state, list) or len(state) != 2
                             or any(type(t) not in (int, float) or not math.isfinite(t) for t in state)):
                         raise ValueError("invalid cooldown")
-                except (ValueError, TypeError):
-                    state = [now, now + 65.0]
+                except (ValueError, TypeError, OverflowError):
+                    state = [now, now + max(self.recovery_seconds, seconds or 0.0)]
                     self._write_state(fd, name, state)
                 recorded, until = state
                 if now < recorded:  # monotonic clock reset after a host reboot
