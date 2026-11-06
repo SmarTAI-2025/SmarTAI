@@ -1,13 +1,17 @@
 """Status persistence must not discard or replay completed model requests."""
 import asyncio
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
 from tenacity import wait_fixed
 
+from backend.config import settings
 from backend.llm import providers, request_timeouts
 from backend.progress.recognition_activity import observe_recognition
 from backend.progress.tracker import get_or_create_reporter, remove_reporter
+from backend.services.execution_control import run_controlled
+from backend.services.workflow_deadlines import processing_budget, run_owned_work
 from backend.tests.test_provider_response_deadlines import MESSAGES, ROUTES, provider_for, scheduler  # noqa: F401
 from backend.tests.test_workflow_gemini_cleanup import workflow_call
 from backend.tools import structured_llm
@@ -61,9 +65,53 @@ async def test_workflow_status_save_hang_preserves_model_outcome(route, outcome,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("outcome", ["error", "hang"])
+@pytest.mark.parametrize("response_only", [False, True])
+async def test_rate_wait_status_save_does_not_abort_retry(route, outcome, response_only, scheduler, monkeypatch):
+    monkeypatch.setattr(request_timeouts, "_LOCAL_STEP_SECONDS", .02)
+    monkeypatch.setattr(settings, "llm_timeout", .01)
+    monkeypatch.setattr(structured_llm._ainvoke_with_retry.retry, "wait", wait_fixed(0))
+    calls, saves = [], []
+
+    async def invoke(options):
+        calls.append(options)
+        if len(calls) == 1:
+            raise providers.ProviderRequestError("provider_rate_limited", status_code=429)
+        return SimpleNamespace(content="complete")
+
+    async def save(snapshot):
+        saves.append(snapshot["model_waits"])
+        if outcome == "hang":
+            await asyncio.Event().wait()
+        raise RuntimeError("synthetic status persistence failure")
+
+    job_id = "retry-status-save"
+    reporter = get_or_create_reporter(job_id)
+    try:
+        async with provider_for(route, invoke, monkeypatch) as provider:
+            async with processing_budget(job_id, kind="grading"):
+                with request_timeouts.response_timeout_scope(.1, response_only=True) if response_only else nullcontext():
+                    result = await asyncio.wait_for(run_owned_work(run_controlled(
+                        job_id, lambda: False, structured_llm.ainvoke_with_retry(provider, MESSAGES),
+                        persist_progress=save,
+                    )), 1)
+        assert result.content == "complete" and len(calls) == 2
+        assert saves[0] and saves[-1] == []
+        assert not (await reporter.snapshot()).model_waits
+        assert scheduler.active == scheduler.host_capacity.active == 0
+        assert scheduler.proxy_slots._value == 50
+    finally:
+        remove_reporter(job_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ROUTES)
 @pytest.mark.parametrize("stage", ["queued", "responding"])
 async def test_status_save_before_request_has_its_own_deadline(route, stage, scheduler, monkeypatch):
     monkeypatch.setattr(request_timeouts, "_LOCAL_STEP_SECONDS", .02)
+    # Advisory persistence has its own allowance, even if the configured
+    # model-response budget is shorter. No model call has started yet.
+    monkeypatch.setattr(settings, "llm_timeout", .01)
     calls, blocked = [], []
 
     async def invoke(options):

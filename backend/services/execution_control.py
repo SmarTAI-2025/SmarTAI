@@ -41,7 +41,8 @@ class ExecutionControl:
         self.task.cancel()
 
     async def check(self, provider) -> None:
-        if self.stopped or await asyncio.to_thread(self.is_cancelled):
+        from backend.llm.request_timeouts import provider_local_step
+        if self.stopped or await provider_local_step(asyncio.to_thread(self.is_cancelled)):
             raise asyncio.CancelledError()
         code = self.blocked.get(provider_key(provider))
         if code:
@@ -61,7 +62,11 @@ class ExecutionControl:
         if reporter is not None:
             await reporter.set_model_waits(list(self.waits.values()))
             if self.persist_progress is not None:
-                await self.persist_progress((await reporter.snapshot()).model_dump(mode="json"))
+                from backend.llm.request_timeouts import provider_local_step
+                await provider_local_step(
+                    self.persist_progress((await reporter.snapshot()).model_dump(mode="json")),
+                    best_effort=True,
+                )
 
     async def waiting(self, provider, attempt: int, limit: int, seconds: float) -> None:
         self.waits[provider_key(provider)] = {

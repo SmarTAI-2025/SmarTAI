@@ -1001,7 +1001,7 @@ async def _before_retry_attempt(retry_state) -> None:
     from backend.services.execution_control import current_execution
     control = current_execution()
     if control is not None:
-        await provider_local_step(control.check(_retry_provider(retry_state)))
+        await control.check(_retry_provider(retry_state))
     budget = _attempt_budget.get()
     if budget is not None:
         if budget.used >= _retry_limit():
@@ -1035,10 +1035,10 @@ async def _before_retry_sleep(retry_state) -> None:
     if control is not None:
         from backend.services.execution_control import provider_key
         provider = _retry_provider(retry_state)
-        await provider_local_step(control.waiting(
+        await control.waiting(
             provider, max(next_attempt, control.rate_failures.get(provider_key(provider), 0) + 1),
             _retry_limit(), seconds,
-        ))
+        )
 
 
 @retry(

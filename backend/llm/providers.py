@@ -457,13 +457,15 @@ class BaseProvider(ABC):
         # SDK timeouts bound individual network reads, not admission or an
         # upstream stream that keeps sending keep-alives. Bound this whole
         # attempt so one waiter cannot occupy a workflow worker indefinitely.
-        deadline = asyncio.timeout(float(settings.llm_timeout) if scope is None else None)
+        deadline = asyncio.timeout(None)
         try:
             await provider_local_step(report_provider_state(self, "queued"), best_effort=True)
             if control is not None:
-                await provider_local_step(control.check(self))
+                await control.check(self)
             scheduler = get_scheduler()
             async with deadline:
+                if scope is None:
+                    deadline.reschedule(asyncio.get_running_loop().time() + float(settings.llm_timeout))
                 lease = scheduler.lease(
                     key=quota_key(self.config, endpoint_key(self.config)),
                     rpm=max(0, int(self.config.rpm or 0)),
@@ -477,10 +479,11 @@ class BaseProvider(ABC):
                 async with scope.local_admission(lease) if scope is not None else lease:
                     admitted = True
                     if control is not None:
-                        await provider_local_step(control.check(self))
+                        await control.check(self)
                     # Time spent waiting for RPM/capacity is not provider
                     # response time. Give the admitted request its full budget.
                     if scope is None:
+                        deadline.reschedule(None)
                         await provider_local_step(report_provider_state(self, "responding"), best_effort=True)
                         deadline.reschedule(asyncio.get_running_loop().time() + (
                             float(settings.llm_timeout) if response_timeout is None else response_timeout
@@ -494,8 +497,9 @@ class BaseProvider(ABC):
                             control.block(self, code)
                         raise
                     else:
+                        deadline.reschedule(None)
                         if control is not None:
-                            await provider_local_step(control.succeeded(self), best_effort=scope is not None)
+                            await provider_local_step(control.succeeded(self), best_effort=True)
             await provider_local_step(report_provider_state(self, "processing"), best_effort=True)
         except TimeoutError as exc:
             if not deadline.expired():
