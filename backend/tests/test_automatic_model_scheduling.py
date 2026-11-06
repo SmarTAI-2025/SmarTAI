@@ -124,6 +124,7 @@ async def test_ocr_and_text_requests_share_byok_admission_without_fixed_two_call
     from backend.recognition.runtime import RecognitionCapacity
     from backend.skills.recognition_reader import LLMRecognitionEngine
     from backend.tests.test_recognition_agent import pdf, request
+    from backend.tools.pdf_evidence import PdfIndexRequest, PdfPagesRequest, PdfRenderRequest, read_pdf_evidence
 
     monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
     release, started = asyncio.Event(), asyncio.Event()
@@ -143,6 +144,19 @@ async def test_ocr_and_text_requests_share_byok_admission_without_fixed_two_call
     capacity = RecognitionCapacity()
     data = pdf([None])
     req = request(data, policy=RecognitionPolicyV1(enable_repair=False))
+    # Prepare real evidence once, before measuring model concurrency. Repeating
+    # index/detail/render for four OCR reads tests the separate CPU worker gate,
+    # not whether OCR and text share BYOK admission.
+    evidence = {}
+    for command in (PdfIndexRequest(), PdfPagesRequest(pages=[1]), PdfRenderRequest(page_number=1)):
+        evidence[command.model_dump_json()] = await read_pdf_evidence(data, command)
+
+    async def prepared_pdf(source_bytes, command, **kwargs):
+        assert source_bytes == data
+        return evidence[command.model_dump_json()].model_copy(deep=True)
+
+    monkeypatch.setattr("backend.agents.recognition_agent.read_pdf_evidence", prepared_pdf)
+    monkeypatch.setattr("backend.recognition.executor.read_pdf_evidence", prepared_pdf)
     jobs = [asyncio.create_task(RecognitionAgent(engine, capacity=capacity).read(
         req, data, authorized_owner_id="owner")) for _ in range(4)]
     jobs.append(asyncio.create_task(provider.ainvoke([HumanMessage(content="Extract or grade.")])))
@@ -730,10 +744,32 @@ async def test_admission_wait_does_not_consume_network_timeout(scheduler, clock,
     from backend.config import settings
     from backend.services.execution_control import run_controlled
     monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
-    monkeypatch.setattr(settings, "llm_timeout", 0.4 if grading else 0.12)
+    admission_timeout, response_timeout = (60 if grading else 30), 30
+    monkeypatch.setattr(settings, "llm_timeout", admission_timeout)
+    # Advance the real event loop's timers without wall-clock sleeps. Generous
+    # margins keep machine load out of the assertion, while the simulated queue
+    # plus response still exceeds the original admission deadline.
+    loop = asyncio.get_running_loop()
+    real_time, elapsed = loop.time, 0
+    monkeypatch.setattr(loop, "time", lambda: real_time() + elapsed)
+    deadlines = []
+    real_timeout = asyncio.timeout
+    def timeout(delay):
+        deadline = real_timeout(delay)
+        if delay == admission_timeout:
+            deadlines.append(deadline)
+        return deadline
+    monkeypatch.setattr(asyncio, "timeout", timeout)
+    queued, responding, finish_response = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    try_acquire = host.try_acquire
+    def acquire(limit):
+        queued.set()
+        return try_acquire(limit)
+    monkeypatch.setattr(host, "try_acquire", acquire)
     host.capacity = 0
     async def invoke(*args, **kwargs):
-        await asyncio.sleep(0.075)
+        responding.set()
+        await finish_response.wait()
         return SimpleNamespace(content="ok")
     if grading:
         provider = SafeRelayProvider(ProviderConfig(provider_type="openai", model="paced", api_key="fake",
@@ -751,13 +787,36 @@ async def test_admission_wait_does_not_consume_network_timeout(scheduler, clock,
         provider._client = SimpleNamespace(ainvoke=invoke)
     request = provider.ainvoke([HumanMessage(content="test")])
     if grading:
-        request = run_controlled("grading-queue", lambda: False, request, response_timeout_seconds=0.12)
+        request = run_controlled("grading-queue", lambda: False, request,
+                                 response_timeout_seconds=response_timeout)
     task = asyncio.create_task(request)
-    await asyncio.sleep(0.075)
-    host.capacity = 1
-    scheduler.wake.set()
-    assert (await task).content == "ok"
-    assert host.active == 0
+    try:
+        await asyncio.wait_for(queued.wait(), timeout=5)
+        assert scheduler.pending and host.active == 0 and not responding.is_set()
+        assert len(deadlines) == 1
+        deadline = deadlines[0]
+        admission_deadline = deadline.when()
+        elapsed += admission_timeout - 10
+        clock.advance(admission_timeout - 10, scheduler)
+        assert 0 < admission_deadline - loop.time() < response_timeout
+        host.capacity = 1
+        scheduler.wake.set()
+        await asyncio.wait_for(responding.wait(), timeout=5)
+        # The response gets its own full budget, including the grading override.
+        assert response_timeout - 5 < deadline.when() - loop.time() <= response_timeout
+        elapsed += 20
+        clock.advance(20, scheduler)
+        await turns()
+        assert loop.time() > admission_deadline
+        assert loop.time() < deadline.when() and not task.done()
+        finish_response.set()
+        assert (await asyncio.wait_for(task, timeout=5)).content == "ok"
+        assert scheduler.active == scheduler.memory_active == host.active == 0
+    finally:
+        finish_response.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 

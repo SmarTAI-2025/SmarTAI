@@ -1,6 +1,6 @@
 """Provider-bound response deadlines; every SDK/HTTP call is a local fake."""
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from types import SimpleNamespace
 
 import httpx
@@ -15,7 +15,7 @@ from backend.llm.concurrency import ModelScheduler
 from backend.llm.providers import AnthropicProvider, GeminiProvider, OpenAIProvider, ProviderRequestError, SafeRelayProvider
 from backend.llm.request_timeouts import current_response_scope, current_response_timeout_seconds, response_timeout_scope
 from backend.models import ProviderConfig
-from backend.services.execution_control import run_controlled
+from backend.services.execution_control import current_execution, run_controlled
 from backend.tests.test_automatic_model_scheduling import FakeHost
 from backend.tools import structured_llm
 
@@ -23,6 +23,48 @@ from backend.tools import structured_llm
 ROUTES = ["openai", "anthropic", "gemini", "gemini_proxy",
           "relay_openai_chat_completions", "relay_anthropic_messages", "relay_gemini_generate_content"]
 MESSAGES = [HumanMessage(content="inspected source")]
+
+
+@pytest.mark.asyncio
+async def test_rate_stop_interrupts_pending_response_and_capacity_queue(monkeypatch, scheduler):
+    from backend.config import settings
+    monkeypatch.setattr(settings, "max_concurrent_llm_per_endpoint", 1)
+    sent, queued = asyncio.Event(), asyncio.Event()
+    sends = []
+    async def invoke(_):
+        sends.append(1)
+        sent.set()
+        await asyncio.Event().wait()
+
+    acquire = scheduler.acquire
+    async def observe_queue(**kwargs):
+        if sent.is_set():
+            queued.set()
+        return await acquire(**kwargs)
+    monkeypatch.setattr(scheduler, "acquire", observe_queue)
+
+    async with provider_for("openai", invoke, monkeypatch) as provider:
+        async def call():
+            with response_timeout_scope(300, response_only=True) as state:
+                with pytest.raises(ProviderRequestError, match="provider_rate_limited") as error:
+                    await structured_llm.ainvoke_with_rate_retry(provider, MESSAGES)
+                assert error.value.retryable is False
+                assert error.value.submission_may_exist == state.submission_may_exist
+                return state.submission_may_exist
+        async def job():
+            responding = asyncio.create_task(call())
+            await sent.wait()
+            in_queue = asyncio.create_task(call())
+            try:
+                await queued.wait()
+                current_execution().block(provider, "provider_rate_limited")
+                assert await asyncio.gather(responding, in_queue) == [True, False]
+            finally:
+                for task in (responding, in_queue):
+                    task.cancel()
+                await asyncio.gather(responding, in_queue, return_exceptions=True)
+        await asyncio.wait_for(run_controlled("interrupt-calls", lambda: False, job()), 5)
+    assert sends == [1] and scheduler.active == 0
 
 
 @pytest.fixture

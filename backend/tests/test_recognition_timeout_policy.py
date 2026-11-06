@@ -13,6 +13,7 @@ from backend.recognition.engine import EngineReadInputV1
 from backend.recognition.models import RecognitionCandidateV1, RecognitionPolicyV1, RecognitionSourceRefV1, RecognitionUsageV1
 from backend.recognition.planner import EngineCapabilitiesV1
 from backend.recognition.runtime import RecognitionCapacity, run_initial_read
+from backend.services.execution_control import current_execution, run_controlled
 from backend.services.question_source_batches import read_question_pdf_batches
 from backend.services.recognition_timeouts import LEGACY_SOURCE_TIMEOUT_PROFILE, apply_source_timeout_profile
 
@@ -76,6 +77,45 @@ def test_all_product_sources_share_one_response_policy(profile, kind):
     clock.now = 100000
     assert budget.remaining("read") is None and budget.remaining("locator") is None
     assert request.model_dump_json() == before
+
+
+@pytest.mark.asyncio
+async def test_legacy_deadline_only_attributes_its_own_429_wait():
+    engine = VisionEngine()
+    engine.provider = SimpleNamespace(provider_id="test-provider", model="test-model")
+    waiting, release = asyncio.Event(), asyncio.Event()
+    async def recognize(request):
+        if request.page_number == 1:
+            await current_execution().waiting(engine.provider, 2, 3, 65)
+            waiting.set()
+            await release.wait()
+        raise TimeoutError()
+    engine.recognize = recognize
+
+    async def read(page):
+        request = read_request()
+        return await run_initial_read(
+            engine, EngineReadInputV1(purpose="problems", input_mode="page_image", page_number=page,
+                                      content_type="image/png", payload=b"image"),
+            source=request.source, policy=request.policy, capabilities=engine.capabilities,
+            region_keys=(f"p{page}",), budget=RecognitionBudget(request.source, request.policy, engine.capabilities),
+            capacity=RecognitionCapacity(),
+        )
+
+    async def job():
+        first = asyncio.create_task(read(1))
+        try:
+            await waiting.wait()
+            other = await read(2)
+            assert other.submission_may_exist and other.candidate.safe_error_code == "provider_submit_uncertain"
+        finally:
+            release.set()
+            result = await first
+        assert not result.submission_may_exist and result.candidate.safe_error_code == "provider_rate_limited"
+        await current_execution().check(engine.provider)  # Only one rejection; the next file may still run.
+    await asyncio.wait_for(run_controlled("legacy-sibling-deadlines", lambda: False, job()), 5)
+
+
 
 
 @pytest.mark.parametrize("profile", ["", "source-300-v2", 300])

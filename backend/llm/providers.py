@@ -21,7 +21,7 @@ import ssl
 import time
 from abc import ABC, abstractmethod
 from collections import deque
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from typing import List, Optional, Dict, Any, Deque, Callable
 from dataclasses import dataclass
 from contextlib import AsyncExitStack
@@ -479,12 +479,16 @@ class BaseProvider(ABC):
         # Admission has no separate deadline; the owner can still cancel it.
         # Time a response only after acquiring the local execution slot.
         deadline = asyncio.timeout(None)
+        admitted = False
         try:
             await provider_local_step(report_provider_state(self, "queued"), best_effort=True)
             if control is not None:
                 await control.check(self)
             scheduler = get_scheduler()
-            async with deadline:
+            interrupt = control.interruptible_call(
+                self, lambda: scope.submission_may_exist if scope is not None else admitted,
+            ) if control is not None else nullcontext()
+            async with deadline, interrupt:
                 lease = scheduler.lease(
                     key=quota_key(self.config, endpoint_key(self.config)),
                     rpm=max(0, int(self.config.rpm or 0)),
@@ -507,6 +511,7 @@ class BaseProvider(ABC):
                             float(settings.llm_timeout) if response_timeout is None else response_timeout
                         ))
                     try:
+                        admitted = True
                         yield
                     except Exception as exc:
                         from backend.llm.provider_limits import exhausted_quota_code
@@ -516,8 +521,7 @@ class BaseProvider(ABC):
                         raise
                     else:
                         deadline.reschedule(None)
-                        if control is not None:
-                            await provider_local_step(control.succeeded(self), best_effort=True)
+                        admitted = False
             await provider_local_step(report_provider_state(self, "processing"), best_effort=True)
         except TimeoutError as exc:
             if not deadline.expired():
