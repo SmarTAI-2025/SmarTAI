@@ -125,7 +125,7 @@ async def test_model_stop_interrupts_queued_timeout_retry_without_erasing_uncert
                 task = asyncio.create_task(llm.ainvoke_with_rate_retry(provider, MESSAGES))
                 try:
                     async with asyncio.timeout(2):
-                        while not scheduler.pending:
+                        while not calls or not scheduler.pending:
                             await asyncio.sleep(.001)
                     current_execution().block(provider, "provider_rate_limited")
                     with pytest.raises(ProviderRequestError, match="provider_rate_limited") as caught:

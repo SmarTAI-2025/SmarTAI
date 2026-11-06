@@ -35,6 +35,11 @@ cycle in which it was sent, even if the next cooldown has already started.
 Pending siblings prevent prematurely declaring a complete cycle unsuccessful.
 Already admitted results and other quota groups remain intact.
 
+Stopping a group immediately interrupts its capacity waiters, including retries
+after an uncertain timeout and explicit daily/zero/balance exhaustion. Whether
+this attempt is in flight is tracked separately from whether an earlier attempt
+may have been billed. Stopping an unsent retry must not erase that uncertainty.
+
 ## Learning and persistence
 
 Unknown BYOK starts at interval T=1 second and C=5 in-flight calls. Explicit RPM
