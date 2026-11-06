@@ -448,6 +448,8 @@ async def test_output_line_format_does_not_change_stdin_protocol(stem):
 @pytest.mark.parametrize("stem,value,expected", [
     ("Read two integers from stdin, each on a separate line; print their sum.", "2,3", "2\n3"),
     ("输入两个整数，以空格分隔，输出它们的和。", "2、3", "2 3"),
+    ("编写程序，从标准输入读入两个以空格分隔的整数，在标准输出打印和。", "2、3", "2 3"),
+    ("读取两个以空格分隔的整数，打印和。", "2,3", "2 3"),
 ])
 def test_declared_numeric_stdin_keeps_teaching_enumeration(stem, value, expected):
     from backend.services.programming_test_contract import bind_stdin_cases

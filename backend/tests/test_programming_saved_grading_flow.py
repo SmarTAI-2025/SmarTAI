@@ -4,6 +4,8 @@ import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from backend.auth import create_token
@@ -16,8 +18,9 @@ from backend.skills import programming
 from backend.tests.test_task_background_workflows import _seed_task
 
 
-def test_teacher_edit_is_used_by_every_expert_and_execution_is_durable(monkeypatch):
-    exercise_saved_grading_flow(monkeypatch, io_mode="function")
+@pytest.mark.parametrize("io_mode", ["function", "stdin"])
+def test_teacher_edit_is_used_by_every_expert_and_execution_is_durable(monkeypatch, io_mode):
+    exercise_saved_grading_flow(monkeypatch, io_mode=io_mode)
 
 
 def exercise_saved_grading_flow(monkeypatch, *, io_mode, native_filename=None):
