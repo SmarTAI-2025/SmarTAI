@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
-import { LocalDraftManager } from "./LocalDraftManager";
+import { LocalDraftManager, draftDestination } from "./LocalDraftManager";
 
 const mocks = vi.hoisted(() => ({ list: vi.fn(), tasks: vi.fn(), remove: vi.fn(), owner: "teacher-a", listeners: new Set<(event?: Event) => void>() }));
 vi.mock("@/api/tasks", () => ({ listTasks: mocks.tasks }));
@@ -31,6 +31,20 @@ describe("saved draft list", () => {
     window.localStorage.removeItem("smartai_locale");
   });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it("offers only current editors when retired import drafts remain on this device", async () => {
+    const retired = ["material-import:task", "material-review:task:job"];
+    mocks.list.mockResolvedValue([
+      ...retired.map(scope => ({ ...draft("retired", DAY), scope })),
+      { ...draft("current", DAY), scope: "problems:current" },
+    ]);
+    render(view());
+    const rows = await screen.findAllByRole("listitem");
+    expect(rows).toHaveLength(1);
+    expect(within(rows[0]).getByRole("link")).toHaveAttribute("href", "/tasks/current/upload/problems");
+    for (const scope of retired) expect(draftDestination(scope)).toBeNull();
+    expect(screen.queryByText(/retired|资料导入|Import review/)).not.toBeInTheDocument();
+  });
 
   it("shows five drafts with imminent expiry first, then recent saves, and links to the full history", async () => {
     mocks.list.mockResolvedValue([

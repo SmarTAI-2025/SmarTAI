@@ -314,9 +314,6 @@ const SOURCE_CHANGED_CODES = new Set([
   "question_preparation_source_expired",
   "question_preparation_library_source_changed",
   "problem_source_material_changed",
-  "material_import_source_changed",
-  "material_import_source_unavailable",
-  "material_import_plan_expired",
 ]);
 
 export function classifyRecoverableError(

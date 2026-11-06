@@ -534,7 +534,7 @@ def test_atomic_question_batch_rolls_back_before_any_partial_write():
     owner_id, task_id = _seed_task(with_question=True)
     job, _ = workflow_repository.create_operation(
         assignment_id=task_id, owner_id=owner_id,
-        operation_type="material_import", input_hash=uuid.uuid4().hex,
+        operation_type="ai_completion", input_hash=uuid.uuid4().hex,
         expires_at=time.time() + 60,
     )
     workflow_repository.update_operation(
@@ -587,7 +587,7 @@ def test_task_tombstone_fences_atomic_question_patch_publication():
     job, _ = workflow_repository.create_operation(
         assignment_id=task_id,
         owner_id=owner_id,
-        operation_type="material_import",
+        operation_type="ai_completion",
         input_hash=uuid.uuid4().hex,
         expires_at=time.time() + 60,
     )
@@ -713,53 +713,11 @@ def test_task_tombstone_fences_submission_recognition_publication():
     ).status == "running"
 
 
-def test_task_tombstone_fences_auxiliary_plan_publication():
-    owner_id, task_id = _seed_task(with_question=True)
-    job, _ = workflow_repository.create_operation(
-        assignment_id=task_id,
-        owner_id=owner_id,
-        operation_type="material_import",
-        input_hash=uuid.uuid4().hex,
-        expires_at=time.time() + 60,
-    )
-    workflow_repository.update_operation(
-        job.id,
-        owner_id=owner_id,
-        expected_attempt=job.attempt,
-        status="running",
-    )
-    workflow_repository.update_workflow(
-        task_id,
-        owner_id=owner_id,
-        bump_revision=False,
-        active_operation="material_import",
-        active_job_id=job.id,
-    )
-    _tombstone_task(task_id)
-
-    with pytest.raises(NotFound):
-        task_facade.complete_planning_operation_atomic(
-            task_id=task_id,
-            owner_id=owner_id,
-            expected_workflow_revision=0,
-            operation_id=job.id,
-            expected_operation_attempt=job.attempt,
-            payload={},
-            progress={},
-        )
-
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
-    assert workflow.active_job_id == job.id
-    assert workflow_repository.get_operation(
-        job.id, owner_id=owner_id
-    ).status == "running"
-
-
 def test_atomic_question_batch_rejects_non_finite_operation_payload():
     owner_id, task_id = _seed_task(with_question=True)
     job, _ = workflow_repository.create_operation(
         assignment_id=task_id, owner_id=owner_id,
-        operation_type="material_import", input_hash=uuid.uuid4().hex,
+        operation_type="ai_completion", input_hash=uuid.uuid4().hex,
         expires_at=time.time() + 60,
     )
     workflow_repository.update_operation(
@@ -1464,8 +1422,7 @@ async def test_ai_completion_error_retry_reclaims_with_current_internal_revision
 @pytest.mark.parametrize(
     ("operation_type", "failure_code"),
     [
-        ("material_import", "material_import_failed"),
-        ("ai_completion", "ai_completion_failed"),
+                ("ai_completion", "ai_completion_failed"),
     ],
 )
 def test_auxiliary_failure_keeps_questions_usable_and_retry_success_clears_error(
@@ -1539,94 +1496,32 @@ def test_auxiliary_failure_keeps_questions_usable_and_retry_success_clears_error
     assert after_stale_failure.active_job_id == retried.id
     assert after_stale_failure.error_code is None
 
-    if operation_type == "material_import":
-        with pytest.raises(VersionConflict) as stale_completion:
-            task_facade.complete_planning_operation_atomic(
-                task_id=task_id, owner_id=owner_id,
-                expected_workflow_revision=retry_revision,
-                operation_id=job.id,
-                expected_operation_attempt=job.attempt,
-                payload={"worker": "old"}, progress={"worker": "old"},
-            )
-        assert stale_completion.value.code == "stale_operation_attempt"
-        task_facade.complete_planning_operation_atomic(
-            task_id=task_id, owner_id=owner_id,
-            expected_workflow_revision=retry_revision,
-            operation_id=retried.id,
-            expected_operation_attempt=retried.attempt,
-            payload={}, progress={},
-        )
-        final_revision = task_facade.apply_question_patches_atomic(
+    with pytest.raises(VersionConflict) as stale_completion:
+        task_facade.apply_question_patches_atomic(
             task_id=task_id, owner_id=owner_id,
             expected_workflow_revision=retry_revision, patches=[],
-            operation_id=retried.id,
-            expected_operation_attempt=retried.attempt,
-            required_operation_status="ready",
-            final_operation_status="applied", operation_payload={},
-        )
-    else:
-        with pytest.raises(VersionConflict) as stale_completion:
-            task_facade.apply_question_patches_atomic(
-                task_id=task_id, owner_id=owner_id,
-                expected_workflow_revision=retry_revision, patches=[],
-                operation_id=job.id,
-                expected_operation_attempt=job.attempt,
-                required_operation_status="running",
-                final_operation_status="done",
-                operation_payload={"worker": "old"},
-                operation_progress={"worker": "old"},
-                require_missing=True,
-            )
-        assert stale_completion.value.code == "stale_operation_attempt"
-        final_revision = task_facade.apply_question_patches_atomic(
-            task_id=task_id, owner_id=owner_id,
-            expected_workflow_revision=retry_revision, patches=[],
-            operation_id=retried.id,
-            expected_operation_attempt=retried.attempt,
+            operation_id=job.id,
+            expected_operation_attempt=job.attempt,
             required_operation_status="running",
-            final_operation_status="done", operation_payload={},
+            final_operation_status="done",
+            operation_payload={"worker": "old"},
+            operation_progress={"worker": "old"},
             require_missing=True,
         )
+    assert stale_completion.value.code == "stale_operation_attempt"
+    final_revision = task_facade.apply_question_patches_atomic(
+        task_id=task_id, owner_id=owner_id,
+        expected_workflow_revision=retry_revision, patches=[],
+        operation_id=retried.id,
+        expected_operation_attempt=retried.attempt,
+        required_operation_status="running",
+        final_operation_status="done", operation_payload={},
+        require_missing=True,
+    )
     succeeded = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     assert final_revision == 3
     assert succeeded.presentation_status == "problems_ready"
     assert succeeded.error_code is None
-
-
-def test_material_apply_failure_after_plan_ready_keeps_attention_without_blocking_task():
-    owner_id, task_id = _seed_task(with_question=True)
-    job, _ = workflow_repository.create_operation(
-        assignment_id=task_id, owner_id=owner_id,
-        operation_type="material_import", input_hash=uuid.uuid4().hex,
-        expires_at=time.time() + 60,
-    )
-    revision = task_facade.claim_workflow_operation_atomic(
-        task_id=task_id, owner_id=owner_id, operation_id=job.id,
-        expected_operation_attempt=job.attempt,
-        expected_workflow_revision=0,
-        workflow_changes={
-            "active_operation": "material_import", "active_job_id": job.id,
-        },
-    )
-    task_facade.complete_planning_operation_atomic(
-        task_id=task_id, owner_id=owner_id,
-        expected_workflow_revision=revision,
-        operation_id=job.id, expected_operation_attempt=job.attempt,
-        payload={}, progress={},
-    )
-    assert workflow_repository.get_workflow(
-        task_id, owner_id=owner_id
-    ).active_job_id is None
-
-    task_facade._fail_operation(
-        task_id, owner_id, job.id, job.attempt, "stale_revision"
-    )
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
-    task = task_facade.get_task(task_id=task_id, owner_id=owner_id, full=False)
-    assert workflow.presentation_status == "problems_ready"
-    assert workflow.error_code == "stale_revision"
-    assert task["status"] == "problems_ready"
-    assert task["needs_attention"] is True
 
 
 def test_primary_problem_failure_still_sets_blocking_error_status():

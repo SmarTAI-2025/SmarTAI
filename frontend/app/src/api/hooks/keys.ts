@@ -44,10 +44,6 @@ export const problemSourceKeys = {
     ["problem-sources", "library", taskId, scope, query] as const,
 };
 
-export const materialImportKeys = {
-  all: ["material-imports"] as const,
-  detail: (taskId: string, jobId: string) => ["material-imports", taskId, jobId] as const,
-};
 
 export const aiCompletionKeys = {
   all: ["ai-completions"] as const,
@@ -72,20 +68,8 @@ export const ocrProviderKeys = {
   baiduConfiguration: () => ["ocr-providers", "baidu-unlimited-ocr"] as const,
 };
 
-export const analyticsKeys = {
-  all: ["analytics"] as const,
-  perQuestion: (taskId: string, qId: string) => ["analytics", "perQuestion", taskId, qId] as const,
-};
-
-export const healthKeys = {
-  root: ["health", "root"] as const,
-  status: ["health", "status"] as const,
-};
-
 // Personal knowledge and private admin caches remain separate from task data.
 export const personalKnowledgeKeys = {
-  all: ["personal-knowledge"] as const,
-  list: () => ["personal-knowledge", "list"] as const,
   usage: () => ["personal-knowledge", "storage", "usage"] as const,
 };
 

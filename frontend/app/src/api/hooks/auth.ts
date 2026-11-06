@@ -53,12 +53,6 @@ export function useConfirmPasswordReset() {
   );
 }
 
-export function useRefreshToken() {
-  return useMutation({
-    mutationFn: authApi.refreshToken,
-  });
-}
-
 export function useLogout() {
   const queryClient = useQueryClient();
 

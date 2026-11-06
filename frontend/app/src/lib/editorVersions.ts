@@ -1,4 +1,4 @@
-import type { AICompletionPreflightResponse, CourseMaterial, GradingSetupResponse, MaterialImportPlanResponse, Task } from "@/types";
+import type { AICompletionPreflightResponse, CourseMaterial, GradingSetupResponse, Task } from "@/types";
 
 function draftFingerprint(value: unknown): string {
   return JSON.stringify(value, (_key, entry: unknown) => entry && typeof entry === "object" && !Array.isArray(entry)
@@ -7,7 +7,7 @@ function draftFingerprint(value: unknown): string {
 
 // Editor conflicts track their business inputs, never the task-wide mutation
 // counter, timestamps or polling state. Server mutations still require CAS.
-export function taskInputVersion(task: Task | undefined, stage: "problems" | "submissions" | "material-import") {
+export function taskInputVersion(task: Task | undefined, stage: "problems" | "submissions") {
   if (!task) return "";
   const questions = Object.fromEntries(Object.entries(task.problem_data ?? {}).map(([id, problem]) => [id, {
     q_id: problem.q_id, number: problem.number, type: problem.type, stem: problem.stem,
@@ -50,16 +50,6 @@ export function completionSelectionVersion(preflight: AICompletionPreflightRespo
   return draftFingerprint(preflight?.missing_targets.slice().sort((a, b) => a.target_id.localeCompare(b.target_id)) ?? []);
 }
 
-export function materialSelectionVersion(plan: MaterialImportPlanResponse | undefined, task: Task | undefined) {
-  const candidates = plan?.candidates.slice().sort((a, b) => a.candidate_id.localeCompare(b.candidate_id));
-  return draftFingerprint({ plan: plan?.request_fingerprint, candidates,
-    // The same candidate must be reconsidered if its destination changes.
-    destinations: candidates?.map(candidate => {
-      const problem = task?.problem_data?.[candidate.q_id];
-      return [candidate.q_id, candidate.target, problem?.stem, problem?.type, problem?.[candidate.target]];
-    }),
-  });
-}
 
 export function materialMetadataVersion(material: CourseMaterial) {
   return draftFingerprint({ filename: material.filename, course: material.course_id,

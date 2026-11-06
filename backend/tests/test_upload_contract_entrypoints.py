@@ -326,8 +326,6 @@ async def test_cached_submission_source_cannot_bypass_current_type_policy():
     assert stored.sha256 == __import__("hashlib").sha256(b"\x00binary").hexdigest()
 
 
-
-
 def test_saved_submission_retry_revalidates_original_format_without_deleting_it():
     from backend.services import workflow_inputs
     from backend.db import file_repository
@@ -482,14 +480,6 @@ async def test_deferred_recovery_keeps_teacher_default_off_and_preserves_native_
     else:
         with pytest.raises(RecognitionError, match="material_ocr_confirmation_required"):
             await api._recognize_saved_question_sources([(draft, cached, payload)], **kwargs)
-    material = {"targets": ["criterion" if role == "rubric" else "test_cases"],
-                "source_kind": "upload", "original_stored_file_id": stored.id,
-                "original_sha256": stored.sha256, "enable_material_ocr": False}
-    if native:
-        await api._revalidate_material_original(material, owner_id=owner, task_id=task)
-    else:
-        with pytest.raises(RecognitionError, match="material_ocr_confirmation_required"):
-            await api._revalidate_material_original(material, owner_id=owner, task_id=task)
     provider.ainvoke_vision.assert_not_awaited()
 
 
@@ -578,81 +568,6 @@ async def test_prepared_source_reuse_observes_lower_effective_limit(monkeypatch)
     with pytest.raises(ValidationError) as caught:
         api._validated_question_source_ref(operation=operation, payload=operation.payload, task_id=task, owner_id=owner)
     assert caught.value.code == "source_too_large"
-
-
-@pytest.mark.asyncio
-async def test_material_text_keeps_original_bytes_for_later_role_revalidation():
-    import hashlib
-    from fastapi import UploadFile
-    from backend.api import task_preparation as api
-    from backend.db import workflow_repository, file_repository
-    from backend.storage import get_storage
-    from backend.tests.test_task_background_workflows import _seed_task
-    from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
-    owner, task = _seed_task(with_question=True)
-    body = b"\xef\xbb\xbfTeacher original criterion -2\r\n"
-    response = await api.preflight_material_import(task_id=task,
-        file=UploadFile(filename="criterion.txt", file=io.BytesIO(body)), library_material_id=None,
-        targets='["criterion"]', structure_mode="organized", extraction_hint="", save_to_library=False,
-        current=SimpleNamespace(id=owner), registry=_RecoveryRegistry())
-    assert response["status"] == "ready"
-    source = workflow_repository.get_operation(response["source_token"], owner_id=owner)
-    original_id = source.payload.get("original_stored_file_id")
-    assert original_id, "Decoded text artifact cannot replace the original upload"
-    stored = file_repository.get_file(file_id=original_id, owner_id=owner)
-    assert stored.assignment_id == task and stored.kind == "problem_source"
-    assert stored.sha256 == hashlib.sha256(body).hexdigest()
-    assert source.payload["original_sha256"] == stored.sha256
-    with get_storage().open(stored.storage_key) as stream:
-        assert stream.read() == body
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("case,code", [
-    ("missing_original", "recognition_source_unavailable"),
-    ("forbidden_role", "source_type_not_allowed"),
-    ("lower_limit", "source_too_large"),
-    ("invalid_targets", "invalid_source_role"),
-    ("artifact_limit", "source_text_too_large"),
-])
-async def test_material_background_revalidates_original_before_parser_or_cache(monkeypatch, case, code):
-    import hashlib
-    from fastapi import UploadFile
-    from backend.api import task_preparation as api
-    from backend.db import workflow_repository
-    from backend.domain.errors import RecognitionError, ValidationError
-    from backend.services import task_facade, upload_contract
-    from backend.services.workflow_worker import LeasedOperation
-    from backend.tests.test_task_background_workflows import _seed_task
-    from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
-    owner, task = _seed_task(with_question=True)
-    registry = _RecoveryRegistry()
-    filename = "teacher.json" if case == "forbidden_role" else "teacher.txt"
-    original = b'{"input":1,"expected_output":2}' if case == "forbidden_role" else b"four"
-    response = await api.preflight_material_import(task_id=task,
-        file=UploadFile(filename=filename, file=io.BytesIO(original)), library_material_id=None,
-        targets='["test_cases"]' if case == "forbidden_role" else '["reference_answer"]', structure_mode="organized", extraction_hint="", save_to_library=False,
-        current=SimpleNamespace(id=owner), registry=registry)
-    source = workflow_repository.get_operation(response["source_token"], owner_id=owner)
-    payload = {**source.payload, "targets": ["criterion"]}
-    if case == "missing_original":
-        payload.pop("original_stored_file_id", None)
-        payload.pop("recognition_stored_file_id", None)
-    if case == "invalid_targets":
-        payload["targets"] = [{"unexpected": "target"}]
-    workflow_repository.update_operation(source.id, owner_id=owner, expected_attempt=source.attempt, payload=payload)
-    queued, _ = workflow_repository.create_operation(assignment_id=task, owner_id=owner,
-        operation_type="material_import", input_hash=hashlib.sha256(source.id.encode()).hexdigest(),
-        payload={"source_token": source.id, "base_workflow_revision": 0, "provider_id": "test-provider"})
-    claimed = workflow_repository.claim_operation(queued.id, owner_id=owner, worker_id="material-policy", lease_seconds=60)
-    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
-    if case == "lower_limit":
-        monkeypatch.setattr(upload_contract, "QUESTION_SOURCE_MAX_BYTES", 3)
-    if case == "artifact_limit":
-        monkeypatch.setattr(api, "MAX_SOURCE_CHARACTERS", 3)
-    with pytest.raises(ValidationError if case == "artifact_limit" else RecognitionError) as caught:
-        await api.run_durable_material_import(LeasedOperation(claimed, worker_id="material-policy", lease_seconds=60))
-    assert caught.value.code == code
 
 
 @pytest.mark.asyncio

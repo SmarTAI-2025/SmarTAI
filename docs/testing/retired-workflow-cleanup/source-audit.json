@@ -1,0 +1,14 @@
+{
+  "method": "Source import/export/dynamic-import reachability from public and private-admin entrypoints; no-test identifier scan of API functions; runtime routes and consumers separately reviewed. Reachability is not behavioral proof.",
+  "production_ts_tsx_files": 257,
+  "reachable_ts_tsx_files": 255,
+  "unreachable": [
+    "api/index.ts",
+    "types/env.d.ts"
+  ],
+  "api_functions_with_no_other_source_identifier": [],
+  "retained_unreachable_rationale": {
+    "api/index.ts": "Current API barrel, no implementation of a retired flow.",
+    "types/env.d.ts": "Vite global environment declarations."
+  }
+}

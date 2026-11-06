@@ -34,14 +34,6 @@ async def test_library_save_rejects_before_ingestion(monkeypatch):
     ingest.assert_not_called()
 
 
-@pytest.mark.parametrize("targets,accepted", [(["criterion"], False), (["reference_answer"], False), (["criterion", "reference_answer"], False), (["test_cases"], True), (["criterion", "test_cases"], True)])
-def test_bulk_material_json_policy_follows_selected_targets(targets, accepted):
-    role = task_preparation._material_import_source_role(targets)
-    assert (".json" in task_preparation._accepted_source_extensions(role, has_vision=False)) is accepted
-    assert (".csv" in task_preparation._accepted_source_extensions(role, has_vision=False)) is accepted
-    assert ".png" in task_preparation._accepted_source_extensions(role, has_vision=False)
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("filename,body,status,code", [
     ("empty.txt", b"", 400, "source_empty"),

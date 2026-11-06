@@ -8,7 +8,6 @@ import pytest
 from backend.api import task_preparation
 from backend.agents.ingest_agent import (
     AICompletionCandidateOutput,
-    MaterialImportCandidateOutput,
 )
 from backend.db import assignment_repository, file_repository, workflow_repository
 from backend.db.models import AssignmentQuestionRecord
@@ -17,7 +16,6 @@ from backend.domain.errors import LeaseLost
 from backend.services import task_facade
 from backend.services.workflow_worker import LeasedOperation
 from backend.storage import get_storage
-from backend.services.source_files import persist_problem_source
 from backend.tests.test_task_background_workflows import _BackgroundTasks, _Registry, _seed_task
 
 
@@ -116,58 +114,6 @@ def _claim_auxiliary_operation(owner_id, operation_id, *, worker_id="fresh-worke
 
 
 @pytest.mark.asyncio
-async def test_fresh_material_worker_reads_artifact_and_keeps_text_out_of_payload(monkeypatch):
-    owner_id, task_id = _seed_task(with_question=True)
-    original, _ = persist_problem_source(storage=get_storage(), owner_id=owner_id, task_id=task_id,
-        original_name="rubric.txt", content=b"rubric text", content_type="text/plain")
-    text_artifact = file_repository.save_file(
-        storage=get_storage(), owner_id=owner_id, kind="material_import_text",
-        original_name="material-source.txt", content=b"rubric text",
-        content_type="text/plain", assignment_id=task_id,
-    )
-    source, _ = workflow_repository.create_operation(
-        assignment_id=task_id, owner_id=owner_id,
-        operation_type="material_source", input_hash="b" * 64,
-        payload={
-            "text_artifact_id": text_artifact.id, "filename": "rubric.txt",
-            "original_stored_file_id": original.id, "original_sha256": original.sha256,
-            "targets": ["criterion"], "structure_mode": "organized",
-            "extraction_hint": "", "base_workflow_revision": 0,
-        }, expires_at=10**12,
-    )
-    job, _ = workflow_repository.create_operation(
-        assignment_id=task_id, owner_id=owner_id,
-        operation_type="material_import", input_hash="c" * 64,
-        payload={"source_token": source.id, "base_workflow_revision": 0},
-        expires_at=10**12,
-    )
-    task_facade.claim_workflow_operation_atomic(
-        task_id=task_id, owner_id=owner_id, operation_id=job.id,
-        expected_operation_attempt=job.attempt, expected_workflow_revision=0,
-        workflow_changes={"active_operation": "material_import", "active_job_id": job.id},
-    )
-
-    async def fake_candidates(*, text, **kwargs):
-        assert text == "rubric text"
-        return [MaterialImportCandidateOutput(
-            q_id="q1", target="criterion", text_value="100% correct",
-            confidence=1.0, match_status="exact",
-        )]
-
-    monkeypatch.setattr(task_preparation, "parse_material_import_to_candidates", fake_candidates)
-    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _Registry())
-    await task_preparation.run_durable_material_import(
-        _claim_auxiliary_operation(owner_id, job.id)
-    )
-
-    completed = workflow_repository.get_operation(job.id, owner_id=owner_id)
-    assert completed.status == "ready"
-    assert "text" not in completed.payload
-    assert completed.payload["text_artifact_id"] == text_artifact.id
-    assert completed.payload["candidates"][0]["text_value"] == "100% correct"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("unresolved_stem", [False, True])
 async def test_fresh_ai_worker_applies_generated_patch_once(monkeypatch, unresolved_stem):
     owner_id, task_id = _seed_task(with_question=True, criterion="")
@@ -231,14 +177,6 @@ async def test_fresh_ai_worker_applies_generated_patch_once(monkeypatch, unresol
     ("operation_type", "artifact_kind", "artifact_suffix", "artifact_body"),
     [
         (
-            "material_import", "material_import_result", "material-candidates",
-            [{
-                "q_id": "q1", "target": "criterion", "text_value": "100% durable",
-                "test_cases": None, "confidence": 1.0, "match_status": "exact",
-                "source_excerpt": "", "source_location": "", "reason": "",
-            }],
-        ),
-        (
             "ai_completion", "ai_completion_result", "ai-candidates",
             [{
                 "target_id": "q1:criterion", "q_id": "q1",
@@ -252,34 +190,14 @@ async def test_auxiliary_worker_discovers_result_saved_before_checkpoint(
     monkeypatch, operation_type, artifact_kind, artifact_suffix, artifact_body,
 ):
     owner_id, task_id = _seed_task(with_question=True, criterion="")
-    if operation_type == "material_import":
-        original, _ = persist_problem_source(storage=get_storage(), owner_id=owner_id, task_id=task_id,
-            original_name="rubric.txt", content=b"rubric text", content_type="text/plain")
-        text_artifact = file_repository.save_file(
-            storage=get_storage(), owner_id=owner_id, kind="material_import_text",
-            original_name="material-source.txt", content=b"rubric text",
-            content_type="text/plain", assignment_id=task_id,
-        )
-        source, _ = workflow_repository.create_operation(
-            assignment_id=task_id, owner_id=owner_id,
-            operation_type="material_source", input_hash="f" * 64,
-            payload={
-                "text_artifact_id": text_artifact.id, "filename": "rubric.txt",
-                "original_stored_file_id": original.id, "original_sha256": original.sha256,
-                "targets": ["criterion"], "structure_mode": "organized",
-                "extraction_hint": "", "base_workflow_revision": 0,
-            }, expires_at=10**12,
-        )
-        job_payload = {"source_token": source.id, "base_workflow_revision": 0}
-    else:
-        job_payload = {
-            "target_ids": ["q1:criterion"], "test_case_count": 5,
-            "base_workflow_revision": 0,
-        }
+    job_payload = {
+        "target_ids": ["q1:criterion"], "test_case_count": 5,
+        "base_workflow_revision": 0,
+    }
     job, _ = workflow_repository.create_operation(
         assignment_id=task_id, owner_id=owner_id,
         operation_type=operation_type,
-        input_hash=("1" if operation_type == "material_import" else "2") * 64,
+        input_hash="2" * 64,
         payload=job_payload, expires_at=10**12,
     )
     task_facade.claim_workflow_operation_atomic(
@@ -299,27 +217,23 @@ async def test_auxiliary_worker_discovers_result_saved_before_checkpoint(
     async def unexpected(**kwargs):
         raise AssertionError("completed provider stage was repeated")
 
-    monkeypatch.setattr(task_preparation, "parse_material_import_to_candidates", unexpected)
     monkeypatch.setattr(task_preparation, "generate_missing_question_materials", unexpected)
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _Registry())
     context = _claim_auxiliary_operation(owner_id, job.id)
-    if operation_type == "material_import":
-        await task_preparation.run_durable_material_import(context)
-    else:
-        await task_preparation.run_durable_ai_completion(context)
+    await task_preparation.run_durable_ai_completion(context)
 
     completed = workflow_repository.get_operation(job.id, owner_id=owner_id)
-    assert completed.status == ("ready" if operation_type == "material_import" else "done")
+    assert completed.status == "done"
     assert completed.checkpoint["result_artifact_id"] == artifact.id
     assert completed.artifact_refs == [artifact.id]
 
 
-@pytest.mark.parametrize("operation_type", ["material_import", "ai_completion"])
+@pytest.mark.parametrize("operation_type", ["ai_completion"])
 def test_auxiliary_stale_lease_cannot_finish_or_fail(operation_type):
     owner_id, task_id = _seed_task(with_question=True)
     job, _ = workflow_repository.create_operation(
         assignment_id=task_id, owner_id=owner_id,
-        operation_type=operation_type, input_hash=("d" if operation_type == "material_import" else "e") * 64,
+        operation_type=operation_type, input_hash="e" * 64,
         payload={}, expires_at=10**12,
     )
     task_facade.claim_workflow_operation_atomic(
@@ -338,21 +252,14 @@ def test_auxiliary_stale_lease_cannot_finish_or_fail(operation_type):
     )
 
     with pytest.raises(LeaseLost):
-        if operation_type == "material_import":
-            task_facade.complete_planning_operation_atomic(
-                task_id=task_id, owner_id=owner_id, expected_workflow_revision=1,
-                operation_id=job.id, expected_operation_attempt=job.attempt,
-                expected_lease_token=old.lease_token, payload={}, progress={},
-            )
-        else:
-            task_facade.apply_question_patches_atomic(
-                task_id=task_id, owner_id=owner_id, expected_workflow_revision=1,
-                patches=[], operation_id=job.id,
-                expected_operation_attempt=job.attempt,
-                expected_lease_token=old.lease_token,
-                required_operation_status="running", final_operation_status="done",
-                operation_payload={},
-            )
+        task_facade.apply_question_patches_atomic(
+            task_id=task_id, owner_id=owner_id, expected_workflow_revision=1,
+            patches=[], operation_id=job.id,
+            expected_operation_attempt=job.attempt,
+            expected_lease_token=old.lease_token,
+            required_operation_status="running", final_operation_status="done",
+            operation_payload={},
+        )
     with pytest.raises(LeaseLost):
         task_facade._fail_operation(
             task_id, owner_id, job.id, job.attempt, f"{operation_type}_failed",

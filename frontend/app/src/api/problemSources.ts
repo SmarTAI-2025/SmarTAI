@@ -5,8 +5,6 @@ import type {
   ProblemSourcePreflightInput,
   ProblemSourcePreflightResponse,
   ProblemSourceScope,
-  StartProblemExtractionInput,
-  StartProblemExtractionResponse,
   StartQuestionPreparationInput,
   StartQuestionPreparationResponse,
 } from "@/types";
@@ -92,26 +90,6 @@ export async function startQuestionPreparation(
         },
         recognition_provider_id: input.recognitionProviderId,
       },
-      { timeout: 180_000 },
-    );
-    return response.data;
-  } catch (error) {
-    throw normalizeAPIError(error);
-  }
-}
-
-export async function startProblemExtraction(
-  input: StartProblemExtractionInput,
-): Promise<StartProblemExtractionResponse> {
-  const formData = new FormData();
-  formData.append("source_token", input.sourceToken);
-  formData.append("confirmed_candidate_ids", JSON.stringify(input.confirmedCandidateIds ?? []));
-  formData.append("replace_confirmed", String(input.replaceConfirmed ?? false));
-
-  try {
-    const response = await apiClient.post<StartProblemExtractionResponse>(
-      `/tasks/${input.taskId}/extract_problems`,
-      formData,
       { timeout: 180_000 },
     );
     return response.data;

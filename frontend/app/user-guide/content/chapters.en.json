@@ -199,11 +199,11 @@
       },
       {
         "title": "Three ways to add materials",
-        "body": "<ul><li><strong>Edit a single item.</strong> Open the question, make your change and save.</li><li><strong>Bulk import materials.</strong> Select reference answers, grading criteria or test cases, then choose one file or one library item. All targets accept documents and still images. Selecting “Test cases” also enables JSON and CSV. New files can be up to 5 MiB, with up to 400,000 characters of extracted text.</li><li><strong>Complete missing items.</strong> Review the list, clear anything you want to skip and confirm generation.</li></ul><p>After importing, check the matched question numbers and select “Apply confirmed matches.” Select overwrite if you want to replace existing content.</p>",
+        "body": "<ul><li><strong>Prepare together.</strong> On “Add Questions &amp; Supporting Materials”, use the Questions, Reference Answers, Rubrics and Test Cases tabs to upload files or select Course Library materials, then prepare them together.</li><li><strong>Edit manually.</strong> Open the question, make your change and save.</li><li><strong>Complete missing items.</strong> AI can generate missing reference answers and grading criteria. Review the list, clear anything you want to skip and confirm generation.</li></ul>",
         "details": [
           {
             "title": "Import scans or save a copy to the library",
-            "body": "<p>Enable visual OCR when importing an image or scanned PDF as grading criteria or test cases. JSON and CSV are used for the current import. To reuse a document or still image later, select “Also save to course library.”</p>"
+            "body": "<p>In unified preparation, enable visual OCR when using an image or scanned PDF as grading criteria or test cases. JSON and CSV are accepted for test cases. To reuse a document or still image later, select “Also save to course library.”</p>"
           }
         ]
       },

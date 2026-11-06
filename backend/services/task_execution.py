@@ -45,13 +45,13 @@ def continue_manual_grading(*, task_id: str, owner_id: str, job_id: str, expecte
 
 
 def continue_auxiliary_run(*, task_id: str, owner_id: str, job_id: str, expected_revision: int) -> dict:
-    """Republish a stopped material/AI job with its saved inputs and a new queue time."""
+    """Republish a stopped AI completion job with its saved inputs and a new queue time."""
     with session_scope() as session:
         row = session.scalar(select(workflows.WorkflowOperationRecord).where(
             workflows.WorkflowOperationRecord.id == job_id,
             workflows.WorkflowOperationRecord.assignment_id == task_id,
             workflows.WorkflowOperationRecord.owner_id == owner_id,
-            workflows.WorkflowOperationRecord.operation_type.in_(("material_import", "ai_completion")),
+            workflows.WorkflowOperationRecord.operation_type == "ai_completion",
         ).with_for_update())
         if row is None:
             raise NotFound("task_run")
@@ -132,6 +132,6 @@ def stop_task_run(*, task_id: str, owner_id: str, job_id: str, expected_revision
         workflow.last_failed_job_id = job_id
         workflow.workflow_revision += 1
         workflow.updated_at = now
-        if operation is not None and operation.operation_type in {"material_import", "ai_completion"}:
+        if operation is not None and operation.operation_type in {"ai_completion"}:
             operation.payload = {**(operation.payload or {}), "stopped_workflow_revision": workflow.workflow_revision}
         return {"status": "stopped", "job_id": job_id}

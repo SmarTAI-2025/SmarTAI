@@ -54,42 +54,6 @@ def test_both_preflight_aliases_route_each_purpose_to_shared_adapter(client_regi
     assert read.call_args.kwargs["task_id"] == task
 
 
-@pytest.mark.parametrize("target", ["criterion", "reference_answer", "test_cases"])
-def test_material_preflight_reaches_shared_reader_without_applying(client_registry, monkeypatch, target):
-    from backend.api import task_preparation
-    client, _ = client_registry
-    owner, task = _seed_task(with_question=True)
-    read = AsyncMock(side_effect=RecognitionError("recognition_request_invalid"))
-    mutate = Mock(side_effect=AssertionError("preflight cannot mutate questions"))
-    monkeypatch.setattr(task_preparation, "read_question_source", read)
-    monkeypatch.setattr(task_preparation.task_facade, "apply_question_patches_atomic", mutate)
-    response = client.post(f"/tasks/{task}/material-imports/preflight", headers=headers(owner),
-        data=dict(targets='["' + target + '"]', enable_material_ocr="true"),
-        files={"file": ("source.txt", b"1. literal -2", "text/plain")})
-    assert response.status_code >= 400, response.text
-    read.assert_awaited_once()
-    assert read.call_args.kwargs["purpose"] == {"criterion":"rubric", "reference_answer":"reference", "test_cases":"test_cases"}[target]
-    assert read.call_args.kwargs["allow_vision"] is True
-    mutate.assert_not_called()
-
-
-@pytest.mark.parametrize("alias,target", [("upload_reference", "reference_answer"), ("upload_test_cases", "test_cases")])
-def test_auxiliary_upload_aliases_only_queue_review_plan(client_registry, monkeypatch, alias, target):
-    from backend.api import task_preparation
-    client, _ = client_registry
-    owner, task = _seed_task(with_question=True)
-    preflight = AsyncMock(return_value={"source_token":"source"})
-    start = AsyncMock(return_value={"job_id":"plan", "status":"started"})
-    monkeypatch.setattr(task_preparation, "preflight_material_import", preflight)
-    monkeypatch.setattr(task_preparation, "start_material_import", start)
-    response = client.post(f"/tasks/{task}/{alias}", headers=headers(owner),
-        files={"file": ("source.txt", b"1. literal -2", "text/plain")})
-    assert response.status_code == 200 and response.json()["job_id"] == "plan"
-    assert preflight.call_args.kwargs["targets"] == '["' + target + '"]'
-    assert preflight.call_args.kwargs["enable_material_ocr"] is False
-    start.assert_awaited_once()
-
-
 @pytest.mark.parametrize("action", ["extract_problems", "parse_submissions"])
 def test_task_upload_only_publishes_durable_job(client_registry, monkeypatch, action):
     from backend.api import tasks

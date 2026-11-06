@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from backend.agents.ingest_agent import _saved_test_case_supported, parse_material_import_to_candidates
 from backend.auth import create_token
-from backend.db import assignment_repository, workflow_repository
+from backend.db import assignment_repository
 from backend.main import create_app
 from backend.models import ProblemInfo, TestCase
 from backend.services import grading_adapter, task_facade
@@ -250,26 +250,6 @@ def test_explicitly_free_name_overrides_an_example_name_and_uses_mapped_entry():
     assert case.function_name == "mine" and case.function_args == [1]
 
 
-def test_multiple_accepted_import_groups_survive_apply_and_replay():
-    owner, task = _seed_task(with_question=True)
-    client = TestClient(create_app(), headers={"Authorization": "Bearer " + create_token(owner, "teacher")})
-    first = client.put(f"/tasks/{task}/problems/q1", json={"type":"programming", "stem":"Implement add(a,b)."})
-    revision = first.json()["workflow_revision"]
-    cases = [{"input":"2、3", "expected_output":"5"}, {"input":"2、-3", "expected_output":"-2"}]
-    candidates = [dict(candidate_id=f"c{i}", q_id="q1", target="test_cases", confidence=1,
-        match_status="exact", test_cases=[case]) for i, case in enumerate(cases)]
-    job, _ = workflow_repository.create_operation(assignment_id=task, owner_id=owner,
-        operation_type="material_import", input_hash="c" * 64, payload={"candidates":candidates})
-    workflow_repository.update_operation(job.id, owner_id=owner, expected_attempt=job.attempt, status="ready")
-    url = f"/tasks/{task}/material-imports/{job.id}/apply"
-    request = {"accepted_candidate_ids":["c0", "c1"], "expected_workflow_revision":revision}
-    for _ in range(2):
-        response = client.post(url, json=request)
-        assert response.status_code == 200, response.text
-        question, = assignment_repository.list_questions(task, teacher_id=owner)
-        assert [case["function_args"] for case in question.test_cases] == [[2, 3], [2, -3]]
-        assert [case["expected_return"] for case in question.test_cases] == ["5", "-2"]
-
 def test_teacher_evidence_preserves_keyword_only_arguments_and_their_types():
     case = dict(function_name="run", function_kwargs={"active": True}, expected_return="1")
     assert _saved_test_case_supported(case, "", json.dumps(case))
@@ -331,51 +311,6 @@ async def test_numbered_arrow_sheet_routes_in_source_order_and_unnumbered_sheet_
         fallback = Provider([json.dumps({"candidates":[]})])
         assert await parse_material_import_to_candidates(text, problems, targets, "organized", "", fallback) == []
         assert len(fallback.calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_unnumbered_arrow_txt_upload_apply_readback_and_execute(monkeypatch):
-    from unittest.mock import AsyncMock
-    from backend.api import task_preparation
-    from backend.llm.registry import get_scoped_expert_registry
-    from backend.tests.test_auxiliary_operation_recovery import _claim_auxiliary_operation
-    from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
-
-    app = create_app()
-    registry = _RecoveryRegistry()
-    app.dependency_overrides[get_scoped_expert_registry] = lambda: registry
-    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
-    forbidden = AsyncMock(side_effect=AssertionError("A literal test sheet made a model request"))
-    monkeypatch.setattr("backend.agents.ingest_agent.ainvoke_with_retry", forbidden)
-    owner, task = _seed_task(with_question=True)
-    client = TestClient(app, headers={"Authorization": "Bearer " + create_token(owner, "teacher")})
-    root = f"/tasks/{task}"
-    stem = "实现 add(a,b)。"
-    client.put(root + "/problems/q1", json={"type":"programming", "stem":stem}).raise_for_status()
-    body = "2、3→5\n3、4 -> 7\n输入 4、4，预期 99"
-    preflight = client.post(root + "/material-imports/preflight",
-        files={"file":("teacher.txt", body.encode(), "text/plain")}, data={"targets":'["test_cases"]'})
-    preflight.raise_for_status()
-    started = client.post(root + "/material-imports", json={"source_token":preflight.json()["source_token"]})
-    started.raise_for_status()
-    job = started.json()["job_id"]
-    await task_preparation.run_durable_material_import(_claim_auxiliary_operation(owner, job))
-    plan_url = root + "/material-imports/" + job
-    plan = client.get(plan_url).json()
-    assert plan["status"] == "ready", plan
-    candidate, = plan["candidates"]
-    assert candidate["match_status"] == "exact" and candidate["source_location"] == ""
-    applied = client.post(plan_url + "/apply", json={"accepted_candidate_ids":[candidate["candidate_id"]],
-        "expected_workflow_revision":plan["workflow_revision"]})
-    applied.raise_for_status()
-    saved = client.get(root).json()["problem_data"]["q1"]["test_cases"]
-    assert [(c["input"], c["expected_output"], c["source"]) for c in saved] == [
-        ("2、3", "5", "teacher"), ("3、4", "7", "teacher"), ("4、4", "99", "teacher")]
-    code = "def add(a,b): return a+b"
-    bound = bind_programming_cases(stem, saved, code)
-    execution = await run_sandbox(code, bound)
-    assert [row.passed for row in execution.results] == [True, True, False]
-    forbidden.assert_not_awaited()
 
 
 def test_syntax_error_uses_only_an_independently_validated_stdin_interface():

@@ -160,7 +160,6 @@ function isAllowedVisibleText(relativePath, line, rule) {
     rule.id === "visible-course-management" &&
     (
       relativePath === "src/routes/tasks/AddProblemsPage.tsx"
-      || relativePath === "src/routes/tasks/QuestionMaterialImportPage.tsx"
       || relativePath === "src/routes/tasks/GradingSetupPage.tsx"
       || relativePath.startsWith("src/api/problemSources")
       || relativePath.startsWith("src/api/hooks/problemSources")
@@ -168,7 +167,7 @@ function isAllowedVisibleText(relativePath, line, rule) {
       || (relativePath === "src/i18n/messages.ts" && /^\s*addProblems/.test(line))
     )
   ) {
-    // Q-01, Q-08, and grading setup may select real owner-scoped course-library
+    // Question preparation and grading setup may select real owner-scoped course-library
     // material for the current task. They do not expose enrollment or publishing.
     return true;
   }

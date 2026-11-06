@@ -248,14 +248,12 @@ def create_app() -> FastAPI:
         )
         from backend.api.task_preparation import (
             run_durable_ai_completion,
-            run_durable_material_import,
             run_durable_question_preparation,
         )
 
         worker = WorkflowWorker(handlers={
             "problem_extraction": run_durable_problem_extraction,
             "submission_recognition": run_durable_submission_recognition,
-            "material_import": run_durable_material_import,
             "ai_completion": run_durable_ai_completion,
             "question_preparation": run_durable_question_preparation,
             "source_cleanup": run_source_cleanup,

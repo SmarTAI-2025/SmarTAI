@@ -1,7 +1,6 @@
 """A real Word document through the mounted routes, immutable originals and recovery."""
 import hashlib
 import io
-import json
 import zipfile
 
 from docx import Document
@@ -59,20 +58,6 @@ def test_teacher_preflight_preserves_docx_bytes_and_literal_text(client_registry
         "library_material_id": operation.payload["library_material_id"]})
     assert derived.status_code == 200, derived.text
     assert workflow_repository.get_operation(derived.json()["source_token"], owner_id=owner).payload["text"] == TEXT
-
-
-@pytest.mark.parametrize("target", ["criterion", "reference_answer", "test_cases"])
-def test_bulk_import_preflight_keeps_material_original(client_registry, word, target):
-    client, _ = client_registry
-    owner, task = _seed_task(with_question=True)
-    response = client.post(f"/tasks/{task}/material-imports/preflight", headers=headers(owner),
-        data={"targets": json.dumps([target])}, files={"file": ("materials.DOCX", word, DOCX_MIME)})
-    assert response.status_code == 200, response.text
-    operation = workflow_repository.get_operation(response.json()["source_token"], owner_id=owner)
-    assert_original(owner, operation.payload["original_stored_file_id"], word)
-    artifact = file_repository.get_file(file_id=operation.payload["text_artifact_id"], owner_id=owner)
-    with get_storage().open(artifact.storage_key) as stream:
-        assert stream.read().decode() == TEXT
 
 
 @pytest.mark.parametrize("path,field", [("/knowledge/documents", "id"), ("/course-materials/", "document_id"),
@@ -257,16 +242,6 @@ def test_legacy_question_file_checks_docx_mime_before_queue_and_preserves_verifi
         assert_original(owner, originals[0].id, word)
 
 
-@pytest.mark.parametrize("alias", ["upload_reference", "upload_test_cases"])
-def test_focused_material_alias_queues_the_review_plan_with_word_original(client_registry, word, alias):
-    client, _ = client_registry
-    owner, task = _seed_task(with_question=True)
-    response = client.post(f"/tasks/{task}/{alias}", headers=headers(owner),
-                           files={"file": ("focused.DOCX", word, DOCX_MIME)})
-    assert response.status_code == 200, response.text
-    job = workflow_repository.get_operation(response.json()["job_id"], owner_id=owner)
-    source = workflow_repository.get_operation(job.payload["source_token"], owner_id=owner)
-    assert_original(owner, source.payload["original_stored_file_id"], word)
 
 
 def test_submission_route_accepts_word_and_rejects_same_file_as_roster(client_registry, word):

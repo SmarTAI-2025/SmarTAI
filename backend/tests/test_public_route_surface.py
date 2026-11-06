@@ -9,6 +9,14 @@ from backend.models import User
 
 
 RETIRED_REQUESTS = [
+    ("GET", "/tasks/old/material-imports/draft-reference?prepared_id=old"),
+    ("POST", "/tasks/old/material-imports/preflight"),
+    ("POST", "/tasks/old/material-imports"),
+    ("GET", "/tasks/old/material-imports/old"),
+    ("GET", "/tasks/old/material-imports/old/source"),
+    ("POST", "/tasks/old/material-imports/old/apply"),
+    ("POST", "/tasks/old/upload_reference"),
+    ("POST", "/tasks/old/upload_test_cases"),
     ("GET", "/admin/invites"),
     ("POST", "/admin/invites"),
     ("GET", "/users/"),
@@ -57,6 +65,9 @@ def test_retired_workflows_are_unmounted_for_every_role(monkeypatch, environment
     assert "/tasks/{task_id}/result" in paths
     assert "/courses" in paths and "/courses/search" in paths
     assert "/auth/register/request" in paths
+    assert not any("material-imports" in path or path.endswith(("/upload_reference", "/upload_test_cases")) for path in paths)
+    assert "/tasks/{task_id}/question-preparation/sources/preflight" in paths
+    assert "/tasks/{task_id}/ai-completions/confirm" in paths
 
     for role in (None, "teacher", "student", "admin"):
         user = User(id=f"surface-{role}", username=f"surface-{role}", role=role, password_hash="unused") if role else None

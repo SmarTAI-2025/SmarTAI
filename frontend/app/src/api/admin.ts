@@ -23,25 +23,6 @@ export async function adminListUsers(params?: {
   return data;
 }
 
-export async function adminSetActive(userId: string, isActive: boolean, reason = "manual_review", note = ""): Promise<AdminUser> {
-  const { data } = await apiClient.patch<AdminUser>(
-    `/admin/users/${userId}/status`,
-    { is_active: isActive, reason, note },
-    { headers: { "Idempotency-Key": crypto.randomUUID() } },
-  );
-  return data;
-}
-
-export async function adminRevokeSessions(userId: string, reason = "manual_review"): Promise<{ status: string; user_id: string }> {
-  const { data } = await apiClient.post(`/admin/users/${userId}/sessions/revoke`, { reason }, { headers: { "Idempotency-Key": crypto.randomUUID() } });
-  return data;
-}
-
-export async function adminRequestPasswordReset(userId: string, reason = "account_support"): Promise<{ status: string; user_id: string }> {
-  const { data } = await apiClient.post(`/admin/users/${userId}/password-reset`, { reason }, { headers: { "Idempotency-Key": crypto.randomUUID() } });
-  return data;
-}
-
 export interface AdminOverview {
   as_of: number;
   users: { total: number; active: number; with_email: number };
@@ -86,21 +67,6 @@ export interface AdminAuditEntry {
 
 export async function adminOverview(): Promise<AdminOverview> {
   const { data } = await apiClient.get<AdminOverview>("/admin/overview");
-  return data;
-}
-
-export async function adminMetricsCatalog(): Promise<{ metrics: AdminMetricDefinition[] }> {
-  const { data } = await apiClient.get<{ metrics: AdminMetricDefinition[] }>("/admin/metrics/catalog");
-  return data;
-}
-
-export async function adminMetricsQuery(input: {
-  start?: number;
-  end?: number;
-  granularity?: "day" | "week";
-  metrics?: string[];
-} = {}): Promise<AdminMetricsResult> {
-  const { data } = await apiClient.post<AdminMetricsResult>("/admin/metrics/query", input);
   return data;
 }
 

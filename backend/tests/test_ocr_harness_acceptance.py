@@ -56,7 +56,7 @@ def test_unleased_artifact_fence_rejects_non_preflight_or_expired_state(tmp_path
     from backend.domain.errors import LeaseLost
     who, task = _seed_task()
     operation, _ = workflow_repository.create_operation(assignment_id=task, owner_id=who,
-        operation_type="material_source", input_hash="synthetic-fence", payload={}, initial_status="pending" if status == "running" else status,
+        operation_type="problem_source", input_hash="synthetic-fence", payload={}, initial_status="pending" if status == "running" else status,
         expires_at=time.time() + (-1 if expired else 60))
     if status == "running":
         from backend.db.workflow_repository import WorkflowOperationRecord
@@ -64,7 +64,7 @@ def test_unleased_artifact_fence_rejects_non_preflight_or_expired_state(tmp_path
         with session_scope() as session:
             session.get(WorkflowOperationRecord, operation.id).status = "running"
     with pytest.raises(LeaseLost):
-        file_repository.save_file(storage=LocalStorage(tmp_path), owner_id=who, kind="material_import_text",
+        file_repository.save_file(storage=LocalStorage(tmp_path), owner_id=who, kind="problem_source_text",
             original_name="material.txt", content=b"synthetic", assignment_id=task,
             fence_operation_id=operation.id, fence_operation_attempt=operation.attempt)
 

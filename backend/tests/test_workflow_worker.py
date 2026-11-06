@@ -122,7 +122,7 @@ def _make_worker(
 @pytest.mark.asyncio
 async def test_polls_only_registered_operation_types():
     owner_id, _assignment_id, registered_op = _seed_operation("problem_extraction")
-    other_owner, _other_assignment, unregistered_op = _seed_operation("material_import")
+    other_owner, _other_assignment, unregistered_op = _seed_operation("unregistered_operation")
     worker = _make_worker({"problem_extraction": _noop_handler})
 
     assert await worker.poll_once() == 1

@@ -123,10 +123,6 @@ export function deleteTask(taskId: string): Promise<{ status: string }> {
   return deleteJSON<{ status: string }>(`/tasks/${taskId}`);
 }
 
-export function extractProblems(taskId: string, file: File, options?: UploadOptions): Promise<TaskMutationResponse> {
-  return postMultipart<TaskMutationResponse>(`/tasks/${taskId}/extract_problems`, file, options);
-}
-
 export interface ParseSubmissionsInput extends UploadOptions {
   taskId: string;
   file: File | null;
@@ -237,13 +233,7 @@ export function manuallyCompleteQuestionPreparation(input: {
       ...(input.questionCount !== undefined ? { question_count: input.questionCount } : {}) });
 }
 
-export function uploadReference(taskId: string, file: File, options?: UploadOptions): Promise<TaskMutationResponse> {
-  return postMultipart<TaskMutationResponse>(`/tasks/${taskId}/upload_reference`, file, options);
-}
 
-export function uploadTestCases(taskId: string, file: File, options?: UploadOptions): Promise<TaskMutationResponse> {
-  return postMultipart<TaskMutationResponse>(`/tasks/${taskId}/upload_test_cases`, file, options);
-}
 
 export function startGrading(
   taskId: string,

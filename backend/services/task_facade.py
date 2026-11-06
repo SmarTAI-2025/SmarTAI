@@ -75,7 +75,6 @@ from backend.domain.errors import (
 )
 from backend.domain.source_outcomes import safe_source_diagnostic, source_requires_reupload
 from backend.domain.source_storage import (
-    DELAYED_SOURCE_OPERATION_TYPES,
     TASK_DELETE_OPERATION,
 )
 from backend.models import TaskGradingSetup, is_programming_question_type
@@ -123,11 +122,9 @@ from backend.services.submission_source_pipeline import (
 )
 from backend.services.stage_provider_routing import (
     assert_grading_routes_supported,
-    build_owner_baidu_ocr_skill,
     resolve_stage_provider_route,
     stage_provider_configuration_fingerprint,
 )
-from backend.skills.ocr_ingest import LLMVisionOCRSkill
 from backend.storage import get_storage
 from backend.tools.file_processing import (
     ARCHIVE_EXTENSIONS,
@@ -140,7 +137,7 @@ from backend.tools.file_processing import (
 SYSTEM_COURSE_CODE = "__SMARTAI_UNASSIGNED__"
 SYSTEM_COURSE_NAME = "SmarTAI Workspace"
 _SAFE_ERROR_CODES = SAFE_BACKGROUND_ERROR_CODES
-_AUXILIARY_QUESTION_OPERATION_TYPES = {"material_import", "ai_completion"}
+_AUXILIARY_QUESTION_OPERATION_TYPES = {"ai_completion"}
 _OPERATION_PUBLICATION_TTL_SECONDS = 60
 _OPERATION_RUNTIME_TTL_SECONDS = 2 * 60 * 60
 logger = logging.getLogger(__name__)
@@ -4117,73 +4114,6 @@ def apply_question_patches_atomic(
         operation.lease_heartbeat_at = None
         session.flush()
         return expected_workflow_revision + 1
-
-
-def complete_planning_operation_atomic(
-    *, task_id: str, owner_id: str, expected_workflow_revision: int,
-    operation_id: str, expected_operation_attempt: int,
-    expected_lease_token: str | None = None,
-    payload: dict[str, Any], progress: dict | None,
-    final_status: str = "ready",
-) -> int:
-    """Publish a background-generated plan only if its task snapshot is current."""
-    validated_payload = workflow_repository._validate_json_object(
-        payload,
-        field="payload",
-        max_bytes=workflow_repository.MAX_OPERATION_PAYLOAD_BYTES,
-    )
-    validated_progress = workflow_repository._validate_json_object(
-        progress or {},
-        field="progress",
-        max_bytes=workflow_repository.MAX_OPERATION_PROGRESS_BYTES,
-    )
-    now = time.time()
-    with session_scope() as session:
-        operation = _cas_operation_attempt_for_write(
-            session, task_id=task_id, owner_id=owner_id,
-            operation_id=operation_id,
-            expected_operation_attempt=expected_operation_attempt,
-            expected_statuses=("running",),
-            expected_lease_token=expected_lease_token,
-        )
-        if operation.expires_at is not None and operation.expires_at <= now:
-            _raise_stale_revision()
-        workflow = session.scalar(
-            select(workflow_repository.AssignmentWorkflowRecord)
-            .where(
-                workflow_repository.AssignmentWorkflowRecord.assignment_id == task_id,
-                workflow_repository.AssignmentWorkflowRecord.owner_id == owner_id,
-            )
-            .with_for_update()
-        )
-        if workflow is None:
-            raise NotFound("workflow")
-        if (
-            workflow.workflow_revision != expected_workflow_revision
-            or workflow.active_job_id != operation_id
-        ):
-            _raise_stale_revision()
-        workflow_repository._lock_live_assignment(
-            session, assignment_id=task_id, owner_id=owner_id
-        )
-        workflow.active_job_id = None
-        workflow.active_operation = None
-        workflow.error_code = None
-        if operation.operation_type in _AUXILIARY_QUESTION_OPERATION_TYPES:
-            workflow.presentation_status = "problems_ready"
-        workflow.updated_at = now
-        operation.status = final_status
-        operation.payload = validated_payload
-        operation.progress = validated_progress
-        operation.error_code = None
-        operation.completed_at = now
-        operation.updated_at = now
-        operation.lease_owner = None
-        operation.lease_token = None
-        operation.lease_expires_at = None
-        operation.lease_heartbeat_at = None
-        session.flush()
-        return expected_workflow_revision
 
 
 def _commit_imported_submissions(

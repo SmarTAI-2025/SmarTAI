@@ -37,7 +37,6 @@ from backend.db.models import (
 )
 from backend.db.session import session_scope
 from backend.domain.errors import (
-    InvalidTransition,
     LeaseLost,
     NotFound,
     SourceStorageReservationConflict,
@@ -1288,7 +1287,7 @@ async def test_preparing_artifact_fence_leaves_late_delete_failure_recoverable(
     draft, _ = workflow_repository.create_operation(
         assignment_id=seeded["task_id"],
         owner_id=seeded["owner_id"],
-        operation_type="material_source",
+        operation_type="problem_source",
         input_hash=hashlib.sha256(b"material-preparing-fence").hexdigest(),
         payload={"state": "preparing_artifact"},
         expires_at=time.time() + 60,
@@ -1297,7 +1296,7 @@ async def test_preparing_artifact_fence_leaves_late_delete_failure_recoverable(
     tracked = file_repository.save_file(
         storage=storage,
         owner_id=seeded["owner_id"],
-        kind="material_import_text",
+        kind="problem_source_text",
         original_name="tracked.txt",
         content=b"tracked before delete",
         content_type="text/plain",
@@ -1316,7 +1315,7 @@ async def test_preparing_artifact_fence_leaves_late_delete_failure_recoverable(
         file_repository.save_file(
             storage=storage,
             owner_id=seeded["owner_id"],
-            kind="material_import_text",
+            kind="problem_source_text",
             original_name="late.txt",
             content=b"late after delete",
             content_type="text/plain",

@@ -979,7 +979,7 @@ async def test_final_commit_rejects_replaced_active_job_atomically():
                 == task_id
             )
             .values(
-                active_operation="material_import",
+                active_operation="ai_completion",
                 active_job_id="replacement-operation",
             )
         )
@@ -1008,7 +1008,7 @@ async def test_final_commit_rejects_replaced_active_job_atomically():
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     assert persisted.status == "running"
     assert assignment_repository.list_questions(task_id, teacher_id=owner_id) == []
-    assert workflow.active_operation == "material_import"
+    assert workflow.active_operation == "ai_completion"
     assert workflow.active_job_id == "replacement-operation"
 
 

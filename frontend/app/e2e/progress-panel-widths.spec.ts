@@ -4,7 +4,6 @@ const pages = [
   ["problems/progress", "extracting_problems"],
   ["submissions/progress", "parsing_submissions"],
   ["grading/progress", "grading"],
-  ["questions/import/progress/job", "problems_ready"],
   ["questions/ai-complete/progress/job", "problems_ready"],
   ["submissions/upload", "error"],
 ] as const;

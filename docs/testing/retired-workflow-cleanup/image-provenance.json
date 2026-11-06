@@ -1,0 +1,44 @@
+{
+  "before-standalone-import.png": {
+    "source": "/Users/annie/code/SmarTAI/docs/project_navigation/2026-11-06-timeout-policy/evidence/question-standalone-import.png",
+    "sha256": "285f5d06cf23fed04f01f798ba1797d6b6a665d6234ef0adbaa58029f714defd",
+    "kind": "local synthetic browser screenshot",
+    "source_revision": "PR291 57b4bbaa before removal (from timeout audit)"
+  },
+  "desktop-retired-route.png": {
+    "source": "/private/tmp/smartai-pr300-evidence-20261106/cleanup-final-browser/artifacts/normalized-workflow-retire-cb4c2--task-entry-works-at-1280px-chromium/retired-route.png",
+    "sha256": "c9b7562237ce273608c7d1f9a3fd78c85e66a8216faf3e3b92916ba32240bece",
+    "kind": "local synthetic browser screenshot",
+    "source_revision": "PR302 working tree after removal, before final documentation commit"
+  },
+  "desktop-current-task-entry.png": {
+    "source": "/private/tmp/smartai-pr300-evidence-20261106/cleanup-final-browser/artifacts/normalized-workflow-retire-cb4c2--task-entry-works-at-1280px-chromium/current-task-entry.png",
+    "sha256": "b87fc5db4b543c0f40e372a39211eca7522c9607463f590ef76db2b6c8e14bfd",
+    "kind": "local synthetic browser screenshot",
+    "source_revision": "PR302 working tree after removal, before final documentation commit"
+  },
+  "desktop-current-draft-list.png": {
+    "source": "/private/tmp/smartai-pr300-evidence-20261106/cleanup-final-browser/artifacts/normalized-workflow-retire-cb4c2--task-entry-works-at-1280px-chromium/current-draft-list.png",
+    "sha256": "9b4b050dd5ca1ad5c22204dd56b4f5afbd69b7211116bff7a53b369562cc2a4e",
+    "kind": "local synthetic browser screenshot",
+    "source_revision": "PR302 working tree after removal, before final documentation commit"
+  },
+  "mobile-retired-route.png": {
+    "source": "/private/tmp/smartai-pr300-evidence-20261106/cleanup-final-browser/artifacts/normalized-workflow-retire-7c495-t-task-entry-works-at-390px-chromium/retired-route.png",
+    "sha256": "65be3806310491eb665a4c1151c16617facf7a20a5897804ec59676f1f4bb924",
+    "kind": "local synthetic browser screenshot",
+    "source_revision": "PR302 working tree after removal, before final documentation commit"
+  },
+  "mobile-current-task-entry.png": {
+    "source": "/private/tmp/smartai-pr300-evidence-20261106/cleanup-final-browser/artifacts/normalized-workflow-retire-7c495-t-task-entry-works-at-390px-chromium/current-task-entry.png",
+    "sha256": "30007ef628451f286c4dc32a9c3210ac43ec2e01ed2b718546e7b7fd30acddb7",
+    "kind": "local synthetic browser screenshot",
+    "source_revision": "PR302 working tree after removal, before final documentation commit"
+  },
+  "mobile-current-draft-list.png": {
+    "source": "/private/tmp/smartai-pr300-evidence-20261106/cleanup-final-browser/artifacts/normalized-workflow-retire-7c495-t-task-entry-works-at-390px-chromium/current-draft-list.png",
+    "sha256": "15cac6d21e9009a5309b116d3b78fdb9e42ed1dae5124cd9957fe9469443c037",
+    "kind": "local synthetic browser screenshot",
+    "source_revision": "PR302 working tree after removal, before final documentation commit"
+  }
+}

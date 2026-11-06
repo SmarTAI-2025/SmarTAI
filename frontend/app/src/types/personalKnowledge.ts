@@ -30,10 +30,6 @@ export interface PersonalKnowledgeDocument {
   content_version?: string;
 }
 
-export interface PersonalKnowledgeListResponse {
-  documents: PersonalKnowledgeDocument[];
-}
-
 export type KnowledgeActivityFilter = "all" | "active" | "attention" | "completed";
 
 export interface KnowledgeActivityResponse {
@@ -56,10 +52,4 @@ export interface KnowledgeStorageUsage {
   cleanup_pending_count: number;
   retrying_cleanup_count: number;
   reserved_count: number;
-}
-
-export interface DeletePersonalKnowledgeResponse {
-  status: "deleted" | "deletion_pending";
-  id: string;
-  cleanup_operation_id?: string | null;
 }

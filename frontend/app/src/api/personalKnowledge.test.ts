@@ -1,20 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { deletePersonalKnowledge, getKnowledgeStorageUsage } from "./personalKnowledge";
+import { getKnowledgeStorageUsage } from "./personalKnowledge";
 
 const clientMocks = vi.hoisted(() => ({
-  deleteJSON: vi.fn(),
   getJSON: vi.fn(),
 }));
 
 vi.mock("@/api/client", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/api/client")>(),
-  deleteJSON: clientMocks.deleteJSON,
   getJSON: clientMocks.getJSON,
 }));
 
 describe("personal knowledge storage API", () => {
   beforeEach(() => {
-    clientMocks.deleteJSON.mockReset();
     clientMocks.getJSON.mockReset();
   });
 
@@ -37,15 +34,4 @@ describe("personal knowledge storage API", () => {
     expect(clientMocks.getJSON).toHaveBeenCalledWith("/knowledge/storage/usage");
   });
 
-  it("accepts the asynchronous deletion response", async () => {
-    const response = {
-      status: "deletion_pending" as const,
-      id: "doc-1",
-      cleanup_operation_id: "cleanup-1",
-    };
-    clientMocks.deleteJSON.mockResolvedValue(response);
-
-    await expect(deletePersonalKnowledge("doc-1")).resolves.toBe(response);
-    expect(clientMocks.deleteJSON).toHaveBeenCalledWith("/knowledge/documents/doc-1");
-  });
 });

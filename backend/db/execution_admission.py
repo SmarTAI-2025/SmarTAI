@@ -7,7 +7,7 @@ from sqlalchemy.orm import aliased
 
 from backend.domain.errors import LeaseLost
 
-WORKLOAD_TYPES = ("problem_extraction", "submission_recognition", "material_import",
+WORKLOAD_TYPES = ("problem_extraction", "submission_recognition",
                   "ai_completion", "question_preparation")
 
 

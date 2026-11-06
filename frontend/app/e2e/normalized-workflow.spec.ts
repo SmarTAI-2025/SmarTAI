@@ -43,6 +43,10 @@ for (const width of [1280, 390]) {
     test.setTimeout(90_000);
     await page.setViewportSize({ width, height: 844 });
     const errors: string[] = [];
+    const retiredRequests: string[] = [];
+    page.on("request", req => {
+      if (/\/material-imports(?:\/|$)|\/upload_(?:reference|test_cases)(?:\?|$)/.test(new URL(req.url()).pathname)) retiredRequests.push(req.url());
+    });
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     const name = `cleanup-routes-${width}`;
@@ -54,9 +58,55 @@ for (const width of [1280, 390]) {
     expect(created.ok()).toBeTruthy();
     const { task_id: taskId } = await created.json();
     expect(taskId).toBeTruthy();
+    const me = await request.get(`${backend}/auth/me`, {
+      headers: { Authorization: `Bearer demo-teacher-${name}` },
+    });
+    expect(me.ok()).toBeTruthy();
+    const { id: owner } = await me.json();
+    // Reproduce an existing device with drafts from the removed feature.
+    // A current metadata draft proves the list did not simply stop loading.
+    await page.evaluate(async ({ owner, taskId }) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const open = indexedDB.open("smartai-explicit-drafts", 1);
+        open.onupgradeneeded = () => {
+          open.result.createObjectStore("drafts", { keyPath: "key" });
+          open.result.createObjectStore("meta");
+        };
+        open.onsuccess = () => resolve(open.result);
+        open.onerror = () => reject(open.error);
+      });
+      const tx = db.transaction(["drafts", "meta"], "readwrite");
+      const done = new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onabort = tx.onerror = () => reject(tx.error);
+      });
+      const epoch = await new Promise<string>((resolve, reject) => {
+        const read = tx.objectStore("meta").get("epoch");
+        read.onsuccess = () => resolve(read.result ?? "initial");
+        read.onerror = () => reject(read.error);
+      });
+      const savedAt = Date.now();
+      for (const scope of [`material-import:${taskId}`, `material-review:${taskId}:old`, `metadata:${taskId}`]) {
+        tx.objectStore("drafts").put({
+          key: JSON.stringify([owner, scope]), version: 2, owner, scope,
+          businessVersion: "", revision: crypto.randomUUID(), epoch, savedAt,
+          expires: savedAt + 86_400_000, bytes: 2, data: { name: "Current task draft" }, files: [],
+        });
+      }
+      await done;
+      db.close();
+    }, { owner, taskId });
+    await page.goto("/history?view=drafts");
+    const drafts = page.getByRole("region", { name: "Saved drafts" });
+    await expect(drafts.locator(`a[href="/tasks/${taskId}/edit"]`)).toBeVisible();
+    await expect(drafts.getByRole("listitem")).toHaveCount(1);
+    await expect(drafts.locator('a[href*="/questions/import"]')).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("current-draft-list.png"), fullPage: true });
     const retired = [
       `/tasks/${taskId}/setup`, `/tasks/${taskId}/upload/submissions`,
       `/tasks/${taskId}/upload/reference`, `/tasks/${taskId}/upload/test-cases`,
+      `/tasks/${taskId}/questions/import`, `/tasks/${taskId}/questions/import/progress/old`,
+      `/tasks/${taskId}/questions/import/review/old`,
       "/teacher", "/teacher/courses", "/teacher/courses/old",
       "/teacher/assignments/old", "/teacher/assignments/old/edit",
       "/teacher/grading", "/teacher/assignments/old/submissions", "/teacher/assignments/old/results",
@@ -75,9 +125,13 @@ for (const width of [1280, 390]) {
     await page.goto(`/tasks/${taskId}`);
     await expect(page).toHaveURL(new RegExp(`/tasks/${taskId}/upload/problems$`));
     await expect(page.locator("main")).not.toBeEmpty();
+    for (const title of ["1. Questions", "2. Reference Answers", "3. Rubrics", "4. Test Cases"]) {
+      await expect(page.getByText(title, { exact: true })).toBeVisible();
+    }
     const links = await page.locator("a[href]").evaluateAll(nodes => nodes.map(node => node.getAttribute("href")));
     expect(links.filter(href => retired.includes(href ?? ""))).toEqual([]);
     expect(errors).toEqual([]);
+    expect(retiredRequests).toEqual([]);
     await page.screenshot({ path: testInfo.outputPath("current-task-entry.png"), fullPage: true });
   });
 }

@@ -1,40 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import * as analyticsApi from "@/api/analytics";
 import type { AnalyticsMode } from "@/types";
-import { analyticsKeys } from "./keys";
 
 export function useAnalyticsQuery() {
   return useMutation({
     mutationFn: ({ taskId, question, mode, history }: { taskId: string; question: string; mode: AnalyticsMode; history?: string[] }) =>
       analyticsApi.runAnalyticsQuery(taskId, question, mode, history),
-  });
-}
-
-export function useAnalyticsFilterIntent() {
-  return useMutation({
-    mutationFn: ({ taskId, question, surface }: { taskId: string; question: string; surface: import("@/types").FilterIntentSurface }) =>
-      analyticsApi.interpretFilterIntent(taskId, question, surface),
-  });
-}
-
-export function usePerQuestionBreakdown(taskId?: string, qId?: string) {
-  return useQuery({
-    queryKey: analyticsKeys.perQuestion(taskId ?? "", qId ?? ""),
-    queryFn: () => analyticsApi.getPerQuestionBreakdown(taskId as string, qId as string),
-    enabled: Boolean(taskId && qId),
-  });
-}
-
-export function useResetPerQuestionCache() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: ({ taskId, qId }: { taskId: string; qId: string }) =>
-      analyticsApi.resetPerQuestionCache(taskId, qId),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: analyticsKeys.perQuestion(variables.taskId, variables.qId),
-      });
-    },
   });
 }
