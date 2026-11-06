@@ -210,7 +210,12 @@ def test_mounted_aliases_require_explicit_teacher_ocr_opt_in(client_registry, mo
     invoke = AsyncMock(return_value=SimpleNamespace(content="Question 1: OCR result",
         provider=provider.provider_id, model="synthetic", duration_ms=1,
         input_tokens=5, output_tokens=5, finish_reason="stop"))
-    monkeypatch.setattr(provider, "ainvoke_vision", invoke, raising=False)
+    async def vision(*args, **kwargs):
+        from backend.llm.request_timeouts import current_response_scope
+        scope = current_response_scope()
+        assert scope is not None
+        return await scope.run_response(lambda: invoke(*args, **kwargs))
+    monkeypatch.setattr(provider, "ainvoke_vision", vision, raising=False)
     owner, task = _seed_task()
     response = client.post(f"/tasks/{task}/{alias}", headers=headers(owner),
         data={"role": role, "enable_material_ocr": str(opt_in).lower()},
