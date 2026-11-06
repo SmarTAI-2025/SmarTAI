@@ -208,7 +208,8 @@ async def test_runtime_feedback_follows_observed_failure(filename, source, marke
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("language,filename", [("c","candidate.c"), ("cpp","candidate.cpp")])
-async def test_reference_outputs_and_optional_boundary_use_real_native_processes(language, filename):
+@pytest.mark.parametrize("generated_solution", [False, True], ids=["teacher-solution", "teacher-reference"])
+async def test_reference_outputs_and_optional_boundary_use_real_native_processes(language, filename, generated_solution):
     from backend.skills.programming import ProgrammingSkill, _generate_test_cases
     from backend.tests.test_programming_scoring_contract import award, fixed_provider, response
 
@@ -217,6 +218,10 @@ async def test_reference_outputs_and_optional_boundary_use_real_native_processes
     problem = ProblemInfo(q_id="double", number="1", type="编程题", stem="Read an integer from stdin and print double its value.",
                           max_score=10, criterion="All teacher examples correct earns full credit.",
                           solution_code=f"```{language}\n{source}\n```")
+    if generated_solution:
+        problem.reference_answer = problem.solution_code
+        problem.solution_code = "```python\nprint(2 * int(input()))\n```"
+        problem._math_rubric_source = {"presentation": {"ai_completion_provenance": {"solution_code": {}}}}
     raw, = source_answers(filename, student, {problem.q_id:problem.model_dump()}, {problem.q_id})
     answer = StudentAnswerInfo.model_validate(raw)
     route = fixed_provider(response({"inputs":[{"input":"-1\n"}]}))
@@ -234,3 +239,49 @@ async def test_reference_outputs_and_optional_boundary_use_real_native_processes
     assert vote.score == 10 and vote.programming_evidence.score_status == "final"
     assert vote.programming_evidence.teacher_tests.passed == 1 and "-2" in vote.programming_evidence.boundary_note
     assert vote.programming_evidence.isolation_mode == "oci_container"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language,source", [
+    ("c", '#include <stdio.h>\nint main(void) { puts("2"); return 0; }'),
+    ("cpp", '#include <iostream>\nint main() { std::cout << 2; return 0; }'),
+    ("python", 'print(2)'),
+])
+@pytest.mark.parametrize("generated_solution", [True, False])
+async def test_selected_reference_executes_in_its_language(monkeypatch, language, source, generated_solution):
+    from backend.services.programming_submission_mapping import PYTHON_FLAG
+    other_language, other_source = ("python", "print(2)") if language != "python" else (
+        "c", '#include <stdio.h>\nint main(void) { puts("2"); return 0; }')
+    problem = ProblemInfo(q_id="q1", number="1", type="编程题", stem="Read an integer from stdin and print it.",
+        criterion="Correct output.", max_score=10, solution_code=f"```{other_language}\n{other_source}\n```",
+        reference_answer=f"```{language}\n{source}\n```", test_cases=[Case(input="2", expected_output="2")])
+    if generated_solution:
+        problem._math_rubric_source = {"presentation": {"ai_completion_provenance": {"solution_code": {}}}}
+    answer = StudentAnswerInfo(q_id="q1", number="1", type="编程题", content="print(2)", flag=[PYTHON_FLAG])
+    with programming_run(None, None):
+        result = await evidence_for_answer(problem=problem, answer=answer, student_id="synthetic",
+            task_id="reference-language", provider=None, reporter=None, generate=None, execute=run_sandbox)
+    assert result.status == "executed", result.reason
+    assert result.report.passed_count == 1
+    assert result.report.results[0].isolation_mode == "oci_container"
+
+
+@pytest.mark.asyncio
+async def test_pre_fix_wrong_language_validation_cannot_survive_recovery(monkeypatch):
+    from backend.services import programming_runs as runs
+    from backend.tests.test_programming_reference_language import POLYGLOT_REFERENCE
+
+    problem = ProblemInfo(q_id="polyglot", number="1", type="编程题", stem="Read stdin.", criterion="Correct output.",
+        solution_code="```python\nprint(2)\n```", reference_answer=f"```c\n{POLYGLOT_REFERENCE}\n```",
+        test_cases=[Case(input="2", expected_output="2")])
+    problem._math_rubric_source = {"presentation": {"ai_completion_provenance": {"solution_code": {}}}}
+    state = runs.ProgrammingRun()
+    identity = runs._reference_execution_identity
+    with monkeypatch.context() as old:
+        old.setattr(runs, "_reference_language", lambda *_: "python")
+        old.setattr(runs, "_reference_execution_identity", lambda p: {
+            k: v for k, v in identity(p).items() if k != "reference_language_selection_version"})
+        old_key, cases, reason = await runs._prepare(state, problem, None, None, run_sandbox, None)
+    assert cases and not reason and state.read(old_key, runs.PREPARED)
+    key, cases, reason = await runs._prepare(state, problem, None, None, run_sandbox, None)
+    assert key != old_key and not cases and reason == "programming_reference_conflict"
