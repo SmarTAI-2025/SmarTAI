@@ -204,3 +204,49 @@ async def test_runtime_feedback_follows_observed_failure(filename, source, marke
             assert marker in evidence.safe_summary
         else:
             assert "ZeroDivisionError" not in evidence.safe_summary
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language,source", [
+    ("c", '#include <stdio.h>\nint main(void) { puts("2"); return 0; }'),
+    ("cpp", '#include <iostream>\nint main() { std::cout << 2; return 0; }'),
+    ("python", 'print(2)'),
+])
+@pytest.mark.parametrize("generated_solution", [True, False])
+async def test_selected_reference_executes_in_its_language(monkeypatch, language, source, generated_solution):
+    from backend.services.programming_submission_mapping import PYTHON_FLAG
+    other_language, other_source = ("python", "print(2)") if language != "python" else (
+        "c", '#include <stdio.h>\nint main(void) { puts("2"); return 0; }')
+    problem = ProblemInfo(q_id="q1", number="1", type="编程题", stem="Read an integer from stdin and print it.",
+        criterion="Correct output.", max_score=10, solution_code=f"```{other_language}\n{other_source}\n```",
+        reference_answer=f"```{language}\n{source}\n```", test_cases=[Case(input="2", expected_output="2")])
+    if generated_solution:
+        problem._math_rubric_source = {"presentation": {"ai_completion_provenance": {"solution_code": {}}}}
+    answer = StudentAnswerInfo(q_id="q1", number="1", type="编程题", content="print(2)", flag=[PYTHON_FLAG])
+    with programming_run(None, None):
+        result = await evidence_for_answer(problem=problem, answer=answer, student_id="synthetic",
+            task_id="reference-language", provider=None, reporter=None, generate=None, execute=run_sandbox)
+    assert result.status == "executed", result.reason
+    assert result.report.passed_count == 1
+    assert result.report.results[0].isolation_mode == "oci_container"
+
+
+@pytest.mark.asyncio
+async def test_pre_fix_wrong_language_validation_cannot_survive_recovery(monkeypatch):
+    from backend.services import programming_runs as runs
+    from backend.tests.test_programming_reference_language import POLYGLOT_REFERENCE
+
+    problem = ProblemInfo(q_id="polyglot", number="1", type="编程题", stem="Read stdin.", criterion="Correct output.",
+        solution_code="```python\nprint(2)\n```", reference_answer=f"```c\n{POLYGLOT_REFERENCE}\n```",
+        test_cases=[Case(input="2", expected_output="2")])
+    problem._math_rubric_source = {"presentation": {"ai_completion_provenance": {"solution_code": {}}}}
+    state = runs.ProgrammingRun()
+    identity = runs._reference_execution_identity
+    with monkeypatch.context() as old:
+        old.setattr(runs, "_reference_language", lambda *_: "python")
+        old.setattr(runs, "_reference_execution_identity", lambda p: {
+            k: v for k, v in identity(p).items() if k != "reference_language_selection_version"})
+        old_key, cases, reason = await runs._prepare(state, problem, None, None, run_sandbox, None)
+    assert cases and not reason and state.read(old_key, runs.PREPARED)
+    key, cases, reason = await runs._prepare(state, problem, None, None, run_sandbox, None)
+    assert key != old_key and not cases and reason == "programming_reference_conflict"

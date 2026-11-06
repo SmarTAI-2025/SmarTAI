@@ -203,7 +203,10 @@ def _reference(problem):
 def _reference_language(problem, source):
     # The teacher's reference can be written in a different language from the
     # student answer. Prefer its explicit fence to any language in the stem.
-    first = (problem.solution_code or problem.reference_answer or "").lstrip().splitlines()[0].strip().lower()
+    provenance = ((problem._math_rubric_source or {}).get("presentation") or {}).get("ai_completion_provenance") or {}
+    material = (problem.solution_code if problem.solution_code and "solution_code" not in provenance
+                else problem.reference_answer)
+    first = (material or "").lstrip().splitlines()[0].strip().lower()
     fenced = {"```c": "c", "```cpp": "cpp", "```c++": "cpp", "```python": "python", "```py": "python"}
     if first in fenced:
         return fenced[first]
@@ -224,6 +227,10 @@ def _reference_execution_identity(problem):
     runtime = runtime_identity()
     try:
         source = _reference(problem)
+        provenance = ((problem._math_rubric_source or {}).get("presentation") or {}).get("ai_completion_provenance") or {}
+        if source and problem.solution_code and "solution_code" in provenance:
+            # Old preparations may have validated this source in the excluded AI language.
+            runtime["reference_language_selection_version"] = 1
         if source and not has_function_only_contract(problem.stem, problem.test_cases):
             # Prior validations may have run a rewritten numeric stdin payload.
             runtime["reference_stdin_binding_version"] = 2
@@ -237,7 +244,7 @@ def _reference_execution_identity(problem):
     return runtime
 
 
-def _question_key(state, problem):
+def _question_key(state, problem, *, runtime=None):
     cp = state.checkpoints
     question = cp.questions.get(problem.q_id) if cp else None
     return digest({"engine": VERSION, "owner": state.owner, "assignment": state.assignment,
@@ -248,7 +255,7 @@ def _question_key(state, problem):
             ((problem._math_rubric_source or {}).get("presentation") or {}).get("ai_completion_provenance") or {}),
         "cases": [case.model_dump(mode="json") for case in problem.test_cases or ()],
         "config": cp.manifest.get("programming_preparation_config", cp.manifest.get("provider_configuration_fingerprint")) if cp else None,
-        "runtime": _reference_execution_identity(problem)})
+        "runtime": _reference_execution_identity(problem) if runtime is None else runtime})
 
 
 async def _notify(reporter, step):
@@ -260,7 +267,8 @@ async def _notify(reporter, step):
 async def _prepare(state, problem, provider, generate, execute, reporter):
     from backend.services.programming_test_contract import ProgrammingCaseError, adapt_programming_cases, bind_stdin_cases, required_function_name
     from backend.skills.programming import _scan_complexity_keywords
-    key = _question_key(state, problem)
+    runtime = _reference_execution_identity(problem)
+    key = _question_key(state, problem, runtime=runtime)
     async with state.lock(key):
         if key in state.failures:
             return key, [], state.failures[key]
@@ -270,7 +278,11 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
                     or not 1 <= len(saved["cases"]) <= 50):
                 raise CheckpointWriteError("programming_suite_identity_invalid")
             return key, [TestCase.model_validate(row) for row in saved["cases"]], ""
-        if state.read(key, STARTED):
+        # A language fix invalidates successful evidence, not an uncertain paid submission.
+        legacy_key = (_question_key(state, problem, runtime={k: v for k, v in runtime.items()
+                      if k != "reference_language_selection_version"})
+                      if "reference_language_selection_version" in runtime else key)
+        if state.read(key, STARTED) or state.read(legacy_key, STARTED):
             return key, [], "programming_preparation_interrupted"
         cases = problem.test_cases
         if not cases:
