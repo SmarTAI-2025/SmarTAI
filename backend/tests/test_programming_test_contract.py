@@ -399,3 +399,60 @@ def test_stdin_literal_separators_survive_binding(stem, value):
     from backend.services.programming_test_contract import bind_stdin_cases
     row, = bind_stdin_cases(stem, [TestCase(input=value, expected_output="x")])
     assert row.input == value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stem", [
+    "读取一行字符串，可以包含数字和空格，输出字符串的长度。",
+    "Read a string containing numbers separated by spaces; print its length.",
+    "输入数字和空格组成的字符串，输出它的长度。",
+    "Read numbers as a string, preserving spaces; print its length.",
+])
+@pytest.mark.parametrize("reference", [False, True])
+async def test_text_input_is_not_rewritten_as_a_numeric_enumeration(stem, reference):
+    from backend.models import StudentAnswerInfo
+    from backend.services.programming_runs import evidence_for_answer
+
+    code = "print(len(input()))"
+    cases = [TestCase(input=value, expected_output=str(len(value)))
+             for value in ("12, 34", "12、 34")]
+    problem = ProblemInfo(q_id="q1", number="1", type="编程题", stem=stem,
+                          criterion="Correct string length.", test_cases=cases,
+                          solution_code=code if reference else None)
+    answer = StudentAnswerInfo(q_id="q1", number="1", type="编程题", content=code)
+    run = await evidence_for_answer(problem=problem, answer=answer, student_id="synthetic",
+                                    task_id=None, provider=None, reporter=None,
+                                    generate=None, execute=run_sandbox)
+    assert run.status == "executed", run.reason
+    assert [case.input for case in run.cases] == [case.input for case in cases]
+    assert run.report.passed_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stem", [
+    "Read two integers separated by spaces from stdin; print their values, each on a separate line.",
+    "输入两个整数，以空格分隔；输出它们，每行一个整数。",
+    "Read two integers separated by spaces from stdin and print each on a separate line.",
+    "输入两个整数，以空格分隔，输出它们，每行一个整数。",
+])
+async def test_output_line_format_does_not_change_stdin_protocol(stem):
+    source = "a, b = map(int, input().split())\nprint(a)\nprint(b)"
+    original = TestCase(input="2,3", expected_output="2\n3")
+    bound = bind_programming_cases(stem, [original], source)
+    assert bound[0].input == "2 3"
+    report = await run_sandbox(source, bound)
+    assert report.passed_count == 1
+    assert original.input == "2,3"
+
+
+@pytest.mark.parametrize("stem,value,expected", [
+    ("Read two integers from stdin, each on a separate line; print their sum.", "2,3", "2\n3"),
+    ("输入两个整数，以空格分隔，输出它们的和。", "2、3", "2 3"),
+])
+def test_declared_numeric_stdin_keeps_teaching_enumeration(stem, value, expected):
+    from backend.services.programming_test_contract import bind_stdin_cases
+
+    case = TestCase(input=value, expected_output="5")
+    bound, = bind_stdin_cases(stem, [case])
+    assert bound.input == expected
+    assert case.input == value
