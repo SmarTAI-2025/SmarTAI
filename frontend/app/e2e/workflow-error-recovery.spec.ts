@@ -86,6 +86,30 @@ for (const locale of ["zh-CN", "en-US"]) {
 
 for (const stage of ["problems", "submissions"] as const) {
   for (const locale of ["zh-CN", "en-US"]) {
+    test(`model permission failure preserves manual retry: ${stage} ${locale}`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width: locale === "zh-CN" ? 390 : 1440, height: 900 });
+      const { calls, errors } = await fixture(page, stage, "provider_permission_denied", true, undefined, locale);
+      const consoleErrors: string[] = [];
+      page.on("console", message => { if (message.type() === "error") consoleErrors.push(message.text()); });
+      await page.goto(`/tasks/recovery-task/${stage}/progress`);
+      await expect(page.getByRole("heading", { name: locale === "zh-CN" ? "模型账号没有服务权限" : "The model account lacks service permission" })).toBeVisible();
+      await expect(page.getByText(/百度控制台|Baidu console/)).toHaveCount(0);
+      const retry = page.getByRole("button", { name: /重试失败项|Retry failed/i });
+      await expect(retry).toBeEnabled();
+      await page.reload();
+      await expect(retry).toBeEnabled();
+      expect(calls).toHaveLength(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath("permission-recovery.png"), fullPage: true });
+      await retry.click();
+      await expect.poll(() => calls.length).toBe(1);
+      expect(calls[0].path).toContain(`/${stage}-job/retry`);
+      expect(JSON.parse(calls[0].body)).toMatchObject({ recognition_provider_id: "old", expected_workflow_revision: 7 });
+      expect(errors).toEqual([]);
+      expect(consoleErrors).toEqual([]);
+    });
+  }
+  for (const locale of ["zh-CN", "en-US"]) {
     for (const width of [390, 1440]) {
       test(`recognition failure page and reason survive refresh with retry protection: ${stage} ${locale} ${width}`, async ({ page }, testInfo) => {
         await page.setViewportSize({ width, height: 900 });

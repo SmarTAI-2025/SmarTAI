@@ -67,6 +67,25 @@ class ExecutionControl:
     active_calls: dict[str, dict[asyncio.Timeout, Callable[[], bool]]] = field(default_factory=dict)
     stopped: bool = False
     rate_cycles: dict[str, _RateCycles] = field(default_factory=dict)
+    configuration_failures: dict[str, tuple[str, int]] = field(default_factory=dict)
+
+    def record_configuration_result(self, provider, code: str | None = None) -> None:
+        """Three consecutive matching configuration refusals stop this run only.
+
+        Called once at the provider boundary, not again by each retry wrapper.
+        Success and unrelated failures break the streak. Already sent requests
+        still finish; their late successes never revoke an established stop.
+        """
+        key = provider_key(provider)
+        if code is None:
+            self.configuration_failures.pop(key, None)
+            return
+        previous, count = self.configuration_failures.get(key, (None, 0))
+        count = count + 1 if previous == code else 1
+        self.configuration_failures[key] = (code, count)
+        if count == 3:
+            logger.warning("Stopping unsent model calls after consecutive configuration failures; code=%s count=3", code)
+            self.block(provider, code)
 
     def rate_started(self, provider, *, started_at: float) -> None:
         state = self.rate_cycles.setdefault(provider_key(provider), _RateCycles())

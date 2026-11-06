@@ -230,6 +230,9 @@ def _classify_exception(e: Exception) -> Exception:
         "grading_wall_time_limit_reached", "knowledge_wall_time_limit_reached",
     }:
         return PermanentLLMError(e.code)
+    from backend.llm.provider_errors import CONFIGURATION_FAILURES, CONTENT_FAILURES
+    if isinstance(e, ProviderRequestError) and e.code in CONFIGURATION_FAILURES | CONTENT_FAILURES:
+        return PermanentLLMError(e.code)
     quota_code = quota_error_code(e)
     if quota_code and quota_code != "provider_rate_limited":
         return DailyQuotaError() if quota_code == "provider_daily_quota_exceeded" else PermanentLLMError(quota_code)
@@ -241,8 +244,6 @@ def _classify_exception(e: Exception) -> Exception:
         return ResponseTimeoutError(submission_may_exist=uncertain)
     if quota_code == "provider_rate_limited":
         return RateLimitError(quota_code, retry_after=_provider_retry_after(e))
-    if isinstance(e, ProviderRequestError) and e.code in {"provider_recitation_blocked", "provider_content_blocked"}:
-        return PermanentLLMError(e.code)
 
     # Endpoint safety-policy rejections (non-public address, host not allowed,
     # DNS/config policy) are deterministic configuration/environment errors:
@@ -272,11 +273,16 @@ def _classify_exception(e: Exception) -> Exception:
     # Structured status codes win over keyword guessing: the stable
     # error-code strings ("provider_upstream_unavailable", …) carry no digits,
     # so without this branch a relay 503 would fall into the default path.
-    status_code = getattr(e, "status_code", None)
+    from backend.llm.provider_errors import upstream_http_status
+    status_code = upstream_http_status(e)
     if isinstance(status_code, int):
         if status_code in {401, 403, 404}:
             # Deterministic auth / routing failures — retrying only delays
             # the same refusal.
+            return PermanentLLMError(msg)
+        if 400 <= status_code < 500 and status_code not in {408, 409, 429}:
+            # Repeating the same invalid payload does not repair it. Content,
+            # image/size/parameter errors stay local to this item, not the run.
             return PermanentLLMError(msg)
         if status_code in {500, 502, 503, 504}:
             return TransientLLMError(msg, retry_after=_provider_retry_after(e))
