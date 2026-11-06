@@ -69,6 +69,7 @@ async def test_failed_question_preparation_reuses_sources_with_frozen_model(
         checkpoint={},
         payload={
             "question_preparation_version": 2,
+            "recognition_timeout_profile": "source-response-180-v1",
             "source_tokens": ["prepared-source-1"],
             "base_workflow_revision": 7,
             "requested_workflow_revision": 7,

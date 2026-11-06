@@ -26,7 +26,7 @@ from backend.recognition.runtime import RecognitionCapacity, run_initial_read
 from backend.services import recognition_runs
 from backend.services.recognition_session import RecognitionCallSessionV2
 from backend.services.recognition_timeouts import (
-    LEGACY_SOURCE_TIMEOUT_PROFILE, SOURCE_TIMEOUT_PROFILE, apply_source_timeout_profile,
+    SOURCE_TIMEOUT_PROFILE, apply_source_timeout_profile,
 )
 from backend.tests.test_recognition_durable_runs import run, runner
 from backend.tests.test_recognition_timeout_policy import Clock, VisionEngine, read_request
@@ -97,12 +97,10 @@ def arguments(request, engine, budget, capacity):
     )
 
 
-def test_profiles_share_response_policy_without_mutating_call_or_token_limits():
+def test_current_response_policy_does_not_mutate_call_or_token_limits():
     request, engine = read_request(), VisionEngine()
     before = request.model_dump_json()
     selected = new_policy(request, engine)
-    for profile in (None, LEGACY_SOURCE_TIMEOUT_PROFILE, "source-response-300-v1", "source-response-600-v1"):
-        assert apply_source_timeout_profile(request, engine=engine, timeout_profile=profile) == selected
     assert selected.policy.timeout_mode == "response_only" and selected.policy.per_call_seconds == 180
     assert selected.policy.max_calls == request.policy.max_calls
     assert selected.policy.max_output_tokens == request.policy.max_output_tokens

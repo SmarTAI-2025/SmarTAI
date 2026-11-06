@@ -4,7 +4,7 @@ from backend.domain.errors import RecognitionError
 from backend.llm.image_capability import image_quality_failure
 from backend.recognition.local_limits import bounded_recognition_progress
 from backend.recognition.models import RecognitionCoverageV1, RecognitionUsageV1
-from backend.services.recognition_timeouts import apply_source_timeout_profile
+from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE, apply_source_timeout_profile
 from backend.skills.recognition_reader import PROMPT_VERSION
 
 
@@ -20,7 +20,7 @@ def _usage(runs, attribute):
 
 async def read_question_pdf_batches(*, service, request, content, engine, total_pages, reporter, binding=None,
                                     allow_native_partial=False, retry_key=None, acknowledge_pending_retry=False,
-                                    timeout_profile=None, allow_partial=False, on_pages=None):
+                                    timeout_profile=SOURCE_TIMEOUT_PROFILE, allow_partial=False, on_pages=None):
     requested = request.pages or list(range(1, total_pages + 1))
     incremental = on_pages is not None and engine is not None
     batches = [requested[offset:offset + 12] for offset in range(0, len(requested), 12)]

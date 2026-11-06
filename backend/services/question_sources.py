@@ -26,7 +26,9 @@ from backend.recognition.models import EvidenceModel, RecognitionSourceRefV1, Re
 from backend.recognition.runtime import RecognitionCapacity
 from backend.services.recognition_artifacts import RecognitionArtifactStore
 from backend.services.recognition_runs import RecognitionRunService
-from backend.services.recognition_timeouts import apply_source_timeout_profile
+from backend.services.recognition_timeouts import (
+    SOURCE_TIMEOUT_PROFILE, apply_source_timeout_profile, require_current_source_timeout_profile,
+)
 from backend.services.question_source_batches import read_question_pdf_batches
 from backend.services.stage_provider_routing import (
     StageProviderRoute, build_owner_baidu_ocr_skill, stage_provider_configuration_fingerprint,
@@ -158,10 +160,11 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                                route: StageProviderRoute, registry, stored_file_id=None,
                                extraction_hint="", options=None, purpose="problems", reporter=None, text_reader=None,
                                allow_vision=None, binding=None, retry_key=None, acknowledge_pending_retry=False,
-                               timeout_profile=None, execution_scope=None, allow_partial=False, on_pages=None,
+                               timeout_profile=SOURCE_TIMEOUT_PROFILE, execution_scope=None, allow_partial=False, on_pages=None,
                                media_slot_timeout_seconds: float | None = 10):
     from backend.services.source_files import persist_problem_source
 
+    require_current_source_timeout_profile(timeout_profile)
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
     allow_vision = purpose not in {"rubric", "test_cases"} if allow_vision is None else allow_vision is True
     reporter = reporter or ProgressReporter(f"recognition-{task_id}")

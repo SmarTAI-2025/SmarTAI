@@ -87,7 +87,7 @@ from backend.llm.registry import (
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import grading_runs
 from backend.services.question_sources import read_question_source
-from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE
+from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE, require_current_source_timeout_profile
 from backend.services.submission_work_budget import submission_work_budget, current_budget
 from backend.services.background_errors import (
     SAFE_BACKGROUND_ERROR_CODES,
@@ -2514,6 +2514,7 @@ def _replace_draft_questions(
 def require_current_submission_pipeline(payload):
     if "manual_saved_sources" in (payload or {}) or (payload or {}).get("submission_structure_version") != 2:
         raise InvalidTransition("Saved text AI recovery has been retired.", code="saved_text_recovery_retired")
+    require_current_source_timeout_profile((payload or {}).get("recognition_timeout_profile"))
 
 
 def queue_task_submission_parsing(
@@ -2586,6 +2587,8 @@ def queue_task_submission_parsing(
         operation_type="submission_recognition",
         input_hash=digest,
     )
+    if replay is not None:
+        require_current_submission_pipeline(replay.payload)
     if replay is not None and not _operation_is_retryable(replay):
         return {
             "status": _operation_state(replay),
@@ -2598,14 +2601,11 @@ def queue_task_submission_parsing(
         # Retiring those files here would invalidate OCR caches before recovery.
         replacement_file_ids = ()
         replacement_group_id = None
-    # Freeze this choice on the parent operation. Old or retried work must
-    # keep its child OCR identity and any uncertain-submission checkpoint.
-    timeout_profile = SOURCE_TIMEOUT_PROFILE
+    # Only current contracts may retain their execution scope on retry.
     execution_scope = f"{task_id}:{digest}"
     if replay is not None:
         if (replay.checkpoint or {}).get("structure_inflight") and not acknowledged_restart_from:
             raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")
-        timeout_profile = (replay.payload or {}).get("recognition_timeout_profile")
         execution_scope = (replay.payload or {}).get("recognition_execution_scope")
     elif retry_from or acknowledged_restart_from:
         if retry_from:
@@ -2623,7 +2623,6 @@ def queue_task_submission_parsing(
         require_current_submission_pipeline(origin.payload)
         if (origin.checkpoint or {}).get("structure_inflight") and not acknowledged_restart_from:
             raise InvalidTransition("A repeated model call may be billed.", code="provider_submit_uncertain")
-        timeout_profile = (origin.payload or {}).get("recognition_timeout_profile")
         if retry_from:
             execution_scope = (origin.payload or {}).get("recognition_execution_scope")
     workflow, active = _ensure_no_other_active_operation(
@@ -2732,7 +2731,7 @@ def queue_task_submission_parsing(
                 "roster_entries": roster_entries or [],
                 "roster_name": roster_name,
                 "recognition_provider_id": resolved_provider_id,
-                "recognition_timeout_profile": timeout_profile,
+                "recognition_timeout_profile": SOURCE_TIMEOUT_PROFILE,
                 "recognition_execution_scope": execution_scope,
                 "provider_configuration_fingerprint": route_fingerprint,
                 "question_snapshot": question_snapshot,
