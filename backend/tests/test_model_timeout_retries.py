@@ -111,6 +111,35 @@ async def test_cancel_queued_timeout_retry_keeps_unknown_marker_without_another_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ROUTES)
+async def test_model_stop_interrupts_queued_timeout_retry_without_erasing_uncertainty(scheduler, monkeypatch, route):
+    calls = []
+    async def invoke(options):
+        calls.append(1)
+        scheduler.host_capacity.capacity = 0
+        raise httpx.ReadTimeout("unknown response")
+
+    async with provider_for(route, invoke, monkeypatch) as provider:
+        async def work():
+            with response_timeout_scope(180, response_only=True) as state:
+                task = asyncio.create_task(llm.ainvoke_with_rate_retry(provider, MESSAGES))
+                try:
+                    async with asyncio.timeout(2):
+                        while not scheduler.pending:
+                            await asyncio.sleep(.001)
+                    current_execution().block(provider, "provider_rate_limited")
+                    with pytest.raises(ProviderRequestError, match="provider_rate_limited") as caught:
+                        await asyncio.wait_for(asyncio.shield(task), 1)
+                    assert caught.value.retryable is False
+                    assert caught.value.submission_may_exist and state.submission_may_exist
+                finally:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+        await run_controlled("stop-timeout-retry", lambda: False, work())
+    assert calls == [1] and not scheduler.pending and scheduler.active == 0
+
+
+@pytest.mark.asyncio
 async def test_guarded_material_generation_timeout_retries_without_losing_billing_warning():
     class Provider:
         calls = 0

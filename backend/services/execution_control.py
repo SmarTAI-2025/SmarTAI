@@ -141,15 +141,15 @@ class ExecutionControl:
         for wait in self.waits.values():
             if wait.key == key:
                 wait.wake.set()
-        if code == "provider_rate_limited":
-            for timer, may_have_sent in self.active_calls.get(key, {}).items():
-                # Stop unsent work, but let already submitted responses finish
-                # within their response deadline and retain successful results.
-                if not may_have_sent() and not timer.expired():
-                    timer.reschedule(asyncio.get_running_loop().time())
+        for timer, in_flight in self.active_calls.get(key, {}).items():
+            # Quota exhaustion and repeated rate limits stop unsent work.
+            # An earlier timeout's unknown bill is not a current in-flight call.
+            if not in_flight() and not timer.expired():
+                timer.reschedule(asyncio.get_running_loop().time())
 
     @asynccontextmanager
-    async def interruptible_call(self, provider, may_have_sent: Callable[[], bool]):
+    async def interruptible_call(self, provider, may_have_sent: Callable[[], bool], *,
+                                 in_flight: Callable[[], bool]):
         """Interrupt only this model's calls, without cancelling the workflow task."""
         from backend.llm.providers import ProviderRequestError
         key = provider_key(provider)
@@ -157,7 +157,7 @@ class ExecutionControl:
         timer = asyncio.timeout(None)
         try:
             async with timer:
-                calls[timer] = may_have_sent
+                calls[timer] = in_flight
                 yield
         except TimeoutError:
             if not timer.expired():

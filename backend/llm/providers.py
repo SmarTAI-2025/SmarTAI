@@ -495,6 +495,7 @@ class BaseProvider(ABC):
                 scheduler.bind_adaptive(key, rpm, identity, profile, revision)
             interrupt = control.interruptible_call(
                 self, lambda: admitted or (scope is not None and scope.submission_may_exist),
+                in_flight=lambda: admitted,
             ) if control is not None else nullcontext()
             async with deadline, interrupt:
                 lease = scheduler.lease(

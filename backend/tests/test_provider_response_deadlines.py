@@ -26,7 +26,9 @@ MESSAGES = [HumanMessage(content="inspected source")]
 
 
 @pytest.mark.asyncio
-async def test_rate_stop_preserves_pending_response_but_interrupts_capacity_queue(monkeypatch, scheduler):
+@pytest.mark.parametrize("stop_code", ["provider_rate_limited", "provider_daily_quota_exceeded",
+                                       "provider_quota_exceeded", "provider_zero_quota"])
+async def test_rate_stop_preserves_pending_response_but_interrupts_capacity_queue(monkeypatch, scheduler, stop_code):
     from backend.config import settings
     monkeypatch.setattr(settings, "max_concurrent_llm_per_endpoint", 1)
     sent, queued, complete = asyncio.Event(), asyncio.Event(), asyncio.Event()
@@ -51,7 +53,7 @@ async def test_rate_stop_preserves_pending_response_but_interrupts_capacity_queu
                     result = await structured_llm.ainvoke_with_rate_retry(provider, MESSAGES)
                     assert not state.submission_may_exist
                     return result.content
-                with pytest.raises(ProviderRequestError, match="provider_rate_limited") as error:
+                with pytest.raises(ProviderRequestError, match=stop_code) as error:
                     await structured_llm.ainvoke_with_rate_retry(provider, MESSAGES)
                 assert error.value.retryable is False
                 assert error.value.submission_may_exist == state.submission_may_exist
@@ -62,7 +64,7 @@ async def test_rate_stop_preserves_pending_response_but_interrupts_capacity_queu
             in_queue = asyncio.create_task(call(False))
             try:
                 await queued.wait()
-                current_execution().block(provider, "provider_rate_limited")
+                current_execution().block(provider, stop_code)
                 assert await asyncio.wait_for(in_queue, 1) is False
                 assert not responding.done()
                 complete.set()
