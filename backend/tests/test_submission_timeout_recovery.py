@@ -111,25 +111,28 @@ async def test_legacy_recognition_dispatch_counts_underlying_model_not_shared_wr
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_legacy_gemini_proxy_clock_covers_sync_response_and_cancellation_drain(
+async def test_gemini_proxy_clock_covers_async_response_and_cancellation(
     cancel, scheduler, monkeypatch,
 ):
     monkeypatch.setattr(clocks, "_current", ContextVar("submission_budget", default=None))
-    budget = clocks.SubmissionWorkBudget("legacy-proxy-retry")
+    budget = clocks.SubmissionWorkBudget("proxy-retry")
     clocks._current.set(budget)
     monkeypatch.setattr(GeminiProvider, "_needs_proxy_mode", property(lambda self: True))
     provider = GeminiProvider(ProviderConfig(provider_type="gemini", model="fixture", api_key="fake"))
-    release, started = threading.Event(), asyncio.Event()
+    release, started = asyncio.Event(), asyncio.Event()
     calls = []
-    loop = asyncio.get_running_loop()
 
-    def invoke(*args, **kwargs):
+    async def invoke(*args, **kwargs):
         calls.append(True)
-        loop.call_soon_threadsafe(started.set)
-        assert release.wait(3)
-        return SimpleNamespace(content="saved sync response")
+        started.set()
+        assert budget.active == scheduler.active == 1
+        await release.wait()
+        return SimpleNamespace(content="saved async response")
 
-    monkeypatch.setattr(provider, "_build_client_sync", lambda: SimpleNamespace(invoke=invoke))
+    async def close():
+        pass
+
+    monkeypatch.setattr(provider, "_build_client_sync", lambda: SimpleNamespace(ainvoke=invoke, aclose=close))
     scheduler.host_capacity.capacity = 0
     pending = asyncio.create_task(provider.ainvoke(MESSAGES))
     try:
@@ -141,14 +144,11 @@ async def test_legacy_gemini_proxy_clock_covers_sync_response_and_cancellation_d
         budget.expire()
         if cancel:
             pending.cancel()
-            await asyncio.sleep(0.01)
-            assert not pending.done() and budget.active == 1 and scheduler.active == 1
-        release.set()
-        if cancel:
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(pending, 2)
         else:
-            assert (await asyncio.wait_for(pending, 2)).content == "saved sync response"
+            release.set()
+            assert (await asyncio.wait_for(pending, 2)).content == "saved async response"
         assert budget.active == scheduler.active == scheduler.host_capacity.active == 0
         with pytest.raises(RecognitionError, match=clocks.CODE):
             await provider.ainvoke(MESSAGES)

@@ -37,9 +37,8 @@ def response_transport(monkeypatch):
     # cached across model instances, so give each test its own real transport.
     for name in ("_get_default_httpx_client", "_get_default_async_httpx_client"):
         monkeypatch.setattr(anthropic_model, name, getattr(anthropic_model, name).__wrapped__)
-    from google.genai._api_client import BaseApiClient
-    # Explicitly exercise Google's HTTPX fallback as well as the other SDKs.
-    monkeypatch.setattr(BaseApiClient, "_use_aiohttp", lambda self: False)
+    # Do not force Google's transport selection: the real builder must select
+    # the protected HTTPX path even when optional aiohttp is installed.
     state = {"route": "openai", "fault": "error", "calls": 0, "closed": [],
              "release": asyncio.Event(), "reading": asyncio.Event()}
 
@@ -109,6 +108,24 @@ async def test_complete_answer_is_not_lost_or_replayed(route, mode, fault, respo
         state["release"].set()
         for _ in range(5):
             await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_response_cleanup_preserves_shared_client(response_transport, monkeypatch, scheduler):
+    import langchain_anthropic.chat_models as anthropic_model
+    from backend.llm.response_cleanup import protect_response
+
+    state = response_transport
+    state.update(route="anthropic", fault="error")
+    async with httpx2.AsyncClient() as shared:
+        monkeypatch.setattr(anthropic_model, "_get_default_async_httpx_client", lambda **kwargs: shared)
+        async with real_provider("anthropic", monkeypatch) as first, real_provider("anthropic", monkeypatch) as second:
+            for provider in (first, second):
+                assert (await provider.ainvoke(MESSAGES)).content == "complete"
+                assert provider._client._async_client._client is shared
+                assert not shared.is_closed
+            assert state["calls"] == 2
+            assert shared.event_hooks["response"].count(protect_response) == 1
 
 
 @pytest.mark.asyncio

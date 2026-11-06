@@ -124,7 +124,7 @@ export function GradingProgressPage() {
   return (
     <div className="w-full max-w-[1300px]">
       <h1 className="min-h-9 text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">
-        {status === "grading_paused" ? (locale === "zh-CN" ? "批改进度" : "Grading progress") : copy(locale, "title")}
+        {status === "error" ? copy(locale, "failedTitle") : status === "grading_paused" ? (locale === "zh-CN" ? "批改进度" : "Grading progress") : copy(locale, "title")}
       </h1>
       <NewTaskStepper currentStep={5} />
       <div className="mx-auto mt-[25px] w-full max-w-[940px]">

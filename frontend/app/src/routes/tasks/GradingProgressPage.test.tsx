@@ -274,6 +274,7 @@ describe("GradingProgressPage completion routing", () => {
     } as unknown as ReturnType<typeof useTaskProgress>);
     renderProgress();
     expect(screen.getByRole("alert")).toHaveTextContent(`This grading run reached its ${title}`);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("This grading run did not finish");
     expect(screen.getByRole("alert")).toHaveTextContent(timing);
     expect(screen.getByRole("alert")).toHaveTextContent("Saved grading results are retained");
     expect(screen.getByRole("alert")).not.toHaveTextContent(code);
