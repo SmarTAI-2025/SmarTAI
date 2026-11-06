@@ -27,6 +27,7 @@ M	backend/tests/test_admin_api.py
 M	backend/tests/test_admin_console.py
 M	backend/tests/test_auth_persistence.py
 M	backend/tests/test_auxiliary_operation_recovery.py
+M	backend/tests/test_baidu_ocr_stage_integration.py
 M	backend/tests/test_docx_upload_routes.py
 M	backend/tests/test_education_api.py
 M	backend/tests/test_grading_checkpoints.py
@@ -46,6 +47,7 @@ M	backend/tests/test_public_route_surface.py
 M	backend/tests/test_question_preparation_recovery.py
 M	backend/tests/test_source_cleanup.py
 M	backend/tests/test_submission_harness_integration.py
+M	backend/tests/test_submission_source_outcomes.py
 M	backend/tests/test_task_background_workflows.py
 M	backend/tests/test_task_execution_control.py
 M	backend/tests/test_upload_contract_entrypoints.py

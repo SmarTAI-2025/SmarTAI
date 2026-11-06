@@ -2,7 +2,7 @@
 
 日期：2026-11-06。来源：[清除最新 main 与 PR300 的废弃代码和旧入口](codex://threads/01a1aedb-812d-74e3-b7c2-29f5574d1437)。[PR302](https://github.com/SmarTAI-2025/SmarTAI/pull/302) 累计清理内容，包括首轮清理、独立材料导入清理，以及用户追加的调用关系复查。
 
-基线是 main `e1f8fd2542057c0a3c232e0f0b1a52bbc0b737be` + PR300 `9eedc31de3224a431f66b6d24be0141111035109`。PR302 暂以 `codex/programming-classroom-reviewed` 为 base；不包含整条 PR291。产品代码/测试/手册累计 **145 个文件变动，其中 58 个删除**；此数字不包含本报告及配图。逐文件状态见 [完整清单](changed-files.txt)。文件标记 `D` 为整文件删除，`M` 为只清理其中的旧部分。
+基线是 main `e1f8fd2542057c0a3c232e0f0b1a52bbc0b737be` + PR300 `9eedc31de3224a431f66b6d24be0141111035109`。PR302 暂以 `codex/programming-classroom-reviewed` 为 base；不包含整条 PR291。产品代码/测试/手册累计 **147 个文件变动，其中 58 个删除**；此数字不包含本报告及配图。逐文件状态见 [完整清单](changed-files.txt)。文件标记 `D` 为整文件删除，`M` 为只清理其中的旧部分。
 
 ## 1. 前端清理位置
 
@@ -83,6 +83,7 @@ flowchart LR
 - 本地生产构建浏览器 **70 项通过**：旧 URL/IndexedDB 草稿、四页签、当前导航、停止继续/错误恢复/额度重试、桌面手机布局、中英文公开手册。公共和私有后台构建、类型和范围检查通过。
 - 测试使用临时数据库、合成账号/文件及固定模型响应，没有真实 AI 准确率、正式学生数据或生产运行验收的含义。CI 与本地日志必须对应各自实际 SHA；首轮 `d0a6c6f0` 的成功记录不能代替追加清理后的 head。
 - 最终 head、CI run 和逐阶段状态见 PR302 描述及 canonical 导航目录 `docs/project_navigation/2026-11-06-retired-cleanup/material-import-removal/` 的验证记录。正式 review、合并、部署分别记录，不由测试通过推导。
+- 首次追加 head 的完整 CI 检出两个 OCR 测试仍 monkeypatch 已删的 facade 别名（共3个参数用例）；改为当前 `question_sources` 工厂和实际 provider 替身，保留并加强错误传播/不重复提交断言。该失败记录保留，最终验证使用修复后的新 head。
 
 ## 4. 与 PR291 的整合约束
 
