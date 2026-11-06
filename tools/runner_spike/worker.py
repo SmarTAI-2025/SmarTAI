@@ -52,10 +52,30 @@ _ABSOLUTE_PATH_RE = re.compile(
 )
 
 
+# A second NUL cannot be a Python repr value; it marks an uncomparable return.
+RETURN_UNAVAILABLE = "\x00"
+
+
+class FunctionReturnUnavailable(ValueError):
+    def __init__(self):
+        super().__init__("programming_return_value_unavailable")
+
+
 # Only this supervisor serializes runner status. The child can supply its
 # return value and stdout, but never receives an expected answer or verdict.
 _CALL_PROGRAM = """
-import json, os, runpy, sys
+import json, math, os, runpy, sys
+def literal_value(value):
+    kind = type(value)
+    if kind in (type(None), bool, int, str, bytes):
+        return True
+    if kind in (float, complex):
+        return math.isfinite(value.real) and math.isfinite(value.imag)
+    if kind in (list, tuple, set):
+        return all(literal_value(item) for item in value)
+    if kind is dict:
+        return all(literal_value(key) and literal_value(item) for key, item in value.items())
+    return False
 source, target = sys.argv[1:3]
 call = json.loads(sys.stdin.read())
 namespace = runpy.run_path(source, run_name="__smartai_submission__")
@@ -65,11 +85,16 @@ with open(int(target) if target.isdecimal() else target, "wb") as channel:
     channel.write(bytes([0]))
     channel.flush()
     value = namespace[call["name"]](*call["args"], **call["kwargs"])
-    # Use JSON to reject tensors, class instances, handles and non-finite
-    # floats before exposing the legacy repr-compatible comparison value.
-    json.dumps(value, ensure_ascii=True, allow_nan=False)
-    # Preserve tuple/list and numeric/string key distinctions for comparison.
-    channel.write(repr(value).encode("utf-8"))
+    # Input arguments are JSON, but returned values use Python literals.
+    # Keep sets, bytes and literal dictionary keys while rejecting objects
+    # with arbitrary repr methods and non-finite numbers.
+    try:
+        comparable = literal_value(value)
+    except RecursionError:
+        comparable = False
+    # Unsupported return representations are an evaluator limitation, not a
+    # Python exception raised by the submitted function.
+    channel.write(repr(value).encode("utf-8") if comparable else bytes([0]))
 """
 
 
@@ -484,6 +509,9 @@ def _execute_request(payload: Any, *, workdir: Path = DEFAULT_WORKDIR, track_res
             return case_result(exit_reason=resource_failure, resource_status=resource_failure + "_exceeded",
                                stdout=stdout, stderr=stderr, stdout_truncated=stdout_truncated,
                                stderr_truncated=stderr_truncated, duration_ms=(time.perf_counter() - started_at) * 1000)
+        if returncode == 0 and return_value == RETURN_UNAVAILABLE:
+            return _result(request["execution_id"], executed=False, exit_reason="internal_error",
+                           stderr="programming_return_value_unavailable", resource_status="not_executed")
         if returncode == 0 and (not request["function_call"] or return_value):
             result = case_result(
                 exit_reason="success",

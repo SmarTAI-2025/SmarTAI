@@ -57,7 +57,10 @@ from backend.models import TestCase
 from backend.services.python_source_encoding import python_execution_source
 from backend.tools.sandbox_runtime import get_sandbox_limit, get_sandbox_semaphore
 
-from tools.runner_spike.worker import child_command, request_digest, _diagnose_failure, split_function_result
+from tools.runner_spike.worker import (
+    FunctionReturnUnavailable, RETURN_UNAVAILABLE, child_command, request_digest,
+    _diagnose_failure, split_function_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +224,8 @@ async def run_python_subprocess(
                     value = returned.read((limit + 1) * 4 + 1).decode(errors="replace")
                 value, return_truncated = _truncate_output(value, limit + 1)
                 module_loaded, return_value = split_function_result(value)
+            if proc.returncode == 0 and return_value == RETURN_UNAVAILABLE:
+                raise FunctionReturnUnavailable()
             output_limited = stdout_truncated or stderr_truncated or return_truncated
             if output_limited:
                 limit_error = f"Output limit exceeded ({max_output_chars} chars)"
@@ -499,6 +504,13 @@ def _values_match(actual_repr: str, expected_repr: str, mode="default", abs_tol=
         return False
 
 
+def _literal_key(value):
+    # Hashable containers must preserve nested bool/number distinctions too.
+    if type(value) in (float, complex) and not (math.isfinite(value.real) and math.isfinite(value.imag)):
+        raise ValueError("Non-finite literal key")
+    return (type(value), tuple(_literal_key(item) for item in value) if type(value) is tuple else value)
+
+
 def _literal_values_match(actual, expected, exact, abs_tol, rel_tol):
     if type(actual) in (int, float) and type(expected) in (int, float):
         if exact and type(actual) is not type(expected):
@@ -510,11 +522,16 @@ def _literal_values_match(actual, expected, exact, abs_tol, rel_tol):
         return _numeric_text_match(repr(actual), repr(expected), abs_tol, rel_tol)
     if type(actual) is not type(expected):
         return False
+    if type(actual) is complex:
+        return (all(math.isfinite(part) for value in (actual, expected) for part in (value.real, value.imag))
+                and actual == expected)
     if isinstance(actual, (list, tuple)):
         return len(actual) == len(expected) and all(
             _literal_values_match(a, b, exact, abs_tol, rel_tol) for a, b in zip(actual, expected)
         )
     if isinstance(actual, dict):
-        return ({(type(k), k) for k in actual} == {(type(k), k) for k in expected}
+        return ({_literal_key(k) for k in actual} == {_literal_key(k) for k in expected}
                 and all(_literal_values_match(actual[k], expected[k], exact, abs_tol, rel_tol) for k in actual))
+    if isinstance(actual, set):
+        return {_literal_key(k) for k in actual} == {_literal_key(k) for k in expected}
     return actual == expected

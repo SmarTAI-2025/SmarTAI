@@ -23,7 +23,7 @@ import uuid
 
 from backend.config import settings
 from tools.runner_spike.harness import build_container_command
-from tools.runner_spike.worker import request_digest
+from tools.runner_spike.worker import FunctionReturnUnavailable, request_digest
 
 
 logger = logging.getLogger(__name__)
@@ -236,6 +236,12 @@ async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, ma
                              "stdout", "stderr", "duration_ms", "resource_status", "isolation_mode"}
                 if not mandatory.issubset(result.model_fields_set):
                     raise IsolatedRunnerUnavailable()
+                if (function_call is not None and not result.executed and result.execution_id == execution_id
+                        and result.isolation_mode == "oci_container" and result.request_digest == digest
+                        and result.exit_reason == "internal_error" and result.resource_status == "not_executed"
+                        and result.total_count == result.passed_count == 0
+                        and result.stderr == "programming_return_value_unavailable"):
+                    raise FunctionReturnUnavailable()
                 if result.execution_id != execution_id or result.isolation_mode != "oci_container" or not result.executed:
                     raise IsolatedRunnerUnavailable()
                 allowed = {"success", "runtime_error", "timeout", "output_limit", "syntax_error"}
@@ -272,7 +278,7 @@ async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, ma
                     execution_id=execution_id, request_digest=digest, error=result.stderr, duration_ms=result.duration_ms,
                     exit_reason=result.exit_reason.value, stdout_truncated=result.stdout_truncated,
                     stderr_truncated=result.stderr_truncated, isolation_mode="oci_container")
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, FunctionReturnUnavailable):
         raise
     except Exception as exc:
         raise IsolatedRunnerUnavailable() from exc

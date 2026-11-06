@@ -205,6 +205,19 @@ def test_worker_owns_status_and_keeps_function_return_separate(tmp_path, monkeyp
     assert result.request_digest == worker.request_digest(request)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX worker return descriptor")
+def test_worker_uncomparable_return_is_an_evaluator_limit(tmp_path, monkeypatch):
+    from tools.runner_spike import worker
+    if sys.platform != "linux":
+        monkeypatch.setattr(worker, "_apply_child_limits", lambda *_: None)
+    request = _request("def f(): return frozenset({1, 2})")
+    request.update(task_type="programming", function_call={"name":"f", "args":[], "kwargs":{}}, bind_request=True)
+    result = RunnerResult.model_validate(execute_request(request, workdir=tmp_path))
+    assert not result.executed and result.total_count == result.passed_count == 0
+    assert result.exit_reason == "internal_error" and result.stderr == "programming_return_value_unavailable"
+    assert result.request_digest == worker.request_digest(request)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX private worker channels")
 @pytest.mark.parametrize(("code", "call", "reason"), [
     ("def f(x): return (", {"name":"f", "args":[2], "kwargs":{}}, "syntax_error"),
