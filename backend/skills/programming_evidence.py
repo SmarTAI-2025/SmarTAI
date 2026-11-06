@@ -27,11 +27,12 @@ _STUDENT_FAILURES = {
 # and exception strings stay out of public text.
 _UNGRADED_REASONS = {
     "native_standard_unsupported": ("本题要求的语言标准超出 C11 / C++17 支持范围，请按题目要求人工复核。", "The requested standard is outside C11 / C++17. Review the submission using the required standard."),
-    "native_header_unavailable": ("找不到所需头文件，请核对源码依赖及运行镜像后重试。", "A required header is missing. Check the submission dependencies and runner image, then retry."),
+    "native_header_unavailable": ("缺少程序需要的头文件，请核对提交文件或联系管理员。", "A required header is missing. Check the submitted files or contact your administrator."),
     "native_main_required": ("请教师复核函数片段，或提交含 main 的单文件标准输入程序。", "Review the function fragment or submit one stdin program with main."),
-    "toolchain_unavailable": ("请管理员修复镜像中的编译器、头文件或链接器，再重试。", "Ask the administrator to repair the compiler, headers or linker in the image, then retry."),
-    "native_runner_unavailable": ("请管理员检查隔离运行时和镜像，再重试。", "Ask the administrator to check the OCI runtime and image, then retry."),
+    "toolchain_unavailable": ("编译服务不可用，请联系管理员处理后重试。", "The compilation service is unavailable. Contact your administrator, then retry."),
+    "native_runner_unavailable": ("代码测试服务不可用，请联系管理员处理后重试。", "The code testing service is unavailable. Contact your administrator, then retry."),
     "programming_execution_unavailable": ("测试服务未能完成运行，请稍后重试失败项。", "The test service could not finish running the tests. Retry the failed items."),
+    "programming_return_value_unavailable": ("暂时无法核对函数的返回值，请人工复核。", "The function’s return value could not be checked. Review it manually."),
     "programming_reference_conflict": ("参考程序未通过本题测试，请核对参考程序与预期结果。", "The reference program failed the tests. Check it against the expected results."),
     "programming_conflicting_expectations": ("同一输入有不同的预期结果，请核对本题测试样例。", "The same input has different expected results. Check the test cases."),
     "programming_case_configuration_invalid": ("测试样例与题目要求不匹配，请核对输入、预期结果和函数要求。", "Check the test inputs and expected results against the question and its function requirements."),

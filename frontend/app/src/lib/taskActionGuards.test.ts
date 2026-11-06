@@ -518,6 +518,15 @@ describe("background task failure guidance", () => {
     expect(info.actionHref).toBe("/tasks/T/grading/progress");
   });
 
+  it.each(["zh-CN", "en-US"] as const)("routes uncomparable returns to manual review in %s", (locale) => {
+    const info = classifyRecoverableError("programming_return_value_unavailable", { locale, taskId: "T" });
+    expect(info.title).toContain(locale === "zh-CN" ? "返回值" : "return values");
+    expect(info.description).toContain(locale === "zh-CN" ? "尚未评分" : "ungraded");
+    expect(info.description).toContain(locale === "zh-CN" ? "人工补齐" : "manually");
+    expect(info.description).not.toMatch(/JSON|OCI|programming_/);
+    expect(info.actionHref).toBe("/tasks/T/grading/progress");
+  });
+
   it("routes an unsafe image payload back to file selection", () => {
     const info = classifyRecoverableError("provider_image_payload_invalid", { locale: "zh-CN" });
 

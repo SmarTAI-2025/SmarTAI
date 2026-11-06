@@ -844,6 +844,8 @@ def _grading_failure_code(run) -> str | None:
     infrastructure = {"programming_execution_unavailable", "native_runner_unavailable", "toolchain_unavailable", "native_header_unavailable"}
     if infrastructure.intersection(kinds) or legacy_execution_unavailable:
         return "programming_execution_unavailable"
+    if "programming_return_value_unavailable" in kinds:
+        return "programming_return_value_unavailable"
     material_errors = {"programming_case_configuration_invalid", "programming_conflicting_expectations",
                        "programming_cases_unavailable", "programming_reference_conflict", "programming_no_cases",
                        "programming_input_domain_unverified"}

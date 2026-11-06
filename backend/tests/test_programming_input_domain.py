@@ -59,6 +59,68 @@ def test_parameter_binding_and_conditional_output():
     assert input_domain(p, call([1, 3])) == "unknown"
 
 
+@pytest.mark.parametrize("criterion", [
+    "输入保证大于零。", "输入限于大于零的整数。", "只考虑正整数。",
+    "参数的十进制表示须为回文。", "The input is drawn from a teacher-defined subset.",
+    "If n is positive, return n.",
+])
+def test_unparsed_rubric_constraints_cannot_be_silently_dropped(criterion):
+    p = problem("Implement f(n): n is an integer. Return n.", criterion=criterion)
+    assert input_domain(p, call([-1])) != "allowed"
+
+
+@pytest.mark.parametrize("location", ["stem", "criterion"])
+def test_unambiguous_chinese_bound_is_checked_without_broadening_examples(location):
+    p = problem("Implement f(n): n is an integer. Return n.")
+    setattr(p, location, getattr(p, location) + " 输入保证大于零。")
+    assert input_domain(p, call([1])) == "allowed"
+    assert input_domain(p, call([0])) == input_domain(p, call([-1])) == "outside"
+    # A positive teacher example does not define an otherwise unknown domain.
+    p = problem("Implement f(n): Return n.", test_cases=[
+        TestCase(function_name="f", function_args=[1], expected_return="1")])
+    assert input_domain(p, call([2])) == "unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("criterion", ["输入保证大于零。", "输入限于教师约定的正数集合。"])
+@pytest.mark.parametrize("other_teacher_failure", [False, True])
+async def test_domain_violation_never_reaches_grading_even_with_real_partial_failure(criterion, other_teacher_failure):
+    p = problem("Implement f(n): n is an integer. Return n.", criterion=criterion,
+        solution_code="def f(n): return n", test_cases=[
+            TestCase(function_name="f", function_args=[1], expected_return="1"),
+            TestCase(function_name="f", function_args=[2], expected_return="2"),
+            TestCase(function_name="f", function_args=[-1], expected_return="-1", source="llm_generated"),
+        ])
+    source = "def f(n): return 99 if n == 2 else abs(n)" if other_teacher_failure else "def f(n): return abs(n)"
+    execute = AsyncMock(wraps=programming.run_sandbox)
+    with programming_run(None, None):
+        run = await evidence_for_answer(problem=p, answer=StudentAnswerInfo(q_id="q1", number="1",
+            type="programming", content=source), student_id="s", task_id="t", provider=fixed_provider(),
+            reporter=None, generate=None, execute=execute)
+    from backend.skills.programming_evidence import describe_run
+    facts, examples = describe_run(run, "en", p)
+    assert facts.teacher_tests.total == 2 and facts.teacher_tests.passed == (1 if other_teacher_failure else 2)
+    assert facts.generated_tests.total == 0
+    assert all(c.function_args[0] > 0 for c in run.cases)
+    assert all(c.function_args[0] > 0 for invoke in execute.await_args_list for c in invoke.args[1])
+    assert all(item.get("input") != "[-1]" for item in examples)
+
+
+@pytest.mark.asyncio
+async def test_new_input_generation_repairs_known_bound_before_reference_or_student_runs():
+    p = problem("Implement f(n): n is an integer. Return n.", criterion="输入保证大于零。",
+        solution_code="def f(n): return n")
+    provider = fixed_provider(response({"single_arguments": [-1, 1]}))
+    execute = AsyncMock(wraps=programming.run_sandbox)
+    with programming_run(None, None):
+        run = await evidence_for_answer(problem=p, answer=StudentAnswerInfo(q_id="q1", number="1",
+            type="programming", content="def f(n): return abs(n)"), student_id="s", task_id="t",
+            provider=provider, reporter=None, generate=programming._generate_test_cases, execute=execute)
+    assert run.status == "executed" and run.report.passed_count == run.report.total_count == 2
+    assert all(c.function_args[0] > 0 for invoke in execute.await_args_list for c in invoke.args[1])
+    assert provider.ainvoke.await_count == 1
+
+
 @pytest.mark.parametrize(
     "stem,args",
     [
@@ -154,7 +216,7 @@ def test_explicit_stdin_protocol(stem, raw, status):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["teacher_and_old_ai", "only_old_ai", "fresh_unknown"])
+@pytest.mark.parametrize("mode", ["teacher_and_generated", "only_generated", "fresh_unknown"])
 async def test_persisted_and_released_results_exclude_out_of_scope_observations(monkeypatch, mode):
     from uuid import uuid4
     from backend.config import settings
@@ -181,7 +243,7 @@ async def test_persisted_and_released_results_exclude_out_of_scope_observations(
             io_mode="function", source="llm_generated", function_name="f", function_args=[-1], expected_return="-2"
         ).model_dump()
     ]
-    if mode == "teacher_and_old_ai":
+    if mode == "teacher_and_generated":
         test_cases.insert(
             0,
             TestCase(
@@ -231,7 +293,7 @@ async def test_persisted_and_released_results_exclude_out_of_scope_observations(
     assert frozen.test_cases == test_cases
     evidence = saved.ai_expert_results[0]["programming_evidence"]
     assert not evidence.get("boundary_note") and evidence["generated_tests"]["total"] == 0
-    if mode == "teacher_and_old_ai":
+    if mode == "teacher_and_generated":
         assert saved.ai_score == 10 and evidence["teacher_tests"] == {"passed": 1, "total": 1}
         grading_runs.release(teacher_id=teacher, run_id=run.id)
         (released,) = grading_runs.student_results(student_id=student, assignment_id=tid)
@@ -241,7 +303,7 @@ async def test_persisted_and_released_results_exclude_out_of_scope_observations(
         with pytest.raises(ResultNotReleasable):
             grading_runs.release(teacher_id=teacher, run_id=run.id)
         assert not grading_runs.student_results(student_id=student, assignment_id=tid)
-        if mode == "only_old_ai":
+        if mode == "only_generated":
             route.ainvoke.assert_not_awaited()
 
 

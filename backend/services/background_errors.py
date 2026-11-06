@@ -92,6 +92,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "grading_failed",
     "grading_provider_transient",
     "programming_execution_unavailable",
+    "programming_return_value_unavailable",
     "programming_test_material_needs_review",
     "grading_inputs_changed",
     "grading_persistence_failed",

@@ -267,7 +267,7 @@ def _reference_execution_identity(problem):
 def _question_key(state, problem):
     cp = state.checkpoints
     question = cp.questions.get(problem.q_id) if cp else None
-    return digest({**({"generated_input_domain_version": 1} if not problem.test_cases or any(c.source == "llm_generated" for c in problem.test_cases) else {}),
+    return digest({
         "engine": VERSION, "owner": state.owner, "assignment": state.assignment,
         "question": question.id if question else problem.q_id, "q_id": problem.q_id,
         "version": question.version if question else None, "stem": problem.stem,
@@ -391,7 +391,7 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
         except ValueError as exc:
             state.failures[key] = str(exc) if str(exc) in {
                 "programming_conflicting_expectations", "programming_reference_conflict",
-                "programming_cases_unavailable", "programming_input_domain_unverified", "programming_execution_contract_invalid", "native_standard_unsupported",
+                "programming_cases_unavailable", "programming_input_domain_unverified", "programming_execution_contract_invalid", "native_standard_unsupported", "programming_return_value_unavailable",
             } else "programming_case_configuration_invalid"
             return key, [], state.failures[key]
         except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError) as exc:
@@ -611,7 +611,9 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
             try:
                 report = await _execute_remaining(state, key, identity, executable, cases, execute)
             except (IsolatedRunnerUnavailable, HostCodeExecutionDisabled, TimeoutError, ValueError) as exc:
-                if isinstance(exc, NativeBuildUnavailable):
+                if isinstance(exc, ValueError) and str(exc) == "programming_return_value_unavailable":
+                    state.failures[key] = str(exc)
+                elif isinstance(exc, NativeBuildUnavailable):
                     state.failures[key] = exc.reason
                 else:
                     state.failures[key] = "native_runner_unavailable" if native else "programming_execution_unavailable"
