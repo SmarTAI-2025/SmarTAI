@@ -128,6 +128,29 @@ def _typed(value, spec, stdin):
     }[label]
 
 
+def _output_only(text):
+    """Ignore complete output instructions, never just their opening verb."""
+    match = re.fullmatch(r"(?:(?:return|print|output|echo|compute|calculate)\b|返回|输出|计算|求)\s*(.+)", text, re.I)
+    if not match:
+        return False
+    value = match[1].strip()
+    if re.fullmatch(
+        r"(?:the )?(?:answer|result|sum)|(?:its|their|the) (?:value|length|size|sum|square)|"
+        r"double its value|the input|it(?: exactly)?|(?:它的|其)(?:两倍|平方|长度)|两倍的值|原字符串|列表长度|字符串长度|结果|答案",
+        value, re.I,
+    ):
+        return True
+    if re.fullmatch(rf"whether {IDENT} is (?:{SIGN}|{TYPE})", value, re.I):
+        return True
+    try:
+        # Parse only; no teacher text is evaluated. A complete expression cannot
+        # conceal prose such as 'on positive integers' or 'assuming ...'.
+        ast.parse(value, mode="eval")
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+    return True
+
+
 def _input_clauses(text, *, rubric=False):
     for sentence in _clauses(text, commas=False):
         if rubric and re.fullmatch(
@@ -136,7 +159,7 @@ def _input_clauses(text, *, rubric=False):
             sentence, re.I,
         ):
             continue  # An award based solely on test outcomes adds no input constraint.
-        conditional = re.search(r"\b(?:if|when|unless)\b|如果|若|当", sentence, re.I)
+        conditional = re.search(r"\b(?:if|when|unless|otherwise|else)\b|如果|若|当|否则", sentence, re.I)
         if conditional:
             if rubric:
                 yield "unresolved input constraint"
@@ -145,7 +168,19 @@ def _input_clauses(text, *, rubric=False):
             # In "if a > 0, b must be …" it is an unsupported conditional domain.
             branch = sentence[conditional.start() :]
             sentence = sentence[: conditional.start()]
-            if not re.search(r"\b(?:return|print|output)\b|返回|输出", branch, re.I):
+            output = re.search(r"\b(?:return|print|output)\b|返回|输出", branch, re.I)
+            valid = output is not None
+            if output:
+                condition = re.sub(r"^(?:if\b|when\b|unless\b|otherwise\b|else\b|如果|若|当|否则)", "", branch[:output.start()], flags=re.I)
+                condition = re.sub(r"(?:\bthen|则)\s*$", "", condition.strip(" ,:：")).strip()
+                if condition and not re.fullmatch(rf"{IDENT}\s*(?:为|是)\s*(?:{TYPE}|{SIGN})", condition, re.I):
+                    try:
+                        ast.parse(condition, mode="eval")
+                    except (SyntaxError, ValueError, RecursionError):
+                        valid = False
+                outputs = re.split(r",\s*(?:otherwise\b|else\b|否则)\s*", branch[output.start():], flags=re.I)
+                valid &= all(_output_only(item) for item in outputs)
+            if not valid:
                 yield "unresolved input constraint"
         yield from _clauses(sentence)
 
@@ -304,9 +339,10 @@ def input_domain(problem, case):
     for raw, rubric in _declarations(stem, problem.criterion):
         # A comparison inside an instruction, example or conditional branch is
         # not a restriction on callers. Separate independently declared inputs.
-        part = re.split(
-            r"\s+and\s+(?=(?:print|return|output)\b)|\s+(?=(?:if|when)\b)", raw, maxsplit=1, flags=re.I
-        )[0]
+        parts = re.split(r"\s+and\s+(?=(?:print|return|output)\b)", raw, maxsplit=1, flags=re.I)
+        part = parts[0]
+        if len(parts) > 1 and not _output_only(parts[1]):
+            unknown = True
         if _CONDITIONAL.match(part) or re.match(r"^(?:else\b|then\b)", part, re.I):
             continue
         part = re.sub(
@@ -423,10 +459,7 @@ def input_domain(problem, case):
         if rubric:
             unknown |= _SCORING_ONLY.fullmatch(part) is None
             continue
-        if re.fullmatch(r"(?:return|print) (?:its|the) (?:length|size)", part, re.I):
-            continue
-        # Output tests ("return whether n is positive") never constrain the caller.
-        if re.match(r"^(?:return whether|return true if|判断|判断是否)", part, re.I):
+        if _output_only(part):
             continue
         if _UNSUPPORTED.search(part) or re.search(
             rf"(?:\b(?:{names})\b\s*(?:{DECL}|{OPS}|∈)|输入(?:是|为|的)|input\s+(?:is|must|consists))", part, re.I
@@ -437,8 +470,7 @@ def input_domain(problem, case):
         ):
             unknown = True
         elif not rubric and not re.match(
-            r"^(?:implement(?: the)?(?: required| python)?(?: function)?$|(?:a )?function$|return\b|print\b|echo\b|"
-            r"compute\b|calculate\b|output\b|返回|输出|计算|求|实现$|函数$|\.\.\.$)",
+            r"^(?:implement(?: the)?(?: required| python)?(?: function)?$|(?:a )?function$|实现$|函数$|\.\.\.$)",
             part,
             re.I,
         ):
