@@ -160,9 +160,11 @@ for (const paused of [false, true]) test(`early ${paused ? "pause" : "failure"} 
   await card.getByRole("button", { name: "题目 · 修改", exact: true }).click();
   await card.getByRole("textbox", { name: "题目", exact: true }).fill("What is 2 + 2?");
   await card.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(card.getByRole("textbox", { name: "题目", exact: true })).toHaveCount(0);
   await card.getByRole("button", { name: "修改第 1.1.5 题满分与评分标准", exact: true }).click();
   await card.getByRole("textbox", { name: "第 1.1.5 题评分标准" }).fill("Award 10 points for 4.");
   await card.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(card.getByRole("textbox", { name: "第 1.1.5 题评分标准" })).toHaveCount(0);
   await card.getByRole("button", { name: /· 待确认$/ }).click();
   await expect(card.getByRole("button", { name: /· 已确认$/ })).toBeVisible();
   await page.goto("/tasks/early-manual/questions?manualJob=early-job");
