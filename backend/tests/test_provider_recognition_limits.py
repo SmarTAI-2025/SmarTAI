@@ -1,5 +1,4 @@
 import asyncio
-import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -88,16 +87,17 @@ async def test_sdk_limit_is_per_call_and_response_metadata_is_preserved(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_proxy_gemini_passes_limit_to_fresh_sync_client(monkeypatch):
+async def test_proxy_gemini_passes_limit_to_fresh_async_client(monkeypatch):
     provider = GeminiProvider(ProviderConfig(provider_type="gemini", model="fixture", api_key="fixture"))
     monkeypatch.setattr(GeminiProvider, "_needs_proxy_mode", property(lambda self: True))
     calls = []
 
-    def invoke(messages, **kwargs):
+    async def invoke(messages, **kwargs):
         calls.append(kwargs)
         return SimpleNamespace(content="literal", usage_metadata=None, response_metadata={"finish_reason": "STOP"})
 
-    monkeypatch.setattr(provider, "_build_client_sync", lambda: SimpleNamespace(invoke=invoke))
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(provider, "_build_client_sync", lambda: SimpleNamespace(ainvoke=invoke, aclose=AsyncMock()))
     result = await provider.ainvoke_vision("read", [VisionImage(b"fixture", "image/png")], max_output_tokens=512)
     assert calls == [{"generation_config": {"max_output_tokens": 512}}]
     assert result.input_tokens is None and result.finish_reason == "stop"
@@ -179,32 +179,28 @@ def test_sdk_visible_blocks_are_faithful_and_reasoning_is_not_source_text():
 
 
 @pytest.mark.asyncio
-async def test_sync_gemini_cancellation_keeps_capacity_until_worker_drains(monkeypatch):
+async def test_proxy_gemini_cancellation_stops_request_and_releases_capacity(monkeypatch):
     provider = GeminiProvider(ProviderConfig(provider_type="gemini", model="fixture", api_key="fixture", max_concurrent=1))
     monkeypatch.setattr(GeminiProvider, "_needs_proxy_mode", property(lambda self: True))
-    started, release = threading.Event(), threading.Event()
+    started, stopped, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
-    def invoke(messages, **kwargs):
+    async def invoke(messages, **kwargs):
         started.set()
-        assert release.wait(5), "test must release its sync worker"
-        return SimpleNamespace(content="literal")
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
 
-    monkeypatch.setattr(provider, "_build_client_sync", lambda: SimpleNamespace(invoke=invoke))
+    async def close():
+        closed.set()
+
+    monkeypatch.setattr(provider, "_build_client_sync", lambda: SimpleNamespace(ainvoke=invoke, aclose=close))
     task = asyncio.create_task(provider.ainvoke([HumanMessage(content="read")], max_output_tokens=512))
-    try:
-        for _ in range(100):
-            if started.is_set():
-                break
-            await asyncio.sleep(0.01)
-        assert started.is_set()
-        task.cancel()
-        await asyncio.sleep(0.01)
-        task.cancel()
-        await asyncio.sleep(0.01)
-        from backend.llm.concurrency import get_scheduler
-        assert not task.done() and get_scheduler().active == 1
-    finally:
-        release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+    await asyncio.wait_for(started.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 2)
+    from backend.llm.concurrency import get_scheduler
+    await asyncio.wait_for(closed.wait(), 2)
+    assert stopped.is_set() and closed.is_set()
     assert get_scheduler().active == 0

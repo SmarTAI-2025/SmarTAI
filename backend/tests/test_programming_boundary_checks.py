@@ -42,6 +42,9 @@ async def test_matched_reference_boundary_is_visible_without_changing_teacher_cr
         outcomes = await asyncio.gather(*(programming.ProgrammingSkill(provider, language="zh").grade(problem, answer, student_id="s") for _ in range(2)))
     assert provider.ainvoke.await_count == 2
     assert execute.await_count == (2 if mixed else 4)
+    # Reference, student and extra-boundary executions share the current
+    # default; explicit per-case limits are still interpreted by the runner.
+    assert all(call.kwargs["per_case_timeout"] == 5.0 for call in execute.await_args_list)
     for vote in outcomes:
         note = vote.programming_evidence.boundary_note
         assert note and "-1" in note and "-2" in note and note in vote.comment

@@ -618,6 +618,8 @@ class _PinnedAsyncHTTPTransport(httpx.AsyncHTTPTransport):
         _validate_outbound_request(request, self._allowed_target_url)
         request.headers["accept-encoding"] = "identity"
         response = await super().handle_async_request(request)
+        from backend.llm.response_cleanup import protect_response
+        await protect_response(response)
         if 300 <= response.status_code < 400:
             await response.aclose()
             raise ProviderEndpointError("provider_endpoint_redirect_blocked")

@@ -56,7 +56,6 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 logger = logging.getLogger(__name__)
 
 _USABLE_RUN_STATUSES = frozenset({"completed", "partial_failed"})
-_RATE_WINDOW_SECONDS = 30.0
 
 
 class QueryRequest(BaseModel):
@@ -145,7 +144,6 @@ class _AnalyticsFacts:
         return {result.student_id for result in self.results}
 
 
-_query_last_at: dict[str, float] = {}
 _query_rate_lock = RLock()
 
 
@@ -445,28 +443,6 @@ def _presentation_payload(
     return {"results": students}, stats
 
 
-def _check_rate_limit(owner_id: str) -> None:
-    now = time.monotonic()
-    with _query_rate_lock:
-        last = _query_last_at.get(owner_id, 0.0)
-        elapsed = now - last
-        if elapsed < _RATE_WINDOW_SECONDS:
-            retry_after = max(1, math.ceil(_RATE_WINDOW_SECONDS - elapsed))
-            raise HTTPException(
-                status.HTTP_429_TOO_MANY_REQUESTS,
-                detail={
-                    "code": "analytics_rate_limited",
-                    "retry_after_seconds": retry_after,
-                },
-                headers={"Retry-After": str(retry_after)},
-            )
-        _query_last_at[owner_id] = now
-        stale_before = now - (_RATE_WINDOW_SECONDS * 2)
-        for actor_id, timestamp in list(_query_last_at.items()):
-            if timestamp < stale_before:
-                _query_last_at.pop(actor_id, None)
-
-
 def _safe_text(value: Any, max_length: int) -> str:
     return str(value or "").replace("\x00", "").strip()[:max_length]
 
@@ -637,15 +613,18 @@ async def interpret_filter_intent(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "analytics_provider_unavailable"},
         )
-    _check_rate_limit(f"{current.id}:filter-intent")
+    _check_ask_limit(current.id)
     provider_question, identities = _redact_filter_question(req.question, known_identifiers)
 
     try:
-        output = await analytics_agent.interpret_filter_intent(
-            question=provider_question,
-            surface=req.surface,
-            provider=provider,
-        )
+        from backend.llm.request_timeouts import response_timeout_scope
+        async with asyncio.timeout(240):
+            with response_timeout_scope(60, response_only=True):
+                output = await analytics_agent.interpret_filter_intent(
+                    question=provider_question,
+                    surface=req.surface,
+                    provider=provider,
+                )
         text_terms = []
         for term in output.text_terms:
             normalized = term.strip().casefold()
@@ -664,6 +643,8 @@ async def interpret_filter_intent(
             "text_terms": text_terms,
             "explanation": _safe_text(output.explanation, 500),
         }
+    except TimeoutError as exc:
+        raise HTTPException(504, detail={"code": "analytics_timeout"}) from exc
     except SharedPoolLimitError as exc:
         raise _provider_error(exc) from exc
     except Exception as exc:
@@ -697,30 +678,34 @@ def _check_ask_limit(owner_id: str) -> None:
             if not _ask_bursts[actor]:
                 del _ask_bursts[actor]
         requests = _ask_bursts.setdefault(owner_id, [])
-        if len(requests) >= 12:
-            raise HTTPException(429, detail={"code": "analytics_rate_limited"}, headers={"Retry-After": "60"})
+        if len(requests) >= 6:
+            retry_after = max(1, math.ceil(60 - (now - requests[0])))
+            raise HTTPException(429, detail={"code": "analytics_rate_limited"}, headers={"Retry-After": str(retry_after)})
         requests.append(now)
 
 
 async def _run_grounded_ask(task_id: str | None, req: AskRequest, current: User, registry: ExpertRegistry):
     try:
-        if any(len(turn) > 2000 for turn in req.history):
-            raise HTTPException(422, detail={"code": "ask_history_too_long"})
-        snapshot = await asyncio.to_thread(load_snapshot, task_id, current.id)
-        provider = resolve_owner_default_provider(current.id, registry)
-        if provider is None:
-            raise HTTPException(503, detail={"code": "analytics_provider_unavailable"})
-        _check_ask_limit(current.id)
-        result = await grounded_ask.ask(task_id=task_id, owner_id=current.id, question=req.question,
-            surface=req.surface, provider=provider, context_student_id=req.context_student_id,
-            history=req.history, snapshot=snapshot)
-        if req.surface == "history" and result.get("tasks") is not None:
-            result["tasks"] = await enrich_history_progress(result["tasks"], owner_id=current.id)
-        # Keep query plans and diagnostic context inside the agent. All Ask
-        # routes, including /query's nested execution, share this boundary.
-        return {key: result[key] for key in (
-            "recognized", "kind", "explanation", "data", "selection", "chart", "candidates", "tasks",
-        ) if key in result}
+        async with asyncio.timeout(240):
+            if any(len(turn) > 2000 for turn in req.history):
+                raise HTTPException(422, detail={"code": "ask_history_too_long"})
+            snapshot = await asyncio.to_thread(load_snapshot, task_id, current.id)
+            provider = resolve_owner_default_provider(current.id, registry)
+            if provider is None:
+                raise HTTPException(503, detail={"code": "analytics_provider_unavailable"})
+            _check_ask_limit(current.id)
+            result = await grounded_ask.ask(task_id=task_id, owner_id=current.id, question=req.question,
+                surface=req.surface, provider=provider, context_student_id=req.context_student_id,
+                history=req.history, snapshot=snapshot)
+            if req.surface == "history" and result.get("tasks") is not None:
+                result["tasks"] = await enrich_history_progress(result["tasks"], owner_id=current.id)
+            # Keep query plans and diagnostic context inside the agent. All Ask
+            # routes, including /query's nested execution, share this boundary.
+            return {key: result[key] for key in (
+                "recognized", "kind", "explanation", "data", "selection", "chart", "candidates", "tasks",
+            ) if key in result}
+    except TimeoutError as exc:
+        raise HTTPException(504, detail={"code": "analytics_timeout"}) from exc
     except DomainError as exc:
         if isinstance(exc, NotFound):
             raise _not_found() from exc

@@ -124,7 +124,7 @@ async def run_python_subprocess(
     code: str,
     test_input: str = "",
     *,
-    timeout: float = 10.0,
+    timeout: float = 5.0,
     memory_mb: int = 256,
     max_output_chars: Optional[int] = None,
     function_call: dict | None = None,
@@ -150,8 +150,9 @@ async def run_python_subprocess(
     digest = request_digest({"execution_id": execution_id, "code": code, "stdin": test_input,
                              "function_call": function_call, "timeout": timeout, "memory_mb": memory_mb,
                              "max_output_chars": max_output_chars})
+    from backend.services.submission_work_budget import active_work
     sem = get_sandbox_semaphore()
-    async with sem:
+    async with sem, active_work():
         started_at = time.perf_counter()
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", newline="\n", suffix=".py", delete=False
@@ -161,6 +162,7 @@ async def run_python_subprocess(
 
         result_dir = tempfile.TemporaryDirectory(prefix="smartai-function-") if function_call is not None else None
         return_path = os.path.join(result_dir.name, "return") if result_dir else None
+        launch = None
         try:
             preexec_fn = (
                 (lambda: _apply_limits(memory_mb, int(timeout) + 2))
@@ -168,13 +170,15 @@ async def run_python_subprocess(
                 else None
             )
             command = child_command(code_path, return_path) if bind_request or function_call is not None else [sys.executable, code_path]
-            proc = await asyncio.create_subprocess_exec(
+            # Retain ownership of a launch that completes after cancellation.
+            launch = asyncio.create_task(asyncio.create_subprocess_exec(
                 *command,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 preexec_fn=preexec_fn,
-            )
+            ))
+            proc = await asyncio.shield(launch)
             try:
                 stdout_b, stderr_b = await asyncio.wait_for(
                     proc.communicate((json.dumps(function_call, allow_nan=False) if function_call is not None else test_input).encode()),
@@ -256,6 +260,10 @@ async def run_python_subprocess(
                 stdout_truncated=stdout_truncated,
                 stderr_truncated=stderr_truncated,
             )
+        except asyncio.CancelledError:
+            from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
+            await reap_pdf_worker(launch)
+            raise
         finally:
             if result_dir:
                 result_dir.cleanup()
@@ -298,7 +306,7 @@ async def run_sandbox(
     test_cases: List[TestCase],
     *,
     language: str = "python",
-    per_case_timeout: float = 10.0,
+    per_case_timeout: float = 5.0,
     memory_mb: int = 256,
     on_case_complete: Callable[[TestResult], Awaitable[None]] | None = None,
 ) -> ExecutionReport:

@@ -42,9 +42,11 @@ async def test_saved_pdf_explicit_retry_reaches_failed_leaf(tmp_path, monkeypatc
     monkeypatch.setattr(task_preparation, "get_storage", lambda: storage)
     monkeypatch.setattr(question_sources, "get_storage", lambda: storage)
 
+    from backend.tests.test_recognition_response_deadlines import AdmittedEngine
+    admitted_engine = AdmittedEngine(agent.engine)
     @asynccontextmanager
     async def engine(**_kwargs):
-        yield agent.engine
+        yield admitted_engine
 
     monkeypatch.setattr(question_sources, "recognition_engine", engine)
     draft = ProblemSourceDraft(

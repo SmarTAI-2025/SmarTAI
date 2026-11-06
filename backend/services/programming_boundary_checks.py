@@ -100,7 +100,7 @@ async def _reference_matches(state, problem, ref_source, ref_case, language, exe
             return saved.get("matched") is True
         state.store(runs.AUXILIARY, ref_key, {"status": "started"})
         await runs._notify(reporter, "validate_programming_reference")
-        report = await execute(ref_source, [ref_case], language=language, per_case_timeout=10.0)
+        report = await execute(ref_source, [ref_case], language=language, per_case_timeout=5.0)
         runs._validate_report(report, [ref_case])
         matched = report.passed_count == 1
         state.store(runs.AUXILIARY, ref_key, {"status": "done", "matched": matched})
@@ -154,7 +154,7 @@ async def verified_boundary(problem, run, public, proposal, execute, reporter):
                 student_language = run.source_language or "python"
                 source = python_execution_source(run.code) if student_language == "python" else run.code
                 await runs._notify(reporter, "run_programming_test_cases")
-                report = await execute(source, [case], language=student_language, per_case_timeout=10.0)
+                report = await execute(source, [case], language=student_language, per_case_timeout=5.0)
                 runs._validate_report(report, [case])
                 result, = report.results
                 observation = _observation(case, result)

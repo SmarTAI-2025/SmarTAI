@@ -129,10 +129,12 @@ async def test_real_saved_page_runs_cap_rechecks_and_reuse_without_new_calls(tmp
     from backend.services.recognition_runs import RecognitionRunService
 
     agent, req, data, results = setup(tmp_path, pdf=True, pages=6, initial=["[unclear] + 1 = 3"] * 6)
+    from backend.tests.test_recognition_response_deadlines import AdmittedEngine
+    engine = AdmittedEngine(agent.engine)
     service = RecognitionRunService(store=results.store, capacity=agent.capacity)
     async def on_pages(pages):
         pass
-    args = dict(service=service, request=req, content=data, engine=agent.engine,
+    args = dict(service=service, request=req, content=data, engine=engine,
         total_pages=6, reporter=ProgressReporter("actual-window"), on_pages=on_pages, allow_partial=True)
     _, first = await read_question_pdf_batches(**args)
     assert len(agent.engine.reads) == 6 and len(agent.engine.repairs) == 4

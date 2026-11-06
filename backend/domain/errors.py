@@ -187,6 +187,9 @@ RECOGNITION_ERROR_CODES = frozenset({
     "source_too_large", "submission_source_too_large", "submission_source_content_type_mismatch",
     "source_docx_limit_exceeded", "source_docx_invalid", "source_text_too_large", "programming_tests_json_invalid", "material_ocr_not_allowed_for_role",
     "source_docx_incomplete", "source_docx_busy", "source_docx_timeout", "source_docx_unavailable",
+    "question_preparation_time_limit_reached", "question_preparation_wall_time_limit_reached",
+    "submission_wall_time_limit_reached", "grading_time_limit_reached", "grading_wall_time_limit_reached",
+    "knowledge_wall_time_limit_reached",
     "question_source_pages_out_of_range", "question_source_incomplete",
     "material_ocr_confirmation_required", "material_recognition_review_required", "material_parser_provider_required",
     "recognition_request_invalid", "recognition_source_mismatch", "recognition_plan_changed",
@@ -212,6 +215,8 @@ RECOGNITION_ERROR_CODES = frozenset({
     "provider_model_not_found", "provider_image_payload_invalid", "provider_message_payload_not_supported",
     "provider_endpoint_dns_failed", "provider_endpoint_redirect_blocked", "provider_endpoint_protocol_mismatch",
     "provider_endpoint_response_too_large", "submission_time_limit_reached",
+    "submission_wall_time_limit_reached", "question_preparation_wall_time_limit_reached",
+    "grading_wall_time_limit_reached", "knowledge_wall_time_limit_reached",
 }) | frozenset(PDF_EVIDENCE_STATUS_CODES)
 
 

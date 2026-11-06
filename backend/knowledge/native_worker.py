@@ -221,7 +221,7 @@ def main():
     if sys.platform.startswith("linux"):
         import resource
         resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
-        resource.setrlimit(resource.RLIMIT_CPU, (50, 50))
+        resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
     max_input = 100 * 1024 * 1024 if sys.argv[1] == ".docx" else MAX_BYTES
     body = sys.stdin.buffer.read(max_input + 1)
     if len(body) > max_input:

@@ -48,10 +48,6 @@ class RecognitionReadRequestV1(EvidenceModel):
 
     @model_validator(mode="after")
     def scope_contract(self):
-        if self.policy.timeout_mode == "response_only" and (
-            self.purpose == "knowledge" or self.source.scope == "knowledge_document"
-        ):
-            raise ValueError("knowledge reads retain their own bounded timeout policy")
         if (self.scope == "pages") != bool(self.pages) or self.pages != sorted(set(self.pages)):
             raise ValueError("page scope requires ordered explicit pages")
         if self.scope == "targets" and not self.targets:

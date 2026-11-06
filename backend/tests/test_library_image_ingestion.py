@@ -65,7 +65,8 @@ def offline_model(monkeypatch):
         engine.caps.route_id = route.route_id
         engine.caps.fingerprint = ingestion.stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry)
         engines.append(engine)
-        yield engine
+        from backend.tests.test_recognition_response_deadlines import AdmittedEngine
+        yield AdmittedEngine(engine)
 
     monkeypatch.setattr(ingestion, "recognition_engine", model)
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)

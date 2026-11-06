@@ -375,7 +375,7 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
                 ref_cases = (bind_programming_cases(problem.stem, cases, executable) if language == "python"
                              else bind_stdin_cases(problem.stem, cases))
                 await _notify(reporter, "validate_programming_reference")
-                report = await execute(executable, ref_cases, language=language, per_case_timeout=10.0)
+                report = await execute(executable, ref_cases, language=language, per_case_timeout=5.0)
                 _validate_report(report, ref_cases)
                 if derive_expectations:
                     cases = adapt_programming_cases(problem.stem, expectations_from_reference(cases, ref_cases, report))
@@ -509,7 +509,7 @@ async def _execute_remaining(state, key, identity, code, cases, execute):
         _validate_report(_report_from_rows([local_row]), [subset[local]])
         rows[missing[local]] = restore_index(row, local)
 
-    options = {"language": identity.get("language", "python"), "per_case_timeout": 10.0}
+    options = {"language": identity.get("language", "python"), "per_case_timeout": 5.0}
     if getattr(execute, "supports_case_checkpoints", False) is True:
         options["on_case_complete"] = completed
     try:

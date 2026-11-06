@@ -460,6 +460,8 @@ function QuestionGenerationFailureSummary({
 
 function questionGenerationErrorLabel(code: string, locale: string) {
   const labels: Record<string, [string, string]> = {
+    question_preparation_time_limit_reached: ["已达到有效处理时限", "Active processing limit reached"],
+    question_preparation_wall_time_limit_reached: ["已达到总时限", "Total time limit reached"],
     provider_submit_uncertain: ["请求未返回结果", "No result received"],
     provider_timeout: ["模型响应超时", "Model response timed out"],
     provider_rate_limited: ["模型请求受限", "Model request was rate limited"],

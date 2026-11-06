@@ -494,7 +494,7 @@ async def _read_evidence(
         raise PdfEvidenceError("pdf_invalid")
     if len(pdf_bytes) > MAX_INPUT_BYTES:
         raise PdfEvidenceError("pdf_input_too_large")
-    if type(timeout_seconds) not in {float, int} or not 0 < timeout_seconds <= 30:
+    if type(timeout_seconds) not in {float, int} or not 0 < timeout_seconds <= 10:
         raise PdfEvidenceError("pdf_invalid_request")
     # Revalidate snapshots, including callers that changed a mutable model.
     try:

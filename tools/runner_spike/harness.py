@@ -68,7 +68,7 @@ def _request_limits(request: dict[str, Any]) -> tuple[float, int, int]:
     if not isinstance(limits, dict):
         raise RunnerSpikeError("request limits must be an object")
     try:
-        timeout_seconds = float(limits.get("timeout_seconds", 10.0))
+        timeout_seconds = float(limits.get("timeout_seconds", 5.0))
         memory_mb = int(limits.get("memory_mb", 256))
         max_output_chars = int(limits.get("max_output_chars", 8192))
     except (TypeError, ValueError) as exc:

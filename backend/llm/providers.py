@@ -5,9 +5,8 @@ Each provider implements: `ainvoke(messages) -> LLMResponse`.
 
 Gemini proxy compatibility:
   The supported langchain-google-genai 4.x client uses Google's HTTP SDK.
-  Keep the established per-call synchronous client path for legacy calls when
-  an explicit SmarTAI proxy is configured. Response-only OCR uses that fresh
-  client's cancellable async API. Do not reintroduce
+  Explicit proxies retain per-call clients, using the cancellable async API
+  for every caller. Do not reintroduce
   the removed legacy transport="rest" parameter or infer machine credentials.
 """
 from __future__ import annotations
@@ -22,9 +21,10 @@ import ssl
 import time
 from abc import ABC, abstractmethod
 from collections import deque
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from typing import List, Optional, Dict, Any, Deque, Callable
 from dataclasses import dataclass
+from contextlib import AsyncExitStack
 
 import httpx
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -42,11 +42,24 @@ from backend.llm.endpoint_policy import (
 from backend.llm.provider_catalog import effective_wire_protocol
 from backend.llm.image_capability import is_explicit_image_rejection, explicitly_rejects_images
 from backend.llm.request_timeouts import (
-    current_response_scope, current_response_timeout_seconds, provider_local_step,
+    current_response_scope, current_response_timeout_seconds,
+    provider_local_step,
 )
+from backend.llm.response_cleanup import GeminiHTTPTransport, protect_client, protect_response, start_cleanup
 from backend.models import ProviderConfig
 
 logger = logging.getLogger(__name__)
+_client_owner_tasks: set[asyncio.Task] = set()
+
+
+def _retain_client_owner(task: asyncio.Task) -> None:
+    """Cancellation of a waiter must not discard a still-owned client."""
+    _client_owner_tasks.add(task)
+    def finished(done):
+        _client_owner_tasks.discard(done)
+        if not done.cancelled():
+            done.exception()
+    task.add_done_callback(finished)
 
 
 
@@ -67,7 +80,7 @@ def _build_httpx_clients(proxy_url: Optional[str]) -> tuple[Any, Any]:
     }
     if proxy_url:
         kwargs["proxy"] = proxy_url
-    return httpx.Client(**kwargs), httpx.AsyncClient(**kwargs)
+    return httpx.Client(**kwargs), httpx.AsyncClient(**kwargs, event_hooks={"response": [protect_response]})
 
 
 def _build_provider_httpx_clients(
@@ -133,7 +146,17 @@ class ProviderRequestError(RuntimeError):
 
 async def _wait_provider_local(awaitable):
     scope = current_response_scope()
-    return await scope.wait_local(awaitable) if scope is not None else await awaitable
+    if scope is not None:
+        return await scope.wait_local(awaitable)
+    from backend.llm.request_timeouts import LOCAL_PREPARATION_SECONDS
+    deadline = asyncio.timeout(LOCAL_PREPARATION_SECONDS)
+    try:
+        async with deadline:
+            return await awaitable
+    except TimeoutError:
+        if not deadline.expired():
+            raise
+        raise ProviderRequestError("provider_capacity_unavailable") from None
 
 
 def _request_definitely_rejected(exc: BaseException) -> bool:
@@ -415,6 +438,7 @@ class BaseProvider(ABC):
         self.model = config.model
         self._client = None
         self._client_lock = None
+        self._client_initialization = None
 
     @property
     def provider_id(self) -> str:
@@ -451,21 +475,20 @@ class BaseProvider(ABC):
         from backend.services.execution_control import current_execution
         from backend.progress.recognition_activity import report_provider_state
         scope = current_response_scope()
-        if scope is None:
-            await report_provider_state(self, "queued")
         control = current_execution()
+        # Admission has no separate deadline; the owner can still cancel it.
+        # Time a response only after acquiring the local execution slot.
+        deadline = asyncio.timeout(None)
         admitted = False
-        # SDK timeouts bound individual network reads, not admission or an
-        # upstream stream that keeps sending keep-alives. Bound this whole
-        # attempt so one waiter cannot occupy a workflow worker indefinitely.
-        deadline = asyncio.timeout(float(settings.llm_timeout) if scope is None else None)
         try:
-            if scope is not None:
-                await provider_local_step(report_provider_state(self, "queued"), best_effort=True)
+            await provider_local_step(report_provider_state(self, "queued"), best_effort=True)
             if control is not None:
-                await provider_local_step(control.check(self))
+                await control.check(self)
             scheduler = get_scheduler()
-            async with deadline:
+            interrupt = control.interruptible_call(
+                self, lambda: scope.submission_may_exist if scope is not None else admitted,
+            ) if control is not None else nullcontext()
+            async with deadline, interrupt:
                 lease = scheduler.lease(
                     key=quota_key(self.config, endpoint_key(self.config)),
                     rpm=max(0, int(self.config.rpm or 0)),
@@ -477,17 +500,18 @@ class BaseProvider(ABC):
                     ready=lambda: not self._endpoint_breaker().is_open,
                 )
                 async with scope.local_admission(lease) if scope is not None else lease:
-                    admitted = True
                     if control is not None:
-                        await provider_local_step(control.check(self))
+                        await control.check(self)
                     # Time spent waiting for RPM/capacity is not provider
                     # response time. Give the admitted request its full budget.
                     if scope is None:
-                        await report_provider_state(self, "responding")
+                        deadline.reschedule(None)
+                        await provider_local_step(report_provider_state(self, "responding"), best_effort=True)
                         deadline.reschedule(asyncio.get_running_loop().time() + (
                             float(settings.llm_timeout) if response_timeout is None else response_timeout
                         ))
                     try:
+                        admitted = True
                         yield
                     except Exception as exc:
                         from backend.llm.provider_limits import exhausted_quota_code
@@ -496,25 +520,19 @@ class BaseProvider(ABC):
                             control.block(self, code)
                         raise
                     else:
-                        if control is not None:
-                            await provider_local_step(control.succeeded(self), best_effort=scope is not None)
-            await provider_local_step(report_provider_state(self, "processing"), best_effort=scope is not None)
+                        deadline.reschedule(None)
+                        admitted = False
+            await provider_local_step(report_provider_state(self, "processing"), best_effort=True)
         except TimeoutError as exc:
             if not deadline.expired():
                 raise
-            code = "provider_timeout" if admitted else "provider_capacity_unavailable"
-            logger.warning("LLM attempt deadline reached; provider_type=%s admitted=%s code=%s",
-                           self.provider_type, admitted, code)
-            error = ProviderRequestError(code)
-            if not admitted:
-                # No upstream request was sent. Surface local capacity pressure
-                # for an explicit retry instead of silently requeueing for minutes.
-                error.retryable = False
-            raise error from exc
+            logger.warning("LLM response deadline reached; provider_type=%s code=provider_timeout",
+                           self.provider_type)
+            raise ProviderRequestError("provider_timeout") from exc
 
         finally:
             from backend.progress.recognition_activity import finish_provider_request
-            await provider_local_step(finish_provider_request(), best_effort=scope is not None)
+            await provider_local_step(finish_provider_request(), best_effort=True)
 
     async def _invoke_response(self, invoke, *, timeout_seconds=None):
         scope = current_response_scope()
@@ -557,20 +575,39 @@ class BaseProvider(ABC):
     async def _get_client(self) -> Any:
         """Get or create a shared client (for native async providers)."""
         self._ensure_async_primitives()
+        if self._client is None and is_user_defined_provider_endpoint(
+            self.config.provider_type, self.config.base_url, self.config.wire_protocol,
+        ):
+            async def initialize():
+                async with self._client_lock:
+                    if self._client is None:
+                        self._client = await asyncio.to_thread(self._build_client_sync)
+                    return self._client
+            return await self._owned_client_initialization(initialize)
         if self._client is None:
             async with self._client_lock:
                 if self._client is None:
-                    if is_user_defined_provider_endpoint(
-                        self.config.provider_type,
-                        self.config.base_url,
-                        self.config.wire_protocol,
-                    ):
-                        self._client = await asyncio.to_thread(
-                            self._build_client_sync
-                        )
-                    else:
-                        self._client = self._build_client_sync()
+                    self._client = self._build_client_sync()
         return self._client
+
+    async def _owned_client_initialization(self, initialize):
+        # The task owns both construction and cache publication. A cancelled
+        # waiter releases neither that ownership nor the initialization lock.
+        while True:
+            task = self._client_initialization
+            owns_attempt = task is None or task.done()
+            if owns_attempt:
+                task = asyncio.create_task(initialize())
+                self._client_initialization = task
+                _retain_client_owner(task)
+            try:
+                return await asyncio.shield(task)
+            except Exception:
+                if owns_attempt:
+                    raise
+                # Preserve the old lock waiter's chance to initialize after
+                # another caller's failed attempt. Do not broadcast that failure
+                # to callers that have not attempted construction themselves.
 
     def _generation_kwargs(self, max_output_tokens: int | None) -> dict[str, Any]:
         _validate_output_limit(max_output_tokens)
@@ -585,7 +622,7 @@ class BaseProvider(ABC):
         client = await _wait_provider_local(self._get_client())
         # Admission combines actual-start RPM, quota concurrency and resources;
         # queued calls do not reserve minute quota or occupy capacity slots.
-        await _wait_provider_local(self._endpoint_breaker().before_call())
+        await self._endpoint_breaker().before_call()
         async with self._call_capacity(messages):
             t0 = time.perf_counter()
             try:
@@ -639,11 +676,12 @@ class BaseProvider(ABC):
 class GeminiProvider(BaseProvider):
     """
     Gemini provider with two modes:
-      - Proxy mode (local): run_in_threadpool + per-call fresh client (parallel safe)
+      - Proxy mode (local): per-call fresh client, cancellable async requests
       - Direct mode (cloud): native ainvoke with shared client (faster)
     Auto-detected from SmarTAI's explicit proxy settings.
     """
     provider_type = "gemini"
+    _CLIENT_CLOSE_SECONDS = 10.0
 
     def _build_client_sync(self) -> Any:
         from langchain_google_genai import ChatGoogleGenerativeAI
@@ -654,6 +692,7 @@ class GeminiProvider(BaseProvider):
             timeout=settings.llm_timeout,
             max_retries=0,
             google_api_key=self.config.api_key,
+            client_args={"transport": GeminiHTTPTransport(proxy=_configured_proxy_url())},
         )
 
     @property
@@ -672,104 +711,63 @@ class GeminiProvider(BaseProvider):
             # Cloud mode: native async, shared client
             return await super().ainvoke(messages, max_output_tokens=max_output_tokens)
 
-        # Local proxy mode: sync invoke in threadpool, fresh client per call
-        scope = current_response_scope()
-        slots = get_scheduler().proxy_slots
-        async with scope.local_admission(slots) if scope is not None else slots:
-            return await self._invoke_proxy(messages, generation_kwargs)
+        return await self._invoke_proxy(messages, generation_kwargs)
 
     async def _invoke_proxy(self, messages: List[BaseMessage], generation_kwargs: dict[str, Any]) -> LLMResponse:
         from anyio import to_thread
 
-        # Prepare before RPM admission; at most 50 per-call clients can wait.
-        # Preparation uses the default pool, separate from the 50 SDK workers.
-        local_client = await _wait_provider_local(to_thread.run_sync(self._build_client_sync))
-        if current_response_scope() is not None:
+        # The slot owns construction AND disposal, including late cancellation.
+        stack = AsyncExitStack()
+        construction = local_client = None
+        try:
+            scope = current_response_scope()
+            slots = get_scheduler().proxy_slots
+            await stack.enter_async_context(scope.local_admission(slots) if scope is not None else slots)
+            construction = asyncio.create_task(to_thread.run_sync(self._build_client_sync))
+            local_client = await _wait_provider_local(asyncio.shield(construction))
+            construction = None
             return await self._invoke_proxy_async(messages, generation_kwargs, local_client)
-        self._ensure_async_primitives()
-        await _wait_provider_local(self._endpoint_breaker().before_call())
-        async with self._call_capacity(messages):
-            t0 = time.perf_counter()
-            try:
-                def _sync_call():
-                    started = time.perf_counter()
-                    response = local_client.invoke(messages, **generation_kwargs)
-                    return response, (time.perf_counter() - started) * 1000
-
-                # Cancellation cannot stop a running sync SDK thread. Keep its
-                # capacity leases until it drains; never start replacement work.
-                async def invoke():
-                    call = asyncio.create_task(to_thread.run_sync(
-                        _sync_call, limiter=get_scheduler().thread_limiter,
-                    ))
+        finally:
+            if construction is not None:
+                owned = stack.pop_all()
+                async def close_late_client():
                     try:
-                        return await asyncio.shield(call)
-                    except asyncio.CancelledError:
-                        while not call.done():
-                            try:
-                                await asyncio.shield(call)
-                            except asyncio.CancelledError:
-                                continue
-                            except Exception:
-                                break
-                        if not call.cancelled():
-                            call.exception()
+                        client = await construction
+                    except BaseException:
+                        await owned.aclose()
                         raise
-
-                response, sdk_duration_ms = await self._invoke_response(invoke)
-                self._endpoint_breaker().record_success()
-                content = _response_text(response.content if hasattr(response, "content") else response)
-                duration_ms = sdk_duration_ms
-                self._record_duration(duration_ms)
-                logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(content)} chars)")
-                return LLMResponse(content=content, provider=self.provider_id, model=self.model,
-                                   duration_ms=duration_ms, **_response_metadata(response))
-            except Exception as e:
-                if _is_overload_failure(e):
-                    self._endpoint_breaker().record_failure()
-                duration_ms = (time.perf_counter() - t0) * 1000
-                logger.warning(
-                    "LLM call failed on %s after %.0fms; exception_type=%s",
-                    self.provider_id,
-                    duration_ms,
-                    type(e).__name__,
-                )
-                raise
+                    start_cleanup(client.aclose(), seconds=self._CLIENT_CLOSE_SECONDS, after=owned.aclose)
+                cleanup = asyncio.create_task(close_late_client())
+                _retain_client_owner(cleanup)
+            elif local_client is not None:
+                owned = stack.pop_all()
+                start_cleanup(local_client.aclose(), seconds=self._CLIENT_CLOSE_SECONDS, after=owned.aclose)
+            await stack.aclose()
 
     async def _invoke_proxy_async(self, messages, generation_kwargs, local_client):
-        """New OCR keeps a fresh proxy client, with cancellable full responses."""
-        try:
-            self._ensure_async_primitives()
-            await _wait_provider_local(self._endpoint_breaker().before_call())
-            async with self._call_capacity(messages):
-                try:
-                    async def invoke():
-                        started = time.perf_counter()
-                        response = await local_client.ainvoke(
-                            messages, **generation_kwargs, timeout=current_response_timeout_seconds(),
-                        )
-                        content = _response_text(response.content if hasattr(response, "content") else response)
-                        return content, _response_metadata(response), (time.perf_counter() - started) * 1000
+        """OCR and whole-workflow owners use fresh cancellable proxy clients."""
+        self._ensure_async_primitives()
+        await self._endpoint_breaker().before_call()
+        async with self._call_capacity(messages):
+            try:
+                async def invoke():
+                    started = time.perf_counter()
+                    options = dict(generation_kwargs)
+                    if current_response_scope() is not None:
+                        options["timeout"] = current_response_timeout_seconds()
+                    response = await local_client.ainvoke(messages, **options)
+                    content = _response_text(response.content if hasattr(response, "content") else response)
+                    return content, _response_metadata(response), (time.perf_counter() - started) * 1000
 
-                    content, metadata, duration_ms = await self._invoke_response(invoke)
-                    self._endpoint_breaker().record_success()
-                    self._record_duration(duration_ms)
-                    return LLMResponse(content=content, provider=self.provider_id, model=self.model,
-                                       duration_ms=duration_ms, **metadata)
-                except Exception as exc:
-                    if _is_overload_failure(exc):
-                        self._endpoint_breaker().record_failure()
-                    raise
-        finally:
-            async def close():
-                await local_client.aclose()
-
-            # Public 4.x aclose closes the fresh sync and async transports on
-            # this loop. A caller cancellation cannot cancel that short cleanup;
-            # its own local-step deadline still bounds it to ten seconds.
-            cleanup = asyncio.create_task(provider_local_step(close(), best_effort=True))
-            cleanup.add_done_callback(lambda task: None if task.cancelled() else task.exception())
-            await asyncio.shield(cleanup)
+                content, metadata, duration_ms = await self._invoke_response(invoke)
+                self._endpoint_breaker().record_success()
+                self._record_duration(duration_ms)
+                return LLMResponse(content=content, provider=self.provider_id, model=self.model,
+                                   duration_ms=duration_ms, **metadata)
+            except Exception as exc:
+                if _is_overload_failure(exc):
+                    self._endpoint_breaker().record_failure()
+                raise
 
 
 # ─── OpenAI / Zhipu / Anthropic ──────────────────────────────────────────────
@@ -855,7 +853,7 @@ class AnthropicProvider(BaseProvider):
 
     def _build_client_sync(self) -> Any:
         from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(
+        client = ChatAnthropic(
             model=self.model,
             # Recent Claude models reject non-default sampling parameters.
             temperature=None,
@@ -864,6 +862,8 @@ class AnthropicProvider(BaseProvider):
             api_key=self.config.api_key,
             anthropic_proxy=_configured_proxy_url(),
         )
+        protect_client(client._async_client._client)
+        return client
 
 
 # ─── Domestic OpenAI-compatible providers (direct, no proxy) ─────────────────
@@ -1190,14 +1190,7 @@ class SafeRelayProvider(BaseProvider):
         )
 
     def _build_client_sync(self) -> Any:
-        timeout_seconds = (
-            float(settings.llm_timeout)
-            if not settings.custom_provider_timeout_seconds
-            else min(
-                float(settings.llm_timeout),
-                float(settings.custom_provider_timeout_seconds),
-            )
-        )
+        timeout_seconds = float(settings.llm_timeout)
         sync_client, async_client = build_safe_provider_clients(
             effective_provider_base_url(
                 self.config.provider_type,
@@ -1214,9 +1207,12 @@ class SafeRelayProvider(BaseProvider):
     async def _relay_client(self) -> httpx.AsyncClient:
         self._ensure_async_primitives()
         if self._safe_async_client is None:
-            async with self._client_lock:
-                if self._safe_async_client is None:
-                    await asyncio.to_thread(self._build_client_sync)
+            async def initialize():
+                async with self._client_lock:
+                    if self._safe_async_client is None:
+                        await asyncio.to_thread(self._build_client_sync)
+                    return self._safe_async_client
+            return await self._owned_client_initialization(initialize)
         assert self._safe_async_client is not None
         return self._safe_async_client
 
@@ -1398,7 +1394,7 @@ class SafeRelayProvider(BaseProvider):
         # DNS validation/client construction must finish before minute quota
         # admission; a delayed cold start must not accumulate a send burst.
         await _wait_provider_local(self._relay_client())
-        await _wait_provider_local(self._endpoint_breaker().before_call())
+        await self._endpoint_breaker().before_call()
         async with self._call_capacity(messages, response_timeout=self._response_timeout_override()):
             try:
                 options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}

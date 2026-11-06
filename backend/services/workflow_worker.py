@@ -205,8 +205,6 @@ class LeasedOperation:
         artifact_refs: list[str] | None = None,
     ) -> int:
         self._check_lease()
-        from backend.services.submission_work_budget import with_work_checkpoint
-        checkpoint = with_work_checkpoint(self.operation_id, checkpoint)
         try:
             saved = workflow_repository.save_operation_checkpoint(
                 self._operation.id,
@@ -494,9 +492,14 @@ class WorkflowWorker:
                     return row.error_code in {"operation_cancelled", "superseded"} or row.attempt != operation.attempt
 
                 from backend.progress.recognition_activity import observe_recognition
-                async with observe_recognition(ctx):
-                    await run_controlled(operation.id, is_cancelled, self._handlers[operation.operation_type](ctx),
-                                         persist_progress=ctx.update_progress)
+                from backend.services.workflow_deadlines import BUDGET_TYPES, operation_budget, run_owned_work
+                async with operation_budget(ctx), observe_recognition(ctx):
+                    work = run_controlled(operation.id, is_cancelled, self._handlers[operation.operation_type](ctx),
+                                          persist_progress=ctx.update_progress)
+                    if operation.operation_type in BUDGET_TYPES:
+                        await run_owned_work(work)
+                    else:
+                        await work
             except asyncio.CancelledError:
                 raise
             except LeaseLost:
@@ -539,6 +542,14 @@ class WorkflowWorker:
         logger.warning(
             "workflow operation %s failed (%s)", ctx.operation_id, code
         )
+        from backend.services.workflow_deadlines import BUDGET_TYPES, LIMIT_CODES
+        if ctx.operation_type in BUDGET_TYPES and code in LIMIT_CODES:
+            try:
+                workflow_repository.fail_timed_out_operation(ctx.operation_id, owner_id=ctx.owner_id,
+                    expected_attempt=ctx.attempt, expected_lease_token=ctx.lease_token, code=code)
+            except (LeaseLost, VersionConflict, InvalidTransition, NotFound):
+                pass
+            return
         if (
             ctx.operation_type in DELAYED_SOURCE_OPERATION_TYPES
             and not isinstance(exc, ValidationError)

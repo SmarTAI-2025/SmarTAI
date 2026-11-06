@@ -80,8 +80,9 @@ async def _command(args, *, timeout, env):
     # three bounded channels (stdout, stderr and a function return).
     reads = asyncio.gather(_bounded_read(process.stdout, 3 * 65_536 * 12 + 4096), _bounded_read(process.stderr))
     try:
-        stdout, _stderr = await asyncio.wait_for(reads, timeout)
-        await asyncio.wait_for(process.wait(), timeout)
+        async with asyncio.timeout(timeout):
+            stdout, _stderr = await reads
+            await process.wait()
         if process.returncode:
             logger.warning("OCI command failed: operation=%s exit=%s", args[1], process.returncode)
             raise IsolatedRunnerUnavailable()
@@ -150,7 +151,6 @@ async def _host_slot(runtime, env, name):
     directory.mkdir(mode=0o700, exist_ok=True)
     if directory.is_symlink() or directory.stat().st_uid != os.getuid() or directory.stat().st_mode & 0o077:
         raise IsolatedRunnerUnavailable()
-    deadline = asyncio.get_running_loop().time() + 120
     quarantined = set()
     while True:
         for index in range(settings.program_runner_max_concurrent):
@@ -188,20 +188,22 @@ async def _host_slot(runtime, env, name):
                         raise
                     _store_slot(handle, "")
                 return
-        if len(quarantined) >= settings.program_runner_max_concurrent or asyncio.get_running_loop().time() >= deadline:
+        if len(quarantined) >= settings.program_runner_max_concurrent:
             raise IsolatedRunnerUnavailable()
-        await asyncio.sleep(.05)
+        from backend.services.submission_work_budget import wait_for_admission
+        await wait_for_admission(asyncio.sleep(.05))
 
 
-async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, max_output_chars=8192,
+async def run_python_oci(code, test_input="", *, timeout=5.0, memory_mb=256, max_output_chars=8192,
                          function_call=None, bind_request=True):
     return await run_program_oci(code, test_input, language="python", timeout=timeout, memory_mb=memory_mb,
                                  max_output_chars=max_output_chars, function_call=function_call, bind_request=bind_request)
 
 
-async def run_program_oci(code, test_input="", *, language, timeout=10.0, memory_mb=256,
+async def run_program_oci(code, test_input="", *, language, timeout=5.0, memory_mb=256,
                           max_output_chars=8192, function_call=None, bind_request=True):
     from backend.models import TestCase
+    from backend.services.submission_work_budget import active_work
     from backend.tools.code_interpreter import TestResult
     from backend.tools.grading_runner import RunnerResult
     if settings.program_runner_mode != "oci":
@@ -230,7 +232,7 @@ async def run_program_oci(code, test_input="", *, language, timeout=10.0, memory
         raise IsolatedRunnerUnavailable()
     try:
         env = launcher_environment()
-        async with _host_slot(runtime, env, name):
+        async with _host_slot(runtime, env, name), active_work():
             with tempfile.TemporaryDirectory(prefix="smartai-oci-") as tmp:
                 request = Path(tmp) / "request.json"
                 request.write_bytes(encoded)

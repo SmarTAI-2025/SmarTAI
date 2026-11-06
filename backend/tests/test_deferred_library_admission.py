@@ -152,12 +152,13 @@ async def test_background_library_queue_keeps_cancellation_and_budget(monkeypatc
     async def forbidden(*args, **kwargs):
         pytest.fail('Queued validation must not launch decoder')
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', forbidden)
-    budget = clocks.SubmissionWorkBudget('retention-test', limit_seconds=0.03)
+    budget = clocks.SubmissionWorkBudget('retention-test')
     monkeypatch.setattr(clocks, '_current', ContextVar('retention-budget', default=budget))
     if stop == 'expired_budget':
         budget.expire()
     if stop == 'budget':
-        budget.start()  # Simulate other already-admitted work in the same context.
+        budget.start()
+        asyncio.get_running_loop().call_later(0.02, budget.expire)
     work = asyncio.create_task(service.ingest_document(owner_id=owner, original_name='source.pdf',
         content=pdf(['A complete native paragraph.\n' * 4]), content_type='application/pdf',
         native_only=True, media_slot_timeout_seconds=None))
@@ -173,7 +174,7 @@ async def test_background_library_queue_keeps_cancellation_and_budget(monkeypatc
                 work.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await work
-            assert budget.elapsed == 0
+            assert budget.active == 0
         else:
             with pytest.raises(RecognitionError, match=clocks.CODE):
                 await asyncio.wait_for(work, 1)
@@ -183,5 +184,5 @@ async def test_background_library_queue_keeps_cancellation_and_budget(monkeypatc
     finally:
         if stop == 'budget':
             budget.finish()
-        budget.close()
+        budget.expire()
         slots.release()

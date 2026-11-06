@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -118,6 +119,38 @@ async def test_host_wide_capacity_is_bounded(configured, monkeypatch):
     monkeypatch.setattr(runner, "_command", command)
     await asyncio.gather(*(runner.run_python_oci("print(3)") for _ in range(6)))
     assert peak == 2
+
+
+@pytest.mark.asyncio
+async def test_busy_host_slot_keeps_waiting_past_old_admission_deadline(configured, monkeypatch):
+    """Advance a controlled clock; no student process runs while capacity is busy."""
+    monkeypatch.setattr(runner.settings, "program_runner_max_concurrent", 1)
+    real_flock, real_sleep = runner.fcntl.flock, asyncio.sleep
+    elapsed, attempts = 0, 0
+
+    def flock(handle, flags):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise BlockingIOError()
+        return real_flock(handle, flags)
+
+    async def wait(_seconds):
+        nonlocal elapsed
+        elapsed += 130
+        await real_sleep(0)
+
+    monkeypatch.setattr(runner.fcntl, "flock", flock)
+    monkeypatch.setattr(runner, "asyncio", SimpleNamespace(**{
+        **vars(asyncio), "sleep": wait,
+        "get_running_loop": lambda: SimpleNamespace(time=lambda: elapsed),
+    }))
+    remove = AsyncMock()
+    monkeypatch.setattr(runner, "_remove", remove)
+    async with runner._host_slot("/usr/bin/docker", {}, "smartai-oci-" + "b" * 32):
+        assert elapsed == 260 and attempts == 3
+        remove.assert_not_awaited()
+    remove.assert_awaited_once()
 
 
 @pytest.mark.asyncio

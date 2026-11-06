@@ -198,3 +198,73 @@ def test_demo_and_teacher_use_same_ask_selection_and_chart_contract(auth_scope):
     assert response.json()["mode"] == "chart"
     assert response.json()["traces"][0]["y"] == [1]
     assert set(response.json()["execution"]) == {"recognized", "kind", "explanation", "data", "selection", "chart", "candidates"}
+
+
+@pytest.mark.parametrize("endpoint", ["teacher", "task", "legacy", "filter-intent"])
+def test_ask_entire_request_timeout_is_clear_and_shared_by_all_routes(monkeypatch, endpoint):
+    import asyncio
+    owner = _user("teacher", "ask-total-timeout")
+    seeded = _seed_graded_assignment(owner)
+    original_timeout = asyncio.timeout
+    deadlines = []
+    def capture(seconds):
+        deadline = original_timeout(seconds)
+        if seconds == 240:
+            deadlines.append(deadline)
+        return deadline
+    monkeypatch.setattr(asyncio, "timeout", capture)
+    async def blocked(**kwargs):
+        assert len(deadlines) == 1
+        deadlines[0].reschedule(asyncio.get_running_loop().time())
+        await asyncio.Event().wait()
+    monkeypatch.setattr(analytics.grounded_ask, "ask", blocked)
+    monkeypatch.setattr(analytics.analytics_agent, "interpret_filter_intent", blocked)
+    path = "/analytics/ask" if endpoint == "teacher" else f"/analytics/{seeded['task_id']}/{'query' if endpoint == 'legacy' else 'ask'}"
+    if endpoint == "filter-intent":
+        path = f"/analytics/{seeded['task_id']}/filter-intent"
+    response = _client(owner, _Registry(Provider())).post(path, json={"question": "Show students", "surface": "student_analysis"})
+    assert response.status_code == 504
+    assert response.json()["detail"]["code"] == "analytics_timeout"
+
+
+def test_ask_six_per_rolling_minute_without_cooldown(monkeypatch):
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+    clock = [100.0]
+    monkeypatch.setattr(analytics, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    for _ in range(6):
+        analytics._check_ask_limit("teacher-one")
+    clock[0] = 145.2
+    with pytest.raises(HTTPException) as limited:
+        analytics._check_ask_limit("teacher-one")
+    assert limited.value.status_code == 429
+    assert limited.value.headers["Retry-After"] == "15"
+    analytics._check_ask_limit("teacher-two")
+    clock[0] = 160.0
+    analytics._check_ask_limit("teacher-one")
+    analytics._check_ask_limit("teacher-one")
+
+
+def test_ask_current_and_compatibility_routes_share_six_requests(monkeypatch):
+    owner = _user("teacher", "shared-ask-rate")
+    seeded = _seed_graded_assignment(owner)
+    calls = []
+    async def fake_ask(**kwargs):
+        calls.append("ask")
+        return {"recognized": False, "kind": "clarification", "explanation": "Specify a student"}
+    async def fake_intent(**kwargs):
+        calls.append("intent")
+        return analytics.analytics_agent.FilterIntentOutput(recognized=False)
+    monkeypatch.setattr(analytics.grounded_ask, "ask", fake_ask)
+    monkeypatch.setattr(analytics.analytics_agent, "interpret_filter_intent", fake_intent)
+    client = _client(owner, _Registry(Provider()))
+    paths = ["/analytics/ask", f"/analytics/{seeded['task_id']}/ask",
+             f"/analytics/{seeded['task_id']}/query", f"/analytics/{seeded['task_id']}/filter-intent"]
+    for path in [*paths, paths[3], paths[0]]:
+        response = client.post(path, json={"question": "Show students", "surface": "student_analysis"})
+        assert response.status_code == 200, response.text
+    for path in paths:
+        response = client.post(path, json={"question": "Show students", "surface": "student_analysis"})
+        assert response.status_code == 429, response.text
+        assert 1 <= int(response.headers["Retry-After"]) <= 60
+    assert len(calls) == 6

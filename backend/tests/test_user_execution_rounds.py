@@ -93,7 +93,8 @@ async def test_saved_pdf_rounds_retry_failures_but_fresh_start_rereads_every_pag
 
     @asynccontextmanager
     async def engine(**_kwargs):
-        yield agent.engine
+        from backend.tests.test_recognition_response_deadlines import AdmittedEngine
+        yield AdmittedEngine(agent.engine)
 
     monkeypatch.setattr(question_sources, "recognition_engine", engine)
 

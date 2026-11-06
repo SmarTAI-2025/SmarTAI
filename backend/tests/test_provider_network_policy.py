@@ -88,7 +88,8 @@ def test_httpx_clients_never_inherit_environment_proxy(monkeypatch, proxy_url):
 
     def fake_async_client(**kwargs):
         captured["async"] = kwargs
-        return object()
+        from types import SimpleNamespace
+        return SimpleNamespace(event_hooks={"response": []})
 
     monkeypatch.setattr(httpx, "Client", fake_sync_client)
     monkeypatch.setattr(httpx, "AsyncClient", fake_async_client)
@@ -489,7 +490,8 @@ def test_gemini_and_anthropic_see_explicit_proxy(monkeypatch):
 
     def fake_chat_anthropic(**kwargs):
         captured.update(kwargs)
-        return object()
+        from types import SimpleNamespace
+        return SimpleNamespace(_async_client=SimpleNamespace(_client=SimpleNamespace(event_hooks={"response": []})))
 
     monkeypatch.setattr(settings, "http_proxy", "")
     monkeypatch.setattr(settings, "https_proxy", "http://127.0.0.1:7897")

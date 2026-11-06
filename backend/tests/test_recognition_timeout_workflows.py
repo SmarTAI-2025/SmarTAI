@@ -35,7 +35,7 @@ from backend.tests.test_task_background_workflows import (
 
 
 PROFILE_KEY = "recognition_timeout_profile"
-NEW_PROFILE = "source-response-300-v1"
+NEW_PROFILE = "source-response-600-v1"
 PR245_PROFILE = "source-300-v1"
 TIMEOUT_PROFILES = pytest.mark.parametrize(
     "profile", [NEW_PROFILE, None, PR245_PROFILE], ids=["new", "pre245", "pr245"],

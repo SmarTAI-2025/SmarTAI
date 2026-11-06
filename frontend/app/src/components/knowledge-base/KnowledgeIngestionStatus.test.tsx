@@ -38,12 +38,12 @@ it("does not label a partial book as fully parsed, and loads coverage only on de
   expect(api.getJSON).toHaveBeenCalledWith("/knowledge/documents/book/coverage?offset=0&limit=20&issues_only=true");
 });
 
-it("resumes a paused ingestion through an explicit command, not through its status GET", async () => {
-  const summary = { id: "run", status: "paused", total_pages: 1000, processed_pages: 24 };
+it.each([null, "knowledge_wall_time_limit_reached"])("resumes paused/timed-out ingestion through an explicit command (%s)", async (error_code) => {
+  const summary = { id: "run", status: "paused", total_pages: 1000, processed_pages: 24, error_code };
   api.getJSON.mockResolvedValue({ summary, pages: [], next_offset: null });
   api.postJSON.mockResolvedValue({ status: "queued" });
   render(<KnowledgeIngestionStatus documentId="book" status="partial" ingestion={summary} zh />);
-  await userEvent.click(screen.getByText("已暂停 · 24/1000"));
+  await userEvent.click(screen.getByText(error_code ? "已超时，已完成内容保留 · 24/1000" : "已暂停 · 24/1000"));
   await waitFor(() => expect(screen.getByRole("button", { name: "继续处理" })).not.toBeDisabled());
   expect(api.postJSON).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "继续处理" }));
