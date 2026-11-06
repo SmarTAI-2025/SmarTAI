@@ -52,6 +52,7 @@ _SCORING_ONLY = re.compile(
     r"(?:award\s+)?\d+(?:\.\d+)?(?: points)? for (?:the correct (?:sum|solution)|"
     r"satisfying the question|reading input|all correct outputs)|"
     r"(?:award\s+)?correctness according to the teacher's rule|"
+    r"all teacher examples correct earns full credit|"
     r"(?:所有|全部)?(?:教师)?(?:测试)?(?:用例|样例)(?:全部|均)?通过(?:时)?(?:给|得|记)(?:满分|\d+(?:\.\d+)?分)",
     re.I,
 )
