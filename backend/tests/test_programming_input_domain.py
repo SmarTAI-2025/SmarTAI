@@ -62,6 +62,11 @@ def test_parameter_binding_and_conditional_output():
 @pytest.mark.parametrize("output", [
     "Return n on positive integers.",
     "返回正整数 n 本身。",
+    "返回正整数n本身。",
+    "返回正整数本身。",
+    "当n保证为奇数时返回n。",
+    "Return n # positive inputs only",
+    "返回n # 输入保证大于零",
     "Return n assuming a positive integer.",
     "If n is positive, return n, assuming that n is odd.",
     "If n is guaranteed to be odd, return n.",
@@ -79,7 +84,7 @@ def test_stdin_output_suffix_cannot_hide_an_input_restriction():
 
 
 @pytest.mark.parametrize("output", ["Return n > 0.", "Return whether n is positive.",
-    "If n > 0, return 1; otherwise return 0."])
+    "Return '#'.", "If n > 0, return 1; otherwise return 0."])
 def test_complete_output_expressions_do_not_narrow_input_domain(output):
     p = problem("Implement f(n): n is an integer. " + output)
     assert input_domain(p, call([-1])) == "allowed"
