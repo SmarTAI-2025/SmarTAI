@@ -152,13 +152,17 @@ def is_response_timeout(exc: BaseException) -> bool:
     Workflow deadlines and local admission/preparation failures have their own
     codes and must not gain model retry authority through a timeout cause.
     """
+    from backend.domain.errors import DomainError
+    from backend.llm.providers import ProviderRequestError
     seen = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
         code = getattr(exc, "code", None)
-        if isinstance(code, str) and code not in {
+        # Application stop codes are authoritative. SDK error identifiers
+        # (for example request_timeout) must not mask an actual 408/504.
+        if (isinstance(code, str) and code not in {
             "provider_upstream_unavailable", "provider_request_failed", "provider_request_rejected",
-        }:
+        } and (isinstance(exc, (DomainError, ProviderRequestError)) or code.startswith("provider_"))):
             return code == "provider_timeout"
         status = getattr(exc, "status_code", None)
         if status is None:
