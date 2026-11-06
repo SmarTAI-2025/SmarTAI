@@ -1,8 +1,8 @@
 /**
- * Admin API client: user management + invitations. Mirrors backend/api/admin.py.
+ * Admin API client: user management, usage and audit. Mirrors backend/api/admin.py.
  */
 import { apiClient } from "./client";
-import type { AdminUser, Invite } from "@/types/education";
+import type { AdminUser } from "@/types/education";
 
 export interface AdminUsersPage {
   items: AdminUser[];
@@ -106,20 +106,5 @@ export async function adminMetricsQuery(input: {
 
 export async function adminListAudit(): Promise<AdminAuditEntry[]> {
   const { data } = await apiClient.get<AdminAuditEntry[]>("/admin/audit");
-  return data;
-}
-
-export async function adminCreateInvite(input: {
-  email?: string;
-  role: "teacher" | "student" | "admin";
-  course_id?: string | null;
-  expires_in_hours?: number;
-}): Promise<{ invite_code: string; role: string; expires_at: number }> {
-  const { data } = await apiClient.post("/admin/invites", input);
-  return data;
-}
-
-export async function adminListInvites(): Promise<Invite[]> {
-  const { data } = await apiClient.get<Invite[]>("/admin/invites");
   return data;
 }

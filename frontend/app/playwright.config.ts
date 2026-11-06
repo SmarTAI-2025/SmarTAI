@@ -8,7 +8,7 @@ const frontendPort = new URL(frontendUrl).port || "5173";
  * server resolves /admin to the source admin.html even in public mode, so it
  * cannot verify that the deployed public build excludes the private console.
  * CI uses a fake provider for the current teacher task workflow. Retired
- * normalized HTTP routes are exercised only by isolated backend contract tests.
+ * normalized HTTP routes must remain unreachable, including direct requests.
  */
 export default defineConfig({
   testDir: "./e2e",

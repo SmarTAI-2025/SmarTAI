@@ -66,8 +66,8 @@ def create_app() -> FastAPI:
 
     # ── V2: new agents/skills/tools architecture ──────────────────────
     # The /tasks façade uses the normalized repositories/services directly.
-    # Retained course-enrollment/student/assignment HTTP workflows are never
-    # mounted here. Their contract tests use a separate, test-only app.
+    # Retired enrollment/student/assignment HTTP implementations are removed.
+    # Shared repositories still serve the current teacher task workflow.
     from backend.api.auth import router as auth_router
     from backend.api.courses import public_router as courses_router
     from backend.api.knowledge import router as knowledge_router, assignment_router as assignment_knowledge_router
@@ -80,9 +80,6 @@ def create_app() -> FastAPI:
     from backend.api.analytics import router as analytics_router
 
     app.include_router(auth_router)
-    if settings.runtime_environment != "production":
-        from backend.api.users import router as users_router
-        app.include_router(users_router)
     app.include_router(courses_router)
     # The public production app deliberately has no administrator surface.
     # Tests/local development may opt in to exercise the API contract; the

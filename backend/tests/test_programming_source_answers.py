@@ -1,16 +1,14 @@
 """Full-source imports through durable, authenticated and manual recovery paths."""
 import io
-import zipfile
 from unittest.mock import AsyncMock
 
 import pytest
 
-from backend.db import assignment_repository, course_repository, workflow_repository
-from backend.services import submissions, task_facade
+from backend.db import assignment_repository, workflow_repository
+from backend.services import task_facade
 from backend.services.programming_submission_mapping import PYTHON_FLAG, source_answers
 from backend.services.submission_manual_review import continue_manually
 from backend.services.task_execution import stop_task_run
-from backend.tests.test_ocr_normalized_ingest import _seed_user
 from backend.tests.test_ocr_mounted_routes import client_registry
 from backend.tests.test_submission_incremental import _claim, _registry
 from backend.tests.test_task_background_workflows import _seed_task
@@ -90,27 +88,6 @@ async def test_original_module_reaches_every_answer_even_if_stopped_before_worke
     registry.provider.ainvoke.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("archive", [False, True])
-@pytest.mark.parametrize("suffix", ["txt", "py"])
-async def test_authenticated_revision_contains_exact_single_module(monkeypatch, archive, suffix):
-    owner, task = seed(SUM, COUNT)
-    student = "student-" + owner
-    _seed_user(student, "student")
-    course = assignment_repository.get_assignment(task, actor_id=owner).course_id
-    course_repository.enroll(course, student_id=student, actor_id=owner)
-    assignment_repository.publish(task, teacher_id=owner, expected_version=1)
-    registry = _registry(monkeypatch, AsyncMock(side_effect=AssertionError("Native input called a provider")))
-    filename, content = "source." + suffix, SOURCE.encode()
-    if archive:
-        data = io.BytesIO()
-        with zipfile.ZipFile(data, "w") as out:
-            out.writestr(filename, content)
-        filename, content = "upload.zip", data.getvalue()
-    revision = await submissions.submit_student_file_with_ocr(student_id=student, assignment_id=task,
-        filename=filename, content=content, content_type=None, provider=registry.provider, registry=registry)
-    assert {a.q_id: a.content for a in revision.answers} == {"q2": SOURCE, "q3": SOURCE}
-    registry.provider.ainvoke.assert_not_awaited()
 
 
 @pytest.mark.parametrize("envelope", [False, True])
@@ -155,29 +132,6 @@ def test_numbered_entry_hints_bind_the_function_after_each_explicit_number():
         ("q2", ["programming_source_entry:earlier"]), ("q3", ["programming_source_entry:later"])]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("version", [None, 1])
-async def test_old_mapping_checkpoint_recovers_original_bytes_and_previous_identity(monkeypatch, version):
-    from dataclasses import replace
-    from backend.db import file_repository
-    owner, task = seed(SUM, COUNT)
-    registry = _registry(monkeypatch, AsyncMock(side_effect=AssertionError("No provider")))
-    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="S1_Alice.txt",
-        content=SOURCE.encode(), content_type="text/plain", registry=registry)
-    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
-    saved, = task_facade._load_submission_results(next(f for f in file_repository.list_files(
-        owner_id=owner, assignment_id=task) if f.kind == "submission_recognition_result"))
-    recognition = {} if version is None else {"native_source_mapping_version": version}
-    old = replace(saved, student={**saved.student, "stu_id": "prior-identity", "recognition": recognition,
-        "stu_ans": [{**a, "content": "return x" if version is None else SOURCE, "flag": ["recognition_manual_pending"]}
-                    for a in saved.student["stu_ans"]]},
-        student_candidate="prior-identity")
-    restored = await task_facade._restore_legacy_native_result(old, questions(SUM, COUNT), task, owner)
-    assert all(not a["flag"] for a in restored.student["stu_ans"])
-    assert restored.student["recognition"]["native_source_mapping_version"] == 4
-    assert restored.student["stu_id"] == "prior-identity" and restored.student["identity_status"] == "matched"
-    assert {a["q_id"]: a["content"] for a in restored.student["stu_ans"]} == {"q2": SOURCE, "q3": SOURCE}
-    registry.provider.ainvoke.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -274,15 +274,14 @@ async def test_prepared_source_reuse_revalidates_original_against_current_role()
     assert len(file_repository.list_files(owner_id=owner, assignment_id=task)) == 1
 
 
-@pytest.mark.parametrize("path", ["extract_problems", "assignment-import", "problem-sources/preflight"])
+@pytest.mark.parametrize("path", ["extract_problems", "problem-sources/preflight"])
 def test_problem_upload_routes_bound_reads_by_effective_contract(client_registry, monkeypatch, path):
     from backend.services import upload_contract
     from backend.tests.test_task_background_workflows import _seed_task
     client, _ = client_registry
     owner, task = _seed_task()
     monkeypatch.setattr(upload_contract, "QUESTION_SOURCE_MAX_BYTES", 3)
-    url = (f"/assignments/{task}/questions/import-file" if path == "assignment-import"
-           else f"/tasks/{task}/{path}")
+    url = f"/tasks/{task}/{path}"
     response = client.post(url, headers=headers(owner), files={"file": ("source.txt", b"four", "text/plain")})
     assert response.status_code == 413, response.text
 
@@ -327,19 +326,6 @@ async def test_cached_submission_source_cannot_bypass_current_type_policy():
     assert stored.sha256 == __import__("hashlib").sha256(b"\x00binary").hexdigest()
 
 
-@pytest.mark.parametrize("actor,alias", [("student", "upload"), ("teacher", "teacher-upload")])
-def test_personal_submission_denies_invalid_container_before_original_storage(client_registry, actor, alias):
-    from backend.tests.test_ocr_normalized_ingest import _published_assignment
-    from backend.db import file_repository
-    client, _ = client_registry
-    teacher, student, task = _published_assignment("policy-" + alias)
-    response = client.post(f"/submissions/{alias}", headers=headers(teacher if actor == "teacher" else student, actor),
-        data={"assignment_id": task, "student_id": student},
-        files={"file": ("answer.rar", b"Rar!\x1a\x07\x00invalid", "application/octet-stream")})
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "submission_archive_invalid"
-    assert file_repository.list_files(owner_id=teacher, assignment_id=task) == []
-    assert file_repository.list_files(owner_id=student) == []
 
 
 def test_saved_submission_retry_revalidates_original_format_without_deleting_it():
@@ -381,8 +367,6 @@ def test_knowledge_worker_revalidates_historical_original_before_reusing_it():
     ("/knowledge/documents", "KNOWLEDGE_MAX_BYTES"),
     ("/course-materials/", "KNOWLEDGE_MAX_BYTES"),
     ("/tasks/{task}/kb", "KNOWLEDGE_MAX_BYTES"),
-    ("/submissions/upload", "INDIVIDUAL_SUBMISSION_MAX_BYTES"),
-    ("/submissions/teacher-upload", "INDIVIDUAL_SUBMISSION_MAX_BYTES"),
     ("/tasks/{task}/parse_submissions", "batch"),
 ])
 def test_all_remaining_http_uploads_read_only_effective_limit_plus_one(client_registry, monkeypatch, path, limit):
@@ -390,17 +374,8 @@ def test_all_remaining_http_uploads_read_only_effective_limit_plus_one(client_re
     from backend.services import upload_contract
     from backend.tools import file_processing
     from backend.tests.test_task_background_workflows import _seed_task
-    from backend.tests.test_ocr_normalized_ingest import _published_assignment
     client, _ = client_registry
-    actor = "teacher"
-    data = {}
-    if path.startswith("/submissions"):
-        teacher, student, task = _published_assignment("bounded" + limit + path.rsplit("/", 1)[-1])
-        actor = "student" if path.endswith("/upload") else "teacher"
-        owner = student if actor == "student" else teacher
-        data = {"assignment_id": task, "student_id": student}
-    else:
-        owner, task = _seed_task(with_question=True)
+    owner, task = _seed_task(with_question=True)
     if limit == "batch":
         monkeypatch.setattr(file_processing, "SUBMISSION_UPLOAD_MAX_BYTES", 3)
     else:
@@ -410,7 +385,7 @@ def test_all_remaining_http_uploads_read_only_effective_limit_plus_one(client_re
         assert 0 <= size <= 4, "Upload read exceeds the effective ceiling before validation"
         return await original_read(self, size)
     monkeypatch.setattr(UploadFile, "read", read_bounded)
-    response = client.post(path.format(task=task), headers=headers(owner, actor), data=data,
+    response = client.post(path.format(task=task), headers=headers(owner),
         files={"file": ("source.txt", b"four", "text/plain")})
     assert response.status_code >= 400
 

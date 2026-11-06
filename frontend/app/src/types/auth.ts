@@ -59,18 +59,6 @@ export interface RefreshResponse {
   user?: User;
 }
 
-export interface InviteRequest {
-  email?: string;
-  role: "teacher" | "student";
-  course_id?: string | null;
-  expires_in_hours?: number;
-}
-
-export interface InviteResponse {
-  invite_code: string;
-  expires_at: number;
-}
-
 export interface StatusResponse {
   status: string;
 }

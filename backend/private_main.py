@@ -40,7 +40,7 @@ def create_private_app(*, maintenance_only: bool = False) -> FastAPI:
                 await worker["task"]
     allowed_auth = {"/auth/login", "/auth/logout", "/auth/refresh", "/auth/activity", "/auth/me",
                     "/auth/password-reset/request", "/auth/password-reset/confirm", "/auth/password-change"}
-    # Do not mount public registration or dormant role-invitation routes here.
+    # Private authentication excludes public teacher registration.
     from fastapi import APIRouter
     auth = APIRouter()
     if maintenance_only:
@@ -48,7 +48,7 @@ def create_private_app(*, maintenance_only: bool = False) -> FastAPI:
     auth.routes = [route for route in auth_router.routes if route.path in allowed_auth]
     app.include_router(auth, prefix="/api")
     management = APIRouter()
-    management.routes = [route for route in admin_router.routes if "/invites" not in route.path]
+    management.routes = list(admin_router.routes)
     if not maintenance_only:
         app.include_router(management, prefix="/api")
         app.include_router(accounts_router, prefix="/api")

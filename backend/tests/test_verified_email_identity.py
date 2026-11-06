@@ -27,7 +27,6 @@ def test_existing_user_cannot_bypass_verification_by_patching_email():
         json={"email": "unverified@mail.ustc.edu.cn"},
     )
 
-    assert response.status_code == 400
-    assert response.json() == {"detail": "Email cannot be changed"}
+    assert response.status_code == 404
     with session_scope() as session:
         assert session.get(UserRecord, "verified-email-owner").email == "owner@ustc.edu.cn"

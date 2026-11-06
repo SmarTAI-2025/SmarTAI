@@ -9,6 +9,13 @@ from backend.models import User
 
 
 RETIRED_REQUESTS = [
+    ("GET", "/admin/invites"),
+    ("POST", "/admin/invites"),
+    ("GET", "/users/"),
+    ("PATCH", "/users/old"),
+    ("DELETE", "/users/old"),
+    ("POST", "/users/invite"),
+    ("PATCH", "/admin/users/old/active"),
     ("GET", "/courses/old/students"),
     ("POST", "/courses/old/enroll"),
     ("GET", "/assignments"),
@@ -41,7 +48,7 @@ def test_retired_workflows_are_unmounted_for_every_role(monkeypatch, environment
     app = create_app()
     client = TestClient(app)
     paths = app.openapi()["paths"]
-    retired_prefixes = ("/submissions", "/grading-runs", "/results", "/prob_preview", "/hw_preview", "/ai_grading")
+    retired_prefixes = ("/users", "/submissions", "/grading-runs", "/results", "/prob_preview", "/hw_preview", "/ai_grading")
     assert not any(path.startswith(retired_prefixes) for path in paths)
     assert "/courses/{course_id}/students" not in paths
     assert "/courses/{course_id}/enroll" not in paths

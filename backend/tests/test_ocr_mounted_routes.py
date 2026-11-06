@@ -1,4 +1,5 @@
 """Mounted HTTP -> shared adapter contracts; model quality is tested separately."""
+import base64
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -7,7 +8,7 @@ from fastapi.testclient import TestClient
 from backend.auth import create_token
 from backend.domain.errors import RecognitionError
 from backend.llm.registry import get_scoped_expert_registry
-from backend.tests.legacy_contract_app import app
+from backend.main import app
 from backend.tests.test_task_background_workflows import _seed_task
 from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
 
@@ -35,7 +36,10 @@ def headers(owner, role="teacher"):
     ("rubric", "rubric"), ("programming_tests", "test_cases")])
 def test_both_preflight_aliases_route_each_purpose_to_shared_adapter(client_registry, monkeypatch, alias, role, purpose):
     from backend.api import task_preparation
-    from backend.tests.test_ocr_normalized_ingest import PNG_1X1
+    PNG_1X1 = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4"
+        "//8/AAX+Av4N70a4AAAAAElFTkSuQmCC"
+    )
     client, registry = client_registry
     monkeypatch.setattr(registry.provider, "supports_vision", True)
     owner, task = _seed_task()
@@ -86,19 +90,6 @@ def test_auxiliary_upload_aliases_only_queue_review_plan(client_registry, monkey
     start.assert_awaited_once()
 
 
-def test_assignment_import_reaches_shared_adapter(client_registry, monkeypatch):
-    from backend.services import question_sources
-    client, _ = client_registry
-    owner, task = _seed_task()
-    read = AsyncMock(side_effect=RecognitionError("recognition_request_invalid"))
-    monkeypatch.setattr(question_sources, "read_question_source", read)
-    response = client.post(f"/assignments/{task}/questions/import-file", headers=headers(owner),
-        files={"file": ("source.txt", b"1. literal -2", "text/plain")})
-    assert response.status_code >= 400, response.text
-    read.assert_awaited_once()
-    assert read.call_args.kwargs["task_id"] == task
-
-
 @pytest.mark.parametrize("action", ["extract_problems", "parse_submissions"])
 def test_task_upload_only_publishes_durable_job(client_registry, monkeypatch, action):
     from backend.api import tasks
@@ -113,22 +104,6 @@ def test_task_upload_only_publishes_durable_job(client_registry, monkeypatch, ac
     queue.assert_called_once()
     assert queue.call_args.kwargs["content"] == b"literal -2"
     assert queue.call_args.kwargs["registry"] is registry
-
-
-@pytest.mark.parametrize("actor,alias", [("student", "upload"), ("teacher", "teacher-upload")])
-def test_individual_submission_upload_reaches_same_faithful_reader(client_registry, monkeypatch, actor, alias):
-    from backend.services import submission_uploads
-    from backend.tests.test_ocr_normalized_ingest import _published_assignment
-    client, _ = client_registry
-    teacher, student, task = _published_assignment(alias)
-    read = AsyncMock(side_effect=RecognitionError("recognition_request_invalid"))
-    monkeypatch.setattr(submission_uploads, "read_question_source", read)
-    response = client.post(f"/submissions/{alias}", headers=headers(teacher if actor == "teacher" else student, actor),
-        data=dict(assignment_id=task, student_id=student), files={"file": ("answer.txt", b"1+1=3", "text/plain")})
-    assert response.status_code >= 400, response.text
-    read.assert_awaited_once()
-    assert read.call_args.kwargs["purpose"] == "submissions"
-    assert read.call_args.kwargs["content"] == b"1+1=3"
 
 
 @pytest.mark.parametrize("api_name,url", [("knowledge", "/knowledge/documents"), ("materials", "/course-materials/"),

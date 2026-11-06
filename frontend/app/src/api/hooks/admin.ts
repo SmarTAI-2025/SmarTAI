@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as adminApi from "@/api/admin";
 import { adminKeys } from "./keys";
-import type { AdminUser, Invite } from "@/types/education";
+import type { AdminUser } from "@/types/education";
 import type { AdminAuditEntry, AdminOverview, AdminMetricsResult, AdminUsersPage } from "@/api/admin";
 
 export function useAdminUsers(filter?: { role?: string; is_active?: boolean; search?: string; page?: number; page_size?: number }) {
@@ -11,12 +11,6 @@ export function useAdminUsers(filter?: { role?: string; is_active?: boolean; sea
   });
 }
 
-export function useAdminInvites() {
-  return useQuery({
-    queryKey: adminKeys.invites(),
-    queryFn: adminApi.adminListInvites,
-  });
-}
 
 export function useAdminSetActive() {
   const queryClient = useQueryClient();
@@ -61,14 +55,5 @@ export function useAdminAudit() {
   return useQuery<AdminAuditEntry[]>({ queryKey: adminKeys.audit(), queryFn: adminApi.adminListAudit });
 }
 
-export function useAdminCreateInvite() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: adminApi.adminCreateInvite,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: adminKeys.invites() });
-    },
-  });
-}
 
-export type { AdminUser, Invite, AdminOverview, AdminAuditEntry, AdminMetricsResult, AdminUsersPage };
+export type { AdminUser, AdminOverview, AdminAuditEntry, AdminMetricsResult, AdminUsersPage };

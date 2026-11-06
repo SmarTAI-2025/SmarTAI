@@ -19,13 +19,12 @@ from sqlalchemy import func, or_, select, text
 
 from backend.auth import require_admin
 from backend.config import settings
-from backend.db.auth_repository import create_invite, revoke_all_refresh_sessions
+from backend.db.auth_repository import revoke_all_refresh_sessions
 from backend.db.models import (
     AdminAuditLogRecord,
     AssignmentRecord,
     CourseRecord,
     GradingRunRecord,
-    InviteCodeRecord,
     UserRecord,
 )
 from backend.db.session import session_scope
@@ -36,13 +35,6 @@ from backend.services.email_sender import get_email_sender
 from backend.services.password_reset import PasswordResetError, request_password_reset
 
 router = APIRouter(prefix="/admin", tags=["admin"])
-
-
-class InviteRequest(BaseModel):
-    email: str = ""
-    role: str = "student"
-    course_id: Optional[str] = None
-    expires_in_hours: int = Field(default=168, ge=1, le=720)
 
 
 class UserStatusRequest(BaseModel):
@@ -374,33 +366,3 @@ def admin_metrics_query(req: MetricsQueryRequest, current: User = Depends(requir
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-
-@router.post("/invites")
-def admin_create_invite(req: InviteRequest, current: User = Depends(require_admin)):
-    if req.role not in ("teacher", "student", "admin"):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Role must be teacher, student, or admin")
-    if req.course_id is not None and req.role == "student":
-        with session_scope() as session:
-            if session.get(CourseRecord, req.course_id) is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Course not found")
-    record = create_invite(invited_by=current.id, email=req.email, role=req.role, course_id=req.course_id, expires_in_hours=req.expires_in_hours)
-    return {"invite_code": record.code, "role": record.role, "expires_at": record.expires_at}
-
-
-@router.get("/invites")
-def admin_list_invites(current: User = Depends(require_admin)):
-    with session_scope() as session:
-        records = session.scalars(select(InviteCodeRecord).order_by(InviteCodeRecord.created_at.desc())).all()
-        return [{"code": row.code, "email": row.email, "role": row.role, "course_id": row.course_id, "created_at": row.created_at, "expires_at": row.expires_at, "used_at": row.used_at, "used_by": row.used_by} for row in records]
-
-
-# Compatibility is deliberately test/local-only and hidden from OpenAPI. The
-# old direct toggle is not part of the production private-admin contract.
-if settings.runtime_environment != "production":
-    router.add_api_route(
-        "/users/{user_id}/active",
-        admin_set_active,
-        methods=["PATCH"],
-        include_in_schema=False,
-    )

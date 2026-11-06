@@ -31,7 +31,6 @@ from backend.agents.ingest_agent import (
     SubmissionSourceParseResult,
     normalize_submission_source_identities,
     native_submission_result,
-    recover_native_submission_result,
     extract_problems,
     parse_student_answer_sources,
     parse_student_answer_sources_from_ocr_markdown,
@@ -87,7 +86,7 @@ from backend.llm.registry import (
 )
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import grading_runs
-from backend.services.programming_submission_mapping import SOURCE_LANGUAGE_FLAGS, NATIVE_SOURCE_MAPPING_VERSION, is_source_file, may_contain_source
+from backend.services.programming_submission_mapping import SOURCE_LANGUAGE_FLAGS, NATIVE_SOURCE_MAPPING_VERSION, is_source_file
 from backend.services.question_sources import read_question_source
 from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE
 from backend.services.submission_archive_ownership import MULTIPLE_SOURCE_FILES, reconcile_archive_results
@@ -2975,47 +2974,6 @@ def _load_submission_results(artifact) -> list[SubmissionSourceParseResult]:
         retryable=bool(item.get("retryable")),
     ) for item in payload if isinstance(item, dict)]
 
-
-async def _restore_legacy_native_result(result, problems, task_id, owner_id):
-    from backend.tools.file_processing import decode_text_bytes
-    version = ((result.student or {}).get("recognition") or {}).get("native_source_mapping_version")
-    if (not result.student or version == NATIVE_SOURCE_MAPPING_VERSION
-            or not may_contain_source(result.filename, problems)
-            or result.stable_error_code == "provider_submit_uncertain"):
-        return result
-    # Earlier checkpoints may contain a model excerpt or an outdated entry match. The original file
-    # is owner-scoped, size- and hash-verified; never repair it from teacher code.
-    def original_bytes():
-        stored = get_file(file_id=result.stored_file_id, owner_id=owner_id)
-        source = source_outcome_repository.get_source(result.source_id, owner_id=owner_id)
-        if (stored is None or source.stored_file_id != stored.id or source.assignment_id != task_id
-                or stored.assignment_id != task_id or stored.sha256 != source.sha256
-                or stored.availability_status != "available"
-                or stored.kind not in {"submission_source", "submission_archive_member"}
-                or stored.size_bytes > SUBMISSION_UPLOAD_MAX_BYTES):
-            raise InvalidTransition("The original submission is unavailable.", code="submission_retry_source_unavailable")
-        with get_storage().open(stored.storage_key) as stream:
-            data = stream.read(stored.size_bytes + 1)
-        if len(data) != stored.size_bytes or hashlib.sha256(data).hexdigest() != stored.sha256:
-            raise InvalidTransition("The original submission changed.", code="submission_retry_source_unavailable")
-        return data
-    body = await run_in_threadpool(original_bytes)
-    if result.filename.lower().endswith(".py"):
-        from fastapi import HTTPException
-        from backend.tools.file_processing import extract_text_from_upload
-        try:
-            text = await extract_text_from_upload(body, result.filename, purpose="submissions")
-        except HTTPException as exc:
-            code = exc.detail.get("code") if isinstance(exc.detail, dict) else None
-            return replace(result, student=None, matched_answer_count=0, status="parse_failed",
-                           stable_error_code=code or "source_decode_failed", failure_phase="source_read",
-                           retryable=False)
-    else:
-        text = await decode_text_bytes(body)
-    source = PreparedSubmissionSource(result.source_id, result.stored_file_id, result.filename, "text/plain", text)
-    return await recover_native_submission_result(source, problems, result)
-
-
 def _reusable_submission_results(*, owner_id, task_id, payload, questions, include_incomplete=False):
     """Load verified source results from an explicit failed-item retry lineage.
 
@@ -3113,7 +3071,7 @@ def _submission_result_incomplete(result):
     coverage = recognition.get("coverage") or {}
     # A native file can be fully read while its question association still
     # awaits the teacher. Replaying the file cannot resolve that review.
-    native = recognition.get("native_source_mapping_version") in (1, 2, NATIVE_SOURCE_MAPPING_VERSION)
+    native = recognition.get("native_source_mapping_version") == NATIVE_SOURCE_MAPPING_VERSION
     mapped = {"recognition_manual_pending"} if native else set()
     return bool(any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
                 or recognition.get("error_code")
@@ -3272,8 +3230,7 @@ async def run_task_submission_parsing(
                 job_attempt=job_attempt,
             )
             if parsed_artifact is not None:
-                results = [await _restore_legacy_native_result(r, problem_data, task_id, owner_id)
-                           for r in _load_submission_results(parsed_artifact)]
+                results = _load_submission_results(parsed_artifact)
                 results = finalize_identities(results, restored=True)
                 # Recovery must not publish an old partial parse or dispatch
                 # another paid read. Leave it failed for the explicit retry.
@@ -3357,8 +3314,6 @@ async def run_task_submission_parsing(
 
             retry_results = _reusable_submission_results(
                 owner_id=owner_id, task_id=task_id, payload=frozen, questions=questions, include_incomplete=True)
-            retry_results = {key: await _restore_legacy_native_result(result, problem_data, task_id, owner_id)
-                             for key, result in retry_results.items()}
             reusable = {key: result for key, result in retry_results.items()
                         if result.status in {"parsed", "identity_conflict"} and result.student
                         and {a["q_id"] for a in result.student["stu_ans"]} == set(problem_data)

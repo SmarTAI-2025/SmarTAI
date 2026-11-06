@@ -1,15 +1,9 @@
-"""Course and enrollment use cases.
-
-Thin orchestration over course_repository: authorization for student-visible
-course reads is resolved here by asking the enrollment table (via
-``list_student_courses``) rather than any user-side mirror. Services raise
-DomainError subtypes; the API layer maps them to HTTP.
-"""
+"""Owner-scoped course labels for the current teacher workflow."""
 from __future__ import annotations
 
 from backend.db import course_repository
 from backend.domain import education
-from backend.domain.errors import Forbidden, NotFound, ValidationError
+from backend.domain.errors import Forbidden, ValidationError
 
 
 # Assignments created without an explicit catalog course are attached to an
@@ -31,37 +25,15 @@ def create_course(*, teacher_id: str, name: str, code: str = "", description: st
 
 
 def list_courses_for(actor_id: str, role: str) -> list[education.CourseDTO]:
-    """Role-scoped course list. Admin reads all (unscoped); a teacher reads
-    courses they own; a student reads courses they are enrolled in."""
-    if role == "admin":
-        # Admin unscoped read: iterate all teachers' courses via a direct query.
-        return _visible(course_repository.list_all_courses())
-    if role == "teacher":
-        return _visible(course_repository.list_courses(actor_id=actor_id))
-    if role == "student":
-        return _visible(course_repository.list_student_courses(student_id=actor_id))
-    raise Forbidden("invalid_role")
+    if role != "teacher":
+        raise Forbidden("invalid_role")
+    return _visible(course_repository.list_courses(actor_id=actor_id))
 
 
 def get_course(*, course_id: str, actor_id: str, role: str) -> education.CourseDTO:
-    if role == "admin":
-        return course_repository.get_course_unscoped(course_id)
-    if role == "teacher":
-        return course_repository.get_course(course_id=course_id, actor_id=actor_id)
-    if role == "student":
-        # Students may read only courses they are enrolled in.
-        enrolled = course_repository.list_student_courses(student_id=actor_id)
-        for c in enrolled:
-            if c.id == course_id:
-                return c
-        raise NotFound("course")
-    raise Forbidden("invalid_role")
-
-
-def enroll_students(*, course_id: str, teacher_id: str, student_ids: list[str]) -> education.CourseDTO:
-    for sid in student_ids:
-        course_repository.enroll(course_id=course_id, student_id=sid, actor_id=teacher_id)
-    return course_repository.get_course(course_id=course_id, actor_id=teacher_id)
+    if role != "teacher":
+        raise Forbidden("invalid_role")
+    return course_repository.get_course(course_id=course_id, actor_id=actor_id)
 
 
 def delete_course(*, course_id: str, teacher_id: str) -> None:

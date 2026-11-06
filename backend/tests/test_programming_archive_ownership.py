@@ -108,34 +108,6 @@ async def test_nested_student_archive_is_still_opaque(monkeypatch):
         "class/S1_Alice/project.zip": "submission_archive_nested_unsupported", "class/S2_Bob/main.py": None}
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("member", ["project/lib/helper.py", "project/lib/helper.txt", "many"])
-async def test_individual_zip_preserves_files_and_cannot_replace_previous_revision(monkeypatch, member):
-    from backend.db import assignment_repository, course_repository, submission_repository
-    from backend.services import submissions
-    from backend.tests.test_ocr_normalized_ingest import _seed_user
-    owner, tid = seed(SUM)
-    student = "student-" + owner
-    _seed_user(student, "student")
-    course = assignment_repository.get_assignment(tid, actor_id=owner).course_id
-    course_repository.enroll(course, student_id=student, actor_id=owner)
-    assignment_repository.publish(tid, teacher_id=owner, expected_version=1)
-    previous = submissions.submit_online(student_id=student, assignment_id=tid, answers=[{"q_id":"q2", "content":"prior"}])
-    registry = _registry(monkeypatch, AsyncMock(side_effect=AssertionError("No model call")))
-    entries = [("project/main.py", CODE), (member, b"def helper(): return 1\n")] if member != "many" else [
-        (f"project/lib/part{i}.py", CODE) for i in range(25)]
-    data = zipped(entries)
-    for _ in range(2):
-        with pytest.raises(DomainError) as error:
-            await submissions.submit_student_file_with_ocr(student_id=student, assignment_id=tid,
-                filename="project.zip", content=data, content_type="application/zip", provider=registry.provider, registry=registry)
-        assert error.value.code == PROJECT
-    originals = {f.original_name: f for f in file_repository.list_files(owner_id=student) if f.kind == "submission"}
-    assert set(originals) == ({"project.zip", "project/main.py", member} if member != "many" else {"project.zip"})
-    with get_storage().open(originals["project.zip"].storage_key) as stream:
-        assert stream.read() == data
-    assert submission_repository.get_submission_for_student(tid, student_id=student).current_revision_id == previous.id
-    registry.provider.ainvoke.assert_not_awaited()
 
 
 @pytest.mark.asyncio

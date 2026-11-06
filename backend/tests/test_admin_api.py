@@ -1,22 +1,10 @@
-"""Admin API and normalized identity contract (Task 3).
-
-Covers the approved design's identity rules:
-
-* public user payloads no longer carry ``course_ids`` (membership is
-  course_enrollments only);
-* admin can list/activate/deactivate users and create teacher/student invites;
-* a teacher (non-admin) cannot call admin endpoints;
-* a deactivated user can no longer login or refresh;
-* a student invite pre-bound to a course enrolls the new student on
-  registration through the course service, after validating the target course
-  exists (a stale course_id produces no enrollment and no crash).
-"""
+"""Current administrator identity, suspension and authorization contracts."""
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
 from backend.auth import hash_password
-from backend.db.auth_repository import register_with_invite
+from backend.db.auth_repository import register_without_invite
 from backend.db.course_repository import create_course
 from backend.main import app
 from backend.models import User
@@ -38,14 +26,13 @@ def _admin_client() -> tuple[TestClient, str]:
     return client, resp.json()["token"]
 
 
-def _register_via_invite(client: TestClient, *, code: str, username: str, role: str):
-    """Consume an admin invite through the controlled repository path, then log in."""
-    register_with_invite(
+def _seed_and_login(client: TestClient, *, username: str, role: str):
+    """Seed an isolated account, then exercise the current login endpoint."""
+    register_without_invite(
         username=username,
         email=f"{username}@example.edu",
         role=role,
         password_hash=hash_password("secret-pass"),
-        invite_code=code,
     )
     response = client.post("/auth/login", json={"username": username, "password": "secret-pass"})
     assert response.status_code == 200, response.text
@@ -74,15 +61,11 @@ def test_admin_can_list_users_and_filter():
 
 def test_admin_can_activate_and_deactivate_user():
     client, token = _admin_client()
-    # Create a student invite + register
-    invite = client.post("/admin/invites", headers={"Authorization": f"Bearer {token}"}, json={"role": "student"})
-    assert invite.status_code == 200
-    code = invite.json()["invite_code"]
-    reg = _register_via_invite(client, code=code, username="stu_one", role="student")
+    reg = _seed_and_login(client, username="stu_one", role="student")
     stu_id = reg.json()["user"]["id"]
 
     # Deactivate
-    resp = client.patch(f"/admin/users/{stu_id}/active", headers={"Authorization": f"Bearer {token}"}, json={"is_active": False})
+    resp = client.patch(f"/admin/users/{stu_id}/status", headers={"Authorization": f"Bearer {token}"}, json={"is_active": False})
     assert resp.status_code == 200
     assert resp.json()["is_active"] is False
 
@@ -91,7 +74,7 @@ def test_admin_can_activate_and_deactivate_user():
     assert login.status_code == 401
 
     # Reactivate
-    react = client.patch(f"/admin/users/{stu_id}/active", headers={"Authorization": f"Bearer {token}"}, json={"is_active": True})
+    react = client.patch(f"/admin/users/{stu_id}/status", headers={"Authorization": f"Bearer {token}"}, json={"is_active": True})
     assert react.status_code == 200
     assert react.json()["is_active"] is True
     assert client.post("/auth/login", json={"username": "stu_one", "password": "secret-pass"}).status_code == 200
@@ -100,13 +83,11 @@ def test_admin_can_activate_and_deactivate_user():
 def test_admin_can_block_login_without_deleting_owned_course():
     client, token = _admin_client()
     # Create a teacher + a course they own
-    invite = client.post("/admin/invites", headers={"Authorization": f"Bearer {token}"}, json={"role": "teacher"})
-    code = invite.json()["invite_code"]
-    reg = _register_via_invite(client, code=code, username="teach1", role="teacher")
+    reg = _seed_and_login(client, username="teach1", role="teacher")
     teacher_id = reg.json()["user"]["id"]
     create_course(teacher_id=teacher_id, name="Owned")
 
-    resp = client.patch(f"/admin/users/{teacher_id}/active", headers={"Authorization": f"Bearer {token}"}, json={"is_active": False})
+    resp = client.patch(f"/admin/users/{teacher_id}/status", headers={"Authorization": f"Bearer {token}"}, json={"is_active": False})
     assert resp.status_code == 200
     from backend.db.models import CourseRecord
     from backend.db.session import session_scope
@@ -115,67 +96,21 @@ def test_admin_can_block_login_without_deleting_owned_course():
         assert session.scalar(select(CourseRecord.id).where(CourseRecord.teacher_id == teacher_id)) is not None
 
 
-def test_admin_can_create_teacher_and_student_invites():
-    client, token = _admin_client()
-    for role in ("teacher", "student"):
-        resp = client.post("/admin/invites", headers={"Authorization": f"Bearer {token}"}, json={"role": role})
-        assert resp.status_code == 200
-        assert resp.json()["role"] == role
-        assert resp.json()["invite_code"]
-    # admin role invite also allowed from admin endpoint
-    assert client.post("/admin/invites", headers={"Authorization": f"Bearer {token}"}, json={"role": "admin"}).status_code == 200
-
-
 def test_teacher_cannot_call_admin_endpoints():
-    # Register a teacher via invite
-    admin_client, admin_token = _admin_client()
-    invite = admin_client.post("/admin/invites", headers={"Authorization": f"Bearer {admin_token}"}, json={"role": "teacher"})
-    code = invite.json()["invite_code"]
-    reg = _register_via_invite(admin_client, code=code, username="tchr", role="teacher")
+    admin_client, _ = _admin_client()
+    reg = _seed_and_login(admin_client, username="tchr", role="teacher")
     teacher_token = reg.json()["token"]
 
     client = TestClient(app)
     h = {"Authorization": f"Bearer {teacher_token}"}
     assert client.get("/admin/users", headers=h).status_code == 403
-    assert client.post("/admin/invites", headers=h, json={"role": "student"}).status_code == 403
-
-
-def test_student_invite_with_course_enrolls_on_registration():
-    client, admin_token = _admin_client()
-    # Admin creates a teacher who creates a course
-    t_invite = client.post("/admin/invites", headers={"Authorization": f"Bearer {admin_token}"}, json={"role": "teacher"})
-    t_code = t_invite.json()["invite_code"]
-    t_reg = _register_via_invite(client, code=t_code, username="teachx", role="teacher")
-    teacher_id = t_reg.json()["user"]["id"]
-    course = create_course(teacher_id=teacher_id, name="Math")
-
-    # Admin creates a student invite pre-bound to that course
-    s_invite = client.post("/admin/invites", headers={"Authorization": f"Bearer {admin_token}"}, json={"role": "student", "course_id": course.id})
-    assert s_invite.status_code == 200
-    s_code = s_invite.json()["invite_code"]
-
-    s_reg = _register_via_invite(client, code=s_code, username="studx", role="student")
-    student_id = s_reg.json()["user"]["id"]
-
-    from backend.db.course_repository import is_enrolled
-    assert is_enrolled(course_id=course.id, student_id=student_id) is True
-
-
-def test_student_invite_with_unknown_course_does_not_enroll():
-    client, admin_token = _admin_client()
-    # course_id references a non-existent course; the invite is still created
-    # (admin may not have validated), but registration must not crash and must
-    # not create a phantom enrollment.
-    s_invite = client.post("/admin/invites", headers={"Authorization": f"Bearer {admin_token}"}, json={"role": "student", "course_id": "no-such-course"})
-    assert s_invite.status_code == 404  # admin endpoint validates the course exists
+    assert client.get("/admin/audit", headers=h).status_code == 403
 
 
 def test_disabled_user_cannot_refresh():
     client, admin_token = _admin_client()
-    invite = client.post("/admin/invites", headers={"Authorization": f"Bearer {admin_token}"}, json={"role": "student"})
-    code = invite.json()["invite_code"]
-    reg = _register_via_invite(client, code=code, username="srefresh_one", role="student")
+    reg = _seed_and_login(client, username="srefresh_one", role="student")
     stu_id = reg.json()["user"]["id"]
     assert client.post("/auth/refresh").status_code == 200  # active can refresh
-    client.patch(f"/admin/users/{stu_id}/active", headers={"Authorization": f"Bearer {admin_token}"}, json={"is_active": False})
+    client.patch(f"/admin/users/{stu_id}/status", headers={"Authorization": f"Bearer {admin_token}"}, json={"is_active": False})
     assert client.post("/auth/refresh").status_code == 401

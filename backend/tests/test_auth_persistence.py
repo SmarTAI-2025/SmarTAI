@@ -7,11 +7,9 @@ import pytest
 from backend.auth import hash_password, verify_password
 from backend.db.auth_repository import (
     AuthRepositoryError,
-    create_invite,
-    register_with_invite,
     register_without_invite,
 )
-from backend.db.models import InviteCodeRecord, RefreshSessionRecord, UserRecord
+from backend.db.models import RefreshSessionRecord, UserRecord
 from backend.db.session import session_scope
 from backend.main import app
 from backend.models import User
@@ -25,35 +23,6 @@ def _seed_admin() -> None:
     )
 
 
-def test_admin_invite_registration_and_one_time_consumption():
-    _seed_admin()
-    client = TestClient(app)
-    admin_login = client.post("/auth/login", json={"username": "admin", "password": "admin-pass"})
-    assert admin_login.status_code == 200
-    token = admin_login.json()["token"]
-    invite = client.post("/users/invite", headers={"Authorization": f"Bearer {token}"}, json={"role": "teacher"})
-    assert invite.status_code == 200
-    code = invite.json()["invite_code"]
-
-    registered = register_with_invite(
-        username="new-teacher",
-        email="new-teacher@example.edu",
-        role="teacher",
-        password_hash=hash_password("secret-pass"),
-        invite_code=code,
-    )
-    assert registered.username == "new-teacher"
-    login = client.post("/auth/login", json={"username": "new-teacher", "password": "secret-pass"})
-    assert login.status_code == 200
-    assert client.cookies.get("smartai_refresh")
-    with pytest.raises(AuthRepositoryError, match="Invalid or expired invite code"):
-        register_with_invite(
-            username="other",
-            email="other@example.edu",
-            role="teacher",
-            password_hash=hash_password("secret-pass"),
-            invite_code=code,
-        )
 
 
 def test_refresh_rotates_cookie_and_logout_revokes_it():
@@ -247,19 +216,3 @@ def test_repository_canonicalizes_email_and_blocks_case_variant_duplicate():
             email="TEACHER@example.edu",
             password_hash=hash_password("secret-pass"),
         )
-
-
-def test_invite_email_is_canonicalized_before_persistence():
-    _seed_admin()
-    invite = create_invite(
-        invited_by="admin-1",
-        email="  Invitee@Example.EDU ",
-        role="teacher",
-        course_id=None,
-        expires_in_hours=24,
-    )
-
-    with session_scope() as session:
-        stored = session.get(InviteCodeRecord, invite.code)
-        assert stored is not None
-        assert stored.email == "invitee@example.edu"

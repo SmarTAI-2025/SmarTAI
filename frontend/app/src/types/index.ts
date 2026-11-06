@@ -9,7 +9,6 @@ export * from "./health";
 export * from "./gradingSetup";
 export * from "./history";
 export * from "./kb";
-export * from "./lms";
 export * from "./materialImports";
 export * from "./personalKnowledge";
 export * from "./progress";
