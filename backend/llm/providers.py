@@ -24,6 +24,7 @@ from collections import deque
 from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any, Deque, Callable
 from dataclasses import dataclass
+from contextlib import AsyncExitStack
 
 import httpx
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -48,6 +49,17 @@ from backend.llm.response_cleanup import GeminiHTTPTransport, protect_client, pr
 from backend.models import ProviderConfig
 
 logger = logging.getLogger(__name__)
+_client_owner_tasks: set[asyncio.Task] = set()
+
+
+def _retain_client_owner(task: asyncio.Task) -> None:
+    """Cancellation of a waiter must not discard a still-owned client."""
+    _client_owner_tasks.add(task)
+    def finished(done):
+        _client_owner_tasks.discard(done)
+        if not done.cancelled():
+            done.exception()
+    task.add_done_callback(finished)
 
 
 
@@ -426,6 +438,7 @@ class BaseProvider(ABC):
         self.model = config.model
         self._client = None
         self._client_lock = None
+        self._client_initialization = None
 
     @property
     def provider_id(self) -> str:
@@ -558,20 +571,39 @@ class BaseProvider(ABC):
     async def _get_client(self) -> Any:
         """Get or create a shared client (for native async providers)."""
         self._ensure_async_primitives()
+        if self._client is None and is_user_defined_provider_endpoint(
+            self.config.provider_type, self.config.base_url, self.config.wire_protocol,
+        ):
+            async def initialize():
+                async with self._client_lock:
+                    if self._client is None:
+                        self._client = await asyncio.to_thread(self._build_client_sync)
+                    return self._client
+            return await self._owned_client_initialization(initialize)
         if self._client is None:
             async with self._client_lock:
                 if self._client is None:
-                    if is_user_defined_provider_endpoint(
-                        self.config.provider_type,
-                        self.config.base_url,
-                        self.config.wire_protocol,
-                    ):
-                        self._client = await asyncio.to_thread(
-                            self._build_client_sync
-                        )
-                    else:
-                        self._client = self._build_client_sync()
+                    self._client = self._build_client_sync()
         return self._client
+
+    async def _owned_client_initialization(self, initialize):
+        # The task owns both construction and cache publication. A cancelled
+        # waiter releases neither that ownership nor the initialization lock.
+        while True:
+            task = self._client_initialization
+            owns_attempt = task is None or task.done()
+            if owns_attempt:
+                task = asyncio.create_task(initialize())
+                self._client_initialization = task
+                _retain_client_owner(task)
+            try:
+                return await asyncio.shield(task)
+            except Exception:
+                if owns_attempt:
+                    raise
+                # Preserve the old lock waiter's chance to initialize after
+                # another caller's failed attempt. Do not broadcast that failure
+                # to callers that have not attempted construction themselves.
 
     def _generation_kwargs(self, max_output_tokens: int | None) -> dict[str, Any]:
         _validate_output_limit(max_output_tokens)
@@ -675,51 +707,63 @@ class GeminiProvider(BaseProvider):
             # Cloud mode: native async, shared client
             return await super().ainvoke(messages, max_output_tokens=max_output_tokens)
 
-        # Local proxy mode: fresh client per call.
-        scope = current_response_scope()
-        slots = get_scheduler().proxy_slots
-        async with scope.local_admission(slots) if scope is not None else slots:
-            return await self._invoke_proxy(messages, generation_kwargs)
+        return await self._invoke_proxy(messages, generation_kwargs)
 
     async def _invoke_proxy(self, messages: List[BaseMessage], generation_kwargs: dict[str, Any]) -> LLMResponse:
         from anyio import to_thread
 
-        # Prepare before RPM admission; at most 50 per-call clients can wait.
-        # Preparation uses the default pool, separate from the 50 SDK workers.
-        local_client = await _wait_provider_local(to_thread.run_sync(self._build_client_sync))
-        return await self._invoke_proxy_async(messages, generation_kwargs, local_client)
+        # The slot owns construction AND disposal, including late cancellation.
+        stack = AsyncExitStack()
+        construction = local_client = None
+        try:
+            scope = current_response_scope()
+            slots = get_scheduler().proxy_slots
+            await stack.enter_async_context(scope.local_admission(slots) if scope is not None else slots)
+            construction = asyncio.create_task(to_thread.run_sync(self._build_client_sync))
+            local_client = await _wait_provider_local(asyncio.shield(construction))
+            construction = None
+            return await self._invoke_proxy_async(messages, generation_kwargs, local_client)
+        finally:
+            if construction is not None:
+                owned = stack.pop_all()
+                async def close_late_client():
+                    try:
+                        client = await construction
+                    except BaseException:
+                        await owned.aclose()
+                        raise
+                    start_cleanup(client.aclose(), seconds=self._CLIENT_CLOSE_SECONDS, after=owned.aclose)
+                cleanup = asyncio.create_task(close_late_client())
+                _retain_client_owner(cleanup)
+            elif local_client is not None:
+                owned = stack.pop_all()
+                start_cleanup(local_client.aclose(), seconds=self._CLIENT_CLOSE_SECONDS, after=owned.aclose)
+            await stack.aclose()
 
     async def _invoke_proxy_async(self, messages, generation_kwargs, local_client):
         """OCR and whole-workflow owners use fresh cancellable proxy clients."""
-        try:
-            self._ensure_async_primitives()
-            await self._endpoint_breaker().before_call()
-            async with self._call_capacity(messages):
-                try:
-                    async def invoke():
-                        started = time.perf_counter()
-                        options = dict(generation_kwargs)
-                        if current_response_scope() is not None:
-                            options["timeout"] = current_response_timeout_seconds()
-                        response = await local_client.ainvoke(messages, **options)
-                        content = _response_text(response.content if hasattr(response, "content") else response)
-                        return content, _response_metadata(response), (time.perf_counter() - started) * 1000
+        self._ensure_async_primitives()
+        await self._endpoint_breaker().before_call()
+        async with self._call_capacity(messages):
+            try:
+                async def invoke():
+                    started = time.perf_counter()
+                    options = dict(generation_kwargs)
+                    if current_response_scope() is not None:
+                        options["timeout"] = current_response_timeout_seconds()
+                    response = await local_client.ainvoke(messages, **options)
+                    content = _response_text(response.content if hasattr(response, "content") else response)
+                    return content, _response_metadata(response), (time.perf_counter() - started) * 1000
 
-                    content, metadata, duration_ms = await self._invoke_response(invoke)
-                    self._endpoint_breaker().record_success()
-                    self._record_duration(duration_ms)
-                    return LLMResponse(content=content, provider=self.provider_id, model=self.model,
-                                       duration_ms=duration_ms, **metadata)
-                except Exception as exc:
-                    if _is_overload_failure(exc):
-                        self._endpoint_breaker().record_failure()
-                    raise
-        finally:
-            # The fresh client is owned by this call; shared provider clients
-            # are never closed here. Caller cancellation leaves cleanup owned.
-            await asyncio.shield(start_cleanup(
-                local_client.aclose(), seconds=self._CLIENT_CLOSE_SECONDS,
-            ))
+                content, metadata, duration_ms = await self._invoke_response(invoke)
+                self._endpoint_breaker().record_success()
+                self._record_duration(duration_ms)
+                return LLMResponse(content=content, provider=self.provider_id, model=self.model,
+                                   duration_ms=duration_ms, **metadata)
+            except Exception as exc:
+                if _is_overload_failure(exc):
+                    self._endpoint_breaker().record_failure()
+                raise
 
 
 # ─── OpenAI / Zhipu / Anthropic ──────────────────────────────────────────────
@@ -1159,9 +1203,12 @@ class SafeRelayProvider(BaseProvider):
     async def _relay_client(self) -> httpx.AsyncClient:
         self._ensure_async_primitives()
         if self._safe_async_client is None:
-            async with self._client_lock:
-                if self._safe_async_client is None:
-                    await asyncio.to_thread(self._build_client_sync)
+            async def initialize():
+                async with self._client_lock:
+                    if self._safe_async_client is None:
+                        await asyncio.to_thread(self._build_client_sync)
+                    return self._safe_async_client
+            return await self._owned_client_initialization(initialize)
         assert self._safe_async_client is not None
         return self._safe_async_client
 

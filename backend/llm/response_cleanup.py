@@ -27,10 +27,17 @@ def _retain(task: asyncio.Task) -> None:
     task.add_done_callback(finished)
 
 
-def start_cleanup(awaitable, *, seconds: float | None = None) -> asyncio.Task:
+def start_cleanup(awaitable, *, seconds: float | None = None, after=None) -> asyncio.Task:
     """Own cleanup independently; even cancellation-resistant close cannot block callers."""
+    async def owned_close():
+        try:
+            await awaitable
+        finally:
+            if after is not None:
+                await after()
+
     async def bounded():
-        task = asyncio.create_task(awaitable)
+        task = asyncio.create_task(owned_close())
         _retain(task)
         done, _ = await asyncio.wait({task}, timeout=CLEANUP_SECONDS if seconds is None else seconds)
         if not done:
