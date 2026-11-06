@@ -364,7 +364,8 @@ async def test_mixed_easy_and_unverified_ai_proposals_are_retained_with_original
             fact, _ = describe_run(run, "zh", p)
             assert (
                 fact.score_status == "unavailable"
-                and "AI 用例共 2 条" in fact.safe_summary
+                and "1 条超出输入范围" in fact.safe_summary
+                and "0 条" not in fact.safe_summary
                 and "整组待确认" in fact.safe_summary
             )
         audits = [r["value"] for r in state.records.values() if r["kind"] == runs.AUXILIARY]
@@ -407,7 +408,7 @@ async def test_original_numbers_survive_quarantine_of_saved_ai_case_in_front_of_
     assert audit["ai_candidates"][1]["original"]["expected_return"] == "2"
     fact, examples = describe_run(run, "en", p)
     assert fact.teacher_tests.total == fact.generated_tests.total == 1 and examples[0]["case_number"] == 2
-    assert "Of 2 AI test(s), 1 fell outside" in fact.safe_summary
+    assert "1 outside the input range" in fact.safe_summary and "0 with unverified" not in fact.safe_summary
     assert not fact.teacher_tests.passed and fact.generated_tests.passed == 1
     # Referring to skipped case #1 cannot turn case #2 into a pass or fail.
     vote = ExpertResult(

@@ -140,11 +140,11 @@ def _domain_feedback(run, language):
     outside = sum(item["domain"] == "outside" for item in excluded)
     unknown = len(excluded) - outside
     if language == "zh":
-        return (f"AI 用例共 {review['ai_count']} 条，其中 {outside} 条超出输入范围，"
-                f"{unknown} 条无法确认输入是否合法。这 {len(excluded)} 条均未用于扣分。"
+        details = ([f"{outside} 条超出输入范围"] if outside else []) + ([f"{unknown} 条无法确认符合题意"] if unknown else [])
+        return (f"自动用例中，{'，'.join(details)}，均未用于评分。"
                 + ("本题只有 AI 用例，整组待确认。" if review["withheld"] else ""))
-    return (f"Of {review['ai_count']} AI test(s), {outside} fell outside the input domain and "
-            f"{unknown} could not be verified as valid. These {len(excluded)} test(s) were excluded from scoring."
+    details = ([f"{outside} outside the input range"] if outside else []) + ([f"{unknown} with unverified inputs"] if unknown else [])
+    return (f"Excluded auto-generated tests: {'; '.join(details)}. They did not affect the score."
             + (" The AI-only suite awaits confirmation." if review["withheld"] else ""))
 
 
