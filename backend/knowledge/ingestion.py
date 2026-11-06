@@ -91,7 +91,7 @@ async def native_units(filename, body):
         from fastapi import HTTPException
         from backend.tools.file_processing import _extract_docx_text
         try:
-            text = await _extract_docx_text(body)
+            text = await _extract_docx_text(body, slot_timeout_seconds=None)
         except HTTPException as exc:
             raise RecognitionError(exc.detail["code"]) from None
         return dict(units=[text[i:i + 80000] for i in range(0, len(text), 80000)] or [""],
