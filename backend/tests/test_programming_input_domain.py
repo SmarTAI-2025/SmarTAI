@@ -59,6 +59,32 @@ def test_parameter_binding_and_conditional_output():
     assert input_domain(p, call([1, 3])) == "unknown"
 
 
+@pytest.mark.parametrize("output", [
+    "Return n on positive integers.",
+    "返回正整数 n 本身。",
+    "Return n assuming a positive integer.",
+    "If n is positive, return n, assuming that n is odd.",
+    "If n is guaranteed to be odd, return n.",
+    "Return whether n is positive, assuming that n is odd.",
+    "Calculate n for the teacher-defined subset.",
+])
+def test_output_prefix_cannot_hide_an_unparsed_input_restriction(output):
+    p = problem("Implement f(n): n is an integer. " + output)
+    assert input_domain(p, call([-1])) == "unknown"
+
+
+def test_stdin_output_suffix_cannot_hide_an_input_restriction():
+    p = problem("Read an integer from stdin and print it on positive integers.")
+    assert input_domain(p, TestCase(input="-1\n")) == "unknown"
+
+
+@pytest.mark.parametrize("output", ["Return n > 0.", "Return whether n is positive.",
+    "If n > 0, return 1; otherwise return 0."])
+def test_complete_output_expressions_do_not_narrow_input_domain(output):
+    p = problem("Implement f(n): n is an integer. " + output)
+    assert input_domain(p, call([-1])) == "allowed"
+
+
 @pytest.mark.parametrize("criterion", [
     "输入保证大于零。", "输入限于大于零的整数。", "只考虑正整数。",
     "参数的十进制表示须为回文。", "The input is drawn from a teacher-defined subset.",
@@ -90,10 +116,14 @@ def test_unambiguous_chinese_bound_is_checked_without_broadening_examples(locati
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("criterion", ["输入保证大于零。", "输入限于教师约定的正数集合。"])
+@pytest.mark.parametrize("location,criterion", [
+    ("criterion", "输入保证大于零。"), ("criterion", "输入限于教师约定的正数集合。"),
+    ("stem", "返回正整数 n 本身。"), ("stem", "Return n on positive integers."),
+])
 @pytest.mark.parametrize("other_teacher_failure", [False, True])
-async def test_domain_violation_never_reaches_grading_even_with_real_partial_failure(criterion, other_teacher_failure):
-    p = problem("Implement f(n): n is an integer. Return n.", criterion=criterion,
+async def test_domain_violation_never_reaches_grading_even_with_real_partial_failure(location, criterion, other_teacher_failure):
+    p = problem("Implement f(n): n is an integer. Return n." + (criterion if location == "stem" else ""),
+        criterion=criterion if location == "criterion" else "Correctness.",
         solution_code="def f(n): return n", test_cases=[
             TestCase(function_name="f", function_args=[1], expected_return="1"),
             TestCase(function_name="f", function_args=[2], expected_return="2"),
