@@ -80,6 +80,7 @@ async def verify_math(request: MathVerificationRequest) -> MathVerificationEvide
     is unchanged. Worker environment excludes application credentials.
     """
     from backend.tools.sandbox_runtime import get_sandbox_semaphore
+    from backend.services.submission_work_budget import active_work
 
     try:
         # Revalidate even model_construct / mutated nested dictionaries.
@@ -89,7 +90,7 @@ async def verify_math(request: MathVerificationRequest) -> MathVerificationEvide
     try:
         # Each admitted check gets its own deadline, including worker startup.
         # Keep the slot until the child has been reaped, including on cancellation.
-        async with get_sandbox_semaphore():
+        async with get_sandbox_semaphore(), active_work():
             async with asyncio.timeout(WALL_SECONDS):
                 return await _run_worker(request)
     except asyncio.CancelledError:

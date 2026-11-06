@@ -23,6 +23,7 @@ from backend.rag.chunker import chunk_spans
 TERMINAL_PAGES = {"searchable", "searchable_with_warning", "blank_confirmed", "failed"}
 GOOD_PAGES = {"searchable", "searchable_with_warning", "blank_confirmed"}
 BATCH_PAGES = 24
+LEASE_SECONDS = 300
 MAX_DERIVED_BYTES = 128 * 1024 * 1024
 MAX_TEXT_CHARS = 32 * 1024 * 1024
 
@@ -157,11 +158,26 @@ def claim_next(*, job_id=None):
                 continue
             if row.status not in {"queued", "processing"} or (row.lease_expires_at or 0) > now:
                 continue
-            row.status, row.lease_token, row.lease_expires_at = "processing", uuid.uuid4().hex, now + 360
+            row.status, row.lease_token, row.lease_expires_at = "processing", uuid.uuid4().hex, now + LEASE_SECONDS
+            from backend.services.workflow_deadlines import KNOWLEDGE_WALL_SECONDS, CHECKPOINT_KEY
+            if CHECKPOINT_KEY not in row.configuration:
+                row.configuration = {**row.configuration, CHECKPOINT_KEY: {
+                    "started_at": now, "deadline_at": now + KNOWLEDGE_WALL_SECONDS}}
             row.updated_at = now
             session.flush()
             return row
     return None
+
+
+def heartbeat(job):
+    with session_scope() as session:
+        row = _job(session, job.id, job.owner_id)
+        if row.status in {"queued", "paused", "complete", "complete_with_warning", "partial", "failed"}:
+            return False  # The batch/terminal write can finish before its caller returns.
+        if row.status != "processing" or row.lease_token != job.lease_token or (row.lease_expires_at or 0) <= time.time():
+            raise LeaseLost()
+        row.lease_expires_at = time.time() + LEASE_SECONDS
+        return True
 
 
 def initialize(job, total_pages, *, unit="page", warning_codes=()):
@@ -192,7 +208,7 @@ def next_pages(job):
 def prepare_page(job, page_id, *, batch_extra_remaining):
     with session_scope() as session:
         row = _job(session, job.id, job.owner_id, job.lease_token)
-        row.lease_expires_at = time.time() + 360
+        row.lease_expires_at = time.time() + LEASE_SECONDS
         page = session.get(KnowledgePageRecord, page_id)
         if page is None or page.ingestion_id != row.id or page.state in TERMINAL_PAGES:
             raise LeaseLost()
@@ -311,6 +327,12 @@ def _publish(session, row):
     if done:
         row.status = ("complete_with_warning" if counts.get("searchable_with_warning") else "complete") if complete else "partial" if available or partial_readable else "failed"
         row.lease_token = row.lease_expires_at = None
+    from backend.services.workflow_deadlines import CHECKPOINT_KEY
+    clock = dict(row.configuration.get(CHECKPOINT_KEY) or {})
+    if clock and row.status not in {"queued", "processing"} and "completed_at" not in clock:
+        clock["completed_at"] = time.time()
+        clock["elapsed_seconds"] = max(0, clock["completed_at"] - clock["started_at"])
+        row.configuration = {**row.configuration, CHECKPOINT_KEY: clock}
     doc = session.get(KnowledgeDocumentRecord, row.document_id)
     summary = dict(id=row.id, status=row.status, total_pages=row.total_pages or None,
         processed_pages=processed, searchable_pages=available - counts.get("blank_confirmed", 0) + partial_readable,
@@ -319,7 +341,7 @@ def _publish(session, row):
         failed_pages=counts.get("failed", 0), coverage_complete=complete,
         unit=row.configuration.get("unit", "page"), error_code=row.error_code,
         policy_version=row.configuration.get("policy_version"), extra_calls_reserved=row.extra_reserved,
-        usage=row.configuration.get("usage", {}))
+        usage=row.configuration.get("usage", {}), execution_deadline=clock)
     # The first version may publish incrementally. Reprocessing never replaces
     # an already readable version with failed or incomplete content.
     if complete or doc.active_version == row.id or (doc.active_version is None and doc.status != "ready"):
@@ -370,6 +392,8 @@ def resume(document_id, owner_id):
         if row is None or row.status not in {"paused", "cancelled"}:
             raise InvalidTransition("Only a paused or cancelled ingestion can resume.")
         row.status, row.error_code = "queued", None
+        from backend.services.workflow_deadlines import CHECKPOINT_KEY
+        row.configuration = {k: v for k, v in row.configuration.items() if k != CHECKPOINT_KEY}
         row.updated_at = time.time()
         _publish(session, row)
 

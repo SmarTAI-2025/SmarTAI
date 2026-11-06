@@ -427,20 +427,22 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
             except NotFound:
                 return True
 
-        grading_task = asyncio.create_task(
-            run_controlled(run_id, is_cancelled, checkpoints.run(grading_adapter.run_grading(
-                **retry_options,
-                run_id=run_id,
-                assignment_id=run.assignment_id,
-                teacher_id=run.teacher_id,
-                questions=questions,
-                frozen_revisions=frozen_revisions,
-                registry=run_registry,
-                language=language,
-                reporter=reporter,
-                grading_setup=grading_setup,
-            )), response_timeout_seconds=settings.grading_custom_provider_timeout_seconds)
-        )
+        from backend.services.workflow_deadlines import processing_budget, run_owned_work
+        async def grade_with_budget():
+            async with processing_budget(run_id, kind="grading", started_at=run.started_at):
+                return await run_owned_work(run_controlled(run_id, is_cancelled, checkpoints.run(grading_adapter.run_grading(
+                    **retry_options,
+                    run_id=run_id,
+                    assignment_id=run.assignment_id,
+                    teacher_id=run.teacher_id,
+                    questions=questions,
+                    frozen_revisions=frozen_revisions,
+                    registry=run_registry,
+                    language=language,
+                    reporter=reporter,
+                    grading_setup=grading_setup,
+                )), response_timeout_seconds=settings.llm_timeout))
+        grading_task = asyncio.create_task(grade_with_budget())
         done, _pending = await asyncio.wait(
             (grading_task, heartbeat_task),
             return_when=asyncio.FIRST_COMPLETED,
@@ -473,6 +475,11 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
                 except VersionConflict:
                     pass
         completed, failed = grading_repository.persisted_result_counters(run_id)
+        # Final database publication is part of this run's total time too.
+        # Keep already persisted results, but never publish a late success.
+        from backend.services.workflow_deadlines import policy
+        if time.time() >= run.started_at + policy("grading")[0]:
+            raise DomainError("grading_wall_time_limit_reached", code="grading_wall_time_limit_reached")
         grading_repository.mark_completed(
             run_id=run_id, worker_id=worker_id, completed=completed, failed=failed
         )

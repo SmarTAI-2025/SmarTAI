@@ -19,12 +19,29 @@ def request(**changes):
     })
 
 
+class ResponseMock(AsyncMock):
+    """Model stub participates in the same admitted-response protocol as SDKs."""
+    async def _execute_mock_call(self, *args, **kwargs):
+        from backend.llm.request_timeouts import current_response_scope
+        from backend.llm.providers import _request_definitely_rejected
+        call = super()._execute_mock_call
+        scope = current_response_scope()
+        if scope is None:
+            return await call(*args, **kwargs)
+        try:
+            return await scope.run_response(lambda: call(*args, **kwargs))
+        except Exception as exc:
+            if _request_definitely_rejected(exc):
+                scope.rejected()
+            raise
+
+
 def llm(text="  x^2 = -2\n[crossed-out: x = 2]  ", **changes):
     response = LLMResponse(**{
         "content": text, "provider": "existing:fixture", "model": "fixture", "duration_ms": 2,
         "input_tokens": 50, "output_tokens": 25, **changes,
     })
-    provider = SimpleNamespace(provider_id="existing:fixture", supports_vision=True, ainvoke_vision=AsyncMock(return_value=response))
+    provider = SimpleNamespace(provider_id="existing:fixture", supports_vision=True, ainvoke_vision=ResponseMock(return_value=response))
     return provider, LLMRecognitionEngine(provider, route_id="owner-route", fingerprint="frozen")
 
 

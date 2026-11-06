@@ -164,11 +164,6 @@ class RecognitionBudget:
         elapsed_seconds: float = 0,
     ):
         self._source, self._policy, self._capabilities = _copy_context(source, policy, capabilities)
-        if self._policy.timeout_mode == "response_only" and (
-            self._capabilities is None or self._capabilities.candidate_kind != "vision"
-            or self._source.scope == "knowledge_document"
-        ):
-            raise RecognitionError("recognition_request_invalid")
         self._bounded_output = bool(self._capabilities and self._capabilities.bounded_output_tokens)
         self._clock = clock
         self._lock = threading.Lock()

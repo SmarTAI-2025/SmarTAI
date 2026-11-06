@@ -24,11 +24,69 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 }
 
 describe("submission source reason copy", () => {
+  describe.each([
+    {
+      code: "question_preparation_time_limit_reached",
+      title: ["本次题目处理已达到有效处理时限", "This question preparation run reached its active processing limit"],
+      duration: ["1.5 小时，排队不计时", "1.5 hours of active processing, excluding queue time"],
+      saved: ["已保存的题干、参考答案和评分标准会保留", "Saved question text, reference answers, and rubrics are retained"],
+      nextStep: ["可重试未完成部分，或人工核对并补齐。", "Retry unfinished work, or review and complete it manually."],
+    },
+    {
+      code: "question_preparation_wall_time_limit_reached",
+      title: ["本次题目处理已达到总时限", "This question preparation run reached its total time limit"],
+      duration: ["2.5 小时总时限，自首次开始运行起，之后等待计入", "2.5-hour total time limit, counted from the first start, including later waits"],
+      saved: ["已保存的题干、参考答案和评分标准会保留", "Saved question text, reference answers, and rubrics are retained"],
+      nextStep: ["可重试未完成部分，或人工核对并补齐。", "Retry unfinished work, or review and complete it manually."],
+    },
+    {
+      code: "grading_time_limit_reached",
+      title: ["本次批改已达到有效处理时限", "This grading run reached its active processing limit"],
+      duration: ["2.5 小时，排队不计时", "2.5 hours of active processing, excluding queue time"],
+      saved: ["已保存的批改结果会保留", "Saved grading results are retained"],
+      nextStep: ["可重试失败项，或人工核对并补齐分数。", "Retry failed items, or review and complete the scores manually."],
+    },
+    {
+      code: "grading_wall_time_limit_reached",
+      title: ["本次批改已达到总时限", "This grading run reached its total time limit"],
+      duration: ["3.5 小时总时限，自首次开始运行起，之后等待计入", "3.5-hour total time limit, counted from the first start, including later waits"],
+      saved: ["已保存的批改结果会保留", "Saved grading results are retained"],
+      nextStep: ["可重试失败项，或人工核对并补齐分数。", "Retry failed items, or review and complete the scores manually."],
+    },
+  ])("$code", ({ code, title, duration, saved, nextStep }) => {
+    it.each(["zh-CN", "en-US"] as const)("explains the task, deadline, retained work, and continuation options (%s)", locale => {
+      const index = locale === "zh-CN" ? 0 : 1;
+      const copy = getSubmissionSourceReasonCopy(source({ reason_code: code }), locale);
+      expect(copy.title).toBe(title[index]);
+      expect(copy.description).toContain(duration[index]);
+      expect(copy.description).toContain(saved[index]);
+      expect(copy.nextStep).toBe(nextStep[index]);
+      expect(JSON.stringify(copy)).not.toMatch(/_time_limit_reached|管理员|administrator/);
+    });
+
+    it.each(["zh-CN", "en-US"] as const)("labels the page using its own deadline rather than the source reason (%s)", locale => {
+      const item = source({ reason_code: "provider_submit_uncertain" });
+      const label = getSubmissionPageErrorLabel(item, { page: 2, error_code: code, status_code: 504 }, locale);
+      expect(label).toBe(locale === "zh-CN" ? `第 2 页：${title[0]} (HTTP 504)` : `Page 2: ${title[1]} (HTTP 504)`);
+      expect(label).not.toContain(code);
+    });
+  });
+
   it.each(["zh-CN", "en-US"] as const)("explains work-time exhaustion and both continuation options (%s)", locale => {
     const copy = getSubmissionSourceReasonCopy(source({ reason_code: "submission_time_limit_reached" }), locale);
-    expect(copy.description).toContain(locale === "zh-CN" ? "3 小时，排队不计时" : "3 hours of active processing, excluding queue time");
+    expect(copy.description).toContain(locale === "zh-CN" ? "2.5 小时，排队不计时" : "2.5 hours of active processing, excluding queue time");
     expect(copy.nextStep).toContain(locale === "zh-CN" ? "人工继续处理" : "continue manually");
     expect(JSON.stringify(copy)).not.toMatch(/管理员|administrator/);
+  });
+
+  it.each(["zh-CN", "en-US"] as const)("explains the total deadline counted from the first start, including later waits (%s)", locale => {
+    const item = source({ reason_code: "submission_wall_time_limit_reached" });
+    const copy = getSubmissionSourceReasonCopy(item, locale);
+    expect(copy.description).toContain(locale === "zh-CN" ? "3.5 小时总时限，自首次开始运行起，之后等待计入" : "3.5-hour total time limit, counted from the first start, including later waits");
+    expect(copy.description).toContain(locale === "zh-CN" ? "结构化作答已保留" : "structured answers are retained");
+    expect(copy.nextStep).toContain(locale === "zh-CN" ? "重试失败项" : "Retry failed files");
+    expect(copy.nextStep).toContain(locale === "zh-CN" ? "人工继续处理" : "continue manually");
+    expect(getSubmissionPageErrorLabel(item, { page: 2, error_code: item.reason_code! }, locale)).toContain(copy.title);
   });
 
   it.each(["zh-CN", "en-US"] as const)("does not diagnose a database outage from a generic save failure (%s)", locale => {

@@ -201,7 +201,7 @@ async def test_work_cap_drains_pdf_worker_and_rejects_queued_read_without_leakin
     from backend.services import submission_work_budget as clocks
 
     process, launch = install_process(monkeypatch, json.dumps(index_payload()).encode())
-    budget = clocks.SubmissionWorkBudget("synthetic", limit_seconds=0.02)
+    budget = clocks.SubmissionWorkBudget("synthetic")
     monkeypatch.setattr(clocks, "_current", ContextVar("test_pdf_work_budget", default=budget))
     original_exchange = pdf_evidence._exchange
     entered, finish = asyncio.Event(), asyncio.Event()
@@ -215,7 +215,7 @@ async def test_work_cap_drains_pdf_worker_and_rejects_queued_read_without_leakin
     running = asyncio.create_task(read_pdf_evidence(b"%PDF-synthetic", PdfIndexRequest(), wait_for_slot=True))
     await entered.wait()
     queued = asyncio.create_task(read_pdf_evidence(b"%PDF-synthetic", PdfIndexRequest(), wait_for_slot=True))
-    await budget.exhausted.wait()
+    budget.expire()
     with pytest.raises(RecognitionError, match=clocks.CODE):
         await asyncio.wait_for(queued, 1)
     assert not running.done()
@@ -225,7 +225,7 @@ async def test_work_cap_drains_pdf_worker_and_rejects_queued_read_without_leakin
     assert process.reaped and budget.active == 0
     assert file_processing._PDF_EXTRACTION_SLOTS.acquire(blocking=False)
     file_processing._PDF_EXTRACTION_SLOTS.release()
-    budget.close()
+    budget.expire()
 
 
 @pytest.mark.asyncio

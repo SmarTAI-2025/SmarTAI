@@ -1,0 +1,100 @@
+{
+  "host": "macOS-15.6.1-arm64-arm-64bit",
+  "python": "3.12.14",
+  "samples": {
+    "native_pdf_500pages_inspect": {
+      "seconds": [
+        0.1191,
+        0.1041,
+        0.1011
+      ],
+      "max_seconds": 0.1191
+    },
+    "native_pdf_500pages_text": {
+      "seconds": [
+        0.2747,
+        0.2689,
+        0.2666
+      ],
+      "max_seconds": 0.2747
+    },
+    "scanned_pdf_200pages_index": {
+      "seconds": [
+        0.1856,
+        0.1705,
+        0.1598
+      ],
+      "max_seconds": 0.1856
+    },
+    "scanned_pdf_contact8": {
+      "seconds": [
+        0.2601,
+        0.2568,
+        0.2575
+      ],
+      "max_seconds": 0.2601
+    },
+    "vector_pdf_20000_rectangles_render": {
+      "seconds": [
+        0.1755,
+        0.1715,
+        0.1732
+      ],
+      "max_seconds": 0.1755
+    },
+    "image_16mp_prepare": {
+      "seconds": [
+        0.2333,
+        0.2415,
+        0.2401
+      ],
+      "max_seconds": 0.2415
+    },
+    "docx_6m_chars": {
+      "seconds": [
+        0.126,
+        0.1155,
+        0.1115
+      ],
+      "max_seconds": 0.126
+    },
+    "pptx_1000slides": {
+      "seconds": [
+        0.0561,
+        0.0552,
+        0.0567
+      ],
+      "max_seconds": 0.0567
+    },
+    "noise_image_16mp_prepare": {
+      "seconds": [
+        1.0606,
+        1.0987,
+        1.0739
+      ],
+      "max_seconds": 1.0987
+    },
+    "noise_scan_200pages_inspect": {
+      "seconds": [
+        0.1043,
+        0.1037,
+        0.1045
+      ],
+      "max_seconds": 0.1045
+    },
+    "noise_scan_contact8": {
+      "seconds": [
+        0.3399,
+        0.3367,
+        0.3334
+      ],
+      "max_seconds": 0.3399
+    }
+  },
+  "noise_image_bytes": 780106,
+  "noise_scan_bytes": 888800,
+  "two_concurrent_image_workers_seconds": [
+    1.0279,
+    1.1065
+  ]
+}

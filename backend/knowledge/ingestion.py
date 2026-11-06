@@ -14,7 +14,8 @@ from backend.agents.recognition_agent import RecognitionReadRequestV1
 from backend.db import knowledge_ingestion_repository as repo
 from backend.db.knowledge_repository import get_document
 from backend.db.file_repository import get_file
-from backend.domain.errors import DomainError, LeaseLost, RecognitionError, ValidationError
+from backend.config import settings
+from backend.domain.errors import DomainError, RecognitionError, ValidationError
 from backend.knowledge.evidence import KnowledgeEvidenceStore
 from backend.progress.tracker import ProgressReporter
 from backend.recognition.models import RecognitionPolicyV1, RecognitionSourceRefV1
@@ -83,7 +84,7 @@ async def native_units(filename, body):
     process = await asyncio.create_subprocess_exec(sys.executable, "-B", "-m", "backend.knowledge.native_worker",
         Path(filename).suffix.lower(), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     try:
-        async with asyncio.timeout(60):
+        async with asyncio.timeout(10):
             output, _ = await process.communicate(body)
         if process.returncode or len(output) > 64 * 1024 * 1024:
             raise RecognitionError("recognition_request_invalid")
@@ -135,76 +136,32 @@ class KnowledgeIngestionWorker:
         if job is None:
             return False
         reporter = ProgressReporter(job.id)
+        owner = asyncio.current_task()
+        lease_lost = False
+        async def renew():
+            nonlocal lease_lost
+            try:
+                while True:
+                    await asyncio.sleep(60)
+                    async with asyncio.timeout(10):
+                        if not await run_in_threadpool(repo.heartbeat, job):
+                            return
+            except Exception:
+                lease_lost = True
+                owner.cancel()  # A fenced worker must stop before sending more work.
+        heartbeat = asyncio.create_task(renew())
         try:
-            document, body = await run_in_threadpool(_read_source, job)
-            visual = document.content_type == "application/pdf" or (document.content_type or "").startswith("image/")
-            native = None
-            if document.content_type == "application/pdf":
-                index = await read_pdf_evidence(body, PdfIndexRequest(window_pages=1), timeout_seconds=30, progress=reporter)
-                total = index.total_pages
-            elif visual:
-                total = 1
-            else:
-                native = await native_units(document.original_name, body)
-                total = len(native["units"])
-            await run_in_threadpool(repo.initialize, job, total, unit=native["unit"] if native else "page",
-                                   warning_codes=native["warning_codes"] if native else ())
-            route, registry = None, None
-            if visual and job.configuration.get("route_id"):
-                registry = await run_in_threadpool(self.registry_factory, job.owner_id)
-                route = resolve_stage_provider_route(owner_id=job.owner_id, registry=registry,
-                                                     requested_route_id=job.configuration["route_id"])
-                fingerprint = stage_provider_configuration_fingerprint(owner_id=job.owner_id, route=route, registry=registry)
-                if fingerprint != job.configuration.get("route_fingerprint"):
-                    raise RecognitionError("recognition_route_changed")
-            source = RecognitionSourceRefV1(owner_id=job.owner_id, scope="knowledge_document", business_id=document.id,
-                stored_file_id=document.stored_file_id, input_sha256=document.sha256, original_name=document.original_name,
-                content_type=document.content_type) if visual else None
-            async with recognition_engine(owner_id=job.owner_id, route=route, registry=registry) as engine:
-                extra_left = 2
-                for page in await run_in_threadpool(repo.next_pages, job):
-                    if self.stopped:
-                        break
-                    reused = await run_in_threadpool(repo.reusable_page, job, page)
-                    if reused is not None:
-                        await run_in_threadpool(repo.prepare_page, job, page.id, batch_extra_remaining=0)
-                        await run_in_threadpool(repo.finish_page, job, page.id, **reused)
-                        continue
-                    page = await run_in_threadpool(repo.prepare_page, job, page.id, batch_extra_remaining=extra_left)
-                    await reporter.set_current_step("knowledge_page", message=f"Processing page {page.page_number} of {total}")
-                    if native:
-                        text = native["units"][page.page_number - 1]
-                        warnings = native["warning_codes"]
-                        # Office images are not evidence of a blank or fully read
-                        # page. Native text remains useful but coverage is partial.
-                        state = "failed" if warnings else "searchable" if text.strip() else "blank_confirmed"
-                        evidence = dict(confidence="medium", warning_codes=warnings, artifact_ids=[],
-                                        usage=dict(initial_calls=0, input_tokens=0, output_tokens=0, usage_complete=True))
-                    else:
-                        repository = repo.KnowledgeRunRepository(job, page.id)
-                        policy = RecognitionPolicyV1(version=POLICY, max_detail_pages=1, max_regions=1,
-                            max_initial_calls=1, max_calls=1 + int(page.extra_allowed), max_locator_calls=0,
-                            max_empty_recoveries=int(page.extra_allowed), max_patches=int(page.extra_allowed),
-                            total_seconds=300, read_seconds=280)
-                        request = RecognitionReadRequestV1(source=source, purpose="knowledge", scope="pages",
-                            pages=[page.page_number], search_start_page=page.page_number, search_window_pages=1, policy=policy)
-                        service = RecognitionRunService(store=KnowledgeEvidenceStore(repository, progress=reporter),
-                            capacity=recognition_capacity(), cache=_CACHE, progress=reporter,
-                            operation_repository=repository, binding_resolver=repository.resolve_binding)
-                        run = await (self.page_reader or service.run)(request, body, engine=engine,
-                            prompt_version=job.configuration["prompt_version"], authorized_owner_id=job.owner_id,
-                            binding=RecognitionArtifactBindingV1(link="knowledge_document", business_id=document.id))
-                        text, state, evidence = _page_result(run)
-                        extra_left -= min(1, run.operation_usage.patch_calls + run.operation_usage.empty_recovery_calls)
-                    await run_in_threadpool(repo.finish_page, job, page.id, text=text, state=state, evidence=evidence)
-                    if evidence.get("error_code") in PAUSE_PROVIDER_ERRORS:
-                        await run_in_threadpool(repo.release, job, status="paused", error=evidence["error_code"])
-                        return True
-            await run_in_threadpool(repo.release, job)
+            from backend.services.workflow_deadlines import processing_budget, run_owned_work, CHECKPOINT_KEY
+            clock = job.configuration[CHECKPOINT_KEY]
+            async with processing_budget(job.id, kind="knowledge_ingestion",
+                    started_at=clock["started_at"], deadline_at=clock["deadline_at"]):
+                await run_owned_work(self._process_job(job, reporter))
         except asyncio.CancelledError:
             # Keep any before-submit marker. Resumption never assumes a cancelled
             # HTTP client cancelled work already accepted by its provider.
-            raise
+            if not lease_lost or owner.cancelling() > 1:
+                raise
+            owner.uncancel()  # Losing one job must not stop the shared worker loop.
         except (DomainError, ValueError, OSError, TimeoutError) as exc:
             code = exc.code if isinstance(exc, DomainError) else "knowledge_ingestion_failed"
             try:
@@ -212,9 +169,78 @@ class KnowledgeIngestionWorker:
             except DomainError:
                 pass
         finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
             from backend.progress.tracker import remove_reporter
             remove_reporter(job.id)
         return True
+
+    async def _process_job(self, job, reporter):
+        document, body = await run_in_threadpool(_read_source, job)
+        visual = document.content_type == "application/pdf" or (document.content_type or "").startswith("image/")
+        native = None
+        if document.content_type == "application/pdf":
+            index = await read_pdf_evidence(body, PdfIndexRequest(window_pages=1), timeout_seconds=10, progress=reporter)
+            total = index.total_pages
+        elif visual:
+            total = 1
+        else:
+            native = await native_units(document.original_name, body)
+            total = len(native["units"])
+        await run_in_threadpool(repo.initialize, job, total, unit=native["unit"] if native else "page",
+                               warning_codes=native["warning_codes"] if native else ())
+        route, registry = None, None
+        if visual and job.configuration.get("route_id"):
+            registry = await run_in_threadpool(self.registry_factory, job.owner_id)
+            route = resolve_stage_provider_route(owner_id=job.owner_id, registry=registry,
+                                                 requested_route_id=job.configuration["route_id"])
+            fingerprint = stage_provider_configuration_fingerprint(owner_id=job.owner_id, route=route, registry=registry)
+            if fingerprint != job.configuration.get("route_fingerprint"):
+                raise RecognitionError("recognition_route_changed")
+        source = RecognitionSourceRefV1(owner_id=job.owner_id, scope="knowledge_document", business_id=document.id,
+            stored_file_id=document.stored_file_id, input_sha256=document.sha256, original_name=document.original_name,
+            content_type=document.content_type) if visual else None
+        async with recognition_engine(owner_id=job.owner_id, route=route, registry=registry) as engine:
+            extra_left = 2
+            for page in await run_in_threadpool(repo.next_pages, job):
+                if self.stopped:
+                    break
+                reused = await run_in_threadpool(repo.reusable_page, job, page)
+                if reused is not None:
+                    await run_in_threadpool(repo.prepare_page, job, page.id, batch_extra_remaining=0)
+                    await run_in_threadpool(repo.finish_page, job, page.id, **reused)
+                    continue
+                page = await run_in_threadpool(repo.prepare_page, job, page.id, batch_extra_remaining=extra_left)
+                await reporter.set_current_step("knowledge_page", message=f"Processing page {page.page_number} of {total}")
+                if native:
+                    text = native["units"][page.page_number - 1]
+                    warnings = native["warning_codes"]
+                    # Office images are not evidence of a blank or fully read
+                    # page. Native text remains useful but coverage is partial.
+                    state = "failed" if warnings else "searchable" if text.strip() else "blank_confirmed"
+                    evidence = dict(confidence="medium", warning_codes=warnings, artifact_ids=[],
+                                    usage=dict(initial_calls=0, input_tokens=0, output_tokens=0, usage_complete=True))
+                else:
+                    repository = repo.KnowledgeRunRepository(job, page.id)
+                    policy = RecognitionPolicyV1(version=POLICY, max_detail_pages=1, max_regions=1,
+                        max_initial_calls=1, max_calls=1 + int(page.extra_allowed), max_locator_calls=0,
+                        max_empty_recoveries=int(page.extra_allowed), max_patches=int(page.extra_allowed),
+                        timeout_mode="response_only", per_call_seconds=settings.llm_timeout)
+                    request = RecognitionReadRequestV1(source=source, purpose="knowledge", scope="pages",
+                        pages=[page.page_number], search_start_page=page.page_number, search_window_pages=1, policy=policy)
+                    service = RecognitionRunService(store=KnowledgeEvidenceStore(repository, progress=reporter),
+                        capacity=recognition_capacity(), cache=_CACHE, progress=reporter,
+                        operation_repository=repository, binding_resolver=repository.resolve_binding)
+                    run = await (self.page_reader or service.run)(request, body, engine=engine,
+                        prompt_version=job.configuration["prompt_version"], authorized_owner_id=job.owner_id,
+                        binding=RecognitionArtifactBindingV1(link="knowledge_document", business_id=document.id))
+                    text, state, evidence = _page_result(run)
+                    extra_left -= min(1, run.operation_usage.patch_calls + run.operation_usage.empty_recovery_calls)
+                await run_in_threadpool(repo.finish_page, job, page.id, text=text, state=state, evidence=evidence)
+                if evidence.get("error_code") in PAUSE_PROVIDER_ERRORS:
+                    await run_in_threadpool(repo.release, job, status="paused", error=evidence["error_code"])
+                    return True
+        await run_in_threadpool(repo.release, job)
 
     async def run_forever(self):
         while not self.stopped:

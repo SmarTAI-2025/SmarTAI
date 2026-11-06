@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from fastapi import UploadFile
+from fastapi import BackgroundTasks, UploadFile
 
 from backend.api import task_preparation as api
 from backend.db import assignment_repository, workflow_repository
@@ -63,8 +63,15 @@ async def test_material_preflight_freezes_parser_and_never_applies_or_runs(tmp_p
         api._validate_material_parser_route(source.payload, route, _RecoveryRegistry("changed"), owner)
     parser.assert_not_awaited()
     assert assignment_repository.list_questions(task, teacher_id=owner)[0].criterion == ""
-    job, _ = workflow_repository.create_operation(assignment_id=task, owner_id=owner, operation_type="material_import",
-                                                  input_hash=source.input_hash, payload=source.payload)
+    started = await api.start_material_import(task_id=task,
+        request=api.StartMaterialImportRequest(source_token=source.id),
+        background_tasks=BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
+    assert started["status"] == "started"
+    job = workflow_repository.get_operation(started["job_id"], owner_id=owner)
+    assert job.payload["preparation_started_at"] == source.payload["preparation_started_at"]
+    assert job.payload["preparation_started_at"] > 0
+    job, _ = workflow_repository.create_operation(assignment_id=task, owner_id=owner,
+        operation_type="material_import", input_hash=source.input_hash + "-preview", payload=source.payload)
     preview = api.material_import_source_content(task, job.id, current=SimpleNamespace(id=owner))
     assert b"Original teacher criterion" in preview.body and preview.headers["cache-control"] == "private, no-store"
     other_owner, other_task = _seed_task()

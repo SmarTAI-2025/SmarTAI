@@ -35,7 +35,7 @@ async def test_historical_and_current_provider_calls_charge_work_only_after_queu
     route, response_only, scheduler, monkeypatch,
 ):
     monkeypatch.setattr(clocks, "_current", ContextVar("submission_budget", default=None))
-    budget = clocks.SubmissionWorkBudget("legacy-retry", limit_seconds=0.02)
+    budget = clocks.SubmissionWorkBudget("legacy-retry")
     clocks._current.set(budget)
     scheduler.host_capacity.capacity = 0
     calls = []
@@ -54,11 +54,12 @@ async def test_historical_and_current_provider_calls_charge_work_only_after_queu
         pending = asyncio.create_task(work())
         try:
             await asyncio.sleep(0.04)
-            assert not pending.done() and budget.elapsed == 0 and calls == []
+            assert not pending.done() and budget.active == 0 and calls == []
             scheduler.host_capacity.capacity = 50
             scheduler.wake.set()
             assert (await asyncio.wait_for(pending, 2)).content == "completed response"
-            assert budget.exhausted.is_set() and budget.elapsed >= 0.02
+            assert not budget.exhausted.is_set() and budget.active == 0
+            budget.expire()
             with pytest.raises(RecognitionError, match=clocks.CODE):
                 await work()
             assert calls == [True]  # Drained first response; never sent a replacement.
@@ -66,7 +67,7 @@ async def test_historical_and_current_provider_calls_charge_work_only_after_queu
         finally:
             pending.cancel()
             await asyncio.gather(pending, return_exceptions=True)
-            budget.close()
+            budget.expire()
 
 
 @pytest.mark.asyncio
@@ -75,7 +76,7 @@ async def test_legacy_recognition_dispatch_counts_underlying_model_not_shared_wr
     shared, scheduler, monkeypatch,
 ):
     monkeypatch.setattr(clocks, "_current", ContextVar("submission_budget", default=None))
-    budget = clocks.SubmissionWorkBudget("legacy-recognition", limit_seconds=0.02)
+    budget = clocks.SubmissionWorkBudget("legacy-recognition")
     clocks._current.set(budget)
     scheduler.host_capacity.capacity = 0
 
@@ -96,58 +97,58 @@ async def test_legacy_recognition_dispatch_counts_underlying_model_not_shared_wr
             capacity=RecognitionCapacity()))
         try:
             await asyncio.sleep(0.04)
-            assert not pending.done() and budget.elapsed == 0
+            assert not pending.done() and budget.active == 0
             scheduler.host_capacity.capacity = 50
             scheduler.wake.set()
             result = await asyncio.wait_for(pending, 2)
             assert result.candidate.text == "faithful transcription"
-            assert budget.exhausted.is_set() and budget.active == 0
+            assert not budget.exhausted.is_set() and budget.active == 0
         finally:
             pending.cancel()
             await asyncio.gather(pending, return_exceptions=True)
-            budget.close()
+            budget.expire()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_legacy_gemini_proxy_clock_covers_sync_response_and_cancellation_drain(
+async def test_gemini_proxy_clock_covers_async_response_and_cancellation(
     cancel, scheduler, monkeypatch,
 ):
     monkeypatch.setattr(clocks, "_current", ContextVar("submission_budget", default=None))
-    budget = clocks.SubmissionWorkBudget("legacy-proxy-retry", limit_seconds=0.02)
+    budget = clocks.SubmissionWorkBudget("proxy-retry")
     clocks._current.set(budget)
     monkeypatch.setattr(GeminiProvider, "_needs_proxy_mode", property(lambda self: True))
     provider = GeminiProvider(ProviderConfig(provider_type="gemini", model="fixture", api_key="fake"))
-    release, started = threading.Event(), asyncio.Event()
+    release, started = asyncio.Event(), asyncio.Event()
     calls = []
-    loop = asyncio.get_running_loop()
 
-    def invoke(*args, **kwargs):
+    async def invoke(*args, **kwargs):
         calls.append(True)
-        loop.call_soon_threadsafe(started.set)
-        assert release.wait(3)
-        return SimpleNamespace(content="saved sync response")
+        started.set()
+        assert budget.active == scheduler.active == 1
+        await release.wait()
+        return SimpleNamespace(content="saved async response")
 
-    monkeypatch.setattr(provider, "_build_client_sync", lambda: SimpleNamespace(invoke=invoke))
+    async def close():
+        pass
+
+    monkeypatch.setattr(provider, "_build_client_sync", lambda: SimpleNamespace(ainvoke=invoke, aclose=close))
     scheduler.host_capacity.capacity = 0
     pending = asyncio.create_task(provider.ainvoke(MESSAGES))
     try:
         await asyncio.sleep(0.04)
-        assert not started.is_set() and budget.elapsed == 0
+        assert not started.is_set() and budget.active == 0
         scheduler.host_capacity.capacity = 50
         scheduler.wake.set()
         await asyncio.wait_for(started.wait(), 2)
-        await asyncio.wait_for(budget.exhausted.wait(), 1)
+        budget.expire()
         if cancel:
             pending.cancel()
-            await asyncio.sleep(0.01)
-            assert not pending.done() and budget.active == 1 and scheduler.active == 1
-        release.set()
-        if cancel:
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(pending, 2)
         else:
-            assert (await asyncio.wait_for(pending, 2)).content == "saved sync response"
+            release.set()
+            assert (await asyncio.wait_for(pending, 2)).content == "saved async response"
         assert budget.active == scheduler.active == scheduler.host_capacity.active == 0
         with pytest.raises(RecognitionError, match=clocks.CODE):
             await provider.ainvoke(MESSAGES)
@@ -156,7 +157,7 @@ async def test_legacy_gemini_proxy_clock_covers_sync_response_and_cancellation_d
         release.set()
         pending.cancel()
         await asyncio.gather(pending, return_exceptions=True)
-        budget.close()
+        budget.expire()
 
 
 @pytest.mark.asyncio
@@ -164,7 +165,7 @@ async def test_legacy_gemini_proxy_clock_covers_sync_response_and_cancellation_d
 @pytest.mark.parametrize("route", ["openai", "anthropic", "gemini"])
 async def test_legacy_native_failure_always_releases_active_work(route, failure, scheduler, monkeypatch):
     monkeypatch.setattr(clocks, "_current", ContextVar("submission_budget", default=None))
-    budget = clocks.SubmissionWorkBudget("legacy-retry", limit_seconds=1)
+    budget = clocks.SubmissionWorkBudget("legacy-retry")
     clocks._current.set(budget)
     entered = asyncio.Event()
 
@@ -183,11 +184,11 @@ async def test_legacy_native_failure_always_releases_active_work(route, failure,
                 pending.cancel()
             with pytest.raises(asyncio.CancelledError if failure == "cancel" else ValueError):
                 await pending
-            assert budget.active == scheduler.active == 0 and budget.timer is None
+            assert budget.active == scheduler.active == 0
         finally:
             pending.cancel()
             await asyncio.gather(pending, return_exceptions=True)
-            budget.close()
+            budget.expire()
 
 
 @pytest.mark.asyncio

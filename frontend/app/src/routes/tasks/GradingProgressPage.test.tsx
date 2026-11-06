@@ -262,6 +262,26 @@ describe("GradingProgressPage completion routing", () => {
     expect(screen.getByRole("alert")).not.toHaveTextContent("grading_failed");
   });
 
+  it.each([
+    ["grading_time_limit_reached", "active processing limit", "2.5 hours of active processing, excluding queue time"],
+    ["grading_wall_time_limit_reached", "total time limit", "3.5-hour total time limit, counted from the first start, including later waits"],
+  ])("renders %s with retained results and recovery actions", (code, title, timing) => {
+    taskStatus = "error";
+    vi.mocked(useTaskProgress).mockReturnValue({
+      data: { task_id: "task-1", status: "error", error: code, grading_job_id: "run-deadline", problem_count: 1, student_count: 1 },
+      progress: { phase: "error", current_step: "grading", error_detail: code, messages: [] },
+      percent: 0, isError: false, isFetching: false, refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useTaskProgress>);
+    renderProgress();
+    expect(screen.getByRole("alert")).toHaveTextContent(`This grading run reached its ${title}`);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("This grading run did not finish");
+    expect(screen.getByRole("alert")).toHaveTextContent(timing);
+    expect(screen.getByRole("alert")).toHaveTextContent("Saved grading results are retained");
+    expect(screen.getByRole("alert")).not.toHaveTextContent(code);
+    expect(screen.getByRole("button", { name: "Retry failed items" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue manually" })).toBeEnabled();
+  });
+
   it("resets a stale retry conflict before refetching task state", () => {
     taskStatus = "error";
     let retryError: unknown = new APIError(409, "workflow_revision_conflict", {

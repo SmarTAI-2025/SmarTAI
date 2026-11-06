@@ -57,10 +57,39 @@ export function getSubmissionPageErrorLabel(source: SubmissionSourceOutcome, err
 }
 
 const REASON_COPY: Record<string, ReasonFactory> = {
+  question_preparation_time_limit_reached: (locale) => ({
+    title: tx(locale, "本次题目处理已达到有效处理时限", "This question preparation run reached its active processing limit"),
+    description: tx(locale, "本次有效处理时间已达到 1.5 小时，排队不计时；已保存的题干、参考答案和评分标准会保留。", "This run reached 1.5 hours of active processing, excluding queue time. Saved question text, reference answers, and rubrics are retained."),
+    nextStep: tx(locale, "可重试未完成部分，或人工核对并补齐。", "Retry unfinished work, or review and complete it manually."),
+  }),
+  question_preparation_wall_time_limit_reached: (locale) => ({
+    title: tx(locale, "本次题目处理已达到总时限", "This question preparation run reached its total time limit"),
+    description: tx(locale, "本次题目处理已达到 2.5 小时总时限，自首次开始运行起，之后等待计入；已保存的题干、参考答案和评分标准会保留。", "This question preparation run reached its 2.5-hour total time limit, counted from the first start, including later waits. Saved question text, reference answers, and rubrics are retained."),
+    nextStep: tx(locale, "可重试未完成部分，或人工核对并补齐。", "Retry unfinished work, or review and complete it manually."),
+  }),
   submission_time_limit_reached: (locale) => ({
     title: tx(locale, "本次识别已达到处理时限", "This recognition run reached its processing limit"),
-    description: tx(locale, "本次有效处理时间已达到 3 小时，排队不计时；已完成的识别和结构化作答已保留。", "This run reached 3 hours of active processing, excluding queue time. Completed recognition and structured answers are retained."),
+    description: tx(locale, "本次有效处理时间已达到 2.5 小时，排队不计时；已完成的识别和结构化作答已保留。", "This run reached 2.5 hours of active processing, excluding queue time. Completed recognition and structured answers are retained."),
     nextStep: tx(locale, "重试失败项可继续补充未完成内容；也可选择人工继续处理，核对已有作答并补齐其余内容。", "Retry failed files to complete unfinished content, or continue manually to review saved answers and fill the gaps."),
+  }),
+  submission_wall_time_limit_reached: (locale) => ({
+    title: tx(locale, "本次识别已达到总时限", "This recognition run reached its total time limit"),
+    description: tx(locale, "本次作答识别已达到 3.5 小时总时限，自首次开始运行起，之后等待计入；已完成的识别和结构化作答已保留。", "This submission recognition run reached its 3.5-hour total time limit, counted from the first start, including later waits. Completed recognition and structured answers are retained."),
+    nextStep: tx(locale, "重试失败项可继续补充未完成内容；也可选择人工继续处理，核对已有作答并补齐其余内容。", "Retry failed files to complete unfinished content, or continue manually to review saved answers and fill the gaps."),
+  }),
+  grading_time_limit_reached: (locale) => ({
+    title: tx(locale, "本次批改已达到有效处理时限", "This grading run reached its active processing limit"),
+    description: tx(locale, "本次有效处理时间已达到 2.5 小时，排队不计时；已保存的批改结果会保留。", "This run reached 2.5 hours of active processing, excluding queue time. Saved grading results are retained."),
+    nextStep: tx(locale, "可重试失败项，或人工核对并补齐分数。", "Retry failed items, or review and complete the scores manually."),
+  }),
+  grading_wall_time_limit_reached: (locale) => ({
+    title: tx(locale, "本次批改已达到总时限", "This grading run reached its total time limit"),
+    description: tx(locale, "本次批改已达到 3.5 小时总时限，自首次开始运行起，之后等待计入；已保存的批改结果会保留。", "This grading run reached its 3.5-hour total time limit, counted from the first start, including later waits. Saved grading results are retained."),
+    nextStep: tx(locale, "可重试失败项，或人工核对并补齐分数。", "Retry failed items, or review and complete the scores manually."),
+  }),
+  knowledge_wall_time_limit_reached: (locale) => ({
+    title: tx(locale, "资料库处理超时", "Course-library processing timed out"),
+    description: tx(locale, "已达到 2 小时总时限，已完成内容会保留。", "The 2-hour total time limit was reached; completed content is retained."),
   }),
   operation_cancelled: (locale) => ({
     title: tx(locale, "已手动暂停，尚未完成识别", "Manually paused before recognition completed"),

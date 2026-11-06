@@ -100,7 +100,7 @@ async def run_python_subprocess(
     code: str,
     test_input: str = "",
     *,
-    timeout: float = 10.0,
+    timeout: float = 5.0,
     memory_mb: int = 256,
     max_output_chars: Optional[int] = None,
 ) -> TestResult:
@@ -119,8 +119,9 @@ async def run_python_subprocess(
                                     memory_mb=memory_mb, max_output_chars=max_output_chars or 8192)
     if settings.runtime_environment == "production":
         raise HostCodeExecutionDisabled()
+    from backend.services.submission_work_budget import active_work
     sem = get_sandbox_semaphore()
-    async with sem:
+    async with sem, active_work():
         started_at = time.perf_counter()
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", newline="\n", suffix=".py", delete=False
@@ -128,20 +129,23 @@ async def run_python_subprocess(
             f.write(code)
             code_path = f.name
 
+        launch = None
         try:
             preexec_fn = (
                 (lambda: _apply_limits(memory_mb, int(timeout) + 2))
                 if sys.platform != "win32"
                 else None
             )
-            proc = await asyncio.create_subprocess_exec(
+            # Retain the launch handle if the owning workflow is cancelled.
+            launch = asyncio.create_task(asyncio.create_subprocess_exec(
                 sys.executable,
                 code_path,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 preexec_fn=preexec_fn,
-            )
+            ))
+            proc = await asyncio.shield(launch)
             try:
                 stdout_b, stderr_b = await asyncio.wait_for(
                     proc.communicate(test_input.encode()),
@@ -194,6 +198,10 @@ async def run_python_subprocess(
                 stdout_truncated=stdout_truncated,
                 stderr_truncated=stderr_truncated,
             )
+        except asyncio.CancelledError:
+            from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
+            await reap_pdf_worker(launch)
+            raise
         finally:
             try:
                 os.unlink(code_path)
@@ -217,7 +225,7 @@ async def run_sandbox(
     test_cases: List[TestCase],
     *,
     language: str = "python",
-    per_case_timeout: float = 10.0,
+    per_case_timeout: float = 5.0,
     memory_mb: int = 256,
 ) -> ExecutionReport:
     """

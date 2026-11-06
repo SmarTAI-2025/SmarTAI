@@ -103,7 +103,7 @@ def _validate_request(payload: Any) -> dict[str, Any]:
     if not isinstance(limits, dict):
         raise InvalidRequest("limits must be a JSON object")
     timeout_seconds = _bounded_float(
-        limits.get("timeout_seconds", 10.0),
+        limits.get("timeout_seconds", 5.0),
         minimum=0.05,
         maximum=MAX_TIMEOUT_SECONDS,
         name="timeout_seconds",

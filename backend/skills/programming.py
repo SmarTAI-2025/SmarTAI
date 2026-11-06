@@ -113,7 +113,7 @@ Return JSON: score, max_score, confidence, comment, steps, logs.
 MAX_LLM_GENERATED_CASES = 8
 
 # Per-test sandbox timeout.
-SANDBOX_PER_CASE_TIMEOUT_S = 10.0
+SANDBOX_PER_CASE_TIMEOUT_S = 5.0
 
 # Keywords whose presence in the problem stem or student code marks the problem
 # as "too complex for sandbox". When matched we skip sandbox and tell the LLM

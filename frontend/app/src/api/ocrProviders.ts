@@ -26,7 +26,7 @@ export function verifyBaiduOCRCredentials(
   credentialId: string,
 ): Promise<BaiduOCRVerificationResponse> {
   return postJSON<BaiduOCRVerificationResponse>(
-    `${ROOT}/${encodeURIComponent(credentialId)}/verify`,
+    `${ROOT}/${encodeURIComponent(credentialId)}/verify`, {}, { timeout: 75_000 },
   );
 }
 

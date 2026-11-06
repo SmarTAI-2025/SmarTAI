@@ -6,6 +6,7 @@ question records.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -43,6 +44,7 @@ from backend.agents.question_preparation_agent import (
     prepare_question_packages,
 )
 from backend.api.errors import domain_error_response
+from backend.services.workflow_deadlines import QUESTION_WALL_SECONDS, TASK_CLEANUP_SECONDS
 from backend.auth import require_task_teacher as require_teacher
 from backend.db import (
     assignment_repository,
@@ -609,8 +611,39 @@ def check_material_draft_reference(
         return domain_error_response(exc)
 
 
+def _timed_question_request(function):
+    """Bound synchronous source OCR too; its saved recognition evidence survives."""
+    from functools import wraps
+    @wraps(function)
+    async def bounded(*args, **kwargs):
+        from backend.services.workflow_deadlines import processing_budget, run_owned_work, LIMIT_CODES
+        started = time.time()
+        guard = None
+        try:
+            async with processing_budget("preflight-" + uuid.uuid4().hex,
+                    kind="question_preparation", started_at=started) as guard:
+                guard.request_started_at = started
+                return await run_owned_work(function(*args, **kwargs))
+        except DomainError as exc:
+            operation = getattr(guard, "source_operation", None)
+            if operation is not None and exc.code in LIMIT_CODES:
+                try:
+                    async with asyncio.timeout(10):
+                        await run_in_threadpool(workflow_repository.fail_timed_out_operation,
+                            operation.id, owner_id=operation.owner_id, expected_attempt=operation.attempt,
+                            expected_lease_token=None, code=exc.code)
+                except Exception:
+                    logger.warning("Could not persist source request timeout; operation_id=%s", operation.id)
+            return domain_error_response(exc)
+        finally:
+            logger.info("Source request finished; route=%s elapsed_seconds=%.3f",
+                        function.__name__, max(0, time.time() - started))
+    return bounded
+
+
 @router.post("/{task_id}/problem-sources/preflight")
 @router.post("/{task_id}/question-preparation/sources/preflight")
+@_timed_question_request
 async def preflight_problem_source(
     task_id: str,
     file: UploadFile | None = File(default=None),
@@ -763,7 +796,7 @@ async def preflight_problem_source(
             operation_type="problem_source",
             input_hash=input_hash,
             payload=provisional_payload,
-            expires_at=time.time() + SOURCE_TTL_SECONDS,
+            expires_at=time.time() + QUESTION_WALL_SECONDS + TASK_CLEANUP_SECONDS,
             initial_status="preparing",
         )
         if not created:
@@ -777,6 +810,9 @@ async def preflight_problem_source(
                 detail={"code": "problem_source_preflight_processing"},
             )
 
+        from backend.services.submission_work_budget import current_budget
+        if current_budget() is not None:
+            current_budget().source_operation = operation
         source_ref = {
             "role": role,
             "source_kind": descriptor["kind"],
@@ -873,7 +909,8 @@ async def preflight_problem_source(
             if defer_recognition and stored is not None:
                 operation = workflow_repository.update_operation(
                     operation.id, owner_id=current.id, expected_attempt=operation.attempt,
-                    status="ready", payload={**provisional_payload, "source_ref": source_ref,
+                    status="ready", expires_at=time.time() + SOURCE_TTL_SECONDS,
+                    payload={**provisional_payload, "source_ref": source_ref,
                                              "text": "", "recognition_pending": True},
                 )
                 return _problem_source_preflight_response(
@@ -1015,7 +1052,7 @@ async def preflight_problem_source(
             operation.id,
             owner_id=current.id,
             expected_attempt=operation.attempt,
-            status="ready",
+            status="ready", expires_at=time.time() + SOURCE_TTL_SECONDS,
             payload=payload,
         )
         return _problem_source_preflight_response(
@@ -2713,6 +2750,7 @@ async def _run_question_preparation(
 
 
 @router.post("/{task_id}/material-imports/preflight")
+@_timed_question_request
 async def preflight_material_import(
     task_id: str,
     file: UploadFile | None = File(default=None),
@@ -2785,9 +2823,12 @@ async def preflight_material_import(
                 "base_workflow_revision": workflow.workflow_revision,
                 "state": "preparing_artifact",
             },
-            expires_at=time.time() + SOURCE_TTL_SECONDS,
+            expires_at=time.time() + QUESTION_WALL_SECONDS + TASK_CLEANUP_SECONDS,
             initial_status="preparing",
         )
+        from backend.services.submission_work_budget import current_budget
+        if current_budget() is not None:
+            current_budget().source_operation = draft
         target_role = (
             "rubric" if requested_targets == ["criterion"]
             else "reference_answer" if requested_targets == ["reference_answer"]
@@ -2827,6 +2868,7 @@ async def preflight_material_import(
             "recognition": descriptor.get("recognition"),
             "recognition_stored_file_id": descriptor.get("recognition_stored_file_id"),
             "source_authority": "uploaded_material",
+            "preparation_started_at": current_budget().request_started_at,
         }
         draft = workflow_repository.update_operation(
             draft.id,
@@ -2964,6 +3006,7 @@ async def start_material_import(
                 "source_token": source.id,
                 "base_workflow_revision": claim_base_revision,
                 "provider_id": provider_id,
+                "preparation_started_at": payload.get("preparation_started_at"),
             }, expires_at=time.time() + task_facade._OPERATION_PUBLICATION_TTL_SECONDS,
             initial_status="preparing",
         )

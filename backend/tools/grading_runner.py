@@ -44,7 +44,7 @@ class RunnerResourceStatus(str, Enum):
 class RunnerLimits(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    timeout_seconds: float = Field(default=10.0, ge=0.05, le=60.0)
+    timeout_seconds: float = Field(default=5.0, ge=0.05, le=60.0)
     memory_mb: int = Field(default=256, ge=64, le=1024)
     max_output_chars: int = Field(default=8192, ge=256, le=65_536)
 

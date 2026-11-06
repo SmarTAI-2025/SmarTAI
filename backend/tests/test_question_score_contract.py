@@ -374,6 +374,13 @@ class _FakeVisionProvider:
         self.calls = []
 
     async def ainvoke_vision(self, prompt, images, **kwargs):
+        from backend.llm.request_timeouts import current_response_scope
+        scope = current_response_scope()
+        if scope is None:
+            return await self._response(prompt, images, **kwargs)
+        return await scope.run_response(lambda: self._response(prompt, images, **kwargs))
+
+    async def _response(self, prompt, images, **kwargs):
         self.calls.append({"prompt": prompt, "images": images})
         return SimpleNamespace(
             content="Question 1: OCR result",

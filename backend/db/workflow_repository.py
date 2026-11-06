@@ -910,6 +910,47 @@ def supersede_workflow_operation(
         return _detach_workflow(row)
 
 
+def fail_timed_out_operation(operation_id: str, *, owner_id: str, expected_attempt: int,
+                             expected_lease_token: str | None, code: str = "question_preparation_wall_time_limit_reached") -> bool:
+    """Atomically fence a timed-out recognition run and release its task marker.
+
+    Keep checkpoints/artifacts and provider-submit uncertainty intact. Only the
+    current live lease can stop its attempt; a stale timer cannot stop a retry.
+    """
+    from backend.services.workflow_deadlines import BUDGET_TYPES, LIMIT_CODES
+    if code not in LIMIT_CODES:
+        raise ValueError("Invalid timeout code")
+    now = time.time()
+    preparing = expected_lease_token is None
+    kinds = {"problem_source", "material_source"} if preparing else BUDGET_TYPES
+    with session_scope() as session:
+        stopped = session.execute(update(WorkflowOperationRecord).where(
+            WorkflowOperationRecord.id == operation_id,
+            WorkflowOperationRecord.owner_id == owner_id,
+            WorkflowOperationRecord.attempt == expected_attempt,
+            WorkflowOperationRecord.operation_type.in_(kinds),
+            WorkflowOperationRecord.status == ("preparing" if preparing else "running"),
+            _lease_write_predicate(expected_lease_token, now),
+        ).values(status="error", error_code=code, completed_at=now, updated_at=now,
+                 terminal_summary={"status": "error", "error_code": code} if preparing else None,
+                 lease_owner=None, lease_token=None, lease_expires_at=None, lease_heartbeat_at=None))
+        if stopped.rowcount != 1:
+            return False
+        operation = session.get(WorkflowOperationRecord, operation_id)
+        operation.progress = {**(operation.progress or {}), "phase": "error", "error_detail": code, "model_waits": []}
+        workflow = session.scalar(select(AssignmentWorkflowRecord).where(
+            AssignmentWorkflowRecord.assignment_id == operation.assignment_id,
+            AssignmentWorkflowRecord.owner_id == owner_id,
+        ).with_for_update())
+        _lock_live_assignment(session, assignment_id=operation.assignment_id, owner_id=owner_id)
+        if workflow is not None and workflow.active_job_id == operation_id:
+            workflow.active_job_id = workflow.active_operation = None
+            workflow.last_failed_job_id = operation_id
+            workflow.error_code = code
+            workflow.presentation_status = "error"
+            workflow.updated_at = now
+        return True
+
 def generate_result_artifacts_atomic(
     *,
     assignment_id: str,
@@ -1525,6 +1566,12 @@ def save_operation_checkpoint(
             if matched_refs != set(refs):
                 raise NotFound("stored_file")
 
+        from backend.services.workflow_deadlines import CHECKPOINT_KEY
+        # Only an explicit new attempt may reset the first-claim deadline.
+        if CHECKPOINT_KEY in (current.checkpoint or {}):
+            checkpoint = {**checkpoint, CHECKPOINT_KEY: current.checkpoint[CHECKPOINT_KEY]}
+        checkpoint = _validate_json_object(checkpoint, field="checkpoint", max_bytes=MAX_OPERATION_CHECKPOINT_BYTES)
+
         checkpoint_values = {
             "checkpoint_revision": current.checkpoint_revision + 1,
             "checkpoint_stage": stage,
@@ -1653,6 +1700,18 @@ def claim_operation(
                 raise LeaseLost(
                     "The task is being deleted.", code="task_deleted"
                 )
+        from backend.services.workflow_deadlines import BUDGET_TYPES, CHECKPOINT_KEY, policy
+        if row.operation_type in BUDGET_TYPES:
+            clock = (row.checkpoint or {}).get(CHECKPOINT_KEY) or {}
+            if clock.get("attempt") != row.attempt:
+                started_at = now
+                if row.operation_type == "material_import" and row.attempt == 1:
+                    # Synchronous source OCR already began this same user action.
+                    started_at = min(now, (row.payload or {}).get("preparation_started_at") or now)
+                row.checkpoint = {**(row.checkpoint or {}), CHECKPOINT_KEY: {
+                    "attempt": row.attempt, "started_at": started_at,
+                    "deadline_at": started_at + policy(row.operation_type)[0],
+                }}
         return _detach_operation(row)
 
 

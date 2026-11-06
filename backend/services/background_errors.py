@@ -132,6 +132,9 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
 }) | SAFE_SOURCE_REASON_CODES | RECOGNITION_ERROR_CODES
 
 RETRYABLE_BACKGROUND_ERROR_CODES = frozenset({
+    "question_preparation_time_limit_reached", "question_preparation_wall_time_limit_reached",
+    "submission_wall_time_limit_reached", "grading_time_limit_reached", "grading_wall_time_limit_reached",
+    "knowledge_wall_time_limit_reached",
     "submission_time_limit_reached",
     "provider_capacity_unavailable",
     "provider_overloaded",

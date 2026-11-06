@@ -289,11 +289,11 @@ class RecognitionPolicyV1(EvidenceModel):
     execution_scope: str | None = Field(
         default=None, min_length=1, max_length=160, exclude_if=lambda value: value is None,
     )
-    # Keep legacy defaults/cache identities. Opt-in caps are 12*300+360 for
-    # locating, 18*300+600 for reading, and both phases plus 60 for finalization.
+    # Numeric phase fields remain part of stored evidence. Product entrypoints
+    # select response_only; the owning workflow alone limits cumulative time.
     version: str = "faithful-v2"
-    # Existing requests/artifacts omit this field so their exact identities stay
-    # stable. Only a newly frozen source profile disables cumulative deadlines.
+    # The low-level legacy mode validates retained evidence; source and library
+    # entrypoints always select the shared response-only policy.
     timeout_mode: Literal["legacy", "response_only"] = Field(
         default="legacy", exclude_if=lambda value: value == "legacy",
     )
@@ -306,7 +306,7 @@ class RecognitionPolicyV1(EvidenceModel):
     max_calls: int = Field(default=18, ge=0, le=18)
     max_empty_recoveries: int = Field(default=2, ge=0, le=2)
     max_patches: int = Field(default=4, ge=0, le=4)
-    per_call_seconds: float = Field(default=120, gt=0, le=300)
+    per_call_seconds: float = Field(default=120, gt=0, le=3600)
     total_seconds: float = Field(default=600, gt=0, le=10020)
     max_output_tokens: int = Field(default=32768, ge=1, le=32768)
     enable_repair: bool = True

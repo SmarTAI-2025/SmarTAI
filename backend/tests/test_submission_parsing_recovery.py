@@ -203,15 +203,7 @@ async def test_failed_only_keeps_successful_pages_but_configuration_restart_rere
                 raise ProviderRequestError("provider_upstream_unavailable", status_code=503)
         return provider.ainvoke_vision.return_value
 
-    async def recognize(prompt, images, **kwargs):
-        from backend.llm.request_timeouts import current_response_scope
-        # This test provider replaces the HTTP adapter. Model its explicit
-        # request boundary so the real durable worker can guard every send.
-        scope = current_response_scope()
-        assert scope is not None
-        return await scope.run_response(lambda: network_response(prompt, images, **kwargs))
-
-    provider.ainvoke_vision.side_effect = recognize
+    provider.ainvoke_vision.side_effect = network_response
     provider.ainvoke = AsyncMock(return_value=SimpleNamespace(content=json.dumps({
         "stu_id": "S1", "stu_name": "Synthetic learner",
         "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept",
@@ -469,7 +461,6 @@ async def test_work_limit_drains_and_preserves_structured_answer_for_retry_or_ma
     from backend.services import submission_work_budget as clocks
     from backend.services.submission_manual_review import continue_manually
 
-    monkeypatch.setattr(clocks, "LIMIT_SECONDS", 0.02)
     owner, task = _seed_task(with_question=True)
     assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1, number="2",
         type="concept", stem="Second question", criterion="Correct method: 10 points", max_score=10)
@@ -488,8 +479,8 @@ async def test_work_limit_drains_and_preserves_structured_answer_for_retry_or_ma
                 sent.append(ids)
                 if round_number == 0:
                     first_sent.set()
-                    await clocks.current_budget().exhausted.wait()
-                    await asyncio.sleep(0.01)  # A sent response can finish after the cap.
+                    clocks.current_budget().expire()
+                    await asyncio.sleep(0.01)  # An already sent response can finish during cleanup.
                 return SimpleNamespace(content=json.dumps({"stu_id": "S1", "stu_name": "Synthetic student",
                     "stu_ans": [{"q_id": q, "number": q[1:], "type": "concept",
                                  "content": f"Saved {q} answer", "flag": []} for q in ids]}))
@@ -509,7 +500,7 @@ async def test_work_limit_drains_and_preserves_structured_answer_for_retry_or_ma
     await asyncio.wait_for(finish(first["job_id"]), 5)
     failed = workflow_repository.get_operation(first["job_id"], owner_id=owner)
     assert failed.error_code == clocks.CODE
-    assert failed.checkpoint[clocks.CHECKPOINT_KEY]["draining"] is True
+    assert "submission_work_clock" not in failed.checkpoint
     assert sent == [["q1"]]
     current = task_facade.get_task(task_id=task, owner_id=owner)
     if manual:
@@ -562,7 +553,7 @@ async def test_submission_queue_persists_archive_and_has_no_request_task():
         "provider_configuration_fingerprint", "question_snapshot",
         "submission_structure_version",
     }
-    assert operation.payload["recognition_timeout_profile"] == "source-response-300-v1"
+    assert operation.payload["recognition_timeout_profile"] == "source-response-600-v1"
     sources = source_outcome_repository.list_sources(
         operation_id=operation.id, owner_id=owner_id, attempt=operation.attempt,
     )

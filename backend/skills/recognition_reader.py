@@ -202,6 +202,8 @@ class LLMRecognitionEngine:
             # of recording an uncertain paid OCR dispatch indefinitely.
             raise RecognitionError("provider_unreachable", submission_may_exist=False) from None
         except ProviderRequestError as exc:
+            if getattr(exc, "submission_may_exist", False):
+                raise RecognitionError("provider_submit_uncertain", submission_may_exist=True) from None
             raise RecognitionError(exc.code, submission_may_exist=exc.code in {
                 "provider_timeout", "provider_unreachable", "provider_upstream_unavailable",
             }, upstream_status_code=exc.status_code) from None

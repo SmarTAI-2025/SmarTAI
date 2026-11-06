@@ -16,7 +16,7 @@ from backend.tests.test_normalized_analytics import (
 @pytest.fixture(autouse=True)
 def _reset_rate_limit():
     with analytics._query_rate_lock:
-        analytics._query_last_at.clear()
+        analytics._ask_bursts.clear()
     yield
 
 

@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from collections import Counter
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,7 +12,7 @@ from backend.db.session import session_scope
 from backend.domain.errors import InvalidTransition, LeaseLost, NotFound, VersionConflict
 from backend.llm.providers import ProviderRequestError
 from backend.progress.tracker import get_or_create_reporter, remove_reporter
-from backend.services.execution_control import cancel_local, run_controlled
+from backend.services.execution_control import cancel_local, current_execution, run_controlled
 from backend.services.task_execution import continue_auxiliary_run, stop_task_run
 from backend.services.task_facade import task_state
 from backend.tests.test_workflow_worker import _seed_operation, _make_worker, _drain
@@ -167,6 +168,113 @@ class LimitedProvider:
     async def ainvoke(self, messages):
         self.calls += 1
         raise self.error
+
+
+class ParallelProvider:
+    provider_id = model = "offline-parallel"
+
+    def __init__(self, *, persistent=()):
+        self.calls = Counter()
+        self.persistent = persistent
+
+    async def ainvoke(self, label):
+        self.calls[label] += 1
+        if self.calls[label] == 1 or label in self.persistent:
+            raise ProviderRequestError("provider_rate_limited", status_code=429)
+        return label
+
+    async def ainvoke_vision(self, prompt, images, *, max_output_tokens):
+        return await self.ainvoke(prompt)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vision", [False, True], ids=["text", "vision"])
+async def test_parallel_first_refusals_each_get_their_own_retry(monkeypatch, vision):
+    provider = ParallelProvider()
+    barrier = asyncio.Barrier(3)
+    async def sleep(seconds):
+        assert 65 <= seconds <= 67
+        await barrier.wait()
+    retry = llm._invoke_with_rate_retry if vision else llm._ainvoke_with_retry
+    monkeypatch.setattr(retry.retry, "sleep", sleep)
+
+    async def call(label):
+        if vision:
+            return await llm.ainvoke_vision_with_rate_retry(provider, label, [], max_output_tokens=10)
+        return await llm.ainvoke_with_retry(provider, label)
+
+    async def job():
+        labels = ["a", "b", "c"]
+        assert await asyncio.gather(*(call(label) for label in labels)) == labels
+        assert provider.calls == {"a": 2, "b": 2, "c": 2}
+        assert not current_execution().blocked and not current_execution().waits
+    await asyncio.wait_for(run_controlled("parallel-recovery", lambda: False, job()), 5)
+
+
+@pytest.mark.asyncio
+async def test_one_call_exhausting_three_429s_wakes_siblings_without_another_send(monkeypatch):
+    provider = ParallelProvider(persistent={"leader"})
+    waiting = asyncio.Event()
+    original_sleep = llm._invoke_with_rate_retry.retry.sleep
+
+    async def sleep(seconds):
+        if asyncio.current_task().get_name() == "sleeping-sibling":
+            waiting.set()
+            await original_sleep(seconds)
+        # Advance the leader's two sleeps without waiting on wall time.
+    monkeypatch.setattr(llm._invoke_with_rate_retry.retry, "sleep", sleep)
+
+    async def call(label):
+        return await llm.ainvoke_vision_with_rate_retry(provider, label, [], max_output_tokens=10)
+
+    async def job():
+        sibling = asyncio.create_task(call("sibling"), name="sleeping-sibling")
+        try:
+            await waiting.wait()
+            with pytest.raises(llm.RateLimitError):
+                await call("leader")
+            with pytest.raises(ProviderRequestError, match="provider_rate_limited"):
+                await sibling
+            with pytest.raises(ProviderRequestError, match="provider_rate_limited"):
+                await call("later")
+            assert provider.calls == {"leader": 3, "sibling": 1}
+            other = ParallelProvider()
+            other.provider_id = "independent-model"
+            assert await llm.ainvoke_with_rate_retry(other, "other") == "other"
+        finally:
+            sibling.cancel()
+            await asyncio.gather(sibling, return_exceptions=True)
+    await asyncio.wait_for(run_controlled("parallel-exhaustion", lambda: False, job()), 5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("errors", [
+    [ProviderRequestError("unavailable", status_code=503)] * 2
+        + [ProviderRequestError("provider_rate_limited", status_code=429)],
+    [ProviderRequestError("provider_rate_limited", status_code=429, retry_after=300)],
+    [ProviderRequestError("provider_rate_limited")] * 3,
+])
+async def test_call_stopping_without_three_429s_does_not_block_siblings(monkeypatch, errors):
+    provider = LimitedProvider()
+    provider.ainvoke = AsyncMock(side_effect=[*errors, "ok"])
+    monkeypatch.setattr(llm._ainvoke_with_retry.retry, "sleep", AsyncMock())
+    async def job():
+        with pytest.raises(llm.RateLimitError):
+            await llm.ainvoke_with_retry(provider, [])
+        assert await llm.ainvoke_with_retry(provider, []) == "ok"
+    await run_controlled("other-stop", lambda: False, job())
+
+
+@pytest.mark.asyncio
+async def test_late_429_does_not_replace_confirmed_daily_quota():
+    provider = LimitedProvider()
+    async def job():
+        control = current_execution()
+        control.block(provider, "provider_daily_quota_exceeded")
+        control.block(provider, "provider_rate_limited")
+        with pytest.raises(ProviderRequestError, match="provider_daily_quota_exceeded"):
+            await control.check(provider)
+    await run_controlled("quota-race", lambda: False, job())
 
 
 @pytest.mark.asyncio

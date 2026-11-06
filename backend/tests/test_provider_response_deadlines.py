@@ -1,6 +1,6 @@
 """Provider-bound response deadlines; every SDK/HTTP call is a local fake."""
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from types import SimpleNamespace
 
 import httpx
@@ -15,6 +15,7 @@ from backend.llm.concurrency import ModelScheduler
 from backend.llm.providers import AnthropicProvider, GeminiProvider, OpenAIProvider, ProviderRequestError, SafeRelayProvider
 from backend.llm.request_timeouts import current_response_scope, current_response_timeout_seconds, response_timeout_scope
 from backend.models import ProviderConfig
+from backend.services.execution_control import current_execution, run_controlled
 from backend.tests.test_automatic_model_scheduling import FakeHost
 from backend.tools import structured_llm
 
@@ -22,6 +23,48 @@ from backend.tools import structured_llm
 ROUTES = ["openai", "anthropic", "gemini", "gemini_proxy",
           "relay_openai_chat_completions", "relay_anthropic_messages", "relay_gemini_generate_content"]
 MESSAGES = [HumanMessage(content="inspected source")]
+
+
+@pytest.mark.asyncio
+async def test_rate_stop_interrupts_pending_response_and_capacity_queue(monkeypatch, scheduler):
+    from backend.config import settings
+    monkeypatch.setattr(settings, "max_concurrent_llm_per_endpoint", 1)
+    sent, queued = asyncio.Event(), asyncio.Event()
+    sends = []
+    async def invoke(_):
+        sends.append(1)
+        sent.set()
+        await asyncio.Event().wait()
+
+    acquire = scheduler.acquire
+    async def observe_queue(**kwargs):
+        if sent.is_set():
+            queued.set()
+        return await acquire(**kwargs)
+    monkeypatch.setattr(scheduler, "acquire", observe_queue)
+
+    async with provider_for("openai", invoke, monkeypatch) as provider:
+        async def call():
+            with response_timeout_scope(300, response_only=True) as state:
+                with pytest.raises(ProviderRequestError, match="provider_rate_limited") as error:
+                    await structured_llm.ainvoke_with_rate_retry(provider, MESSAGES)
+                assert error.value.retryable is False
+                assert error.value.submission_may_exist == state.submission_may_exist
+                return state.submission_may_exist
+        async def job():
+            responding = asyncio.create_task(call())
+            await sent.wait()
+            in_queue = asyncio.create_task(call())
+            try:
+                await queued.wait()
+                current_execution().block(provider, "provider_rate_limited")
+                assert await asyncio.gather(responding, in_queue) == [True, False]
+            finally:
+                for task in (responding, in_queue):
+                    task.cancel()
+                await asyncio.gather(responding, in_queue, return_exceptions=True)
+        await asyncio.wait_for(run_controlled("interrupt-calls", lambda: False, job()), 5)
+    assert sends == [1] and scheduler.active == 0
 
 
 @pytest.fixture
@@ -125,25 +168,44 @@ async def test_queue_and_guard_do_not_spend_complete_response_time(route, schedu
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ROUTES)
-async def test_initial_admission_timeout_never_authorizes_or_submits(route, scheduler, monkeypatch):
+async def test_long_admission_wait_never_authorizes_until_capacity_is_available(route, scheduler, monkeypatch):
     scheduler.host_capacity.capacity = 0
     events = []
+    loop = asyncio.get_running_loop()
+    real_time, offset = loop.time, 0
+    monkeypatch.setattr(loop, "time", lambda: real_time() + offset)
 
     async def guard():
         events.append("guard")
 
     async def invoke(options):
         events.append("request")
-        return SimpleNamespace(content="unexpected")
+        return SimpleNamespace(content="complete")
 
     async with provider_for(route, invoke, monkeypatch) as provider:
-        with response_timeout_scope(300, response_only=True, local_wait_seconds=0.03,
+        with response_timeout_scope(300, response_only=True, local_wait_seconds=600,
                                     before_send=guard, on_send=lambda: events.append("reserve")) as state:
-            with pytest.raises(ProviderRequestError, match="provider_capacity_unavailable") as raised:
-                await provider.ainvoke(MESSAGES)
-    assert raised.value.retryable is False and events == []
-    assert not state.ever_started and not state.submission_may_exist
+            task = asyncio.create_task(provider.ainvoke(MESSAGES))
+            try:
+                async with asyncio.timeout(2):
+                    while not scheduler.pending:
+                        await asyncio.sleep(0.001)
+                remaining = state.local_wait_remaining
+                offset = 601
+                await turns()
+                assert not task.done() and events == []
+                assert not state.ever_started and not state.submission_may_exist
+                assert state.local_wait_remaining == remaining
+                scheduler.host_capacity.capacity = 50
+                scheduler.wake.set()
+                assert (await asyncio.wait_for(task, 1)).content == "complete"
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+    assert events == ["guard", "reserve", "request"]
+    assert state.attempt_count == 1 and not state.submission_may_exist
     assert scheduler.active == scheduler.host_capacity.active == 0
+    assert not scheduler.pending and not scheduler.owners
 
 
 @pytest.mark.asyncio
@@ -198,7 +260,7 @@ async def test_429_attempts_get_new_response_limits_with_one_authorization(route
 
 
 @pytest.mark.asyncio
-async def test_queue_timeout_after_429_is_known_rejection_not_unknown(scheduler, monkeypatch):
+async def test_cancel_queued_retry_after_429_is_known_rejection_not_unknown(scheduler, monkeypatch):
     monkeypatch.setattr(structured_llm._invoke_with_rate_retry.retry, "wait", wait_fixed(0))
     calls, reservations = [], []
 
@@ -210,10 +272,20 @@ async def test_queue_timeout_after_429_is_known_rejection_not_unknown(scheduler,
     async with provider_for("relay_openai_chat_completions", invoke, monkeypatch) as provider:
         with response_timeout_scope(300, response_only=True, local_wait_seconds=0.04,
                                     on_send=lambda: reservations.append(1)) as state:
-            with pytest.raises(ProviderRequestError, match="provider_capacity_unavailable"):
-                await structured_llm.ainvoke_with_rate_retry(provider, MESSAGES)
+            task = asyncio.create_task(structured_llm.ainvoke_with_rate_retry(provider, MESSAGES))
+            try:
+                async with asyncio.timeout(2):
+                    while not calls or not scheduler.pending:
+                        await asyncio.sleep(0.001)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
     assert len(calls) == len(reservations) == state.attempt_count == 1
     assert state.ever_started and state.last_attempt_rejected and not state.submission_may_exist
+    assert not scheduler.pending and scheduler.host_capacity.active == 0
 
 
 @pytest.mark.asyncio
@@ -341,8 +413,8 @@ async def test_guard_failure_never_reserves_or_starts_request(scheduler, monkeyp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("point", ["prepare", "breaker", "proxy_slots"])
-async def test_all_local_provider_waits_are_bounded_before_pending(point, scheduler, monkeypatch):
+@pytest.mark.parametrize("point", ["prepare"])
+async def test_local_provider_preparation_is_still_bounded_before_pending(point, scheduler, monkeypatch):
     events = []
 
     async def blocked(*args, **kwargs):
@@ -351,19 +423,96 @@ async def test_all_local_provider_waits_are_bounded_before_pending(point, schedu
     async def invoke(options):
         events.append("request")
 
-    route = "gemini_proxy" if point == "proxy_slots" else "openai"
-    async with provider_for(route, invoke, monkeypatch) as provider:
+    async with provider_for("openai", invoke, monkeypatch) as provider:
         if point == "prepare":
             monkeypatch.setattr(provider, "_get_client", blocked)
-        elif point == "breaker":
-            monkeypatch.setattr(provider._endpoint_breaker(), "before_call", blocked)
         else:
-            scheduler.proxy_slots = asyncio.Semaphore(0)
+            monkeypatch.setattr(provider._endpoint_breaker(), "before_call", blocked)
         with response_timeout_scope(300, response_only=True, local_wait_seconds=0.03,
                                     on_send=lambda: events.append("reserve")) as state:
             with pytest.raises(ProviderRequestError, match="provider_capacity_unavailable"):
                 await provider.ainvoke(MESSAGES)
     assert events == [] and not state.ever_started
+
+
+@pytest.mark.asyncio
+async def test_proxy_slot_wait_has_no_local_deadline_and_can_be_cancelled(scheduler, monkeypatch):
+    entered = asyncio.Event()
+    class BlockedSlots:
+        async def __aenter__(self):
+            entered.set()
+            await asyncio.Event().wait()
+
+        async def __aexit__(self, *args):
+            pytest.fail("A slot was never acquired")
+
+    scheduler.proxy_slots = BlockedSlots()
+    loop = asyncio.get_running_loop()
+    real_time, offset = loop.time, 0
+    monkeypatch.setattr(loop, "time", lambda: real_time() + offset)
+
+    async def invoke(options):
+        pytest.fail("A queued request must not reach the provider")
+
+    async with provider_for("gemini_proxy", invoke, monkeypatch) as provider:
+        with response_timeout_scope(300, response_only=True, local_wait_seconds=600) as state:
+            task = asyncio.create_task(provider.ainvoke(MESSAGES))
+            try:
+                await asyncio.wait_for(entered.wait(), 1)
+                offset = 601
+                await turns()
+                assert not task.done() and state.local_wait_remaining == 600
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+    assert not state.ever_started and not state.submission_may_exist
+    assert not scheduler.pending and scheduler.host_capacity.active == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_only", [False, True])
+async def test_workflow_deadline_still_cancels_queued_request(scheduler, monkeypatch, response_only):
+    from backend.domain.errors import DomainError
+    from backend.services.workflow_deadlines import processing_budget
+
+    scheduler.host_capacity.capacity = 0
+    deadlines, budgets = [], []
+    original_timeout = asyncio.timeout
+    def capture(seconds):
+        deadline = original_timeout(seconds)
+        if seconds is not None and seconds > 10000:
+            deadlines.append(deadline)
+        return deadline
+    monkeypatch.setattr(asyncio, "timeout", capture)
+
+    async def invoke(options):
+        pytest.fail("The workflow stopped before admission")
+
+    async with provider_for("openai", invoke, monkeypatch) as provider:
+        async def work():
+            async with processing_budget("queued-workflow", kind="grading") as budget:
+                budgets.append(budget)
+                with response_timeout_scope(300, response_only=response_only):
+                    await provider.ainvoke(MESSAGES)
+        task = asyncio.create_task(work())
+        try:
+            async with original_timeout(2):
+                while not scheduler.pending:
+                    await asyncio.sleep(0.001)
+            assert budgets[0].active == 0
+            assert len(deadlines) == 1
+            deadlines[0].reschedule(asyncio.get_running_loop().time())
+            with pytest.raises(DomainError, match="grading_wall_time_limit_reached"):
+                await asyncio.wait_for(task, 2)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    assert budgets[0].exhausted.is_set()
+    assert not scheduler.pending and not scheduler.owners
+    assert scheduler.active == scheduler.host_capacity.active == 0
 
 
 @pytest.mark.asyncio
@@ -487,33 +636,44 @@ async def test_legacy_native_scope_keeps_existing_sdk_behavior(scheduler, monkey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("point", ["check", "waiting"])
-async def test_retry_control_io_is_local_and_bounded(point, scheduler, monkeypatch):
+@pytest.mark.parametrize("outcome", ["hang", "error"])
+@pytest.mark.parametrize("response_only", [False, True])
+async def test_required_cancel_check_is_local_bounded_and_never_swallowed(outcome, response_only, scheduler, monkeypatch):
     monkeypatch.setattr(request_timeouts, "_LOCAL_STEP_SECONDS", 0.02)
-    monkeypatch.setattr(structured_llm._invoke_with_rate_retry.retry, "wait", wait_fixed(0))
     calls = []
 
-    async def check(provider):
-        if point == "check":
+    def is_cancelled():
+        return False
+
+    to_thread = asyncio.to_thread
+
+    async def blocked_read(function, *args, **kwargs):
+        if function is is_cancelled:
+            if outcome == "error":
+                raise RuntimeError("synthetic required check failure")
             await asyncio.Event().wait()
+        return await to_thread(function, *args, **kwargs)
 
-    async def waiting(*args):
-        await asyncio.Event().wait()
-
-    control = SimpleNamespace(check=check, waiting=waiting, rate_failures={}, block=lambda *args: None)
-    monkeypatch.setattr("backend.services.execution_control.current_execution", lambda: control)
+    monkeypatch.setattr(asyncio, "to_thread", blocked_read)
 
     async def invoke(options):
         calls.append(options)
         raise ProviderRequestError("provider_rate_limited", status_code=429)
 
     async with provider_for("openai", invoke, monkeypatch) as provider:
-        with response_timeout_scope(300, response_only=True) as state:
-            with pytest.raises(ProviderRequestError, match="provider_capacity_unavailable"):
-                await structured_llm.ainvoke_with_rate_retry(provider, MESSAGES)
-    assert not state.submission_may_exist
-    assert len(calls) == state.attempt_count == (1 if point == "waiting" else 0)
-    assert state.last_attempt_rejected is (point == "waiting")
+        with response_timeout_scope(300, response_only=response_only) as state:
+            expected = ProviderRequestError if outcome == "hang" else RuntimeError
+            message = "provider_capacity_unavailable" if outcome == "hang" else "synthetic required check failure"
+            with pytest.raises(expected, match=message):
+                await asyncio.wait_for(run_controlled(
+                    "required-check", is_cancelled,
+                    structured_llm.ainvoke_with_rate_retry(provider, MESSAGES),
+                ), 1)
+    assert not calls
+    if state is not None:
+        assert not state.submission_may_exist
+        assert state.attempt_count == 0
+        assert not state.last_attempt_rejected
 
 
 @pytest.mark.asyncio
@@ -550,6 +710,8 @@ async def test_new_gemini_proxy_closes_fresh_client_on_all_outcomes(outcome, sch
                 await task
         else:
             assert (await task).content == "complete"
+    await asyncio.wait_for(closed.wait(), 2)
+    await turns()
     assert closed.is_set()
     assert states[0].submission_may_exist is (outcome != "success")
     assert scheduler.active == scheduler.host_capacity.active == 0
@@ -557,7 +719,7 @@ async def test_new_gemini_proxy_closes_fresh_client_on_all_outcomes(outcome, sch
 
 
 @pytest.mark.asyncio
-async def test_cancel_during_new_gemini_close_preserves_cancel_and_finishes_cleanup(scheduler, monkeypatch):
+async def test_gemini_returns_response_before_close_and_retains_cleanup_slot(scheduler, monkeypatch):
     close_started, release_close, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
     states = []
 
@@ -580,9 +742,8 @@ async def test_cancel_during_new_gemini_close_preserves_cancel_and_finishes_clea
         task = asyncio.create_task(work())
         try:
             await asyncio.wait_for(close_started.wait(), 1)
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
+            assert (await task).content == "complete"
+            assert scheduler.proxy_slots._value == 49
             assert not states[0].submission_may_exist
         finally:
             release_close.set()
@@ -595,7 +756,7 @@ async def test_cancel_during_new_gemini_close_preserves_cancel_and_finishes_clea
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["hang", "error"])
 async def test_new_gemini_close_failure_does_not_discard_response(failure, scheduler, monkeypatch):
-    monkeypatch.setattr(request_timeouts, "_LOCAL_STEP_SECONDS", 0.02)
+    monkeypatch.setattr(GeminiProvider, "_CLIENT_CLOSE_SECONDS", 0.02)
     closed = asyncio.Event()
 
     async def invoke(options):
@@ -614,29 +775,31 @@ async def test_new_gemini_close_failure_does_not_discard_response(failure, sched
         with response_timeout_scope(300, response_only=True) as state:
             result = await provider.ainvoke(MESSAGES)
     assert result.content == "complete" and not state.submission_may_exist
+    await asyncio.wait_for(closed.wait(), 2)
     assert closed.is_set()
 
 
 @pytest.mark.asyncio
-async def test_legacy_gemini_proxy_keeps_sync_thread_and_cleanup_policy(scheduler, monkeypatch):
+async def test_unscoped_gemini_proxy_uses_cancellable_sdk_and_closes_client(scheduler, monkeypatch):
     calls = []
 
-    async def forbidden(options):
-        pytest.fail("legacy proxy unexpectedly used async SDK")
+    async def invoke(options):
+        calls.append(options)
+        return SimpleNamespace(content="complete")
 
     async def close():
-        pytest.fail("legacy proxy unexpectedly used new cleanup")
+        calls.append("closed")
 
-    def invoke(messages, **options):
-        calls.append(options)
-        return SimpleNamespace(content="legacy")
+    def forbidden(*args, **kwargs):
+        pytest.fail("ordinary proxy call used an uncancellable sync request")
 
-    async with provider_for("gemini_proxy", forbidden, monkeypatch) as provider:
+    async with provider_for("gemini_proxy", invoke, monkeypatch) as provider:
         client = provider._build_client_sync()
-        client.invoke, client.aclose = invoke, close
+        client.invoke, client.aclose = forbidden, close
         with response_timeout_scope(300):
             result = await provider.ainvoke(MESSAGES)
-    assert result.content == "legacy" and calls == [{}]
+    await turns()
+    assert result.content == "complete" and calls == [{}, "closed"]
     assert scheduler.active == scheduler.host_capacity.active == 0
 
 

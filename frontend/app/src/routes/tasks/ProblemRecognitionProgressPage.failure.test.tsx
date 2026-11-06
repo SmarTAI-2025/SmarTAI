@@ -76,6 +76,22 @@ describe("ProblemRecognitionProgressPage generation failure", () => {
     expect(screen.getByRole("button", { name: "重试失败项" })).toBeDisabled();
   });
 
+  it.each([
+    ["question_preparation_time_limit_reached", "本次题目处理已达到有效处理时限", "1.5 小时，排队不计时", "已达到有效处理时限"],
+    ["question_preparation_wall_time_limit_reached", "本次题目处理已达到总时限", "2.5 小时总时限，自首次开始运行起，之后等待计入", "已达到总时限"],
+  ])("shows retained question results and existing recovery actions for %s", (code, title, timing, itemLabel) => {
+    failureCode = code;
+    generationProgress = { question_error_codes: { q2: code } };
+    render(<MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}>
+      <Routes><Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByRole("heading", { name: title })).toBeVisible();
+    expect(screen.getByText(new RegExp(timing))).toHaveTextContent("已保存的题干、参考答案和评分标准会保留");
+    expect(screen.getByText(`1.1.7 · ${itemLabel}`)).toBeVisible();
+    expect(screen.getByRole("button", { name: "重试失败项" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "人工继续处理" })).toBeEnabled();
+  });
+
   it("keeps uncertain request numbers and completed counts visible after a real-style timeout", () => {
     failureCode = "provider_submit_uncertain";
     generationProgress = {
