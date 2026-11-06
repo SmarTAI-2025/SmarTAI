@@ -17,6 +17,7 @@ import errno
 import getpass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import stat
@@ -202,13 +203,73 @@ class HostCapacity:
                 os.close(fd)
             raise RuntimeError(_FENCE_ERROR) from None
 
-    def try_start(self, key: str, rpm: int) -> bool:
+    def try_start(self, key: str, rpm: int, *, min_interval: float = 0.0) -> bool:
+        # Hold the cooldown fence through pacing admission: another process
+        # cannot publish a freeze between our check and our actual-start stamp.
+        return self._cooldown(key, admit=lambda repair: self._try_paced_start(key, rpm, min_interval, repair)) is True
+
+    @staticmethod
+    def _overwrite(fd: int, body: bytes) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        view = memoryview(body)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("incomplete capacity write")
+            view = view[written:]
+        os.ftruncate(fd, len(body))
+        os.fsync(fd)
+
+    def _read_state(self, fd: int, name: str, maximum: int):
+        # The stable .lock inode is never replaced: existing OS locks and the
+        # legacy RPM JSON format remain valid. Replay a complete write-ahead
+        # record before reading a possibly interrupted in-place write.
+        pending = self._open_name(name + ".pending")
+        try:
+            raw = os.read(pending, maximum + 1)
+            if raw and raw != b"\0":
+                if len(raw) > maximum:
+                    raise ValueError("invalid capacity journal")
+                json.loads(raw)  # Never replay a malformed journal.
+                self._overwrite(fd, raw)
+                os.ftruncate(pending, 0)
+        finally:
+            os.close(pending)
+        os.lseek(fd, 0, os.SEEK_SET)
+        raw = os.read(fd, maximum + 1)
+        if len(raw) > maximum:
+            raise ValueError("invalid capacity record")
+        return json.loads(raw) if raw and raw != b"\0" else None
+
+    def _write_state(self, fd: int, name: str, state) -> None:
+        body = json.dumps(state, separators=(",", ":"), allow_nan=False).encode()
+        temporary = self._open_name(name + ".tmp")
+        try:
+            self._overwrite(temporary, body)
+        finally:
+            os.close(temporary)
+        if _IS_WINDOWS:
+            os.replace(self.directory / (name + ".tmp"), self.directory / (name + ".pending"))
+        else:
+            os.replace(name + ".tmp", name + ".pending",
+                       src_dir_fd=self._directory_fd, dst_dir_fd=self._directory_fd)
+            os.fsync(self._directory_fd)
+        # Until this succeeds, another worker can recover the whole new state.
+        self._overwrite(fd, body)
+        pending = self._open_name(name + ".pending")
+        try:
+            os.ftruncate(pending, 0)
+        finally:
+            os.close(pending)
+
+    def _try_paced_start(self, key: str, rpm: int, min_interval: float, repair) -> bool:
         """Atomically pace actual requests across web and workflow processes.
 
         Store only a quota-key digest and monotonic timestamps. A rejected
         admission consumes no quota; cancellation before admission is free.
         """
-        if rpm <= 0:
+        interval = max(60.0 / rpm if rpm > 0 else 0.0, min_interval)
+        if rpm <= 0 and interval <= 0:
             return True
         name = "rpm-" + hashlib.sha256(key.encode()).hexdigest() + ".lock"
         fd = self._open_name(name)
@@ -220,23 +281,82 @@ class HostCapacity:
                     return False
                 _lease_fds.add(fd)
                 now = time.monotonic()
-                os.lseek(fd, 0, os.SEEK_SET)
-                raw = os.read(fd, 300_001)
-                if len(raw) > 300_000:
-                    raise ValueError("invalid quota window")
-                starts = json.loads(raw) if raw and raw != b"\0" else []
-                if not isinstance(starts, list) or any(type(t) not in (int, float) for t in starts):
-                    raise ValueError("invalid quota window")
-                starts = [t for t in starts if now - 60 < t <= now]
-                if len(starts) >= rpm or (starts and now - starts[-1] < 60.0 / rpm):
+                try:
+                    starts = self._read_state(fd, name, 300_000)
+                    starts = [] if starts is None else starts
+                    if not isinstance(starts, list) or any(
+                        type(t) not in (int, float) or not math.isfinite(t) for t in starts
+                    ):
+                        raise ValueError("invalid quota window")
+                except (ValueError, TypeError):
+                    # Old unjournaled writes may already be torn. Persist a
+                    # bounded quiet period rather than fail forever or burst.
+                    # Commit that protection BEFORE clearing the damaged RPM.
+                    repair(max(65.0, interval))
+                    self._write_state(fd, name, [])
+                    return False
+                # A reset invalidates the whole prior clock epoch. Do not
+                # merely hide future stamps and let them reappear later.
+                starts = [] if any(t > now for t in starts) else [
+                    t for t in starts if now - max(60.0, interval) < t <= now
+                ]
+                if ((rpm > 0 and sum(t > now - 60 for t in starts) >= rpm)
+                        or (starts and now - starts[-1] < interval)):
                     return False
                 starts.append(now)
-                body = json.dumps(starts[-10_000:], separators=(",", ":")).encode()
-                os.lseek(fd, 0, os.SEEK_SET)
-                if os.write(fd, body) != len(body):
-                    raise OSError("incomplete quota window write")
-                os.ftruncate(fd, len(body))
+                self._write_state(fd, name, starts[-10_000:])
                 return True
+            except (OSError, ValueError, TypeError):
+                raise RuntimeError(_FENCE_ERROR) from None
+            finally:
+                _lease_fds.discard(fd)
+                os.close(fd)
+
+    def defer_start(self, key: str, seconds: float, *, started_at: float | None = None,
+                    extend: bool = False) -> float | None:
+        """Share a 429 wait even when the user did not configure RPM."""
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError("invalid cooldown")
+        return self._cooldown(key, seconds, started_at=started_at, extend=extend)
+
+    def cooldown_remaining(self, key: str) -> float | None:
+        return self._cooldown(key)
+
+    def _cooldown(self, key: str, seconds: float | None = None, *,
+                  started_at: float | None = None, extend: bool = False, admit=None):
+        # Separate from the existing RPM window: cooling down must not clear
+        # counted starts, and previously deployed workers can still read RPM.
+        name = "cooldown-" + hashlib.sha256(key.encode()).hexdigest() + ".lock"
+        fd = self._open_name(name)
+        with _lease_lock:
+            try:
+                if not _try_lock(fd):
+                    return None
+                _lease_fds.add(fd)
+                now = time.monotonic()
+                try:
+                    state = self._read_state(fd, name, 256)
+                    state = [now, 0.0] if state is None else state
+                    if (not isinstance(state, list) or len(state) != 2
+                            or any(type(t) not in (int, float) or not math.isfinite(t) for t in state)):
+                        raise ValueError("invalid cooldown")
+                except (ValueError, TypeError):
+                    state = [now, now + 65.0]
+                    self._write_state(fd, name, state)
+                recorded, until = state
+                if now < recorded:  # monotonic clock reset after a host reboot
+                    until = 0.0
+                    self._write_state(fd, name, [now, until])
+                if seconds is None:
+                    if admit is not None and now >= until:
+                        def repair_pacing(delay):
+                            self._write_state(fd, name, [now, now + delay])
+                        return admit(repair_pacing)
+                    return False if admit is not None else max(0.0, until - now)
+                if extend or (now >= until and (started_at is None or started_at >= until)):
+                    until = max(until, now + seconds)
+                self._write_state(fd, name, [now, until])
+                return max(0.0, until - now)
             except (OSError, ValueError, TypeError):
                 raise RuntimeError(_FENCE_ERROR) from None
             finally:

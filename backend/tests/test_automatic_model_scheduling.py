@@ -333,7 +333,7 @@ async def test_all_models_and_users_share_fifty_call_ceiling(scheduler, host):
 
 
 @pytest.mark.asyncio
-async def test_fairness_is_per_teacher_and_not_per_model_count(scheduler, host):
+async def test_fifo_across_teachers_does_not_move_a_late_owner_ahead(scheduler, host):
     host.capacity = 0
     first = [asyncio.create_task(scheduler.acquire(**call(
         f"model-{index}", owner="teacher-many-models",
@@ -345,15 +345,16 @@ async def test_fairness_is_per_teacher_and_not_per_model_count(scheduler, host):
         host.capacity = 2
         scheduler.wake.set()
         await turns(100)
-        assert second.done()
-        assert sum(task.done() for task in first) == 1
+        assert not second.done()
+        assert first[0].done() and first[1].done()
+        assert sum(task.done() for task in first) == 2
     finally:
         await cleanup(tasks)
 
 
 @pytest.mark.parametrize(("occupied", "capacity"), [(0, 1), (49, 50)])
 @pytest.mark.asyncio
-async def test_backlogged_teachers_alternate_when_slots_free_one_at_a_time(
+async def test_backlogged_teachers_keep_arrival_order_when_slots_free_one_at_a_time(
     scheduler, host, occupied, capacity,
 ):
     held = [await scheduler.acquire(**call("held", owner="holder")) for _ in range(occupied)]
@@ -370,14 +371,14 @@ async def test_backlogged_teachers_alternate_when_slots_free_one_at_a_time(
         host.capacity = capacity
         scheduler.wake.set()
         seen, served = set(), []
-        for _ in range(4):
+        for _ in range(8):
             await turns(50)
             fresh = [task for task in tasks if task.done() and task not in seen]
             assert len(fresh) == 1
             seen.add(fresh[0])
             served.append(owners[fresh[0]])
             fresh[0].result().release()
-        assert all(left != right for left, right in zip(served, served[1:])), served
+        assert served == ["teacher-a"] * 4 + ["teacher-b"] * 4
     finally:
         await cleanup(tasks)
         for lease in held:
@@ -657,10 +658,10 @@ async def test_only_explicit_zhipu_concurrency_response_lowers_automatic_ceiling
         assert caught.value.code == "provider_overloaded"
         assert caught.value.retry_after == 12.0
         assert budget.limit == 10
-        assert budget.blocked_until == 112.0
+        assert budget.blocked_until == 165.0
     else:
         assert budget.limit == 20
-        assert budget.blocked_until == 0.0
+        assert budget.blocked_until == 165.0
     assert not provider._endpoint_breaker()._failures
     assert scheduler.active == scheduler.memory_active == 0
 
@@ -696,7 +697,7 @@ async def test_low_memory_queue_can_outlast_response_limit_without_sending_or_sp
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-    assert not scheduler.pending and not scheduler.owners
+    assert not scheduler.pending and not scheduler.queue
     assert scheduler.active == scheduler.memory_active == host.active == 0
 
 
@@ -733,7 +734,7 @@ async def test_external_cancellation_remains_cancellation(scheduler, clock, monk
     with pytest.raises(asyncio.CancelledError):
         await task
     await turns()
-    assert not scheduler.pending and not scheduler.owners
+    assert not scheduler.pending and not scheduler.queue
 
 
 @pytest.mark.asyncio
@@ -904,3 +905,68 @@ async def test_official_provider_keeps_existing_timeout_during_grading(scheduler
         provider.ainvoke([HumanMessage(content="test")]), response_timeout_seconds=0.03)
     assert result.content == "ok"
     assert scheduler.active == 0
+
+
+@pytest.mark.asyncio
+async def test_cooling_call_keeps_original_place_across_owners(scheduler, clock, host):
+    host.capacity = 0
+    scheduler.budget("cooling", 0).blocked_until = clock.now + 65
+    old = asyncio.create_task(scheduler.acquire(**call("cooling", owner="a")))
+    passing = asyncio.create_task(scheduler.acquire(**call("healthy", owner="b")))
+    later = asyncio.create_task(scheduler.acquire(**call("healthy-2", owner="c")))
+    tasks = [old, passing, later]
+    try:
+        await turns()
+        host.capacity = 1
+        scheduler.wake.set()
+        await turns(50)
+        assert passing.done() and not old.done() and not later.done()
+        clock.advance(65, scheduler)
+        passing.result().release()
+        await turns(50)
+        assert old.done() and not later.done()
+        old.result().release()
+        await turns(50)
+        assert later.done()
+    finally:
+        await cleanup(tasks)
+
+
+@pytest.mark.asyncio
+async def test_retry_retains_ticket_but_next_logical_call_and_child_get_new_tickets(scheduler, host):
+    from backend.llm.concurrency import admission_order
+    host.capacity = 1
+    retry_ready, requeue = asyncio.Event(), asyncio.Event()
+    sent = []
+    async def original():
+        with admission_order():
+            lease = await scheduler.acquire(**call("original", owner="a"))
+            sent.append("first")
+            retry_ready.set()
+            await requeue.wait()
+            lease.release()
+            again = await scheduler.acquire(**call("original", owner="a"))
+            sent.append("retry")
+            again.release()
+        lease = await scheduler.acquire(**call("new-logical", owner="a"))
+        sent.append("new-logical")
+        lease.release()
+    async def newer():
+        lease = await scheduler.acquire(**call("newer", owner="b"))
+        sent.append("newer")
+        lease.release()
+    first = asyncio.create_task(original())
+    await retry_ready.wait()
+    other = asyncio.create_task(newer())
+    await turns()
+    requeue.set()
+    await asyncio.wait_for(asyncio.gather(first, other), 2)
+    assert sent == ["first", "retry", "newer", "new-logical"]
+
+    host.capacity = 0
+    with admission_order():
+        one = asyncio.create_task(scheduler.acquire(**call("one")))
+        two = asyncio.create_task(scheduler.acquire(**call("two")))
+    await turns()
+    assert scheduler.queue[0].order < scheduler.queue[1].order
+    await cleanup([one, two])

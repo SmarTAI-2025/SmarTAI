@@ -525,9 +525,10 @@ class ProviderConfig(BaseModel):
     rpm: int = Field(
         default=0,
         ge=0,
-        description="Requests per minute cap for this key. "
-                    "0 = no additional RPM gating; automatic concurrency and server resource "
-                    "limits still apply. Set this to the provider's per-minute quota. "
+        description="User-specified requests per minute cap for this key. "
+                    "0 = no user-specified cap; saved BYOK operating estimates, automatic "
+                    "concurrency and server resource limits still apply. "
+                    "Set this to the provider's per-minute quota. "
                     "When grading would exceed this, calls automatically queue until the "
                     "rolling 60s window has room — prevents 429 quota errors instead of "
                     "burning retries on them.",

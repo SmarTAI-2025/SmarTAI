@@ -17,6 +17,7 @@ from backend.tests.test_multi_expert_robustness import _FakeProvider, _FakeRegis
 
 def provider(name):
     result = _FakeProvider(name)
+    result._adaptive_binding = None
     result.config = ProviderConfig(provider_type="openai", model=name, api_key="secret-key", display_name=name)
     return result
 
@@ -49,11 +50,10 @@ async def test_plan_requests_are_public_before_expert_activity_without_counting_
     question = ProblemInfo(q_id="q1", number="1", type="计算题", stem="2 + 2",
                            criterion="Method 8, result 2.", max_score=10)
 
-    @asynccontextmanager
-    async def lease(**kwargs):
-        yield
-
-    monkeypatch.setattr(providers, "get_scheduler", lambda: Obj(lease=lease))
+    from backend.llm.concurrency import ModelScheduler
+    from backend.tests.test_automatic_model_scheduling import FakeHost
+    scheduler = ModelScheduler(host_capacity=FakeHost(), memory_reader=lambda: None)
+    monkeypatch.setattr(providers, "get_scheduler", lambda: scheduler)
 
     async def prepare(value, selected, **kwargs):
         # Exercise the real provider admission and structured retry hooks,
@@ -241,13 +241,19 @@ async def test_capacity_reports_admission_separately_from_response(monkeypatch):
     p._endpoint_breaker = lambda: Obj(is_open=False)
     entered, admit = asyncio.Event(), asyncio.Event()
 
+    from backend.llm.concurrency import ModelScheduler
+    from backend.tests.test_automatic_model_scheduling import FakeHost
+    scheduler = ModelScheduler(host_capacity=FakeHost(), memory_reader=lambda: None)
+    original = scheduler.lease
     @asynccontextmanager
     async def lease(**kwargs):
         entered.set()
         await admit.wait()
-        yield
+        async with original(**kwargs):
+            yield
 
-    monkeypatch.setattr(providers, "get_scheduler", lambda: Obj(lease=lease))
+    monkeypatch.setattr(scheduler, "lease", lease)
+    monkeypatch.setattr(providers, "get_scheduler", lambda: scheduler)
     reporter, events = recorder(1)
 
     async def call():

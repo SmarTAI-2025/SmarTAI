@@ -26,6 +26,21 @@ describe("Task execution controls", () => {
     act(() => vi.advanceTimersByTime(65000));
     expect(screen.getByRole("status")).toHaveTextContent("正在进行第 2/3 次尝试");
   });
+  it("shows both models together and keeps the second countdown when the first resumes", () => {
+    vi.useFakeTimers(); vi.setSystemTime(100000);
+    const waits = [
+      { model: "Model A", reason: "provider_rate_limited" as const, attempt: 2, max_attempts: 3, retry_at: 165 },
+      { model: "Model B", reason: "provider_rate_limited" as const, attempt: 3, max_attempts: 3, retry_at: 195 },
+    ];
+    const props = { taskId: "task", state: { ...state, active_operation_status: "running" }, onChanged: refresh };
+    const { rerender } = render(<TaskExecutionControls {...props} progress={{ model_waits: waits } as JobProgress} />);
+    expect(screen.getByText(/Model A · 已尝试 1\/3 次，65 秒后重试/)).toBeVisible();
+    expect(screen.getByText(/Model B · 已尝试 2\/3 次，95 秒后重试/)).toBeVisible();
+    act(() => vi.advanceTimersByTime(65000));
+    rerender(<TaskExecutionControls {...props} progress={{ model_waits: [waits[1]] } as JobProgress} />);
+    expect(screen.queryByText(/Model A/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Model B · 已尝试 2\/3 次，30 秒后重试/)).toBeVisible();
+  });
   it("requires an explicit stop and sends the exact displayed run only once", async () => {
     let finish!: () => void;
     vi.mocked(stopTaskRun).mockImplementation(() => new Promise((resolve) => { finish = () => resolve({ status: "stopped", job_id: "job-1" }); }));

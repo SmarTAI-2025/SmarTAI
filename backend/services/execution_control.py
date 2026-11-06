@@ -6,6 +6,7 @@ immediately and observes cancellation from other processes without model calls.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -36,6 +37,25 @@ class _RateWait:
 
 
 @dataclass
+class _RateCycle:
+    gate: float
+    until: float
+    extra_used: bool = False
+
+
+@dataclass
+class _RateCycles:
+    until: float = 0.0
+    failures: int = 0
+    extra_granted: bool = False
+    extra_remaining: int = 0
+    pending: Counter = field(default_factory=Counter)
+    cycles: list[_RateCycle] = field(default_factory=list)
+    latest_success: float = float("-inf")
+    recovery_gate: float = float("inf")
+
+
+@dataclass
 class ExecutionControl:
     job_id: str
     is_cancelled: Callable[[], bool]
@@ -44,8 +64,58 @@ class ExecutionControl:
     response_timeout_seconds: float | None = None
     blocked: dict[str, str] = field(default_factory=dict)
     waits: WeakKeyDictionary[asyncio.Task, _RateWait] = field(default_factory=WeakKeyDictionary)
-    active_calls: dict[str, set[asyncio.Timeout]] = field(default_factory=dict)
+    active_calls: dict[str, dict[asyncio.Timeout, Callable[[], bool]]] = field(default_factory=dict)
     stopped: bool = False
+    rate_cycles: dict[str, _RateCycles] = field(default_factory=dict)
+
+    def rate_started(self, provider, *, started_at: float) -> None:
+        state = self.rate_cycles.setdefault(provider_key(provider), _RateCycles())
+        state.pending[started_at] += 1
+
+    def rate_limited(self, provider, *, started_at: float, until: float) -> None:
+        state = self.rate_cycles.setdefault(provider_key(provider), _RateCycles())
+        if started_at >= state.until:
+            state.recovery_gate = min(state.recovery_gate, until)
+            state.cycles.append(_RateCycle(state.until, until))
+        state.until = max(state.until, until)
+        self._settle_cycles(provider, state)
+
+    def rate_recovered(self, provider, *, started_at: float, adjusted: bool = False) -> None:
+        state = self.rate_cycles.setdefault(provider_key(provider), _RateCycles())
+        if started_at >= state.recovery_gate:
+            state.latest_success = max(state.latest_success, started_at)
+        if adjusted and not state.extra_granted:
+            state.extra_granted = True
+            state.extra_remaining = 2
+        self._settle_cycles(provider, state)
+
+    def rate_finished(self, provider, *, started_at: float) -> None:
+        state = self.rate_cycles[provider_key(provider)]
+        state.pending[started_at] -= 1
+        if state.pending[started_at] <= 0:
+            del state.pending[started_at]
+        self._settle_cycles(provider, state)
+
+    def _settle_cycles(self, provider, state: _RateCycles) -> None:
+        # A response admitted after an earlier cooldown can arrive during the
+        # next cooldown. Associate it with its admission cycle, not arrival time.
+        recovered = next((i for i in range(len(state.cycles) - 1, -1, -1)
+                          if state.latest_success >= state.cycles[i].gate), -1)
+        if recovered >= 0:
+            del state.cycles[:recovered + 1]
+        state.failures = 0
+        for cycle in state.cycles:
+            # Never declare a whole cycle unsuccessful while its siblings run.
+            if any(cycle.gate <= start < cycle.until for start in state.pending):
+                break
+            state.failures += 1
+            if state.failures >= 3 and not cycle.extra_used:
+                if state.extra_remaining:
+                    state.extra_remaining -= 1
+                    cycle.extra_used = True
+                else:
+                    self.block(provider, "provider_rate_limited")
+                    break
 
     def stop(self) -> None:
         self.stopped = True
@@ -71,21 +141,23 @@ class ExecutionControl:
         for wait in self.waits.values():
             if wait.key == key:
                 wait.wake.set()
-        if code == "provider_rate_limited":
-            for timer in self.active_calls.get(key, ()):
-                if not timer.expired():
-                    timer.reschedule(asyncio.get_running_loop().time())
+        for timer, in_flight in self.active_calls.get(key, {}).items():
+            # Quota exhaustion and repeated rate limits stop unsent work.
+            # An earlier timeout's unknown bill is not a current in-flight call.
+            if not in_flight() and not timer.expired():
+                timer.reschedule(asyncio.get_running_loop().time())
 
     @asynccontextmanager
-    async def interruptible_call(self, provider, may_have_sent: Callable[[], bool]):
+    async def interruptible_call(self, provider, may_have_sent: Callable[[], bool], *,
+                                 in_flight: Callable[[], bool]):
         """Interrupt only this model's calls, without cancelling the workflow task."""
         from backend.llm.providers import ProviderRequestError
         key = provider_key(provider)
-        calls = self.active_calls.setdefault(key, set())
+        calls = self.active_calls.setdefault(key, {})
         timer = asyncio.timeout(None)
         try:
             async with timer:
-                calls.add(timer)
+                calls[timer] = in_flight
                 yield
         except TimeoutError:
             if not timer.expired():
@@ -95,7 +167,7 @@ class ExecutionControl:
             error.submission_may_exist = may_have_sent()
             raise error from None
         finally:
-            calls.discard(timer)
+            calls.pop(timer, None)
             if not calls:
                 del self.active_calls[key]
 

@@ -290,6 +290,7 @@ class ProviderConfigRecord(Base):
     )
     max_concurrent: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     rpm: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    adaptive_limits: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     verification_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="unverified"
     )

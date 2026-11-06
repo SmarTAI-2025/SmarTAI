@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from collections import Counter
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -397,3 +398,41 @@ async def test_grading_worker_dispatches_two_runs_and_keeps_running_after_one_st
     finally:
         worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_two_models_publish_waits_together_and_resume_independently():
+    from backend.services.execution_control import current_execution
+    job_id = "two-independent-cooldowns"
+    reporter = get_or_create_reporter(job_id)
+    a = SimpleNamespace(provider_id="model-a", model="Model A")
+    b = SimpleNamespace(provider_id="model-b", model="Model B")
+    ready_a, ready_b, finish_a, finish_b = (asyncio.Event() for _ in range(4))
+    async def wait(provider, seconds, ready, finish):
+        control = current_execution()
+        await control.waiting(provider, 2, 3, seconds)
+        ready.set()
+        await finish.wait()
+        await control.finish_wait(provider)
+    async def job():
+        calls = [asyncio.create_task(wait(a, 65, ready_a, finish_a)),
+                 asyncio.create_task(wait(b, 95, ready_b, finish_b))]
+        try:
+            await ready_a.wait()
+            await ready_b.wait()
+            snapshot = await reporter.snapshot()
+            assert {w.model for w in snapshot.model_waits} == {"Model A", "Model B"}
+            finish_a.set()
+            await calls[0]
+            assert [w.model for w in (await reporter.snapshot()).model_waits] == ["Model B"]
+            finish_b.set()
+            await calls[1]
+            assert not (await reporter.snapshot()).model_waits
+        finally:
+            for task in calls:
+                task.cancel()
+            await asyncio.gather(*calls, return_exceptions=True)
+    try:
+        await run_controlled(job_id, lambda: False, job())
+    finally:
+        remove_reporter(job_id)

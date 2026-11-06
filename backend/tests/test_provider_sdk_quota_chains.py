@@ -28,6 +28,12 @@ CASES = [
 ]
 
 
+async def advance_test_round(scheduler):
+    offset = max(scheduler.clock(), max((b.blocked_until for b in scheduler.budgets.values()), default=0))
+    scheduler.clock = lambda: offset + 0.01
+    scheduler.wake.set()
+
+
 def response_body(kind):
     if kind.endswith("_text"):
         message = "Quota exceeded for requests per day" if kind == "daily_text" else "Quota exceeded; quota limit: 0"
@@ -56,8 +62,14 @@ def http_response(monkeypatch):
     for module in (httpx, httpx2):
         monkeypatch.setattr(module.Client, "send", send)
         monkeypatch.setattr(module.AsyncClient, "send", asend)
-    monkeypatch.setattr(llm._ainvoke_with_retry.retry, "sleep", AsyncMock())
-    monkeypatch.setattr(llm._invoke_with_rate_retry.retry, "sleep", AsyncMock())
+    async def advance_cooldown(_seconds):
+        # SDK tests simulate time as well as HTTP; no real minute-long waits.
+        scheduler = providers.get_scheduler()
+        offset = max(scheduler.clock(), max((b.blocked_until for b in scheduler.budgets.values()), default=0))
+        scheduler.clock = lambda: offset + 0.01
+        scheduler.wake.set()
+    monkeypatch.setattr(llm._ainvoke_with_retry.retry, "sleep", advance_cooldown)
+    monkeypatch.setattr(llm._invoke_with_rate_retry.retry, "sleep", advance_cooldown)
     return state
 
 
@@ -124,6 +136,7 @@ async def test_gemini_sdk_wrapper_is_classified_before_retry(monkeypatch, schedu
         error = await run_controlled("first-click", lambda: False, round())
         assert http_response["calls"] == calls
         assert classify_background_error(error, "workflow_failed") == code
+        await advance_test_round(scheduler)
         error = await run_controlled("next-click", lambda: False, round())
         assert http_response["calls"] == 2 * calls
         assert classify_background_error(error, "workflow_failed") == code

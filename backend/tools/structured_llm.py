@@ -17,8 +17,10 @@ import logging
 import random
 import re
 import math
+import inspect
 import time
 from contextlib import contextmanager
+from backend.llm.concurrency import admission_order, ordered_call
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from email.utils import parsedate_to_datetime
@@ -92,7 +94,8 @@ def llm_attempt_budget():
         return
     token = _attempt_budget.set(_AttemptBudget())
     try:
-        yield
+        with admission_order():
+            yield
     except Exception as exc:
         if _attempt_budget.get().uncertain_timeout:
             # A later rejected attempt cannot erase an earlier unknown charge.
@@ -964,8 +967,8 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
 def _retry_wait(retry_state) -> float:
     """tenacity wait callable.
 
-    - On a rate limit: wait at least 65 seconds and at least Retry-After,
-      plus 0.5-2s jitter. The stop predicate enforces the wait budget.
+    - Managed providers use the remaining shared cooldown (normally 65s).
+      Legacy callers retain their existing jitter and Retry-After fallback.
     - On a response timeout: immediately re-enter normal provider admission.
     - On any other transient: exponential backoff (1, 2, 4 … capped at 30s),
       or a longer Retry-After hint. A 5xx hint does not make it a rate limit.
@@ -973,10 +976,14 @@ def _retry_wait(retry_state) -> float:
     outcome = retry_state.outcome
     exc = outcome.exception() if (outcome and outcome.failed) else None
 
+    shared_wait = getattr(_retry_provider(retry_state), "_shared_cooldown_remaining", None)
+    remaining = shared_wait() if callable(shared_wait) and not inspect.iscoroutinefunction(shared_wait) else None
+    if type(remaining) not in (int, float) or not math.isfinite(remaining):
+        remaining = None
+    if isinstance(exc, RateLimitError) and remaining is not None:
+        return remaining
     if isinstance(exc, ResponseTimeoutError):
-        # Re-enter normal provider admission immediately; it owns RPM,
-        # concurrency and any existing shared 429 cooldown.
-        return 0.0
+        return remaining or 0.0
 
     if isinstance(exc, RateLimitError):
         if exc.retry_after is not None:
@@ -990,11 +997,12 @@ def _retry_wait(retry_state) -> float:
 
     # Generic transient: exponential 1, 2, 4, 8, ... cap 30s
     n = max(1, retry_state.attempt_number)
-    return max(float(min(30, 2 ** (n - 1))), float(getattr(exc, "retry_after", None) or 0))
+    return max(float(min(30, 2 ** (n - 1))), float(getattr(exc, "retry_after", None) or 0), remaining or 0)
 
 
 def _retry_provider(retry_state):
-    first = retry_state.args[0] if retry_state.args else None
+    args = getattr(retry_state, "args", ())
+    first = args[0] if args else None
     return getattr(first, "__self__", None) or first
 
 
@@ -1027,7 +1035,11 @@ def _retry_stop(retry_state) -> bool:
             # A fresh Tenacity state belongs to one invocation. Three sibling
             # first refusals or a text-only quota hint cannot trip the batch.
             retry_state.rate_limit_failures = getattr(retry_state, "rate_limit_failures", 0) + 1
-            if retry_state.rate_limit_failures == _MAX_ATTEMPTS:
+            if (retry_state.rate_limit_failures == _MAX_ATTEMPTS
+                    and not hasattr(_retry_provider(retry_state), "_shared_cooldown_remaining")):
+                # Persisted BYOK admission owns shared cooling and recovery.
+                # This logical call still stops at three attempts, but must
+                # not cancel unrelated queued calls after a transient refusal.
                 control.block(_retry_provider(retry_state), "provider_rate_limited")
     return stop
 
@@ -1087,6 +1099,7 @@ async def _sleep_before_retry(seconds: float) -> None:
         await asyncio.sleep(seconds)
 
 
+@ordered_call
 @retry(
     stop=_retry_stop,
     wait=_retry_wait,
@@ -1127,6 +1140,7 @@ def _preserve_unknown_usage(response):
     return response
 
 
+@ordered_call
 @retry(stop=_retry_stop, wait=_retry_wait, retry=retry_if_exception_type((RateLimitError, ResponseTimeoutError)),
        before=_before_retry_attempt, before_sleep=_before_retry_sleep, sleep=_sleep_before_retry, reraise=True)
 async def _invoke_with_rate_retry(invoke, *args, **kwargs):

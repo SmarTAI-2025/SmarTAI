@@ -20,6 +20,12 @@ async def test_rate_wait_persistence(route, response_only, retry_kind, outcome, 
     retry = structured_llm._invoke_with_rate_retry if retry_kind == 'rate' else structured_llm._ainvoke_with_retry
     invoke_with_retry = structured_llm.ainvoke_with_rate_retry if retry_kind == 'rate' else structured_llm.ainvoke_with_retry
     monkeypatch.setattr(retry.retry, 'wait', wait_fixed(0))
+    from backend.tests.test_automatic_model_scheduling import FakeClock
+    clock = FakeClock()
+    scheduler.clock = clock
+    async def sleep(_):
+        clock.advance(65, scheduler)
+    monkeypatch.setattr(retry.retry, 'sleep', sleep)
     calls, saves = [], []
     async def invoke(options):
         calls.append(options)

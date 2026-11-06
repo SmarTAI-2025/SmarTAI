@@ -4,7 +4,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from backend.db.models import ProviderConfigRecord, ProviderPreferenceRecord
 from backend.db.session import session_scope
@@ -24,6 +24,7 @@ class StoredProviderConfig:
     last_checked_at: float | None = None
     verification_error_code: str | None = None
     updated_at: float | None = None
+    adaptive_limits: dict | None = None
 
 
 class DefaultProviderReplacementRequired(RuntimeError):
@@ -238,6 +239,7 @@ def list_provider_configs(owner_id: str, *, master_key: str) -> list[StoredProvi
             last_checked_at=record.last_checked_at,
             verification_error_code=record.verification_error_code,
             updated_at=record.updated_at,
+            adaptive_limits=record.adaptive_limits,
         )
         for record in records
     ]
@@ -269,6 +271,7 @@ def get_provider_config(owner_id: str, provider_id: str, *, master_key: str) -> 
         last_checked_at=record.last_checked_at,
         verification_error_code=record.verification_error_code,
         updated_at=record.updated_at,
+        adaptive_limits=record.adaptive_limits,
     )
 
 
@@ -326,6 +329,7 @@ def update_provider_config(
             last_checked_at=record.last_checked_at,
             verification_error_code=record.verification_error_code,
             updated_at=record.updated_at,
+            adaptive_limits=record.adaptive_limits,
         )
 
 
@@ -409,3 +413,42 @@ def delete_provider_config(owner_id: str, provider_id: str) -> bool:
 def record_image_rejection(owner_id: str, provider_id: str, *, expected_updated_at: float | None) -> bool:
     return set_image_capability(owner_id, provider_id, status="unsupported", checked_at=time.time(),
                                 reason="provider_vision_not_supported", expected_updated_at=expected_updated_at)
+
+
+def record_adaptive_limits(owner_id: str, provider_id: str, profile: dict, *,
+                           expected_updated_at: float) -> bool:
+    """Owner/configuration CAS: old work cannot overwrite an edited BYOK.
+
+    A learning update is not a user configuration edit and must not invalidate
+    workflow fingerprints, credential verification, or another learning write.
+    """
+    from backend.llm.adaptive_admission import valid_profile
+    profile = valid_profile(profile)
+    if profile is None or profile["config_version"] != expected_updated_at or profile["generation"] < 1:
+        return False
+    with session_scope() as session:
+        result = session.execute(update(ProviderConfigRecord).where(
+            ProviderConfigRecord.id == provider_id,
+            ProviderConfigRecord.owner_id == owner_id,
+            ProviderConfigRecord.updated_at == expected_updated_at,
+            # Both faster and slower validated estimates may be saved, but
+            # an old worker cannot overwrite a newer learning generation.
+            func.coalesce(ProviderConfigRecord.adaptive_limits["generation"].as_integer(), 0)
+                == profile["generation"] - 1,
+        ).values(adaptive_limits=profile, updated_at=ProviderConfigRecord.updated_at))
+        return result.rowcount == 1
+
+
+def load_adaptive_states(sources: dict[str, tuple[str, str]]) -> dict[str, dict]:
+    """Read only owner-scoped lifecycle/learning metadata, never credentials."""
+    if not sources:
+        return {}
+    with session_scope() as session:
+        rows = session.execute(select(
+            ProviderConfigRecord.id, ProviderConfigRecord.owner_id,
+            ProviderConfigRecord.updated_at, ProviderConfigRecord.enabled,
+            ProviderConfigRecord.adaptive_limits,
+        ).where(ProviderConfigRecord.id.in_({provider_id for _, provider_id in sources.values()}))).all()
+    records = {(row.owner_id, row.id): row for row in rows}
+    return {identity: {"revision": row.updated_at, "enabled": row.enabled, "profile": row.adaptive_limits}
+            for identity, source in sources.items() if (row := records.get(source)) is not None}

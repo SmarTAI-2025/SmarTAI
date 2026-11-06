@@ -57,8 +57,12 @@ async def test_timeout_retries_reenter_admission_and_preserve_unknown_usage(rout
 @pytest.mark.parametrize("sequence", [("timeout", "429", "timeout"), ("429", "timeout", "429")])
 async def test_mixed_failures_share_three_attempts_without_erasing_uncertainty(sequence, scheduler, monkeypatch):
     calls, sleeps = [], []
+    from backend.tests.test_automatic_model_scheduling import FakeClock
+    clock = FakeClock()
+    scheduler.clock = clock
     async def sleep(seconds):
         sleeps.append(seconds)
+        clock.advance(seconds, scheduler)
     monkeypatch.setattr(llm._invoke_with_rate_retry.retry, "sleep", sleep)
     async def invoke(options):
         failure = sequence[len(calls)]
@@ -104,6 +108,35 @@ async def test_cancel_queued_timeout_retry_keeps_unknown_marker_without_another_
     assert calls == [1] and state.submission_may_exist
     assert not state.last_attempt_rejected
     assert not scheduler.pending and scheduler.active == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ROUTES)
+async def test_model_stop_interrupts_queued_timeout_retry_without_erasing_uncertainty(scheduler, monkeypatch, route):
+    calls = []
+    async def invoke(options):
+        calls.append(1)
+        scheduler.host_capacity.capacity = 0
+        raise httpx.ReadTimeout("unknown response")
+
+    async with provider_for(route, invoke, monkeypatch) as provider:
+        async def work():
+            with response_timeout_scope(180, response_only=True) as state:
+                task = asyncio.create_task(llm.ainvoke_with_rate_retry(provider, MESSAGES))
+                try:
+                    async with asyncio.timeout(2):
+                        while not calls or not scheduler.pending:
+                            await asyncio.sleep(.001)
+                    current_execution().block(provider, "provider_rate_limited")
+                    with pytest.raises(ProviderRequestError, match="provider_rate_limited") as caught:
+                        await asyncio.wait_for(asyncio.shield(task), 1)
+                    assert caught.value.retryable is False
+                    assert caught.value.submission_may_exist and state.submission_may_exist
+                finally:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+        await run_controlled("stop-timeout-retry", lambda: False, work())
+    assert calls == [1] and not scheduler.pending and scheduler.active == 0
 
 
 @pytest.mark.asyncio

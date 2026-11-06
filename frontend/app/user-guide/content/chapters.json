@@ -72,7 +72,7 @@
         "details": [
           {
             "title": "Base URL、协议与 RPM 怎么填",
-            "body": "<p>Base URL 保留 /v1 等前缀，不要附加 /chat/completions 等操作路径。API 协议通常保持“跟随厂商”；仅在中转方明确要求时调整。RPM 留空或填 0 表示不额外限速。并发由系统自动调节，资源不足时排队。</p>"
+            "body": "<p>Base URL 保留 /v1 等前缀，不要附加 /chat/completions 等操作路径。API 协议通常保持“跟随厂商”；仅在中转方明确要求时调整。RPM 留空或填 0 时，系统会学习并复用发送间隔和并发数；持续限流时调整，资源不足时排队。</p>"
           }
         ]
       },
@@ -330,7 +330,7 @@
       {
         "id": "api-fields",
         "title": "填写并保存",
-        "body": "<p>先在<a href=\"#api-providers\">第 2 节</a>找到要使用的厂商，按步骤申请密钥，再填写以下内容。</p><div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">怎么填</th></tr></thead><tbody><tr><td><strong>服务商</strong></td><td>选择对应厂商。</td></tr><tr><td><strong>配置名称</strong></td><td>可选，例如“作业批改”“图片识别”；留空则默认使用模型名称。</td></tr><tr><td><strong>模型名称</strong></td><td>复制厂商的 <strong>Model ID</strong>。这是模型的调用名称，例如 <code>gemini-3.5-flash-lite</code>，不是中文展示名。</td></tr><tr><td><strong>API key</strong></td><td>粘贴刚申请的密钥，注意不要多复制空格。</td></tr><tr><td><strong>API Base URL</strong></td><td>填接口基础地址，可直接复制各厂商小节中的地址。</td></tr><tr><td><strong>API 协议</strong></td><td>使用厂商官方接口时，保持<strong>跟随厂商</strong>。</td></tr><tr><td><strong>RPM</strong></td><td>每分钟允许发送的请求数。厂商提供了该数值就照填；不清楚可留空或填 <code>0</code>。</td></tr><tr><td><strong>并发</strong></td><td>自动调节，无需填写。</td></tr></tbody></table></div><p>点击 <strong>保存配置</strong>，确认配置为<strong>已启用</strong>。常用的配置可以<strong>设为默认</strong>；需要使用多个模型时，分别添加即可。</p><p>API Key 类似密码，请妥善保管，不要放进截图或发到群聊。保存后页面不会显示完整密钥；编辑配置时，密钥栏留空可保留原密钥。</p><p><strong>费用和限额看哪里？</strong> 到厂商控制台查看“余额 / 免费额度 / 资源包”和“限流 / Limits / Rate Limit”。Token 是厂商统计模型用量的单位，输入和输出都会消耗。免费额度通常有适用模型和有效期；用完后是否继续扣费，取决于账户余额及计费设置。RPM 填 <code>0</code> 只表示不额外排队限速，不代表厂商没有限额。</p>"
+        "body": "<p>先在<a href=\"#api-providers\">第 2 节</a>找到要使用的厂商，按步骤申请密钥，再填写以下内容。</p><div class=\"table-wrap\"><table><thead><tr><th scope=\"col\">字段</th><th scope=\"col\">怎么填</th></tr></thead><tbody><tr><td><strong>服务商</strong></td><td>选择对应厂商。</td></tr><tr><td><strong>配置名称</strong></td><td>可选，例如“作业批改”“图片识别”；留空则默认使用模型名称。</td></tr><tr><td><strong>模型名称</strong></td><td>复制厂商的 <strong>Model ID</strong>。这是模型的调用名称，例如 <code>gemini-3.5-flash-lite</code>，不是中文展示名。</td></tr><tr><td><strong>API key</strong></td><td>粘贴刚申请的密钥，注意不要多复制空格。</td></tr><tr><td><strong>API Base URL</strong></td><td>填接口基础地址，可直接复制各厂商小节中的地址。</td></tr><tr><td><strong>API 协议</strong></td><td>使用厂商官方接口时，保持<strong>跟随厂商</strong>。</td></tr><tr><td><strong>RPM</strong></td><td>每分钟允许发送的请求数。厂商提供了该数值就照填；不清楚可留空或填 <code>0</code>。</td></tr><tr><td><strong>并发</strong></td><td>自动调节，无需填写。</td></tr></tbody></table></div><p>点击 <strong>保存配置</strong>，确认配置为<strong>已启用</strong>。常用的配置可以<strong>设为默认</strong>；需要使用多个模型时，分别添加即可。</p><p>API Key 类似密码，请妥善保管，不要放进截图或发到群聊。保存后页面不会显示完整密钥；编辑配置时，密钥栏留空可保留原密钥。</p><p><strong>费用和限额看哪里？</strong> 到厂商控制台查看“余额 / 免费额度 / 资源包”和“限流 / Limits / Rate Limit”。Token 是厂商统计模型用量的单位，输入和输出都会消耗。免费额度通常有适用模型和有效期；用完后是否继续扣费，取决于账户余额及计费设置。RPM 填 <code>0</code> 表示不指定手动额度，系统仍会使用学习到的发送间隔和并发数，不代表厂商没有限额。</p>"
       },
       {
         "id": "api-api-connectivity",

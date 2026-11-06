@@ -70,6 +70,23 @@ def _seed_user(role: str) -> str:
     return uid
 
 
+@pytest.mark.asyncio
+async def test_provider_admission_recovers_a_conflicting_learning_write(pg_database, monkeypatch):
+    from backend.tests.test_adaptive_admission_lifecycle import (
+        test_failed_generation_save_refreshes_and_allows_later_verified_save,
+    )
+    await test_failed_generation_save_refreshes_and_allows_later_verified_save(monkeypatch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["edit", "delete", "disable", "upsert"])
+async def test_provider_admission_releases_departed_configuration(pg_database, change):
+    from backend.tests.test_adaptive_admission_lifecycle import (
+        test_database_changes_release_other_owner_without_another_departed_owner_call,
+    )
+    await test_database_changes_release_other_owner_without_another_departed_owner_call(change)
+
+
 @pytest.mark.parametrize("case", ["race", "rollback", "resend", "single_use"])
 def test_registration_invitations_are_atomic_on_postgres(pg_database, monkeypatch, case):
     from backend.config import settings
