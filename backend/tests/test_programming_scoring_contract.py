@@ -241,8 +241,13 @@ async def exercise_review_and_release(monkeypatch, scenario, *, native=False):
     if scenario == "later_expert":
         routes.append(fixed_provider(response(award(8)), name="second"))
     if scenario == "later_sample":
-        route = fixed_provider(response(award(10)), response(award(8)))
-        routes = [route]
+        # Sample slots are constructed before concurrent work. Bind each reply
+        # to its slot, not to whichever sample reaches the model first.
+        sample_routes = iter([fixed_provider(response(award(10))), fixed_provider(response(award(8)))])
+        original_init = programming.ProgrammingSkill.__init__
+        def initialize_sample(self, provider, **kwargs):
+            original_init(self, next(sample_routes), **kwargs)
+        monkeypatch.setattr(programming.ProgrammingSkill, "__init__", initialize_sample)
     registry = SimpleNamespace(count=lambda: len(routes), list_available=lambda: routes, pick_default=lambda: route)
     run = grading_runs.create_run(teacher_id=teacher, assignment_id=assignment.id)
     await grading_runs.process_run(run_id=run.id, worker_id="worker", registry=registry)
