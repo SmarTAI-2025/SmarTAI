@@ -55,7 +55,8 @@ class AdaptiveAdmission:
         self.profile = valid_profile(profile)
         self.revision, self.rpm = revision, rpm
         self.floor = 60.0 / rpm if rpm else .001
-        self.interval = max(self.floor, self.profile["interval_seconds"] if self.profile else 1.0)
+        self.interval = max(self.floor, self.profile["interval_seconds"] if self.profile else (
+            self.floor if rpm else 1.0))
         self.concurrency = self.profile["concurrency"] if self.profile else (min(50, max(1, rpm * 2)) if rpm else 5)
         self.response_seconds = self.profile["response_seconds"] if self.profile else 0.0
         self.buckets: OrderedDict[int, _Bucket] = OrderedDict()

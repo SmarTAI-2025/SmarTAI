@@ -42,8 +42,9 @@ may have been billed. Stopping an unsent retry must not erase that uncertainty.
 
 ## Learning and persistence
 
-Unknown BYOK starts at interval T=1 second and C=5 in-flight calls. Explicit RPM
-is always an interval floor T >= 60/RPM and retains its rolling-window guard;
+Unknown BYOK starts at interval T=1 second and C=5 in-flight calls. With explicit
+RPM and no saved profile, T starts at 60/RPM instead of imposing a hidden 60 RPM
+cap. Explicit RPM is always an interval floor T >= 60/RPM and retains its rolling-window guard;
 automatic latency-derived concurrency and server bounds still apply.
 
 Recalibrate after two recovered independent cooldown incidents without stable

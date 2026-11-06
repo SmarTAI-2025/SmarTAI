@@ -151,6 +151,30 @@ def test_user_rpm_is_a_floor_on_interval_and_invalid_profiles_are_rejected():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rpm,interval", [(0, 1.0), (6, 10.0), (120, .5), (600, .1)])
+async def test_cold_byok_uses_explicit_rpm_without_an_extra_sixty_rpm_cap(rpm, interval):
+    clock = FakeClock()
+    scheduler = ModelScheduler(clock=clock, host_capacity=FakeHost(), memory_reader=lambda: None)
+    scheduler.bind_adaptive("same", rpm, "byok", None, 1)
+    first = await scheduler.acquire(**call("same", rpm=rpm))
+    first.release()
+    queued = asyncio.create_task(scheduler.acquire(**call("same", rpm=rpm)))
+    try:
+        clock.now = 100 + interval - .001
+        scheduler.wake.set()
+        await turns()
+        assert not queued.done()
+        clock.now = 100 + interval + .001
+        scheduler.wake.set()
+        await turns()
+        assert queued.done(), "known RPM must not inherit the unknown-RPM one-second interval"
+        queued.result().release()
+    finally:
+        queued.cancel()
+        await asyncio.gather(queued, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_loaded_parameters_gate_queue_by_interval_and_slots():
     clock = FakeClock()
     scheduler = ModelScheduler(clock=clock, host_capacity=FakeHost(), memory_reader=lambda: None)
