@@ -41,6 +41,7 @@ def test_unordered_values_keep_nested_types_and_finite_numbers(actual, expected)
 @pytest.mark.parametrize("code", [
     "def f(): return float('nan')",
     "def f(): return frozenset({1, 2})",
+    "def f(): return 10 ** 5000",
     "def f():\n x=[]; x.append(x); return x",
     "class Value:\n def __repr__(self): raise AssertionError('must not call custom repr')\ndef f(): return Value()",
 ])
