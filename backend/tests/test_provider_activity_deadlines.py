@@ -71,6 +71,11 @@ async def test_rate_wait_status_save_does_not_abort_retry(route, outcome, respon
     monkeypatch.setattr(request_timeouts, "_LOCAL_STEP_SECONDS", .02)
     monkeypatch.setattr(settings, "llm_timeout", .01)
     monkeypatch.setattr(structured_llm._ainvoke_with_retry.retry, "wait", wait_fixed(0))
+    async def advance_shared_wait(_seconds):
+        offset = max(scheduler.clock(), max(b.blocked_until for b in scheduler.budgets.values())) + .01
+        scheduler.clock = lambda: offset
+        scheduler.wake.set()
+    monkeypatch.setattr(structured_llm._ainvoke_with_retry.retry, "sleep", advance_shared_wait)
     calls, saves = [], []
 
     async def invoke(options):

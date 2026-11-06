@@ -57,8 +57,12 @@ async def test_timeout_retries_reenter_admission_and_preserve_unknown_usage(rout
 @pytest.mark.parametrize("sequence", [("timeout", "429", "timeout"), ("429", "timeout", "429")])
 async def test_mixed_failures_share_three_attempts_without_erasing_uncertainty(sequence, scheduler, monkeypatch):
     calls, sleeps = [], []
+    from backend.tests.test_automatic_model_scheduling import FakeClock
+    clock = FakeClock()
+    scheduler.clock = clock
     async def sleep(seconds):
         sleeps.append(seconds)
+        clock.advance(seconds, scheduler)
     monkeypatch.setattr(llm._invoke_with_rate_retry.retry, "sleep", sleep)
     async def invoke(options):
         failure = sequence[len(calls)]

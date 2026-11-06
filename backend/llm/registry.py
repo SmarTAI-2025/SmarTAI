@@ -774,6 +774,12 @@ def _build_scoped_registry(current) -> ExpertRegistry:
                     record_image_rejection, current.id, stored.id,
                     expected_updated_at=stored.updated_at,
                 )
+                from backend.db.provider_repository import record_adaptive_limits
+                provider._adaptive_binding = (
+                    f"{current.id}:{stored.id}", stored.adaptive_limits, stored.updated_at,
+                    partial(record_adaptive_limits, current.id, stored.id,
+                            expected_updated_at=stored.updated_at),
+                )
     except ValueError as exc:
         logger.error("Unable to load encrypted provider configurations for user %s", current.id)
         raise HTTPException(503, detail="Saved provider credentials cannot be loaded.") from exc

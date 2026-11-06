@@ -440,6 +440,7 @@ class BaseProvider(ABC):
         self._client = None
         self._client_lock = None
         self._client_initialization = None
+        self._adaptive_binding = None
 
     @property
     def provider_id(self) -> str:
@@ -481,13 +482,19 @@ class BaseProvider(ABC):
         # Time a response only after acquiring the local execution slot.
         deadline = asyncio.timeout(None)
         admitted = False
+        update = None
         try:
             await provider_local_step(report_provider_state(self, "queued"), best_effort=True)
             if control is not None:
                 await control.check(self)
             scheduler = get_scheduler()
+            key = quota_key(self.config, endpoint_key(self.config))
+            rpm = max(0, int(self.config.rpm or 0))
+            if self._adaptive_binding is not None:
+                identity, profile, revision, recorder = self._adaptive_binding
+                scheduler.bind_adaptive(key, rpm, identity, profile, revision)
             interrupt = control.interruptible_call(
-                self, lambda: scope.submission_may_exist if scope is not None else admitted,
+                self, lambda: admitted or (scope is not None and scope.submission_may_exist),
             ) if control is not None else nullcontext()
             async with deadline, interrupt:
                 lease = scheduler.lease(
@@ -513,16 +520,70 @@ class BaseProvider(ABC):
                         ))
                     try:
                         admitted = True
+                        admitted_at = scheduler.clock()
+                        active_at_start = scheduler.budgets[key].active
+                        busy_at_start = sum(scheduler.budgets[key].requests.values()) > active_at_start
+                        scheduler.record_adaptive_start(key, admitted_at)
+                        if control is not None:
+                            control.rate_started(self, started_at=admitted_at)
                         yield
                     except Exception as exc:
                         from backend.llm.provider_limits import exhausted_quota_code
                         code = exhausted_quota_code(exc)
                         if control is not None and code:
                             control.block(self, code)
+                        if not code:
+                            from backend.services.background_errors import provider_failure_diagnostic
+                            from backend.tools.structured_llm import _provider_retry_after
+                            failure = provider_failure_diagnostic(exc)
+                            if (getattr(exc, "status_code", None) == 429
+                                    or (failure is not None and failure.http_status == 429)):
+                                # All callers (including raw/vision calls) pass
+                                # here before the rejected slot is released.
+                                hint = _provider_retry_after(exc)
+                                seconds = max(65.0, float(settings.llm_rate_limit_retry_seconds), hint or 0.0)
+                                until = await scheduler.record_rate_limit(
+                                    key, rpm, seconds,
+                                    run=control.job_id if control is not None else "unscoped",
+                                    started_at=admitted_at, active=active_at_start,
+                                    extend=hint is not None and hint > 65.0,
+                                )
+                                if control is not None:
+                                    control.rate_limited(self, started_at=admitted_at, until=until)
+                            else:
+                                scheduler.record_adaptive_failure(key, admitted_at)
+                        else:
+                            scheduler.record_adaptive_failure(key, admitted_at)
+                        raise
+                    except BaseException:
+                        scheduler.record_adaptive_failure(key, admitted_at)
                         raise
                     else:
                         deadline.reschedule(None)
-                        admitted = False
+                        before = scheduler.adjustment_count(key)
+                        if self._adaptive_binding is not None:
+                            update = scheduler.record_adaptive_success(
+                                key, identity, revision, admitted_at,
+                                run=control.job_id if control is not None else "unscoped", busy=busy_at_start,
+                            )
+                        else:
+                            scheduler.record_adaptive_success(
+                                key, "", 0, admitted_at,
+                                run=control.job_id if control is not None else "unscoped", busy=busy_at_start,
+                            )
+                        if control is not None:
+                            control.rate_recovered(self, started_at=admitted_at,
+                                                   adjusted=scheduler.adjustment_count(key) != before)
+                    finally:
+                        if control is not None:
+                            control.rate_finished(self, started_at=admitted_at)
+            if update is not None:
+                # Storage is not a model request; release scarce call slots first.
+                try:
+                    if await provider_local_step(asyncio.to_thread(recorder, update)):
+                        scheduler.adaptive_saved(key, identity, update)
+                except Exception:
+                    logger.warning("Unable to persist BYOK admission estimate")
             await provider_local_step(report_provider_state(self, "processing"), best_effort=True)
         except TimeoutError as exc:
             if not deadline.expired():
@@ -534,6 +595,9 @@ class BaseProvider(ABC):
         finally:
             from backend.progress.recognition_activity import finish_provider_request
             await provider_local_step(finish_provider_request(), best_effort=True)
+
+    def _shared_cooldown_remaining(self) -> float | None:
+        return get_scheduler().cooldown_remaining(quota_key(self.config, endpoint_key(self.config)))
 
     async def _invoke_response(self, invoke, *, timeout_seconds=None):
         scope = current_response_scope()

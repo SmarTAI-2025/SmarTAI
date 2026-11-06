@@ -1370,7 +1370,7 @@ function ExpertEditorDialog({
         <div className="grid gap-4 sm:grid-cols-2">
           <Field
             label="RPM"
-            hint={zh ? "留空或填 0 表示不额外限速" : "Leave blank or enter 0 for no additional rate limit"}
+            hint={zh ? "有厂商额度时填写；留空或填 0，系统会自动调整并复用发送速度。" : "Enter the provider's limit if known; otherwise leave blank or enter 0 to automatically adjust and reuse a sending pace."}
           >
             <Input
               value={rpm}
@@ -1389,8 +1389,8 @@ function ExpertEditorDialog({
             </span>
             <p className="text-xs leading-5 text-muted-foreground">
               {zh
-                ? "并发数会自动调节。"
-                : "Concurrency adjusts automatically."}
+                ? "系统会记住稳定的发送间隔和并发数；持续限流时再调整。"
+                : "The system remembers a stable sending interval and concurrency, adjusting after repeated rate limits."}
             </p>
           </div>
         </div>

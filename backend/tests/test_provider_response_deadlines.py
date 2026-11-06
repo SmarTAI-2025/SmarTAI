@@ -26,15 +26,16 @@ MESSAGES = [HumanMessage(content="inspected source")]
 
 
 @pytest.mark.asyncio
-async def test_rate_stop_interrupts_pending_response_and_capacity_queue(monkeypatch, scheduler):
+async def test_rate_stop_preserves_pending_response_but_interrupts_capacity_queue(monkeypatch, scheduler):
     from backend.config import settings
     monkeypatch.setattr(settings, "max_concurrent_llm_per_endpoint", 1)
-    sent, queued = asyncio.Event(), asyncio.Event()
+    sent, queued, complete = asyncio.Event(), asyncio.Event(), asyncio.Event()
     sends = []
     async def invoke(_):
         sends.append(1)
         sent.set()
-        await asyncio.Event().wait()
+        await complete.wait()
+        return SimpleNamespace(content="retained result")
 
     acquire = scheduler.acquire
     async def observe_queue(**kwargs):
@@ -44,21 +45,28 @@ async def test_rate_stop_interrupts_pending_response_and_capacity_queue(monkeypa
     monkeypatch.setattr(scheduler, "acquire", observe_queue)
 
     async with provider_for("openai", invoke, monkeypatch) as provider:
-        async def call():
+        async def call(expect_sent):
             with response_timeout_scope(300, response_only=True) as state:
+                if expect_sent:
+                    result = await structured_llm.ainvoke_with_rate_retry(provider, MESSAGES)
+                    assert not state.submission_may_exist
+                    return result.content
                 with pytest.raises(ProviderRequestError, match="provider_rate_limited") as error:
                     await structured_llm.ainvoke_with_rate_retry(provider, MESSAGES)
                 assert error.value.retryable is False
                 assert error.value.submission_may_exist == state.submission_may_exist
                 return state.submission_may_exist
         async def job():
-            responding = asyncio.create_task(call())
+            responding = asyncio.create_task(call(True))
             await sent.wait()
-            in_queue = asyncio.create_task(call())
+            in_queue = asyncio.create_task(call(False))
             try:
                 await queued.wait()
                 current_execution().block(provider, "provider_rate_limited")
-                assert await asyncio.gather(responding, in_queue) == [True, False]
+                assert await asyncio.wait_for(in_queue, 1) is False
+                assert not responding.done()
+                complete.set()
+                assert await responding == "retained result"
             finally:
                 for task in (responding, in_queue):
                     task.cancel()
@@ -205,7 +213,7 @@ async def test_long_admission_wait_never_authorizes_until_capacity_is_available(
     assert events == ["guard", "reserve", "request"]
     assert state.attempt_count == 1 and not state.submission_may_exist
     assert scheduler.active == scheduler.host_capacity.active == 0
-    assert not scheduler.pending and not scheduler.owners
+    assert not scheduler.pending and not scheduler.queue
 
 
 @pytest.mark.asyncio
@@ -237,6 +245,13 @@ async def test_full_response_deadline_stops_active_chunks_with_three_attempts(ro
 @pytest.mark.parametrize("route", ["openai", "anthropic", "gemini", "relay_openai_chat_completions"])
 async def test_429_attempts_get_new_response_limits_with_one_authorization(route, scheduler, monkeypatch):
     monkeypatch.setattr(structured_llm._invoke_with_rate_retry.retry, "wait", wait_fixed(0.25))
+    from backend.tests.test_automatic_model_scheduling import FakeClock
+    clock = FakeClock()
+    monkeypatch.setattr(scheduler, "clock", clock)
+    async def advance_shared_wait(seconds):
+        await asyncio.sleep(seconds)
+        clock.advance(67, scheduler)
+    monkeypatch.setattr(structured_llm._invoke_with_rate_retry.retry, "sleep", advance_shared_wait)
     events = []
 
     async def guard():
@@ -511,7 +526,7 @@ async def test_workflow_deadline_still_cancels_queued_request(scheduler, monkeyp
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
     assert budgets[0].exhausted.is_set()
-    assert not scheduler.pending and not scheduler.owners
+    assert not scheduler.pending and not scheduler.queue
     assert scheduler.active == scheduler.host_capacity.active == 0
 
 

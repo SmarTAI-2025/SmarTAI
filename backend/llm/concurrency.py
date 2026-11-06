@@ -11,9 +11,13 @@ import hashlib
 import math
 import sys
 import time
+from bisect import insort_right
 from collections import Counter, deque
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
+from functools import wraps
+from itertools import count
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +25,38 @@ HARD_LIMIT = 50
 INITIAL_SECONDS = 120.0
 MEMORY_PER_CALL = 32 * 1024 * 1024
 MEMORY_SAMPLE_SECONDS = 5.0
+
+
+@dataclass
+class _AdmissionOrder:
+    task: Any
+    order: int | None = None
+
+
+_order: ContextVar[_AdmissionOrder | None] = ContextVar("model_admission_order", default=None)
+_sequence = count()
+
+
+@contextmanager
+def admission_order():
+    """Retain a logical call's place across retries, never across child tasks."""
+    current = _order.get()
+    if current is not None and current.task is asyncio.current_task():
+        yield
+        return
+    token = _order.set(_AdmissionOrder(asyncio.current_task()))
+    try:
+        yield
+    finally:
+        _order.reset(token)
+
+
+def ordered_call(invoke):
+    @wraps(invoke)
+    async def wrapped(*args, **kwargs):
+        with admission_order():
+            return await invoke(*args, **kwargs)
+    return wrapped
 
 
 def initial_concurrency(rpm: int) -> int:
@@ -90,8 +126,10 @@ class _Budget:
     requests: Counter = field(default_factory=Counter)
     ceiling: int = HARD_LIMIT
     blocked_until: float = 0.0
+    rate_limited_until: float | None = None
     last_reduction: float = -math.inf
     recovery_after: float = 0.0
+    adaptive: dict = field(default_factory=dict)
 
     @property
     def rpm(self) -> int:
@@ -100,7 +138,13 @@ class _Budget:
 
     @property
     def limit(self) -> int:
-        return min(self.ceiling, target_concurrency(self.rpm, self.seconds))
+        return min(self.ceiling, target_concurrency(self.rpm, self.seconds),
+                   *(control.concurrency for control in self.adaptive.values()))
+
+    @property
+    def interval(self) -> float:
+        return max(60.0 / self.rpm if self.rpm else 0.0,
+                   *(control.interval for control in self.adaptive.values()), 0.0)
 
 
 @dataclass
@@ -112,6 +156,7 @@ class _Waiter:
     endpoint_limit: int
     memory: int
     future: asyncio.Future
+    order: int
     ready: Any = None
 
 
@@ -144,8 +189,7 @@ class ModelScheduler:
         self.clock = clock
         self.budgets: dict[str, _Budget] = {}
         self.endpoints: dict[str, int] = {}
-        self.queues: dict[str, deque[_Waiter]] = {}
-        self.owners: deque[str] = deque()
+        self.queue: list[_Waiter] = []
         self.active = 0
         self.memory_active = 0
         self.memory_peak_budget: int | None = None
@@ -176,6 +220,48 @@ class ModelScheduler:
 
     def limit(self, key: str, rpm: int) -> int:
         return self.budget(key, rpm).limit
+
+    def bind_adaptive(self, key: str, rpm: int, identity: str, profile: dict | None,
+                      revision: float) -> None:
+        from backend.llm.adaptive_admission import AdaptiveAdmission, valid_profile
+        budget = self.budget(key, rpm)
+        previous = budget.adaptive.get(identity)
+        saved = valid_profile(profile)
+        if (previous is None or previous.revision < revision
+                or (previous.revision == revision and saved is not None
+                    and saved["generation"] > previous.generation)):
+            budget.adaptive[identity] = AdaptiveAdmission(profile, revision, rpm, self.clock())
+
+    def record_adaptive_start(self, key: str, started_at: float) -> None:
+        for control in self.budgets[key].adaptive.values():
+            control.started(started_at)
+
+    def record_adaptive_failure(self, key: str, started_at: float) -> None:
+        for control in self.budgets[key].adaptive.values():
+            control.finished(started_at, success=False)
+
+    def adjustment_count(self, key: str) -> int:
+        return sum(c.adjustments for c in self.budgets[key].adaptive.values())
+
+    def record_adaptive_success(self, key: str, identity: str, revision: float, started_at: float,
+                                *, run: str = "unscoped", busy: bool = False) -> dict | None:
+        budget = self.budgets[key]
+        for control in budget.adaptive.values():
+            control.succeeded(now=self.clock(), started_at=started_at, run=run, busy=busy)
+        # A newly learned interval must also gate the very next queued call.
+        if budget.starts:
+            budget.next_start = max(budget.next_start, budget.starts[-1] + budget.interval)
+        control = budget.adaptive.get(identity)
+        if (control is not None and control.revision == revision and control.pending is not None
+                and self.clock() >= control.save_after):
+            control.save_after = self.clock() + 30
+            return dict(control.pending)
+        return None
+
+    def adaptive_saved(self, key: str, identity: str, profile: dict) -> None:
+        control = self.budgets[key].adaptive.get(identity)
+        if control is not None:
+            control.saved(profile)
 
     def _forget_request(self, key: str, rpm: int) -> None:
         requests = self.budgets[key].requests
@@ -211,6 +297,51 @@ class ModelScheduler:
         budget.recovery_after = max(budget.recovery_after, now + 60.0)
         self.wake.set()
 
+    async def record_rate_limit(self, key: str, rpm: int, seconds: float, *,
+                               run: str = "unscoped", started_at: float | None = None,
+                               active: int = 1, extend: bool = False) -> float:
+        """Pause all new calls sharing this quota, without cancelling responses.
+
+        A generic 429 does not identify RPM, TPM or a concurrency ceiling.
+        BYOK learning estimates operating parameters, never user quota fields.
+        Publish before releasing the rejected call's slot, so a queued sibling
+        cannot take that slot while only the rejected coroutine is sleeping.
+        """
+        budget = self.budget(key, rpm)
+        now = self.clock()
+        started_at = now if started_at is None else started_at
+        previous_block = budget.blocked_until
+        previous = budget.rate_limited_until or 0.0
+        until = max(previous, now + seconds) if extend or (now >= previous and started_at >= previous) else previous
+        budget.blocked_until = max(budget.blocked_until, until)
+        self.wake.set()
+        defer = getattr(self.host_capacity, "defer_start", None)
+        if defer is not None:
+            # OS quota locks are nonblocking. Contention holds this call, not
+            # the event loop, and never lets this worker ignore the cooldown.
+            while (remaining := defer(key, seconds, started_at=started_at, extend=extend)) is None:
+                await asyncio.sleep(0.01)
+            until = self.clock() + remaining if remaining > 0 else min(until, self.clock())
+        budget.rate_limited_until = until
+        budget.blocked_until = max(previous_block, until)
+        for control in budget.adaptive.values():
+            control.limited(run, now=self.clock(), started_at=started_at, until=until, active=active)
+        return until
+
+    def cooldown_remaining(self, key: str) -> float | None:
+        budget = self.budgets.get(key)
+        if budget is None:
+            return None
+        until = budget.rate_limited_until
+        read = getattr(self.host_capacity, "cooldown_remaining", None)
+        if read is not None:
+            remaining = read(key)
+            if remaining is not None and remaining > 0:
+                until = max(until or 0, self.clock() + remaining)
+                budget.rate_limited_until = until
+                budget.blocked_until = max(budget.blocked_until, until)
+        return None if until is None else max(0.0, until - self.clock())
+
     def _memory_allows(self, cost: int, now: float) -> bool:
         if now - self.memory_at >= MEMORY_SAMPLE_SECONDS:
             self.memory_sample = self.memory_reader()
@@ -242,11 +373,14 @@ class ModelScheduler:
         self.budgets[key].requests[rpm] += 1
         future = asyncio.get_running_loop().create_future()
         self.pending.add(future)
-        waiter = _Waiter(key, rpm, owner, endpoint, min(HARD_LIMIT, max(1, endpoint_limit)), memory, future, ready)
-        if owner not in self.queues:
-            self.queues[owner] = deque()
-            self.owners.append(owner)
-        self.queues[owner].append(waiter)
+        ticket = _order.get()
+        if ticket is None or ticket.task is not asyncio.current_task():
+            ticket = _AdmissionOrder(asyncio.current_task())
+        if ticket.order is None:
+            ticket.order = next(_sequence)
+        waiter = _Waiter(key, rpm, owner, endpoint, min(HARD_LIMIT, max(1, endpoint_limit)),
+                         memory, future, ticket.order, ready)
+        insort_right(self.queue, waiter, key=lambda item: item.order)
         self.wake.set()
         if self.pump is None or self.pump.done():
             self.pump = asyncio.create_task(self._run())
@@ -278,78 +412,50 @@ class ModelScheduler:
             return False
         while budget.starts and budget.starts[0] <= now - 60:
             budget.starts.popleft()
-        if budget.rpm > 0 and (now < budget.next_start or len(budget.starts) >= budget.rpm):
+        if now < budget.next_start or (budget.rpm > 0 and len(budget.starts) >= budget.rpm):
             return False
         return self._memory_allows(waiter.memory, now)
 
     def _dispatch(self) -> bool:
         if self.active >= HARD_LIMIT:
             return False
-        made_progress = False
-        # One turn per owner. A quota-blocked model must not block that owner's
-        # other models or any other user's ready requests.
-        for _ in range(len(self.owners)):
-            if self.active >= HARD_LIMIT:
-                return made_progress
-            owner = self.owners.popleft()
-            queue = self.queues[owner]
-            candidate = None
-            now = self.clock()
-            for _ in range(len(queue)):
-                waiter = queue.popleft()
-                if waiter.future.cancelled():
-                    continue
-                if candidate is None and self.active < HARD_LIMIT and self._eligible(waiter, now):
-                    candidate = waiter
-                    break
-                queue.append(waiter)
-            if candidate is not None:
-                try:
-                    host = self.host_capacity.try_acquire(HARD_LIMIT)
-                except Exception:
-                    queue.appendleft(candidate)
-                    self.owners.appendleft(owner)
-                    raise
-                if host is None:
-                    queue.appendleft(candidate)
-                    self.owners.appendleft(owner)
-                    # All callers use the same 50 host slots; checking every
-                    # queued owner again cannot find a free slot this round.
-                    return made_progress
-                else:
-                    budget = self.budgets[candidate.key]
-                    try:
-                        try_start = getattr(self.host_capacity, "try_start", None)
-                        allowed = try_start is None or try_start(candidate.key, budget.rpm)
-                    except Exception:
-                        host.release()
-                        raise
-                    if not allowed:
-                        host.release()
-                        queue.appendleft(candidate)
-                        self.owners.append(owner)
-                        continue
-                    budget.active += 1
-                    budget.starts.append(now)
-                    if budget.rpm > 0:
-                        budget.next_start = now + 60.0 / budget.rpm
-                    self.active += 1
-                    self.memory_active += candidate.memory
-                    self.endpoints[candidate.endpoint] = self.endpoints.get(candidate.endpoint, 0) + 1
-                    candidate.future.set_result(_Lease(self, candidate, host))
-                    made_progress = True
-            if queue:
-                self.owners.append(owner)
-            else:
-                del self.queues[owner]
-        return made_progress
+        self.queue[:] = [waiter for waiter in self.queue if not waiter.future.cancelled()]
+        # Across all owners, take the earliest eligible logical call. Skipping
+        # cooling/rate/capacity-blocked calls never changes their queue order.
+        now = self.clock()
+        for candidate in self.queue:
+            if not self._eligible(candidate, now):
+                continue
+            host = self.host_capacity.try_acquire(HARD_LIMIT)
+            if host is None:
+                return False
+            budget = self.budgets[candidate.key]
+            try:
+                try_start = getattr(self.host_capacity, "try_start", None)
+                allowed = try_start is None or try_start(candidate.key, budget.rpm, min_interval=budget.interval)
+            except Exception:
+                host.release()
+                raise
+            if not allowed:
+                host.release()
+                continue
+            self.queue.remove(candidate)
+            budget.active += 1
+            budget.starts.append(now)
+            budget.next_start = now + budget.interval
+            self.active += 1
+            self.memory_active += candidate.memory
+            self.endpoints[candidate.endpoint] = self.endpoints.get(candidate.endpoint, 0) + 1
+            candidate.future.set_result(_Lease(self, candidate, host))
+            return True
+        return False
 
     async def _run(self) -> None:
         try:
-            while self.owners:
+            while self.queue:
                 self.wake.clear()
                 if self._dispatch():
-                    # Give new users a chance to enqueue between admission rounds.
+                    # Yield between grants so cancellations and cooldowns are visible.
                     await asyncio.sleep(0)
                     continue
                 try:
@@ -361,8 +467,7 @@ class ModelScheduler:
             for future in self.pending:
                 if not future.done():
                     future.set_exception(exc)
-            self.queues.clear()
-            self.owners.clear()
+            self.queue.clear()
 
     @asynccontextmanager
     async def lease(self, **kwargs):

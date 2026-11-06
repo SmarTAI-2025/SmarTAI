@@ -8,6 +8,7 @@ const stages = {
 
 async function fixture(page: Page, reason: "user_busy" | "server_busy" | "rate_limited", stage: keyof typeof stages) {
   const spec = stages[stage];
+  const waits = [{ model: "synthetic-model", reason: "provider_rate_limited", attempt: 2, max_attempts: 3, retry_at: Date.now() / 1000 + 65 }];
   const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -54,11 +55,11 @@ async function fixture(page: Page, reason: "user_busy" | "server_busy" | "rate_l
       phase: task.status === spec.paused ? "paused" : stage === "grading" ? "grading" : "parsing", current_step: "preparing_files", total_steps: 4, completed_steps: 1,
       total_students: task.student_count, total_questions: 2, completed_units: 1, active: [], messages: [], error_detail: null,
       model_waits: reason === "rate_limited" && task.active_operation_status === "running"
-        ? [{ model: "synthetic-model", reason: "provider_rate_limited", attempt: 2, max_attempts: 3, retry_at: Date.now() / 1000 + 65 }] : [] } });
+        ? waits : [] } });
     if (path === `/tasks/${task.task_id}`) return json(task);
     return json({ items: [], total: 0 });
   });
-  return { calls, errors };
+  return { calls, errors, waits };
 }
 
 for (const stage of ["problems", "submissions", "grading"] as const) for (const reason of ["user_busy", "server_busy", "rate_limited"] as const) {
@@ -96,5 +97,28 @@ for (const stage of ["problems", "submissions", "grading"] as const) for (const 
       ? { expected_workflow_revision: 8, retry_scope: "failed_only", request_id: expect.any(String) }
       : { recognition_provider_id: "saved-provider", expected_workflow_revision: 8, acknowledge_possible_duplicate_call: true });
     expect(errors).toEqual([]);
+  });
+}
+
+
+for (const width of [1280, 390]) {
+  test(`grading: independent simultaneous model countdowns at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.clock.install();
+    const { errors, waits } = await fixture(page, "rate_limited", "grading");
+    waits[0].model = "Model A";
+    waits.push({ ...waits[0], model: "Model B", retry_at: waits[0].retry_at + 30 });
+    await page.goto("/tasks/execution-task/grading/progress");
+    await expect(page.getByText(/Model A · 已尝试/)).toBeVisible();
+    await expect(page.getByText(/Model B · 已尝试/)).toBeVisible();
+    expect(await page.title()).not.toBe("");
+    await page.screenshot({ path: testInfo.outputPath("two-cooldowns.png"), fullPage: true });
+    waits.shift();
+    await page.clock.fastForward(65000);
+    await expect(page.getByText(/Model A · 已尝试/)).toHaveCount(0);
+    await expect(page.getByText(/Model B · 已尝试.*(2[0-9]|30) 秒后重试/)).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(errors).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath("remaining-cooldown.png"), fullPage: true });
   });
 }

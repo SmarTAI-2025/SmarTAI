@@ -17,6 +17,7 @@ import errno
 import getpass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import stat
@@ -202,13 +203,19 @@ class HostCapacity:
                 os.close(fd)
             raise RuntimeError(_FENCE_ERROR) from None
 
-    def try_start(self, key: str, rpm: int) -> bool:
+    def try_start(self, key: str, rpm: int, *, min_interval: float = 0.0) -> bool:
+        # Hold the cooldown fence through pacing admission: another process
+        # cannot publish a freeze between our check and our actual-start stamp.
+        return self._cooldown(key, admit=lambda: self._try_paced_start(key, rpm, min_interval)) is True
+
+    def _try_paced_start(self, key: str, rpm: int, min_interval: float) -> bool:
         """Atomically pace actual requests across web and workflow processes.
 
         Store only a quota-key digest and monotonic timestamps. A rejected
         admission consumes no quota; cancellation before admission is free.
         """
-        if rpm <= 0:
+        interval = max(60.0 / rpm if rpm > 0 else 0.0, min_interval)
+        if rpm <= 0 and interval <= 0:
             return True
         name = "rpm-" + hashlib.sha256(key.encode()).hexdigest() + ".lock"
         fd = self._open_name(name)
@@ -227,8 +234,9 @@ class HostCapacity:
                 starts = json.loads(raw) if raw and raw != b"\0" else []
                 if not isinstance(starts, list) or any(type(t) not in (int, float) for t in starts):
                     raise ValueError("invalid quota window")
-                starts = [t for t in starts if now - 60 < t <= now]
-                if len(starts) >= rpm or (starts and now - starts[-1] < 60.0 / rpm):
+                starts = [t for t in starts if now - max(60.0, interval) < t <= now]
+                if ((rpm > 0 and sum(t > now - 60 for t in starts) >= rpm)
+                        or (starts and now - starts[-1] < interval)):
                     return False
                 starts.append(now)
                 body = json.dumps(starts[-10_000:], separators=(",", ":")).encode()
@@ -237,6 +245,54 @@ class HostCapacity:
                     raise OSError("incomplete quota window write")
                 os.ftruncate(fd, len(body))
                 return True
+            except (OSError, ValueError, TypeError):
+                raise RuntimeError(_FENCE_ERROR) from None
+            finally:
+                _lease_fds.discard(fd)
+                os.close(fd)
+
+    def defer_start(self, key: str, seconds: float, *, started_at: float | None = None,
+                    extend: bool = False) -> float | None:
+        """Share a 429 wait even when the user did not configure RPM."""
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError("invalid cooldown")
+        return self._cooldown(key, seconds, started_at=started_at, extend=extend)
+
+    def cooldown_remaining(self, key: str) -> float | None:
+        return self._cooldown(key)
+
+    def _cooldown(self, key: str, seconds: float | None = None, *,
+                  started_at: float | None = None, extend: bool = False, admit=None):
+        # Separate from the existing RPM window: cooling down must not clear
+        # counted starts, and previously deployed workers can still read RPM.
+        name = "cooldown-" + hashlib.sha256(key.encode()).hexdigest() + ".lock"
+        fd = self._open_name(name)
+        with _lease_lock:
+            try:
+                if not _try_lock(fd):
+                    return None
+                _lease_fds.add(fd)
+                now = time.monotonic()
+                os.lseek(fd, 0, os.SEEK_SET)
+                raw = os.read(fd, 257)
+                state = json.loads(raw) if raw and raw != b"\0" else [now, 0.0]
+                if (len(raw) > 256 or not isinstance(state, list) or len(state) != 2
+                        or any(type(t) not in (int, float) or not math.isfinite(t) for t in state)):
+                    raise ValueError("invalid cooldown")
+                recorded, until = state
+                if now < recorded:  # monotonic clock reset after a host reboot
+                    until = 0.0
+                if seconds is None:
+                    return admit() if admit is not None and now >= until else (
+                        False if admit is not None else max(0.0, until - now))
+                if extend or (now >= until and (started_at is None or started_at >= until)):
+                    until = max(until, now + seconds)
+                body = json.dumps([now, until]).encode()
+                os.lseek(fd, 0, os.SEEK_SET)
+                if os.write(fd, body) != len(body):
+                    raise OSError("incomplete cooldown write")
+                os.ftruncate(fd, len(body))
+                return max(0.0, until - now)
             except (OSError, ValueError, TypeError):
                 raise RuntimeError(_FENCE_ERROR) from None
             finally:
