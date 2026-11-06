@@ -46,11 +46,12 @@ async def test_explicit_daily_limit_never_automatically_retries():
 
 
 @pytest.mark.asyncio
-async def test_vision_rate_retry_does_not_replay_uncertain_timeout():
+async def test_vision_timeout_retries_three_times_and_retains_uncertainty():
     provider = SimpleNamespace(ainvoke_vision=AsyncMock(side_effect=ProviderRequestError("provider_timeout")))
-    with pytest.raises(ProviderRequestError):
+    with pytest.raises(llm.ResponseTimeoutError) as caught:
         await llm.ainvoke_vision_with_rate_retry(provider, "read", [], max_output_tokens=100)
-    assert provider.ainvoke_vision.await_count == 1
+    assert provider.ainvoke_vision.await_count == 3
+    assert caught.value.submission_may_exist
 
 
 def test_undifferentiated_limit_does_not_invent_a_daily_or_minute_reason():

@@ -74,15 +74,16 @@ async def test_shared_pool_never_receives_extra_query_call():
 
 
 @pytest.mark.asyncio
-async def test_timeout_is_not_automatically_replayed():
+async def test_timeouts_retry_at_most_three_times_then_cache_the_unknown_outcome():
     class Slow(Provider):
         async def ainvoke(self, *args, **kwargs):
             self.calls += 1
-            await asyncio.sleep(1)
+            from backend.llm.request_timeouts import current_response_scope
+            await current_response_scope().run_response(lambda: asyncio.sleep(1))
     provider, planner = Slow(), QueryPlanner(timeout=.01)
     assert (await planner.plan("query", provider=provider, scope="owner")).status == "rewrite_timeout"
     assert (await planner.plan("query", provider=provider, scope="owner")).provider_calls == 0
-    assert provider.calls == 1
+    assert provider.calls == 3
 
 
 def test_rrf_deduplicates_per_query_and_retains_original_citations():

@@ -95,6 +95,13 @@ class _ProviderSubmissionUncertainError(RuntimeError):
     submission_may_exist = True
 
 
+class _ProviderSubmissionTimeoutError(_ProviderSubmissionUncertainError):
+    """Timeout retries are authorized, while the earlier charge stays unknown."""
+
+    code = "provider_timeout"
+    retryable = True
+
+
 class _ProviderSubmissionRejectedError(RuntimeError):
     """A provider call that is known not to have started billable work."""
 
@@ -183,7 +190,7 @@ def provider_submission_is_uncertain(exc: BaseException) -> bool:
 
 
 class _SubmissionSafeProvider:
-    """Disable in-worker replay when a provider may have received the call."""
+    """Preserve unknown outcomes; only the bounded timeout policy may replay."""
 
     def __init__(self, provider: BaseProvider, *, reporter: ProgressReporter | None = None) -> None:
         self._provider = provider
@@ -198,6 +205,11 @@ class _SubmissionSafeProvider:
         except Exception as exc:
             if self._reporter is not None:
                 await self._reporter.record_provider_failure(exc)
+            from backend.llm.request_timeouts import is_response_timeout
+            if getattr(exc, "retryable", True) is not False and is_response_timeout(exc):
+                error = _ProviderSubmissionTimeoutError("provider_timeout")
+                error.submission_may_exist = _provider_submission_may_exist(exc)
+                raise error from exc
             if _provider_submission_may_exist(exc):
                 raise _ProviderSubmissionUncertainError(
                     "provider_submit_uncertain"

@@ -213,7 +213,7 @@ class LLMRecognitionEngine:
                 diagnostic = provider_failure_diagnostic(exc)
             except Exception:
                 diagnostic = None  # Diagnostics cannot replace the recovery decision.
-            raise RecognitionError(code, submission_may_exist=code not in {
+            raise RecognitionError(code, submission_may_exist=getattr(exc, "submission_may_exist", False) or code not in {
                 "provider_auth_failed", "provider_permission_denied", "provider_region_unsupported", "provider_quota_exceeded", "provider_zero_quota",
                 "provider_rate_limited", "provider_daily_quota_exceeded", "provider_model_not_found", "provider_request_rejected",
                 "provider_vision_not_supported",

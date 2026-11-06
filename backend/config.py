@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     # 5 = 20 parallel calls to one gateway).  Keep at or below
     # max_concurrent_llm_per_provider.
     max_concurrent_llm_per_endpoint: int = 50
-    llm_timeout: int = 600  # seconds
+    llm_timeout: int = 180  # response seconds per attempt; excludes admission waits
     llm_max_retries: int = 3
     # Retained for old environment files. It no longer adds retry attempts.
     llm_rate_limit_max_retries: int = 0  # legacy compatibility; total attempts are capped at 3

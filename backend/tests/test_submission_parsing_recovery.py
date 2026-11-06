@@ -553,7 +553,7 @@ async def test_submission_queue_persists_archive_and_has_no_request_task():
         "provider_configuration_fingerprint", "question_snapshot",
         "submission_structure_version",
     }
-    assert operation.payload["recognition_timeout_profile"] == "source-response-600-v1"
+    assert operation.payload["recognition_timeout_profile"] == "source-response-180-v1"
     sources = source_outcome_repository.list_sources(
         operation_id=operation.id, owner_id=owner_id, attempt=operation.attempt,
     )
