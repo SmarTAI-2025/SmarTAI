@@ -7,10 +7,12 @@ constraints abstain; the submitted implementation never participates in this dec
 from __future__ import annotations
 
 import ast
+import io
 import json
 from decimal import Decimal, InvalidOperation
 import operator
 import re
+import tokenize
 import unicodedata
 
 from backend.services.programming_test_contract import _teacher_signature, bind_stdin_cases, required_function_name
@@ -131,7 +133,11 @@ def _typed(value, spec, stdin):
 def _expression_only(value):
     try:
         tree = ast.parse(value, mode="eval")
-    except (SyntaxError, ValueError, RecursionError):
+        # Python discards comments, but a teacher may put input requirements
+        # there. A quoted '#' remains output data and is safe to keep.
+        if any(token.type == tokenize.COMMENT for token in tokenize.generate_tokens(io.StringIO(value).readline)):
+            return False
+    except (SyntaxError, ValueError, RecursionError, tokenize.TokenError):
         return False
     # Natural Chinese prose can parse as a Unicode identifier. This domain
     # grammar binds ASCII names only; do not silently discard that prose.
