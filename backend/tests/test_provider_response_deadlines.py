@@ -668,6 +668,7 @@ async def test_new_gemini_proxy_closes_fresh_client_on_all_outcomes(outcome, sch
                 await task
         else:
             assert (await task).content == "complete"
+    await asyncio.wait_for(closed.wait(), 2)
     assert closed.is_set()
     assert states[0].submission_may_exist is (outcome != "success")
     assert scheduler.active == scheduler.host_capacity.active == 0
@@ -675,7 +676,7 @@ async def test_new_gemini_proxy_closes_fresh_client_on_all_outcomes(outcome, sch
 
 
 @pytest.mark.asyncio
-async def test_cancel_during_new_gemini_close_preserves_cancel_and_finishes_cleanup(scheduler, monkeypatch):
+async def test_gemini_returns_response_before_close_and_retains_cleanup_slot(scheduler, monkeypatch):
     close_started, release_close, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
     states = []
 
@@ -698,9 +699,8 @@ async def test_cancel_during_new_gemini_close_preserves_cancel_and_finishes_clea
         task = asyncio.create_task(work())
         try:
             await asyncio.wait_for(close_started.wait(), 1)
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
+            assert (await task).content == "complete"
+            assert scheduler.proxy_slots._value == 49
             assert not states[0].submission_may_exist
         finally:
             release_close.set()
@@ -732,6 +732,7 @@ async def test_new_gemini_close_failure_does_not_discard_response(failure, sched
         with response_timeout_scope(300, response_only=True) as state:
             result = await provider.ainvoke(MESSAGES)
     assert result.content == "complete" and not state.submission_may_exist
+    await asyncio.wait_for(closed.wait(), 2)
     assert closed.is_set()
 
 
@@ -754,6 +755,7 @@ async def test_unscoped_gemini_proxy_uses_cancellable_sdk_and_closes_client(sche
         client.invoke, client.aclose = forbidden, close
         with response_timeout_scope(300):
             result = await provider.ainvoke(MESSAGES)
+    await turns()
     assert result.content == "complete" and calls == [{}, "closed"]
     assert scheduler.active == scheduler.host_capacity.active == 0
 

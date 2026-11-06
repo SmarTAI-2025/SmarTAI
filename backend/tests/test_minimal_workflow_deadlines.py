@@ -287,14 +287,7 @@ def test_total_limit_errors_keep_existing_retry_and_manual_projection():
 
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["question_preparation", "submission_recognition", "grading"])
-async def test_only_processing_budget_selects_workflow_cancellation_transport(kind):
-    from backend.llm.request_timeouts import current_workflow_cancellation_scope
-    assert not current_workflow_cancellation_scope()
-    async with limits.processing_budget("job", kind=kind):
-        assert current_workflow_cancellation_scope()
-    assert not current_workflow_cancellation_scope()
+
 
 
 @pytest.mark.asyncio

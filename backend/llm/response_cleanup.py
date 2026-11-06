@@ -29,26 +29,24 @@ def _retain(task: asyncio.Task) -> None:
 
 def start_cleanup(awaitable, *, seconds: float | None = None, after=None) -> asyncio.Task:
     """Own cleanup independently; even cancellation-resistant close cannot block callers."""
-    async def owned_close():
-        try:
-            await awaitable
-        finally:
-            if after is not None:
-                await after()
+    task = asyncio.create_task(awaitable)
+    _retain(task)
 
-    async def bounded():
-        task = asyncio.create_task(owned_close())
-        _retain(task)
-        done, _ = await asyncio.wait({task}, timeout=CLEANUP_SECONDS if seconds is None else seconds)
-        if not done:
-            task.cancel()
-            logger.warning("Provider cleanup exceeded its time limit")
-        # A closer's CancelledError is its own outcome, not caller cancellation.
-        # The retained task consumes exceptions and remains owned if it drains late.
+    def expired():
+        task.cancel()
+        logger.warning("Provider cleanup exceeded its time limit")
 
-    owner = asyncio.create_task(bounded())
-    _retain(owner)
-    return owner
+    timer = asyncio.get_running_loop().call_later(CLEANUP_SECONDS if seconds is None else seconds, expired)
+
+    def finished(done):
+        timer.cancel()
+        if after is not None:
+            _retain(asyncio.create_task(after()))
+
+    task.add_done_callback(finished)
+    # Cancellation-resistant cleanup remains retained, with its resource slot,
+    # until it actually exits. No request/result waits for that late cleanup.
+    return task
 
 
 class _ResponseStream(httpx.AsyncByteStream, httpx2.AsyncByteStream):

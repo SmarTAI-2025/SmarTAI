@@ -201,5 +201,6 @@ async def test_proxy_gemini_cancellation_stops_request_and_releases_capacity(mon
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, 2)
     from backend.llm.concurrency import get_scheduler
+    await asyncio.wait_for(closed.wait(), 2)
     assert stopped.is_set() and closed.is_set()
     assert get_scheduler().active == 0

@@ -17,7 +17,6 @@ LOCAL_PREPARATION_SECONDS = 60.0
 
 _response_seconds: ContextVar[float | None] = ContextVar("provider_response_seconds", default=None)
 _response_scope: ContextVar[ResponseDeadlineScope | None] = ContextVar("provider_response_scope", default=None)
-_workflow_cancellation: ContextVar[bool] = ContextVar("workflow_cancellation", default=False)
 
 
 def _positive_seconds(seconds: float) -> float:
@@ -142,24 +141,6 @@ def current_response_timeout_seconds() -> float | None:
 
 def current_response_scope() -> ResponseDeadlineScope | None:
     return _response_scope.get()
-
-
-def current_workflow_cancellation_scope() -> bool:
-    return _workflow_cancellation.get()
-
-
-@contextmanager
-def workflow_cancellation_scope() -> Iterator[None]:
-    """Let the three whole-workflow owners cancel Gemini's local request.
-
-    This selects its existing async transport only. It does not change any
-    per-request timeout, admission limit, or ordinary-error retry policy.
-    """
-    token = _workflow_cancellation.set(True)
-    try:
-        yield
-    finally:
-        _workflow_cancellation.reset(token)
 
 
 async def provider_local_step(awaitable: Awaitable[T], *, best_effort: bool = False) -> T | None:

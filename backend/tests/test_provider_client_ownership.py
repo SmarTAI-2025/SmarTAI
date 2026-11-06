@@ -20,7 +20,8 @@ async def wait_thread_event(event):
 
 async def wait_cleanup():
     async def poll():
-        while providers._client_owner_tasks:
+        from backend.llm.response_cleanup import _cleanup_tasks
+        while providers._client_owner_tasks or _cleanup_tasks:
             await asyncio.sleep(.001)
     await asyncio.wait_for(poll(), 5)
 
@@ -110,7 +111,7 @@ async def test_gemini_local_wait_expiry_keeps_late_constructor_owned(scheduler, 
 async def test_unused_gemini_close_is_bounded(close_mode, scheduler, monkeypatch):
     entered, release = threading.Event(), threading.Event()
     closed = asyncio.Event()
-    monkeypatch.setattr(providers, "_UNUSED_CLIENT_CLOSE_SECONDS", .02)
+    monkeypatch.setattr(providers.GeminiProvider, "_CLIENT_CLOSE_SECONDS", .02)
     async def close():
         try:
             if close_mode == "blocked":

@@ -7,10 +7,9 @@ from tenacity import wait_fixed
 
 from backend.config import settings
 from backend.llm import providers
-from backend.llm.request_timeouts import current_workflow_cancellation_scope
 from backend.services.execution_control import run_controlled
 from backend.services.workflow_deadlines import processing_budget, run_owned_work
-from backend.tests.test_provider_response_deadlines import MESSAGES, provider_for, scheduler  # noqa: F401
+from backend.tests.test_provider_response_deadlines import MESSAGES, provider_for, scheduler, turns  # noqa: F401
 from backend.tools import structured_llm
 
 
@@ -50,10 +49,11 @@ async def test_completed_workflow_response_survives_client_cleanup(
         ), 2)
 
     assert result.content == "complete"
+    await asyncio.wait_for(closed.wait(), 2)
+    await turns()
     assert calls == [{}] and closes == [True] and closed.is_set()
     assert scheduler.active == scheduler.host_capacity.active == 0
     assert scheduler.proxy_slots._value == 50
-    assert not current_workflow_cancellation_scope()
 
 
 @pytest.mark.asyncio
@@ -104,14 +104,15 @@ async def test_workflow_cleanup_preserves_original_failure(
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
+    await asyncio.wait_for(closed.wait(), 2)
+    await turns()
     assert calls == [{}] and closed.is_set()
     assert scheduler.active == scheduler.host_capacity.active == 0
     assert scheduler.proxy_slots._value == 50
-    assert not current_workflow_cancellation_scope()
 
 
 @pytest.mark.asyncio
-async def test_cancellation_during_workflow_cleanup_keeps_closer_running(scheduler, monkeypatch):
+async def test_workflow_result_returns_before_slow_cleanup_with_slot_still_owned(scheduler, monkeypatch):
     started, release, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     async def invoke(options):
@@ -129,9 +130,8 @@ async def test_cancellation_during_workflow_cleanup_keeps_closer_running(schedul
         task = asyncio.create_task(workflow_call(provider.ainvoke(MESSAGES)))
         try:
             await asyncio.wait_for(started.wait(), 2)
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(task, 2)
+            assert (await asyncio.wait_for(task, 2)).content == "complete"
+            assert scheduler.proxy_slots._value == 49
             assert not closed.is_set()
         finally:
             release.set()
@@ -141,7 +141,6 @@ async def test_cancellation_during_workflow_cleanup_keeps_closer_running(schedul
 
     assert scheduler.active == scheduler.host_capacity.active == 0
     assert scheduler.proxy_slots._value == 50
-    assert not current_workflow_cancellation_scope()
 
 
 @pytest.mark.asyncio
@@ -193,4 +192,3 @@ async def test_other_workflow_transports_keep_their_outcomes(route, outcome, sch
     assert len(calls) == 1
     assert scheduler.active == scheduler.host_capacity.active == 0
     assert scheduler.proxy_slots._value == 50
-    assert not current_workflow_cancellation_scope()

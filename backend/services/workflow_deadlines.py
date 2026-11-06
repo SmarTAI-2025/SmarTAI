@@ -105,13 +105,11 @@ async def processing_budget(job_id, *, kind, started_at=None, deadline_at=None, 
 
     completed = False
     try:
-        from backend.llm.request_timeouts import workflow_cancellation_scope
-        with workflow_cancellation_scope():
-            async with execution_deadline(deadline_at, f"{prefix}_wall_time_limit_reached"):
-                yield budget
-                if budget.blocked and raise_on_blocked:
-                    raise RecognitionError(budget.code)
-                completed = True
+        async with execution_deadline(deadline_at, f"{prefix}_wall_time_limit_reached"):
+            yield budget
+            if budget.blocked and raise_on_blocked:
+                raise RecognitionError(budget.code)
+            completed = True
     finally:
         if not completed:
             budget.expire()  # Cancelled children cannot admit replacement work.

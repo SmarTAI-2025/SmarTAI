@@ -9,7 +9,7 @@ import pytest
 from tenacity import wait_fixed
 
 from backend.llm import providers
-from backend.llm.request_timeouts import response_timeout_scope, workflow_cancellation_scope
+from backend.llm.request_timeouts import response_timeout_scope
 from backend.tests.test_provider_response_deadlines import scheduler  # noqa: F401
 from backend.tests.test_provider_sdk_quota_chains import MESSAGES, real_provider
 from backend.tools import structured_llm
@@ -88,8 +88,7 @@ async def test_complete_answer_is_not_lost_or_replayed(route, mode, fault, respo
     state = response_transport
     state.update(route=route, fault=fault)
     protocol = route.removeprefix("relay_") if route.startswith("relay_") else None
-    context = (response_timeout_scope(.2, response_only=True) if mode == "recognition" else
-               workflow_cancellation_scope() if mode == "workflow" else nullcontext())
+    context = response_timeout_scope(.2, response_only=True) if mode == "recognition" else nullcontext()
     try:
         kind = "deepseek" if protocol else "gemini" if route == "gemini_proxy" else route
         async with real_provider(kind, monkeypatch, protocol=protocol, proxy=route == "gemini_proxy") as provider:
@@ -99,7 +98,11 @@ async def test_complete_answer_is_not_lost_or_replayed(route, mode, fault, respo
                 from backend.llm.response_cleanup import protect_client
                 protect_client(provider._safe_async_client)
             with context:
-                result = await asyncio.wait_for(structured_llm.ainvoke_with_retry(provider, MESSAGES), 1)
+                work = structured_llm.ainvoke_with_retry(provider, MESSAGES)
+                if mode == "workflow":
+                    from backend.tests.test_workflow_gemini_cleanup import workflow_call
+                    work = workflow_call(work)
+                result = await asyncio.wait_for(work, 1)
             assert result.content == "complete"
             assert state["calls"] == 1
     finally:
@@ -165,6 +168,7 @@ async def test_temporary_client_cleanup_cannot_cancel_or_hold_a_success(self_can
         provider._build_client_sync().aclose = close
         try:
             result = await asyncio.wait_for(provider.ainvoke(MESSAGES), 2)
+            await asyncio.wait_for(entered.wait(), 2)
             assert result.content == "complete" and entered.is_set()
             if not self_cancel:
                 assert not finished.is_set()
