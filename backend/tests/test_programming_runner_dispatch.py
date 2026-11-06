@@ -151,3 +151,80 @@ async def test_checkpoint_failure_is_an_operation_failure_and_stops_sibling(two_
     with pytest.raises(OSError, match="checkpoint unavailable"):
         await runner.run_sandbox("A", cases(4), on_case_complete=failed)
     assert cleaned.is_set()
+
+
+@pytest.mark.asyncio
+async def test_repeated_stop_preserves_completed_case_checkpoint(two_slots, monkeypatch):
+    saving, allow_save, cleaned = (asyncio.Event() for _ in range(3))
+    notices = []
+
+    async def controlled(code, case, timeout, memory):
+        if case.input == "0":
+            return result(case)
+        try:
+            await asyncio.Future()
+        finally:
+            cleaned.set()
+
+    async def checkpoint(item):
+        saving.set()
+        await allow_save.wait()
+        notices.append(item.case_index)
+
+    monkeypatch.setattr(runner, "_run_case", controlled)
+    batch = asyncio.create_task(runner.run_sandbox("A", cases(4), on_case_complete=checkpoint))
+    try:
+        await asyncio.wait_for(saving.wait(), 1)
+        batch.cancel()
+        await asyncio.wait_for(cleaned.wait(), 1)
+        # Let the coordinator begin draining the completed case's callback.
+        for _ in range(3):
+            await asyncio.sleep(0)
+        batch.cancel()
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert not batch.done(), "Repeated stop abandoned a completed case checkpoint"
+        allow_save.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(batch, 1)
+        assert notices == [0]
+    finally:
+        allow_save.set()
+        await asyncio.gather(batch, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_repeated_stop_keeps_worker_capacity_until_cleanup(two_slots, monkeypatch):
+    entered, cleaning, allow_cleanup = (asyncio.Event() for _ in range(3))
+    capacity = asyncio.Semaphore(1)
+    calls = []
+
+    async def controlled(code, case, timeout, memory):
+        async with capacity:
+            calls.append(case.input)
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                cleaning.set()
+                await allow_cleanup.wait()
+
+    monkeypatch.setattr(runner, "_run_case", controlled)
+    batch = asyncio.create_task(runner.run_sandbox("A", cases(4)))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        batch.cancel()
+        await asyncio.wait_for(cleaning.wait(), 1)
+        batch.cancel()
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert not batch.done()
+        assert capacity.locked(), "A second stop released a still-owned worker"
+        assert calls == ["0"]
+        allow_cleanup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(batch, 1)
+        assert capacity._value == 1
+    finally:
+        allow_cleanup.set()
+        await asyncio.gather(batch, return_exceptions=True)

@@ -365,6 +365,53 @@ async def test_cancel_a_live_child_and_reuse_only_slot(monkeypatch, record_prope
     assert at_return == (True, False, True)
 
 
+async def test_repeated_batch_stop_waits_for_real_container_removal(monkeypatch):
+    from backend.tools import oci_grading_runner as transport
+
+    monkeypatch.setattr(settings, "program_runner_max_concurrent", 1)
+    removing, allow_removal = asyncio.Event(), asyncio.Event()
+    original_remove = transport._remove
+    names = []
+
+    async def held_remove(runtime, name, env):
+        names.append(name)
+        removing.set()
+        await allow_removal.wait()
+        await original_remove(runtime, name, env)
+
+    monkeypatch.setattr(transport, "_remove", held_remove)
+    batch = asyncio.create_task(run_sandbox("import time; time.sleep(18)",
+                                            [Case(expected_output="")], per_case_timeout=25))
+    try:
+        async with asyncio.timeout(20):
+            while not await asyncio.to_thread(container_names):
+                if batch.done():
+                    await batch
+                    pytest.fail("Batch finished before a real container started")
+                await asyncio.sleep(.05)
+        batch.cancel()
+        await asyncio.wait_for(removing.wait(), 5)
+        batch.cancel()
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert not batch.done()
+        slot = Path(tempfile.gettempdir()) / f"smartai-oci-slots-{os.getuid()}" / "0"
+        assert slot.read_text() == names[0]
+        assert names[0] in await asyncio.to_thread(container_names, all_states=True)
+        allow_removal.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(batch, 10)
+        assert slot.read_text() == ""
+        assert not await asyncio.to_thread(container_names, all_states=True)
+        assert (await run_python_oci("print('reused')")).stdout == "reused\n"
+    finally:
+        allow_removal.set()
+        batch.cancel()
+        await asyncio.gather(batch, return_exceptions=True)
+        for name in names:
+            await original_remove("podman", name, launcher_environment())
+
+
 @pytest.mark.parametrize(("source", "args", "kwargs", "reason"), [
     pytest.param("def helper(x): return x", [], {}, "target_function_missing", id="absent-entry"),
     pytest.param("def solve(x, /, *, shift): return x+shift", [4], {}, "signature_mismatch",
