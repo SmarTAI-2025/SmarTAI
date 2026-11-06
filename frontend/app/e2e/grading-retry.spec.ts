@@ -19,7 +19,8 @@ test("partial failure → explicit same-config retry → live progress → revie
   await expect(page).toHaveURL(/\/dashboard$/);
   await page.goto(`/tasks/${fixture.task_id}/review`);
   await expect(page).toHaveURL(/\/grading\/progress$/);
-  await expect(page.getByRole("heading", { name: "This grading run did not finish" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "This grading run did not finish", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "This grading run did not finish", level: 2 })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("01-partial-failed.png"), fullPage: true });
   await expect(page.getByText(/keep successful results and teacher edits/)).toBeVisible();
   const manualResponse = page.waitForResponse((r) => r.url().endsWith(`/tasks/${fixture.task_id}/continue`) && r.request().method() === "POST");
