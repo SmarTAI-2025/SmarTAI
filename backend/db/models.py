@@ -1109,7 +1109,7 @@ class KnowledgeChunkRecord(Base):
         ForeignKey("knowledge_documents.id", ondelete="CASCADE"), nullable=False, index=True
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    content_version: Mapped[str] = mapped_column(String(64), nullable=False, default="legacy", server_default="legacy")
+    content_version: Mapped[str] = mapped_column(String(64), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     chunk_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

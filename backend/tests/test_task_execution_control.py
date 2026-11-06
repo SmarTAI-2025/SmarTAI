@@ -247,7 +247,7 @@ async def test_stop_during_backoff_persists_wait_and_never_sends_second_attempt(
     async def handler(ctx):
         get_or_create_reporter(ctx.operation_id)
         await llm.ainvoke_with_retry(provider, [])
-    worker = _make_worker({"problem_extraction": handler})
+    worker = _make_worker({"question_preparation": handler})
     try:
         assert await worker.poll_once() == 1
         await asyncio.wait_for(waiting.wait(), 2)

@@ -10,7 +10,8 @@ import pytest
 
 from backend.tools.file_processing import extract_raw_files_from_archive, extract_text_from_upload
 from backend.tests.test_file_processing import FakeOCRSkill, _valid_png_1x1
-from backend.tests.test_ocr_mounted_routes import client_registry, headers
+from backend.tests.test_ocr_mounted_routes import headers
+from backend.tests.test_ocr_mounted_routes import client_registry  # noqa: F401 - pytest fixture
 
 
 @pytest.mark.asyncio
@@ -160,22 +161,6 @@ async def test_knowledge_upload_observes_lower_canonical_limit_before_publicatio
     assert list_documents(owner) == []
 
 
-@pytest.mark.parametrize("filename,content,code", [
-    ("source.exe", b"teacher,question", "source_type_not_allowed"),
-    ("source.png", b"not an image", "submission_source_content_type_mismatch"),
-])
-def test_problem_queue_rejects_invalid_file_before_publishing_source(filename, content, code):
-    from backend.domain.errors import ValidationError
-    from backend.db import file_repository
-    from backend.services import task_facade
-    from backend.tests.test_task_background_workflows import _seed_task
-    from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
-    owner, task = _seed_task()
-    with pytest.raises(ValidationError) as caught:
-        task_facade.queue_task_problem_extraction(task_id=task, owner_id=owner,
-            filename=filename, content=content, content_type=None, registry=_RecoveryRegistry())
-    assert caught.value.code == code
-    assert file_repository.list_files(owner_id=owner, assignment_id=task) == []
 
 
 @pytest.mark.parametrize("filename,content", [
@@ -197,7 +182,7 @@ def test_submission_queue_denies_invalid_container_before_publication(filename, 
     assert file_repository.list_files(owner_id=owner, assignment_id=task) == []
 
 
-@pytest.mark.parametrize("alias", ["problem-sources/preflight", "question-preparation/sources/preflight"])
+@pytest.mark.parametrize("alias", ["question-preparation/sources/preflight"])
 @pytest.mark.parametrize("role", ["rubric", "programming_tests"])
 @pytest.mark.parametrize("opt_in", [False, True])
 def test_mounted_aliases_require_explicit_teacher_ocr_opt_in(client_registry, monkeypatch, alias, role, opt_in):
@@ -274,7 +259,7 @@ async def test_prepared_source_reuse_revalidates_original_against_current_role()
     assert len(file_repository.list_files(owner_id=owner, assignment_id=task)) == 1
 
 
-@pytest.mark.parametrize("path", ["extract_problems", "problem-sources/preflight"])
+@pytest.mark.parametrize("path", ["question-preparation/sources/preflight"])
 def test_problem_upload_routes_bound_reads_by_effective_contract(client_registry, monkeypatch, path):
     from backend.services import upload_contract
     from backend.tests.test_task_background_workflows import _seed_task
@@ -362,7 +347,6 @@ def test_knowledge_worker_revalidates_historical_original_before_reusing_it():
 
 
 @pytest.mark.parametrize("path,limit", [
-    ("/knowledge/documents", "KNOWLEDGE_MAX_BYTES"),
     ("/course-materials/", "KNOWLEDGE_MAX_BYTES"),
     ("/tasks/{task}/kb", "KNOWLEDGE_MAX_BYTES"),
     ("/tasks/{task}/parse_submissions", "batch"),
@@ -612,30 +596,9 @@ async def test_mixed_zip_records_rejected_source_and_publishes_valid_sibling(mon
     assert snapshot["submission_source_summary"]["failed"] == 1
 
 
-def test_invalid_replacement_does_not_retire_previous_problem_original():
-    from backend.db import workflow_repository, file_repository
-    from backend.domain.errors import ValidationError
-    from backend.services import task_facade
-    from backend.storage import get_storage
-    from backend.tests.test_task_background_workflows import _seed_task
-    from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
-    owner, task = _seed_task()
-    registry = _RecoveryRegistry()
-    queued = task_facade.queue_task_problem_extraction(task_id=task, owner_id=owner,
-        filename="valid.txt", content=b"1. Original question", content_type="text/plain", registry=registry)
-    before = file_repository.list_files(owner_id=owner, assignment_id=task)
-    with pytest.raises(ValidationError) as caught:
-        task_facade.queue_task_problem_extraction(task_id=task, owner_id=owner,
-            filename="invalid.exe", content=b"teacher,question", content_type="text/csv",
-            replace_confirmed=True, registry=registry)
-    assert caught.value.code == "source_type_not_allowed"
-    after = file_repository.list_files(owner_id=owner, assignment_id=task)
-    assert [(row.id, row.sha256, row.availability_status) for row in after] == [(row.id, row.sha256, row.availability_status) for row in before]
-    assert all(get_storage().exists(row.storage_key) for row in after)
-    assert workflow_repository.get_workflow(task, owner_id=owner).extract_job_id == queued["job_id"]
 
 
-@pytest.mark.parametrize("alias", ["problem-sources/preflight", "question-preparation/sources/preflight"])
+@pytest.mark.parametrize("alias", ["question-preparation/sources/preflight"])
 def test_teacher_preflight_keeps_existing_signature_mismatch_code(client_registry, alias):
     from backend.tests.test_task_background_workflows import _seed_task
     from backend.tests.test_upload_contract import payload
@@ -680,7 +643,7 @@ def test_course_material_filename_limit_matches_actual_boundary(client_registry,
     assert get_upload_contract()["limits"]["course_material_filename_max_characters"] == 240
 
 
-@pytest.mark.parametrize("alias", ["problem-sources/preflight", "question-preparation/sources/preflight"])
+@pytest.mark.parametrize("alias", ["question-preparation/sources/preflight"])
 @pytest.mark.parametrize("role", ["rubric", "programming_tests"])
 def test_teacher_scanned_pdf_is_actionable_role_error_not_provider_failure(client_registry, monkeypatch, alias, role):
     import fitz

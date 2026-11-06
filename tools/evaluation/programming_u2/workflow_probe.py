@@ -84,7 +84,7 @@ def main():
     sys.addaudithook(process_guard)
 
     from fastapi.testclient import TestClient
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.main import create_app
     from backend.db.base import Base
     from backend.db import assignment_repository as assignments, workflow_repository as workflows

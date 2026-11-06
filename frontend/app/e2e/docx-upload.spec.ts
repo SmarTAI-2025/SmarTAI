@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
+import { currentLogin } from "./fixtures/current-auth";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 const bytes = readFileSync(new URL("./fixtures/native-word.docx", import.meta.url));
@@ -7,7 +8,7 @@ const mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.doc
 
 for (const [width, locale] of [[1440, "en-US"], [390, "zh-CN"]] as const) {
   test(`native Word upload, download and question drop at ${width}px`, async ({ page, request }, info) => {
-    const token = `demo-teacher-e2e-word-${width}`;
+    const token = await currentLogin(page, "teacher", `word-${width}`);
     const headers = { Authorization: `Bearer ${token}` };
     const zh = locale === "zh-CN";
     const name = "Lesson.DOCX";
@@ -32,7 +33,14 @@ for (const [width, locale] of [[1440, "en-US"], [390, "zh-CN"]] as const) {
     expect(response.ok(), await response.text()).toBeTruthy();
     const material = await response.json();
     expect(material.parse_status).toBe("ready");
-    const original = await request.get(`${backend}/knowledge/documents/${material.document_id}/download`, { headers });
+    const search = await request.post(`${backend}/knowledge/search`, {
+      headers, data: { query: "def inc", document_ids: [material.document_id] },
+    });
+    expect(search.ok()).toBeTruthy();
+    const matches = (await search.json()).matches;
+    expect(matches.length).toBeGreaterThan(0);
+    const citation = matches[0].citation;
+    const original = await request.get(`${backend}/knowledge/documents/${material.document_id}/citations/${citation.chunk_id}/download`, { headers });
     expect(original.ok()).toBeTruthy();
     expect(await original.body()).toEqual(bytes);
     await expect(dialog).toBeHidden();

@@ -13,7 +13,7 @@ from backend.tests.test_task_finalization_contract import _prepared_task
 def test_historical_ai_scores_share_precision_across_results_statistics_and_export(
     teacher_score,
 ):
-    from backend.api.analytics import _load_facts
+    from backend.analytics.ask_workspace import load_snapshot
     from backend.db import grading_repository
     from backend.db.models import GradeResultRecord
     from backend.db.session import session_scope
@@ -57,13 +57,9 @@ def test_historical_ai_scores_share_precision_across_results_statistics_and_expo
     assert corrections["q-required"]["provisional_score"] == 4.4
     assert corrections["q-required"]["teacher_score"] == teacher_score
 
-    facts = _load_facts(seeded["task_id"], seeded["owner_id"])
-    assert {row.q_id: row.score for row in facts.results} == expected
-    assert facts.per_student_stats[0]["total"] == pytest.approx(expected_total)
-    assert {
-        row["q_id"]: row["score"]
-        for row in facts.results_payload["results"][0]["corrections"]
-    } == expected
+    snapshot = load_snapshot(seeded["task_id"], seeded["owner_id"])
+    assert {row["q_id"]: row["score"] for row in snapshot.tables["grades"]} == expected
+    assert snapshot.tables["students"][0]["total_score"] == pytest.approx(expected_total)
 
     state = task_facade.finalization(**task_args)
     task_facade.generate_artifacts(

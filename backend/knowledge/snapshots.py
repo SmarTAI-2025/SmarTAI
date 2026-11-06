@@ -3,16 +3,14 @@ from __future__ import annotations
 
 from sqlalchemy import func, select
 
-from backend.db.models import KnowledgeChunkRecord, KnowledgeDocumentRecord
+from backend.db.models import KnowledgeChunkRecord
 from backend.db.knowledge_ingestion_repository import live_document
 from backend.db.knowledge_storage_repository import lock_knowledge_owner_in_session
 from backend.db.session import session_scope
 from backend.domain.errors import InvalidTransition, ValidationError
 
-LEGACY_INDEX_VERSION = "bm25-cjk2-ids-v1"
-TERMS_INDEX_VERSION = "bm25-cjk2-terms-v2"
 INDEX_VERSION = "bm25-structure-stems-v3"
-SUPPORTED_INDEX_VERSIONS = frozenset({LEGACY_INDEX_VERSION, TERMS_INDEX_VERSION, INDEX_VERSION})
+SUPPORTED_INDEX_VERSIONS = frozenset({INDEX_VERSION})
 
 
 def freeze_in_session(session, owner_id, document_ids, expected=None):
@@ -26,9 +24,9 @@ def freeze_in_session(session, owner_id, document_ids, expected=None):
     for document_id in ids:
         doc = live_document(session, document_id, owner_id)
         if expected is None:
-            if doc.status not in {"ready", "partial"} or doc.chunk_count <= 0:
+            if doc.status not in {"ready", "partial"} or doc.chunk_count <= 0 or doc.active_version in {None, "", "legacy"}:
                 raise InvalidTransition("Selected knowledge has no readable content yet.", code="knowledge_content_not_ready")
-            ref = dict(document_id=doc.id, content_version=doc.active_version or "legacy",
+            ref = dict(document_id=doc.id, content_version=doc.active_version,
                 chunk_count=doc.chunk_count, source_sha256=doc.sha256, index_version=INDEX_VERSION,
                 coverage_complete=(doc.ingestion_summary or {}).get("coverage_complete", doc.status == "ready"),
                 warning_pages=(doc.ingestion_summary or {}).get("warning_pages", 0),
@@ -39,7 +37,7 @@ def freeze_in_session(session, owner_id, document_ids, expected=None):
                 raise ValidationError("knowledge_storage_manifest_invalid", code="knowledge_storage_manifest_invalid")
             ref = dict(matches[0])
             if (type(ref.get("chunk_count")) is not int or not 0 < ref["chunk_count"] <= 1_000_000
-                    or not isinstance(ref.get("content_version"), str) or len(ref["content_version"]) > 64
+                    or not isinstance(ref.get("content_version"), str) or ref["content_version"] in {"", "legacy"} or len(ref["content_version"]) > 64
                     or ref.get("source_sha256") != doc.sha256 or ref.get("index_version") not in SUPPORTED_INDEX_VERSIONS):
                 raise ValidationError("knowledge_storage_manifest_invalid", code="knowledge_storage_manifest_invalid")
         actual = session.scalar(select(func.count()).select_from(KnowledgeChunkRecord).where(

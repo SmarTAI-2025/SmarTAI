@@ -16,8 +16,8 @@ from backend.models import ProviderConfig
 from backend.services.background_errors import classify_background_error
 from backend.services.execution_control import run_controlled
 from backend.tests.test_provider_quota_boundaries import quota_body
-from backend.tests.test_provider_response_deadlines import scheduler  # noqa: F401
 from backend.tools import structured_llm as llm
+from backend.tests.test_provider_response_deadlines import scheduler  # noqa: F401 - pytest fixture
 
 MESSAGES = [HumanMessage(content="Q1. Example question")]
 IMAGE = VisionImage(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="), "image/png")
@@ -173,7 +173,7 @@ async def test_custom_endpoint_protocols(monkeypatch, scheduler, http_response, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["problems", "submissions"])
+@pytest.mark.parametrize("stage", ["submissions"])
 @pytest.mark.parametrize("kind,code", [("daily", "provider_daily_quota_exceeded"), ("zero", "provider_zero_quota")])
 async def test_gemini_sdk_quota_reaches_background_task_and_database(monkeypatch, scheduler, http_response, stage, kind, code):
     from backend.db import workflow_repository, source_outcome_repository
@@ -195,15 +195,12 @@ async def test_gemini_sdk_quota_reaches_background_task_and_database(monkeypatch
         registry.provider = provider
         owner, task = _seed_task(with_question=stage == "submissions")
         args = dict(task_id=task, owner_id=owner, filename="student.txt", content=b"Q1. Example answer", registry=registry)
-        queue = task_facade.queue_task_problem_extraction if stage == "problems" else task_facade.queue_task_submission_parsing
+        queue = task_facade.queue_task_submission_parsing
         queued = queue(**args, content_type="text/plain")
         args.update(job_id=queued["job_id"], job_attempt=queued["_job_attempt"],
                     claimed_workflow_revision=queued["workflow_revision"], replace_confirmed=False,
                     recognition_provider_id=queued["_recognition_provider_id"])
-        if stage == "problems":
-            await task_facade.run_task_problem_extraction(**args)
-        else:
-            await task_facade.run_task_submission_parsing(**args, content_type="text/plain", identity_mode="filename", roster_entries=None)
+        await task_facade.run_task_submission_parsing(**args, content_type="text/plain", identity_mode="filename", roster_entries=None)
         operation = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
         assert operation.error_code == code
         assert task_facade.get_task(task_id=task, owner_id=owner, full=False)["error"] == code

@@ -38,7 +38,7 @@ def test_instruction_contract_does_not_require_grading_or_load_task_facts(monkey
     task_id = _seed_ungraded_assignment(owner)
     provider = _Provider()
     provider.outputs["intent"].update(fields)
-    monkeypatch.setattr(analytics, "_load_facts", lambda *_: pytest.fail("Instruction routing must not load grading facts"))
+    monkeypatch.setattr(analytics, "load_snapshot", lambda *_: pytest.fail("Instruction routing must not load grading facts"))
     response = _client(owner, _Registry(provider)).post(
         f"/analytics/{task_id}/filter-intent", json={"question": "请按我的要求筛选和排序", "surface": surface},
     )

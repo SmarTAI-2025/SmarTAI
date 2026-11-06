@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, inspect, select
 from backend.api.ocr_providers import (
     get_baidu_unlimited_ocr_credential_verifier,
 )
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.config import settings
 from backend.db.models import (
     OCRProviderCredentialRecord,

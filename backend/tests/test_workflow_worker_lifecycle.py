@@ -36,7 +36,6 @@ def test_app_starts_and_stops_empty_workflow_worker(monkeypatch):
     with TestClient(app) as client:
         assert client.get("/").status_code == 200
         from backend.services.task_facade import (
-            run_durable_problem_extraction,
             run_durable_submission_recognition,
         )
         from backend.api.task_preparation import (
@@ -53,7 +52,6 @@ def test_app_starts_and_stops_empty_workflow_worker(monkeypatch):
         assert (
             "constructed",
             {
-                "problem_extraction": run_durable_problem_extraction,
                 "submission_recognition": run_durable_submission_recognition,
                 "ai_completion": run_durable_ai_completion,
                 "question_preparation": run_durable_question_preparation,
@@ -83,8 +81,7 @@ def test_workflow_worker_lifecycle_never_bulk_releases_leases(monkeypatch):
     class FakeWorker:
         def __init__(self, *, handlers):
             from backend.services.task_facade import (
-                run_durable_problem_extraction,
-                run_durable_submission_recognition,
+                    run_durable_submission_recognition,
             )
             from backend.api.task_preparation import (
                 run_durable_ai_completion,
@@ -98,7 +95,6 @@ def test_workflow_worker_lifecycle_never_bulk_releases_leases(monkeypatch):
             from backend.services.task_deletion import run_task_deletion
 
             assert dict(handlers) == {
-                "problem_extraction": run_durable_problem_extraction,
                 "submission_recognition": run_durable_submission_recognition,
                 "ai_completion": run_durable_ai_completion,
                 "question_preparation": run_durable_question_preparation,

@@ -544,7 +544,6 @@ def get_question_preparation_input(task_id: str, current: User = Depends(require
         return domain_error_response(exc)
 
 
-@router.post("/{task_id}/problem-sources/preflight")
 @router.post("/{task_id}/question-preparation/sources/preflight")
 async def preflight_problem_source(
     task_id: str,

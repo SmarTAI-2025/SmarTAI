@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 from types import SimpleNamespace
 
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.db.knowledge_storage_repository import request_document_cleanup
 from backend.knowledge.query_plan import QueryPlan
 from backend.main import app

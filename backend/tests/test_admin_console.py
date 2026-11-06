@@ -36,14 +36,14 @@ def test_suspend_then_restore_keeps_old_access_token_invalid():
     login = client.post("/auth/login", json={"username": "suspend-me", "password": "user-pass"})
     old_token = login.json()["token"]
     headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": "suspend-1"}
-    assert client.patch(f"/admin/users/{user_id}/status", headers=headers, json={"is_active": False, "reason": "risk_review"}).status_code == 200
-    assert client.patch(f"/admin/users/{user_id}/status", headers={**headers, "Idempotency-Key": "restore-1"}, json={"is_active": True, "reason": "risk_review"}).status_code == 200
+    assert client.patch(f"/admin/users/{user_id}/access", headers=headers, json={"access": "login_blocked", "reason": "risk_review"}).status_code == 200
+    assert client.patch(f"/admin/users/{user_id}/access", headers={**headers, "Idempotency-Key": "restore-1"}, json={"access": "normal", "reason": "risk_review"}).status_code == 200
     assert client.get("/auth/me", headers={"Authorization": f"Bearer {old_token}"}).status_code == 401
 
 
 def test_admin_cannot_deactivate_self_or_last_admin():
     client, token = _admin_client()
-    response = client.patch("/admin/users/admin-console/status", headers={"Authorization": f"Bearer {token}"}, json={"is_active": False, "reason": "offboarding"})
+    response = client.patch("/admin/users/admin-console/access", headers={"Authorization": f"Bearer {token}"}, json={"access": "login_blocked", "reason": "offboarding"})
     assert response.status_code == 409
 
 
@@ -52,9 +52,9 @@ def test_course_owner_can_be_suspended_with_audited_reason():
     teacher_id = _seed_user(client, "teacher", "course-owner")
     create_course(teacher_id=teacher_id, name="Keep this course")
     response = client.patch(
-        f"/admin/users/{teacher_id}/status",
+        f"/admin/users/{teacher_id}/access",
         headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "owner-suspend"},
-        json={"is_active": False, "reason": "abuse_report", "note": "Preserve teaching data"},
+        json={"access": "login_blocked", "reason": "abuse_report", "note": "Preserve teaching data"},
     )
     assert response.status_code == 200, response.text
     audits = client.get("/admin/audit", headers={"Authorization": f"Bearer {token}"})

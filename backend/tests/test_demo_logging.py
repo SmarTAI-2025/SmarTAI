@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from uvicorn.logging import AccessFormatter
 
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.models import User
 from backend.services import frontier_demo
 from backend.services.demo_logging import DemoLoggingMiddleware, demo_log_context, install_demo_log_redaction

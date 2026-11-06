@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.db.models import KnowledgeDocumentRecord, KnowledgeIngestionRecord, StoredFileRecord
 from backend.db.knowledge_storage_repository import request_document_cleanup
 from backend.db.session import session_scope

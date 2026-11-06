@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 
 def test_task_kb_save_to_library_and_attachment_provenance_persist():
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.db import course_library_repository
     from backend.db.models import UserRecord
     from backend.db.session import session_scope
@@ -95,7 +95,7 @@ def test_task_only_upload_is_hidden_globally_and_same_hash_promotes_retained():
     owner/hash document in place.  Detaching it from the task must therefore
     retain the promoted document rather than enqueue task-only cleanup.
     """
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.db.models import UserRecord
     from backend.db.session import session_scope
     from backend.main import app
@@ -137,8 +137,8 @@ def test_task_only_upload_is_hidden_globally_and_same_hash_promotes_retained():
     assert client.get(f"/tasks/{task_id}/kb", headers=headers).json()["docs"][0][
         "doc_id"
     ] == task_payload["doc_id"]
-    assert client.get("/knowledge/documents", headers=headers).json()[
-        "documents"
+    assert client.get("/course-materials/", headers=headers).json()[
+        "items"
     ] == []
     assert client.get(
         f"/knowledge/documents/{task_payload['doc_id']}", headers=headers
@@ -149,16 +149,16 @@ def test_task_only_upload_is_hidden_globally_and_same_hash_promotes_retained():
     assert client.get("/course-materials/", headers=headers).json()["items"] == []
 
     promoted = client.post(
-        "/knowledge/documents",
+        "/course-materials/",
         headers=headers,
         files={"file": ("personal-copy.txt", content, "text/plain")},
     )
-    assert promoted.status_code == 201, promoted.text
-    assert promoted.json()["id"] == task_payload["doc_id"]
+    assert promoted.status_code == 200, promoted.text
+    assert promoted.json()["document_id"] == task_payload["doc_id"]
     assert [
-        item["id"]
-        for item in client.get("/knowledge/documents", headers=headers).json()[
-            "documents"
+        item["document_id"]
+        for item in client.get("/course-materials/", headers=headers).json()[
+            "items"
         ]
     ] == [task_payload["doc_id"]]
 
@@ -170,14 +170,12 @@ def test_task_only_upload_is_hidden_globally_and_same_hash_promotes_retained():
         },
     )
     assert removed.status_code == 200, removed.text
-    detail = client.get(
-        f"/knowledge/documents/{task_payload['doc_id']}", headers=headers
-    )
-    assert detail.status_code == 200
+    retained = client.get("/course-materials/", headers=headers).json()["items"]
+    assert [item["document_id"] for item in retained] == [task_payload["doc_id"]]
 
 
 def test_task_only_document_cleanup_waits_for_the_last_task_reference():
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.db.knowledge_storage_repository import get_document_storage
     from backend.db.models import UserRecord
     from backend.db.session import session_scope
@@ -263,7 +261,7 @@ def test_task_only_document_cleanup_waits_for_the_last_task_reference():
 def test_failed_task_only_attachment_enqueues_cleanup_instead_of_leaking_quota():
     import hashlib
 
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.db.knowledge_repository import (
         get_document_by_hash,
         set_task_documents,
@@ -298,7 +296,7 @@ def test_failed_task_only_attachment_enqueues_cleanup_instead_of_leaking_quota()
     retained_ids = []
     for index in range(20):
         uploaded = client.post(
-            "/knowledge/documents",
+            "/course-materials/",
             headers=headers,
             files={
                 "file": (
@@ -308,8 +306,8 @@ def test_failed_task_only_attachment_enqueues_cleanup_instead_of_leaking_quota()
                 )
             },
         )
-        assert uploaded.status_code == 201, uploaded.text
-        retained_ids.append(uploaded.json()["id"])
+        assert uploaded.status_code == 200, uploaded.text
+        retained_ids.append(uploaded.json()["document_id"])
     set_task_documents(
         assignment_id=task["task_id"],
         owner_id=owner_id,

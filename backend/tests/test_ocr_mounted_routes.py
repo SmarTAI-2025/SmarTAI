@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.domain.errors import RecognitionError
 from backend.llm.registry import get_scoped_expert_registry
 from backend.main import app
@@ -31,7 +31,7 @@ def headers(owner, role="teacher"):
     return {"Authorization": "Bearer " + create_token(owner, role)}
 
 
-@pytest.mark.parametrize("alias", ["problem-sources/preflight", "question-preparation/sources/preflight"])
+@pytest.mark.parametrize("alias", ["question-preparation/sources/preflight"])
 @pytest.mark.parametrize("role,purpose", [("problem", "problems"), ("reference_answer", "reference"),
     ("rubric", "rubric"), ("programming_tests", "test_cases")])
 def test_both_preflight_aliases_route_each_purpose_to_shared_adapter(client_registry, monkeypatch, alias, role, purpose):
@@ -54,12 +54,12 @@ def test_both_preflight_aliases_route_each_purpose_to_shared_adapter(client_regi
     assert read.call_args.kwargs["task_id"] == task
 
 
-@pytest.mark.parametrize("action", ["extract_problems", "parse_submissions"])
+@pytest.mark.parametrize("action", ["parse_submissions"])
 def test_task_upload_only_publishes_durable_job(client_registry, monkeypatch, action):
     from backend.api import tasks
     client, registry = client_registry
     owner, task = _seed_task(with_question=action == "parse_submissions")
-    method = "queue_task_problem_extraction" if action == "extract_problems" else "queue_task_submission_parsing"
+    method = "queue_task_submission_parsing"
     queue = Mock(return_value={"job_id":"durable", "status":"started"})
     monkeypatch.setattr(tasks.task_facade, method, queue)
     response = client.post(f"/tasks/{task}/{action}", headers=headers(owner),
@@ -70,7 +70,7 @@ def test_task_upload_only_publishes_durable_job(client_registry, monkeypatch, ac
     assert queue.call_args.kwargs["registry"] is registry
 
 
-@pytest.mark.parametrize("api_name,url", [("knowledge", "/knowledge/documents"), ("materials", "/course-materials/"),
+@pytest.mark.parametrize("api_name,url", [("materials", "/course-materials/"),
     ("tasks", "/tasks/{task}/kb")])
 def test_all_knowledge_uploads_share_whole_book_ingestion(client_registry, monkeypatch, api_name, url):
     from backend.api import knowledge, materials, tasks

@@ -11,11 +11,11 @@ import hashlib
 import json
 import time
 import uuid
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Query, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import func, or_, select
 
 from backend.auth import require_admin
 from backend.config import settings
@@ -28,24 +28,13 @@ from backend.db.models import (
     UserRecord,
 )
 from backend.db.session import session_scope
-from backend.analytics.admin_usage import metrics_catalog, query_usage_metrics
+from backend.analytics.admin_usage import query_usage_metrics
 from backend.models import User
-from backend.services.admin_transactions import administrator_transaction, protect_administrator
+from backend.services.admin_transactions import administrator_transaction
 from backend.services.email_sender import get_email_sender
 from backend.services.password_reset import PasswordResetError, request_password_reset
 
 router = APIRouter(prefix="/admin", tags=["admin"])
-
-
-class UserStatusRequest(BaseModel):
-    is_active: bool
-    reason: str = Field(default="manual_review", min_length=1, max_length=80)
-    note: str = Field(default="", max_length=1000)
-
-    @field_validator("reason", "note", mode="before")
-    @classmethod
-    def _strip_text(cls, value: object) -> object:
-        return value.strip() if isinstance(value, str) else value
 
 
 class ActionRequest(BaseModel):
@@ -56,17 +45,6 @@ class ActionRequest(BaseModel):
     @classmethod
     def _strip_text(cls, value: object) -> object:
         return value.strip() if isinstance(value, str) else value
-
-
-class MetricsQueryRequest(BaseModel):
-    start: float | None = Field(default=None, gt=0)
-    end: float | None = Field(default=None, gt=0)
-    granularity: Literal["day", "week"] = "day"
-    metrics: list[str] = Field(default_factory=lambda: [
-        "active_users", "activated_users", "new_users", "login_successes",
-        "tasks_created", "courses_created", "assignments_created",
-        "grading_runs_started", "submissions_created",
-    ], min_length=1, max_length=20)
 
 
 def _user_public(record: UserRecord) -> dict[str, Any]:
@@ -188,54 +166,6 @@ def admin_list_users(
         return [_user_public(record) for record in session.scalars(stmt).all()]
 
 
-@router.patch("/users/{user_id}/status")
-def admin_set_active(
-    user_id: str,
-    req: UserStatusRequest,
-    request: Request,
-    current: User = Depends(require_admin),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-):
-    """Suspend or restore an account while invalidating its old sessions."""
-    key = _idempotency_key(idempotency_key)
-    request_hash = _request_hash("user_status", user_id, req.model_dump())
-    with administrator_transaction(current) as session:
-        replay = _replay_or_conflict(session, actor_id=current.id, idempotency_key=key, request_hash=request_hash)
-        if replay is not None:
-            return replay
-        record = session.scalar(select(UserRecord).where(UserRecord.id == user_id).with_for_update())
-        if record is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
-        if not req.is_active:
-            protect_administrator(session, current.id, record)
-        from backend.db.models import AccountClosureRecord
-        if session.scalar(select(AccountClosureRecord.id).where(AccountClosureRecord.user_id == user_id)):
-            raise HTTPException(409, detail="Account closure is in progress")
-        before = _user_public(record)
-        now = time.time()
-        record.is_active = req.is_active
-        record.updated_at = now
-        if not req.is_active:
-            record.auth_invalid_before = max(record.auth_invalid_before or 0.0, now)
-            record.auth_version += 1
-            revoke_all_refresh_sessions(session, record.id, now=now)
-        after = _user_public(record)
-        _audit(
-            session,
-            actor_id=current.id,
-            target_user_id=record.id,
-            action="user_deactivated" if not req.is_active else "user_reactivated",
-            reason=req.reason,
-            note=req.note,
-            idempotency_key=key,
-            request_hash=request_hash,
-            before_state={"is_active": before["is_active"], "updated_at": before["updated_at"]},
-            after_state={"is_active": after["is_active"], "updated_at": after["updated_at"]},
-            response_body=after,
-        )
-        return after
-
-
 @router.post("/users/{user_id}/sessions/revoke")
 def admin_revoke_sessions(
     user_id: str,
@@ -346,23 +276,3 @@ def admin_overview(current: User = Depends(require_admin)):
         "usage": usage,
         "shared_pool": {"enabled": bool(settings.shared_pool_enabled), "daily_request_limit": int(config.values["shared_pool_daily_request_limit"]), "daily_estimated_token_limit": int(config.values["shared_pool_daily_estimated_token_limit"]), "source": "resolved_business_configuration"},
     }
-
-
-@router.get("/metrics/catalog")
-def admin_metrics_catalog(current: User = Depends(require_admin)):
-    """Describe metrics so clients do not guess whether a value is collected."""
-    return {"metrics": metrics_catalog()}
-
-
-@router.post("/metrics/query")
-def admin_metrics_query(req: MetricsQueryRequest, current: User = Depends(require_admin)):
-    now = time.time()
-    try:
-        return query_usage_metrics(
-            start=req.start if req.start is not None else now - 30 * 86400,
-            end=req.end if req.end is not None else now,
-            granularity=req.granularity,
-            metrics=req.metrics,
-        )
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

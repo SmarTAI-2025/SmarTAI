@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from backend.db.models import ProviderConfigRecord, UserRecord
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.db.provider_repository import (
     DefaultProviderNotEnabled,
     DefaultProviderReplacementRequired,

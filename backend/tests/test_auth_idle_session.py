@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from backend.auth import create_token, decode_token, hash_password
+from backend.auth import decode_token, hash_password
 from backend.config import settings
 from backend.db.models import RefreshSessionRecord, UserRecord
 from backend.db.session import session_scope
@@ -97,15 +97,21 @@ def test_read_only_account_can_keep_reading_without_mutation_access(signed_in):
     assert client.post("/tasks/", headers=headers(token), json={}).status_code == 403
 
 
-def test_unexpired_legacy_token_upgrades_without_forcing_another_login(signed_in):
-    client, _ = signed_in
+@pytest.mark.parametrize("missing", ["sid", "auth_version", "session_scope"])
+def test_old_token_formats_are_rejected_without_creating_a_session(signed_in, missing):
+    import jwt
+    from sqlalchemy import func
+    client, token = signed_in
     client.cookies.clear()
-    legacy = create_token("idle-teacher", "teacher")
-    renewed = client.post("/auth/activity", headers=headers(legacy))
-    assert renewed.status_code == 200
-    assert decode_token(renewed.json()["token"])["sid"]
-    expired = create_token("idle-teacher", "teacher", expires_in_minutes=-1)
-    assert client.post("/auth/activity", headers=headers(expired)).status_code == 401
+    payload = decode_token(token)
+    payload.pop(missing)
+    legacy = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    with session_scope() as session:
+        before = session.scalar(select(func.count()).select_from(RefreshSessionRecord))
+    assert client.get("/auth/me", headers=headers(legacy)).status_code == 401
+    assert client.post("/auth/activity", headers=headers(legacy)).status_code == 401
+    with session_scope() as session:
+        assert session.scalar(select(func.count()).select_from(RefreshSessionRecord)) == before
 
 
 def test_legacy_access_lifetime_setting_cannot_shorten_the_new_idle_window(signed_in, monkeypatch):

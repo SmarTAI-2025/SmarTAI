@@ -364,7 +364,7 @@ def manifest(document_id, owner_id, *, offset=0, limit=100, issues_only=False):
             query = query.where(KnowledgePageRecord.state.not_in(GOOD_PAGES))
         pages = list(session.scalars(query.order_by(KnowledgePageRecord.page_number)
             .offset(max(0, offset)).limit(min(100, max(1, limit)))))
-        return dict(summary=doc.ingestion_summary or {}, content_version=doc.active_version or "legacy",
+        return dict(summary=doc.ingestion_summary or {}, content_version=doc.active_version,
             pages=[dict(page_number=p.page_number, state=p.state, **p.evidence) for p in pages],
             offset=offset, next_offset=offset + len(pages) if len(pages) == limit else None)
 

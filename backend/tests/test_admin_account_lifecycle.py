@@ -1,11 +1,9 @@
 import uuid
 from fastapi.testclient import TestClient
-from sqlalchemy import select
 
-from backend.auth import create_token, hash_password, verify_password
+from backend.auth import hash_password
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.db.auth_repository import register_without_invite
-from backend.db.models import UserRecord
-from backend.db.session import session_scope
 from backend.main import app
 from backend.models import User
 from backend.state import get_user_store

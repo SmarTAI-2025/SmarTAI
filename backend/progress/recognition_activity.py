@@ -12,7 +12,7 @@ from backend.services.background_errors import SAFE_BACKGROUND_ERROR_CODES, safe
 
 logger = logging.getLogger(__name__)
 _current = ContextVar("recognition_activity", default=None)
-OPERATIONS = {"question_preparation", "problem_extraction", "submission_recognition"}
+OPERATIONS = {"question_preparation", "submission_recognition"}
 STAGES = set("""validating_sources extracting_questions aligning_uploaded_materials
 generating_solutions aligning_rubrics preparing_programming_tests detecting_conflicts
 committing_question_packages reading_sources reading_source recognizing_structure

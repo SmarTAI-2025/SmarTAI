@@ -240,8 +240,6 @@ def validate_upload(role: str, file_name: str, data: bytes, *, from_library: boo
                     content_type: str | None = None) -> ValidatedUpload:
     """Validate one ordinary file. ZIP container handling is a separate boundary."""
     extensions = ROLE_EXTENSIONS.get(role)
-    if role == "legacy_problem":
-        extensions = ROLE_EXTENSIONS["problem_reference"] | {"csv", "rst"}
     if extensions is None:
         raise UploadContractError("invalid_source_role")
     extension = PurePosixPath(file_name).suffix.lower().lstrip(".")

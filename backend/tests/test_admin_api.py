@@ -65,7 +65,7 @@ def test_admin_can_activate_and_deactivate_user():
     stu_id = reg.json()["user"]["id"]
 
     # Deactivate
-    resp = client.patch(f"/admin/users/{stu_id}/status", headers={"Authorization": f"Bearer {token}"}, json={"is_active": False})
+    resp = client.patch(f"/admin/users/{stu_id}/access", headers={"Authorization": f"Bearer {token}"}, json={"access": "login_blocked"})
     assert resp.status_code == 200
     assert resp.json()["is_active"] is False
 
@@ -74,7 +74,7 @@ def test_admin_can_activate_and_deactivate_user():
     assert login.status_code == 401
 
     # Reactivate
-    react = client.patch(f"/admin/users/{stu_id}/status", headers={"Authorization": f"Bearer {token}"}, json={"is_active": True})
+    react = client.patch(f"/admin/users/{stu_id}/access", headers={"Authorization": f"Bearer {token}"}, json={"access": "normal"})
     assert react.status_code == 200
     assert react.json()["is_active"] is True
     assert client.post("/auth/login", json={"username": "stu_one", "password": "secret-pass"}).status_code == 200
@@ -87,7 +87,7 @@ def test_admin_can_block_login_without_deleting_owned_course():
     teacher_id = reg.json()["user"]["id"]
     create_course(teacher_id=teacher_id, name="Owned")
 
-    resp = client.patch(f"/admin/users/{teacher_id}/status", headers={"Authorization": f"Bearer {token}"}, json={"is_active": False})
+    resp = client.patch(f"/admin/users/{teacher_id}/access", headers={"Authorization": f"Bearer {token}"}, json={"access": "login_blocked"})
     assert resp.status_code == 200
     from backend.db.models import CourseRecord
     from backend.db.session import session_scope
@@ -112,5 +112,5 @@ def test_disabled_user_cannot_refresh():
     reg = _seed_and_login(client, username="srefresh_one", role="student")
     stu_id = reg.json()["user"]["id"]
     assert client.post("/auth/refresh").status_code == 200  # active can refresh
-    client.patch(f"/admin/users/{stu_id}/status", headers={"Authorization": f"Bearer {admin_token}"}, json={"is_active": False})
+    client.patch(f"/admin/users/{stu_id}/access", headers={"Authorization": f"Bearer {admin_token}"}, json={"access": "login_blocked"})
     assert client.post("/auth/refresh").status_code == 401

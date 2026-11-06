@@ -29,7 +29,7 @@ from backend.domain.errors import (
     VersionConflict,
 )
 from backend.services import task_facade
-from backend.tools.structured_llm import PermanentLLMError, RateLimitError, TransientLLMError
+from backend.tools.structured_llm import RateLimitError, TransientLLMError
 
 
 def _seed_task(*, with_question: bool = False, criterion: str = "Award up to 10 points for the method and result.") -> tuple[str, str]:
@@ -850,46 +850,6 @@ def test_expired_running_operation_retry_advances_attempt():
     assert stale.value.code == "stale_operation_attempt"
 
 
-def test_exact_facade_retry_consumes_only_its_prior_claim_revision():
-    owner_id, task_id = _seed_task()
-    request = {
-        "task_id": task_id, "owner_id": owner_id,
-        "filename": "questions.txt", "content": b"Question 1",
-        "content_type": "text/plain", "registry": _Registry(),
-        "expected_workflow_revision": 0,
-    }
-    first = task_facade.queue_task_problem_extraction(**request)
-    first_operation = workflow_repository.get_operation(
-        first["job_id"], owner_id=owner_id
-    )
-    assert first["workflow_revision"] == 1
-    assert task_facade._fail_operation(
-        task_id, owner_id, first_operation.id, first_operation.attempt,
-        "problem_extraction_failed",
-    ) is True
-
-    retried = task_facade.queue_task_problem_extraction(**request)
-    retry_operation = workflow_repository.get_operation(
-        retried["job_id"], owner_id=owner_id
-    )
-    assert retried["status"] == "started"
-    assert retried["job_id"] == first["job_id"]
-    assert retried["workflow_revision"] == 2
-    assert retry_operation.attempt == first_operation.attempt + 1
-    assert retry_operation.payload["base_workflow_revision"] == 1
-    assert task_facade._fail_operation(
-        task_id, owner_id, retry_operation.id, retry_operation.attempt,
-        "problem_extraction_failed",
-    ) is True
-
-    # One unrelated mutation beyond the failed attempt's own claim bump keeps
-    # the original request stale; exact-retry handling is not a general bypass.
-    workflow_repository.update_workflow(
-        task_id, owner_id=owner_id, expected_revision=2,
-    )
-    with pytest.raises(VersionConflict) as stale_request:
-        task_facade.queue_task_problem_extraction(**request)
-    assert stale_request.value.code == "stale_revision"
 
 
 def test_student_identity_conflict_does_not_consume_workflow_revision():
@@ -934,32 +894,6 @@ def test_student_identity_conflict_does_not_consume_workflow_revision():
     assert claimed.workflow_revision == 1
 
 
-@pytest.mark.asyncio
-async def test_extract_endpoint_queues_durable_work_and_returns_started():
-    owner_id, task_id = _seed_task()
-    background = _BackgroundTasks()
-    upload = UploadFile(
-        file=io.BytesIO(b"Question 1: example"), filename="questions.txt",
-        headers=Headers({"content-type": "text/plain"}),
-    )
-
-    response = await tasks.extract_problems_endpoint(
-        task_id=task_id, background_tasks=background, file=upload,
-        source_token=None, confirmed_candidate_ids="[]",
-        replace_confirmed=False, current=SimpleNamespace(id=owner_id),
-        registry=_Registry(),
-    )
-
-    assert response["status"] == "started"
-    assert background.calls == []
-    operation = workflow_repository.get_operation(
-        response["job_id"], owner_id=owner_id
-    )
-    assert operation.status == "pending"
-    snapshot = task_facade.task_state(task_id=task_id, owner_id=owner_id)
-    assert snapshot["active_operation_status"] == "pending"
-    assert isinstance(operation.payload.get("source_id"), str)
-    assert assignment_repository.list_questions(task_id, teacher_id=owner_id) == []
 
 
 @pytest.mark.asyncio
@@ -1073,26 +1007,7 @@ def test_disabled_selected_recognition_provider_has_figma_error_code():
     assert disabled.value.code == "recognition_provider_not_enabled"
 
 
-def test_question_and_submission_queues_freeze_resolved_default_provider_id():
-    problem_owner, problem_task = _seed_task()
-    problem_queued = task_facade.queue_task_problem_extraction(
-        task_id=problem_task,
-        owner_id=problem_owner,
-        filename="questions.txt",
-        content=b"Question 1",
-        content_type="text/plain",
-        registry=_Registry(),
-    )
-    problem_operation = workflow_repository.get_operation(
-        problem_queued["job_id"], owner_id=problem_owner,
-    )
-    problem_workflow = workflow_repository.get_workflow(
-        problem_task, owner_id=problem_owner,
-    )
-    assert problem_queued["_recognition_provider_id"] == "test-provider"
-    assert problem_operation.payload["recognition_provider_id"] == "test-provider"
-    assert problem_workflow.question_recognition_provider_id == "test-provider"
-
+def test_submission_queue_freezes_resolved_default_provider_id():
     submission_owner, submission_task = _seed_task(with_question=True)
     submission_queued = task_facade.queue_task_submission_parsing(
         task_id=submission_task,
@@ -1116,7 +1031,6 @@ def test_question_and_submission_queues_freeze_resolved_default_provider_id():
 @pytest.mark.asyncio
 async def test_submission_ocr_without_vision_provider_has_figma_error_code(monkeypatch):
     from backend.db import source_outcome_repository
-    from backend.services import submission_source_pipeline
 
     owner_id, task_id = _seed_task(with_question=True)
 
@@ -1186,44 +1100,11 @@ class _VisionlessRegistry(_Registry):
         return None
 
 
-@pytest.mark.asyncio
-async def test_problem_extraction_timeout_persists_provider_timeout(monkeypatch):
-    owner_id, task_id = _seed_task()
-    registry = _VisionlessRegistry()
-
-    async def _timeout(*args, **kwargs):
-        del args, kwargs
-        try:
-            raise TimeoutError("provider request timed out")
-        except TimeoutError as exc:
-            raise TransientLLMError("provider request failed") from exc
-
-    monkeypatch.setattr(task_facade, "extract_text_from_upload", _timeout)
-    queued = task_facade.queue_task_problem_extraction(
-        task_id=task_id, owner_id=owner_id, filename="questions.txt",
-        content=b"source", content_type="text/plain", registry=registry,
-    )
-    await task_facade.run_task_problem_extraction(
-        task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
-        filename="questions.txt", content=b"source", registry=registry,
-        job_attempt=queued["_job_attempt"],
-        claimed_workflow_revision=queued["workflow_revision"],
-        replace_confirmed=False,
-        recognition_provider_id=queued["_recognition_provider_id"],
-    )
-
-    failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
-    workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
-    assert failed.status == "error"
-    assert failed.error_code == "provider_timeout"
-    assert workflow.presentation_status == "error"
-    assert workflow.error_code == "provider_timeout"
 
 
 @pytest.mark.asyncio
 async def test_submission_rate_limit_persists_provider_rate_limited(monkeypatch):
     from backend.db import source_outcome_repository
-    from backend.services import submission_source_pipeline
 
     owner_id, task_id = _seed_task(with_question=True)
 
@@ -1268,7 +1149,6 @@ async def test_submission_rate_limit_persists_provider_rate_limited(monkeypatch)
 @pytest.mark.asyncio
 async def test_submission_connection_error_persists_provider_unreachable(monkeypatch):
     from backend.db import source_outcome_repository
-    from backend.services import submission_source_pipeline
 
     owner_id, task_id = _seed_task(with_question=True)
 
@@ -1310,32 +1190,6 @@ async def test_submission_connection_error_persists_provider_unreachable(monkeyp
     assert result.outcome.failure_phase == "recognition"
 
 
-@pytest.mark.asyncio
-async def test_problem_extraction_auth_error_persists_provider_auth_failed(monkeypatch):
-    owner_id, task_id = _seed_task()
-    registry = _VisionlessRegistry()
-
-    async def _auth_failed(*args, **kwargs):
-        del args, kwargs
-        raise PermanentLLMError("401 invalid api key")
-
-    monkeypatch.setattr(task_facade, "extract_text_from_upload", _auth_failed)
-    queued = task_facade.queue_task_problem_extraction(
-        task_id=task_id, owner_id=owner_id, filename="questions.txt",
-        content=b"source", content_type="text/plain", registry=registry,
-    )
-    await task_facade.run_task_problem_extraction(
-        task_id=task_id, owner_id=owner_id, job_id=queued["job_id"],
-        filename="questions.txt", content=b"source", registry=registry,
-        job_attempt=queued["_job_attempt"],
-        claimed_workflow_revision=queued["workflow_revision"],
-        replace_confirmed=False,
-        recognition_provider_id=queued["_recognition_provider_id"],
-    )
-
-    failed = workflow_repository.get_operation(queued["job_id"], owner_id=owner_id)
-    assert failed.status == "error"
-    assert failed.error_code == "provider_auth_failed"
 
 
 @pytest.mark.asyncio

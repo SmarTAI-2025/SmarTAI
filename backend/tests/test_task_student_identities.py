@@ -4,14 +4,9 @@ from importlib import import_module
 import pytest
 from alembic import command
 from alembic.config import Config
-from fastapi import HTTPException
 from sqlalchemy import select, text
 
-from backend.db.models import (
-    CourseEnrollmentRecord, CourseRecord, GradeResultRecord,
-    GradingRunSubmissionRecord, SubmissionRecord, SubmissionRevisionRecord,
-    UserRecord,
-)
+from backend.db.models import CourseEnrollmentRecord, CourseRecord, GradingRunSubmissionRecord, SubmissionRecord, UserRecord
 from backend.db.session import configure_database, session_scope
 from backend.db.workflow_repository import AssignmentStudentPresentationRecord
 from backend.tests import test_normalized_analytics as fixtures
@@ -43,7 +38,9 @@ def test_teacher_import_and_grading_need_no_student_login_or_enrollment():
 
 
 def test_analytics_preserves_names_results_and_owner_isolation_without_users():
-    from backend.api.analytics import _load_facts, _load_filter_identifiers
+    from backend.api.analytics import _load_filter_identifiers
+    from backend.analytics.ask_workspace import load_snapshot
+    from backend.domain.errors import NotFound
     from sqlalchemy import delete
 
     owner = fixtures._user("teacher", "identity-owner")
@@ -55,14 +52,13 @@ def test_analytics_preserves_names_results_and_owner_isolation_without_users():
             student_id=student.id, display_name="Imported Name", display_student_id="S001",
         ))
         session.execute(delete(UserRecord).where(UserRecord.id == student.id))
-    facts = _load_facts(seeded["task_id"], owner.id)
-    assert facts.student_names[student.id] == "Imported Name"
-    assert len(facts.results) == 3
-    assert facts.results[0].score == 8.5  # Teacher review survived.
+    snapshot = load_snapshot(seeded["task_id"], owner.id)
+    assert next(row["student_name"] for row in snapshot.tables["students"] if row["student_id"] == "S001") == "Imported Name"
+    assert len(snapshot.tables["grades"]) == 3
+    assert next(row["score"] for row in snapshot.tables["grades"] if row["student_id"] == "S001") == 8.5
     assert {student.id, "Imported Name", "S001"} <= _load_filter_identifiers(seeded["task_id"], owner.id)
-    with pytest.raises(HTTPException) as denied:
-        _load_facts(seeded["task_id"], "another-teacher")
-    assert denied.value.status_code == 404
+    with pytest.raises(NotFound):
+        load_snapshot(seeded["task_id"], "another-teacher")
 
 
 def _seed_legacy_imports(monkeypatch):

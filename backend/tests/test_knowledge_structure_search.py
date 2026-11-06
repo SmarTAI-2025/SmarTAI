@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from backend.knowledge.index import IndexedChunk, KnowledgeIndex
 from backend.knowledge.lexical import stem
-from backend.knowledge.snapshots import INDEX_VERSION, TERMS_INDEX_VERSION
+from backend.knowledge.snapshots import INDEX_VERSION
 from backend.knowledge.structure import exercise_hints
 from backend.rag.chunker import chunk_spans
 
@@ -57,9 +57,8 @@ def test_unlabelled_lists_and_footer_after_a_section_transition_are_not_exercise
     assert index.search("Exercise 2.2.1", 5) == []
 
 
-def test_v2_freeze_remains_unchanged_and_stemming_is_thread_safe():
+def test_current_index_stemming_is_thread_safe():
     chunks = pages(["Groups contain elements."])
-    assert not KnowledgeIndex(chunks, version=TERMS_INDEX_VERSION).search("group element", 1)
     assert KnowledgeIndex(chunks, version=INDEX_VERSION).search("group element", 1)
     with ThreadPoolExecutor(max_workers=4) as pool:
         assert set(pool.map(stem, ["groups"] * 20)) == {"group"}

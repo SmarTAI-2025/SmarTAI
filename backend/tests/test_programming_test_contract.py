@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.agents.ingest_agent import _saved_test_case_supported, parse_material_import_to_candidates
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.db import assignment_repository
 from backend.main import create_app
 from backend.models import ProblemInfo, TestCase

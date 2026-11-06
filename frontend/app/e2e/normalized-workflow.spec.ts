@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { currentLogin } from "./fixtures/current-auth";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 
@@ -8,13 +9,14 @@ async function loginAs(
   name: string,
   target = "/dashboard",
 ) {
-  const token = `demo-${role}-${name}`;
+  const token = await currentLogin(page, role, name);
   await page.goto("/login");
   await page.evaluate((t) => {
     window.localStorage.setItem("smartai_token", t);
     window.localStorage.setItem("smartai_locale", "en-US");
   }, token);
   await page.goto(target);
+  return token;
 }
 
 test("production router keeps the current teacher surface and rejects retired workspaces", async ({ page }) => {
@@ -50,16 +52,16 @@ for (const width of [1280, 390]) {
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     const name = `cleanup-routes-${width}`;
-    await loginAs(page, "teacher", name);
+    const token = await loginAs(page, "teacher", name);
     const created = await request.post(`${backend}/tasks/`, {
-      headers: { Authorization: `Bearer demo-teacher-${name}` },
+      headers: { Authorization: `Bearer ${token}` },
       data: { name: `Current route verification ${width}` },
     });
     expect(created.ok()).toBeTruthy();
     const { task_id: taskId } = await created.json();
     expect(taskId).toBeTruthy();
     const me = await request.get(`${backend}/auth/me`, {
-      headers: { Authorization: `Bearer demo-teacher-${name}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
     expect(me.ok()).toBeTruthy();
     const { id: owner } = await me.json();

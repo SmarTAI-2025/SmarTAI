@@ -10,11 +10,12 @@ import pytest
 from backend.db import file_repository, knowledge_repository, workflow_repository
 from backend.domain.source_outcomes import source_requires_reupload
 from backend.storage import get_storage
-from backend.tests.test_ocr_mounted_routes import client_registry, headers
+from backend.tests.test_ocr_mounted_routes import headers
 from backend.tests.test_programming_input_mapping_regressions import DOCX_MIME, docx, prepare
 from backend.tests.test_task_background_workflows import _seed_task
 from backend.tests.test_upload_contract import office_package
 from backend.tools.file_processing import extract_text_from_upload
+from backend.tests.test_ocr_mounted_routes import client_registry  # noqa: F401 - pytest fixture
 
 
 @pytest.fixture
@@ -60,7 +61,7 @@ def test_teacher_preflight_preserves_docx_bytes_and_literal_text(client_registry
     assert workflow_repository.get_operation(derived.json()["source_token"], owner_id=owner).payload["text"] == TEXT
 
 
-@pytest.mark.parametrize("path,field", [("/knowledge/documents", "id"), ("/course-materials/", "document_id"),
+@pytest.mark.parametrize("path,field", [("/course-materials/", "document_id"),
                                          ("/tasks/{task}/kb", "doc_id")])
 def test_knowledge_upload_indexes_native_word_and_downloads_original(client_registry, word, path, field):
     client, _ = client_registry
@@ -74,9 +75,7 @@ def test_knowledge_upload_indexes_native_word_and_downloads_original(client_regi
     assert document.ingestion_summary["usage"].get("initial_calls", 0) == 0
     assert knowledge_repository.list_chunks([document_id])[0].content == TEXT
     chunks = knowledge_repository.list_chunks([document_id])
-    download = f"/knowledge/documents/{document_id}"
-    if field == "doc_id":  # Task-only documents require an owner-bound citation.
-        download += f"/citations/{chunks[0].id}"
+    download = f"/knowledge/documents/{document_id}/citations/{chunks[0].id}"
     assert client.get(download + "/download", headers=headers(owner)).content == word
 
 
@@ -84,14 +83,15 @@ def test_complex_word_in_library_remains_downloadable_without_partial_index_or_r
     client, _ = client_registry
     owner, _ = _seed_task()
     body = docx("<w:p><w:r><w:t>Partial text</w:t><w:footnoteReference w:id='1'/></w:r></w:p>")
-    response = client.post("/knowledge/documents", headers=headers(owner), data={"native_only": "true"},
+    response = client.post("/course-materials/", headers=headers(owner), data={"native_only": "true"},
                            files={"file": ("book.docx", body, DOCX_MIME)})
-    assert response.status_code == 201, response.text
+    assert response.status_code == 200, response.text
     result = response.json()
-    assert result["status"] == "failed" and result["ingestion"]["error_code"] == "source_docx_incomplete"
-    assert not knowledge_repository.list_chunks([result["id"]])
-    assert client.get(f"/knowledge/documents/{result['id']}/download", headers=headers(owner)).content == body
-    retry = client.post(f"/knowledge/documents/{result['id']}/retry-failed", headers=headers(owner))
+    assert result["parse_status"] == "failed" and result["ingestion"]["error_code"] == "source_docx_incomplete"
+    assert not knowledge_repository.list_chunks([result["document_id"]])
+    document = knowledge_repository.get_document(result["document_id"], owner)
+    assert_original(owner, document.stored_file_id, body)
+    retry = client.post(f"/knowledge/documents/{result['document_id']}/retry-failed", headers=headers(owner))
     assert retry.status_code == 422 and retry.json()["error"]["code"] == "source_docx_incomplete"
 
 
@@ -227,19 +227,6 @@ async def test_durable_retry_reuses_word_original_then_requires_replacement_for_
     assert blocked.status_code == 409 and "submission_retry_requires_reupload" in blocked.body.decode()
 
 
-@pytest.mark.parametrize("hint", ["application/zip", "application/octet-stream", "application/pdf"])
-def test_legacy_question_file_checks_docx_mime_before_queue_and_preserves_verified_type(client_registry, word, hint):
-    client, _ = client_registry
-    owner, task = _seed_task()
-    result = client.post(f"/tasks/{task}/extract_problems", headers=headers(owner),
-                         files={"file": ("questions.DOCX", word, hint)})
-    originals = file_repository.list_files(owner_id=owner, assignment_id=task)
-    if hint == "application/pdf":
-        assert result.status_code in {415, 422} and not originals
-    else:
-        assert result.status_code == 200, result.text
-        assert len(originals) == 1
-        assert_original(owner, originals[0].id, word)
 
 
 

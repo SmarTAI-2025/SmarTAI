@@ -1,7 +1,7 @@
 """Actual export HTTP paths protected by the suite's multi-layer zero-OCR guard."""
 from fastapi.testclient import TestClient
 
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.main import app
 from backend.tests.test_task_finalization_contract import _prepared_task
 

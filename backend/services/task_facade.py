@@ -31,7 +31,6 @@ from backend.agents.ingest_agent import (
     SubmissionSourceParseResult,
     normalize_submission_source_identities,
     native_submission_result,
-    extract_problems,
     parse_student_answer_sources,
     parse_student_answer_sources_from_ocr_markdown,
 )
@@ -129,7 +128,6 @@ from backend.storage import get_storage
 from backend.tools.file_processing import (
     ARCHIVE_EXTENSIONS,
     SUBMISSION_UPLOAD_MAX_BYTES,
-    extract_text_from_upload,
     infer_upload_content_type,
 )
 
@@ -1997,270 +1995,6 @@ def _ensure_no_other_active_operation(
     raise InvalidTransition("The task is busy.", code="workflow_busy")
 
 
-def _has_draft_questions(task_id: str) -> bool:
-    with session_scope() as session:
-        return bool(session.scalar(
-            select(AssignmentQuestionRecord.id)
-            .where(assignment_repository.active_question_clause(), AssignmentQuestionRecord.assignment_id == task_id)
-            .limit(1)
-        ))
-
-
-def queue_task_problem_extraction(
-    *, task_id: str, owner_id: str, filename: str, content: bytes,
-    content_type: str | None, registry, input_hash: str | None = None,
-    expected_workflow_revision: int | None = None,
-    replace_confirmed: bool = False,
-    extraction_options: dict[str, Any] | None = None,
-) -> dict:
-    """Persist and claim a problem-extraction job without doing OCR/LLM work."""
-    assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
-    from backend.services.upload_contract import UploadContractError, validate_upload
-    try:
-        validated = validate_upload("legacy_problem", filename, content, content_type=content_type)
-        if validated.extension == "docx":
-            content_type = validated.media_type
-    except UploadContractError as exc:
-        raise ValidationError("The source upload is not allowed.", code=exc.code, details=exc.details) from None
-    if assignment.status not in education.EDITABLE_ASSIGNMENT_STATUSES:
-        raise InvalidTransition("assignment_not_editable")
-    has_draft_questions = _has_draft_questions(task_id)
-    workflow = workflow_repository.get_live_workflow(
-        task_id, owner_id=owner_id
-    )
-    replacement_file_ids = (
-        source_storage_repository.replacement_source_file_ids(
-            assignment_id=task_id,
-            owner_id=owner_id,
-            operation_id=workflow.extract_job_id,
-            family="problem",
-        )
-        if replace_confirmed or not has_draft_questions
-        else ()
-    )
-    base_revision = (
-        workflow.workflow_revision
-        if expected_workflow_revision is None
-        else expected_workflow_revision
-    )
-    recognition_provider_id = resolve_owner_default_provider_id(owner_id, registry)
-    if recognition_provider_id is None or resolve_owner_default_provider(
-        owner_id,
-        registry,
-    ) is None:
-        raise ValidationError(
-            "No enabled provider is available.", code="no_provider_configured"
-        )
-    digest = _hash_json({
-        "source": input_hash or hashlib.sha256(content).hexdigest(),
-        "replace_confirmed": replace_confirmed,
-        "extraction_options": extraction_options or {},
-        "recognition_provider_id": recognition_provider_id,
-    })
-    replacement_group_id = source_storage_repository.replacement_claim_group_id(
-        assignment_id=task_id,
-        family="problem",
-        replacement_file_ids=replacement_file_ids,
-    )
-    replay = find_task_operation(
-        task_id=task_id, owner_id=owner_id,
-        operation_type="problem_extraction", input_hash=digest,
-    )
-    if replay is not None and not _operation_is_retryable(replay):
-        return {
-            "status": _operation_state(replay), "task_id": task_id,
-            "job_id": replay.id, "workflow_revision": workflow.workflow_revision,
-        }
-    claim_base_revision = retryable_operation_claim_revision(
-        workflow=workflow, replay=replay, requested_revision=base_revision,
-    )
-    if has_draft_questions and not replace_confirmed:
-        _raise_replacement_confirmation_required()
-    workflow, active = _ensure_no_other_active_operation(
-        task_id=task_id, owner_id=owner_id,
-        operation_type="problem_extraction", input_hash=digest,
-        allow_supersede=replace_confirmed,
-    )
-    if active is not None:
-        return {
-            "status": "already_running", "task_id": task_id,
-            "job_id": active.id, "workflow_revision": workflow.workflow_revision,
-        }
-    operation, created = workflow_repository.create_operation(
-        assignment_id=task_id,
-        owner_id=owner_id,
-        operation_type="problem_extraction",
-        input_hash=digest,
-        payload={},
-        expires_at=time.time() + _OPERATION_PUBLICATION_TTL_SECONDS,
-        initial_status="preparing",
-    )
-    if not created:
-        return {
-            "status": _operation_state(operation), "task_id": task_id,
-            "job_id": operation.id, "workflow_revision": workflow.workflow_revision,
-        }
-    remove_reporter(operation.id)
-    try:
-        source_sha256 = hashlib.sha256(content).hexdigest()
-        stored = next((
-            item for item in file_repository.list_files(
-                owner_id=owner_id, assignment_id=task_id
-            )
-            if item.kind == "problem_source"
-            and (validated.extension != "docx" or (item.original_name == filename and item.content_type == content_type))
-            and item.sha256 == source_sha256
-            and item.availability_status == "available"
-        ), None)
-        if stored is not None:
-            source_storage_repository.renew_replacement_claim_for_staged_file(
-                owner_id=owner_id,
-                assignment_id=task_id,
-                staged_file_id=stored.id,
-                replacement_file_ids=replacement_file_ids,
-                replacement_group_id=replacement_group_id,
-            )
-        if stored is None:
-            stored = file_repository.save_file(
-                storage=get_storage(), owner_id=owner_id,
-                kind="problem_source", original_name=filename, content=content,
-                content_type=content_type or "application/octet-stream",
-                assignment_id=task_id,
-                replacement_file_ids=replacement_file_ids,
-                replacement_group_id=replacement_group_id,
-            )
-        source, _ = source_outcome_repository.register_source(
-            owner_id=owner_id, assignment_id=task_id,
-            operation_id=operation.id, expected_attempt=operation.attempt,
-            order_index=0, stored_file_id=stored.id,
-        )
-        claimed_revision = activate_workflow_operation_atomic(
-            task_id=task_id, owner_id=owner_id, operation_id=operation.id,
-            expected_operation_attempt=operation.attempt,
-            expected_workflow_revision=claim_base_revision,
-            operation_payload={
-                "source_id": source.id,
-                "base_workflow_revision": claim_base_revision,
-                "replace_confirmed": replace_confirmed,
-                "extraction_options": extraction_options or {},
-                "recognition_provider_id": recognition_provider_id,
-            },
-            workflow_changes={
-                "presentation_status": "extracting_problems",
-                "active_operation": "problem_extraction",
-                "active_job_id": operation.id, "extract_job_id": operation.id,
-                "problem_file_name": filename, "error_code": None,
-                "question_recognition_provider_id": recognition_provider_id,
-            },
-            replacement_file_ids=replacement_file_ids,
-            replacement_keep_file_ids=(stored.id,),
-        )
-    except VersionConflict:
-        workflow_repository.update_operation(
-            operation.id, owner_id=owner_id,
-            expected_attempt=operation.attempt, status="error",
-            error_code="stale_revision", completed_at=time.time(),
-        )
-        _raise_stale_revision()
-    except Exception:
-        workflow_repository.update_operation(
-            operation.id, owner_id=owner_id,
-            expected_attempt=operation.attempt, status="error",
-            error_code="problem_extraction_failed", completed_at=time.time(),
-        )
-        raise
-    return {
-        "status": "started", "task_id": task_id, "job_id": operation.id,
-        "workflow_revision": claimed_revision,
-        "_job_attempt": operation.attempt,
-        "_recognition_provider_id": recognition_provider_id,
-    }
-
-
-async def run_task_problem_extraction(
-    *, task_id: str, owner_id: str, job_id: str, filename: str,
-    content: bytes, registry, job_attempt: int,
-    claimed_workflow_revision: int,
-    replace_confirmed: bool, extraction_options: dict[str, Any] | None = None,
-    recognition_provider_id: str | None = None,
-) -> None:
-    """Run a previously claimed extraction job and durably record its outcome."""
-    try:
-        provider = (
-            _registry_provider(registry, recognition_provider_id, owner_id)
-            if recognition_provider_id
-            else None
-        )
-        if provider is None:
-            raise ValidationError(
-                "No enabled provider is available.", code="no_provider_configured"
-            )
-        reporter = get_or_create_reporter(job_id)
-        await reporter.configure_workflow(
-            "problem_recognition",
-            ("reading_source", "recognizing_structure", "validating_questions", "completed"),
-        )
-        await reporter.set_phase("extracting")
-        await reporter.set_stage_progress(
-            "reading_source", total_steps=4, completed_steps=0,
-            message="Reading problem source.",
-        )
-        from backend.services.question_sources import read_question_source, attach_recognition_review
-        from backend.services.stage_provider_routing import StageProviderRoute
-        read = await read_question_source(
-            owner_id=owner_id, task_id=task_id, content=content, filename=filename,
-            route=StageProviderRoute(route_id=recognition_provider_id, kind="llm", provider=provider),
-            registry=registry, extraction_hint=str((extraction_options or {}).get("extraction_hint") or ""),
-            options=(extraction_options or {}).get("recognition_options"), reporter=reporter,
-            text_reader=extract_text_from_upload,
-            media_slot_timeout_seconds=None,
-        )
-        text = read.text
-        problem_data: dict[str, dict] = {}
-        await extract_problems(
-            text, provider, problem_data, reporter=reporter,
-            structure_mode=str((extraction_options or {}).get("structure_mode") or "organized"),
-            extraction_hint=str((extraction_options or {}).get("extraction_hint") or ""),
-            confirmed_candidates=list((extraction_options or {}).get("confirmed_candidates") or []),
-            manage_progress_lifecycle=False,
-        )
-        attach_recognition_review(problem_data, [{"recognition": read.recognition}])
-        await reporter.set_stage_progress(
-            "validating_questions", total_steps=4, completed_steps=3,
-            message="Validating recognized questions.",
-        )
-        await reporter.set_stage_progress(
-            "completed", total_steps=4, completed_steps=4,
-            message="Problem recognition completed.",
-        )
-        await reporter.set_phase("done")
-        snapshot = (await reporter.snapshot()).model_dump(mode="json")
-        _replace_draft_questions(
-            task_id, owner_id, problem_data, filename,
-            expected_workflow_revision=claimed_workflow_revision,
-            replace_confirmed=replace_confirmed,
-            operation_id=job_id,
-            expected_operation_attempt=job_attempt,
-            operation_progress=snapshot,
-            recognition_provider_id=recognition_provider_id,
-        )
-    except Exception as exc:
-        code = classify_background_error(exc, "problem_extraction_failed")
-        logger.warning(
-            "Background problem extraction failed; job_id=%s code=%s exception_type=%s",
-            job_id,
-            code,
-            type(exc).__name__,
-        )
-        _fail_operation(
-            task_id, owner_id, job_id, job_attempt, code
-        )
-    finally:
-        # The operation row stores the terminal snapshot. Do not retain a
-        # second in-memory copy of task/question progress after the worker.
-        remove_reporter(job_id)
-
-
 def _registry_for_owner(owner_id: str):
     from backend.llm.registry import _build_scoped_registry
 
@@ -2278,37 +2012,6 @@ def _registry_for_owner(owner_id: str):
             is_active=record.is_active,
         )
     return _build_scoped_registry(user)
-
-
-async def run_durable_problem_extraction(operation) -> None:
-    from backend.services.problem_extraction import run_problem_extraction
-
-    try:
-        await run_problem_extraction(
-            operation,
-            registry_factory=_registry_for_owner,
-            extract_text=extract_text_from_upload,
-            extract_questions=extract_problems,
-            commit=_replace_draft_questions,
-        )
-    except Exception as exc:
-        from backend.domain.errors import LeaseLost
-
-        if isinstance(exc, LeaseLost):
-            raise
-        code = (
-            _detail_error(exc, "problem_extraction_failed")
-            if isinstance(exc, DomainError)
-            else "problem_extraction_failed"
-        )
-        _fail_operation(
-            operation.assignment_id,
-            operation.owner_id,
-            operation.operation_id,
-            operation.attempt,
-            code,
-            expected_lease_token=operation.lease_token,
-        )
 
 
 def _replace_draft_questions(
@@ -4601,7 +4304,7 @@ def task_state(*, task_id: str, owner_id: str) -> dict:
 def _project_recognition_progress(payload):
     progress = payload.get("progress")
     if progress is not None and (payload.get("status") in {"extracting_problems", "parsing_submissions"}
-            or payload.get("active_operation") in {"question_preparation", "problem_extraction", "submission_recognition"}
+            or payload.get("active_operation") in {"question_preparation", "submission_recognition"}
             or (isinstance(progress, dict) and isinstance(progress.get("job_id"), str) and progress["job_id"] in {
                 payload.get("extract_job_id"), payload.get("parse_job_id")
             } - {None})):

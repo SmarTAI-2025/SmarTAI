@@ -578,18 +578,6 @@ def _resolve_problem_source(
         )
         if resolved is not None:
             return resolved
-    elif operation.operation_type == "problem_extraction":
-        source_id = operation.payload.get("source_id")
-        if isinstance(source_id, str):
-            return _problem_from_workflow_source(
-                storage=storage,
-                task_id=task_id,
-                owner_id=owner_id,
-                source_id=source_id,
-                expected_operation_id=operation.id,
-                expected_attempt=operation.attempt,
-                expected_operation_type="problem_extraction",
-            )
     return _ResolvedSource(
         descriptor=_unavailable_descriptor(
             display_name=workflow.problem_file_name or "source",

@@ -78,18 +78,18 @@ def test_wrong_scope_refresh_cannot_rotate_or_revoke_the_other_session(monkeypat
 
 
 @pytest.mark.parametrize("role", ["teacher", "admin"])
-def test_legacy_access_only_preserves_public_teacher_sessions(monkeypatch, tmp_path, role):
+def test_unscoped_access_is_rejected_for_every_role(monkeypatch, tmp_path, role):
     public, _, admin, teacher = accounts()
     payload = decode_token(teacher if role == "teacher" else admin)
     payload.pop("session_scope")
     legacy = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
     private = private_app(monkeypatch, tmp_path)
-    assert public.get("/auth/me", headers=headers(legacy)).status_code == (200 if role == "teacher" else 401)
+    assert public.get("/auth/me", headers=headers(legacy)).status_code == 401
     assert private.get("/api/auth/me", headers=headers(legacy)).status_code == 401
 
 
 @pytest.mark.parametrize("role", ["teacher", "admin"])
-def test_legacy_refresh_only_preserves_public_teacher_sessions(monkeypatch, tmp_path, role):
+def test_unscoped_refresh_is_rejected_for_every_role(monkeypatch, tmp_path, role):
     public, user, _, _ = accounts()
     raw = "legacy-" + uuid.uuid4().hex
     with session_scope() as session:
@@ -99,10 +99,7 @@ def test_legacy_refresh_only_preserves_public_teacher_sessions(monkeypatch, tmp_
     assert private.post("/api/auth/refresh").status_code == 401
     put_cookie(public, settings.refresh_cookie_name, raw)
     refreshed = public.post("/auth/refresh")
-    assert refreshed.status_code == (200 if role == "teacher" else 401)
-    if role == "teacher":
-        assert decode_token(refreshed.json()["token"])["session_scope"] == "public"
-        assert public.cookies.get(settings.refresh_cookie_name).startswith("public.")
+    assert refreshed.status_code == 401
 
 
 def test_password_change_invalidates_both_scopes(monkeypatch, tmp_path):

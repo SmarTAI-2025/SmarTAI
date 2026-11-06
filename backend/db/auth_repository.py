@@ -99,19 +99,6 @@ def revoke_access_session(session_id: str, user_id: str) -> None:
                 record.revoked_at = time.time()
 
 
-def adopt_legacy_session(user: User, *, days: int, session_scope: Literal["public", "private-admin"]) -> tuple[str, str] | None:
-    """Upgrade an unexpired, already authenticated pre-idle JWT on real input."""
-    with user_auth_lock(user.id):
-        with database_session() as session:
-            current = _locked_user(session, user.id)
-            if (current is None or not current.is_active or current.auth_version != user.auth_version
-                    or current.auth_invalid_before != user.auth_invalid_before):
-                return None
-            now = time.time()
-            raw = _add_refresh_session(session, user_id=user.id, days=days, now=now, session_scope=session_scope)
-            return raw, _session_access(_user_from_record(current), _hash_token(raw), now, session_scope)
-
-
 def _canonical_email(email: str | None) -> str:
     if not email:
         return ""
@@ -295,7 +282,7 @@ def authenticate_and_create_session(
 
 
 def refresh_session_matches_scope(raw: str, session_scope: str) -> bool:
-    return raw.startswith(session_scope + ".") or (session_scope == "public" and "." not in raw)
+    return raw.startswith(session_scope + ".")
 
 
 def rotate_refresh_session(raw: str, days: int, *, session_scope: Literal["public", "private-admin"] = "public") -> tuple[str, User, str] | None:
@@ -317,8 +304,6 @@ def rotate_refresh_session(raw: str, days: int, *, session_scope: Literal["publi
         with database_session() as session:
             user_record = _locked_user(session, user_id)
             if user_record is None or not user_record.is_active:
-                return None
-            if "." not in raw and user_record.role != "teacher":
                 return None
             record = session.scalar(
                 select(RefreshSessionRecord)

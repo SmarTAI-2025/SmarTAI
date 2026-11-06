@@ -22,8 +22,9 @@ from backend.tests.test_submission_source_pipeline_integrity import _create_oper
 from backend.tests.test_submission_incremental import _claim, _registry
 from backend.tests.test_task_background_workflows import _BackgroundTasks, _seed_task
 from backend.tests.test_upload_contract import office_package
-from backend.tests.test_ocr_mounted_routes import client_registry, headers
+from backend.tests.test_ocr_mounted_routes import headers
 from backend.tools import file_processing as files
+from backend.tests.test_ocr_mounted_routes import client_registry  # noqa: F401 - pytest fixture
 
 CODE = "# 辅助函数在前\ndef helper(x):\n\treturn x + 1\n\ndef add(a, b):\n\treturn helper(a) + b\n"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -270,7 +271,7 @@ def test_docx_capability_matches_native_teacher_preflight(client_registry):
     capability = client.get(f"/tasks/{task}/question-preparation/capabilities", headers=headers(owner))
     assert capability.status_code == 200 and capability.json()["reader"]["docx"] is True
     body = docx('<w:p><w:r><w:t>1. Implement add(a,b).</w:t></w:r></w:p>')
-    result = client.post(f"/tasks/{task}/problem-sources/preflight", headers=headers(owner),
+    result = client.post(f"/tasks/{task}/question-preparation/sources/preflight", headers=headers(owner),
         data={"role": "problem", "structure_mode": "organized"}, files={"file": ("problem.docx", body, DOCX_MIME)})
     assert result.status_code == 200, result.text
     assert result.json()["status"] == "ready"

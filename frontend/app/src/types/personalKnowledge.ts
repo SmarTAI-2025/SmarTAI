@@ -27,7 +27,7 @@ export interface PersonalKnowledgeDocument {
   created_at: number;
   updated_at: number;
   ingestion?: KnowledgeIngestionSummary;
-  content_version?: string;
+  content_version?: string | null;
 }
 
 export type KnowledgeActivityFilter = "all" | "active" | "attention" | "completed";

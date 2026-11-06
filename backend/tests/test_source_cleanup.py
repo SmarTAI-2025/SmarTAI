@@ -869,10 +869,8 @@ async def test_task_delete_removes_only_knowledge_link_and_retains_library_objec
     seeded = _prepared_task()
     storage = LocalStorage(tmp_path / "retained-knowledge")
     content = b"long-lived-knowledge"
-    from backend.db.knowledge_repository import (
-        replace_document_chunks,
-        set_task_documents,
-    )
+    from backend.tests.knowledge_helpers import replace_document_chunks
+    from backend.db.knowledge_repository import set_task_documents
     from backend.services.knowledge_storage import persist_knowledge_upload
 
     upload = persist_knowledge_upload(
@@ -922,10 +920,8 @@ async def test_task_delete_enqueues_last_reference_task_only_knowledge_cleanup(
     seeded = _prepared_task()
     storage = LocalStorage(tmp_path / "task-only-knowledge")
     content = b"temporary-task-knowledge"
-    from backend.db.knowledge_repository import (
-        replace_document_chunks,
-        set_task_documents,
-    )
+    from backend.tests.knowledge_helpers import replace_document_chunks
+    from backend.db.knowledge_repository import set_task_documents
     from backend.db.knowledge_storage_repository import get_document_storage
     from backend.services.knowledge_storage import (
         KnowledgeStorageWorker,

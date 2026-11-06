@@ -379,7 +379,7 @@ def test_demo_task_knowledge_reads_preserve_document_and_citation_ownership(enab
     assert enabled.get(url, headers=headers(second["token"])).status_code == 404
     assert enabled.get(url + "/download", headers=headers(second["token"])).status_code == 404
     assert enabled.post("/knowledge/search", headers=headers(second["token"]), json=query).status_code == 404
-    assert enabled.get("/knowledge/documents", headers=headers(first["token"])).status_code == 403
+    assert enabled.get("/course-materials/", headers=headers(first["token"])).status_code == 403
 
 
 @pytest.mark.parametrize("change_provider_before_worker", [False, True])

@@ -36,7 +36,7 @@ def _snapshot():
 
 def _case(state="draft"):
     from fastapi.testclient import TestClient
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.main import app
 
     seeded = _prepared_task()
@@ -101,7 +101,7 @@ def test_unavailable_run_does_not_consume_revision(run_state):
 
 
 def test_another_teacher_cannot_edit_result():
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.db.models import UserRecord
 
     _, client, url, payload = _case("released")

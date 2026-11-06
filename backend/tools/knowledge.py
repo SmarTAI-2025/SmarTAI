@@ -1,9 +1,9 @@
 """
 Knowledge retrieval tool (RAG over external knowledge base).
 
-The application registers a combined persistent and in-memory retriever at
-startup. Persistent documents are selected per assignment; the in-memory
-retriever remains available to the unchanged grading algorithm.
+The application registers the persistent, owner-scoped retriever at startup.
+Documents are selected per assignment; grading runs freeze the selected
+content versions so later uploads cannot change an existing run's references.
 
 Skills call `retrieve(query, k=5, scope=task_id)` and get back a list of
 relevant chunks. The adapter passes the assignment ID through the algorithm's
@@ -59,7 +59,7 @@ def citations(chunks):
 
 class KnowledgeRetriever:
     """
-    Base class. Real implementation in backend/rag/store.py subclasses this.
+    Base class. The durable implementation lives in backend/knowledge/retriever.py.
 
     NoOpRetriever (default) returns [] — skills handle this gracefully.
     """

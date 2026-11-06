@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
 
-from backend.auth import create_token
+from backend.tests.auth_helpers import create_session_token as create_token
 from backend.db import assignment_repository, grading_repository, workflow_repository
 from backend.db.provider_repository import upsert_provider_config
 from backend.main import create_app

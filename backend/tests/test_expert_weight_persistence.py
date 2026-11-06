@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 def test_saved_expert_weights_reload_and_freeze_with_the_grading_run():
     from backend.api import tasks
-    from backend.auth import create_token
+    from backend.tests.auth_helpers import create_session_token as create_token
     from backend.config import settings
     from backend.db.provider_repository import upsert_provider_config
     from backend.db import workflow_repository

@@ -23,8 +23,6 @@ def _seed_admin() -> None:
     )
 
 
-
-
 def test_refresh_rotates_cookie_and_logout_revokes_it():
     _seed_admin()
     client = TestClient(app)
@@ -49,6 +47,21 @@ def test_expired_refresh_session_is_rejected():
         record = session.scalar(select(RefreshSessionRecord).where(RefreshSessionRecord.token_hash == cookie_hash))
         assert record is not None
         record.expires_at = 0
+    assert client.post("/auth/refresh").status_code == 401
+
+
+def test_unscoped_refresh_cookie_is_rejected_even_if_its_record_exists():
+    _seed_admin()
+    client = TestClient(app)
+    assert client.post("/auth/login", json={"username": "admin", "password": "admin-pass"}).status_code == 200
+    current = client.cookies.get("smartai_refresh")
+    old_format = current.split(".", 1)[1]
+    with session_scope() as session:
+        record = session.scalar(select(RefreshSessionRecord).where(
+            RefreshSessionRecord.token_hash == hashlib.sha256(current.encode()).hexdigest()))
+        record.token_hash = hashlib.sha256(old_format.encode()).hexdigest()
+    client.cookies.clear()
+    client.cookies.set("smartai_refresh", old_format)
     assert client.post("/auth/refresh").status_code == 401
 
 
@@ -171,7 +184,7 @@ def test_real_jwt_authentication_is_unchanged(monkeypatch):
     assert response.json()["id"] == "jwt-teacher"
 
 
-def test_password_hash_supports_128_unicode_chars_and_legacy_bcrypt():
+def test_password_hash_supports_128_unicode_chars_and_rejects_legacy_bcrypt():
     long_password = "密" * 128
     password_hash = hash_password(long_password)
 
@@ -179,7 +192,7 @@ def test_password_hash_supports_128_unicode_chars_and_legacy_bcrypt():
     assert not verify_password(("密" * 127) + "错", password_hash)
 
     legacy_hash = bcrypt.hashpw(b"legacy-password", bcrypt.gensalt()).decode("utf-8")
-    assert verify_password("legacy-password", legacy_hash)
+    assert not verify_password("legacy-password", legacy_hash)
     assert not verify_password("wrong-password", legacy_hash)
 
 
