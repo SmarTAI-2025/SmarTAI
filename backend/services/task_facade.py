@@ -31,6 +31,8 @@ from starlette.concurrency import run_in_threadpool
 from backend.agents.ingest_agent import (
     SubmissionSourceParseResult,
     normalize_submission_source_identities,
+    native_submission_result,
+    recover_native_submission_result,
     extract_problems,
     parse_student_answer_sources,
     parse_student_answer_sources_from_ocr_markdown,
@@ -61,6 +63,7 @@ from backend.db.models import (
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
+from backend.domain.grading_review import result_programming_review_reason, teacher_resolved_programming_score
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
 from backend.domain.errors import (
@@ -69,7 +72,6 @@ from backend.domain.errors import (
     InvalidTransition,
     LeaseLost,
     NotFound,
-    ResultNotReleasable,
     ValidationError,
     VersionConflict,
 )
@@ -78,7 +80,7 @@ from backend.domain.source_storage import (
     DELAYED_SOURCE_OPERATION_TYPES,
     TASK_DELETE_OPERATION,
 )
-from backend.models import TaskGradingSetup
+from backend.models import TaskGradingSetup, is_programming_question_type
 from backend.models import User
 from backend.llm.registry import (
     resolve_owner_default_provider,
@@ -86,8 +88,10 @@ from backend.llm.registry import (
 )
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import grading_runs
+from backend.services.programming_submission_mapping import SOURCE_LANGUAGE_FLAGS, NATIVE_SOURCE_MAPPING_VERSION, is_source_file, may_contain_source
 from backend.services.question_sources import read_question_source
 from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE
+from backend.services.submission_archive_ownership import MULTIPLE_SOURCE_FILES, reconcile_archive_results
 from backend.services.submission_work_budget import submission_work_budget, current_budget
 from backend.services.background_errors import (
     SAFE_BACKGROUND_ERROR_CODES,
@@ -95,6 +99,7 @@ from backend.services.background_errors import (
     is_retryable_background_error,
     safe_background_error_code,
 )
+from backend.services.programming_test_contract import ProgrammingCaseError, adapt_programming_cases
 from backend.services.result_artifacts import (
     ARTIFACT_SCHEMA_VERSION,
     artifact_download_filename,
@@ -668,7 +673,8 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
             ),
             "failure_phase": safe_phase,
             "requires_reupload": (
-                external_status == "failed" and outcome is not None
+                outcome is not None and (external_status == "failed" or
+                    (external_status == "manual_review" and outcome.stable_error_code == MULTIPLE_SOURCE_FILES))
                 and source_requires_reupload(outcome.stable_error_code, outcome.retryable)
             ),
             "retryable": (
@@ -836,8 +842,19 @@ def _grading_failure_code(run) -> str | None:
         "该题未执行：生产环境禁止宿主代码执行。隔离执行尚未接通，请人工复核。"
         for result in missing for expert in (result.ai_expert_results or []) if isinstance(expert, dict)
     )
-    if "programming_execution_unavailable" in kinds or legacy_execution_unavailable:
+    infrastructure = {"programming_execution_unavailable", "native_runner_unavailable", "toolchain_unavailable", "native_header_unavailable"}
+    if infrastructure.intersection(kinds) or legacy_execution_unavailable:
         return "programming_execution_unavailable"
+    if "programming_return_value_unavailable" in kinds:
+        return "programming_return_value_unavailable"
+    material_errors = {"programming_case_configuration_invalid", "programming_conflicting_expectations",
+                       "programming_cases_unavailable", "programming_reference_conflict", "programming_no_cases",
+                       "programming_input_domain_unverified"}
+    if missing and all(result.ai_expert_results and all(
+        isinstance(expert, dict) and expert.get("error_kind") in material_errors
+        for expert in result.ai_expert_results
+    ) for result in missing):
+        return "programming_test_material_needs_review"
     if "quota_exhausted" in kinds:
         return "provider_rate_limited"
     if "parse_failed" in kinds:
@@ -924,6 +941,17 @@ def _math_rubric_advisory(question, plan, language: str) -> list[dict]:
     }]
 
 
+def _validated_test_cases(stem, question_type, cases, *, edited=False):
+    if cases is None or not is_programming_question_type(question_type):
+        return cases
+    try:
+        return [case.model_dump(mode="json", exclude_unset=True) for case in
+                adapt_programming_cases(stem or "", cases, edited=edited)]
+    except ProgrammingCaseError as exc:
+        raise ValidationError(str(exc), code="invalid_programming_test_cases",
+                              details={"case_number": exc.case_number, "issue": exc.issue}) from exc
+
+
 def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> dict:
     presentation = dict((question.source or {}).get("presentation") or {})
     # Older manually entered drafts used a value outside the public contract.
@@ -944,6 +972,13 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     rubric_summary = summarize_rubric_points(
         question.criterion or "", max_score, structure
     ).model_dump()
+    # Give the editor valid old function-only rows in its existing text fields.
+    # Invalid legacy data must remain visible so the teacher can correct it.
+    cases = question.test_cases
+    try:
+        cases = _validated_test_cases(question.stem, question.type, cases)
+    except ValidationError:
+        pass
     return {
         "q_id": question.q_id,
         "number": question.number,
@@ -963,7 +998,7 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         "review_status": presentation.get("review_status", "needs_review"),
         "reference_answer": question.reference_answer,
         "solution_code": presentation.get("solution_code"),
-        "test_cases": question.test_cases,
+        "test_cases": cases,
         "material_provenance": presentation.get("material_provenance", {}),
         "ai_completion_provenance": presentation.get("ai_completion_provenance", {}),
         "preparation_issues": [
@@ -1985,6 +2020,13 @@ def queue_task_problem_extraction(
 ) -> dict:
     """Persist and claim a problem-extraction job without doing OCR/LLM work."""
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
+    from backend.services.upload_contract import UploadContractError, validate_upload
+    try:
+        validated = validate_upload("legacy_problem", filename, content, content_type=content_type)
+        if validated.extension == "docx":
+            content_type = validated.media_type
+    except UploadContractError as exc:
+        raise ValidationError("The source upload is not allowed.", code=exc.code, details=exc.details) from None
     if assignment.status not in education.EDITABLE_ASSIGNMENT_STATUSES:
         raise InvalidTransition("assignment_not_editable")
     has_draft_questions = _has_draft_questions(task_id)
@@ -2071,6 +2113,7 @@ def queue_task_problem_extraction(
                 owner_id=owner_id, assignment_id=task_id
             )
             if item.kind == "problem_source"
+            and (validated.extension != "docx" or (item.original_name == filename and item.content_type == content_type))
             and item.sha256 == source_sha256
             and item.availability_status == "available"
         ), None)
@@ -2476,7 +2519,7 @@ def _replace_draft_questions(
                 criterion=str(raw.get("criterion") or ""),
                 max_score=float(raw.get("max_score") or 10),
                 reference_answer=raw.get("reference_answer"),
-                test_cases=raw.get("test_cases"), source=source,
+                test_cases=_validated_test_cases(raw.get("stem"), raw.get("type"), raw.get("test_cases")), source=source,
                 version=retained_versions.get(str(raw.get("q_id") or q_id), 0) + 1, created_at=now, updated_at=now,
             ))
         assignment.status = education.AssignmentStatus.READY.value
@@ -2530,6 +2573,11 @@ def queue_task_submission_parsing(
     if manual_saved_sources is not None:
         raise InvalidTransition("Saved text AI recovery has been retired.", code="saved_text_recovery_retired")
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
+    from backend.services.upload_contract import UploadContractError, validate_submission_upload
+    try:
+        validate_submission_upload(filename, content)
+    except UploadContractError as exc:
+        raise ValidationError("The submission upload is not allowed.", code=exc.code, details=exc.details) from None
     questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
     if not questions:
         raise InvalidTransition("problems_required")
@@ -2834,21 +2882,28 @@ def load_submission_retry_upload(
                 and candidate.kind == "submission_source"
             ):
                 stored = candidate
-    if stored is None or stored.size_bytes > SUBMISSION_UPLOAD_MAX_BYTES:
+    from backend.services.upload_contract import UploadContractError, upload_limit, validate_submission_upload
+    maximum = upload_limit("submission_upload_max_bytes", SUBMISSION_UPLOAD_MAX_BYTES)
+    if stored is None or stored.size_bytes > maximum:
         raise InvalidTransition(
             "The original upload is not available for retry.",
             code="submission_retry_source_unavailable",
         )
     storage = get_storage()
     with storage.open(stored.storage_key) as stream:
-        content = stream.read(SUBMISSION_UPLOAD_MAX_BYTES + 1)
-    if not content or len(content) > SUBMISSION_UPLOAD_MAX_BYTES:
+        content = stream.read(maximum + 1)
+    if (not content or len(content) > maximum or len(content) != stored.size_bytes
+            or hashlib.sha256(content).hexdigest() != stored.sha256):
         raise InvalidTransition(
             "The original upload is not available for retry.",
             code="submission_retry_source_unavailable",
         )
+    try:
+        validate_submission_upload(stored.original_name, content)
+    except UploadContractError as exc:
+        raise ValidationError("The saved upload is not allowed.", code=exc.code, details=exc.details) from None
     return {
-        "filename": str(payload.get("filename") or stored.original_name),
+        "filename": stored.original_name,
         "content": content,
         "content_type": payload.get("content_type") or stored.content_type,
         "identity_mode": str(payload.get("identity_mode") or "filename"),
@@ -2920,6 +2975,46 @@ def _load_submission_results(artifact) -> list[SubmissionSourceParseResult]:
         failure_phase=item.get("failure_phase"),
         retryable=bool(item.get("retryable")),
     ) for item in payload if isinstance(item, dict)]
+
+
+async def _restore_legacy_native_result(result, problems, task_id, owner_id):
+    from backend.tools.file_processing import decode_text_bytes
+    version = ((result.student or {}).get("recognition") or {}).get("native_source_mapping_version")
+    if (not result.student or version == NATIVE_SOURCE_MAPPING_VERSION
+            or not may_contain_source(result.filename, problems)
+            or result.stable_error_code == "provider_submit_uncertain"):
+        return result
+    # Earlier checkpoints may contain a model excerpt or an outdated entry match. The original file
+    # is owner-scoped, size- and hash-verified; never repair it from teacher code.
+    def original_bytes():
+        stored = get_file(file_id=result.stored_file_id, owner_id=owner_id)
+        source = source_outcome_repository.get_source(result.source_id, owner_id=owner_id)
+        if (stored is None or source.stored_file_id != stored.id or source.assignment_id != task_id
+                or stored.assignment_id != task_id or stored.sha256 != source.sha256
+                or stored.availability_status != "available"
+                or stored.kind not in {"submission_source", "submission_archive_member"}
+                or stored.size_bytes > SUBMISSION_UPLOAD_MAX_BYTES):
+            raise InvalidTransition("The original submission is unavailable.", code="submission_retry_source_unavailable")
+        with get_storage().open(stored.storage_key) as stream:
+            data = stream.read(stored.size_bytes + 1)
+        if len(data) != stored.size_bytes or hashlib.sha256(data).hexdigest() != stored.sha256:
+            raise InvalidTransition("The original submission changed.", code="submission_retry_source_unavailable")
+        return data
+    body = await run_in_threadpool(original_bytes)
+    if result.filename.lower().endswith(".py"):
+        from fastapi import HTTPException
+        from backend.tools.file_processing import extract_text_from_upload
+        try:
+            text = await extract_text_from_upload(body, result.filename, purpose="submissions")
+        except HTTPException as exc:
+            code = exc.detail.get("code") if isinstance(exc.detail, dict) else None
+            return replace(result, student=None, matched_answer_count=0, status="parse_failed",
+                           stable_error_code=code or "source_decode_failed", failure_phase="source_read",
+                           retryable=False)
+    else:
+        text = await decode_text_bytes(body)
+    source = PreparedSubmissionSource(result.source_id, result.stored_file_id, result.filename, "text/plain", text)
+    return await recover_native_submission_result(source, problems, result)
 
 
 def _reusable_submission_results(*, owner_id, task_id, payload, questions, include_incomplete=False):
@@ -3017,10 +3112,14 @@ def _submission_result_incomplete(result):
     student = result.student or {}
     recognition = student.get("recognition") or {}
     coverage = recognition.get("coverage") or {}
+    # A native file can be fully read while its question association still
+    # awaits the teacher. Replaying the file cannot resolve that review.
+    native = recognition.get("native_source_mapping_version") in (1, 2, NATIVE_SOURCE_MAPPING_VERSION)
+    mapped = {"recognition_manual_pending"} if native else set()
     return bool(any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
                 or recognition.get("error_code")
                 or recognition.get("missing_question_ids")
-                or any(_answer_recognition_failures(answer.get("flag")) for answer in student.get("stu_ans", [])))
+                or any(_answer_recognition_failures(answer.get("flag")) - mapped for answer in student.get("stu_ans", [])))
 
 
 def _merge_submission_retry_answers(result, saved, target_ids, questions):
@@ -3154,6 +3253,17 @@ async def run_task_submission_parsing(
         assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
         questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
         await reporter.set_totals(students=0, questions=len(questions))
+        problem_data = {q.q_id: _serialize_problem(q) for q in questions}
+        programming = any(is_programming_question_type(q.type) for q in questions)
+
+        def finalize_identities(values, *, restored=False):
+            if filename.lower().endswith(ARCHIVE_EXTENSIONS) and (programming or any(is_source_file(r.filename) for r in values)):
+                values = reconcile_archive_results(values, identity_mode, roster_entries if identity_mode == "roster" else [],
+                                                   programming=programming)
+            elif restored:
+                return values
+            return normalize_submission_source_identities(values)
+
         results = None
         if leased_operation is not None:
             parsed_artifact = _submission_result_artifact(
@@ -3163,7 +3273,9 @@ async def run_task_submission_parsing(
                 job_attempt=job_attempt,
             )
             if parsed_artifact is not None:
-                results = _load_submission_results(parsed_artifact)
+                results = [await _restore_legacy_native_result(r, problem_data, task_id, owner_id)
+                           for r in _load_submission_results(parsed_artifact)]
+                results = finalize_identities(results, restored=True)
                 # Recovery must not publish an old partial parse or dispatch
                 # another paid read. Leave it failed for the explicit retry.
                 results = [replace(result, status="parse_failed",
@@ -3244,10 +3356,14 @@ async def run_task_submission_parsing(
                 await save_pages((read.recognition or {}).get("page_diagnostics"))
                 return read
 
-            reusable = _reusable_submission_results(
-                owner_id=owner_id, task_id=task_id, payload=frozen, questions=questions)
             retry_results = _reusable_submission_results(
                 owner_id=owner_id, task_id=task_id, payload=frozen, questions=questions, include_incomplete=True)
+            retry_results = {key: await _restore_legacy_native_result(result, problem_data, task_id, owner_id)
+                             for key, result in retry_results.items()}
+            reusable = {key: result for key, result in retry_results.items()
+                        if result.status in {"parsed", "identity_conflict"} and result.student
+                        and {a["q_id"] for a in result.student["stu_ans"]} == set(problem_data)
+                        and not _submission_result_incomplete(result)}
             reused, partials, source_question_ids, source_contexts = {}, {}, {}, {}
 
             def reuse_source(raw, source_id, stored_file_id):
@@ -3255,7 +3371,7 @@ async def run_task_submission_parsing(
                 result = reusable.get((raw.filename, hashlib.sha256(raw.content).hexdigest()))
                 if result is None:
                     saved = retry_results.get((raw.filename, hashlib.sha256(raw.content).hexdigest()))
-                    if saved is not None:
+                    if saved is not None and saved.student is not None:
                         good_ids = {answer["q_id"] for answer in saved.student.get("stu_ans", [])
                                     if "content" in answer and not _answer_recognition_failures(answer.get("flag"))}
                         targets = [q.q_id for q in questions if q.q_id not in good_ids]
@@ -3272,7 +3388,6 @@ async def run_task_submission_parsing(
             from backend.services.submission_incremental import (
                 invalidate_answer_units, merge_parse_repair, merge_source_answer_units, split_submission_question_units,
             )
-            problem_data = {q.q_id: _serialize_problem(q) for q in questions}
             from backend.agents.question_preparation_agent import _major_question_generation_concurrency
             parse_capacity = asyncio.Semaphore(_major_question_generation_concurrency(provider) if provider else 4)
             boundary_invalidations = {}
@@ -3305,7 +3420,9 @@ async def run_task_submission_parsing(
                     await run_in_threadpool(source_outcome_repository.assert_source_write_fence,
                         owner_id=owner_id, assignment_id=task_id, operation_id=job_id,
                         expected_attempt=job_attempt, expected_lease_token=leased_operation.lease_token)
-                    key = _hash_json(dict(version=3, operation_id=job_id, attempt=job_attempt,
+                    native = await native_submission_result(source, problem_data, set(target_ids), identity_mode, roster_entries or [])
+                    parser_version = f"native-{NATIVE_SOURCE_MAPPING_VERSION}" if native else 3
+                    key = _hash_json(dict(version=parser_version, operation_id=job_id, attempt=job_attempt,
                         file_id=source.stored_file_id, filename=source.filename,
                         text_sha256=hashlib.sha256(source.text.encode()).hexdigest(), questions=problem_data,
                         route=route_fingerprint, identity_mode=identity_mode, roster=roster_entries or [],
@@ -3336,7 +3453,7 @@ async def run_task_submission_parsing(
                     heartbeat = recognition_runs._RecognitionLeaseHeartbeat(lease_context, worker=worker)
                     heartbeat.start()
                     try:
-                        if child.checkpoint:
+                        if child.checkpoint and native is None:
                             return SubmissionSourceParseResult(
                                 source.source_id, source.stored_file_id, source.filename,
                                 "parse_failed", None, None, 0, (), "provider_submit_uncertain",
@@ -3346,7 +3463,7 @@ async def run_task_submission_parsing(
                             owner_id=owner_id, expected_attempt=child.attempt,
                             expected_checkpoint_revision=child.checkpoint_revision,
                             expected_lease_token=child.lease_token, stage="parser_pending", checkpoint={"pending": True})
-                        if not route.is_baidu_ocr:
+                        if not route.is_baidu_ocr and native is None:
                             checkpoint = dict(leased_operation.checkpoint_data)
                             checkpoint["structure_inflight"] = {**checkpoint.get("structure_inflight", {}),
                                 child.id: {"file_id": source.stored_file_id, "question_ids": sorted(target_ids)}}
@@ -3355,7 +3472,7 @@ async def run_task_submission_parsing(
                         try:
                             from backend.llm.request_timeouts import response_timeout_scope
                             with response_timeout_scope(settings.llm_timeout, response_only=True) as response_scope:
-                                result = attach_submission_recognition([await invoke()], [source])[0]
+                                result = attach_submission_recognition([native or await invoke()], [source])[0]
                                 if response_scope.submission_may_exist:
                                     result = replace(result, status="parse_failed",
                                         stable_error_code="provider_submit_uncertain", failure_phase="recognition", retryable=False)
@@ -3575,7 +3692,7 @@ async def run_task_submission_parsing(
                         task.cancel()
                 await asyncio.gather(*pending_tasks, return_exceptions=True)
             by_source = {**reused, **{result.source_id: result for result in values}}
-            results = normalize_submission_source_identities([by_source[source.source_id] for source in all_sources])
+            results = finalize_identities([by_source[source.source_id] for source in all_sources])
             await reporter.set_current_step("consolidating_submission_results", message="Saving submission results.")
             if leased_operation is not None:
                 current_failure_phase = "outcome_persistence"
@@ -3780,8 +3897,16 @@ async def run_durable_submission_recognition(operation) -> None:
         )
         if input_file is None or input_file.assignment_id != operation.assignment_id:
             raise NotFound("stored_file")
+        from backend.services.upload_contract import upload_limit
+        maximum = upload_limit("submission_upload_max_bytes", SUBMISSION_UPLOAD_MAX_BYTES)
+        if input_file.size_bytes > maximum:
+            raise ValidationError("The saved upload exceeds the supported limit.", code="submission_source_too_large")
         with get_storage().open(input_file.storage_key) as stream:
-            content = stream.read()
+            content = stream.read(maximum + 1)
+        if len(content) > maximum:
+            raise ValidationError("The saved upload exceeds the supported limit.", code="submission_source_too_large")
+        if len(content) != input_file.size_bytes or hashlib.sha256(content).hexdigest() != input_file.sha256:
+            raise InvalidTransition("The saved upload changed.", code="submission_retry_source_unavailable")
         await run_task_submission_parsing(
             task_id=operation.assignment_id,
             owner_id=operation.owner_id,
@@ -3910,6 +4035,10 @@ def apply_question_patches_atomic(
                 presentation_updates
             ).issubset(allowed_presentation):
                 raise ValidationError("Unsupported question patch.")
+            if "test_cases" in fields:
+                fields["test_cases"] = _validated_test_cases(
+                    fields.get("stem", question.stem), question.type, fields["test_cases"]
+                )
             if "max_score" in fields:
                 max_score = float(fields["max_score"])
                 if not math.isfinite(max_score) or not 0 < max_score <= 10_000:
@@ -4868,7 +4997,7 @@ def _public_answer_flags(flags, *, content=None, review_status=None):
     # Existing clients understand recognition_failed. Preserve the precise
     # source evidence too; projecting it must not mutate the stored answer.
     result = [flag for flag in flags or []
-              if not flag.startswith(("recognition_confidence:", "answer_recognition_confidence:"))
+              if flag not in SOURCE_LANGUAGE_FLAGS and not flag.startswith(("recognition_confidence:", "answer_recognition_confidence:"))
               and flag not in {"recognition_matching_review", "answer_assignment_conflict", "recognition_metadata_review", "recognition_low_confidence", "recognition_very_low_confidence",
                                "low_confidence", "very_low_confidence", "recognition_needs_review"}]
     if _metadata_only_recognition_fields(flags, content):
@@ -5112,6 +5241,12 @@ def start_task_grading(
             question.q_id: math_rubric_fingerprint(problem_from_question(question))
             for question in questions if question.q_id in math_qids
         }
+    from backend.models import is_programming_question_type
+    from backend.services.programming_runs import VERSION as programming_version, artifacts_for_retry, runtime_identity
+    programming_qids = {q.q_id for q in questions if is_programming_question_type(q.type)}
+    if programming_qids:
+        input_manifest["programming_grading_version"] = programming_version
+        input_manifest["programming_runtime"] = runtime_identity()
     fingerprint_manifest = deepcopy(input_manifest)
     for row in fingerprint_manifest["questions"]:
         # Semantic input already has its own fingerprint. Persisting an internal
@@ -5158,10 +5293,20 @@ def start_task_grading(
         # a model to redistribute the same question's points. Old-engine or
         # missing-plan mathematical results are rerun in this new run.
         plans = saved_math_plans(latest.id, questions=questions) if math_qids else {}
+        compatible_programming = old.get("programming_grading_version") == programming_version
+        if programming_qids and compatible_programming:
+            if old.get("programming_runtime") != input_manifest["programming_runtime"]:
+                raise VersionConflict("Programming runtime changed; start a new run.", code="grading_inputs_changed")
+            # Retain the class's accepted test basis even when a provider
+            # credential was rotated between the failed item and its retry.
+            input_manifest["programming_preparation_config"] = old.get(
+                "programming_preparation_config", old.get("provider_configuration_fingerprint"))
+            input_manifest["programming_artifacts"] = artifacts_for_retry(latest.id, old, owner_id)
         previous_results = grading_repository.list_results_for_run(latest.id)
         reusable = [result.model_dump(mode="json") for result in previous_results
                     if result.effective_score is not None and math.isfinite(result.effective_score)
                     and (result.q_id not in math_qids or result.q_id in plans)
+                    and (result.q_id not in programming_qids or compatible_programming or result.teacher_review)
                     and ("grading_paused" not in result.initial_review_reasons or result.teacher_review)]
         if len(reusable) == len(questions) * len(frozen_revision_ids):
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
@@ -5176,6 +5321,9 @@ def start_task_grading(
         # but partial expert votes from its previous configuration cannot mix in.
         input_manifest["reused_experts"] = (saved_experts(latest.id)
             if old.get("provider_configuration_fingerprint") == input_manifest.get("provider_configuration_fingerprint") else [])
+        if programming_qids and not compatible_programming:
+            input_manifest["reused_experts"] = [item for item in input_manifest["reused_experts"]
+                                                  if item.get("q_id") not in programming_qids]
         if math_qids:
             from backend.services.math_grading_context import expert_matches_plan
             input_manifest["reused_experts"] = [
@@ -5355,6 +5503,13 @@ def update_problem(
         source = dict(question.source or {})
         presentation = dict(source.get("presentation") or {})
         presentation["preparation_issues"] = _effective_question_issues(presentation)
+        if "test_cases" in patch or (question.test_cases and {"stem", "type"}.intersection(patch)):
+            patch = {**patch, "test_cases": _validated_test_cases(
+                patch.get("stem", question.stem), patch.get("type", question.type),
+                patch.get("test_cases", question.test_cases), edited="test_cases" in patch,
+            )}
+        elif patch.get("review_status") == "confirmed" and question.test_cases:
+            _validated_test_cases(question.stem, question.type, question.test_cases)
         original_problem = _serialize_problem(question)
         manual_markers = [issue for issue in presentation.get("preparation_issues", [])
                           if issue.get("code") == "manual_completion_required"]
@@ -5630,7 +5785,7 @@ def update_student_answer(
         elif matching_confirmation and not content_changed:
             # Preserve the metadata-only confirmation path. An explicit save
             # also resolves the doubt without requiring that confirmation.
-            if patch.get("review_status") == "confirmed":
+            if patch.get("review_status") == "confirmed" and not is_programming_question_type(target.type):
                 patch = {key: value for key, value in patch.items() if key != "flag"}
             else:
                 patch = {**patch, "flag": [flag for flag in target.flag or [] if flag != "recognition_manual_pending"]}
@@ -5648,6 +5803,13 @@ def update_student_answer(
         if patch.get("flag") is not None:
             patch = {**patch, "flag": [*_public_answer_flags(patch["flag"]),
                                        *[flag for flag in target.flag or [] if flag.startswith("answer_recognition_confidence:")]]}
+        if patch.get("flag") is not None or content_changed or target_q_id != target.q_id:
+            flags = [f for f in (patch.get("flag", target.flag) or []) if f not in SOURCE_LANGUAGE_FLAGS and not f.startswith("programming_source_entry:")]
+            flags.extend(f for f in target.flag or [] if f in SOURCE_LANGUAGE_FLAGS)
+            if not content_changed and target_q_id == target.q_id:
+                flags.extend(f for f in target.flag or [] if f.startswith("programming_source_entry:"))
+            if flags != list(target.flag or []) or patch.get("flag") is not None:
+                patch = {**patch, "flag": flags}
         flags_changed = patch.get("flag") is not None and list(patch["flag"]) != list(target.flag or [])
         if patch.get("review_status") == "confirmed" and not matching_confirmation and any(
             flag in failed_flags
@@ -5956,14 +6118,16 @@ def update_correction_review(
 
 
 def _correction_review_blocks_finalization(result) -> bool:
-    """Only a missing or invalid effective score prevents finalization."""
+    """A provisional programming score also needs a recorded teacher decision."""
     def valid_score(value):
         return (value is not None and math.isfinite(value)
                 and 0 <= value <= result.ai_max_score)
 
-    return (
-        result.result_status in education.NON_SCOREABLE_RESULT_STATUSES
-        or not valid_score(result.effective_score)
+    if result.result_status in education.NON_SCOREABLE_RESULT_STATUSES or not valid_score(result.effective_score):
+        return True
+    review = result.teacher_review or {}
+    return bool(result_programming_review_reason(result)) and not teacher_resolved_programming_score(
+        result.ai_score, review.get("new_score"), result.ai_max_score, review.get("confirmed"),
     )
 
 
@@ -5986,8 +6150,9 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
     confirmed_required_count = 0
     if run is not None:
         for result in grading_repository.list_results_for_run(run.id, include_missing=True):
-            if (_correction_review_blocks_finalization(result)
-                    or result.ai_score is None):
+            blocked = _correction_review_blocks_finalization(result)
+            programming_reason = result_programming_review_reason(result)
+            if blocked or result.ai_score is None or programming_reason:
                 required_review_count += 1
                 review = result.teacher_review or {}
                 if (
@@ -5996,12 +6161,12 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
                     and review.get("confirmed") is True
                 ):
                     confirmed_required_count += 1
-            if _correction_review_blocks_finalization(result):
+            if blocked:
                 presentation = workflow_repository.list_student_presentations(task_id).get(result.student_id)
                 remaining.append({
                     "student_id": presentation.display_student_id if presentation else result.student_id,
                     "q_id": result.q_id,
-                    "reasons": list(result.review_reasons or []),
+                    "reasons": list(result.review_reasons or ([programming_reason] if programming_reason else [])),
                     "confirmed": False,
                 })
     released = bool(run and run.released_at is not None)
@@ -6186,9 +6351,6 @@ def generate_artifacts(
     def render_manifest(version: int, released_at: float, task_name: str) -> dict:
         # Called under the run/workflow locks before either snapshot or report
         # metadata is written. No provider calls, storage writes or mutations.
-        if any(_correction_review_blocks_finalization(result)
-               for result in grading_repository.list_results_for_run(run.id)):
-            raise ResultNotReleasable("unresolved_failures")
         snapshot = result_snapshot(
             task_id=task_id, owner_id=owner_id, result_version=version,
             grading_run_id=run.id,

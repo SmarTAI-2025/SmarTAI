@@ -22,7 +22,7 @@ from typing import Any
 from backend.agents.grading_agent import grade_batch
 from backend.domain import education
 from backend.domain.errors import DomainError
-from backend.models import Correction, TaskGradingSetup
+from backend.models import Correction, TaskGradingSetup, is_programming_question_type
 from backend.config import settings
 from backend.services.grading_scores import round_ai_score
 from backend.skills.base import (
@@ -77,6 +77,8 @@ def build_problem_store(questions: list[education.QuestionDTO]) -> dict[str, dic
             "_math_question_id": q.id,
             "_math_question_version": q.version,
         }
+        if is_programming_question_type(q.type):
+            store[q.q_id]["solution_code"] = ((q.source or {}).get("presentation") or {}).get("solution_code")
     return store
 
 
@@ -149,6 +151,8 @@ def correction_to_result(
     needs_review = hard_failure or soft_review
     if invalid_scale:
         primary_reasons = ["invalid_score_scale"]
+    elif hard_failure and review_reasons and any(e.programming_evidence for e in correction.expert_results):
+        primary_reasons = []  # Keep the actual programming failure (e.g. a bad mapping or runner).
     elif hard_failure:
         primary_reasons = [
             "grading_paused" if method == "paused" else "quota_exhausted" if method == "quota_exhausted" else "llm_failed"
@@ -181,7 +185,7 @@ def correction_to_result(
     public_experts = []
     for expert in normalized_experts:
         payload = expert.model_dump()
-        if read_math_trace(expert) is not None:
+        if expert.programming_evidence or read_math_trace(expert) is not None:
             # The full graph stays in private checkpoints. Keep the existing
             # public field and all scored evidence without mutating the vote.
             payload["raw_output"] = None

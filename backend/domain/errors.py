@@ -182,6 +182,11 @@ class PdfEvidenceError(DomainError):
 
 
 RECOGNITION_ERROR_CODES = frozenset({
+    "invalid_source_role", "source_type_not_allowed", "submission_source_type_not_allowed",
+    "source_filename_too_long", "source_empty", "submission_source_empty",
+    "source_too_large", "submission_source_too_large", "submission_source_content_type_mismatch",
+    "source_docx_limit_exceeded", "source_docx_invalid", "source_text_too_large", "programming_tests_json_invalid", "material_ocr_not_allowed_for_role",
+    "source_docx_incomplete", "source_docx_busy", "source_docx_timeout", "source_docx_unavailable",
     "question_preparation_time_limit_reached", "question_preparation_wall_time_limit_reached",
     "submission_wall_time_limit_reached", "grading_time_limit_reached", "grading_wall_time_limit_reached",
     "knowledge_wall_time_limit_reached",

@@ -1,0 +1,509 @@
+{
+  "python": "3.12.14 (main, Sep  3 2026, 03:46:19) [Clang 21.1.8 ]",
+  "executable": "/opt/anaconda3/envs/smartai-py312/bin/python",
+  "requirements_path": "/private/tmp/smartai-u3-20261028/source/requirements-dev.txt",
+  "checked_packages": 100,
+  "differences": [],
+  "packages": [
+    {
+      "package": "alembic",
+      "locked": "==1.20.0",
+      "actual": "1.20.0"
+    },
+    {
+      "package": "annotated-doc",
+      "locked": "==0.0.5",
+      "actual": "0.0.5"
+    },
+    {
+      "package": "annotated-types",
+      "locked": "==0.8.0",
+      "actual": "0.8.0"
+    },
+    {
+      "package": "anthropic",
+      "locked": "==1.11.0",
+      "actual": "1.11.0"
+    },
+    {
+      "package": "anyio",
+      "locked": "==4.15.1",
+      "actual": "4.15.1"
+    },
+    {
+      "package": "backports-zstd",
+      "locked": "==1.7.0",
+      "actual": "1.7.0"
+    },
+    {
+      "package": "bcrypt",
+      "locked": "==5.0.0",
+      "actual": "5.0.0"
+    },
+    {
+      "package": "boto3",
+      "locked": "==1.43.106",
+      "actual": "1.43.106"
+    },
+    {
+      "package": "botocore",
+      "locked": "==1.43.106",
+      "actual": "1.43.106"
+    },
+    {
+      "package": "brotli",
+      "locked": "==1.2.0",
+      "actual": "1.2.0"
+    },
+    {
+      "package": "certifi",
+      "locked": "==2026.7.22",
+      "actual": "2026.7.22"
+    },
+    {
+      "package": "cffi",
+      "locked": "==2.1.1",
+      "actual": "2.1.1"
+    },
+    {
+      "package": "charset-normalizer",
+      "locked": "==3.5.2",
+      "actual": "3.5.2"
+    },
+    {
+      "package": "click",
+      "locked": "==8.5.0",
+      "actual": "8.5.0"
+    },
+    {
+      "package": "cryptography",
+      "locked": "==50.0.2",
+      "actual": "50.0.2"
+    },
+    {
+      "package": "distro",
+      "locked": "==1.9.0",
+      "actual": "1.9.0"
+    },
+    {
+      "package": "docstring-parser",
+      "locked": "==0.18.0",
+      "actual": "0.18.0"
+    },
+    {
+      "package": "fastapi",
+      "locked": "==0.142.2",
+      "actual": "0.142.2"
+    },
+    {
+      "package": "filetype",
+      "locked": "==1.2.0",
+      "actual": "1.2.0"
+    },
+    {
+      "package": "google-auth",
+      "locked": "==2.59.1",
+      "actual": "2.59.1"
+    },
+    {
+      "package": "google-genai",
+      "locked": "==2.26.0",
+      "actual": "2.26.0"
+    },
+    {
+      "package": "h11",
+      "locked": "==0.16.0",
+      "actual": "0.16.0"
+    },
+    {
+      "package": "httpcore",
+      "locked": "==1.0.9",
+      "actual": "1.0.9"
+    },
+    {
+      "package": "httpcore2",
+      "locked": "==2.13.1",
+      "actual": "2.13.1"
+    },
+    {
+      "package": "httpx",
+      "locked": "==0.28.1",
+      "actual": "0.28.1"
+    },
+    {
+      "package": "httpx2",
+      "locked": "==2.13.1",
+      "actual": "2.13.1"
+    },
+    {
+      "package": "idna",
+      "locked": "==3.20",
+      "actual": "3.20"
+    },
+    {
+      "package": "inflate64",
+      "locked": "==1.0.4",
+      "actual": "1.0.4"
+    },
+    {
+      "package": "iniconfig",
+      "locked": "==2.3.0",
+      "actual": "2.3.0"
+    },
+    {
+      "package": "jiter",
+      "locked": "==0.17.0",
+      "actual": "0.17.0"
+    },
+    {
+      "package": "jmespath",
+      "locked": "==1.1.0",
+      "actual": "1.1.0"
+    },
+    {
+      "package": "jsonpatch",
+      "locked": "==1.33",
+      "actual": "1.33"
+    },
+    {
+      "package": "jsonpointer",
+      "locked": "==3.1.1",
+      "actual": "3.1.1"
+    },
+    {
+      "package": "langchain-anthropic",
+      "locked": "==1.7.5",
+      "actual": "1.7.5"
+    },
+    {
+      "package": "langchain-core",
+      "locked": "==1.6.6",
+      "actual": "1.6.6"
+    },
+    {
+      "package": "langchain-google-genai",
+      "locked": "==4.4.0",
+      "actual": "4.4.0"
+    },
+    {
+      "package": "langchain-openai",
+      "locked": "==1.6.7",
+      "actual": "1.6.7"
+    },
+    {
+      "package": "langchain-protocol",
+      "locked": "==0.0.19",
+      "actual": "0.0.19"
+    },
+    {
+      "package": "langsmith",
+      "locked": "==0.14.2",
+      "actual": "0.14.2"
+    },
+    {
+      "package": "lxml",
+      "locked": "==6.1.3",
+      "actual": "6.1.3"
+    },
+    {
+      "package": "mako",
+      "locked": "==1.4.3",
+      "actual": "1.4.3"
+    },
+    {
+      "package": "markupsafe",
+      "locked": "==3.0.3",
+      "actual": "3.0.3"
+    },
+    {
+      "package": "mpmath",
+      "locked": "==1.3.0",
+      "actual": "1.3.0"
+    },
+    {
+      "package": "multivolumefile",
+      "locked": "==0.2.3",
+      "actual": "0.2.3"
+    },
+    {
+      "package": "numpy",
+      "locked": "==2.5.3",
+      "actual": "2.5.3"
+    },
+    {
+      "package": "openai",
+      "locked": "==3.22.1",
+      "actual": "3.22.1"
+    },
+    {
+      "package": "opentelemetry-api",
+      "locked": "==1.45.0",
+      "actual": "1.45.0"
+    },
+    {
+      "package": "orjson",
+      "locked": "==3.12.0",
+      "actual": "3.12.0"
+    },
+    {
+      "package": "packaging",
+      "locked": "==26.3",
+      "actual": "26.3"
+    },
+    {
+      "package": "pillow",
+      "locked": "==12.3.0",
+      "actual": "12.3.0"
+    },
+    {
+      "package": "pluggy",
+      "locked": "==1.6.0",
+      "actual": "1.6.0"
+    },
+    {
+      "package": "psutil",
+      "locked": "==7.2.2",
+      "actual": "7.2.2"
+    },
+    {
+      "package": "psycopg",
+      "locked": "==3.3.6",
+      "actual": "3.3.6"
+    },
+    {
+      "package": "psycopg-binary",
+      "locked": "==3.3.6",
+      "actual": "3.3.6"
+    },
+    {
+      "package": "py7zr",
+      "locked": "==1.1.3",
+      "actual": "1.1.3"
+    },
+    {
+      "package": "pyasn1",
+      "locked": "==0.6.4",
+      "actual": "0.6.4"
+    },
+    {
+      "package": "pyasn1-modules",
+      "locked": "==0.4.2",
+      "actual": "0.4.2"
+    },
+    {
+      "package": "pybcj",
+      "locked": "==1.0.8",
+      "actual": "1.0.8"
+    },
+    {
+      "package": "pycparser",
+      "locked": "==3.0",
+      "actual": "3.0"
+    },
+    {
+      "package": "pycryptodomex",
+      "locked": "==3.23.0",
+      "actual": "3.23.0"
+    },
+    {
+      "package": "pydantic",
+      "locked": "==2.13.5",
+      "actual": "2.13.5"
+    },
+    {
+      "package": "pydantic-core",
+      "locked": "==2.46.5",
+      "actual": "2.46.5"
+    },
+    {
+      "package": "pydantic-settings",
+      "locked": "==2.15.0",
+      "actual": "2.15.0"
+    },
+    {
+      "package": "pygments",
+      "locked": "==2.21.0",
+      "actual": "2.21.0"
+    },
+    {
+      "package": "pyjwt",
+      "locked": "==2.15.1",
+      "actual": "2.15.1"
+    },
+    {
+      "package": "pymupdf",
+      "locked": "==1.28.2",
+      "actual": "1.28.2"
+    },
+    {
+      "package": "pyppmd",
+      "locked": "==1.3.1",
+      "actual": "1.3.1"
+    },
+    {
+      "package": "pytest",
+      "locked": "==9.1.1",
+      "actual": "9.1.1"
+    },
+    {
+      "package": "pytest-asyncio",
+      "locked": "==1.4.0",
+      "actual": "1.4.0"
+    },
+    {
+      "package": "python-dateutil",
+      "locked": "==2.9.0.post0",
+      "actual": "2.9.0.post0"
+    },
+    {
+      "package": "python-docx",
+      "locked": "==1.2.0",
+      "actual": "1.2.0"
+    },
+    {
+      "package": "python-dotenv",
+      "locked": "==1.2.4",
+      "actual": "1.2.4"
+    },
+    {
+      "package": "python-multipart",
+      "locked": "==0.0.32",
+      "actual": "0.0.32"
+    },
+    {
+      "package": "python-pptx",
+      "locked": "==1.0.2",
+      "actual": "1.0.2"
+    },
+    {
+      "package": "pyyaml",
+      "locked": "==6.0.3",
+      "actual": "6.0.3"
+    },
+    {
+      "package": "rank-bm25",
+      "locked": "==0.2.2",
+      "actual": "0.2.2"
+    },
+    {
+      "package": "rarfile",
+      "locked": "==4.5",
+      "actual": "4.5"
+    },
+    {
+      "package": "regex",
+      "locked": "==2026.9.29",
+      "actual": "2026.9.29"
+    },
+    {
+      "package": "requests",
+      "locked": "==2.34.2",
+      "actual": "2.34.2"
+    },
+    {
+      "package": "requests-toolbelt",
+      "locked": "==1.0.0",
+      "actual": "1.0.0"
+    },
+    {
+      "package": "s3transfer",
+      "locked": "==0.19.2",
+      "actual": "0.19.2"
+    },
+    {
+      "package": "six",
+      "locked": "==1.17.0",
+      "actual": "1.17.0"
+    },
+    {
+      "package": "sniffio",
+      "locked": "==1.3.1",
+      "actual": "1.3.1"
+    },
+    {
+      "package": "snowballstemmer",
+      "locked": "==3.1.1",
+      "actual": "3.1.1"
+    },
+    {
+      "package": "sqlalchemy",
+      "locked": "==2.1.1",
+      "actual": "2.1.1"
+    },
+    {
+      "package": "starlette",
+      "locked": "==1.7.0",
+      "actual": "1.7.0"
+    },
+    {
+      "package": "sympy",
+      "locked": "==1.14.0",
+      "actual": "1.14.0"
+    },
+    {
+      "package": "tenacity",
+      "locked": "==9.1.4",
+      "actual": "9.1.4"
+    },
+    {
+      "package": "texttable",
+      "locked": "==1.7.0",
+      "actual": "1.7.0"
+    },
+    {
+      "package": "tiktoken",
+      "locked": "==0.14.0",
+      "actual": "0.14.0"
+    },
+    {
+      "package": "truststore",
+      "locked": "==0.10.4",
+      "actual": "0.10.4"
+    },
+    {
+      "package": "typing-extensions",
+      "locked": "==4.16.0",
+      "actual": "4.16.0"
+    },
+    {
+      "package": "typing-inspection",
+      "locked": "==0.4.4",
+      "actual": "0.4.4"
+    },
+    {
+      "package": "urllib3",
+      "locked": "==2.8.0",
+      "actual": "2.8.0"
+    },
+    {
+      "package": "uuid-utils",
+      "locked": "==0.17.1",
+      "actual": "0.17.1"
+    },
+    {
+      "package": "uvicorn",
+      "locked": "==0.54.0",
+      "actual": "0.54.0"
+    },
+    {
+      "package": "websockets",
+      "locked": "==16.1.1",
+      "actual": "16.1.1"
+    },
+    {
+      "package": "xlsxwriter",
+      "locked": "==3.2.9",
+      "actual": "3.2.9"
+    },
+    {
+      "package": "xxhash",
+      "locked": "==4.0.1",
+      "actual": "4.0.1"
+    },
+    {
+      "package": "zstandard",
+      "locked": "==0.25.0",
+      "actual": "0.25.0"
+    }
+  ]
+}

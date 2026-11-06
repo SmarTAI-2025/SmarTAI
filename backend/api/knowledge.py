@@ -119,8 +119,8 @@ def get_citation(document_id: str, chunk_id: str, current: User = Depends(get_ta
 async def upload_document(file: UploadFile = File(...), recognition_route_id: str | None = Form(default=None),
                           native_only: bool = Form(default=False),
                           current: User = Depends(get_current_user)):
-    from backend.rag.chunker import MAX_FILE_BYTES
-    body = await file.read(MAX_FILE_BYTES + 1)
+    from backend.services.upload_contract import upload_limit
+    body = await file.read(upload_limit("knowledge_max_bytes") + 1)
     try:
         document = await ingest_document(
             owner_id=current.id,

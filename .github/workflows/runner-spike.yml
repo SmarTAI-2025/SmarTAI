@@ -4,6 +4,11 @@ on:
   push:
     paths:
       - "tools/runner_spike/**"
+      - "tools/evaluation/programming/replay_u1.py"
+      - "backend/services/programming*.py"
+      - "backend/skills/programming*.py"
+      - "backend/tests/test_programming_saved_grading_flow.py"
+      - "backend/tests/test_programming_scoring_contract.py"
       - "backend/tools/grading_runner.py"
       - "backend/tools/oci_grading_runner.py"
       - "backend/tools/code_interpreter.py"
@@ -15,6 +20,11 @@ on:
     branches: [main]
     paths:
       - "tools/runner_spike/**"
+      - "tools/evaluation/programming/replay_u1.py"
+      - "backend/services/programming*.py"
+      - "backend/skills/programming*.py"
+      - "backend/tests/test_programming_saved_grading_flow.py"
+      - "backend/tests/test_programming_scoring_contract.py"
       - "backend/tools/grading_runner.py"
       - "backend/tools/oci_grading_runner.py"
       - "backend/tools/code_interpreter.py"
@@ -49,7 +59,20 @@ jobs:
           SMARTAI_OCI_REAL_TEST: "1"
           SMARTAI_RUNTIME_ENVIRONMENT: test
           SMARTAI_PROGRAM_RUNNER_IMAGE: smartai-runner-spike:week1
-        run: python -m pytest backend/tests/test_oci_real_runtime.py -q
+        run: |
+          export SMARTAI_PROGRAM_RUNNER_IMAGE="$(docker image inspect --format '{{.Id}}' smartai-runner-spike:week1)"
+          export SMARTAI_U1_NATIVE_EVIDENCE="$RUNNER_TEMP/u1-native-evidence.json"
+          printf 'FROM smartai-runner-spike:week1\nUSER root\nRUN rm /usr/bin/gcc\nUSER 65534:65534\n' |
+            docker build --network=none -t smartai-qa-without-gcc -
+          export SMARTAI_TEST_BROKEN_CC_IMAGE="$(docker image inspect --format '{{.Id}}' smartai-qa-without-gcc)"
+          git fetch --depth=1 origin ab36293b5b00ea2dd20803cd89c727398671c835
+          python -m pytest backend/tests/test_oci_real_runtime.py backend/tests/test_oci_native.py -q
+      - name: Save synthetic U1 native evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: u1-native-evidence
+          path: ${{ runner.temp }}/u1-native-evidence.json
+          if-no-files-found: error
       - name: Check container cleanup
         if: always()
         run: test -z "$(docker ps -aq --filter label=smartai.isolated-runner=true)"

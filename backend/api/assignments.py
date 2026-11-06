@@ -128,7 +128,11 @@ async def import_questions_file(
         raise HTTPException(
             503, detail="No LLM provider configured. Add an API key first."
         )
-    content = await file.read()
+    from backend.services.upload_contract import upload_limit
+    max_bytes = upload_limit("question_source_max_bytes")
+    content = await file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise HTTPException(413, detail={"code": "source_too_large", "max_bytes": max_bytes})
     try:
         questions = await assignment_service.import_questions_from_upload(
             assignment_id=assignment_id,

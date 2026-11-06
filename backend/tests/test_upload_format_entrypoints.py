@@ -8,6 +8,7 @@ from starlette.datastructures import Headers
 from backend.api import task_preparation
 from backend.services.stage_provider_routing import StageProviderRoute
 from backend.tests.test_archive_content_detection import PDF, archive_bytes
+from backend.tests.test_task_background_workflows import _seed_task
 from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
 
 
@@ -24,11 +25,12 @@ def upload(body, name, mime):
 @pytest.mark.parametrize("name", ["material.txt", "material.md", "material.markdown"])
 async def test_all_teacher_material_readers_preserve_text_quoting_pdf(role, name):
     body = b"Question 1: Explain the %PDF-1.7 file header.\n"
+    owner, task = _seed_task()
     registry = _RecoveryRegistry()
     route = StageProviderRoute(route_id="test-provider", kind="llm", provider=registry.provider)
     text, descriptor = await task_preparation._read_source(
         file=upload(body, name, "text/plain"), library_material_id=None, inline_text=None,
-        owner_id="synthetic-owner", task_id="synthetic-task", registry=registry, role=role, route=route,
+        owner_id=owner, task_id=task, registry=registry, role=role, route=route,
     )
     assert text == body.decode()
     assert descriptor["content_type"].startswith("text/")
@@ -40,10 +42,11 @@ async def test_all_teacher_material_readers_preserve_text_quoting_pdf(role, name
 @pytest.mark.parametrize("header", TEXT_HEADERS)
 async def test_teacher_material_readers_preserve_bzip_header_text(role, header):
     body = f"{header} is an example header, not compressed data.\n".encode()
+    owner, task = _seed_task()
     registry = _RecoveryRegistry()
     text, descriptor = await task_preparation._read_source(
         file=upload(body, "material.txt", "text/plain"), library_material_id=None, inline_text=None,
-        owner_id="synthetic-owner", task_id="synthetic-task", registry=registry, role=role,
+        owner_id=owner, task_id=task, registry=registry, role=role,
         route=StageProviderRoute(route_id="test-provider", kind="llm", provider=registry.provider),
     )
     assert text == body.decode()
@@ -55,10 +58,11 @@ async def test_teacher_material_readers_preserve_bzip_header_text(role, header):
 @pytest.mark.parametrize("mime", ["application/json", "text/json", "text/plain", "application/octet-stream"])
 async def test_programming_tests_json_reaches_actual_text_reader(mime):
     body = b'{"input": "%PDF-1.7", "expected_output": "PDF"}'
+    owner, task = _seed_task()
     registry = _RecoveryRegistry()
     text, descriptor = await task_preparation._read_source(
         file=upload(body, "cases.json", mime), library_material_id=None, inline_text=None,
-        owner_id="synthetic-owner", task_id="synthetic-task", registry=registry, role="programming_tests",
+        owner_id=owner, task_id=task, registry=registry, role="programming_tests",
         route=StageProviderRoute(route_id="test-provider", kind="llm", provider=registry.provider),
     )
     assert text == body.decode() and descriptor["content_type"] == "application/json"

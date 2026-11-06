@@ -44,6 +44,7 @@ except ImportError:
 from fastapi import HTTPException
 
 from backend.config import settings
+from backend.services.upload_contract import PROGRAMMING_SOURCE_SUFFIXES
 from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
 from backend.skills.ocr_ingest import OCRImage, OCRIngestSkill, OCRPurpose
 
@@ -55,6 +56,9 @@ PDF_EXTRACTION_TIMEOUT_SECONDS = 10.0
 PDF_EXTRACTION_MAX_WORKERS = 2
 _PDF_EXTRACTION_SLOTS = threading.BoundedSemaphore(PDF_EXTRACTION_MAX_WORKERS)
 _PDF_WORKER_PATH = Path(__file__).with_name("_pdf_worker.py")
+_NATIVE_OFFICE_WORKER_PATH = Path(__file__).resolve().parents[1] / "knowledge" / "native_worker.py"
+DOCX_MAX_CHARACTERS = 500_000
+DOCX_EXTRACTION_TIMEOUT_SECONDS = 10.0
 BAIDU_OCR_MAX_PDF_PAGES = 500
 BAIDU_OCR_MAX_IMAGE_SIDE = 8192
 SUBMISSION_ARCHIVE_MAX_FILES = 500
@@ -75,7 +79,8 @@ IMAGE_MEDIA_TYPES = {
     ".tiff": "image/tiff",
     ".webp": "image/webp",
 }
-SUBMISSION_SOURCE_EXTENSIONS = frozenset({".pdf", *DOCUMENT_TEXT_EXTENSIONS, *IMAGE_MEDIA_TYPES})
+SUBMISSION_TEXT_EXTENSIONS = DOCUMENT_TEXT_EXTENSIONS | PROGRAMMING_SOURCE_SUFFIXES
+SUBMISSION_SOURCE_EXTENSIONS = frozenset({".pdf", ".docx", *SUBMISSION_TEXT_EXTENSIONS, *IMAGE_MEDIA_TYPES})
 
 ARCHIVE_EXTENSIONS = (
     ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
@@ -155,6 +160,17 @@ def _looks_like_text(data: bytes) -> bool:
     return all(character in "\t\n\r" or ord(character) >= 32 for character in text)
 
 
+def _decodable_text(data: bytes, suffix: str) -> bool:
+    if suffix == ".py":
+        from backend.services.python_source_encoding import PythonSourceEncodingError, decode_python_submission
+        try:
+            decode_python_submission(data)
+        except PythonSourceEncodingError:
+            return False
+        return True
+    return _looks_like_text(data)
+
+
 def _content_signature_type(data: bytes, filename: str) -> str:
     if not data:
         return "application/octet-stream"
@@ -206,9 +222,7 @@ def _content_signature_type(data: bytes, filename: str) -> str:
     # the isolated parser distinguishes an actual PDF from quoted text.
     if b"%PDF-" in data[:1024]:
         return "application/pdf"
-    if _looks_like_text(data):
-        return "text/plain"
-    return "application/octet-stream"
+    return "text/plain" if _decodable_text(data, _ext(filename)) else "application/octet-stream"
 
 
 def inspect_upload_content(
@@ -222,6 +236,17 @@ def inspect_upload_content(
     guessed, _encoding = mimetypes.guess_type(filename)
     filename_type = _normalized_content_type(guessed)
     extension = _ext(filename)
+    if extension in PROGRAMMING_SOURCE_SUFFIXES:
+        # Browser/OS MIME databases differ. The bytes determine text vs binary;
+        # explicit MIME claims must still be consistent with the source role.
+        filename_type = "text/plain"
+        aliases = ({"text/x-python", "text/x-python-script", "application/x-python"}
+                   if extension == ".py" else
+                   {"text/x-c", "text/x-csrc", "text/x-c++", "text/x-c++src", "application/x-c"})
+        if supplied_type in aliases:
+            supplied_type = "text/plain"
+        declared = supplied_type if supplied_type != "application/octet-stream" else filename_type
+        return ContentInspection(detected, declared, detected != "text/plain" or declared != "text/plain")
     if extension in {".tar.gz", ".tgz"}:
         filename_type = "application/gzip"
     elif extension in {".tar.bz2", ".tbz2"}:
@@ -230,6 +255,9 @@ def inspect_upload_content(
         # These formats are ZIP containers, but they are not submission
         # archives and remain unsupported until a dedicated parser exists.
         detected = filename_type
+    if extension == ".docx" and detected == filename_type and supplied_type == "application/zip":
+        # Some clients report the container MIME. The OPC validator still has to succeed.
+        supplied_type = filename_type
     declared = (
         supplied_type
         if supplied_type != "application/octet-stream"
@@ -252,13 +280,25 @@ def inspect_upload_content(
     )
 
 
+def _stored_content_type(filename: str, content: bytes, inspection: ContentInspection) -> str:
+    suffix = _ext(filename)
+    if (suffix in PROGRAMMING_SOURCE_SUFFIXES and inspection.content_type == "application/pdf"
+            and inspection.declared_content_type in {"text/plain", "application/pdf"}
+            and _decodable_text(content, suffix)):
+        # Filename and source bytes indicate code quoting a PDF header. Before
+        # any text is consumed, the reader still checks the bounded PDF parser.
+        return "text/plain"
+    return inspection.content_type
+
+
 def infer_upload_content_type(
     filename: str,
     supplied: str | None = None,
     content: bytes | None = None,
 ) -> str:
     if content is not None:
-        return inspect_upload_content(content, filename, supplied).content_type
+        inspection = inspect_upload_content(content, filename, supplied)
+        return _stored_content_type(filename, content, inspection)
     if supplied and supplied.strip() and supplied != "application/octet-stream":
         return _normalized_content_type(supplied)
     guessed, _encoding = mimetypes.guess_type(filename)
@@ -267,10 +307,20 @@ def infer_upload_content_type(
 
 def submission_source_error(filename: str, inspection: ContentInspection, content: bytes | None = None) -> str | None:
     """One leaf-file policy for direct uploads, archive members and retries."""
-    if _ext(filename) not in SUBMISSION_SOURCE_EXTENSIONS:
+    suffix = _ext(filename)
+    if suffix not in SUBMISSION_SOURCE_EXTENSIONS:
         return "submission_source_unsupported"
+    if content is not None and suffix == ".docx":
+        from backend.services.upload_contract import UploadContractError, validate_docx_package
+        try:
+            validate_docx_package(content)
+        except UploadContractError as exc:
+            return exc.code
     if inspection.mismatch:
-        if content is not None and inspection.content_type == "application/pdf" and _ext(filename) in DOCUMENT_TEXT_EXTENSIONS and _looks_like_text(content):
+        if (content is not None and inspection.content_type == "application/pdf"
+                and suffix in SUBMISSION_TEXT_EXTENSIONS and _decodable_text(content, suffix)
+                and (suffix not in PROGRAMMING_SOURCE_SUFFIXES
+                     or inspection.declared_content_type in {"text/plain", "application/pdf"})):
             return None  # The bounded decoder will distinguish a real PDF from quoted text.
         return "submission_source_content_type_mismatch"
     return None
@@ -284,14 +334,28 @@ async def validate_upload_content(content: bytes, filename: str, *, content_type
     if not content:
         raise HTTPException(400, detail={"code": "source_empty"})
     allowed_extensions = (SUBMISSION_SOURCE_EXTENSIONS if purpose == "submissions" else
-                          frozenset({".pdf", *IMAGE_MEDIA_TYPES, *DOCUMENT_TEXT_EXTENSIONS,
+                          frozenset({".pdf", ".docx", *IMAGE_MEDIA_TYPES, *DOCUMENT_TEXT_EXTENSIONS,
                                      *({".csv", ".json"} if purpose == "test_cases" else {".csv", ".rst"} if purpose == "problems" else set())}))
     if _ext(filename) not in allowed_extensions:
         raise HTTPException(415, detail={"code": "submission_source_unsupported" if purpose == "submissions" else "source_type_not_allowed"})
     inspection = inspect_upload_content(content, filename, content_type)
+    suffix = _ext(filename)
+    if suffix == ".docx":
+        from backend.services.upload_contract import validate_docx_package, UploadContractError
+        if inspection.mismatch:
+            code = "submission_source_content_type_mismatch" if purpose == "submissions" else "source_content_type_not_allowed"
+            raise HTTPException(415, detail={"code": code})
+        try:
+            await asyncio.to_thread(validate_docx_package, content)
+        except UploadContractError as exc:
+            raise HTTPException(413 if exc.code == "source_docx_limit_exceeded" else 422, detail={"code": exc.code}) from None
+        return inspection
     # A plain-text/Markdown lesson may quote a PDF header. Only an actual PDF
     # parse can settle this ambiguous signature; a valid renamed PDF is rejected.
-    if inspection.content_type == "application/pdf" and _ext(filename) in (TEXT_EXTENSIONS | {".json"}) and _looks_like_text(content):
+    allowed_text = (SUBMISSION_TEXT_EXTENSIONS if purpose == "submissions" else
+                    TEXT_EXTENSIONS | ({".json"} if purpose == "test_cases" else set()))
+    if (inspection.content_type == "application/pdf" and suffix in allowed_text and _decodable_text(content, suffix)
+            and (suffix not in PROGRAMMING_SOURCE_SUFFIXES or inspection.declared_content_type in {"text/plain", "application/pdf"})):
         try:
             await validate_media_content(content, "application/pdf", wait_for_slot=True,
                                          slot_timeout_seconds=media_slot_timeout_seconds)
@@ -306,19 +370,17 @@ async def validate_upload_content(content: bytes, filename: str, *, content_type
             raise HTTPException(415, detail={"code": error})
     elif inspection.mismatch:
         raise HTTPException(415, detail={"code": "source_content_type_not_allowed"})
-    suffix = _ext(filename)
     if inspection.content_type in {"application/pdf", *IMAGE_MEDIA_TYPES.values()}:
         await validate_media_content(content, inspection.content_type, wait_for_slot=True,
                                      slot_timeout_seconds=media_slot_timeout_seconds)
     elif inspection.content_type == "text/plain":
-        allowed_text = TEXT_EXTENSIONS | ({".json"} if purpose == "test_cases" else set())
         if suffix not in allowed_text:
             raise HTTPException(415, detail={"code": "source_type_not_allowed"})
         if suffix == ".json":
-            text = await decode_text_bytes(content)
+            from backend.services.upload_contract import UploadContractError, _validate_json
             try:
-                json.loads(text, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
-            except (ValueError, RecursionError):
+                _validate_json(content)
+            except UploadContractError:
                 raise HTTPException(400, detail={"code": "source_json_invalid"}) from None
             return ContentInspection("application/json", inspection.declared_content_type, False)
     else:
@@ -713,7 +775,16 @@ async def extract_text_from_upload(
         await reporter._emit_message(f"Reading {safe_name}...")
 
     if media_type.startswith("text/") or (media_type == "application/json" and purpose == "test_cases"):
+        if purpose == "submissions" and _ext(safe_name) == ".py":
+            from backend.services.python_source_encoding import PythonSourceEncodingError, decode_python_submission
+            try:
+                return decode_python_submission(file_bytes)
+            except PythonSourceEncodingError:
+                raise HTTPException(400, detail={"code": "source_decode_failed"}) from None
         return await decode_text_bytes(file_bytes)
+
+    if _ext(safe_name) == ".docx":
+        return await _extract_docx_text(file_bytes, slot_timeout_seconds=media_slot_timeout_seconds)
 
     if media_type == "application/pdf":
         if fitz is None:
@@ -758,6 +829,59 @@ async def extract_text_from_upload(
         status_code=415,
         detail={"code": "submission_source_unsupported"},
     )
+
+
+async def _extract_docx_text(body: bytes, *, slot_timeout_seconds: float | None = 10) -> str:
+    """Read data through the existing bounded Office worker, never run source."""
+    # Share the existing native document process budget and cancellation-safe
+    # reaper rather than open unrestricted Office parsers in the web process.
+    from backend.services.submission_work_budget import current_budget, wait_for_admission
+
+    budget = current_budget()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + slot_timeout_seconds if slot_timeout_seconds is not None else None
+    slots = _PDF_EXTRACTION_SLOTS
+    while not slots.acquire(blocking=False):
+        if budget is not None:
+            budget.check()
+        if deadline is not None and loop.time() >= deadline:
+            raise HTTPException(429, detail={"code": "source_docx_busy"})
+        await wait_for_admission(asyncio.sleep(0.02))
+    launch_task = None
+    started = False
+    try:
+        if budget is not None:
+            budget.start()
+            started = True
+        async with asyncio.timeout(DOCX_EXTRACTION_TIMEOUT_SECONDS):
+            launch_task = asyncio.create_task(asyncio.create_subprocess_exec(
+                sys.executable, "-B", str(_NATIVE_OFFICE_WORKER_PATH), ".docx", str(DOCX_MAX_CHARACTERS),
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL))
+            process = await asyncio.shield(launch_task)
+            output, _ = await process.communicate(body)
+        if process.returncode:
+            raise HTTPException(503, detail={"code": "source_docx_unavailable"})
+        payload = json.loads(output)
+        if payload.get("error") in {"source_docx_invalid", "source_text_too_large"}:
+            code = payload["error"]
+            raise HTTPException(413 if code == "source_text_too_large" else 422, detail={"code": code})
+        if payload["warning_codes"]:
+            raise HTTPException(422, detail={"code": "source_docx_incomplete"})
+        text = "".join(payload["units"])
+        if not text.strip():
+            raise HTTPException(422, detail={"code": "source_docx_incomplete"})
+        return text
+    except TimeoutError:
+        raise HTTPException(408, detail={"code": "source_docx_timeout"}) from None
+    except (OSError, KeyError, TypeError, ValueError):
+        raise HTTPException(503, detail={"code": "source_docx_unavailable"}) from None
+    finally:
+        try:
+            await reap_pdf_worker(launch_task)
+        finally:
+            if started:
+                budget.finish()
+            slots.release()
 
 
 def _is_valid_file(name: str) -> bool:
@@ -920,7 +1044,7 @@ def _extract_raw_files_from_archive(
         sources.append(RawUploadSource(
             filename=clean,
             content=data,
-            content_type=inspection.content_type,
+            content_type=inspection.content_type if error_code else _stored_content_type(clean, data, inspection),
             pre_error_code=error_code,
             failure_phase=("archive" if error_code == "submission_archive_nested_unsupported" else "source_read") if error_code else None,
         ))
@@ -948,6 +1072,10 @@ def _extract_raw_files_from_archive(
     if lower.endswith(".zip"):
         with zipfile.ZipFile(file_in_memory, "r") as archive:
             entries = archive.infolist()
+            if {"word/document.xml", "_rels/.rels", "[Content_Types].xml"}.issubset(archive.NameToInfo):
+                return [RawUploadSource(filename=_bounded_source_name(filename), content=file_bytes,
+                    content_type=container_inspection.content_type, pre_error_code="submission_source_content_type_mismatch",
+                    failure_phase="source_read", retryable=False)]
             members = [
                 item for item in entries
                 if not item.is_dir() and _is_valid_file(item.filename)
@@ -1091,7 +1219,8 @@ def _extract_raw_files_from_archive(
     error_code = submission_source_error(filename, container_inspection, file_bytes)
     return [RawUploadSource(
         filename=_bounded_source_name(filename), content=file_bytes,
-        content_type=container_inspection.content_type, pre_error_code=error_code,
+        content_type=container_inspection.content_type if error_code else _stored_content_type(filename, file_bytes, container_inspection),
+        pre_error_code=error_code,
         failure_phase="source_read" if error_code else None,
     )]
 

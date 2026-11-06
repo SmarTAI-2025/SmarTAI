@@ -55,7 +55,7 @@ from typing import List, Optional, Tuple, TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from backend.config import settings as _settings
-from backend.domain.grading_review import expert_disagreement_signal
+from backend.domain.grading_review import expert_disagreement_signal, programming_evidence_review_reason
 from backend.models import Correction, ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.llm.registry import ExpertRegistry
@@ -148,8 +148,61 @@ class AllExpertsFailed(Exception):
 
 async def run_multi_expert(**kwargs) -> Correction:
     from backend.skills.math_grading import math_review_scope
+    from backend.models import is_programming_question_type
+    if is_programming_question_type(kwargs["problem"].type):
+        from backend.services.programming_runs import programming_run
+        from backend.services.programming_partial_review import review_partial_score
+        with programming_run(kwargs["registry"], kwargs.get("grading_setup")) as state:
+            language = kwargs.get("language", "en")
+            correction = _project_programming_result(await _run_multi_expert(**kwargs), language)
+            await review_partial_score(correction, state=state, problem=kwargs["problem"], answer=kwargs["answer"],
+                                       student_id=kwargs["student_id"], language=language, reporter=kwargs.get("reporter"))
+            return correction
     with math_review_scope():
         return _apply_math_review_advisory(await _run_multi_expert(**kwargs))
+
+
+def _project_programming_result(correction: Correction, language: str) -> Correction:
+    """Project the one shared execution after expert weights and disagreement are final."""
+    from backend.skills.programming_evidence import mark_teacher_case_score_review
+    votes = [e for e in correction.expert_results if not e.error_kind]
+    for vote in votes:
+        mark_teacher_case_score_review(vote, language)  # Includes prior checkpoints.
+    evidence = next((e.programming_evidence for e in votes if e.programming_evidence), None)
+    if evidence is None:
+        return correction
+
+    aggregated = correction.synthesis_method in {"weighted_average", "multi_sample", "judge_agent"}
+    rounded = abs(sum(step.score for step in correction.steps) - correction.score) > 0.010000000001
+    if aggregated or rounded:
+        # Retain exact original rubric awards per expert. Their published
+        # weighted or rounded total is a separate, explicitly attributed step.
+        desc = "\n".join(f"{e.provider}: {e.score:g}/{e.max_score:g}" for e in votes)
+        correction.steps = [StepScore(step_no=1, desc=desc, score=correction.score,
+                                      is_correct=correction.score == correction.max_score)]
+    disputed = next((v.programming_evidence for v in votes
+                     if v.programming_evidence and v.programming_evidence.score_review_reason), None)
+    if disputed:
+        # Selected/first expert and aggregate can agree with the tests while a
+        # later vote disagrees. Make its pending interpretation explicit.
+        label = "模型评分意见" if language == "zh" else "Model scoring opinion"
+        if not correction.comment.startswith(disputed.safe_summary):
+            correction.comment = f"{disputed.safe_summary}\n\n{label} · {correction.comment}"
+    elif correction.synthesis_method == "judge_agent":
+        correction.comment += "\n\n" + evidence.safe_summary
+    boundary = next((v.programming_evidence.boundary_note for v in votes
+                     if v.programming_evidence and v.programming_evidence.boundary_note), None)
+    if boundary:
+        correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, "programming_extra_boundary"]))
+        if boundary not in correction.comment:
+            correction.comment += "\n" + boundary
+    for vote in votes:
+        facts = vote.programming_evidence
+        if facts and facts.requires_human_review:
+            reason = programming_evidence_review_reason(facts.model_dump())
+            correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, reason]))
+            correction.requires_human_review = True
+    return correction
 
 
 def _apply_math_review_advisory(correction: Correction) -> Correction:
@@ -582,7 +635,7 @@ async def _synthesize(
             max_score=problem.max_score,
             confidence=max(0.0, min(result.confidence, 1.0)),
             comment=result.comment,
-            steps=(aggregate.steps if math_results else
+            steps=(aggregate.steps if math_results or any(e.programming_evidence for e in expert_results) else
                    normalized_steps if normalized_score == aggregate.score else []),
             expert_results=aggregate.expert_results,
             synthesis_method="judge_agent",

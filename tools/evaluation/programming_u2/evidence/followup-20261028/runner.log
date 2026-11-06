@@ -1,0 +1,5 @@
+U2_OCI_OBSERVATION {"id": "D06", "evidence": "real parser/adapter; fixed command response", "duration_from_fixture": "Infinity", "observed_duration_finite": false, "observed_passed": true, "real_oci_executions": 0}
+.U2_OCI_OBSERVATION {"id": "D07", "evidence": "real host-slot logic; injected run timeout and rm failure", "max_concurrent": 1, "command_operations": ["run", "rm", "run", "rm"], "second_run_request_admitted": true, "cleanup_successes": 0, "real_oci_executions": 0, "limitation": "No actual containers exist; does not prove production leakage or full runtime cleanup behavior"}
+.
+2 passed in 0.15s
+U2_OFFLINE_RUN {"repo": "/Users/annie/.codex/worktrees/programming-u2-baseline/SmarTAI", "runtime": "/var/folders/_p/v8vvlf6x441989_5zxzsl3y40000gn/T/u2-offline-vl_w9xgv", "network_or_process_attempts_blocked": 0, "blocked_events": [], "blocked_process_names": [], "blocked_process_callers": [], "real_model_calls": 0, "real_oci_executions": 0, "pytest_exit_code": 0, "exit_code": 0}

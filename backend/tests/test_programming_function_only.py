@@ -1,18 +1,4 @@
-"""Unit tests for programming-skill function-only / LeetCode-mode behaviors:
-
-- _detect_function_only correctly fires when student only submitted a def
-  (no top-level input/print).
-- run_sandbox in function-call mode wraps the student function and matches
-  expected_return through ast.literal_eval normalization.
-- Sandbox 0/N pass on llm_generated cases caps confidence ≤ 0.5 in the
-  ExpertResult coming out of ProgrammingSkill.grade().
-- _generate_test_cases returns ("llm_failed_transient", []) when the
-  underlying provider raises, vs ("llm_returned_empty", []) when LLM's parsed
-  list is empty.
-
-Run:
-    python -m pytest backend/tests/test_programming_function_only.py -v
-"""
+"""Frozen question generation, Python function execution, and AI-only review."""
 from __future__ import annotations
 
 import os
@@ -27,36 +13,12 @@ import pytest
 from backend.models import ExpertResult, ProblemInfo, StudentAnswerInfo, TestCase
 from backend.skills.programming import (
     ProgrammingSkill,
-    _detect_function_only,
     _generate_test_cases,
 )
 from backend.tools.code_interpreter import (
     _values_match,
     run_sandbox,
 )
-
-
-# ─── _detect_function_only ───────────────────────────────────────────────────
-
-
-def test_detect_function_only_yes():
-    code = "def fib(n):\n    if n < 2: return n\n    return fib(n-1) + fib(n-2)"
-    assert _detect_function_only(code) == "fib"
-
-
-def test_detect_function_only_no_when_print_present():
-    code = "def fib(n):\n    return n\nprint(fib(5))"
-    assert _detect_function_only(code) is None
-
-
-def test_detect_function_only_no_when_input_present():
-    code = "n = int(input())\ndef fib(n): return n"
-    assert _detect_function_only(code) is None
-
-
-def test_detect_function_only_returns_first_def():
-    code = "def helper(x): return x\n\ndef main(n): return n+1"
-    assert _detect_function_only(code) == "helper"
 
 
 # ─── _values_match (numeric tolerance + literal_eval) ─────────────────────────
@@ -146,7 +108,7 @@ async def test_generate_test_cases_distinguishes_transient_failure():
     with patch("backend.skills.programming.structured_llm_call", new=AsyncMock(side_effect=RuntimeError("timeout"))):
         cases, err = await _generate_test_cases(provider, problem)
     assert cases == []
-    assert err == "llm_failed_transient"
+    assert err == "transient_llm"
 
 
 @pytest.mark.asyncio
@@ -163,61 +125,28 @@ async def test_generate_test_cases_distinguishes_empty_response():
     ):
         cases, err = await _generate_test_cases(provider, problem)
     assert cases == []
-    assert err == "llm_returned_empty"
+    assert err == "programming_no_cases"
 
 
 # ─── ProgrammingSkill end-to-end: function-only path skips sandbox cleanly ──
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("language,footer", [("zh", "调用失败"), ("en", "Test generation failed")])
-async def test_programming_skill_function_only_when_llm_fails(language, footer):
-    """Student submits bare `def`, LLM call to generate function-call cases
-    fails transiently → cases_source 'llm_call_failed', no sandbox, comment
-    has the network/quota footer."""
-    provider = MagicMock()
-    provider.provider_id = "mock:test"
-
+@pytest.mark.parametrize("language", ["en", "zh"])
+async def test_generation_failure_uses_no_grading_vote_or_execution(language):
+    provider = MagicMock(provider_id="mock:test")
     skill = ProgrammingSkill(provider, language=language)
-    problem = ProblemInfo(
-        q_id="q1", number="1", type="编程题",
-        stem="实现 fib(n)", criterion="正确性",
-    )
-    answer = StudentAnswerInfo(
-        q_id="q1", number="1", type="编程题",
-        content="def fib(n):\n    return n if n < 2 else fib(n-1)+fib(n-2)\n",
-    )
-
-    # Make _generate_test_cases fail transiently AND make the final
-    # grading LLM call return a successful structured grade.
-    grading_result = MagicMock()
-    grading_result.score = 7.0
-    grading_result.max_score = 10.0
-    grading_result.confidence = 0.7
-    grading_result.comment = "Function looks correct."
-    grading_result.steps = []
-    grading_result.logs = ""
-    fake_raw = MagicMock()
-    fake_raw.content = "{}"
-    fake_raw.duration_ms = 100.0
-
-    call_count = {"n": 0}
-
-    async def fake_structured(*_args, **kwargs):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            # _generate_test_cases call → simulate transient failure
-            raise RuntimeError("Request timed out.")
-        # subsequent call: the actual grading
-        return grading_result, fake_raw
-
-    with patch("backend.skills.programming.structured_llm_call", new=fake_structured):
+    problem = ProblemInfo(q_id="q1", number="1", type="编程题", stem="def fib(n):", criterion="正确性")
+    answer = StudentAnswerInfo(q_id="q1", number="1", type="编程题", content="def fib(n): return n")
+    failed = AsyncMock(side_effect=TimeoutError())
+    with patch("backend.skills.programming.structured_llm_call", new=failed), patch(
+            "backend.skills.programming.run_sandbox", new_callable=AsyncMock) as execute:
         result = await skill.grade(problem, answer, student_id="S1")
-
-    assert isinstance(result, ExpertResult)
-    assert result.confidence == pytest.approx(0.7)
-    assert footer in result.comment  # the llm_call_failed footer follows the selected language
-    assert "fib" in result.comment.lower() or "Function looks correct" in result.comment
+    assert result.error_kind == "transient_llm"
+    assert result.programming_evidence.score_status == "unavailable"
+    assert result.programming_evidence.teacher_tests.total == result.programming_evidence.generated_tests.total == 0
+    failed.assert_awaited_once()
+    execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -230,7 +159,7 @@ async def test_programming_skill_zero_pass_rate_caps_confidence():
 
     problem = ProblemInfo(
         q_id="q1", number="1", type="编程题",
-        stem="A program that prints 'hello'.", criterion="Correctness.",
+        stem="Read one integer from stdin and print 'hello'.", criterion="Correctness.",
     )
     # Student code that just prints something else — guarantees 0% pass rate
     # against any reasonable LLM-generated stdin/stdout test
@@ -242,7 +171,7 @@ async def test_programming_skill_zero_pass_rate_caps_confidence():
     # Fake _generate_test_cases output: 3 stdin/stdout cases
     cases = MagicMock()
     cases.cases = [
-        TestCase(input="", expected_output="hello", description=f"case{i}", sandbox_feasible=True)
+        TestCase(input=str(i), expected_output="hello", description=f"case{i}", sandbox_feasible=True)
         for i in range(3)
     ]
 
@@ -267,3 +196,6 @@ async def test_programming_skill_zero_pass_rate_caps_confidence():
     assert result.confidence <= 0.5, (
         f"Expected confidence cap to ≤ 0.5 on 0% pass-rate, got {result.confidence}"
     )
+
+    assert result.programming_evidence.generated_tests.total == 3
+    assert result.programming_evidence.requires_human_review

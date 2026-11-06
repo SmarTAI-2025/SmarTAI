@@ -1108,8 +1108,8 @@ def test_disabled_selected_recognition_provider_has_figma_error_code():
 
     with pytest.raises(ValidationError) as disabled:
         task_facade.queue_task_submission_parsing(
-            task_id=task_id, owner_id=owner_id, filename="answers.zip",
-            content=b"archive", content_type="application/zip",
+            task_id=task_id, owner_id=owner_id, filename="answers.txt",
+            content=b"answer", content_type="text/plain",
             registry=DisabledRegistry(), recognition_provider_id="disabled",
         )
     assert disabled.value.code == "recognition_provider_not_enabled"
