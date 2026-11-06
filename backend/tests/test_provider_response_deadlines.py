@@ -711,6 +711,7 @@ async def test_new_gemini_proxy_closes_fresh_client_on_all_outcomes(outcome, sch
         else:
             assert (await task).content == "complete"
     await asyncio.wait_for(closed.wait(), 2)
+    await turns()
     assert closed.is_set()
     assert states[0].submission_may_exist is (outcome != "success")
     assert scheduler.active == scheduler.host_capacity.active == 0

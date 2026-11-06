@@ -139,6 +139,7 @@ async def test_workflow_result_returns_before_slow_cleanup_with_slot_still_owned
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
+    await turns()
     assert scheduler.active == scheduler.host_capacity.active == 0
     assert scheduler.proxy_slots._value == 50
 

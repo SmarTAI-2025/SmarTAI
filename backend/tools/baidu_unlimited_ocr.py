@@ -255,10 +255,12 @@ class BaiduUnlimitedOCRClient:
         )
 
         self._owns_http_client = http_client is None
+        from backend.llm.response_cleanup import protect_response
         self._http_client = http_client or httpx.AsyncClient(
             timeout=self._request_timeout_seconds,
             follow_redirects=False,
             trust_env=False,
+            event_hooks={"response": [protect_response]},
         )
         self._download_client = download_client or self._http_client
         # Injected transports belong to their caller.  The default download
@@ -279,10 +281,13 @@ class BaiduUnlimitedOCRClient:
         await self.aclose()
 
     async def aclose(self) -> None:
+        from backend.llm.response_cleanup import start_cleanup
         if self._owns_download_client:
-            await self._download_client.aclose()
+            start_cleanup(self._download_client.aclose())
+            self._owns_download_client = False
         if self._owns_http_client:
-            await self._http_client.aclose()
+            start_cleanup(self._http_client.aclose())
+            self._owns_http_client = False
         self._api_key = ""
         self._secret_key = ""
         self._access_token = None

@@ -252,14 +252,13 @@ async def test_slow_client_preparation_cannot_age_quota_and_create_send_burst(
         provider = GeminiProvider(config)
         monkeypatch.setattr(GeminiProvider, "_needs_proxy_mode", property(lambda self: True))
 
-        def sync_invoke(messages, **kwargs):
-            starts.append(clock())
-            return SimpleNamespace(content="ok")
+        async def close():
+            pass
 
         async def run_sync(function, *args, **kwargs):
             if function.__name__ == "_build_client_sync":
                 await prepared.wait()
-                return SimpleNamespace(invoke=sync_invoke)
+                return SimpleNamespace(ainvoke=invoke, aclose=close)
             return function(*args)
 
         monkeypatch.setattr(to_thread, "run_sync", run_sync)
@@ -744,8 +743,8 @@ async def test_admission_wait_does_not_consume_network_timeout(scheduler, clock,
     from backend.config import settings
     from backend.services.execution_control import run_controlled
     monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
-    admission_timeout, response_timeout = (60 if grading else 30), 30
-    monkeypatch.setattr(settings, "llm_timeout", admission_timeout)
+    response_timeout = 30
+    monkeypatch.setattr(settings, "llm_timeout", response_timeout)
     # Advance the real event loop's timers without wall-clock sleeps. Generous
     # margins keep machine load out of the assertion, while the simulated queue
     # plus response still exceeds the original admission deadline.
@@ -756,8 +755,7 @@ async def test_admission_wait_does_not_consume_network_timeout(scheduler, clock,
     real_timeout = asyncio.timeout
     def timeout(delay):
         deadline = real_timeout(delay)
-        if delay == admission_timeout:
-            deadlines.append(deadline)
+        deadlines.append(deadline)
         return deadline
     monkeypatch.setattr(asyncio, "timeout", timeout)
     queued, responding, finish_response = asyncio.Event(), asyncio.Event(), asyncio.Event()
@@ -793,21 +791,20 @@ async def test_admission_wait_does_not_consume_network_timeout(scheduler, clock,
     try:
         await asyncio.wait_for(queued.wait(), timeout=5)
         assert scheduler.pending and host.active == 0 and not responding.is_set()
-        assert len(deadlines) == 1
-        deadline = deadlines[0]
-        admission_deadline = deadline.when()
-        elapsed += admission_timeout - 10
-        clock.advance(admission_timeout - 10, scheduler)
-        assert 0 < admission_deadline - loop.time() < response_timeout
+        elapsed += 601
+        clock.advance(601, scheduler)
+        await turns()
+        assert not task.done() and not responding.is_set()
         host.capacity = 1
         scheduler.wake.set()
         await asyncio.wait_for(responding.wait(), timeout=5)
-        # The response gets its own full budget, including the grading override.
+        # Only the admitted response has a clock, even after a >600s wait.
+        deadline = next(d for d in deadlines if d.when() and
+                        response_timeout - 5 < d.when() - loop.time() <= response_timeout)
         assert response_timeout - 5 < deadline.when() - loop.time() <= response_timeout
         elapsed += 20
         clock.advance(20, scheduler)
         await turns()
-        assert loop.time() > admission_deadline
         assert loop.time() < deadline.when() and not task.done()
         finish_response.set()
         assert (await asyncio.wait_for(task, timeout=5)).content == "ok"
