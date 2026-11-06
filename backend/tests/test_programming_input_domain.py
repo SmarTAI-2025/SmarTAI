@@ -62,6 +62,9 @@ def test_parameter_binding_and_conditional_output():
 @pytest.mark.parametrize("output", [
     "Return n on positive integers.",
     "返回正整数 n 本身。",
+    "返回正整数n本身。",
+    "返回正整数本身。",
+    "当n保证为奇数时返回n。",
     "Return n assuming a positive integer.",
     "If n is positive, return n, assuming that n is odd.",
     "If n is guaranteed to be odd, return n.",

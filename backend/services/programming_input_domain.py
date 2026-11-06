@@ -128,6 +128,17 @@ def _typed(value, spec, stdin):
     }[label]
 
 
+def _expression_only(value):
+    try:
+        tree = ast.parse(value, mode="eval")
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+    # Natural Chinese prose can parse as a Unicode identifier. This domain
+    # grammar binds ASCII names only; do not silently discard that prose.
+    return all(re.fullmatch(IDENT, node.id if isinstance(node, ast.Name) else node.attr)
+               for node in ast.walk(tree) if isinstance(node, (ast.Name, ast.Attribute)))
+
+
 def _output_only(text):
     """Ignore complete output instructions, never just their opening verb."""
     match = re.fullmatch(r"(?:(?:return|print|output|echo|compute|calculate)\b|返回|输出|计算|求)\s*(.+)", text, re.I)
@@ -142,13 +153,9 @@ def _output_only(text):
         return True
     if re.fullmatch(rf"whether {IDENT} is (?:{SIGN}|{TYPE})", value, re.I):
         return True
-    try:
-        # Parse only; no teacher text is evaluated. A complete expression cannot
-        # conceal prose such as 'on positive integers' or 'assuming ...'.
-        ast.parse(value, mode="eval")
-    except (SyntaxError, ValueError, RecursionError):
-        return False
-    return True
+    # Parse only; no teacher text is evaluated. Require the whole expression,
+    # not a prefix followed by 'on positive integers' or 'assuming ...'.
+    return _expression_only(value)
 
 
 def _input_clauses(text, *, rubric=False):
@@ -174,10 +181,7 @@ def _input_clauses(text, *, rubric=False):
                 condition = re.sub(r"^(?:if\b|when\b|unless\b|otherwise\b|else\b|如果|若|当|否则)", "", branch[:output.start()], flags=re.I)
                 condition = re.sub(r"(?:\bthen|则)\s*$", "", condition.strip(" ,:：")).strip()
                 if condition and not re.fullmatch(rf"{IDENT}\s*(?:为|是)\s*(?:{TYPE}|{SIGN})", condition, re.I):
-                    try:
-                        ast.parse(condition, mode="eval")
-                    except (SyntaxError, ValueError, RecursionError):
-                        valid = False
+                    valid &= _expression_only(condition)
                 outputs = re.split(r",\s*(?:otherwise\b|else\b|否则)\s*", branch[output.start():], flags=re.I)
                 valid &= all(_output_only(item) for item in outputs)
             if not valid:
