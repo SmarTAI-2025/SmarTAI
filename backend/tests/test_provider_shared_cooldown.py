@@ -21,13 +21,14 @@ async def test_429_freezes_queued_calls_but_preserves_inflight_success(monkeypat
     monkeypatch.setattr(providers, "get_scheduler", lambda: scheduler)
     monkeypatch.setattr(providers, "_ENDPOINT_BREAKERS", {})
     monkeypatch.setattr(settings, "max_concurrent_llm_per_endpoint", 2)
-    started, release, reject = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    first_started, started, release, reject = (asyncio.Event() for _ in range(4))
     sends = []
 
     async def invoke(_):
         sends.append(clock())
         index = len(sends)
         if index == 1:
+            first_started.set()
             await release.wait()
         elif index == 2:
             started.set()
@@ -37,10 +38,16 @@ async def test_429_freezes_queued_calls_but_preserves_inflight_success(monkeypat
 
     async with provider_for(route, invoke, monkeypatch) as provider:
         active = asyncio.create_task(provider.ainvoke(MESSAGES))
-        refused = asyncio.create_task(provider.ainvoke(MESSAGES))
-        await asyncio.wait_for(started.wait(), 5)
-        queued = asyncio.create_task(provider.ainvoke(MESSAGES))
+        tasks = [active]
         try:
+            # Proxy clients initialize on worker threads; task creation order
+            # does not guarantee HTTP arrival order. Establish both roles.
+            await asyncio.wait_for(first_started.wait(), 5)
+            refused = asyncio.create_task(provider.ainvoke(MESSAGES))
+            tasks.append(refused)
+            await asyncio.wait_for(started.wait(), 5)
+            queued = asyncio.create_task(provider.ainvoke(MESSAGES))
+            tasks.append(queued)
             await turns()
             reject.set()
             with pytest.raises(ProviderRequestError):
@@ -60,9 +67,9 @@ async def test_429_freezes_queued_calls_but_preserves_inflight_success(monkeypat
             assert sends == [100.0, 100.0, 100.0 + delay]
         finally:
             release.set()
-            for task in (active, refused, queued):
+            for task in tasks:
                 task.cancel()
-            await asyncio.gather(active, refused, queued, return_exceptions=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
         assert scheduler.active == 0
 
 

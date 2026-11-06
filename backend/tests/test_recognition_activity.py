@@ -107,7 +107,7 @@ async def test_capacity_failure_clears_waiting_response_without_success_event(mo
     from backend.models import ProviderConfig
     op = Obj(operation_id="recognition-test", operation_type="question_preparation", update_progress=AsyncMock())
     reporter = get_or_create_reporter(op.operation_id)
-    provider = Obj(_adaptive_binding=None, config=ProviderConfig(provider_type="openai", model="synthetic", api_key="private"), _endpoint_breaker=lambda: Obj(is_open=False))
+    provider = Obj(provider_type="openai", _adaptive_binding=None, config=ProviderConfig(provider_type="openai", model="synthetic", api_key="private"), _endpoint_breaker=lambda: Obj(is_open=False))
     from backend.llm.concurrency import ModelScheduler
     from backend.tests.test_automatic_model_scheduling import FakeHost
     scheduler = ModelScheduler(host_capacity=FakeHost(), memory_reader=lambda: None)
