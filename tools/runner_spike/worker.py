@@ -94,7 +94,11 @@ with open(int(target) if target.isdecimal() else target, "wb") as channel:
         comparable = False
     # Unsupported return representations are an evaluator limitation, not a
     # Python exception raised by the submitted function.
-    channel.write(repr(value).encode("utf-8") if comparable else bytes([0]))
+    try:
+        payload = repr(value).encode("utf-8") if comparable else bytes([0])
+    except (ValueError, OverflowError, RecursionError, UnicodeError):
+        payload = bytes([0])
+    channel.write(payload)
 """
 
 
