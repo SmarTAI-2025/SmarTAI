@@ -452,8 +452,6 @@ class BaseProvider(ABC):
         from backend.services.execution_control import current_execution
         from backend.progress.recognition_activity import report_provider_state
         scope = current_response_scope()
-        if scope is None:
-            await report_provider_state(self, "queued")
         control = current_execution()
         admitted = False
         # SDK timeouts bound individual network reads, not admission or an
@@ -461,8 +459,7 @@ class BaseProvider(ABC):
         # attempt so one waiter cannot occupy a workflow worker indefinitely.
         deadline = asyncio.timeout(float(settings.llm_timeout) if scope is None else None)
         try:
-            if scope is not None:
-                await provider_local_step(report_provider_state(self, "queued"), best_effort=True)
+            await provider_local_step(report_provider_state(self, "queued"), best_effort=True)
             if control is not None:
                 await provider_local_step(control.check(self))
             scheduler = get_scheduler()
@@ -484,7 +481,7 @@ class BaseProvider(ABC):
                     # Time spent waiting for RPM/capacity is not provider
                     # response time. Give the admitted request its full budget.
                     if scope is None:
-                        await report_provider_state(self, "responding")
+                        await provider_local_step(report_provider_state(self, "responding"), best_effort=True)
                         deadline.reschedule(asyncio.get_running_loop().time() + (
                             float(settings.llm_timeout) if response_timeout is None else response_timeout
                         ))
@@ -499,7 +496,7 @@ class BaseProvider(ABC):
                     else:
                         if control is not None:
                             await provider_local_step(control.succeeded(self), best_effort=scope is not None)
-            await provider_local_step(report_provider_state(self, "processing"), best_effort=scope is not None)
+            await provider_local_step(report_provider_state(self, "processing"), best_effort=True)
         except TimeoutError as exc:
             if not deadline.expired():
                 raise
@@ -515,7 +512,7 @@ class BaseProvider(ABC):
 
         finally:
             from backend.progress.recognition_activity import finish_provider_request
-            await provider_local_step(finish_provider_request(), best_effort=scope is not None)
+            await provider_local_step(finish_provider_request(), best_effort=True)
 
     async def _invoke_response(self, invoke, *, timeout_seconds=None):
         scope = current_response_scope()
