@@ -63,7 +63,12 @@ class AdmittedEngine:
                 return await self.response(scope, request)
             return await getattr(self.engine, method)(request)
 
-        return await scope.run_response(submit)
+        try:
+            return await scope.run_response(submit)
+        except RecognitionError as exc:
+            if not exc.submission_may_exist:
+                scope.rejected()
+            raise
 
     async def recognize(self, request):
         return await self._call("recognize", request)
@@ -92,31 +97,20 @@ def arguments(request, engine, budget, capacity):
     )
 
 
-def test_new_profile_is_explicit_and_old_profile_identity_is_unchanged():
+def test_profiles_share_response_policy_without_mutating_call_or_token_limits():
     request, engine = read_request(), VisionEngine()
     before = request.model_dump_json()
-    old = apply_source_timeout_profile(request, engine=engine, timeout_profile=LEGACY_SOURCE_TIMEOUT_PROFILE)
-    expected = request.model_copy(update={"policy": RecognitionPolicyV1.model_validate({
-        **request.policy.model_dump(), "per_call_seconds": 300, "read_seconds": 6000,
-        "locator_seconds": 360, "total_seconds": 6060,
-    })})
-    assert old.model_dump_json() == expected.model_dump_json()
-    assert "timeout_mode" not in old.policy.model_dump()
-    identity = lambda value: final_cache_identity(value, capabilities=engine.capabilities,
-                                                  prompt_version="faithful-reader-v1", workflow_version=2)
-    assert identity(old) == identity(expected)
     selected = new_policy(request, engine)
-    assert selected.policy.timeout_mode == "response_only" and selected.policy.per_call_seconds == 300
+    for profile in (None, LEGACY_SOURCE_TIMEOUT_PROFILE, "source-response-300-v1"):
+        assert apply_source_timeout_profile(request, engine=engine, timeout_profile=profile) == selected
+    assert selected.policy.timeout_mode == "response_only" and selected.policy.per_call_seconds == 600
     assert selected.policy.max_calls == request.policy.max_calls
-    assert selected.policy.max_initial_calls == request.policy.max_initial_calls
     assert selected.policy.max_output_tokens == request.policy.max_output_tokens
-    assert identity(selected) != identity(old)
     assert request.model_dump_json() == before
-    assert apply_source_timeout_profile(request, engine=engine, timeout_profile=None) is request
 
 
 @pytest.mark.parametrize("kind", ["native", "ocr", "knowledge_purpose", "knowledge_scope"])
-def test_new_profile_does_not_change_native_ocr_or_knowledge(kind):
+def test_all_product_ocr_routes_use_response_policy(kind):
     request, engine = read_request(), VisionEngine()
     if kind == "native":
         engine = None
@@ -126,7 +120,7 @@ def test_new_profile_does_not_change_native_ocr_or_knowledge(kind):
         request = request.model_copy(update={"purpose": "knowledge"})
     else:
         request = request.model_copy(update={"source": request.source.model_copy(update={"scope": "knowledge_document"})})
-    assert new_policy(request, engine) is request
+    assert new_policy(request, engine).policy.timeout_mode == "response_only"
 
 
 def test_response_only_budget_has_no_cumulative_deadline_but_retains_call_and_token_limits():
@@ -200,7 +194,7 @@ async def test_response_clock_starts_after_local_admission(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_recognition_and_model_queues_share_one_local_wait_allowance(monkeypatch):
+async def test_recognition_queue_preserves_the_local_preparation_allowance(monkeypatch):
     entered = asyncio.Event()
 
     async def local_wait():
@@ -210,6 +204,7 @@ async def test_recognition_and_model_queues_share_one_local_wait_allowance(monke
     engine = AdmittedEngine(VisionEngine(), local_wait=local_wait)
     request = new_policy(read_request(), engine)
     monkeypatch.setattr(settings, "llm_timeout", 0.2)
+    monkeypatch.setattr("backend.llm.request_timeouts.LOCAL_PREPARATION_SECONDS", 0.2)
     budget = RecognitionBudget(request.source, request.policy, engine.capabilities)
     capacity = RecognitionCapacity(global_limit=1)
     async with capacity.lease(request.source.owner_id):
@@ -217,7 +212,7 @@ async def test_recognition_and_model_queues_share_one_local_wait_allowance(monke
         await asyncio.sleep(0.12)
         assert engine.scopes == []
     await asyncio.wait_for(entered.wait(), 1)
-    assert 0 < engine.scopes[0].local_wait_remaining < 0.12
+    assert engine.scopes[0].local_wait_remaining == 0.2
     with pytest.raises(RecognitionError, match="provider_capacity_unavailable") as caught:
         await asyncio.wait_for(task, 1)
     assert not caught.value.submission_may_exist
@@ -225,17 +220,12 @@ async def test_recognition_and_model_queues_share_one_local_wait_allowance(monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("layer", ["recognition", "provider"])
-async def test_queue_timeout_persists_no_pending_and_safe_retry_needs_no_ack(tmp_path, monkeypatch, layer):
+async def test_preparation_timeout_persists_no_pending_and_safe_retry_needs_no_ack(tmp_path, monkeypatch):
     service, request, data, engine = new_runner(tmp_path, initial=["literal 1 + 1 = 3"])
     monkeypatch.setattr(settings, "llm_timeout", 0.02)
-    if layer == "provider":
-        engine.local_wait = lambda: asyncio.Event().wait()
-        first = await run(service, request, data, engine)
-    else:
-        service.capacity = RecognitionCapacity(global_limit=1)
-        async with service.capacity.lease(request.source.owner_id):
-            first = await run(service, request, data, engine)
+    monkeypatch.setattr("backend.llm.request_timeouts.LOCAL_PREPARATION_SECONDS", 0.02)
+    engine.local_wait = lambda: asyncio.Event().wait()
+    first = await run(service, request, data, engine)
     assert first.status == "needs_review" and first.safe_error_code == "provider_capacity_unavailable"
     assert first.current_usage.total_calls == first.operation_usage.total_calls == 0
     persisted = workflow_repository.get_operation(first.operation_id, owner_id=request.source.owner_id)
@@ -340,6 +330,7 @@ def session_for(request, *, guard=None):
 @pytest.mark.asyncio
 async def test_real_reader_provider_queue_does_not_authorize_or_start_a_model_request(scheduler, monkeypatch):
     post_calls = []
+    queued = asyncio.Event()
 
     async def handle(request):
         post_calls.append(request)
@@ -347,10 +338,12 @@ async def test_real_reader_provider_queue_does_not_authorize_or_start_a_model_re
 
     @asynccontextmanager
     async def unavailable(*args, **kwargs):
+        queued.set()
         await asyncio.Event().wait()
         yield
 
     monkeypatch.setattr(settings, "llm_timeout", 0.025)
+    monkeypatch.setattr("backend.llm.request_timeouts.LOCAL_PREPARATION_SECONDS", 0.025)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handle), timeout=120) as client:
         provider = relay(client)
         engine = LLMRecognitionEngine(provider, route_id="test-route", fingerprint="frozen")
@@ -360,9 +353,15 @@ async def test_real_reader_provider_queue_does_not_authorize_or_start_a_model_re
         capacity = RecognitionCapacity(global_limit=1)
         call = arguments(request, engine, budget, capacity)
         monkeypatch.setattr(providers, "get_scheduler", lambda: SimpleNamespace(lease=unavailable))
-        with pytest.raises(RecognitionError, match="provider_capacity_unavailable") as caught:
-            await run_initial_read(**call, call_session=session)
-    assert not caught.value.submission_may_exist
+        task = asyncio.create_task(run_initial_read(**call, call_session=session))
+        try:
+            await asyncio.wait_for(queued.wait(), 1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
     assert post_calls == [] and service.before_dispatch.await_count == 0
     assert budget.snapshot().pending_calls == budget.snapshot().total_calls == 0
     assert session._pending is None
@@ -433,34 +432,34 @@ async def test_real_reader_retains_unknown_responses_but_settles_proved_no_conne
 
 
 @pytest.mark.asyncio
-async def test_explicit_429_then_local_wait_failure_settles_the_existing_dispatch(
+async def test_explicit_429_then_preparation_failure_settles_the_existing_dispatch(
     tmp_path, scheduler, monkeypatch,
 ):
     from tenacity import wait_fixed
     from backend.tools import structured_llm
 
-    admissions, posts = [], []
-
-    @asynccontextmanager
-    async def lease(*args, **kwargs):
-        admissions.append(None)
-        if len(admissions) > 1:
-            await asyncio.Event().wait()
-        yield
+    posts = []
 
     async def handle(request):
         posts.append(request)
         return httpx.Response(429, json={"error": {"message": "Rate limit"}})
 
-    monkeypatch.setattr(providers, "get_scheduler", lambda: SimpleNamespace(lease=lease))
     monkeypatch.setattr(settings, "llm_timeout", 0.025)
+    monkeypatch.setattr("backend.llm.request_timeouts.LOCAL_PREPARATION_SECONDS", 0.025)
     monkeypatch.setattr(structured_llm._invoke_with_rate_retry.retry, "wait", wait_fixed(0))
     async with httpx.AsyncClient(transport=httpx.MockTransport(handle), timeout=120) as client:
-        engine = LLMRecognitionEngine(relay(client), route_id="test-route", fingerprint="frozen")
+        provider = relay(client)
+        original_client = provider._relay_client
+        async def prepare():
+            if posts:
+                await asyncio.Event().wait()
+            return await original_client()
+        monkeypatch.setattr(provider, "_relay_client", prepare)
+        engine = LLMRecognitionEngine(provider, route_id="test-route", fingerprint="frozen")
         service, request, data, _ = runner(tmp_path)
         request = new_policy(request, engine)
         result = await run(service, request, data, engine)
-    assert len(posts) == 1 and len(admissions) == 2
+    assert len(posts) == 1
     assert result.status == "needs_review" and result.safe_error_code == "provider_capacity_unavailable"
     assert result.current_usage.total_calls == result.operation_usage.total_calls == 1
     persisted = workflow_repository.get_operation(result.operation_id, owner_id=request.source.owner_id)

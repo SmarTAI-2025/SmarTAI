@@ -70,7 +70,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [frontier, active, documentId, summary?.id, poll]);
   const effectiveStatus = summary?.status ?? status;
-  const label = paused ? (zh ? "已暂停" : "Paused") : active ? (zh ? "后台处理中" : "Processing")
+  const label = summary?.error_code === "knowledge_wall_time_limit_reached" ? (zh ? "已超时，已完成内容保留" : "Timed out; completed content retained") : paused ? (zh ? "已暂停" : "Paused") : active ? (zh ? "后台处理中" : "Processing")
     : effectiveStatus === "partial" ? (zh ? "部分可检索" : "Partial coverage")
     : effectiveStatus === "failed" ? (zh ? "处理未完成" : "Incomplete")
     : summary?.warning_pages ? (zh ? "可检索，有待核对" : "Searchable, with warnings") : (zh ? "已解析" : "Parsed");

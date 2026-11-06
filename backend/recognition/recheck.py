@@ -220,10 +220,10 @@ async def _prepare_image(source_bytes, source, target, budget, progress, *, tota
     if source.content_type == "application/pdf":
         command = PdfRenderRequest(page_number=context.page_number, region=context.region.as_tuple(), scale=2)
         if local_reader is not None:
-            result = (await local_reader.read(source_bytes, command, timeout_seconds=budget.local_timeout(10, "read"))).evidence
+            result = (await local_reader.read(source_bytes, command, timeout_seconds=budget.local_timeout(30, "read"))).evidence
         else:
             result = await read_pdf_evidence(
-                source_bytes, command, timeout_seconds=budget.local_timeout(10, "read"), progress=progress,
+                source_bytes, command, timeout_seconds=budget.local_timeout(30, "read"), progress=progress,
             )
         if (not isinstance(result, PdfRenderResult) or result.total_pages != total_pages
                 or result.page_number != context.page_number or result.region != context.region.as_tuple()):
@@ -232,10 +232,10 @@ async def _prepare_image(source_bytes, source, target, budget, progress, *, tota
     else:
         command = ImagePrepareRequest(content_type=source.content_type, region=context.region.as_tuple())
         if local_reader is not None:
-            result = (await local_reader.read(source_bytes, command, timeout_seconds=budget.local_timeout(10, "read"))).evidence
+            result = (await local_reader.read(source_bytes, command, timeout_seconds=budget.local_timeout(30, "read"))).evidence
         else:
             result = await read_image_evidence(
-                source_bytes, command, timeout_seconds=budget.local_timeout(10, "read"), progress=progress,
+                source_bytes, command, timeout_seconds=budget.local_timeout(30, "read"), progress=progress,
             )
         if not isinstance(result, ImagePreparedResult):
             raise RecognitionError("recognition_response_invalid")

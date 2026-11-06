@@ -174,6 +174,8 @@ async def test_provider_wide_rejection_pauses_before_requesting_remaining_pages(
     who, doc_id, job_id = queued(pdf(3))
     calls = []
     async def reject(request, *args, **kwargs):
+        assert request.policy.timeout_mode == "response_only"
+        assert request.policy.per_call_seconds == 600
         calls.append(request.pages)
         usage = SimpleNamespace(patch_calls=0, empty_recovery_calls=0,
             model_dump=lambda **_: dict(initial_calls=1, usage_complete=False))
@@ -301,7 +303,8 @@ async def test_cancelled_paid_page_is_never_resubmitted_on_resume_or_retry(monke
     engine.recognize = blocked
     @asynccontextmanager
     async def adapter(**_):
-        yield engine
+        from backend.tests.test_recognition_response_deadlines import AdmittedEngine
+        yield AdmittedEngine(engine)
     monkeypatch.setattr(ingestion, "recognition_engine", adapter)
     who = owner()
     body, media = source_file()

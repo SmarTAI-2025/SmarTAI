@@ -17,7 +17,7 @@ def reset_limits():
     analytics._ask_bursts.clear()
 
 
-@pytest.mark.parametrize("endpoint", ["teacher", "task", "legacy"])
+@pytest.mark.parametrize("endpoint", ["teacher", "task", "legacy", "filter-intent"])
 @pytest.mark.parametrize("recognized", [True, False])
 def test_http_response_excludes_planning_details_without_changing_public_result(monkeypatch, endpoint, recognized):
     owner = _user("teacher", "public-ask")
@@ -198,3 +198,30 @@ def test_demo_and_teacher_use_same_ask_selection_and_chart_contract(auth_scope):
     assert response.json()["mode"] == "chart"
     assert response.json()["traces"][0]["y"] == [1]
     assert set(response.json()["execution"]) == {"recognized", "kind", "explanation", "data", "selection", "chart", "candidates"}
+
+
+@pytest.mark.parametrize("endpoint", ["teacher", "task", "legacy", "filter-intent"])
+def test_ask_entire_request_timeout_is_clear_and_shared_by_all_routes(monkeypatch, endpoint):
+    import asyncio
+    owner = _user("teacher", "ask-total-timeout")
+    seeded = _seed_graded_assignment(owner)
+    original_timeout = asyncio.timeout
+    deadlines = []
+    def capture(seconds):
+        deadline = original_timeout(seconds)
+        if seconds == 240:
+            deadlines.append(deadline)
+        return deadline
+    monkeypatch.setattr(asyncio, "timeout", capture)
+    async def blocked(**kwargs):
+        assert len(deadlines) == 1
+        deadlines[0].reschedule(asyncio.get_running_loop().time())
+        await asyncio.Event().wait()
+    monkeypatch.setattr(analytics.grounded_ask, "ask", blocked)
+    monkeypatch.setattr(analytics.analytics_agent, "interpret_filter_intent", blocked)
+    path = "/analytics/ask" if endpoint == "teacher" else f"/analytics/{seeded['task_id']}/{'query' if endpoint == 'legacy' else 'ask'}"
+    if endpoint == "filter-intent":
+        path = f"/analytics/{seeded['task_id']}/filter-intent"
+    response = _client(owner, _Registry(Provider())).post(path, json={"question": "Show students", "surface": "student_analysis"})
+    assert response.status_code == 504
+    assert response.json()["detail"]["code"] == "analytics_timeout"

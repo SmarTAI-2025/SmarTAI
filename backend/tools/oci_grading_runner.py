@@ -62,8 +62,9 @@ async def _command(args, *, timeout, env):
     )
     reads = asyncio.gather(_bounded_read(process.stdout), _bounded_read(process.stderr))
     try:
-        stdout, _stderr = await asyncio.wait_for(reads, timeout)
-        await asyncio.wait_for(process.wait(), timeout)
+        async with asyncio.timeout(timeout):
+            stdout, _stderr = await reads
+            await process.wait()
         if process.returncode:
             logger.warning("OCI command failed: operation=%s exit=%s", args[1], process.returncode)
             raise IsolatedRunnerUnavailable()
@@ -112,7 +113,6 @@ async def _host_slot():
     if directory.is_symlink() or directory.stat().st_uid != os.getuid() or directory.stat().st_mode & 0o077:
         raise IsolatedRunnerUnavailable()
     handle = None
-    deadline = asyncio.get_running_loop().time() + 120
     try:
         while handle is None:
             for index in range(settings.program_runner_max_concurrent):
@@ -125,9 +125,8 @@ async def _host_slot():
                 except BlockingIOError:
                     candidate.close()
             if handle is None:
-                if asyncio.get_running_loop().time() >= deadline:
-                    raise IsolatedRunnerUnavailable()
-                await asyncio.sleep(0.05)
+                from backend.services.submission_work_budget import wait_for_admission
+                await wait_for_admission(asyncio.sleep(0.05))
         yield
     finally:
         if handle is not None:

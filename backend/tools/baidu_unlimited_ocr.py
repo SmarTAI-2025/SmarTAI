@@ -296,10 +296,11 @@ class BaiduUnlimitedOCRClient:
         suffix = self._validate_file(file_data, file_name)
         started = time.perf_counter()
         call_state = _RecognitionCallState()
+        from backend.llm.request_timeouts import current_response_scope
         try:
             document = await asyncio.wait_for(
                 self._recognize_document(file_data, suffix, call_state),
-                timeout=self._overall_timeout_seconds,
+                timeout=None if current_response_scope() is not None else self._overall_timeout_seconds,
             )
         except BaiduUnlimitedOCRError as error:
             submission_may_exist = (

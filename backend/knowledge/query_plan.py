@@ -36,7 +36,7 @@ class QueryPlan:
 
 
 class QueryPlanner:
-    def __init__(self, *, max_entries=512, ttl=1800, timeout=30):
+    def __init__(self, *, max_entries=512, ttl=1800, timeout=60):
         self.max_entries, self.ttl, self.timeout = max_entries, ttl, timeout
         self._cache = OrderedDict()
         self._pending = {}

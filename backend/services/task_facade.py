@@ -6,6 +6,7 @@ course/assignment/submission/grading repositories.  It intentionally does not
 recreate the removed TaskStore or JobStore.
 """
 from __future__ import annotations
+from backend.config import settings
 from backend.llm.image_capability import can_attempt_images
 
 import asyncio
@@ -3353,7 +3354,7 @@ async def run_task_submission_parsing(
                                 artifact_refs=leased_operation.artifact_refs)
                         try:
                             from backend.llm.request_timeouts import response_timeout_scope
-                            with response_timeout_scope(900, response_only=True) as response_scope:
+                            with response_timeout_scope(settings.llm_timeout, response_only=True) as response_scope:
                                 result = attach_submission_recognition([await invoke()], [source])[0]
                                 if response_scope.submission_may_exist:
                                     result = replace(result, status="parse_failed",
@@ -3652,7 +3653,7 @@ async def run_task_submission_parsing(
             # request from the explicit-retry acknowledgement boundary.
             code = "provider_submit_uncertain" if any(
                 result.stable_error_code == "provider_submit_uncertain" for result in results
-            ) else "submission_time_limit_reached" if current_budget() is not None and current_budget().blocked else next(
+            ) else current_budget().code if current_budget() is not None and current_budget().blocked else next(
                 (
                     result.stable_error_code
                     for result in results

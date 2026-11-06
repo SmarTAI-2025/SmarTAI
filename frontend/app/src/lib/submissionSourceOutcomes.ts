@@ -87,6 +87,10 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     description: tx(locale, "本次批改已达到 3.5 小时总时限，自首次开始运行起，之后等待计入；已保存的批改结果会保留。", "This grading run reached its 3.5-hour total time limit, counted from the first start, including later waits. Saved grading results are retained."),
     nextStep: tx(locale, "可重试失败项，或人工核对并补齐分数。", "Retry failed items, or review and complete the scores manually."),
   }),
+  knowledge_wall_time_limit_reached: (locale) => ({
+    title: tx(locale, "资料库处理超时", "Course-library processing timed out"),
+    description: tx(locale, "已达到 2 小时总时限，已完成内容会保留。", "The 2-hour total time limit was reached; completed content is retained."),
+  }),
   operation_cancelled: (locale) => ({
     title: tx(locale, "已手动暂停，尚未完成识别", "Manually paused before recognition completed"),
     description: tx(locale, "原文件和已完成识别已保留。可以继续识别未完成部分，也可以人工继续处理。", "Originals and completed recognition are preserved. Resume the unfinished work or continue manually."),

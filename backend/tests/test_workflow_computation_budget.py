@@ -65,16 +65,16 @@ async def test_only_admitted_computation_spends_work_budget(route, monkeypatch):
         async def invoke():
             return await code_interpreter.run_python_subprocess("print('ok')", timeout=7)
 
-    with pytest.raises(DomainError, match="grading_time_limit_reached"):
+    with pytest.raises(DomainError, match="grading_wall_time_limit_reached"):
         async with limits.processing_budget("run", kind="grading") as budget:
             task = asyncio.create_task(invoke())
             try:
                 await asyncio.sleep(.02)
-                assert budget.elapsed == 0 and calls == []
+                assert budget.active == 0 and calls == []
                 gate.release()
                 await asyncio.wait_for(entered.wait(), 1)
                 await asyncio.sleep(.02)
-                assert budget.elapsed >= .02
+                assert budget.active == 1
                 release.set()
                 await task
                 assert budget.active == 0

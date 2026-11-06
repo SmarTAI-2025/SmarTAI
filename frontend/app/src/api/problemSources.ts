@@ -61,7 +61,7 @@ export async function preflightProblemSource(
     const response = await apiClient.post<ProblemSourcePreflightResponse>(
       `/tasks/${input.taskId}/question-preparation/sources/preflight`,
       formData,
-      { timeout: 960_000 },
+      { timeout: 300_000 },
     );
     return response.data;
   } catch (error) {
@@ -92,7 +92,7 @@ export async function startQuestionPreparation(
         },
         recognition_provider_id: input.recognitionProviderId,
       },
-      { timeout: 180_000 },
+      { timeout: 300_000 },
     );
     return response.data;
   } catch (error) {
@@ -112,7 +112,7 @@ export async function startProblemExtraction(
     const response = await apiClient.post<StartProblemExtractionResponse>(
       `/tasks/${input.taskId}/extract_problems`,
       formData,
-      { timeout: 180_000 },
+      { timeout: 300_000 },
     );
     return response.data;
   } catch (error) {

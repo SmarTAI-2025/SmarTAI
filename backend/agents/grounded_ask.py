@@ -306,7 +306,8 @@ def _chart(plan: QueryPlan, data: dict, snapshot: Snapshot, targets: list[Entity
 
 
 async def _model(provider, messages, schema):
-    async with asyncio.timeout(60):
+    from backend.llm.request_timeouts import response_timeout_scope
+    with response_timeout_scope(60, response_only=True):
         response = await provider.ainvoke(messages)
     # The prose JSON cleaner strips trailing SQL quotes and reformats math.
     # Machine plans must instead be parsed losslessly, without repairing literals.

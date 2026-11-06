@@ -204,6 +204,8 @@ def _classify_exception(e: Exception) -> Exception:
     from backend.llm.provider_limits import quota_error_code
     if getattr(e, "code", None) in {
         "submission_time_limit_reached", "question_preparation_time_limit_reached", "grading_time_limit_reached",
+        "submission_wall_time_limit_reached", "question_preparation_wall_time_limit_reached",
+        "grading_wall_time_limit_reached", "knowledge_wall_time_limit_reached",
     }:
         return PermanentLLMError(e.code)
     quota_code = quota_error_code(e)

@@ -12,6 +12,7 @@ from typing import Awaitable, Callable, Iterator, TypeVar
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 _LOCAL_STEP_SECONDS = 10.0
+LOCAL_PREPARATION_SECONDS = 60.0
 
 
 _response_seconds: ContextVar[float | None] = ContextVar("provider_response_seconds", default=None)
@@ -75,10 +76,12 @@ class ResponseDeadlineScope:
 
     @asynccontextmanager
     async def local_admission(self, lease):
-        # Only entering the lease is local waiting. Its body can contain an
-        # entire provider response; releasing it must remain cancellation-safe.
+        # Waiting for an internal slot consumes neither the local preparation
+        # allowance nor response time. Workflow limits/cancellation still apply;
+        # releasing an acquired lease must remain cancellation-safe.
+        from backend.services.submission_work_budget import wait_for_admission
         async with AsyncExitStack() as stack:
-            await self.wait_local(stack.enter_async_context(lease))
+            await wait_for_admission(stack.enter_async_context(lease))
             yield
 
     async def run_response(
@@ -161,8 +164,6 @@ def workflow_cancellation_scope() -> Iterator[None]:
 
 async def provider_local_step(awaitable: Awaitable[T], *, best_effort: bool = False) -> T | None:
     """Bound advisory I/O in every mode; preserve required control failures."""
-    if current_response_scope() is None and not best_effort:
-        return await awaitable
     deadline = asyncio.timeout(_LOCAL_STEP_SECONDS)
     try:
         async with deadline:
@@ -178,14 +179,14 @@ async def provider_local_step(awaitable: Awaitable[T], *, best_effort: bool = Fa
 
 @contextmanager
 def response_timeout_scope(
-    seconds: float, *, response_only: bool = False, local_wait_seconds: float = 600,
+    seconds: float, *, response_only: bool = False, local_wait_seconds: float | None = None,
     before_send=None, on_send=None,
 ) -> Iterator[ResponseDeadlineScope | None]:
     """Bound only this coroutine's requests; nested scopes cannot widen a cap."""
     seconds = _positive_seconds(seconds)
     previous = _response_seconds.get()
     seconds = seconds if previous is None else min(previous, seconds)
-    scope = ResponseDeadlineScope(seconds, local_wait_seconds=local_wait_seconds, before_send=before_send,
+    scope = ResponseDeadlineScope(seconds, local_wait_seconds=LOCAL_PREPARATION_SECONDS if local_wait_seconds is None else local_wait_seconds, before_send=before_send,
                                   on_send=on_send) if response_only else None
     token = _response_seconds.set(seconds)
     scope_token = _response_scope.set(scope)

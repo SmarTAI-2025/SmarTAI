@@ -24,7 +24,7 @@ export async function preflightMaterialImport(
     const response = await apiClient.post<MaterialImportPreflightResponse>(
       `/tasks/${input.taskId}/material-imports/preflight`,
       formData,
-      { timeout: 960_000 },
+      { timeout: 9_060_000 },
     );
     return response.data;
   } catch (error) {

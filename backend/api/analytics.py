@@ -641,11 +641,14 @@ async def interpret_filter_intent(
     provider_question, identities = _redact_filter_question(req.question, known_identifiers)
 
     try:
-        output = await analytics_agent.interpret_filter_intent(
-            question=provider_question,
-            surface=req.surface,
-            provider=provider,
-        )
+        from backend.llm.request_timeouts import response_timeout_scope
+        async with asyncio.timeout(240):
+            with response_timeout_scope(60, response_only=True):
+                output = await analytics_agent.interpret_filter_intent(
+                    question=provider_question,
+                    surface=req.surface,
+                    provider=provider,
+                )
         text_terms = []
         for term in output.text_terms:
             normalized = term.strip().casefold()
@@ -664,6 +667,8 @@ async def interpret_filter_intent(
             "text_terms": text_terms,
             "explanation": _safe_text(output.explanation, 500),
         }
+    except TimeoutError as exc:
+        raise HTTPException(504, detail={"code": "analytics_timeout"}) from exc
     except SharedPoolLimitError as exc:
         raise _provider_error(exc) from exc
     except Exception as exc:
@@ -704,23 +709,26 @@ def _check_ask_limit(owner_id: str) -> None:
 
 async def _run_grounded_ask(task_id: str | None, req: AskRequest, current: User, registry: ExpertRegistry):
     try:
-        if any(len(turn) > 2000 for turn in req.history):
-            raise HTTPException(422, detail={"code": "ask_history_too_long"})
-        snapshot = await asyncio.to_thread(load_snapshot, task_id, current.id)
-        provider = resolve_owner_default_provider(current.id, registry)
-        if provider is None:
-            raise HTTPException(503, detail={"code": "analytics_provider_unavailable"})
-        _check_ask_limit(current.id)
-        result = await grounded_ask.ask(task_id=task_id, owner_id=current.id, question=req.question,
-            surface=req.surface, provider=provider, context_student_id=req.context_student_id,
-            history=req.history, snapshot=snapshot)
-        if req.surface == "history" and result.get("tasks") is not None:
-            result["tasks"] = await enrich_history_progress(result["tasks"], owner_id=current.id)
-        # Keep query plans and diagnostic context inside the agent. All Ask
-        # routes, including /query's nested execution, share this boundary.
-        return {key: result[key] for key in (
-            "recognized", "kind", "explanation", "data", "selection", "chart", "candidates", "tasks",
-        ) if key in result}
+        async with asyncio.timeout(240):
+            if any(len(turn) > 2000 for turn in req.history):
+                raise HTTPException(422, detail={"code": "ask_history_too_long"})
+            snapshot = await asyncio.to_thread(load_snapshot, task_id, current.id)
+            provider = resolve_owner_default_provider(current.id, registry)
+            if provider is None:
+                raise HTTPException(503, detail={"code": "analytics_provider_unavailable"})
+            _check_ask_limit(current.id)
+            result = await grounded_ask.ask(task_id=task_id, owner_id=current.id, question=req.question,
+                surface=req.surface, provider=provider, context_student_id=req.context_student_id,
+                history=req.history, snapshot=snapshot)
+            if req.surface == "history" and result.get("tasks") is not None:
+                result["tasks"] = await enrich_history_progress(result["tasks"], owner_id=current.id)
+            # Keep query plans and diagnostic context inside the agent. All Ask
+            # routes, including /query's nested execution, share this boundary.
+            return {key: result[key] for key in (
+                "recognized", "kind", "explanation", "data", "selection", "chart", "candidates", "tasks",
+            ) if key in result}
+    except TimeoutError as exc:
+        raise HTTPException(504, detail={"code": "analytics_timeout"}) from exc
     except DomainError as exc:
         if isinstance(exc, NotFound):
             raise _not_found() from exc

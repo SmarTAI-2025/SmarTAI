@@ -205,8 +205,6 @@ class LeasedOperation:
         artifact_refs: list[str] | None = None,
     ) -> int:
         self._check_lease()
-        from backend.services.submission_work_budget import with_work_checkpoint
-        checkpoint = with_work_checkpoint(self.operation_id, checkpoint)
         try:
             saved = workflow_repository.save_operation_checkpoint(
                 self._operation.id,

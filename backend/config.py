@@ -130,19 +130,6 @@ class Settings(BaseSettings):
     custom_provider_verification_timeout_seconds: int = 60
     custom_provider_verification_cooldown_seconds: int = 5
     custom_provider_max_response_bytes: int = 4 * 1024 * 1024
-    # Timeout for individual custom-provider (SafeRelay) LLM calls.  Some free
-    # relay endpoints (e.g. campus relays) silently hang on larger requests,
-    # while `llm_timeout` (600s) would otherwise let a single call block the
-    # whole question-preparation job for ten minutes.  A separate, shorter cap
-    # makes such endpoints fail into the normal retry/error flow instead of
-    # appearing to spin forever.  0 disables the override and falls back to
-    # `llm_timeout`.
-    custom_provider_timeout_seconds: int = int(
-        os.getenv("SMARTAI_CUSTOM_PROVIDER_TIMEOUT_SECONDS", "120")
-    )
-    # Grading only: bound a complete admitted custom-provider response, including a
-    # relay that keeps sending partial data. Queue time has its own budget.
-    grading_custom_provider_timeout_seconds: float = Field(default=300.0, gt=0)
     # Question-level grading retry.  The per-LLM-call tenacity retry
     # (`llm_max_retries`) already covers most flakes, but when EVERY expert of
     # a question fails with a transient error (e.g. the USTC campus relay
@@ -188,10 +175,6 @@ class Settings(BaseSettings):
     progress_ring_buffer_size: int = 200  # max events kept per job
 
     # ─── Job recovery & maintenance (Task 4) ───────────────────────────────────
-    # Hard wall-clock cap on a single grading job. The periodic maintenance loop
-    # marks active jobs older than this (by created_at) as error so a wedged
-    # worker cannot hold a concurrency slot forever.
-    job_timeout_seconds: int = int(os.getenv("SMARTAI_JOB_TIMEOUT_SECONDS", "3600"))
     # How often the per-worker maintenance loop runs recover_interrupted()/maintain().
     job_maintenance_interval_seconds: int = int(
         os.getenv("SMARTAI_JOB_MAINTENANCE_INTERVAL_SECONDS", "300")

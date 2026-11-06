@@ -68,11 +68,11 @@ async def read_image_plan(
                 command = ImagePrepareRequest(content_type=source.content_type, region=region.as_tuple())
                 if local_reader is not None:
                     prepared = (await local_reader.read(
-                        image_bytes, command, timeout_seconds=budget.local_timeout(10, "read"),
+                        image_bytes, command, timeout_seconds=budget.local_timeout(30, "read"),
                     )).evidence
                 else:
                     prepared = await read_image_evidence(
-                        image_bytes, command, timeout_seconds=budget.local_timeout(10, "read"), progress=progress,
+                        image_bytes, command, timeout_seconds=budget.local_timeout(30, "read"), progress=progress,
                     )
                 metadata = ImagePreparedMetadata.model_validate({
                     name: getattr(prepared, name) for name in ImagePreparedMetadata.model_fields

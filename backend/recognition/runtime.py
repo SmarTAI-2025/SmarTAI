@@ -291,12 +291,9 @@ async def _dispatch_response_only(
     engine, request, *, dispatch, kind, source, policy, capabilities, region_keys,
     budget, capacity, progress, before_send,
 ):
-    """Charge only admitted submissions; local queues have a separate allowance."""
-    from backend.config import settings
+    """Charge only admitted submissions; internal queues have no call deadline."""
     from backend.llm.providers import ProviderRequestError
 
-    if capabilities.candidate_kind != "vision" or source.scope == "knowledge_document" or request.purpose == "knowledge":
-        raise RecognitionError("recognition_request_invalid")
     ticket = None
     state = None
     authorization_error = None
@@ -333,12 +330,20 @@ async def _dispatch_response_only(
 
     try:
         with response_timeout_scope(
-            policy.per_call_seconds, response_only=True, local_wait_seconds=settings.llm_timeout,
+            policy.per_call_seconds, response_only=True,
             before_send=authorize, on_send=reserve,
         ) as state:
             async with state.local_admission(_recognition_admission(engine, source, capacity)):
                 budget.assert_context(source, policy, engine.capabilities)
-                candidate = await dispatch(request)
+                if capabilities.candidate_kind == "ocr":
+                    try:
+                        candidate = await state.run_response(lambda: dispatch(request))
+                    except RecognitionError as exc:
+                        if not exc.submission_may_exist:
+                            state.rejected()  # The OCR adapter has explicit pre-submit/rejection evidence.
+                        raise
+                else:
+                    candidate = await dispatch(request)
             if ticket is None or not state.ever_started:
                 # A provider adapter must identify its actual request boundary;
                 # returning a candidate is not proof that this contract was met.

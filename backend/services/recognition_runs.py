@@ -354,8 +354,6 @@ class RecognitionRunService:
             raise RecognitionError("recognition_request_invalid") from None
         source = request.source
         response_only = request.policy.timeout_mode == "response_only"
-        if response_only and (caps is None or caps.candidate_kind != "vision"):
-            raise RecognitionError("recognition_request_invalid")
         progress = bounded_recognition_progress(self.progress) if response_only else self.progress
         if source.owner_id != authorized_owner_id:
             raise RecognitionError("recognition_source_mismatch")
@@ -401,9 +399,13 @@ class RecognitionRunService:
             source=source, identity=identity, binding=binding, authorized_owner_id=authorized_owner_id,
         ), response_only=response_only):
             raise RecognitionError("recognition_source_unavailable")
-        renew_lease = ((response_only or request.policy.total_seconds > 900) and caps is not None and caps.candidate_kind == "vision"
+        renew_lease = ((response_only or (request.policy.total_seconds > 900 and caps is not None and caps.candidate_kind == "vision"))
                        and source.scope != "knowledge_document" and request.purpose != "knowledge")
-        lease_seconds = _RENEWABLE_LEASE_SECONDS if renew_lease else math.ceil(request.policy.total_seconds) + 60
+        from backend.services.workflow_deadlines import KNOWLEDGE_WALL_SECONDS
+        # Knowledge pages are fenced by their parent job's renewed lease. A
+        # page may wait for a provider slot, so its sublease must cover the job.
+        lease_seconds = (_RENEWABLE_LEASE_SECONDS if renew_lease else
+                         KNOWLEDGE_WALL_SECONDS + 60 if response_only else math.ceil(request.policy.total_seconds) + 60)
         worker = "recognition-" + uuid.uuid4().hex
         try:
             row = await _storage_step(run_in_threadpool(

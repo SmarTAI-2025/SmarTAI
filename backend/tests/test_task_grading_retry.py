@@ -54,7 +54,7 @@ def finish(case, run_id, monkeypatch, failed=("q2",), *, score=8):
 
     async def fake_batch(**kwargs):
         from backend.services.execution_control import current_execution
-        assert current_execution().response_timeout_seconds == grading_runs.settings.grading_custom_provider_timeout_seconds
+        assert current_execution().response_timeout_seconds == grading_runs.settings.llm_timeout
         calls.append(kwargs)
         return [{"student_id": sid, "corrections": [Correction(
             q_id=qid, type="concept", score=0 if qid in failed else score,

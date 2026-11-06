@@ -156,13 +156,11 @@ def test_grading_reclaim_keeps_first_started_at(setup_assignment):
 async def test_shared_active_clock_excludes_queue_counts_parallel_once_and_drains(kind):
     from backend.services.submission_work_budget import current_budget
     from backend.llm.request_timeouts import ResponseDeadlineScope
-    saved = []
-    async def persist(snapshot): saved.append(snapshot)
     with pytest.raises(DomainError, match="time_limit_reached"):
-        async with limits.processing_budget("job", kind=kind, persist=persist) as budget:
+        async with limits.processing_budget("job", kind=kind) as budget:
             assert current_budget() is budget
             await budget.wait(asyncio.sleep(.02))
-            assert budget.elapsed == 0
+            assert budget.active == 0
             release, both_started = asyncio.Event(), asyncio.Event()
             entered = 0
             async def call():
@@ -184,54 +182,28 @@ async def test_shared_active_clock_excludes_queue_counts_parallel_once_and_drain
             assert not first.done() and not second.done()
             release.set()
             await asyncio.gather(first, second)
-            assert .01 <= budget.elapsed <= asyncio.get_running_loop().time() - wall_started
-    assert saved[-1]["blocked"] and saved[-1]["draining"]
+            assert budget.active == 0
+    assert budget.exhausted.is_set()
     assert current_budget() is None
 
-@pytest.mark.asyncio
-async def test_active_clock_resumes_saved_elapsed_without_reset():
-    saved = {"profile": "question_preparation-active-v1", "attempt": 1,
-             "active_seconds": 5399, "draining": False, "blocked": False}
-    async with limits.processing_budget("job", kind="question_preparation", saved=saved) as budget:
-        assert budget.elapsed == 5399 and budget.limit == 5400
-    async with limits.processing_budget("job", kind="question_preparation", attempt=2, saved=saved) as budget:
-        assert budget.elapsed == 0
 
 
-def test_only_three_workflows_have_total_budgets():
-    assert limits.policy("question_preparation")[:2] == (5400, 9000)
-    assert limits.policy("submission_recognition")[:2] == (9000, 12600)
-    assert limits.policy("grading")[:2] == (9000, 12600)
-    assert limits.BUDGET_TYPES == {"question_preparation", "submission_recognition"}
-    for kind in ("ai_completion", "material_import", "problem_extraction", "source_cleanup", "knowledge_ingestion"):
-        with pytest.raises(ValueError):
-            limits.policy(kind)
 
 
-@pytest.mark.asyncio
-async def test_deployed_submission_clock_retains_spent_time_under_lower_limit():
-    from backend.services import submission_work_budget as clocks
-    saved = {"profile": "submission-active-3h-v1", "attempt": 1, "active_seconds": 8999}
-    async with limits.processing_budget("job", kind="submission_recognition", saved=saved) as budget:
-        assert budget.limit == 9000 and budget.elapsed == 8999
-        assert clocks.with_work_checkpoint("job", {})[clocks.CHECKPOINT_KEY]["active_seconds"] == 8999
 
 
 @pytest.mark.asyncio
 async def test_total_expiry_closes_admission_and_preserves_final_active_clock():
-    saved = []
-    async def persist(snapshot):
-        saved.append(snapshot)
     with pytest.raises(DomainError, match="question_preparation_wall_time_limit_reached"):
         async with limits.processing_budget("job", kind="question_preparation",
-                deadline_at=time.time() + .02, persist=persist) as budget:
+                deadline_at=time.time() + .02) as budget:
             budget.start()
             try:
                 await asyncio.Event().wait()
             finally:
                 budget.finish()
-    assert budget.exhausted.is_set() and saved[-1]["active_seconds"] > 0
-    with pytest.raises(DomainError, match="question_preparation_time_limit_reached"):
+    assert budget.exhausted.is_set() and budget.active == 0
+    with pytest.raises(DomainError, match="question_preparation_wall_time_limit_reached"):
         budget.start()
 
 
@@ -291,68 +263,8 @@ def test_total_limit_errors_keep_existing_retry_and_manual_projection():
         assert safe_background_error_code(code, "workflow_failed") == code
 
 
-@pytest.mark.asyncio
-async def test_final_checkpoint_cannot_hold_timed_out_coordinator_forever(monkeypatch):
-    monkeypatch.setattr(limits, "TASK_CLEANUP_SECONDS", .02)
-    saving, release = asyncio.Event(), asyncio.Event()
-    async def persist(snapshot):
-        saving.set()
-        try:
-            await release.wait()
-        except asyncio.CancelledError:
-            await release.wait()
-    async def run():
-        async with limits.processing_budget("job", kind="grading", deadline_at=time.time() + .01,
-                                            persist=persist):
-            await asyncio.Event().wait()
-    task = asyncio.create_task(run())
-    try:
-        with pytest.raises(DomainError, match="grading_wall_time_limit_reached"):
-            await asyncio.wait_for(task, .5)
-        assert saving.is_set() and limits._quarantined_tasks
-    finally:
-        release.set()
-        await asyncio.gather(task, return_exceptions=True)
-        for _ in range(10):
-            await asyncio.sleep(0)
-    assert not limits._quarantined_tasks
 
 
-@pytest.mark.asyncio
-async def test_clock_watcher_stuck_in_checkpoint_has_bounded_shutdown(monkeypatch, running_deadlines):
-    monkeypatch.setattr(limits, "TASK_CLEANUP_SECONDS", .02)
-    tick, saving, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    original_sleep = asyncio.sleep
-    async def sleep(seconds):
-        if seconds == 5:
-            await tick.wait()
-            tick.clear()
-        else:
-            await original_sleep(seconds)
-    monkeypatch.setattr(asyncio, "sleep", sleep)
-    async def persist(snapshot):
-        saving.set()
-        try:
-            await release.wait()
-        except asyncio.CancelledError:
-            await release.wait()
-    async def run():
-        async with limits.processing_budget("job", kind="grading", persist=persist):
-            tick.set()
-            await asyncio.Event().wait()
-    task = asyncio.create_task(run())
-    try:
-        await asyncio.wait_for(saving.wait(), 1)
-        running_deadlines[0].reschedule(asyncio.get_running_loop().time())
-        with pytest.raises(DomainError, match="grading_wall_time_limit_reached"):
-            await asyncio.wait_for(task, .5)
-        assert limits._quarantined_tasks
-    finally:
-        release.set()
-        await asyncio.gather(task, return_exceptions=True)
-        for _ in range(10):
-            await original_sleep(0)
-    assert not limits._quarantined_tasks
 
 
 @pytest.mark.asyncio
@@ -387,3 +299,13 @@ async def test_grading_final_persistence_cannot_publish_success_after_total_dead
     with pytest.raises(DomainError, match="grading_wall_time_limit_reached"):
         await grading_runs.process_run(run_id=run.id, worker_id="deadline-worker", registry=Registry())
     assert grades.get_run(run.id).error_message == "grading_wall_time_limit_reached"
+
+
+def test_whole_task_policies_cover_auxiliary_question_entrypoints():
+    for kind in limits.QUESTION_TYPES:
+        assert limits.policy(kind) == (9000, "question_preparation")
+    assert limits.policy("submission_recognition") == (12600, "submission")
+    assert limits.policy("grading") == (12600, "grading")
+    assert limits.policy("knowledge_ingestion") == (7200, "knowledge")
+    with pytest.raises(ValueError):
+        limits.policy("source_cleanup")

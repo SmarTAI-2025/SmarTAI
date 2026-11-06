@@ -380,7 +380,7 @@ export async function postMultipart<T>(
 
   try {
     const response = await apiClient.post<T>(path, formData, {
-      timeout: 180_000,
+      timeout: 300_000,
       headers: options.contentType ? { "Content-Type": options.contentType } : undefined,
       onUploadProgress: (event) => {
         if (!options.onProgress) {

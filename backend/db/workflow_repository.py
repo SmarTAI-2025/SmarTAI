@@ -911,7 +911,7 @@ def supersede_workflow_operation(
 
 
 def fail_timed_out_operation(operation_id: str, *, owner_id: str, expected_attempt: int,
-                             expected_lease_token: str, code: str = "question_preparation_time_limit_reached") -> bool:
+                             expected_lease_token: str | None, code: str = "question_preparation_wall_time_limit_reached") -> bool:
     """Atomically fence a timed-out recognition run and release its task marker.
 
     Keep checkpoints/artifacts and provider-submit uncertainty intact. Only the
@@ -921,16 +921,18 @@ def fail_timed_out_operation(operation_id: str, *, owner_id: str, expected_attem
     if code not in LIMIT_CODES:
         raise ValueError("Invalid timeout code")
     now = time.time()
+    preparing = expected_lease_token is None
+    kinds = {"problem_source", "material_source"} if preparing else BUDGET_TYPES
     with session_scope() as session:
         stopped = session.execute(update(WorkflowOperationRecord).where(
             WorkflowOperationRecord.id == operation_id,
             WorkflowOperationRecord.owner_id == owner_id,
             WorkflowOperationRecord.attempt == expected_attempt,
-            WorkflowOperationRecord.operation_type.in_(BUDGET_TYPES),
-            WorkflowOperationRecord.status == "running",
-            WorkflowOperationRecord.lease_token == expected_lease_token,
-            WorkflowOperationRecord.lease_expires_at >= now,
+            WorkflowOperationRecord.operation_type.in_(kinds),
+            WorkflowOperationRecord.status == ("preparing" if preparing else "running"),
+            _lease_write_predicate(expected_lease_token, now),
         ).values(status="error", error_code=code, completed_at=now, updated_at=now,
+                 terminal_summary={"status": "error", "error_code": code} if preparing else None,
                  lease_owner=None, lease_token=None, lease_expires_at=None, lease_heartbeat_at=None))
         if stopped.rowcount != 1:
             return False
@@ -1564,13 +1566,10 @@ def save_operation_checkpoint(
             if matched_refs != set(refs):
                 raise NotFound("stored_file")
 
-        from backend.services.workflow_deadlines import CHECKPOINT_KEY, WORK_CHECKPOINT_KEY
-        from backend.services.submission_work_budget import CHECKPOINT_KEY as SUBMISSION_CLOCK
-        # A stage checkpoint cannot restart the first-claim deadline or lose
-        # saved active time. An explicit new attempt clears these in create_operation.
-        for key in (CHECKPOINT_KEY, WORK_CHECKPOINT_KEY, SUBMISSION_CLOCK):
-            if key in (current.checkpoint or {}) and (key == CHECKPOINT_KEY or key not in checkpoint):
-                checkpoint = {**checkpoint, key: current.checkpoint[key]}
+        from backend.services.workflow_deadlines import CHECKPOINT_KEY
+        # Only an explicit new attempt may reset the first-claim deadline.
+        if CHECKPOINT_KEY in (current.checkpoint or {}):
+            checkpoint = {**checkpoint, CHECKPOINT_KEY: current.checkpoint[CHECKPOINT_KEY]}
         checkpoint = _validate_json_object(checkpoint, field="checkpoint", max_bytes=MAX_OPERATION_CHECKPOINT_BYTES)
 
         checkpoint_values = {
@@ -1707,7 +1706,7 @@ def claim_operation(
             if clock.get("attempt") != row.attempt:
                 row.checkpoint = {**(row.checkpoint or {}), CHECKPOINT_KEY: {
                     "attempt": row.attempt, "started_at": now,
-                    "deadline_at": now + policy(row.operation_type)[1],
+                    "deadline_at": now + policy(row.operation_type)[0],
                 }}
         return _detach_operation(row)
 

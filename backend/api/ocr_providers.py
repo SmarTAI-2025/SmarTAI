@@ -268,7 +268,7 @@ async def verify_baidu_unlimited_ocr_credential(
         # value is intentionally discarded so a token can never reach the API.
         await asyncio.wait_for(
             verifier(api_key=credential.api_key, secret_key=credential.secret_key),
-            timeout=30,
+            timeout=settings.custom_provider_verification_timeout_seconds,
         )
     except Exception as exc:
         error_code = _safe_verification_code(exc)

@@ -29,7 +29,7 @@ async def validate_media_content(
     detected_content_type: str,
     *,
     max_pdf_pages: int | None = None,
-    timeout_seconds: float = 10,
+    timeout_seconds: float = 30,
     wait_for_slot: bool = False,
     slot_timeout_seconds: float | None = 10,
 ) -> dict:

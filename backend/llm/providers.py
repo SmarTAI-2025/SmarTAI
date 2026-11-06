@@ -134,7 +134,17 @@ class ProviderRequestError(RuntimeError):
 
 async def _wait_provider_local(awaitable):
     scope = current_response_scope()
-    return await scope.wait_local(awaitable) if scope is not None else await awaitable
+    if scope is not None:
+        return await scope.wait_local(awaitable)
+    from backend.llm.request_timeouts import LOCAL_PREPARATION_SECONDS
+    deadline = asyncio.timeout(LOCAL_PREPARATION_SECONDS)
+    try:
+        async with deadline:
+            return await awaitable
+    except TimeoutError:
+        if not deadline.expired():
+            raise
+        raise ProviderRequestError("provider_capacity_unavailable") from None
 
 
 def _request_definitely_rejected(exc: BaseException) -> bool:
@@ -453,10 +463,8 @@ class BaseProvider(ABC):
         from backend.progress.recognition_activity import report_provider_state
         scope = current_response_scope()
         control = current_execution()
-        admitted = False
-        # SDK timeouts bound individual network reads, not admission or an
-        # upstream stream that keeps sending keep-alives. Bound this whole
-        # attempt so one waiter cannot occupy a workflow worker indefinitely.
+        # Admission has no separate deadline; the owner can still cancel it.
+        # Time a response only after acquiring the local execution slot.
         deadline = asyncio.timeout(None)
         try:
             await provider_local_step(report_provider_state(self, "queued"), best_effort=True)
@@ -464,8 +472,6 @@ class BaseProvider(ABC):
                 await control.check(self)
             scheduler = get_scheduler()
             async with deadline:
-                if scope is None:
-                    deadline.reschedule(asyncio.get_running_loop().time() + float(settings.llm_timeout))
                 lease = scheduler.lease(
                     key=quota_key(self.config, endpoint_key(self.config)),
                     rpm=max(0, int(self.config.rpm or 0)),
@@ -477,7 +483,6 @@ class BaseProvider(ABC):
                     ready=lambda: not self._endpoint_breaker().is_open,
                 )
                 async with scope.local_admission(lease) if scope is not None else lease:
-                    admitted = True
                     if control is not None:
                         await control.check(self)
                     # Time spent waiting for RPM/capacity is not provider
@@ -504,15 +509,9 @@ class BaseProvider(ABC):
         except TimeoutError as exc:
             if not deadline.expired():
                 raise
-            code = "provider_timeout" if admitted else "provider_capacity_unavailable"
-            logger.warning("LLM attempt deadline reached; provider_type=%s admitted=%s code=%s",
-                           self.provider_type, admitted, code)
-            error = ProviderRequestError(code)
-            if not admitted:
-                # No upstream request was sent. Surface local capacity pressure
-                # for an explicit retry instead of silently requeueing for minutes.
-                error.retryable = False
-            raise error from exc
+            logger.warning("LLM response deadline reached; provider_type=%s code=provider_timeout",
+                           self.provider_type)
+            raise ProviderRequestError("provider_timeout") from exc
 
         finally:
             from backend.progress.recognition_activity import finish_provider_request
@@ -587,7 +586,7 @@ class BaseProvider(ABC):
         client = await _wait_provider_local(self._get_client())
         # Admission combines actual-start RPM, quota concurrency and resources;
         # queued calls do not reserve minute quota or occupy capacity slots.
-        await _wait_provider_local(self._endpoint_breaker().before_call())
+        await self._endpoint_breaker().before_call()
         async with self._call_capacity(messages):
             t0 = time.perf_counter()
             try:
@@ -692,7 +691,7 @@ class GeminiProvider(BaseProvider):
         if current_workflow_cancellation_scope():
             return await self._invoke_proxy_async(messages, generation_kwargs, local_client)
         self._ensure_async_primitives()
-        await _wait_provider_local(self._endpoint_breaker().before_call())
+        await self._endpoint_breaker().before_call()
         async with self._call_capacity(messages):
             t0 = time.perf_counter()
             try:
@@ -745,7 +744,7 @@ class GeminiProvider(BaseProvider):
         """OCR and whole-workflow owners use fresh cancellable proxy clients."""
         try:
             self._ensure_async_primitives()
-            await _wait_provider_local(self._endpoint_breaker().before_call())
+            await self._endpoint_breaker().before_call()
             async with self._call_capacity(messages):
                 try:
                     async def invoke():
@@ -1201,14 +1200,7 @@ class SafeRelayProvider(BaseProvider):
         )
 
     def _build_client_sync(self) -> Any:
-        timeout_seconds = (
-            float(settings.llm_timeout)
-            if not settings.custom_provider_timeout_seconds
-            else min(
-                float(settings.llm_timeout),
-                float(settings.custom_provider_timeout_seconds),
-            )
-        )
+        timeout_seconds = float(settings.llm_timeout)
         sync_client, async_client = build_safe_provider_clients(
             effective_provider_base_url(
                 self.config.provider_type,
@@ -1409,7 +1401,7 @@ class SafeRelayProvider(BaseProvider):
         # DNS validation/client construction must finish before minute quota
         # admission; a delayed cold start must not accumulate a send burst.
         await _wait_provider_local(self._relay_client())
-        await _wait_provider_local(self._endpoint_breaker().before_call())
+        await self._endpoint_breaker().before_call()
         async with self._call_capacity(messages, response_timeout=self._response_timeout_override()):
             try:
                 options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}

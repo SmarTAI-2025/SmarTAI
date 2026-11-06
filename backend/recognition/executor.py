@@ -235,10 +235,10 @@ checks here do not replace the caller's storage ACL and operation lease.
     async def pdf_read(request):
         if local_reader is not None:
             return (await local_reader.read(
-                pdf_bytes, request, timeout_seconds=budget.local_timeout(10, "read"),
+                pdf_bytes, request, timeout_seconds=budget.local_timeout(30, "read"),
             )).evidence
         return await read_pdf_evidence(
-            pdf_bytes, request, timeout_seconds=budget.local_timeout(10, "read"), progress=progress,
+            pdf_bytes, request, timeout_seconds=budget.local_timeout(30, "read"), progress=progress,
         )
 
     try:

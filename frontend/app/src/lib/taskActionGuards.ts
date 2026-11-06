@@ -787,6 +787,24 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "knowledge_wall_time_limit_reached") {
+    return {
+      title: tx(locale, "资料库处理已达到总时限", "Library processing reached its total time limit"),
+      description: tx(locale, "本轮处理已达到 2 小时，已提取的页面和内容会保留。可继续处理未完成页面，或重试缺页；新一轮重新计时。", "This run reached 2 hours. Extracted pages and content are retained. Resume unfinished pages or retry gaps with a fresh time allowance."),
+      actionLabel: tx(locale, "继续处理", "Resume"),
+      actionKind: "retry", tone: "warning", technicalDetails,
+    };
+  }
+
+  if (code === "analytics_timeout") {
+    return {
+      title: tx(locale, "Ask SmarTAI 等待超时", "Ask SmarTAI timed out"),
+      description: tx(locale, "本次问答超过 4 分钟，请缩小问题范围后重试。", "This request exceeded 4 minutes. Narrow the question and retry."),
+      actionLabel: tx(locale, "重试", "Retry"),
+      actionKind: "retry", tone: "warning", technicalDetails,
+    };
+  }
+
   if (code === "question_preparation_time_limit_reached" || code === "question_preparation_wall_time_limit_reached") {
     const wallTime = code === "question_preparation_wall_time_limit_reached";
     return {

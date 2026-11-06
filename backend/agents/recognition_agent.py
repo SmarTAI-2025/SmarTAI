@@ -48,10 +48,6 @@ class RecognitionReadRequestV1(EvidenceModel):
 
     @model_validator(mode="after")
     def scope_contract(self):
-        if self.policy.timeout_mode == "response_only" and (
-            self.purpose == "knowledge" or self.source.scope == "knowledge_document"
-        ):
-            raise ValueError("knowledge reads retain their own bounded timeout policy")
         if (self.scope == "pages") != bool(self.pages) or self.pages != sorted(set(self.pages)):
             raise ValueError("page scope requires ordered explicit pages")
         if self.scope == "targets" and not self.targets:
@@ -264,9 +260,9 @@ class RecognitionAgent:
         async def pdf_read(command, phase="locator"):
             if local_reader is not None:
                 return (await local_reader.read(
-                    source_bytes, command, timeout_seconds=budget.local_timeout(10, phase),
+                    source_bytes, command, timeout_seconds=budget.local_timeout(30, phase),
                 )).evidence
-            return await read_pdf_evidence(source_bytes, command, timeout_seconds=budget.local_timeout(10, phase),
+            return await read_pdf_evidence(source_bytes, command, timeout_seconds=budget.local_timeout(30, phase),
                                            progress=self.progress, wait_for_slot=request.source.scope != "knowledge_document")
 
         try:
@@ -422,11 +418,11 @@ class RecognitionAgent:
                     command = PdfContactSheetRequest(pages=sorted(numbers[part:part + 8]))
                     if local_reader is not None:
                         sheet = (await local_reader.read(
-                            source_bytes, command, timeout_seconds=budget.local_timeout(10, "locator"),
+                            source_bytes, command, timeout_seconds=budget.local_timeout(30, "locator"),
                         )).evidence
                     else:
                         sheet = await read_pdf_evidence(source_bytes, command,
-                                                       timeout_seconds=budget.local_timeout(10, "locator"), progress=self.progress)
+                                                       timeout_seconds=budget.local_timeout(30, "locator"), progress=self.progress)
                     if not isinstance(sheet, PdfContactSheetResult) or sheet.total_pages != index.total_pages:
                         raise RecognitionError("recognition_response_invalid")
                     payload = decode_pdf_payload(sheet)

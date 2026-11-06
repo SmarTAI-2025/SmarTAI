@@ -653,31 +653,38 @@ async def test_only_explicit_zhipu_concurrency_response_lowers_automatic_ceiling
 
 
 @pytest.mark.asyncio
-async def test_low_memory_admission_has_deadline_without_sending_or_spending_quota(clock, host, monkeypatch):
+async def test_low_memory_queue_can_outlast_response_limit_without_sending_or_spending_quota(clock, host, monkeypatch):
     from backend.config import settings
-    from backend.services.background_errors import classify_background_error, is_retryable_background_error
-    from backend.tools.structured_llm import _classify_exception, PermanentLLMError
     scheduler = ModelScheduler(clock=clock, host_capacity=host,
                                memory_reader=lambda: (541 * 1024**2, 1906 * 1024**2))
     monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
-    monkeypatch.setattr(settings, "llm_timeout", 0.03)
+    monkeypatch.setattr(settings, "llm_timeout", 600)
+    loop = asyncio.get_running_loop()
+    real_time, offset = loop.time, 0
+    monkeypatch.setattr(loop, "time", lambda: real_time() + offset)
     starts = []
     provider = RecordingProvider(ProviderConfig(provider_type="openai", model="queued", api_key="fake"), clock, starts)
-    with pytest.raises(ProviderRequestError, match="provider_capacity_unavailable") as raised:
-        await provider.ainvoke([HumanMessage(content="test")])
-    await turns()
-    assert starts == []
-    assert not any(budget.starts for budget in scheduler.budgets.values())
-    assert scheduler.active == scheduler.memory_active == host.active == 0
+    task = asyncio.create_task(provider.ainvoke([HumanMessage(content="test")]))
+    try:
+        await turns()
+        assert scheduler.pending
+        offset = 601  # Advance the real asyncio timer too, not only scheduler time.
+        clock.advance(601, scheduler)
+        await turns()
+        assert not task.done() and starts == []
+        assert not any(budget.starts for budget in scheduler.budgets.values())
+        assert scheduler.active == scheduler.memory_active == host.active == 0
+        assert not provider._endpoint_breaker()._failures
+        # The original queued call proceeds when memory recovers; no manual retry.
+        scheduler.memory_reader = lambda: (768 * 1024**2, 1906 * 1024**2)
+        clock.advance(5, scheduler)  # Refresh the scheduler's cached memory sample.
+        assert (await asyncio.wait_for(task, 1)).content == "ok"
+        assert len(starts) == 1
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
     assert not scheduler.pending and not scheduler.owners
-    assert not provider._endpoint_breaker()._failures
-    assert classify_background_error(raised.value, "workflow_failed") == "provider_capacity_unavailable"
-    assert is_retryable_background_error("provider_capacity_unavailable")
-    assert isinstance(_classify_exception(raised.value), PermanentLLMError)  # explicit retry, no silent loop
-    # Once memory recovers, the same scheduler can admit a new explicit request.
-    scheduler.memory_reader = lambda: (768 * 1024**2, 1906 * 1024**2)
-    clock.advance(5, scheduler)
-    assert (await provider.ainvoke([HumanMessage(content="retry")])).content == "ok"
+    assert scheduler.active == scheduler.memory_active == host.active == 0
 
 
 @pytest.mark.asyncio
@@ -753,15 +760,6 @@ async def test_admission_wait_does_not_consume_network_timeout(scheduler, clock,
     assert host.active == 0
 
 
-def test_grading_response_timeout_defaults_to_300_and_is_configurable(monkeypatch):
-    from backend.config import Settings
-    monkeypatch.delenv("SMARTAI_GRADING_CUSTOM_PROVIDER_TIMEOUT_SECONDS", raising=False)
-    assert Settings(_env_file=None).grading_custom_provider_timeout_seconds == 300
-    monkeypatch.setenv("SMARTAI_GRADING_CUSTOM_PROVIDER_TIMEOUT_SECONDS", "240")
-    assert Settings(_env_file=None).grading_custom_provider_timeout_seconds == 240
-    monkeypatch.setenv("SMARTAI_GRADING_CUSTOM_PROVIDER_TIMEOUT_SECONDS", "0")
-    with pytest.raises(ValueError):
-        Settings(_env_file=None)
 
 
 @pytest.mark.asyncio
@@ -771,7 +769,6 @@ async def test_slow_grading_relay_uses_its_own_budget_without_changing_other_wor
     from backend.services.execution_control import current_execution, run_controlled
     monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
     monkeypatch.setattr(settings, "llm_timeout", 1)
-    monkeypatch.setattr(settings, "custom_provider_timeout_seconds", 0.12)
     provider = SafeRelayProvider(ProviderConfig(
         provider_type="zhipu", model="slow", api_key="fake",
         base_url="https://relay.example.com/v1",
