@@ -449,10 +449,26 @@ def bind_stdin_cases(stem, cases):
     # Existing stdin payloads (including spaces, line endings and CSV) are
     # literal. Only translate a natural numeric enumeration for a stated
     # numeric, whitespace-based input protocol.
-    line_protocol = re.search(r"separate lines?|each (?:on )?a line|one per line|two lines|每行|两行|分行", stem, re.I)
+    # A description of strings, or the output layout, is not an input protocol.
+    # Restrict shorthand conversion to a direct numeric-input declaration.
+    input_protocol = ""
+    for sentence in re.split(r"[.;。；\n]", stem):
+        instruction = re.split(r"\s*(?:\b(?:and|then)\s+)?\b(?:print|output|return|write)\b|输出|打印|返回",
+                               sentence, maxsplit=1, flags=re.I)[0].strip(" ,，:：")
+        if re.fullmatch(
+            r"(?:(?:read|input)\s+(?:(?:a|an|one|two|three|\d+)\s+)?"
+            r"(?:(?:signed|unsigned|positive|negative|space-separated|whitespace-separated)\s+)?(?:integers?|numbers?)"
+            r"(?:[,\s]+(?:from (?:stdin|standard input)|separated by (?:spaces?|whitespace)|"
+            r"each (?:on )?(?:a )?separate line|one per line|on separate lines))*"
+            r"|(?:从标准输入)?(?:读入|读取|输入)\s*(?:[一二两三四五六七八九十\d]+个)?(?:整数|数字|数值|数)"
+            r"(?:[\s,，]*(?:(?:用|以)?(?:空格|空白)分隔|每行一个(?:整数|数)|分行(?:输入)?))*)",
+            instruction, re.I,
+        ):
+            input_protocol = instruction
+            break
+    line_protocol = re.search(r"separate lines?|each (?:on )?a line|one per line|two lines|每行|两行|分行", input_protocol, re.I)
     whitespace_protocol = line_protocol or re.search(
-        r"white[ -]?space|space[- ](?:separated|delimited)|separated by spaces?|空白|空格", stem, re.I)
-    numeric_protocol = re.search(r"integer|number|整数|数字|数值|两个数", stem, re.I)
+        r"white[ -]?space|space[- ](?:separated|delimited)|separated by spaces?|空白|空格", input_protocol, re.I)
     literal_protocol = re.search(r"csv|comma|逗号|顿号|verbatim|byte|字节|原样", stem, re.I)
     converted = []
     for case in cases:
@@ -461,7 +477,7 @@ def bind_stdin_cases(stem, cases):
         # The teaching-material importer also accepts bare enumerations such
         # as “3、4 → 7”. An ASCII comma alone is not evidence of that notation.
         enumeration = whitespace_protocol or "、" in value
-        if enumeration and numeric_protocol and not literal_protocol and _NUMBERS.fullmatch(value):
+        if enumeration and input_protocol and not literal_protocol and _NUMBERS.fullmatch(value):
             delimiter = "\n" if line_protocol else " "
             value = delimiter.join(re.split(r"\s*[,，、]\s*", value))
         converted.append(case.model_copy(update={"input": value}))
