@@ -196,7 +196,7 @@ it("keeps exactly one review-confirm button per question", async () => {
   }
 });
 
-it("accepts the saved question type returned in Chinese without a draft conflict", async () => {
+it.each([false, true])("accepts a saved Chinese type and later clean snapshots (external update: %s)", async (externalUpdate) => {
   const user = userEvent.setup();
   const acknowledged = { ...taskData.problem_data.Q1, type: "编程题" };
   mutateAsync.mockResolvedValue({ workflow_revision: 8, problem: acknowledged });
@@ -218,8 +218,22 @@ it("accepts the saved question type returned in Chinese without a draft conflict
   expect(screen.queryByText(/任务内容已更新，请核对当前输入/)).toBeNull();
   expect(screen.queryByRole("button", { name: "保留当前输入" })).toBeNull();
   expect(screen.queryByRole("button", { name: "恢复保留的内容" })).toBeNull();
+  if (externalUpdate) {
+    taskData.workflow_revision = 9;
+    taskData.problem_data = { ...taskData.problem_data, Q1: { ...acknowledged, type: "概念题" } };
+    await act(async () => { await router.navigate("/tasks/task-1/questions/Q1/content#clean-external-type"); });
+    expect(screen.queryByText(/任务内容已更新，请核对当前输入/)).toBeNull();
+    expect(card.queryByRole("combobox", { name: "题型" })).toBeNull();
+  }
+  const currentType = externalUpdate ? "concept" : "programming";
   await user.click(card.getByRole("button", { name: "题型 · 修改" }));
-  expect(card.getByRole("combobox", { name: "题型" })).toHaveValue("programming");
+  expect(card.getByRole("combobox", { name: "题型" })).toHaveValue(currentType);
+  expect(card.getByRole("button", { name: "保存" })).toBeDisabled();
+  await user.selectOptions(card.getByRole("combobox", { name: "题型" }), "calculation");
+  await user.click(card.getByRole("button", { name: "题型 · 取消修改" }));
+  await user.click(await screen.findByRole("button", { name: "不暂存并离开" }));
+  await user.click(card.getByRole("button", { name: "题型 · 修改" }));
+  expect(card.getByRole("combobox", { name: "题型" })).toHaveValue(currentType);
   expect(card.getByRole("button", { name: "保存" })).toBeDisabled();
   expect(await listPageDrafts("question-draft-teacher")).toEqual([]);
 });

@@ -616,15 +616,18 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   useEffect(() => { if (manualEditing && !readOnly) setEditing(true); }, [manualEditing, readOnly]);
   const [draft, setDraft] = useState(value);
   const savedType = useRef<string | null>(null);
+  if (field === "type" && savedType.current === value) savedType.current = null;
   const [error, setError] = useState(false);
   const dirty = editing && draft !== value;
-  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:${field}`, value: { draft }, baseline: { draft: value }, version: value, enabled: !readOnly, busy: saving, onRestore: (restored) => { setDraft(restored.draft); if (field !== "type" || savedType.current !== restored.draft) setEditing(true); } });
+  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:${field}`, value: { draft }, baseline: { draft: value }, version: value, enabled: !readOnly, busy: saving, onRestore: (restored) => { setDraft(restored.draft); if (field !== "type" || restored.draft !== value) setEditing(true); } });
   const leave = useDraftLeave();
 
+  // Adjust a clean type editor before effects compare its new server version.
+  // Pending saves and actual local edits/drafts retain their existing protection.
+  if (field === "type" && !editing && !localDraft.savedAt && !localDraft.conflict
+      && savedType.current === null && draft !== value) setDraft(value);
   useEffect(() => {
-    // Successful saves can close before the query cache renders its reply.
-    // Keep the submitted type until that reply replaces the old server value.
-    if (!editing && !localDraft.savedAt && (field !== "type" || savedType.current === null || savedType.current === value)) setDraft(value);
+    if (field !== "type" && !editing && !localDraft.savedAt) setDraft(value);
   }, [editing, value]);
   useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
 
