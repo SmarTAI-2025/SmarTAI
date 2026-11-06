@@ -35,6 +35,17 @@ cycle in which it was sent, even if the next cooldown has already started.
 Pending siblings prevent prematurely declaring a complete cycle unsuccessful.
 Already admitted results and other quota groups remain intact.
 
+Host cooldown/RPM files retain their stable lock inodes and legacy JSON format.
+A complete write-ahead record is synced and atomically published before an
+in-place update. After a writer exits mid-write, the next lock holder replays
+that record before admitting work. A backward monotonic-clock jump durably
+discards the previous clock epoch, so a retained stale cooldown cannot return
+when uptime catches up. Existing malformed unjournaled data is repaired with
+one persisted 65-second quiet period (or the longer RPM interval); active valid
+Retry-After deadlines remain in force. Filesystem/permission errors still fail
+closed. Do not remove lock files while workers run. Recovery requires updated
+workers; unchanged old binaries do not understand a pending journal.
+
 Stopping a group immediately interrupts its capacity waiters, including retries
 after an uncertain timeout and explicit daily/zero/balance exhaustion. Whether
 this attempt is in flight is tracked separately from whether an earlier attempt
