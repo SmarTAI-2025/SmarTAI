@@ -37,7 +37,7 @@ _UNGRADED_REASONS = {
     "programming_conflicting_expectations": ("同一输入有不同的预期结果，请核对本题测试样例。", "The same input has different expected results. Check the test cases."),
     "programming_case_configuration_invalid": ("测试样例与题目要求不匹配，请核对输入、预期结果和函数要求。", "Check the test inputs and expected results against the question and its function requirements."),
     "programming_cases_unavailable": ("这组样例无法运行，请核对样例内容、数量及大小。", "These tests could not be run. Check their content, number and size."),
-    "programming_input_domain_unverified": ("无法确认生成的输入符合本题要求。请补充或确认本题的合法输入和预期结果后重试。", "The generated inputs could not be verified against the question’s input requirements. Add or confirm valid test inputs and expected results, then retry."),
+    "programming_input_domain_unverified": ("无法确认生成的输入符合本题要求。请在题目资料中修改或补充合法的测试输入和预期结果后重试。", "The generated inputs could not be verified against the question’s input requirements. Edit or add valid test inputs and expected results in the question materials, then retry."),
     "programming_no_cases": ("未能生成可靠的测试样例，请补充输入和预期结果后重试。", "No reliable tests were generated. Add inputs and expected results, then retry."),
     "programming_preparation_interrupted": ("测试样例准备中断，请重试失败项。", "Test preparation was interrupted. Retry the failed items."),
     "programming_mapping_invalid": ("无法确定要测试的作答或函数，请核对本题与学生源码的对应关系。", "The submission or function to test is unclear. Check which code belongs to this question."),

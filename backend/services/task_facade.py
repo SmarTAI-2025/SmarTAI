@@ -951,6 +951,49 @@ def _validated_test_cases(stem, question_type, cases, *, edited=False):
                               details={"case_number": exc.case_number, "issue": exc.issue}) from exc
 
 
+def _attribute_edited_test_cases(cases, previous, source):
+    """Attribute saved inputs/expectations, never a client-supplied source label."""
+    def identity(case):
+        # Function text is a display of the parsed argument vector. Reformatting
+        # it, or changing labels/visibility/comparison options, is not authorship.
+        fields = ([case.get("function_args", case.get("input", "")),
+                   case.get("function_kwargs") or {}, case.get("expected_return")]
+                  if case.get("io_mode") == "function" else
+                  [case.get("input", ""), case.get("expected_output", "")])
+        return json.dumps(fields, sort_keys=True, ensure_ascii=False)
+
+    originals = list(source.get("programming_original_ai_cases") or [])
+    known_ai = {identity(case) for case in originals}
+    for case in previous or []:
+        if case.get("source") == "llm_generated" and identity(case) not in known_ai:
+            originals.append(deepcopy(case))
+            known_ai.add(identity(case))
+    if originals:
+        # Private server-side provenance survives edits, deletion and restoration;
+        # the public presentation/provenance patch cannot replace this audit.
+        source["programming_original_ai_cases"] = originals
+    previous_sources = {}
+    for case in previous or []:
+        key = identity(case)
+        if previous_sources.get(key) != "teacher":
+            previous_sources[key] = case.get("source", "teacher")
+    attributed = []
+    for case in cases or []:
+        key = identity(case)
+        if key in previous_sources:
+            origin = previous_sources[key]
+        elif key in known_ai:
+            origin = "llm_generated"
+        elif previous or originals:
+            origin = "teacher"
+        else:
+            # Initial imports may carry generated cases. The absence of any
+            # prior material is not evidence that those inputs were corrected.
+            origin = case.get("source", "teacher")
+        attributed.append({**case, "source": origin} if case.get("source", "teacher") != origin else case)
+    return attributed if cases is not None else None
+
+
 def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> dict:
     presentation = dict((question.source or {}).get("presentation") or {})
     # Older manually entered drafts used a value outside the public contract.
@@ -5502,6 +5545,7 @@ def update_problem(
         source = dict(question.source or {})
         presentation = dict(source.get("presentation") or {})
         presentation["preparation_issues"] = _effective_question_issues(presentation)
+        test_cases_edited = "test_cases" in patch
         if "test_cases" in patch or (question.test_cases and {"stem", "type"}.intersection(patch)):
             patch = {**patch, "test_cases": _validated_test_cases(
                 patch.get("stem", question.stem), patch.get("type", question.type),
@@ -5510,6 +5554,10 @@ def update_problem(
         elif patch.get("review_status") == "confirmed" and question.test_cases:
             _validated_test_cases(question.stem, question.type, question.test_cases)
         original_problem = _serialize_problem(question)
+        if test_cases_edited and is_programming_question_type(patch.get("type", question.type)):
+            patch["test_cases"] = _attribute_edited_test_cases(
+                patch["test_cases"], original_problem["test_cases"], source,
+            )
         manual_markers = [issue for issue in presentation.get("preparation_issues", [])
                           if issue.get("code") == "manual_completion_required"]
         protected_markers = [issue for issue in presentation.get("preparation_issues", [])
