@@ -453,14 +453,16 @@ def bind_stdin_cases(stem, cases):
     # Restrict shorthand conversion to a direct numeric-input declaration.
     input_protocol = ""
     for sentence in re.split(r"[.;。；\n]", stem):
-        instruction = re.split(r"\s*(?:\b(?:and|then)\s+)?\b(?:print|output|return|write)\b|输出|打印|返回",
+        instruction = re.split(r"\s*(?:\b(?:and|then)\s+)?\b(?:print|output|return|write)\b|(?:在|向)?(?:标准)?输出|打印|返回",
                                sentence, maxsplit=1, flags=re.I)[0].strip(" ,，:：")
+        instruction = re.sub(r"^编写(?:一个)?程序\s*[,，]\s*", "", instruction)
         if re.fullmatch(
             r"(?:(?:read|input)\s+(?:(?:a|an|one|two|three|\d+)\s+)?"
             r"(?:(?:signed|unsigned|positive|negative|space-separated|whitespace-separated)\s+)?(?:integers?|numbers?)"
             r"(?:[,\s]+(?:from (?:stdin|standard input)|separated by (?:spaces?|whitespace)|"
             r"each (?:on )?(?:a )?separate line|one per line|on separate lines))*"
-            r"|(?:从标准输入)?(?:读入|读取|输入)\s*(?:[一二两三四五六七八九十\d]+个)?(?:整数|数字|数值|数)"
+            r"|(?:从标准输入)?(?:读入|读取|输入)\s*(?:[一二两三四五六七八九十\d]+个)?"
+            r"(?:(?:用|以)?(?:空格|空白)分隔的)?(?:整数|数字|数值|数)"
             r"(?:[\s,，]*(?:(?:用|以)?(?:空格|空白)分隔|每行一个(?:整数|数)|分行(?:输入)?))*)",
             instruction, re.I,
         ):
