@@ -267,7 +267,7 @@ def _reference_execution_identity(problem):
 def _question_key(state, problem):
     cp = state.checkpoints
     question = cp.questions.get(problem.q_id) if cp else None
-    return digest({
+    return digest({**({"generated_input_domain_version": 1} if not problem.test_cases or any(c.source == "llm_generated" for c in problem.test_cases) else {}),
         "engine": VERSION, "owner": state.owner, "assignment": state.assignment,
         "question": question.id if question else problem.q_id, "q_id": problem.q_id,
         "version": question.version if question else None, "stem": problem.stem,
