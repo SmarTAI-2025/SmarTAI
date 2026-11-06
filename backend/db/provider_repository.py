@@ -437,3 +437,18 @@ def record_adaptive_limits(owner_id: str, provider_id: str, profile: dict, *,
                 == profile["generation"] - 1,
         ).values(adaptive_limits=profile, updated_at=ProviderConfigRecord.updated_at))
         return result.rowcount == 1
+
+
+def load_adaptive_states(sources: dict[str, tuple[str, str]]) -> dict[str, dict]:
+    """Read only owner-scoped lifecycle/learning metadata, never credentials."""
+    if not sources:
+        return {}
+    with session_scope() as session:
+        rows = session.execute(select(
+            ProviderConfigRecord.id, ProviderConfigRecord.owner_id,
+            ProviderConfigRecord.updated_at, ProviderConfigRecord.enabled,
+            ProviderConfigRecord.adaptive_limits,
+        ).where(ProviderConfigRecord.id.in_({provider_id for _, provider_id in sources.values()}))).all()
+    records = {(row.owner_id, row.id): row for row in rows}
+    return {identity: {"revision": row.updated_at, "enabled": row.enabled, "profile": row.adaptive_limits}
+            for identity, source in sources.items() if (row := records.get(source)) is not None}

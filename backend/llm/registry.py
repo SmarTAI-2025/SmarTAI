@@ -780,6 +780,7 @@ def _build_scoped_registry(current) -> ExpertRegistry:
                     partial(record_adaptive_limits, current.id, stored.id,
                             expected_updated_at=stored.updated_at),
                 )
+                provider._adaptive_source = (current.id, stored.id)
     except ValueError as exc:
         logger.error("Unable to load encrypted provider configurations for user %s", current.id)
         raise HTTPException(503, detail="Saved provider credentials cannot be loaded.") from exc

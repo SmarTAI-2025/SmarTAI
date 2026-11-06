@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import math
 import sys
 import time
@@ -25,6 +26,7 @@ HARD_LIMIT = 50
 INITIAL_SECONDS = 120.0
 MEMORY_PER_CALL = 32 * 1024 * 1024
 MEMORY_SAMPLE_SECONDS = 5.0
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -122,7 +124,7 @@ class _Budget:
     # Public RPM is capped at 10,000. Retain enough actual starts for that
     # window even if an unlimited config later shares a limited credential.
     starts: deque[float] = field(default_factory=lambda: deque(maxlen=10_000))
-    next_start: float = 0.0
+    last_start: float | None = None
     requests: Counter = field(default_factory=Counter)
     ceiling: int = HARD_LIMIT
     blocked_until: float = 0.0
@@ -134,7 +136,11 @@ class _Budget:
     @property
     def rpm(self) -> int:
         known = [rpm for rpm, count in self.requests.items() if rpm > 0 and count > 0]
-        return min(known) if known else self.default_rpm
+        return min(known) if known else (0 if self.requests else self.default_rpm)
+
+    @property
+    def next_start(self) -> float:
+        return self.last_start + self.interval if self.last_start is not None else 0.0
 
     @property
     def limit(self) -> int:
@@ -200,6 +206,12 @@ class ModelScheduler:
         self.pump: asyncio.Task | None = None
         self.pending: set[asyncio.Future] = set()
         self._thread_limiter = None
+        self._adaptive_keys: dict[str, str] = {}
+        self._adaptive_revisions: dict[str, float] = {}
+        self._adaptive_sources: dict[str, tuple[str, str]] = {}
+        self._adaptive_refresh_after = 0.0
+        self._adaptive_refresh_lock = asyncio.Lock()
+        self._adaptive_refresh_task: asyncio.Task | None = None
         # Local Gemini proxy mode needs one client per sync thread. Bound
         # prepared clients as well as actual calls, including RPM waiters.
         self.proxy_slots = asyncio.Semaphore(HARD_LIMIT)
@@ -222,8 +234,18 @@ class ModelScheduler:
         return self.budget(key, rpm).limit
 
     def bind_adaptive(self, key: str, rpm: int, identity: str, profile: dict | None,
-                      revision: float) -> None:
+                      revision: float, *, source: tuple[str, str] | None = None) -> None:
         from backend.llm.adaptive_admission import AdaptiveAdmission, valid_profile
+        if revision < self._adaptive_revisions.get(identity, -math.inf):
+            return  # A running task may still hold an edited/deleted snapshot.
+        previous_key = self._adaptive_keys.get(identity)
+        if previous_key is not None and (previous_key != key or revision > self._adaptive_revisions[identity]):
+            self._detach_adaptive(identity)
+        self._adaptive_keys[identity] = key
+        self._adaptive_revisions[identity] = revision
+        if source is not None and identity not in self._adaptive_sources:
+            self._adaptive_sources[identity] = source
+            self._adaptive_refresh_after = 0.0
         budget = self.budget(key, rpm)
         previous = budget.adaptive.get(identity)
         saved = valid_profile(profile)
@@ -231,6 +253,59 @@ class ModelScheduler:
                 or (previous.revision == revision and saved is not None
                     and saved["generation"] > previous.generation)):
             budget.adaptive[identity] = AdaptiveAdmission(profile, revision, rpm, self.clock())
+
+    def _detach_adaptive(self, identity: str) -> None:
+        key = self._adaptive_keys.pop(identity, None)
+        if key is not None:
+            budget = self.budgets[key]
+            budget.adaptive.pop(identity, None)
+            # Drop the departed configuration's pacing, not shared cooldowns
+            # or already-counted starts/leases belonging to this quota group.
+            self.wake.set()
+
+    async def refresh_adaptive(self, *, force: bool = False) -> None:
+        """One batched metadata read per 5s of demand, also across processes.
+
+        No keys are decrypted. Deletion/config changes fence old snapshots;
+        a newer saved generation wins over a conflicting stale candidate.
+        """
+        async with self._adaptive_refresh_lock:
+            if not force and self.clock() < self._adaptive_refresh_after:
+                return
+            self._adaptive_refresh_after = self.clock() + 5.0
+            observed = {identity: (key, self.budgets[key].adaptive[identity])
+                        for identity, key in self._adaptive_keys.items() if identity in self._adaptive_sources}
+            if not observed:
+                return
+            from backend.db.provider_repository import load_adaptive_states
+            from backend.llm.adaptive_admission import AdaptiveAdmission, valid_profile
+            try:
+                async with asyncio.timeout(10):
+                    states = await asyncio.to_thread(load_adaptive_states, {
+                        identity: self._adaptive_sources[identity] for identity in observed})
+            except Exception:
+                self._adaptive_refresh_after = self.clock() + 30.0
+                logger.warning("Unable to refresh BYOK admission metadata")
+                return
+            for identity, (key, control) in observed.items():
+                if self._adaptive_keys.get(identity) != key or self.budgets[key].adaptive.get(identity) is not control:
+                    continue  # A newer bind arrived while the database read ran.
+                state = states.get(identity)
+                revision = state["revision"] if state else math.inf
+                self._adaptive_revisions[identity] = max(control.revision, revision)
+                if state is None or not state["enabled"] or revision != control.revision:
+                    self._detach_adaptive(identity)
+                    continue
+                saved = valid_profile(state["profile"])
+                if saved is not None and saved["generation"] > control.generation:
+                    if saved == control.pending:
+                        control.saved(saved)  # Our own write is awaiting its acknowledgement.
+                    else:
+                        # Adopt the winner; do not simply renumber and overwrite
+                        # it with stale observations. New traffic can learn again.
+                        self.budgets[key].adaptive[identity] = AdaptiveAdmission(
+                            saved, revision, control.rpm, self.clock())
+                    self.wake.set()
 
     def record_adaptive_start(self, key: str, started_at: float) -> None:
         for control in self.budgets[key].adaptive.values():
@@ -248,9 +323,7 @@ class ModelScheduler:
         budget = self.budgets[key]
         for control in budget.adaptive.values():
             control.succeeded(now=self.clock(), started_at=started_at, run=run, busy=busy)
-        # A newly learned interval must also gate the very next queued call.
-        if budget.starts:
-            budget.next_start = max(budget.next_start, budget.starts[-1] + budget.interval)
+        # next_start derives from the current controls, including removals.
         control = budget.adaptive.get(identity)
         if (control is not None and control.revision == revision and control.pending is not None
                 and self.clock() >= control.save_after):
@@ -260,7 +333,8 @@ class ModelScheduler:
 
     def adaptive_saved(self, key: str, identity: str, profile: dict) -> None:
         control = self.budgets[key].adaptive.get(identity)
-        if control is not None:
+        if (control is not None and control.revision == profile["config_version"]
+                and control.generation <= profile["generation"]):
             control.saved(profile)
 
     def _forget_request(self, key: str, rpm: int) -> None:
@@ -442,7 +516,7 @@ class ModelScheduler:
             self.queue.remove(candidate)
             budget.active += 1
             budget.starts.append(now)
-            budget.next_start = now + budget.interval
+            budget.last_start = now
             self.active += 1
             self.memory_active += candidate.memory
             self.endpoints[candidate.endpoint] = self.endpoints.get(candidate.endpoint, 0) + 1
@@ -454,6 +528,9 @@ class ModelScheduler:
         try:
             while self.queue:
                 self.wake.clear()
+                if (self._adaptive_sources and self.clock() >= self._adaptive_refresh_after
+                        and (self._adaptive_refresh_task is None or self._adaptive_refresh_task.done())):
+                    self._adaptive_refresh_task = asyncio.create_task(self.refresh_adaptive())
                 if self._dispatch():
                     # Yield between grants so cancellations and cooldowns are visible.
                     await asyncio.sleep(0)

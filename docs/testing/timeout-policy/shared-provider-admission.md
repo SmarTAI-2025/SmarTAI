@@ -71,6 +71,19 @@ unvalidated upward trials do not replace a validated baseline. Owner/config
 revision plus generation compare-and-swap prevents stale writers. Learning
 never changes the user's RPM, verification metadata or workflow fingerprint.
 
+An identity moving to a new quota group detaches its old control and fences
+older registry snapshots. With queued demand, each scheduler batches one
+credential-free metadata refresh per five seconds; this also discovers edits,
+deletions and disabled configurations made by another process. Refreshing does
+not occupy model slots or block other groups; a database failure retains the
+last known protection and backs off metadata reads for 30 seconds. Existing
+shared cooldowns, recorded starts and admitted responses remain intact.
+
+A rejected learning CAS immediately reloads metadata. A competing worker's
+newer profile is adopted instead of blindly renumbering a stale candidate.
+Subsequent observations can publish against that generation. Late database
+reads or save acknowledgements cannot replace a newer configuration binding.
+
 ## Offline comparison
 
 90 logical calls; at most five server slots. Entries are completed / 429 / seconds.

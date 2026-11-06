@@ -441,6 +441,7 @@ class BaseProvider(ABC):
         self._client_lock = None
         self._client_initialization = None
         self._adaptive_binding = None
+        self._adaptive_source = None
 
     @property
     def provider_id(self) -> str:
@@ -492,7 +493,7 @@ class BaseProvider(ABC):
             rpm = max(0, int(self.config.rpm or 0))
             if self._adaptive_binding is not None:
                 identity, profile, revision, recorder = self._adaptive_binding
-                scheduler.bind_adaptive(key, rpm, identity, profile, revision)
+                scheduler.bind_adaptive(key, rpm, identity, profile, revision, source=self._adaptive_source)
             interrupt = control.interruptible_call(
                 self, lambda: admitted or (scope is not None and scope.submission_may_exist),
                 in_flight=lambda: admitted,
@@ -583,6 +584,8 @@ class BaseProvider(ABC):
                 try:
                     if await provider_local_step(asyncio.to_thread(recorder, update)):
                         scheduler.adaptive_saved(key, identity, update)
+                    else:
+                        await scheduler.refresh_adaptive(force=True)
                 except Exception:
                     logger.warning("Unable to persist BYOK admission estimate")
             await provider_local_step(report_provider_state(self, "processing"), best_effort=True)
