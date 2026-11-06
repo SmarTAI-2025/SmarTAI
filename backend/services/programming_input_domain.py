@@ -44,6 +44,18 @@ _UNSUPPORTED = re.compile(
     re.I,
 )
 
+# Only complete, unambiguous scoring-only clauses can be ignored. An unknown
+# rubric sentence may narrow the input domain even without a known keyword.
+_SCORING_ONLY = re.compile(
+    r"(?:award )?correctness(?: and (?:method|readability))?|correct results|exact output|readability|numerical stability|"
+    r"(?:结果|算法)?正确(?:性)?|preserve whitespace|accept equivalent implementations|"
+    r"(?:award\s+)?\d+(?:\.\d+)?(?: points)? for (?:the correct (?:sum|solution)|"
+    r"satisfying the question|reading input|all correct outputs)|"
+    r"(?:award\s+)?correctness according to the teacher's rule|"
+    r"(?:所有|全部)?(?:教师)?(?:测试)?(?:用例|样例)(?:全部|均)?通过(?:时)?(?:给|得|记)(?:满分|\d+(?:\.\d+)?分)",
+    re.I,
+)
+
 
 def _normal(text):
     return (
@@ -125,6 +137,9 @@ def _input_clauses(text, *, rubric=False):
             continue  # An award based solely on test outcomes adds no input constraint.
         conditional = re.search(r"\b(?:if|when|unless)\b|如果|若|当", sentence, re.I)
         if conditional:
+            if rubric:
+                yield "unresolved input constraint"
+                continue
             # In "if a > 0 then return …" the condition is part of the algorithm.
             # In "if a > 0, b must be …" it is an unsupported conditional domain.
             branch = sentence[conditional.start() :]
@@ -187,6 +202,20 @@ def _declarations(stem, criterion):
 def _value_constraint(part, values, names, stdin):
     # Entire mathematical constraints only. Never eval teacher/model text.
     expr = re.sub(r"^(?:where\b|such that\b|满足|其中|保证)\s*", "", part, flags=re.I)
+    verbal_zh = re.fullmatch(
+        rf"({names}|输入|参数)\s*(?:保证|必须)?\s*"
+        rf"(大于等于|小于等于|不小于|不大于|不等于|大于|小于|等于)\s*({NUM}|零)", expr,
+    )
+    if verbal_zh:
+        target = verbal_zh[1]
+        if target not in values:
+            if len(values) != 1:
+                return "unknown", ()
+            target = next(iter(values))
+        op = {"大于等于": ">=", "小于等于": "<=", "不小于": ">=", "不大于": "<=",
+              "不等于": "!=", "大于": ">", "小于": "<", "等于": "=="}[verbal_zh[2]]
+        bound = "0" if verbal_zh[3] == "零" else verbal_zh[3]
+        expr = f"{target} {op} {bound}"
     negative = re.fullmatch(
         rf"(?:inputs?|values?)\s+(?:with\s+)?(.+?)\s+(?:are|is)\s+(?:outside (?:the )?(?:task|domain)|out of scope)",
         expr,
@@ -389,6 +418,9 @@ def input_domain(problem, case):
             continue
         if re.fullmatch(r"read\s+(?:stdin|the input|from standard input)(?:\s+exactly)?", part, re.I) and stdin:
             tested.update(values)
+            continue
+        if rubric:
+            unknown |= _SCORING_ONLY.fullmatch(part) is None
             continue
         if re.fullmatch(r"(?:return|print) (?:its|the) (?:length|size)", part, re.I):
             continue

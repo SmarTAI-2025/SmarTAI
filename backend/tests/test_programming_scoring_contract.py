@@ -87,6 +87,26 @@ async def test_critical_run_failures_never_become_votes(monkeypatch, failure):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reference", [False, True])
+@pytest.mark.parametrize("language", ["en", "zh"])
+async def test_uncomparable_return_cannot_supply_a_zero_score_vote(monkeypatch, reference, language):
+    problem = _make_problem(stem="Implement f(): Return the result.", test_cases=[
+        TestCase(function_name="f", function_args=[], expected_return="1")])
+    if reference:
+        problem.solution_code = "def f(): return frozenset({1})"
+    monkeypatch.setattr(programming, "run_sandbox", AsyncMock(side_effect=ValueError("programming_return_value_unavailable")))
+    route = fixed_provider(response(award(0)))
+    result = await programming.ProgrammingSkill(route, language=language).grade(problem, _make_answer("def f(): return frozenset({1})"))
+    # The internal failed expert has a placeholder number; it must not vote.
+    # The persisted/public null score is covered by the release-flow case below.
+    assert result.programming_evidence.score_status == "unavailable" and result.confidence == 0
+    assert result.error_kind == "programming_return_value_unavailable"
+    assert ("返回值" if language == "zh" else "return value") in result.comment
+    assert ("人工复核" if language == "zh" else "manually") in result.comment
+    route.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("score, subtotal, max_points, wanted", [
     (20, 20, 100, 2), (1, 1.01, 10, 1), (1, 1.011, 10, None),
     (0, 0, 10, 0), (100.5, 100.5, 100, 10), (-1, -1, 10, None),
@@ -159,7 +179,7 @@ async def test_selected_experts_share_one_execution_and_weighted_real_zero(monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["ai_only_confirm", "ai_only_edit", "code_only", "entry_only", "teacher_zero", "platform", "configuration", "no_submission",
+@pytest.mark.parametrize("scenario", ["ai_only_confirm", "ai_only_edit", "code_only", "entry_only", "teacher_zero", "platform", "configuration", "return_value", "no_submission",
                                       "teacher_deduction", "teacher_full", "later_expert", "later_sample"])
 async def test_run_review_finalization_and_release(monkeypatch, scenario):
     await exercise_review_and_release(monkeypatch, scenario)
@@ -211,6 +231,8 @@ async def exercise_review_and_release(monkeypatch, scenario, *, native=False):
             monkeypatch.setattr(settings, "program_runner_image", "smartai-intentionally-absent:missing")
         else:
             monkeypatch.setattr(programming, "run_sandbox", AsyncMock(side_effect=IsolatedRunnerUnavailable()))
+    if scenario == "return_value":
+        monkeypatch.setattr(programming, "run_sandbox", AsyncMock(side_effect=ValueError("programming_return_value_unavailable")))
     ai_score = 7 if scenario in {"ai_only_edit", "code_only", "entry_only"} else 0
     if scenario in {"teacher_deduction", "teacher_full", "later_expert", "later_sample"}:
         ai_score = {"teacher_deduction": 8, "teacher_full": 10, "later_expert": 9, "later_sample": 9}[scenario]
@@ -228,7 +250,7 @@ async def exercise_review_and_release(monkeypatch, scenario, *, native=False):
     public = task_facade._serialize_correction(row)
     evidence = row.ai_expert_results[0]["programming_evidence"]
     assert row.ai_expert_results[0]["raw_output"] is None
-    if scenario in {"platform", "configuration"}:
+    if scenario in {"platform", "configuration", "return_value"}:
         route.ainvoke.assert_not_awaited()
         assert row.result_status == "failed" and row.ai_score is None and public["score"] is None
         assert evidence["score_status"] == "unavailable" and task_facade._correction_review_blocks_finalization(row)
@@ -238,12 +260,14 @@ async def exercise_review_and_release(monkeypatch, scenario, *, native=False):
             ("programming_conflicting_expectations", "同一输入有不同的预期结果", "same input has different expected results")
         )
         if native and scenario == "platform":
-            reason, zh, en = "native_runner_unavailable", "检查隔离运行时和镜像", "check the OCI runtime and image"
+            reason, zh, en = "native_runner_unavailable", "代码测试服务不可用", "code testing service is unavailable"
+        if scenario == "return_value":
+            reason, zh, en = "programming_return_value_unavailable", "无法核对函数的返回值", "return value could not be checked"
         assert evidence["primary_reason"] == reason and reason not in public["comment"]
         assert zh in public["comment"] or en in public["comment"]
         assert public["expert_results"][0]["comment"] == public["comment"]
         failure = task_facade._grading_failure_code(grading_repository.get_run(run.id))
-        assert failure == ("programming_execution_unavailable" if scenario == "platform"
+        assert failure == ("programming_return_value_unavailable" if scenario == "return_value" else "programming_execution_unavailable" if scenario == "platform"
                            else "programming_test_material_needs_review")
         with pytest.raises(ResultNotReleasable):
             grading_runs.release(teacher_id=teacher, run_id=run.id)

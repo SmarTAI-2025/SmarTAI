@@ -683,6 +683,20 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "programming_return_value_unavailable") {
+    return {
+      title: tx(locale, "函数返回值暂时无法核对", "Function return values could not be checked"),
+      description: tx(locale,
+        "相关作答尚未评分，已有结果已保留。请进入复核，人工补齐分数。",
+        "Affected answers are ungraded. Existing results are retained. Open review to enter scores manually."),
+      actionLabel: tx(locale, "查看进度与恢复", "View progress and recovery"),
+      actionKind: "refresh",
+      actionHref: taskId ? `/tasks/${taskId}/grading/progress` : undefined,
+      tone: "warning",
+      technicalDetails,
+    };
+  }
+
   if (code === "programming_execution_unavailable") {
     return {
       title: tx(locale, "编程题测试暂不可用", "Programming tests are unavailable"),
