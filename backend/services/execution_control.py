@@ -53,7 +53,8 @@ class ExecutionControl:
 
     async def check(self, provider) -> None:
         await self.finish_wait(provider)
-        if self.stopped or await asyncio.to_thread(self.is_cancelled):
+        from backend.llm.request_timeouts import provider_local_step
+        if self.stopped or await provider_local_step(asyncio.to_thread(self.is_cancelled)):
             raise asyncio.CancelledError()
         code = self.blocked.get(provider_key(provider))
         if code:
@@ -113,7 +114,11 @@ class ExecutionControl:
                     upcoming[wait.key] = wait.progress
             await reporter.set_model_waits(list(upcoming.values()))
             if self.persist_progress is not None:
-                await self.persist_progress((await reporter.snapshot()).model_dump(mode="json"))
+                from backend.llm.request_timeouts import provider_local_step
+                await provider_local_step(
+                    self.persist_progress((await reporter.snapshot()).model_dump(mode="json")),
+                    best_effort=True,
+                )
 
     async def waiting(self, provider, attempt: int, limit: int, seconds: float) -> None:
         self.waits[asyncio.current_task()] = _RateWait(provider_key(provider), {

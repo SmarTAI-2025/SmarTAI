@@ -141,8 +141,8 @@ def current_response_scope() -> ResponseDeadlineScope | None:
 
 
 async def provider_local_step(awaitable: Awaitable[T], *, best_effort: bool = False) -> T | None:
-    """Bound new-mode control/progress I/O without spending response time."""
-    if current_response_scope() is None:
+    """Bound advisory I/O in every mode; preserve required control failures."""
+    if current_response_scope() is None and not best_effort:
         return await awaitable
     deadline = asyncio.timeout(_LOCAL_STEP_SECONDS)
     try:

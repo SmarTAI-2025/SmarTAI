@@ -530,22 +530,24 @@ async def test_legacy_native_scope_keeps_existing_sdk_behavior(scheduler, monkey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("point", ["check", "waiting"])
-async def test_retry_control_io_is_local_and_bounded(point, scheduler, monkeypatch):
+@pytest.mark.parametrize("outcome", ["hang", "error"])
+async def test_required_cancel_check_is_local_bounded_and_never_swallowed(outcome, scheduler, monkeypatch):
     monkeypatch.setattr(request_timeouts, "_LOCAL_STEP_SECONDS", 0.02)
-    monkeypatch.setattr(structured_llm._invoke_with_rate_retry.retry, "wait", wait_fixed(0))
     calls = []
 
-    async def check(provider):
-        if point == "check":
+    def is_cancelled():
+        return False
+
+    to_thread = asyncio.to_thread
+
+    async def blocked_read(function, *args, **kwargs):
+        if function is is_cancelled:
+            if outcome == "error":
+                raise RuntimeError("synthetic required check failure")
             await asyncio.Event().wait()
+        return await to_thread(function, *args, **kwargs)
 
-    async def waiting(*args):
-        await asyncio.Event().wait()
-
-    control = SimpleNamespace(check=check, waiting=waiting, block=lambda *args: None,
-                              interruptible_call=lambda *args: nullcontext())
-    monkeypatch.setattr("backend.services.execution_control.current_execution", lambda: control)
+    monkeypatch.setattr(asyncio, "to_thread", blocked_read)
 
     async def invoke(options):
         calls.append(options)
@@ -553,11 +555,16 @@ async def test_retry_control_io_is_local_and_bounded(point, scheduler, monkeypat
 
     async with provider_for("openai", invoke, monkeypatch) as provider:
         with response_timeout_scope(300, response_only=True) as state:
-            with pytest.raises(ProviderRequestError, match="provider_capacity_unavailable"):
-                await structured_llm.ainvoke_with_rate_retry(provider, MESSAGES)
+            expected = ProviderRequestError if outcome == "hang" else RuntimeError
+            message = "provider_capacity_unavailable" if outcome == "hang" else "synthetic required check failure"
+            with pytest.raises(expected, match=message):
+                await asyncio.wait_for(run_controlled(
+                    "required-check", is_cancelled,
+                    structured_llm.ainvoke_with_rate_retry(provider, MESSAGES),
+                ), 1)
     assert not state.submission_may_exist
-    assert len(calls) == state.attempt_count == (1 if point == "waiting" else 0)
-    assert state.last_attempt_rejected is (point == "waiting")
+    assert len(calls) == state.attempt_count == 0
+    assert not state.last_attempt_rejected
 
 
 @pytest.mark.asyncio

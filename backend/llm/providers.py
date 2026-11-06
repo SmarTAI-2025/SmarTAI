@@ -463,7 +463,7 @@ class BaseProvider(ABC):
             if scope is not None:
                 await provider_local_step(report_provider_state(self, "queued"), best_effort=True)
             if control is not None:
-                await provider_local_step(control.check(self))
+                await control.check(self)
             scheduler = get_scheduler()
             interrupt = control.interruptible_call(
                 self, lambda: scope.submission_may_exist if scope is not None else admitted,
@@ -482,7 +482,7 @@ class BaseProvider(ABC):
                 async with scope.local_admission(lease) if scope is not None else lease:
                     admitted = True
                     if control is not None:
-                        await provider_local_step(control.check(self))
+                        await control.check(self)
                     # Time spent waiting for RPM/capacity is not provider
                     # response time. Give the admitted request its full budget.
                     if scope is None:
