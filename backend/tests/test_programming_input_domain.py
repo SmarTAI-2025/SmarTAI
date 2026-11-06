@@ -69,6 +69,14 @@ def test_unparsed_rubric_constraints_cannot_be_silently_dropped(criterion):
     assert input_domain(p, call([-1])) != "allowed"
 
 
+def test_test_outcome_only_award_does_not_restrict_the_declared_input_domain():
+    p = problem("Read an integer from stdin and print double its value.",
+        criterion="All teacher examples correct earns full credit.")
+    assert input_domain(p, TestCase(io_mode="stdin", input="-1\n")) == "allowed"
+    p.criterion += " Inputs are limited to an instructor-defined subset."
+    assert input_domain(p, TestCase(io_mode="stdin", input="-1\n")) == "unknown"
+
+
 @pytest.mark.parametrize("location", ["stem", "criterion"])
 def test_unambiguous_chinese_bound_is_checked_without_broadening_examples(location):
     p = problem("Implement f(n): n is an integer. Return n.")
