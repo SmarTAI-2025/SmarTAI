@@ -196,6 +196,50 @@ it("keeps exactly one review-confirm button per question", async () => {
   }
 });
 
+it("accepts the saved question type returned in Chinese without a draft conflict", async () => {
+  const user = userEvent.setup();
+  const acknowledged = { ...taskData.problem_data.Q1, type: "编程题" };
+  mutateAsync.mockResolvedValue({ workflow_revision: 8, problem: acknowledged });
+  const router = await renderPage();
+  const card = within(document.querySelector('[data-question-id="Q1"]') as HTMLElement);
+  await user.click(card.getByRole("button", { name: "题型 · 修改" }));
+  await user.selectOptions(card.getByRole("combobox", { name: "题型" }), "programming");
+  await user.click(card.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(card.queryByRole("combobox", { name: "题型" })).toBeNull());
+  expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({
+    taskId: "task-1", qId: "Q1", expectedWorkflowRevision: 7, type: "programming",
+  });
+
+  // A query-cache render may follow successful draft cleanup. The backend
+  // stores/returns the canonical Chinese type, even for an English enum patch.
+  taskData.workflow_revision = 8;
+  taskData.problem_data = { ...taskData.problem_data, Q1: acknowledged };
+  await act(async () => { await router.navigate("/tasks/task-1/questions/Q1/content#saved-type"); });
+  expect(screen.queryByText(/任务内容已更新，请核对当前输入/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "保留当前输入" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "恢复保留的内容" })).toBeNull();
+  await user.click(card.getByRole("button", { name: "题型 · 修改" }));
+  expect(card.getByRole("combobox", { name: "题型" })).toHaveValue("programming");
+  expect(card.getByRole("button", { name: "保存" })).toBeDisabled();
+  expect(await listPageDrafts("question-draft-teacher")).toEqual([]);
+});
+
+it("preserves an unsaved type selection when a genuinely different server type arrives", async () => {
+  const user = userEvent.setup();
+  const router = await renderPage();
+  const card = within(document.querySelector('[data-question-id="Q1"]') as HTMLElement);
+  await user.click(card.getByRole("button", { name: "题型 · 修改" }));
+  await user.selectOptions(card.getByRole("combobox", { name: "题型" }), "programming");
+  taskData.workflow_revision = 8;
+  taskData.problem_data = { ...taskData.problem_data, Q1: { ...taskData.problem_data.Q1, type: "计算题" } };
+  await act(async () => { await router.navigate("/tasks/task-1/questions/Q1/content#external-type"); });
+  await screen.findByText(/任务内容已更新，请核对当前输入/);
+  expect(card.getByRole("combobox", { name: "题型" })).toHaveValue("programming");
+  await user.click(screen.getByRole("button", { name: "保留当前输入" }));
+  expect(card.getByRole("combobox", { name: "题型" })).toHaveValue("programming");
+  expect(mutateAsync).not.toHaveBeenCalled();
+});
+
 afterEach(async () => {
   // Unmount before draining real draft transactions so detached editors cannot
   // rerender, and their queued hydration work cannot spill into the next test.

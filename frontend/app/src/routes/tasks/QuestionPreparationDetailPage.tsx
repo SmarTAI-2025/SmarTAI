@@ -419,7 +419,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
       <div className="space-y-0 divide-y">
         <div className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0">
           <EditableTextField fieldKey={`${problem.q_id}:number`} label={tx(locale, "题号", "Question number")} value={problem.number ?? ""} problem={problem} field="number" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
-          <EditableTextField fieldKey={`${problem.q_id}:type`} label={tx(locale, "题型", "Question type")} value={problem.type ?? ""} problem={problem} field="type" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
+          <EditableTextField fieldKey={`${problem.q_id}:type`} label={tx(locale, "题型", "Question type")} value={normalizeFilterType(problem.type ?? "")} problem={problem} field="type" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
         </div>
         <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Question")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
 
@@ -615,12 +615,17 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   const manualEditing = useManualEditor(problem, [field]);
   useEffect(() => { if (manualEditing && !readOnly) setEditing(true); }, [manualEditing, readOnly]);
   const [draft, setDraft] = useState(value);
+  const savedType = useRef<string | null>(null);
   const [error, setError] = useState(false);
   const dirty = editing && draft !== value;
-  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:${field}`, value: { draft }, baseline: { draft: value }, version: value, enabled: !readOnly, busy: saving, onRestore: (restored) => { setDraft(restored.draft); setEditing(true); } });
+  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:${field}`, value: { draft }, baseline: { draft: value }, version: value, enabled: !readOnly, busy: saving, onRestore: (restored) => { setDraft(restored.draft); if (field !== "type" || savedType.current !== restored.draft) setEditing(true); } });
   const leave = useDraftLeave();
 
-  useEffect(() => { if (!editing && !localDraft.savedAt) setDraft(value); }, [editing, value]);
+  useEffect(() => {
+    // Successful saves can close before the query cache renders its reply.
+    // Keep the submitted type until that reply replaces the old server value.
+    if (!editing && !localDraft.savedAt && (field !== "type" || savedType.current === null || savedType.current === value)) setDraft(value);
+  }, [editing, value]);
   useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
 
   async function save() {
@@ -628,6 +633,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
     setError(false);
     try {
       if (!await localDraft.runFormal(() => onSave(problem, field, draft), { draft })) return;
+      if (field === "type") savedType.current = draft;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch {
