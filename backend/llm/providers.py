@@ -42,7 +42,7 @@ from backend.llm.endpoint_policy import (
 from backend.llm.provider_catalog import effective_wire_protocol
 from backend.llm.image_capability import is_explicit_image_rejection, explicitly_rejects_images
 from backend.llm.request_timeouts import (
-    current_response_scope, current_response_timeout_seconds,
+    current_response_scope, current_response_timeout_seconds, is_response_timeout,
     provider_local_step,
 )
 from backend.llm.response_cleanup import GeminiHTTPTransport, protect_client, protect_response, start_cleanup
@@ -296,8 +296,10 @@ def _is_overload_failure(exc: BaseException) -> bool:
     policy) must NOT feed the breaker: retrying them is pointless and
     freezing the endpoint would punish unrelated, healthy traffic.
     """
+    if is_response_timeout(exc):
+        return False
     if isinstance(exc, ProviderRequestError):
-        if exc.code in {"provider_timeout", "provider_unreachable"}:
+        if exc.code == "provider_unreachable":
             return True
         # Relay 5xx (status_code carried on the error) IS endpoint overload;
         # 4xx codes (auth, rate-limit, model-not-found) are per-key or
@@ -313,8 +315,7 @@ def _is_overload_failure(exc: BaseException) -> bool:
         return code >= 500
     # LangChain/OpenAI SDK connection-level failures (no HTTP response at all).
     return type(exc).__name__ in {
-        "APITimeoutError", "APIConnectionError",
-        "ConnectError", "ConnectTimeout", "ReadError", "ReadTimeout",
+        "APIConnectionError", "ConnectError", "ReadError",
     }
 
 

@@ -210,7 +210,7 @@ async def test_long_admission_wait_never_authorizes_until_capacity_is_available(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ROUTES)
-async def test_full_response_deadline_stops_active_chunks_without_retry(route, scheduler, monkeypatch):
+async def test_full_response_deadline_stops_active_chunks_with_three_attempts(route, scheduler, monkeypatch):
     calls, chunks = [], []
     closed = asyncio.Event()
 
@@ -225,9 +225,9 @@ async def test_full_response_deadline_stops_active_chunks_without_retry(route, s
 
     async with provider_for(route, invoke, monkeypatch) as provider:
         with response_timeout_scope(0.04, response_only=True) as state:
-            with pytest.raises(ProviderRequestError, match="provider_timeout"):
+            with pytest.raises(structured_llm.ResponseTimeoutError, match="provider_timeout"):
                 await asyncio.wait_for(structured_llm.ainvoke_with_rate_retry(provider, MESSAGES), 1)
-    assert len(calls) == 1 and len(chunks) >= 2 and closed.is_set()
+    assert len(calls) == 3 and len(chunks) >= 2 and closed.is_set()
     assert state.ever_started and state.submission_may_exist and not state.last_attempt_rejected
     assert current_response_scope() is None and current_response_timeout_seconds() is None
     assert scheduler.active == scheduler.host_capacity.active == 0
@@ -804,13 +804,12 @@ async def test_unscoped_gemini_proxy_uses_cancellable_sdk_and_closes_client(sche
 
 
 @pytest.mark.asyncio
-async def test_unknown_sdk_failure_with_old_429_context_never_enters_retry_backoff(scheduler, monkeypatch):
+async def test_timeout_with_old_429_context_uses_only_timeout_retry(scheduler, monkeypatch):
     calls = []
-
-    def forbidden_wait(retry_state):
-        pytest.fail("unknown request entered rate-limit backoff")
-
-    monkeypatch.setattr(structured_llm._invoke_with_rate_retry.retry, "wait", forbidden_wait)
+    sleeps = []
+    async def sleep(seconds):
+        sleeps.append(seconds)
+    monkeypatch.setattr(structured_llm._invoke_with_rate_retry.retry, "sleep", sleep)
 
     async def invoke(options):
         calls.append(options)
@@ -820,7 +819,7 @@ async def test_unknown_sdk_failure_with_old_429_context_never_enters_retry_backo
 
     async with provider_for("openai", invoke, monkeypatch) as provider:
         with response_timeout_scope(300, response_only=True) as state:
-            with pytest.raises(httpx.ReadTimeout):
+            with pytest.raises(structured_llm.ResponseTimeoutError):
                 await structured_llm.ainvoke_with_rate_retry(provider, MESSAGES)
-    assert len(calls) == state.attempt_count == 1
+    assert len(calls) == state.attempt_count == 3 and sleeps == [0, 0]
     assert state.submission_may_exist and not state.last_attempt_rejected

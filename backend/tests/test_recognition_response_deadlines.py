@@ -101,9 +101,9 @@ def test_profiles_share_response_policy_without_mutating_call_or_token_limits():
     request, engine = read_request(), VisionEngine()
     before = request.model_dump_json()
     selected = new_policy(request, engine)
-    for profile in (None, LEGACY_SOURCE_TIMEOUT_PROFILE, "source-response-300-v1"):
+    for profile in (None, LEGACY_SOURCE_TIMEOUT_PROFILE, "source-response-300-v1", "source-response-600-v1"):
         assert apply_source_timeout_profile(request, engine=engine, timeout_profile=profile) == selected
-    assert selected.policy.timeout_mode == "response_only" and selected.policy.per_call_seconds == 600
+    assert selected.policy.timeout_mode == "response_only" and selected.policy.per_call_seconds == 180
     assert selected.policy.max_calls == request.policy.max_calls
     assert selected.policy.max_output_tokens == request.policy.max_output_tokens
     assert request.model_dump_json() == before
@@ -418,7 +418,8 @@ async def test_real_reader_retains_unknown_responses_but_settles_proved_no_conne
         service, request, data, _ = runner(tmp_path)
         request = new_policy(request, engine)
         result = await run(service, request, data, engine)
-    assert len(posts) == 1 and result.status == "needs_review"
+    assert len(posts) == (3 if failure in {"connect_timeout", "read_timeout"} else 1)
+    assert result.status == "needs_review"
     persisted = workflow_repository.get_operation(result.operation_id, owner_id=request.source.owner_id)
     checkpoint = persisted.checkpoint["calls"]
     assert len(checkpoint) == 1

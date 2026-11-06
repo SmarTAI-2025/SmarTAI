@@ -18,7 +18,7 @@ from backend.tools.baidu_unlimited_ocr import (
     BaiduUnlimitedOCRClient,
     BaiduUnlimitedOCRError,
 )
-from backend.tools.structured_llm import format_math_and_quotes
+from backend.tools.structured_llm import ainvoke_vision_with_rate_retry, format_math_and_quotes
 
 OCRPurpose = Literal["problems", "submissions", "reference", "test_cases"]
 
@@ -136,7 +136,7 @@ class LLMVisionOCRSkill:
             VisionImage(data=image.data, media_type=image.media_type, filename=image.label)
             for image in images
         ]
-        response = await self.provider.ainvoke_vision(prompt, vision_images)
+        response = await ainvoke_vision_with_rate_retry(self.provider, prompt, vision_images)
         return OCRResult(
             text=format_math_and_quotes((response.content or "").strip()),
             provider=response.provider,

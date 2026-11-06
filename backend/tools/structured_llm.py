@@ -20,7 +20,7 @@ import math
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from email.utils import parsedate_to_datetime
 from typing import Type, TypeVar, Optional, List, Dict, Any, Callable
 
@@ -36,7 +36,7 @@ from tenacity import (
 from backend.config import settings
 from backend.llm.providers import BaseProvider, LLMResponse, ProviderRequestError
 from backend.llm.endpoint_policy import ProviderEndpointError
-from backend.llm.request_timeouts import current_response_scope, provider_local_step
+from backend.llm.request_timeouts import current_response_scope, is_response_timeout, provider_local_step
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ class StructuredOutputInvalidError(ValueError):
 class _AttemptBudget:
     used: int = 0
     waited: float = 0
+    uncertain_timeout: bool = False
 
 
 _attempt_budget: ContextVar[_AttemptBudget | None] = ContextVar("llm_attempt_budget", default=None)
@@ -92,6 +93,11 @@ def llm_attempt_budget():
     token = _attempt_budget.set(_AttemptBudget())
     try:
         yield
+    except Exception as exc:
+        if _attempt_budget.get().uncertain_timeout:
+            # A later rejected attempt cannot erase an earlier unknown charge.
+            exc.submission_may_exist = True
+        raise
     finally:
         _attempt_budget.reset(token)
 
@@ -121,8 +127,20 @@ class RateLimitError(TransientLLMError):
     code = "provider_rate_limited"
 
 
+class ResponseTimeoutError(TransientLLMError):
+    """An authorized retry does not establish whether the attempt was billed."""
+
+    code = "provider_timeout"
+
+    def __init__(self, *, submission_may_exist: bool):
+        super().__init__(self.code)
+        self.submission_may_exist = submission_may_exist
+
+
 class PermanentLLMError(Exception):
     """Non-retryable error (4xx auth, bad request)."""
+
+    retryable = False
 
 
 class DailyQuotaError(PermanentLLMError):
@@ -214,6 +232,10 @@ def _classify_exception(e: Exception) -> Exception:
         return DailyQuotaError() if quota_code == "provider_daily_quota_exceeded" else PermanentLLMError(quota_code)
     if getattr(e, "retryable", True) is False:
         return PermanentLLMError(quota_code or "non_retryable_provider_limit")
+    if is_response_timeout(e):
+        scope = current_response_scope()
+        uncertain = scope.submission_may_exist if scope is not None else getattr(e, "submission_may_exist", True)
+        return ResponseTimeoutError(submission_may_exist=uncertain)
     if quota_code == "provider_rate_limited":
         return RateLimitError(quota_code, retry_after=_provider_retry_after(e))
     if isinstance(e, ProviderRequestError) and e.code in {"provider_recitation_blocked", "provider_content_blocked"}:
@@ -944,11 +966,17 @@ def _retry_wait(retry_state) -> float:
 
     - On a rate limit: wait at least 65 seconds and at least Retry-After,
       plus 0.5-2s jitter. The stop predicate enforces the wait budget.
+    - On a response timeout: immediately re-enter normal provider admission.
     - On any other transient: exponential backoff (1, 2, 4 … capped at 30s),
       or a longer Retry-After hint. A 5xx hint does not make it a rate limit.
     """
     outcome = retry_state.outcome
     exc = outcome.exception() if (outcome and outcome.failed) else None
+
+    if isinstance(exc, ResponseTimeoutError):
+        # Re-enter normal provider admission immediately; it owns RPM,
+        # concurrency and any existing shared 429 cooldown.
+        return 0.0
 
     if isinstance(exc, RateLimitError):
         if exc.retry_after is not None:
@@ -1021,6 +1049,11 @@ async def _before_retry_sleep(retry_state) -> None:
     if budget is not None:
         budget.waited += float(retry_state.next_action.sleep)
     exc = retry_state.outcome.exception()
+    if isinstance(exc, ResponseTimeoutError):
+        if budget is not None:
+            budget.uncertain_timeout |= exc.submission_may_exist
+        if (scope := current_response_scope()) is not None:
+            scope.authorize_timeout_retry()
     from backend.progress.recognition_activity import report_provider_state
     await provider_local_step(report_provider_state(
         _retry_provider(retry_state), "retrying",
@@ -1063,35 +1096,50 @@ async def _sleep_before_retry(seconds: float) -> None:
     sleep=_sleep_before_retry,
     reraise=True,
 )
-async def _ainvoke_with_retry(provider: BaseProvider, messages: List[BaseMessage]) -> LLMResponse:
+async def _ainvoke_with_retry(provider: BaseProvider, messages: List[BaseMessage], **kwargs) -> LLMResponse:
     """Inner retry wrapper — honors retry-after hints, async-native."""
     try:
-        response = await provider.ainvoke(messages)
+        response = await provider.ainvoke(messages, **kwargs)
         if getattr(response, "finish_reason", None) == "refused":
             raise ProviderRequestError(getattr(response, "refusal_code", None) or "provider_content_blocked", status_code=422)
-        return response
+        return _preserve_unknown_usage(response)
     except Exception as e:
         classified = _classify_exception(e)
         _block_exhausted_provider(provider, str(classified))
         raise classified from e
 
 
-# Public alias for callers outside this module. Ingest agent / future helpers
+# Public entry for callers outside this module. Ingest agent / future helpers
 # that issue raw provider.ainvoke calls must route through this so they share
 # the same transient/rate-limit retry + classification policy as the skills.
-ainvoke_with_retry = _ainvoke_with_retry
+async def ainvoke_with_retry(provider: BaseProvider, messages: List[BaseMessage], **kwargs) -> LLMResponse:
+    with llm_attempt_budget():
+        return await _ainvoke_with_retry(provider, messages, **kwargs)
 
 
-@retry(stop=_retry_stop, wait=_retry_wait, retry=retry_if_exception_type(RateLimitError),
+def _preserve_unknown_usage(response):
+    budget, scope = _attempt_budget.get(), current_response_scope()
+    if isinstance(response, LLMResponse) and (
+        budget is not None and budget.uncertain_timeout
+        or scope is not None and scope.had_uncertain_timeout
+    ):
+        return replace(response, input_tokens=None, output_tokens=None)
+    return response
+
+
+@retry(stop=_retry_stop, wait=_retry_wait, retry=retry_if_exception_type((RateLimitError, ResponseTimeoutError)),
        before=_before_retry_attempt, before_sleep=_before_retry_sleep, sleep=_sleep_before_retry, reraise=True)
 async def _invoke_with_rate_retry(invoke, *args, **kwargs):
-    """Retry explicit rejected 429s only; never replay an uncertain vision call."""
+    """Bounded retries for rejected 429s and explicitly authorized timeouts."""
     try:
-        return await invoke(*args, **kwargs)
+        return _preserve_unknown_usage(await invoke(*args, **kwargs))
     except Exception as exc:
         if getattr(exc, "retryable", True) is False:
             raise
-        if (scope := current_response_scope()) is not None and scope.submission_may_exist:
+        if is_response_timeout(exc):
+            raise _classify_exception(exc) from exc
+        if ((scope := current_response_scope()) is not None
+                and scope.submission_may_exist and not scope.last_attempt_rejected):
             # A previous 429 in an SDK exception context cannot authorize even
             # another local retry cycle while this request remains unknown.
             raise
@@ -1105,12 +1153,15 @@ async def _invoke_with_rate_retry(invoke, *args, **kwargs):
         raise
 
 
-async def ainvoke_vision_with_rate_retry(provider, prompt, images, *, max_output_tokens):
-    return await _invoke_with_rate_retry(provider.ainvoke_vision, prompt, images, max_output_tokens=max_output_tokens)
+async def ainvoke_vision_with_rate_retry(provider, prompt, images, *, max_output_tokens=None):
+    with llm_attempt_budget():
+        options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
+        return await _invoke_with_rate_retry(provider.ainvoke_vision, prompt, images, **options)
 
 
-async def ainvoke_with_rate_retry(provider, messages):
-    return await _invoke_with_rate_retry(provider.ainvoke, messages)
+async def ainvoke_with_rate_retry(provider, messages, **kwargs):
+    with llm_attempt_budget():
+        return await _invoke_with_rate_retry(provider.ainvoke, messages, **kwargs)
 
 
 async def structured_llm_call(

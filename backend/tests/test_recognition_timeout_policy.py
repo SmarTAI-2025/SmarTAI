@@ -15,7 +15,7 @@ from backend.recognition.planner import EngineCapabilitiesV1
 from backend.recognition.runtime import RecognitionCapacity, run_initial_read
 from backend.services.execution_control import current_execution, run_controlled
 from backend.services.question_source_batches import read_question_pdf_batches
-from backend.services.recognition_timeouts import LEGACY_SOURCE_TIMEOUT_PROFILE, apply_source_timeout_profile
+from backend.services.recognition_timeouts import LEGACY_SOURCE_TIMEOUT_PROFILE, SOURCE_TIMEOUT_PROFILE, apply_source_timeout_profile
 
 
 class Clock:
@@ -61,14 +61,14 @@ def apply(request, engine, **kwargs):
     return apply_source_timeout_profile(request, engine=engine, timeout_profile=LEGACY_SOURCE_TIMEOUT_PROFILE, **kwargs)
 
 
-@pytest.mark.parametrize("profile", [None, LEGACY_SOURCE_TIMEOUT_PROFILE, "source-response-300-v1", "source-response-600-v1"])
+@pytest.mark.parametrize("profile", [None, LEGACY_SOURCE_TIMEOUT_PROFILE, "source-response-300-v1", "source-response-600-v1", SOURCE_TIMEOUT_PROFILE])
 @pytest.mark.parametrize("kind", ["vision", "ocr", "native", "knowledge"])
 def test_all_product_sources_share_one_response_policy(profile, kind):
     engine = None if kind == "native" else VisionEngine(candidate_kind="ocr" if kind == "ocr" else "vision")
     request = read_request(purpose="knowledge" if kind == "knowledge" else "problems")
     before = request.model_dump_json()
     selected = apply_source_timeout_profile(request, engine=engine, timeout_profile=profile)
-    assert selected.policy.per_call_seconds == 600 and selected.policy.timeout_mode == "response_only"
+    assert selected.policy.per_call_seconds == 180 and selected.policy.timeout_mode == "response_only"
     ignored = {"timeout_mode", "per_call_seconds"}
     assert {k: v for k, v in selected.policy.model_dump().items() if k not in ignored} == {
         k: v for k, v in request.policy.model_dump().items() if k not in ignored}
@@ -144,7 +144,7 @@ async def test_twelve_slow_pages_complete_without_cumulative_ocr_cutoff():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("profile,per_call,total", [(None, 600, 600), (LEGACY_SOURCE_TIMEOUT_PROFILE, 600, 600)])
+@pytest.mark.parametrize("profile,per_call,total", [(None, 180, 600), (LEGACY_SOURCE_TIMEOUT_PROFILE, 180, 600)])
 async def test_each_pdf_batch_gets_the_selected_frozen_policy(profile, per_call, total):
     seen = []
 

@@ -70,7 +70,8 @@ class TestGatewayErrorClassification:
         exc = ProviderRequestError(
             "provider_upstream_unavailable", status_code=status_code
         )
-        assert type(_classify_exception(exc)) is TransientLLMError
+        assert isinstance(_classify_exception(exc), TransientLLMError)
+        assert not isinstance(_classify_exception(exc), RateLimitError)
 
     def test_relay_429_uses_rate_limit_policy(self):
         exc = ProviderRequestError("provider_rate_limited", status_code=429)
@@ -199,7 +200,7 @@ class TestIsOverloadFailure:
         [
             (ProviderRequestError("provider_upstream_unavailable", status_code=503), True),
             (ProviderRequestError("provider_upstream_unavailable", status_code=500), True),
-            (ProviderRequestError("provider_timeout"), True),
+            (ProviderRequestError("provider_timeout"), False),
             (ProviderRequestError("provider_unreachable"), True),
             # Deterministic / per-key failures must not feed the breaker.
             (ProviderRequestError("provider_auth_failed", status_code=401), False),
@@ -207,7 +208,7 @@ class TestIsOverloadFailure:
             (ProviderRequestError("provider_model_or_endpoint_not_found", status_code=404), False),
             (ProviderRequestError("provider_response_invalid"), False),
             (httpx.ConnectError("boom"), True),
-            (httpx.ConnectTimeout("slow"), True),
+            (httpx.ConnectTimeout("slow"), False),
             (RuntimeError("local bug"), False),
         ],
     )

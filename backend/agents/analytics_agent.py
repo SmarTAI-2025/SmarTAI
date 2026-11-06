@@ -26,7 +26,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator, model_validator
 
 from backend.llm.providers import BaseProvider
-from backend.tools.structured_llm import extract_and_parse_json
+from backend.tools.structured_llm import ainvoke_with_rate_retry, extract_and_parse_json
 
 logger = logging.getLogger(__name__)
 
@@ -329,7 +329,7 @@ async def filter_students(
 ) -> FilterOutput:
     ctx = _build_grading_context(results_payload, problem_data, per_student_stats=per_student_stats)
     user_msg = f"**[Class Data (JSON)]**:\n{ctx}\n\n**[Teacher Question]**: {question}"
-    response = await provider.ainvoke([
+    response = await ainvoke_with_rate_retry(provider, [
         SystemMessage(content=FILTER_SYS),
         HumanMessage(content=user_msg),
     ])
@@ -346,7 +346,7 @@ async def interpret_filter_intent(
         "allowed_filter_fields": sorted(allowed_fields),
         "allowed_sorts": sorted(allowed_sorts),
     }, ensure_ascii=False)
-    response = await provider.ainvoke([
+    response = await ainvoke_with_rate_retry(provider, [
         SystemMessage(content=f"{FILTER_INTENT_SYS}\n{contract}"),
         HumanMessage(content=json.dumps({"surface": surface, "teacher_query": question}, ensure_ascii=False)),
     ])
@@ -378,7 +378,7 @@ async def summarize(
 ) -> SummaryOutput:
     ctx = _build_grading_context(results_payload, problem_data, per_student_stats=per_student_stats)
     user_msg = f"**[Class Data (JSON)]**:\n{ctx}\n\n**[Teacher Question]**: {question}"
-    response = await provider.ainvoke([
+    response = await ainvoke_with_rate_retry(provider, [
         SystemMessage(content=SUMMARY_SYS),
         HumanMessage(content=user_msg),
     ])
@@ -395,7 +395,7 @@ async def make_chart(
 ) -> ChartOutput:
     ctx = _build_grading_context(results_payload, problem_data, per_student_stats=per_student_stats)
     user_msg = f"**[Class Data (JSON)]**:\n{ctx}\n\n**[Teacher Asks for Chart]**: {question}"
-    response = await provider.ainvoke([
+    response = await ainvoke_with_rate_retry(provider, [
         SystemMessage(content=CHART_SYS),
         HumanMessage(content=user_msg),
     ])
@@ -500,7 +500,7 @@ async def question_common_mistakes(
         f"  criterion: {problem.get('criterion','')[:200]}\n\n"
         f"**[Student Responses (JSON)]**:\n{json.dumps(capped_rows, ensure_ascii=False)}"
     )
-    response = await provider.ainvoke([
+    response = await ainvoke_with_rate_retry(provider, [
         SystemMessage(content=QUESTION_SUMMARY_SYS),
         HumanMessage(content=user_msg),
     ])

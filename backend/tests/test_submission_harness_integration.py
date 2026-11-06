@@ -34,7 +34,7 @@ def upload_args(student, assignment, provider, registry):
 
 
 @pytest.mark.asyncio
-async def test_uncertain_parser_is_not_replayed_and_old_revision_remains():
+async def test_exhausted_timeout_parser_is_not_replayed_and_old_revision_remains():
     _, student, assignment = _published_assignment("uncertain_parser")
     previous = submissions.submit_online(student_id=student, assignment_id=assignment,
         answers=[{"q_id": "q1", "content": "old answer"}])
@@ -43,10 +43,11 @@ async def test_uncertain_parser_is_not_replayed_and_old_revision_remains():
     args = upload_args(student, assignment, provider, registry)
     with pytest.raises(ValidationError):
         await submissions.submit_student_file_with_ocr(**args)
+    assert provider.ainvoke.await_count == 3
     with pytest.raises(ValidationError) as error:
         await submissions.submit_student_file_with_ocr(**args)
     assert error.value.code == "provider_submit_uncertain"
-    assert provider.ainvoke.await_count == 1
+    assert provider.ainvoke.await_count == 3
     assert submission_repository.get_submission_for_student(assignment, student_id=student).current_revision_id == previous.id
 
 

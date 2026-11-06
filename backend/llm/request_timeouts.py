@@ -35,8 +35,8 @@ def _local_timeout():
 class ResponseDeadlineScope:
     """One logical OCR call, with separate local waits and response attempts.
 
-    A rejected attempt may be retried by the existing 429 policy. An unknown
-    attempt cannot reset its submission marker or authorize another request.
+    Rejections and explicitly authorized timeout retries share the caller's
+    attempt limit. A timeout retry never proves the previous request unbilled.
     """
 
     def __init__(self, seconds, *, local_wait_seconds, before_send=None, on_send=None):
@@ -46,6 +46,8 @@ class ResponseDeadlineScope:
         self.attempt_count = 0
         self.submission_may_exist = False
         self.last_attempt_rejected = False
+        self.had_uncertain_timeout = False
+        self._timeout_retry_authorized = False
         self._authorized = False
         self._reserved = False
 
@@ -87,7 +89,9 @@ class ResponseDeadlineScope:
         self, invoke: Callable[[], Awaitable[T]], *, timeout_seconds=None, before_request=None,
     ) -> T:
         from backend.llm.providers import ProviderRequestError
-        if self.submission_may_exist:
+        if self.submission_may_exist and not (
+            self._timeout_retry_authorized or self.last_attempt_rejected
+        ):
             raise ProviderRequestError("provider_submit_uncertain")
         from backend.services.submission_work_budget import current_budget
         budget = current_budget()
@@ -112,6 +116,7 @@ class ResponseDeadlineScope:
                     self.on_send()
                 self._reserved = True
             self.attempt_count += 1
+            self._timeout_retry_authorized = False
             self.submission_may_exist = True
             self.last_attempt_rejected = False
             deadline = asyncio.timeout(seconds)
@@ -131,8 +136,48 @@ class ResponseDeadlineScope:
 
     def rejected(self) -> None:
         """Called only with evidence of rejection or failure before connection."""
-        self.submission_may_exist = False
+        # A later rejection cannot disprove an earlier timed-out submission.
+        self.submission_may_exist = self.had_uncertain_timeout
         self.last_attempt_rejected = True
+
+    def authorize_timeout_retry(self) -> None:
+        """Permit one bounded retry without clearing uncertain-submission evidence."""
+        self.had_uncertain_timeout |= self.submission_may_exist
+        self._timeout_retry_authorized = True
+
+
+def is_response_timeout(exc: BaseException) -> bool:
+    """Recognize response/transport timeouts, never a stale exception context.
+
+    Workflow deadlines and local admission/preparation failures have their own
+    codes and must not gain model retry authority through a timeout cause.
+    """
+    from backend.domain.errors import DomainError
+    from backend.llm.providers import ProviderRequestError
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        code = getattr(exc, "code", None)
+        # Application stop codes are authoritative. SDK error identifiers
+        # (for example request_timeout) must not mask an actual 408/504.
+        if (isinstance(code, str) and code not in {
+            "provider_upstream_unavailable", "provider_request_failed", "provider_request_rejected",
+        } and (isinstance(exc, (DomainError, ProviderRequestError)) or code.startswith("provider_"))):
+            return code == "provider_timeout"
+        status = getattr(exc, "status_code", None)
+        if status is None:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status is None and type(code) is int:  # Google SDK HTTP errors.
+            status = code
+        if isinstance(status, int):
+            return status in {408, 504}
+        if isinstance(exc, TimeoutError) or type(exc).__name__ in {
+            "APITimeoutError", "TimeoutException", "ConnectTimeout", "ReadTimeout",
+            "WriteTimeout", "PoolTimeout", "DeadlineExceeded",
+        }:
+            return True
+        exc = exc.__cause__
+    return False
 
 
 def current_response_timeout_seconds() -> float | None:

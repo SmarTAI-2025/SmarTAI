@@ -175,7 +175,7 @@ async def test_provider_wide_rejection_pauses_before_requesting_remaining_pages(
     calls = []
     async def reject(request, *args, **kwargs):
         assert request.policy.timeout_mode == "response_only"
-        assert request.policy.per_call_seconds == 600
+        assert request.policy.per_call_seconds == 180
         calls.append(request.pages)
         usage = SimpleNamespace(patch_calls=0, empty_recovery_calls=0,
             model_dump=lambda **_: dict(initial_calls=1, usage_complete=False))
