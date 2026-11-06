@@ -384,20 +384,34 @@ async def run_sandbox(
     # students can acquire slots before this batch dispatches its next wave.
     # The OS-wide slots, per-case deadline and cleanup remain in the runner.
     jobs = [asyncio.create_task(run_cases()) for _ in range(min(parallelism, len(test_cases)))]
+    joined = asyncio.gather(*jobs)
     try:
-        await asyncio.gather(*jobs)
+        # The coordinator sends cancellation once, then owns child cleanup.
+        # Repeated parent cancellation must not reach a child's finally block.
+        await asyncio.shield(joined)
     except BaseException as failure:
         stopped = True
         for job in jobs:
             job.cancel()
-        await asyncio.gather(*jobs, return_exceptions=True)
-        # Do not publish a partial score. Drain only callbacks for full
-        # observed results before the caller handles the actual failure.
-        outcomes = await asyncio.gather(*notifications, return_exceptions=True)
-        if not isinstance(failure, asyncio.CancelledError):
-            for outcome in outcomes:
-                if isinstance(outcome, Exception) and outcome is not failure:
-                    raise outcome from failure
+
+        async def drain():
+            await asyncio.gather(*jobs, joined, return_exceptions=True)
+            # Do not publish a partial score. Save only fully observed cases.
+            return await asyncio.gather(*notifications, return_exceptions=True)
+
+        cleanup = asyncio.create_task(drain())
+        cancelled = isinstance(failure, asyncio.CancelledError)
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                cancelled = True
+        outcomes = cleanup.result()
+        if cancelled:
+            raise asyncio.CancelledError from None
+        for outcome in outcomes:
+            if isinstance(outcome, Exception) and outcome is not failure:
+                raise outcome from failure
         raise
 
     ordered = [results[index] for index in range(len(test_cases))]
