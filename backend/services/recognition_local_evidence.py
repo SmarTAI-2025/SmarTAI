@@ -87,7 +87,7 @@ class RecognitionLocalEvidenceReader:
             raise RecognitionError("recognition_source_unavailable")
 
     async def read(self, source_bytes: bytes, command: PdfIndexRequest | PdfPagesRequest | PdfRenderRequest | PdfContactSheetRequest | ImagePrepareRequest,
-                   *, timeout_seconds: float = 30) -> LocalEvidenceRead:
+                   *, timeout_seconds: float = 10) -> LocalEvidenceRead:
         if (type(source_bytes) is not bytes or not source_bytes or len(source_bytes) > MAX_INPUT_BYTES
                 or type(timeout_seconds) not in {int, float} or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= 30):
             raise RecognitionError("recognition_request_invalid")

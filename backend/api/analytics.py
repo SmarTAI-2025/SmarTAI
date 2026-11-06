@@ -56,7 +56,6 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 logger = logging.getLogger(__name__)
 
 _USABLE_RUN_STATUSES = frozenset({"completed", "partial_failed"})
-_RATE_WINDOW_SECONDS = 30.0
 
 
 class QueryRequest(BaseModel):
@@ -145,7 +144,6 @@ class _AnalyticsFacts:
         return {result.student_id for result in self.results}
 
 
-_query_last_at: dict[str, float] = {}
 _query_rate_lock = RLock()
 
 
@@ -445,28 +443,6 @@ def _presentation_payload(
     return {"results": students}, stats
 
 
-def _check_rate_limit(owner_id: str) -> None:
-    now = time.monotonic()
-    with _query_rate_lock:
-        last = _query_last_at.get(owner_id, 0.0)
-        elapsed = now - last
-        if elapsed < _RATE_WINDOW_SECONDS:
-            retry_after = max(1, math.ceil(_RATE_WINDOW_SECONDS - elapsed))
-            raise HTTPException(
-                status.HTTP_429_TOO_MANY_REQUESTS,
-                detail={
-                    "code": "analytics_rate_limited",
-                    "retry_after_seconds": retry_after,
-                },
-                headers={"Retry-After": str(retry_after)},
-            )
-        _query_last_at[owner_id] = now
-        stale_before = now - (_RATE_WINDOW_SECONDS * 2)
-        for actor_id, timestamp in list(_query_last_at.items()):
-            if timestamp < stale_before:
-                _query_last_at.pop(actor_id, None)
-
-
 def _safe_text(value: Any, max_length: int) -> str:
     return str(value or "").replace("\x00", "").strip()[:max_length]
 
@@ -637,7 +613,7 @@ async def interpret_filter_intent(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "analytics_provider_unavailable"},
         )
-    _check_rate_limit(f"{current.id}:filter-intent")
+    _check_ask_limit(current.id)
     provider_question, identities = _redact_filter_question(req.question, known_identifiers)
 
     try:
@@ -702,8 +678,9 @@ def _check_ask_limit(owner_id: str) -> None:
             if not _ask_bursts[actor]:
                 del _ask_bursts[actor]
         requests = _ask_bursts.setdefault(owner_id, [])
-        if len(requests) >= 12:
-            raise HTTPException(429, detail={"code": "analytics_rate_limited"}, headers={"Retry-After": "60"})
+        if len(requests) >= 6:
+            retry_after = max(1, math.ceil(60 - (now - requests[0])))
+            raise HTTPException(429, detail={"code": "analytics_rate_limited"}, headers={"Retry-After": str(retry_after)})
         requests.append(now)
 
 

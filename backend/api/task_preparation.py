@@ -622,6 +622,7 @@ def _timed_question_request(function):
         try:
             async with processing_budget("preflight-" + uuid.uuid4().hex,
                     kind="question_preparation", started_at=started) as guard:
+                guard.request_started_at = started
                 return await run_owned_work(function(*args, **kwargs))
         except DomainError as exc:
             operation = getattr(guard, "source_operation", None)
@@ -2867,6 +2868,7 @@ async def preflight_material_import(
             "recognition": descriptor.get("recognition"),
             "recognition_stored_file_id": descriptor.get("recognition_stored_file_id"),
             "source_authority": "uploaded_material",
+            "preparation_started_at": current_budget().request_started_at,
         }
         draft = workflow_repository.update_operation(
             draft.id,
@@ -3004,6 +3006,7 @@ async def start_material_import(
                 "source_token": source.id,
                 "base_workflow_revision": claim_base_revision,
                 "provider_id": provider_id,
+                "preparation_started_at": payload.get("preparation_started_at"),
             }, expires_at=time.time() + task_facade._OPERATION_PUBLICATION_TTL_SECONDS,
             initial_status="preparing",
         )

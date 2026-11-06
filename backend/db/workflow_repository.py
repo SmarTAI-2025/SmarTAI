@@ -1704,9 +1704,13 @@ def claim_operation(
         if row.operation_type in BUDGET_TYPES:
             clock = (row.checkpoint or {}).get(CHECKPOINT_KEY) or {}
             if clock.get("attempt") != row.attempt:
+                started_at = now
+                if row.operation_type == "material_import" and row.attempt == 1:
+                    # Synchronous source OCR already began this same user action.
+                    started_at = min(now, (row.payload or {}).get("preparation_started_at") or now)
                 row.checkpoint = {**(row.checkpoint or {}), CHECKPOINT_KEY: {
-                    "attempt": row.attempt, "started_at": now,
-                    "deadline_at": now + policy(row.operation_type)[0],
+                    "attempt": row.attempt, "started_at": started_at,
+                    "deadline_at": started_at + policy(row.operation_type)[0],
                 }}
         return _detach_operation(row)
 

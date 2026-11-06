@@ -5,6 +5,7 @@ import asyncio
 import io
 import json
 import platform
+import random
 import time
 import zipfile
 import pymupdf as fitz
@@ -40,11 +41,19 @@ def fixtures():
     with zipfile.ZipFile(pptx, 'w', zipfile.ZIP_DEFLATED) as z:
         for n in range(1, 1001):
             z.writestr(f'ppt/slides/slide{n}.xml', '<slide><p><t>' + 'Synthetic text. ' * 100 + '</t></p></slide>')
-    return native.tobytes(), scan.tobytes(), vector.tobytes(), png.getvalue(), docx.getvalue(), pptx.getvalue()
+    # Near the product's 16 MP limit, with poorly compressible image detail.
+    noise = io.BytesIO()
+    Image.frombytes('L', (4000, 4000), random.Random(42).randbytes(16_000_000)).point(lambda v: 240 + v // 32).save(noise, format='JPEG', quality=80)
+    dense_scan = fitz.open()
+    for n in range(200):
+        page = dense_scan.new_page()
+        page.insert_image(page.rect, stream=noise.getvalue())
+        page.insert_text((40, 40), f'Synthetic scanned page {n + 1}')
+    return native.tobytes(), scan.tobytes(), vector.tobytes(), png.getvalue(), docx.getvalue(), pptx.getvalue(), noise.getvalue(), dense_scan.tobytes()
 
 
 async def main():
-    native, scan, vector, png, docx, pptx = fixtures()
+    native, scan, vector, png, docx, pptx, noise, dense_scan = fixtures()
     cases = {
         'native_pdf_500pages_inspect': lambda: validate_media_content(native, 'application/pdf'),
         'native_pdf_500pages_text': lambda: extract_text_from_pdf(native, max_pages=500),
@@ -54,8 +63,11 @@ async def main():
         'image_16mp_prepare': lambda: read_image_evidence(png, ImagePrepareRequest(content_type='image/png')),
         'docx_6m_chars': lambda: native_units('synthetic.docx', docx),
         'pptx_1000slides': lambda: native_units('synthetic.pptx', pptx),
+        'noise_image_16mp_prepare': lambda: read_image_evidence(noise, ImagePrepareRequest(content_type='image/jpeg')),
+        'noise_scan_200pages_inspect': lambda: validate_media_content(dense_scan, 'application/pdf'),
+        'noise_scan_contact8': lambda: read_pdf_evidence(dense_scan, PdfContactSheetRequest(pages=list(range(1, 9)))),
     }
-    output = {'host': platform.platform(), 'python': platform.python_version(), 'samples': {}}
+    output = {'host': platform.platform(), 'python': platform.python_version(), 'samples': {}, 'noise_image_bytes': len(noise), 'noise_scan_bytes': len(dense_scan)}
     for name, invoke in cases.items():
         durations = []
         for _ in range(3):
@@ -65,7 +77,7 @@ async def main():
         output['samples'][name] = {'seconds': durations, 'max_seconds': max(durations)}
     async def timed(invoke):
         start = time.perf_counter(); await invoke(); return round(time.perf_counter()-start, 4)
-    output['two_concurrent_image_workers_seconds'] = await asyncio.gather(*[timed(cases['image_16mp_prepare']) for _ in range(2)])
+    output['two_concurrent_image_workers_seconds'] = await asyncio.gather(*[timed(cases['noise_image_16mp_prepare']) for _ in range(2)])
     print(json.dumps(output, indent=2))
 
 if __name__ == '__main__':

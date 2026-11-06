@@ -66,7 +66,7 @@ def main():
     if sys.platform.startswith("linux"):
         import resource
         resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
-        resource.setrlimit(resource.RLIMIT_CPU, (50, 50))
+        resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
     body = sys.stdin.buffer.read(MAX_BYTES + 1)
     if len(body) > MAX_BYTES:
         raise ValueError("input budget")

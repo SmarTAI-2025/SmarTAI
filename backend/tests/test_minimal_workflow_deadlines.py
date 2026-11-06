@@ -1,4 +1,4 @@
-"""Only the three requested workflows gain active and total run budgets."""
+"""Workflow deadlines include all work in an attempt and preserve saved units."""
 import asyncio
 import time
 
@@ -103,6 +103,26 @@ async def test_outer_deadline_does_not_reclassify_provider_timeout():
     with pytest.raises(TimeoutError, match="provider-only"):
         async with limits.execution_deadline(time.time() + 30, "workflow_time_limit_reached"):
             raise TimeoutError("provider-only")
+
+
+def test_material_import_shares_source_ocr_clock_but_explicit_retry_starts_fresh():
+    owner, task, op = _seed_operation("material_import")
+    activate(owner, task, op)
+    source_started = time.time() - 500
+    flows.update_operation(op.id, owner_id=owner, expected_attempt=op.attempt,
+                           payload={"preparation_started_at": source_started})
+    claimed = flows.claim_operation(op.id, owner_id=owner, worker_id="first", lease_seconds=60)
+    clock = claimed.checkpoint[limits.CHECKPOINT_KEY]
+    assert clock["started_at"] == source_started
+    assert clock["deadline_at"] == source_started + limits.QUESTION_WALL_SECONDS
+    flows.fail_timed_out_operation(op.id, owner_id=owner, expected_attempt=op.attempt,
+        expected_lease_token=claimed.lease_token, code="question_preparation_wall_time_limit_reached")
+    retried, _ = flows.create_operation(assignment_id=task, owner_id=owner,
+        operation_type=op.operation_type, input_hash=op.input_hash,
+        payload={"preparation_started_at": source_started})
+    assert retried.attempt == 2
+    renewed = flows.claim_operation(op.id, owner_id=owner, worker_id="retry", lease_seconds=60)
+    assert renewed.checkpoint[limits.CHECKPOINT_KEY]["deadline_at"] > time.time() + 8990
 
 @pytest.mark.asyncio
 async def test_timeout_after_suppressed_cancellation_cannot_be_success():

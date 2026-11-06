@@ -84,7 +84,7 @@ async def native_units(filename, body):
     process = await asyncio.create_subprocess_exec(sys.executable, "-B", "-m", "backend.knowledge.native_worker",
         Path(filename).suffix.lower(), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     try:
-        async with asyncio.timeout(60):
+        async with asyncio.timeout(10):
             output, _ = await process.communicate(body)
         if process.returncode or len(output) > 64 * 1024 * 1024:
             raise RecognitionError("recognition_request_invalid")
@@ -180,7 +180,7 @@ class KnowledgeIngestionWorker:
         visual = document.content_type == "application/pdf" or (document.content_type or "").startswith("image/")
         native = None
         if document.content_type == "application/pdf":
-            index = await read_pdf_evidence(body, PdfIndexRequest(window_pages=1), timeout_seconds=30, progress=reporter)
+            index = await read_pdf_evidence(body, PdfIndexRequest(window_pages=1), timeout_seconds=10, progress=reporter)
             total = index.total_pages
         elif visual:
             total = 1

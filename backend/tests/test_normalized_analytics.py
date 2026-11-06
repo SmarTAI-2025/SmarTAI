@@ -341,7 +341,7 @@ def _seed_ungraded_assignment(owner: User) -> str:
 @pytest.fixture(autouse=True)
 def _clear_derived_state():
     with analytics._query_rate_lock:
-        analytics._query_last_at.clear()
+        analytics._ask_bursts.clear()
     yield
 
 
@@ -455,7 +455,7 @@ def test_nl_query_filters_hallucinated_ids_and_emits_only_safe_chart_fields():
     assert response.json()["student_ids"] == [valid_id]
     assert other_seeded["students"][0].username not in str(provider.calls[0])
     with analytics._query_rate_lock:
-        analytics._ask_bursts[owner.id] = [time.monotonic()] * 12
+        analytics._ask_bursts[owner.id] = [time.monotonic()] * 6
     limited = client.post(f"/analytics/{seeded['task_id']}/query", json={"question":"Again","mode":"summary"})
     assert limited.status_code == 429
     assert int(limited.headers["retry-after"]) >= 1

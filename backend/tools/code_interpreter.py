@@ -100,7 +100,7 @@ async def run_python_subprocess(
     code: str,
     test_input: str = "",
     *,
-    timeout: float = 10.0,
+    timeout: float = 5.0,
     memory_mb: int = 256,
     max_output_chars: Optional[int] = None,
 ) -> TestResult:
@@ -225,7 +225,7 @@ async def run_sandbox(
     test_cases: List[TestCase],
     *,
     language: str = "python",
-    per_case_timeout: float = 10.0,
+    per_case_timeout: float = 5.0,
     memory_mb: int = 256,
 ) -> ExecutionReport:
     """

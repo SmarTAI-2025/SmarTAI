@@ -29,7 +29,7 @@ async def validate_media_content(
     detected_content_type: str,
     *,
     max_pdf_pages: int | None = None,
-    timeout_seconds: float = 30,
+    timeout_seconds: float = 10,
     wait_for_slot: bool = False,
     slot_timeout_seconds: float | None = 10,
 ) -> dict:
@@ -53,7 +53,7 @@ async def validate_media_content(
     if len(body) > (MAX_IMAGE_BYTES if image else MAX_PDF_BYTES):
         raise HTTPException(413, detail={"code": "image_input_too_large" if image else "pdf_input_too_large"})
     if (type(timeout_seconds) not in {float, int} or not math.isfinite(timeout_seconds)
-            or not 0 < timeout_seconds <= 30 or
+            or not 0 < timeout_seconds <= 10 or
             (max_pdf_pages is not None and (type(max_pdf_pages) is not int or max_pdf_pages < 1))
             or type(wait_for_slot) is not bool
             or (slot_timeout_seconds is not None and (

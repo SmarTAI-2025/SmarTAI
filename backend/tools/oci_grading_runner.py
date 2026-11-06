@@ -138,7 +138,7 @@ async def _remove(runtime, name, env):
         await _command([runtime, "rm", "--force", name], timeout=5, env=env)
 
 
-async def run_python_oci(code, test_input="", *, timeout=10.0, memory_mb=256, max_output_chars=8192):
+async def run_python_oci(code, test_input="", *, timeout=5.0, memory_mb=256, max_output_chars=8192):
     from backend.models import TestCase
     from backend.services.submission_work_budget import active_work
     from backend.tools.code_interpreter import TestResult

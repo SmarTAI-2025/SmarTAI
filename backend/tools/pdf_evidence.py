@@ -447,7 +447,7 @@ async def read_pdf_evidence(
     pdf_bytes: bytes,
     request: PdfRequest,
     *,
-    timeout_seconds: float = 30,
+    timeout_seconds: float = 10,
     progress: ProgressReporter | None = None,
     wait_for_slot: bool = False,
     on_admitted: Callable[[], None] | None = None,
@@ -463,7 +463,7 @@ async def read_image_evidence(
     image_bytes: bytes,
     request: ImagePrepareRequest,
     *,
-    timeout_seconds: float = 30,
+    timeout_seconds: float = 10,
     progress: ProgressReporter | None = None,
     wait_for_slot: bool = False,
     on_admitted: Callable[[], None] | None = None,
@@ -494,7 +494,7 @@ async def _read_evidence(
         raise PdfEvidenceError("pdf_invalid")
     if len(pdf_bytes) > MAX_INPUT_BYTES:
         raise PdfEvidenceError("pdf_input_too_large")
-    if type(timeout_seconds) not in {float, int} or not 0 < timeout_seconds <= 30:
+    if type(timeout_seconds) not in {float, int} or not 0 < timeout_seconds <= 10:
         raise PdfEvidenceError("pdf_invalid_request")
     # Revalidate snapshots, including callers that changed a mutable model.
     try:
