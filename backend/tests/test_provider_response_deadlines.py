@@ -595,7 +595,7 @@ async def test_cancel_during_new_gemini_close_preserves_cancel_and_finishes_clea
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["hang", "error"])
 async def test_new_gemini_close_failure_does_not_discard_response(failure, scheduler, monkeypatch):
-    monkeypatch.setattr(request_timeouts, "_LOCAL_STEP_SECONDS", 0.02)
+    monkeypatch.setattr(GeminiProvider, "_CLIENT_CLOSE_SECONDS", 0.02)
     closed = asyncio.Event()
 
     async def invoke(options):

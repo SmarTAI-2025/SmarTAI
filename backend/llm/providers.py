@@ -645,6 +645,7 @@ class GeminiProvider(BaseProvider):
     Auto-detected from SmarTAI's explicit proxy settings.
     """
     provider_type = "gemini"
+    _CLIENT_CLOSE_SECONDS = 10.0
 
     def _build_client_sync(self) -> Any:
         from langchain_google_genai import ChatGoogleGenerativeAI
@@ -766,12 +767,17 @@ class GeminiProvider(BaseProvider):
                     raise
         finally:
             async def close():
-                await local_client.aclose()
+                try:
+                    async with asyncio.timeout(self._CLIENT_CLOSE_SECONDS):
+                        await local_client.aclose()
+                except Exception as exc:
+                    logger.warning("Gemini proxy client cleanup failed; exception_type=%s", type(exc).__name__)
 
             # Public 4.x aclose closes the fresh sync and async transports on
-            # this loop. A caller cancellation cannot cancel that short cleanup;
-            # its own local-step deadline still bounds it to ten seconds.
-            cleanup = asyncio.create_task(provider_local_step(close(), best_effort=True))
+            # this loop. Bound cleanup independently of response-only scopes:
+            # workflow callers must retain their response or original failure.
+            # A caller cancellation cannot cancel this bounded cleanup.
+            cleanup = asyncio.create_task(close())
             cleanup.add_done_callback(lambda task: None if task.cancelled() else task.exception())
             await asyncio.shield(cleanup)
 

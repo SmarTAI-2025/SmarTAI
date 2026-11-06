@@ -51,7 +51,9 @@ async def test_workflow_gemini_uses_existing_async_transport(outcome, scheduler,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["runtime", "500", "503"])
-@pytest.mark.parametrize("route", ["gemini_proxy", "openai"])
+@pytest.mark.parametrize("route", ["gemini_proxy", "openai", "anthropic", "gemini",
+                                  "relay_openai_chat_completions", "relay_anthropic_messages",
+                                  "relay_gemini_generate_content"])
 async def test_workflow_transport_preserves_ordinary_error_retries(failure, route, scheduler, monkeypatch):
     calls = []
     monkeypatch.setattr(structured_llm._ainvoke_with_retry.retry, "wait", wait_fixed(0))
