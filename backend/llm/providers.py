@@ -5,9 +5,8 @@ Each provider implements: `ainvoke(messages) -> LLMResponse`.
 
 Gemini proxy compatibility:
   The supported langchain-google-genai 4.x client uses Google's HTTP SDK.
-  Keep the established per-call synchronous client path for legacy calls when
-  an explicit SmarTAI proxy is configured. Response-only OCR uses that fresh
-  client's cancellable async API. Do not reintroduce
+  Explicit proxies retain per-call clients, using the cancellable async API
+  for every caller. Do not reintroduce
   the removed legacy transport="rest" parameter or infer machine credentials.
 """
 from __future__ import annotations
@@ -42,9 +41,10 @@ from backend.llm.endpoint_policy import (
 from backend.llm.provider_catalog import effective_wire_protocol
 from backend.llm.image_capability import is_explicit_image_rejection, explicitly_rejects_images
 from backend.llm.request_timeouts import (
-    current_response_scope, current_response_timeout_seconds, current_workflow_cancellation_scope,
+    current_response_scope, current_response_timeout_seconds,
     provider_local_step,
 )
+from backend.llm.response_cleanup import GeminiHTTPTransport, protect_client, protect_response, start_cleanup
 from backend.models import ProviderConfig
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def _build_httpx_clients(proxy_url: Optional[str]) -> tuple[Any, Any]:
     }
     if proxy_url:
         kwargs["proxy"] = proxy_url
-    return httpx.Client(**kwargs), httpx.AsyncClient(**kwargs)
+    return httpx.Client(**kwargs), httpx.AsyncClient(**kwargs, event_hooks={"response": [protect_response]})
 
 
 def _build_provider_httpx_clients(
@@ -640,7 +640,7 @@ class BaseProvider(ABC):
 class GeminiProvider(BaseProvider):
     """
     Gemini provider with two modes:
-      - Proxy mode (local): run_in_threadpool + per-call fresh client (parallel safe)
+      - Proxy mode (local): per-call fresh client, cancellable async requests
       - Direct mode (cloud): native ainvoke with shared client (faster)
     Auto-detected from SmarTAI's explicit proxy settings.
     """
@@ -656,6 +656,7 @@ class GeminiProvider(BaseProvider):
             timeout=settings.llm_timeout,
             max_retries=0,
             google_api_key=self.config.api_key,
+            client_args={"transport": GeminiHTTPTransport(proxy=_configured_proxy_url())},
         )
 
     @property
@@ -674,7 +675,7 @@ class GeminiProvider(BaseProvider):
             # Cloud mode: native async, shared client
             return await super().ainvoke(messages, max_output_tokens=max_output_tokens)
 
-        # Local proxy mode: sync invoke in threadpool, fresh client per call
+        # Local proxy mode: fresh client per call.
         scope = current_response_scope()
         slots = get_scheduler().proxy_slots
         async with scope.local_admission(slots) if scope is not None else slots:
@@ -686,59 +687,7 @@ class GeminiProvider(BaseProvider):
         # Prepare before RPM admission; at most 50 per-call clients can wait.
         # Preparation uses the default pool, separate from the 50 SDK workers.
         local_client = await _wait_provider_local(to_thread.run_sync(self._build_client_sync))
-        if current_response_scope() is not None:
-            return await self._invoke_proxy_async(messages, generation_kwargs, local_client)
-        if current_workflow_cancellation_scope():
-            return await self._invoke_proxy_async(messages, generation_kwargs, local_client)
-        self._ensure_async_primitives()
-        await self._endpoint_breaker().before_call()
-        async with self._call_capacity(messages):
-            t0 = time.perf_counter()
-            try:
-                def _sync_call():
-                    started = time.perf_counter()
-                    response = local_client.invoke(messages, **generation_kwargs)
-                    return response, (time.perf_counter() - started) * 1000
-
-                # Cancellation cannot stop a running sync SDK thread. Keep its
-                # capacity leases until it drains; never start replacement work.
-                async def invoke():
-                    call = asyncio.create_task(to_thread.run_sync(
-                        _sync_call, limiter=get_scheduler().thread_limiter,
-                    ))
-                    try:
-                        return await asyncio.shield(call)
-                    except asyncio.CancelledError:
-                        while not call.done():
-                            try:
-                                await asyncio.shield(call)
-                            except asyncio.CancelledError:
-                                continue
-                            except Exception:
-                                break
-                        if not call.cancelled():
-                            call.exception()
-                        raise
-
-                response, sdk_duration_ms = await self._invoke_response(invoke)
-                self._endpoint_breaker().record_success()
-                content = _response_text(response.content if hasattr(response, "content") else response)
-                duration_ms = sdk_duration_ms
-                self._record_duration(duration_ms)
-                logger.info(f"LLM call OK on {self.provider_id} in {duration_ms:.0f}ms ({len(content)} chars)")
-                return LLMResponse(content=content, provider=self.provider_id, model=self.model,
-                                   duration_ms=duration_ms, **_response_metadata(response))
-            except Exception as e:
-                if _is_overload_failure(e):
-                    self._endpoint_breaker().record_failure()
-                duration_ms = (time.perf_counter() - t0) * 1000
-                logger.warning(
-                    "LLM call failed on %s after %.0fms; exception_type=%s",
-                    self.provider_id,
-                    duration_ms,
-                    type(e).__name__,
-                )
-                raise
+        return await self._invoke_proxy_async(messages, generation_kwargs, local_client)
 
     async def _invoke_proxy_async(self, messages, generation_kwargs, local_client):
         """OCR and whole-workflow owners use fresh cancellable proxy clients."""
@@ -766,20 +715,11 @@ class GeminiProvider(BaseProvider):
                         self._endpoint_breaker().record_failure()
                     raise
         finally:
-            async def close():
-                try:
-                    async with asyncio.timeout(self._CLIENT_CLOSE_SECONDS):
-                        await local_client.aclose()
-                except Exception as exc:
-                    logger.warning("Gemini proxy client cleanup failed; exception_type=%s", type(exc).__name__)
-
-            # Public 4.x aclose closes the fresh sync and async transports on
-            # this loop. Bound cleanup independently of response-only scopes:
-            # workflow callers must retain their response or original failure.
-            # A caller cancellation cannot cancel this bounded cleanup.
-            cleanup = asyncio.create_task(close())
-            cleanup.add_done_callback(lambda task: None if task.cancelled() else task.exception())
-            await asyncio.shield(cleanup)
+            # The fresh client is owned by this call; shared provider clients
+            # are never closed here. Caller cancellation leaves cleanup owned.
+            await asyncio.shield(start_cleanup(
+                local_client.aclose(), seconds=self._CLIENT_CLOSE_SECONDS,
+            ))
 
 
 # ─── OpenAI / Zhipu / Anthropic ──────────────────────────────────────────────
@@ -865,7 +805,7 @@ class AnthropicProvider(BaseProvider):
 
     def _build_client_sync(self) -> Any:
         from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(
+        client = ChatAnthropic(
             model=self.model,
             # Recent Claude models reject non-default sampling parameters.
             temperature=None,
@@ -874,6 +814,8 @@ class AnthropicProvider(BaseProvider):
             api_key=self.config.api_key,
             anthropic_proxy=_configured_proxy_url(),
         )
+        protect_client(client._async_client._client)
+        return client
 
 
 # ─── Domestic OpenAI-compatible providers (direct, no proxy) ─────────────────

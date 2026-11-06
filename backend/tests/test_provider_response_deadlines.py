@@ -736,25 +736,25 @@ async def test_new_gemini_close_failure_does_not_discard_response(failure, sched
 
 
 @pytest.mark.asyncio
-async def test_legacy_gemini_proxy_keeps_sync_thread_and_cleanup_policy(scheduler, monkeypatch):
+async def test_unscoped_gemini_proxy_uses_cancellable_sdk_and_closes_client(scheduler, monkeypatch):
     calls = []
 
-    async def forbidden(options):
-        pytest.fail("legacy proxy unexpectedly used async SDK")
+    async def invoke(options):
+        calls.append(options)
+        return SimpleNamespace(content="complete")
 
     async def close():
-        pytest.fail("legacy proxy unexpectedly used new cleanup")
+        calls.append("closed")
 
-    def invoke(messages, **options):
-        calls.append(options)
-        return SimpleNamespace(content="legacy")
+    def forbidden(*args, **kwargs):
+        pytest.fail("ordinary proxy call used an uncancellable sync request")
 
-    async with provider_for("gemini_proxy", forbidden, monkeypatch) as provider:
+    async with provider_for("gemini_proxy", invoke, monkeypatch) as provider:
         client = provider._build_client_sync()
-        client.invoke, client.aclose = invoke, close
+        client.invoke, client.aclose = forbidden, close
         with response_timeout_scope(300):
             result = await provider.ainvoke(MESSAGES)
-    assert result.content == "legacy" and calls == [{}]
+    assert result.content == "complete" and calls == [{}, "closed"]
     assert scheduler.active == scheduler.host_capacity.active == 0
 
 
