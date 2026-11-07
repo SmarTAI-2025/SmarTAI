@@ -971,7 +971,6 @@ def generate_result_artifacts_atomic(
     """
     now = time.time()
     terminal_statuses = {"completed", "partial_failed"}
-    unresolved_statuses = {"failed"}
     with session_scope() as session:
         # Canonical grading lock order: G -> W -> A.
         if session.bind.dialect.name == "sqlite":
@@ -1057,21 +1056,9 @@ def generate_result_artifacts_atomic(
             raise VersionConflict("workflow_revision_conflict")
         if run.status not in terminal_statuses:
             raise InvalidTransition("run_not_complete")
-        unresolved = session.scalar(
-            select(GradeResultRecord.id)
-            .where(
-                GradeResultRecord.grading_run_id == grading_run_id,
-                GradeResultRecord.result_status.in_(unresolved_statuses),
-            )
-            .limit(1)
-        )
-        if unresolved is not None:
-            raise ResultNotReleasable("unresolved_failures")
-        # Match the normalized release gate: the run cannot become formal
-        # until every frozen revision has exactly one result for every frozen
-        # question. This check stays inside the same run-row transaction.
-        from backend.db.grading_repository import _result_matrix_axes
+        from backend.db.grading_repository import _ensure_releasable_scores, _result_matrix_axes
 
+        _ensure_releasable_scores(session, grading_run_id)
         revision_ids, question_ids = _result_matrix_axes(session, run)
         actual_pairs = set(session.execute(
             select(

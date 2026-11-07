@@ -390,6 +390,12 @@ async def _grade_single_answer(
             else:
                 synthesis_method = "all_failed"
             comment = _grading_failure_feedback(e.dominant_kind, grading_setup)
+            reasons = []
+            for failure in e.failures:
+                if failure.programming_evidence and failure.error_kind == e.dominant_kind:
+                    comment = failure.comment
+                    reasons = [failure.programming_evidence.primary_reason]
+                    break
             if reporter:
                 await reporter.increment_completed()
             return _apply_low_confidence_policy(Correction(
@@ -401,6 +407,7 @@ async def _grade_single_answer(
                 comment=comment,
                 steps=[],
                 expert_results=e.failures,
+                requires_human_review=bool(reasons), review_reasons=reasons,
                 synthesis_method=synthesis_method,
             ), grading_setup)
         except Exception as e:
@@ -448,7 +455,15 @@ async def grade_batch(
         pending_store, kwargs["registry"], grading_setup=kwargs.get("grading_setup"),
         reporter=kwargs.get("reporter"),
     )
-    with math_plans_context(plans):
+    from contextlib import nullcontext
+    from backend.models import is_programming_question_type
+    from backend.services.programming_runs import prepare_pending, programming_run
+    has_programming = any(is_programming_question_type(raw.get("type") if isinstance(raw, dict) else raw.type)
+                          for raw in pending_store.values())
+    context = programming_run(kwargs["registry"], kwargs.get("grading_setup")) if has_programming else nullcontext()
+    with math_plans_context(plans), context as programming_state:
+        if has_programming:
+            await prepare_pending(programming_state, pending_store, student_store, question_ids_by_student, kwargs.get("reporter"))
         return await _grade_batch_frozen(question_ids_by_student, **kwargs)
 
 

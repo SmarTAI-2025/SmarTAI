@@ -291,6 +291,75 @@ describe("one-click grading review", () => {
     expect(within(result).getByRole("tabpanel")).not.toHaveTextContent("0/10");
   });
 
+  it.each([
+    ["zh-CN", "未评分。测试服务未能完成运行，请稍后重试失败项。", "SmarTAI 批改结果", "查看各专家原始结果", "无有效分数"],
+    ["en-US", "Ungraded. The test service could not finish running the tests. Retry the failed items.", "SmarTAI Grading Result", "View Original Model Results", "No valid score"],
+  ])("shows the programming failure without blaming the model or showing a zero (%s)", async (locale, message, heading, expand, noScore) => {
+    state.locale = locale;
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: null, provisional_score: null,
+      comment: message, synthesis_method: "all_failed", expert_results: [{ provider: "expert", score: 0, max_score: 10,
+        confidence: 0, steps: [], error_kind: "programming_execution_unavailable", comment: message,
+        programming_evidence: { contract: "smartai.programming_evidence", execution_status: "not_executed", score_status: "unavailable" } }],
+    })] }];
+    show(true);
+    const result = screen.getByRole("region", { name: heading });
+    expect(result).toHaveTextContent(noScore);
+    await userEvent.click(within(result).getByText(expand));
+    const details = within(result).getByRole("tabpanel");
+    expect(details).toHaveTextContent(message);
+    expect(details).not.toHaveTextContent(/模型出错|Model error|0\/10|programming_execution_unavailable/);
+  });
+
+  it("shows a full-credit boundary note in yellow and a disputed deduction in red", async () => {
+    state.locale = "zh-CN";
+    state.result.results = [{student_id: "S1", corrections: [
+      correction("Q1", {type: "programming", confidence: .95, score: 10, provisional_score: 10, review_reasons: ["programming_extra_boundary"]}),
+      correction("Q2", {score: 8, provisional_score: 8, review_reasons: ["programming_extra_boundary", "programming_teacher_tests_passed_deduction"]}),
+    ]}];
+    show();
+    const required = screen.getByRole("tabpanel", {name: "需要处理 (1)"});
+    expect(within(required).getByText(/教师用例全部通过/)).toHaveClass("text-red-700");
+    await userEvent.click(screen.getByRole("tab", {name: "建议处理 (1)"}));
+    const advisory = screen.getByRole("tabpanel", {name: "建议处理 (1)"});
+    expect(within(advisory).getByText(/额外输入/)).toHaveClass("text-amber-700");
+  });
+
+  it("puts both teacher-test score conflicts in the existing red required queue", () => {
+    state.locale = "zh-CN";
+    state.result.results = [{student_id: "S1", corrections: [
+      correction("Q1", {score: 8, provisional_score: 8, review_reasons: ["programming_teacher_tests_passed_deduction"]}),
+      correction("Q2", {score: 10, provisional_score: 10, review_reasons: ["programming_teacher_tests_failed_full_credit"]}),
+    ]}];
+    show();
+    const tab = screen.getByRole("tab", {name: "需要处理 (2)"});
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab).toHaveClass("text-red-700");
+    const panel = screen.getByRole("tabpanel", {name: "需要处理 (2)"});
+    for (const explanation of [/教师用例全部通过/, /有教师用例未通过/]) {
+      expect(within(panel).getByText(explanation)).toHaveClass("text-red-700");
+    }
+    expect(screen.getByRole("tab", {name: "建议处理 (0)"})).toBeInTheDocument();
+  });
+
+  it.each([
+    ["zh-CN", "SmarTAI 批改结果", "建议 9 / 10，待复核", "教师用例 5/5 通过。模型建议扣分，待核对。"],
+    ["en-US", "SmarTAI Grading Result", "Suggested 9 / 10, pending review", "All 5/5 teacher tests passed. Review the proposed deduction."],
+  ])("leads with shared facts when a later expert disagrees (%s)", (locale, title, pending, note) => {
+    state.locale = locale;
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: 9, provisional_score: 9,
+      comment: note, expert_results: [
+        {provider: "first", score: 10, max_score: 10, confidence: .99, steps: [], comment: "First expert's own conclusion"},
+        {provider: "second", score: 8, max_score: 10, confidence: .99, steps: [], comment: "Disputed deduction",
+          programming_evidence: {contract: "smartai.programming_evidence", execution_status: "executed",
+          score_status: "provisional", score_review_reason: "programming_teacher_tests_passed_deduction"}},
+      ]})]}];
+    show(true);
+    const result = within(screen.getByRole("region", { name: title }));
+    expect(result.getByText(pending)).toBeVisible();
+    expect(result.getByText(note)).toBeVisible();
+    expect(result.queryByText("First expert's own conclusion")).not.toBeVisible();
+  });
+
   it("keeps original AI score after a teacher override and labels failed experts without a zero grade", () => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", {
       score: 9, provisional_score: 8.53, teacher_score: 9,

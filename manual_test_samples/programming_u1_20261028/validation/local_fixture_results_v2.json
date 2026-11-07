@@ -1,0 +1,1840 @@
+{
+  "checked_at_utc": "2026-10-28T06:19:55.348473+00:00",
+  "platform": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+  "python": "3.13.13",
+  "question_count": 9,
+  "case_count": 44,
+  "row_count": 39,
+  "scope": "Constructed fixture facts only; not product, model or OCI acceptance",
+  "score_computation": false,
+  "structure": "passed",
+  "references": [
+    {
+      "q_id": "PY-F01",
+      "source_sha256": "a98b6fb26df105b3ff39a9adfe18b43929ead8890526fac54742837c1e486b98",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F01-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "55\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "q_id": "PY-F02",
+      "source_sha256": "71560a1e20871f1d304ae5259bd851a7874bf22ce8b2a769860cd9006a315124",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F02-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "7\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "q_id": "PY-F03",
+      "source_sha256": "d6f616629c0a1ea658c7da2b79a44201bd92e72e8d0ed91cdc5e387b38e863d1",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F03-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "q_id": "PY-S01",
+      "source_sha256": "74d8d0b249fb9259cc9bfe90acd302185ba7cf77331a5b61d89a3bee161fdf26",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-S01-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "11\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "2000000000\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "q_id": "C-S01",
+      "source_sha256": "ecf7f3f370a3a5314a9d1549c7c8929e509211ab47c1a6bd857b4468bd3f185f",
+      "status": "observed",
+      "executed": true,
+      "passed": 6,
+      "total": 6,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "C-S01-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "11\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "2000000000\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T06",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3000000000\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "q_id": "CPP-S01",
+      "source_sha256": "789b1ef4175d90839c9901953d06823d4ab32497a5745b96c7eb07a3b8dcf9a0",
+      "status": "observed",
+      "executed": true,
+      "passed": 6,
+      "total": 6,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "CPP-S01-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "11\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "2000000000\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T06",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3000000000\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "q_id": "PY-F04",
+      "source_sha256": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+      "status": "observed",
+      "executed": true,
+      "passed": 4,
+      "total": 4,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F04-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F04-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F04-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F04-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "q_id": "PY-F05",
+      "source_sha256": "a59319c784e80f713fa37802a35df845697005ea879e4f71ad134a57ab126c37",
+      "status": "observed",
+      "executed": true,
+      "passed": 4,
+      "total": 4,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F05-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F05-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F05-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F05-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "q_id": "PY-S02",
+      "source_sha256": "c77f44a2a3d4bb56881242af8accebee2082926d858ead7906caa7aea8268295",
+      "status": "observed",
+      "executed": true,
+      "passed": 4,
+      "total": 4,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-S02-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S02-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S02-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S02-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    }
+  ],
+  "submissions": [
+    {
+      "submission_id": "S01-F01",
+      "source_sha256": "a98b6fb26df105b3ff39a9adfe18b43929ead8890526fac54742837c1e486b98",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F01-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "55\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S02-F01",
+      "source_sha256": "2ae818ec19dfc07c4272b1b230c97a9d1f0ff22754d35f1c985e52111ea5401f",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F01-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "55\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S03-F01",
+      "source_sha256": "3c6141e06fde915977c46e93d867748d1490a438ecd468ab51006788413aa50c",
+      "status": "observed",
+      "executed": true,
+      "passed": 4,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F01-T01",
+          "passed": false,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "55\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S04-F01",
+      "source_sha256": null,
+      "status": "not_executed_by_policy",
+      "executed": false,
+      "reason": "do_not_execute_missing"
+    },
+    {
+      "submission_id": "S05-F01",
+      "source_sha256": "4d65c41af394141f52ce6abecb584703115c4f833c091f4cf0bb5c970d575ecd",
+      "status": "syntax_error",
+      "executed": false,
+      "diagnostic": "expected ':', line 3"
+    },
+    {
+      "submission_id": "S06-F01",
+      "source_sha256": "0c6a483464d044e8b2975786ee39d075edae2946dc827f988ea1e8c4322128da",
+      "status": "observed",
+      "executed": true,
+      "passed": 4,
+      "total": 5,
+      "runtime_errors": 1,
+      "exception_classes": [
+        "ZeroDivisionError"
+      ],
+      "cases": [
+        {
+          "case_id": "PY-F01-T01",
+          "passed": false,
+          "returncode": 1,
+          "stdout": "",
+          "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import json,runpy,sys; ns=runpy.run_path(sys.argv[1]); print(json.dumps(ns[sys.argv[2]](*json.loads(sys.argv[3]))))\n                                                                            ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<packet>/submissions/S06_fib_runtime.py\", line 3, in fib\n    return 1 // n\n           ~~^^~~\nZeroDivisionError: integer division or modulo by zero\n",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "55\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S07-F02",
+      "source_sha256": "1f298cfd4f5df61836556c893caf463457112df8081f28c93378a798962a1e63",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F02-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "7\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S07-F03",
+      "source_sha256": "1f298cfd4f5df61836556c893caf463457112df8081f28c93378a798962a1e63",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F03-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S08-F02",
+      "source_sha256": "3f6bf694a826269b8343f02af01b5f92caf1ccf028e378513d833700197db684",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F02-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "7\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S08-F03",
+      "source_sha256": "3f6bf694a826269b8343f02af01b5f92caf1ccf028e378513d833700197db684",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F03-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S09-F02",
+      "source_sha256": "5377f1350269c1e91d66e107dde45d559679fdbe5260b673c3bb264443f4523b",
+      "status": "observed",
+      "executed": true,
+      "passed": 4,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F02-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T04",
+          "passed": false,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S10-F02",
+      "source_sha256": "0893ff0210770fcf2aaffec54dbafae6325ba5a195df055be2b91629b73a541c",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F02-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "7\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S10-F03",
+      "source_sha256": "0893ff0210770fcf2aaffec54dbafae6325ba5a195df055be2b91629b73a541c",
+      "status": "observed",
+      "executed": true,
+      "passed": 4,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F03-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T03",
+          "passed": false,
+          "returncode": 0,
+          "stdout": "2\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S11-F02",
+      "source_sha256": "71560a1e20871f1d304ae5259bd851a7874bf22ce8b2a769860cd9006a315124",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F02-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "7\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S11-F03",
+      "source_sha256": "71560a1e20871f1d304ae5259bd851a7874bf22ce8b2a769860cd9006a315124",
+      "status": "not_executed_by_policy",
+      "executed": false,
+      "reason": "do_not_execute_missing_entry"
+    },
+    {
+      "submission_id": "S12-F02",
+      "source_sha256": "d7f6e3a362e63103635bd176fec62dda28223b2b71111536eb3653ca66404a40",
+      "status": "not_executed_by_policy",
+      "executed": false,
+      "reason": "do_not_execute_until_mapping_confirmed"
+    },
+    {
+      "submission_id": "S13-S01",
+      "source_sha256": "74d8d0b249fb9259cc9bfe90acd302185ba7cf77331a5b61d89a3bee161fdf26",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-S01-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "11\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "2000000000\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S14-S01",
+      "source_sha256": "f4a001f4b5082e10bbaec378feba5d178d2f284998e15f50dd5482eb0a6a42b8",
+      "status": "observed",
+      "executed": true,
+      "passed": 4,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-S01-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T02",
+          "passed": false,
+          "returncode": 0,
+          "stdout": "7\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "11\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "2000000000\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S15-S01",
+      "source_sha256": "1ca2a6b171dc5424a0b6d01d5f14c96e518d6fabf4581b394c5982bc1b3e0a0a",
+      "status": "observed",
+      "executed": true,
+      "passed": 0,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-S01-T01",
+          "passed": false,
+          "returncode": 0,
+          "stdout": "sum = 6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T02",
+          "passed": false,
+          "returncode": 0,
+          "stdout": "sum = 3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T03",
+          "passed": false,
+          "returncode": 0,
+          "stdout": "sum = 0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T04",
+          "passed": false,
+          "returncode": 0,
+          "stdout": "sum = 11\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S01-T05",
+          "passed": false,
+          "returncode": 0,
+          "stdout": "sum = 2000000000\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S16-S01",
+      "source_sha256": "832847ba689a94c30fb366490cc95175a10b9958f7cd934710f6da6344ed1f57",
+      "status": "syntax_error",
+      "executed": false,
+      "diagnostic": "'(' was never closed, line 4"
+    },
+    {
+      "submission_id": "S17-S01",
+      "source_sha256": "74d8d0b249fb9259cc9bfe90acd302185ba7cf77331a5b61d89a3bee161fdf26",
+      "status": "not_executed_by_policy",
+      "executed": false,
+      "reason": "do_not_execute_platform_unavailable"
+    },
+    {
+      "submission_id": "S18-S01",
+      "source_sha256": "74d8d0b249fb9259cc9bfe90acd302185ba7cf77331a5b61d89a3bee161fdf26",
+      "status": "not_executed_by_policy",
+      "executed": false,
+      "reason": "do_not_execute_until_case_confirmed"
+    },
+    {
+      "submission_id": "S19-F02",
+      "source_sha256": "a7b0be827375beb4b6915aad037aecd26bc6142e6f67891d051d991acc080e06",
+      "status": "not_executed_by_policy",
+      "executed": false,
+      "reason": "do_not_execute_until_mapping_confirmed"
+    },
+    {
+      "submission_id": "S19-F03",
+      "source_sha256": "a7b0be827375beb4b6915aad037aecd26bc6142e6f67891d051d991acc080e06",
+      "status": "not_executed_by_policy",
+      "executed": false,
+      "reason": "do_not_execute_until_mapping_confirmed"
+    },
+    {
+      "submission_id": "C01",
+      "source_sha256": "ecf7f3f370a3a5314a9d1549c7c8929e509211ab47c1a6bd857b4468bd3f185f",
+      "status": "observed",
+      "executed": true,
+      "passed": 6,
+      "total": 6,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "C-S01-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "11\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "2000000000\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T06",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3000000000\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "C02",
+      "source_sha256": "1484bcf3bf72f9bf2fc9b41a0db91c2f517d2ab05f846541839117ad4d739a16",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 6,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "C-S01-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T02",
+          "passed": false,
+          "returncode": 0,
+          "stdout": "7\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "11\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "2000000000\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "C-S01-T06",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3000000000\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "C03",
+      "source_sha256": "445a9b2a14c4078c5cd1253f057a58391ca3222a679e5886b6257fcb8f84c4b6",
+      "status": "compile_error",
+      "executed": false,
+      "diagnostic": "<packet>/submissions/C03_compile_error.c:7:19: error: expected ';' after expression\n    7 |         total += x\n      |                   ^\n      |                   ;\n1 error generated.\n"
+    },
+    {
+      "submission_id": "C04",
+      "source_sha256": null,
+      "status": "not_executed_by_policy",
+      "executed": false,
+      "reason": "do_not_execute_missing"
+    },
+    {
+      "submission_id": "X01",
+      "source_sha256": "789b1ef4175d90839c9901953d06823d4ab32497a5745b96c7eb07a3b8dcf9a0",
+      "status": "observed",
+      "executed": true,
+      "passed": 6,
+      "total": 6,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "CPP-S01-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "11\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "2000000000\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T06",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3000000000\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "X02",
+      "source_sha256": "08784e1a81d2c1bdc5a689d23f2581bcc0a1ebf80313259d8538f23954d8d731",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 6,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "CPP-S01-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T02",
+          "passed": false,
+          "returncode": 0,
+          "stdout": "7\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "11\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "2000000000\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "CPP-S01-T06",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3000000000\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "X03",
+      "source_sha256": "630f76c32fbfda0b7188f69836d8ed4b86107aaceaa05f1345c0841d7d0babd0",
+      "status": "compile_error",
+      "executed": false,
+      "diagnostic": "<packet>/submissions/X03_compile_error.cpp:7:19: error: expected ';' after expression\n    7 |         total += x\n      |                   ^\n      |                   ;\n1 error generated.\n"
+    },
+    {
+      "submission_id": "X04",
+      "source_sha256": null,
+      "status": "not_executed_by_policy",
+      "executed": false,
+      "reason": "do_not_execute_missing"
+    },
+    {
+      "submission_id": "S20-F04",
+      "source_sha256": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+      "status": "observed",
+      "executed": true,
+      "passed": 4,
+      "total": 4,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F04-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F04-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F04-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F04-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S21-F04",
+      "source_sha256": "a59319c784e80f713fa37802a35df845697005ea879e4f71ad134a57ab126c37",
+      "status": "not_executed_by_policy",
+      "executed": false,
+      "reason": "do_not_execute_explicit_contract_violation"
+    },
+    {
+      "submission_id": "S21-F05",
+      "source_sha256": "a59319c784e80f713fa37802a35df845697005ea879e4f71ad134a57ab126c37",
+      "status": "observed",
+      "executed": true,
+      "passed": 4,
+      "total": 4,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F05-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F05-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F05-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F05-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S22-F04",
+      "source_sha256": "1599decd3ed0336206b38d9005c131642c92ad9a65d28c88a35f21753c998c69",
+      "status": "not_executed_by_policy",
+      "executed": false,
+      "reason": "do_not_execute_explicit_contract_violation"
+    },
+    {
+      "submission_id": "S23-F02",
+      "source_sha256": "62101a0d0c8bc7eb1ef45748c596d35f8e9a162136946f5fda2be9445206519a",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F02-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "6\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "7\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F02-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S23-F03",
+      "source_sha256": "62101a0d0c8bc7eb1ef45748c596d35f8e9a162136946f5fda2be9445206519a",
+      "status": "observed",
+      "executed": true,
+      "passed": 5,
+      "total": 5,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-F03-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "3\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-F03-T05",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    },
+    {
+      "submission_id": "S24-S02",
+      "source_sha256": "c77f44a2a3d4bb56881242af8accebee2082926d858ead7906caa7aea8268295",
+      "status": "observed",
+      "executed": true,
+      "passed": 4,
+      "total": 4,
+      "runtime_errors": 0,
+      "exception_classes": [],
+      "cases": [
+        {
+          "case_id": "PY-S02-T01",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "5\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S02-T02",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "1\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S02-T03",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        },
+        {
+          "case_id": "PY-S02-T04",
+          "passed": true,
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": "",
+          "timed_out": false
+        }
+      ]
+    }
+  ],
+  "failures": [],
+  "result": "passed"
+}

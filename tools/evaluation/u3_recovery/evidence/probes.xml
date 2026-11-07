@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="9" time="17.562" timestamp="2026-10-28T13:42:02.853432+08:00" hostname="Shuangyues-MacBook-Pro.local"><testcase classname="test_mapping" name="test_long_selected_source_retains_shared_definition_in_later_request" time="0.365"><failure message="AssertionError: Shared definition was omitted from the request containing Question 2&#10;assert False&#10; +  where False = all(&lt;generator object test_long_selected_source_retains_shared_definition_in_later_request.&lt;locals&gt;.&lt;genexpr&gt; at 0x11d60fd80&gt;)">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x11d6b2a80&gt;
+
+    @pytest.mark.asyncio
+    async def test_long_selected_source_retains_shared_definition_in_later_request(monkeypatch):
+        definition = 'For Questions 1 and 2, the operation star is defined by a star b = a + 2*b.'
+        first = 'Calculate 2 star 3 using the common definition.'
+        second = 'Calculate 4 star 5 using the common definition.'
+        text = (SAMPLES / 'long_shared_definition.txt').read_text()
+        original = api.preflight_problem_source
+        async def selected(**kwargs):
+            kwargs.update(structure_mode='extract_from_source', extraction_hint='题号: 1, 2',
+                          recognition_options=json.dumps({'targets': ['1', '2']}))
+            return await original(**kwargs)
+        monkeypatch.setattr(api, 'preflight_problem_source', selected)
+        owner, _, operation, pipeline = await setup(monkeypatch, text)
+        calls = []
+        async def extract(chunk, *args, **kwargs):
+            calls.append({'text': chunk, 'source_context': kwargs.get('source_context', '')})
+            return inc._rows([row(number, stem=stem, criterion='Teacher rubric.', reference_answer='Teacher answer.')
+                              for number, stem in [('1', first), ('2', second)] if stem in chunk])
+        monkeypatch.setattr(inc, '_extract_problems_call', extract)
+        forbidden = AsyncMock(side_effect=AssertionError('No real generation is allowed'))
+        monkeypatch.setattr(inc, 'generate_missing_question_materials', forbidden)
+        await pipeline.run()
+        _, saved = persisted(owner, operation)
+        later = [call for call in calls if second in call['text']]
+        record('long_shared_definition', {
+            'definition': definition, 'source_chars': len(text), 'real_chunk_chars': [len(c['text']) for c in calls],
+            'call_count': len(calls), 'later_call_context': [c['source_context'] for c in later],
+            'definition_in_later_payload': [definition in c['text'] or definition in c['source_context'] for c in later],
+            'saved': saved, 'generation_calls': forbidden.await_count,
+        })
+        assert later
+&gt;       assert all(definition in c['text'] or definition in c['source_context'] for c in later), 'Shared definition was omitted from the request containing Question 2'
+E       AssertionError: Shared definition was omitted from the request containing Question 2
+E       assert False
+E        +  where False = all(&lt;generator object test_long_selected_source_retains_shared_definition_in_later_request.&lt;locals&gt;.&lt;genexpr&gt; at 0x11d60fd80&gt;)
+
+/private/tmp/smartai-u3-20261028/package/probes/test_mapping.py:59: AssertionError</failure></testcase><testcase classname="test_mapping" name="test_three_page_reverse_arrival_retains_all_material_parts[rubric-criterion]" time="0.156" /><testcase classname="test_mapping" name="test_three_page_reverse_arrival_retains_all_material_parts[reference_answer-reference_answer]" time="0.136" /><testcase classname="test_mapping" name="test_ambiguous_number_material_remains_visible_as_unresolved_after_manual_handoff" time="0.154"><failure message="AssertionError: Ambiguous uploaded material disappeared from the editable/manual projection&#10;assert 'Use the supplied blue formula; award 6 points for the stated condition and 4 for the conclusion.' in '{&quot;q1&quot;: {&quot;q_id&quot;: &quot;q1&quot;, &quot;number&quot;: &quot;7&quot;, &quot;type&quot;: &quot;概念题&quot;, &quot;stem&quot;: &quot;For matrix A = diag(1,2), compute its determinant.&quot;, &quot;cr...code&quot;: null, &quot;test_cases&quot;: null, &quot;material_provenance&quot;: {}, &quot;ai_completion_provenance&quot;: {}, &quot;preparation_issues&quot;: []}}'&#10; +  where '{&quot;q1&quot;: {&quot;q_id&quot;: &quot;q1&quot;, &quot;number&quot;: &quot;7&quot;, &quot;type&quot;: &quot;概念题&quot;, &quot;stem&quot;: &quot;For matrix A = diag(1,2), compute its determinant.&quot;, &quot;cr...code&quot;: null, &quot;test_cases&quot;: null, &quot;material_provenance&quot;: {}, &quot;ai_completion_provenance&quot;: {}, &quot;preparation_issues&quot;: []}}' = &lt;function dumps at 0x1018f25c0&gt;({'q1': {'q_id': 'q1', 'number': '7', 'type': '概念题', 'stem': 'For matrix A = diag(1,2), compute its determinant.', ...}, 'q2': {'q_id': 'q2', 'number': '7', 'type': '概念题', 'stem': 'For matrix B = diag(3,4), compute its determinant.', ...}}, ensure_ascii=False)&#10; +    where &lt;function dumps at 0x1018f25c0&gt; = json.dumps">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x11d6d69c0&gt;
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_number_material_remains_visible_as_unresolved_after_manual_handoff(monkeypatch):
+        literal = 'Use the supplied blue formula; award 6 points for the stated condition and 4 for the conclusion.'
+        source_text = (SAMPLES / 'duplicate_number_problems.txt').read_text()
+        original = api.preflight_problem_source
+        async def literal_problem_source(**kwargs):
+            if kwargs.get('role') == 'problem':
+                kwargs['inline_text'] = source_text
+            return await original(**kwargs)
+        monkeypatch.setattr(api, 'preflight_problem_source', literal_problem_source)
+        owner, task, operation, pipeline = await material_setup(monkeypatch, [
+            ('rubric', (SAMPLES / 'duplicate_number_rubric.txt').read_text())])
+        monkeypatch.setattr(inc, '_extract_problems_call', AsyncMock(return_value=inc._rows([
+            row('7', stem='For matrix A = diag(1,2), compute its determinant.', criterion='Existing rubric A.', reference_answer='Answer A.'),
+            row('7', stem='For matrix B = diag(3,4), compute its determinant.', criterion='Existing rubric B.', reference_answer='Answer B.'),
+        ])))
+        monkeypatch.setattr(inc, 'structured_llm_call', AsyncMock(return_value=parsed_material('7', literal)))
+        forbidden = AsyncMock(side_effect=AssertionError('No real generation is allowed'))
+        monkeypatch.setattr(inc, 'generate_missing_question_materials', forbidden)
+        await pipeline.run()
+        saved_op, saved = persisted(owner, operation)
+        material_units = {key: data for key, data in pipeline.units.items() if key.startswith('material:')}
+        workflow = workflow_repository.get_workflow(task, owner_id=owner)
+        stop_task_run(task_id=task, owner_id=owner, job_id=operation.operation_id, expected_revision=workflow.workflow_revision)
+        workflow = workflow_repository.get_workflow(task, owner_id=owner)
+        response = await api.manually_complete_question_preparation(task, operation.operation_id,
+            api.ManualQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision), current=SimpleNamespace(id=owner))
+        published = task_facade.get_task(task_id=task, owner_id=owner)['problem_data']
+        readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)
+        queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+            filename='SYNTHETIC001_Example.txt', content=b'Question 7: Synthetic student work.',
+            content_type='text/plain', registry=_RecoveryRegistry())
+        record('duplicate_number_material', {
+            'problem_source': source_text, 'literal': literal, 'material_units': material_units, 'saved': saved, 'published': published,
+            'manual_status': response.get('status'), 'generation_calls': forbidden.await_count,
+            'checkpoint_source_plans': saved_op.checkpoint.get('incremental_source_plans'),
+            'grading_readiness_before_student_upload': readiness,
+            'submission_upload_accepted_status': queued.get('status'),
+        })
+        assert len([r for r in published.values() if r.get('stem')]) == 2
+        assert literal in json.dumps(material_units, ensure_ascii=False), 'The source unit itself must be retained'
+&gt;       assert literal in json.dumps(published, ensure_ascii=False), 'Ambiguous uploaded material disappeared from the editable/manual projection'
+E       AssertionError: Ambiguous uploaded material disappeared from the editable/manual projection
+E       assert 'Use the supplied blue formula; award 6 points for the stated condition and 4 for the conclusion.' in '{"q1": {"q_id": "q1", "number": "7", "type": "概念题", "stem": "For matrix A = diag(1,2), compute its determinant.", "cr...code": null, "test_cases": null, "material_provenance": {}, "ai_completion_provenance": {}, "preparation_issues": []}}'
+E        +  where '{"q1": {"q_id": "q1", "number": "7", "type": "概念题", "stem": "For matrix A = diag(1,2), compute its determinant.", "cr...code": null, "test_cases": null, "material_provenance": {}, "ai_completion_provenance": {}, "preparation_issues": []}}' = &lt;function dumps at 0x1018f25c0&gt;({'q1': {'q_id': 'q1', 'number': '7', 'type': '概念题', 'stem': 'For matrix A = diag(1,2), compute its determinant.', ...}, 'q2': {'q_id': 'q2', 'number': '7', 'type': '概念题', 'stem': 'For matrix B = diag(3,4), compute its determinant.', ...}}, ensure_ascii=False)
+E        +    where &lt;function dumps at 0x1018f25c0&gt; = json.dumps
+
+/private/tmp/smartai-u3-20261028/package/probes/test_mapping.py:133: AssertionError</failure></testcase><testcase classname="test_process_recovery" name="test_actual_process_exit_preserves_page_and_uncertain_dispatch[before_second]" time="6.016" /><testcase classname="test_process_recovery" name="test_actual_process_exit_preserves_page_and_uncertain_dispatch[pending_second]" time="8.529" /><testcase classname="test_recovery" name="test_three_materials_reordered_numbers_gap_pause_and_manual_keep_every_issue[rubric]" time="0.329" /><testcase classname="test_recovery" name="test_three_materials_reordered_numbers_gap_pause_and_manual_keep_every_issue[reference_answer]" time="0.217" /><testcase classname="test_recovery" name="test_duplicate_numbers_two_retries_preserve_success_and_manual_unresolved" time="0.326" /></testsuite></testsuites>

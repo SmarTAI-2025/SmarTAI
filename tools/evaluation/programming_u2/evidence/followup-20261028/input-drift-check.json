@@ -1,0 +1,7 @@
+{
+  "negative_control": "changed frozen U1 input",
+  "exit_code": 1,
+  "diagnostic": "U1 input drift: manifest.json; use frozen c1c36025d2dad7c8f3208f3ba0fdb4dd2acf24bb",
+  "observations_written": false,
+  "expected_rejection": true
+}

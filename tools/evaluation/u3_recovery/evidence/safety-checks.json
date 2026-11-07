@@ -1,0 +1,10 @@
+[
+  {
+    "name": "worker_without_launcher",
+    "refused_before_state_read": true
+  },
+  {
+    "name": "source_with_dotenv",
+    "refused_before_backend_import": true
+  }
+]

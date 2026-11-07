@@ -25,6 +25,13 @@ describe("task contract compatibility", () => {
     const ocr = classifyRecoverableError("ocr_credential_not_found", { locale });
     expect(ocr.description).toMatch(locale === "zh-CN" ? /百度 OCR/ : /Baidu OCR/);
   });
+
+  it.each(["zh-CN", "en-US"] as const)("shows the single-source packaging correction (%s)", locale => {
+    const info = classifyRecoverableError("submission_programming_multiple_files", { locale });
+    expect(info.actionKind).toBe("reupload");
+    expect(info.description).toContain(locale === "zh-CN" ? "每名学生一份完整源码" : "one self-contained source file per student");
+  });
+
   it.each(["pdf_evidence_busy", "source_extent_unavailable"])("offers retained-result retry for local PDF failure %s", code => {
     for (const locale of ["zh-CN", "en-US"] as const) {
       const info = classifyRecoverableError(code, { locale });
@@ -520,6 +527,21 @@ describe("background task failure guidance", () => {
     expect(info.title).toContain(locale === "zh-CN" ? "模型服务临时故障" : "temporary model-service failure");
     expect(info.description).toContain(locale === "zh-CN" ? "仅重试失败项" : "Retry only the failed items");
     expect(info.actionKind).toBe("retry");
+  });
+
+  it.each(["zh-CN", "en-US"] as const)("explains programming test material failures in %s", (locale) => {
+    const info = classifyRecoverableError("programming_test_material_needs_review", { locale, taskId: "T" });
+    expect(info.description).toContain(locale === "zh-CN" ? "预期结果和参考程序" : "expected results and reference program");
+    expect(info.actionHref).toBe("/tasks/T/grading/progress");
+  });
+
+  it.each(["zh-CN", "en-US"] as const)("routes uncomparable returns to manual review in %s", (locale) => {
+    const info = classifyRecoverableError("programming_return_value_unavailable", { locale, taskId: "T" });
+    expect(info.title).toContain(locale === "zh-CN" ? "返回值" : "return values");
+    expect(info.description).toContain(locale === "zh-CN" ? "尚未评分" : "ungraded");
+    expect(info.description).toContain(locale === "zh-CN" ? "人工补齐" : "manually");
+    expect(info.description).not.toMatch(/JSON|OCI|programming_/);
+    expect(info.actionHref).toBe("/tasks/T/grading/progress");
   });
 
   it("routes an unsafe image payload back to file selection", () => {

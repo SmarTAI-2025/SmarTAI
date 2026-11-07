@@ -1,0 +1,71 @@
+{
+  "audited_product_main": "101352c8a7df4e628d2716a2731b702d5f294a8d",
+  "previous_audit_commit": "b1c7315849ca55b997c55d88802be2d4c0ba1430",
+  "runs": {
+    "probes": {
+      "tests": 36,
+      "failures": [
+        "test_long_selected_source_retains_shared_definition_in_later_request",
+        "test_ambiguous_number_material_remains_visible_as_unresolved_after_manual_handoff"
+      ],
+      "passed": 34,
+      "run": {
+        "source": "/Users/annie/.codex/worktrees/u3-recovery-audit/SmarTAI",
+        "runtime": "/private/var/folders/_p/v8vvlf6x441989_5zxzsl3y40000gn/T/smartai-u3-audit-435e3my5",
+        "python": "3.12.14 (main, Sep  3 2026, 03:46:19) [Clang 21.1.8 ]",
+        "platform": "macOS-15.6.1-arm64-arm-64bit",
+        "pytest_args": [
+          "-p",
+          "backend.tests.conftest",
+          "-q",
+          "-s",
+          "tools/evaluation/u3_recovery/probes",
+          "--junitxml=/private/tmp/smartai-u3-20261028/followup-final-v4.xml"
+        ],
+        "allow_loopback": false,
+        "blocked_network_attempts": 0,
+        "exit_code": 1
+      }
+    },
+    "related": {
+      "tests": 221,
+      "failures": [],
+      "passed": 221,
+      "run": {
+        "source": "/Users/annie/.codex/worktrees/u3-recovery-audit/SmarTAI",
+        "runtime": "/private/var/folders/_p/v8vvlf6x441989_5zxzsl3y40000gn/T/smartai-u3-audit-9strhmpk",
+        "python": "3.12.14 (main, Sep  3 2026, 03:46:19) [Clang 21.1.8 ]",
+        "platform": "macOS-15.6.1-arm64-arm-64bit",
+        "pytest_args": [
+          "-q",
+          "backend/tests/test_incremental_question_preparation.py",
+          "backend/tests/test_incremental_question_materials.py",
+          "backend/tests/test_question_manual_completion.py",
+          "backend/tests/test_question_preparation_recovery.py",
+          "backend/tests/test_recognition_stop_resume.py",
+          "backend/tests/test_targeted_question_context.py",
+          "backend/tests/test_answer_assignment_review.py",
+          "backend/tests/test_submission_source_pipeline_integrity.py",
+          "--junitxml=/private/tmp/smartai-u3-20261028/followup-related-final.xml"
+        ],
+        "allow_loopback": false,
+        "blocked_network_attempts": 0,
+        "exit_code": 0
+      }
+    }
+  },
+  "separate_layers": {
+    "product_behavior": {
+      "passed": 11,
+      "failed": 2
+    },
+    "oracle_controls": {
+      "passed": 19,
+      "invalid_mutants_rejected": 17
+    },
+    "discovery_controls": {
+      "passed": 4
+    }
+  },
+  "scope": "Audit tools only; no product/frontend/CI/root pytest changes; no real models or production data; old full-suite evidence not rerun"
+}

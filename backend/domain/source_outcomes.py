@@ -86,6 +86,7 @@ SAFE_SOURCE_REASON_CODES = RECOGNITION_ERROR_CODES | frozenset({
     "submission_archive_empty",
     "submission_archive_directories_only",
     "submission_archive_nested_unsupported",
+    "submission_programming_multiple_files",
     "submission_archive_invalid",
     "submission_archive_limit_exceeded",
     "submission_archive_member_too_large",
@@ -125,9 +126,11 @@ NO_MATCH_REASON_CODES = frozenset(reason for reason, _phase in NO_MATCH_DIAGNOST
 # not infer this from a failure phase or from automatic retryability: provider
 # uncertainty, credentials, worker failures and unknown errors can recover.
 SOURCE_REUPLOAD_REASON_CODES = frozenset({
+    "source_docx_limit_exceeded", "source_docx_invalid", "source_docx_incomplete", "source_text_too_large",
     "submission_archive_empty",
     "submission_archive_directories_only",
     "submission_archive_nested_unsupported",
+    "submission_programming_multiple_files",
     "submission_archive_invalid",
     "submission_archive_limit_exceeded",
     "submission_archive_member_too_large",

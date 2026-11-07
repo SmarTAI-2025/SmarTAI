@@ -278,7 +278,7 @@ def test_task_problem_contract_serializes_and_edits_authoritative_max_score():
     ]
 
 
-def test_question_preparation_capabilities_expose_all_role_images_with_test_ocr_opt_in():
+def test_question_preparation_capabilities_keep_teacher_images_but_ocr_default_off():
     owner_id = "score-capability-owner"
     task_id = "score-capability-task"
     _seed_question_task(owner_id, task_id)
@@ -294,6 +294,10 @@ def test_question_preparation_capabilities_expose_all_role_images_with_test_ocr_
     assert ".jpg" in capabilities["source_roles"]["problem"]["accepted_extensions"]
     assert ".webp" in capabilities["source_roles"]["rubric"]["accepted_extensions"]
     assert ".jpg" in capabilities["source_roles"]["programming_tests"]["accepted_extensions"]
+    assert capabilities["source_roles"]["rubric"]["allow_vision"] is False
+    assert capabilities["source_roles"]["programming_tests"]["allow_vision"] is False
+    assert capabilities["reader"]["material_ocr_opt_in_supported"] is True
+    assert capabilities["reader"]["material_ocr_default_enabled"] is False
     assert capabilities["reader"]["images"] is True
 
 
@@ -323,6 +327,7 @@ def test_question_preparation_capabilities_keep_images_selectable_without_vision
     [
         ("problem", "questions.png", "image/png", True, None),
         ("reference_answer", "answers.webp", "image/webp", True, None),
+        ("reference_answer", "answers.png", "image/png", True, None),
         ("rubric", "rubric.jpg", "image/jpeg", True, None),
         ("problem", "questions.png", "image/png", False, None),
         ("programming_tests", "cases.png", "image/png", True, None),

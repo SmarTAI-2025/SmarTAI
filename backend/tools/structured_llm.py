@@ -899,7 +899,7 @@ def _normalize_markdown_json_keys(source: str) -> str:
     return "".join(result)
 
 
-def extract_and_parse_json(raw: str, model: Type[T]) -> T:
+def extract_and_parse_json(raw: str, model: Type[T], *, require_complete: bool = False) -> T:
     """
     Robustly extract JSON from LLM text output and validate against a Pydantic model.
     Handles: markdown code fences, leading prose, backslash escape issues, truncation,
@@ -908,6 +908,16 @@ def extract_and_parse_json(raw: str, model: Type[T]) -> T:
     """
     # 1. Strip markdown code fences if present
     cleaned = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", raw.strip(), flags=re.MULTILINE)
+
+    if require_complete:
+        # A verification verdict must be an intact value; never complete an
+        # interrupted affirmative response or select one of multiple objects.
+        def unique_object(pairs):
+            value = dict(pairs)
+            if len(value) != len(pairs):
+                raise ValueError("ambiguous verification JSON")
+            return value
+        return model.model_validate(json.loads(cleaned, object_pairs_hook=unique_object), strict=True)
 
     # 2. Find first BALANCED JSON object/array. We deliberately don't use
     # ``re.search(r"\{.*\}", ...)`` because it's greedy and will absorb a

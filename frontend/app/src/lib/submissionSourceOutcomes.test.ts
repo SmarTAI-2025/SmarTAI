@@ -24,6 +24,12 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 }
 
 describe("submission source reason copy", () => {
+  it.each(["failed", "manual_review"] as const)("explains how to repackage a multi-source submission (%s)", status => {
+    const issue = source({status, reason_code: "submission_programming_multiple_files", requires_reupload: true});
+    expect(getSubmissionSourceReasonCopy(issue, "zh-CN").description).toContain("每名学生一份完整源码");
+    expect(getSubmissionSourceReasonCopy(issue, "en-US").description).toContain("one self-contained source file per student");
+  });
+
   describe.each([
     {
       code: "question_preparation_time_limit_reached",
@@ -110,6 +116,19 @@ describe("submission source reason copy", () => {
     expect(invalid.description).toContain(locale === "zh-CN" ? "不表示学生答错" : "does not mean the student's answer is wrong");
   });
 
+  it.each([
+    ["source_docx_incomplete", "DOCX 内容尚未完整读取", "DOCX reading is incomplete"],
+    ["source_docx_busy", "DOCX 读取正忙", "DOCX extraction is busy"],
+    ["source_docx_timeout", "DOCX 读取超时", "DOCX extraction timed out"],
+  ])("routes %s to actionable DOCX guidance instead of generic failure", (code, zhTitle, enTitle) => {
+    for (const [locale, title] of [["zh-CN", zhTitle], ["en-US", enTitle]] as const) {
+      const copy = getSubmissionSourceReasonCopy(source({ reason_code: code, failure_phase: "source_read" }), locale);
+      expect(copy.title).toBe(title);
+      expect(copy.description).toContain(locale === "zh-CN" ? "不是学生答错" : "not a student mistake");
+      expect(copy.nextStep?.trim().length).toBeGreaterThan(0);
+    }
+  });
+
   it("describes incomplete pages in the submission workflow", () => {
     const item = source({ reason_code: "question_source_incomplete" });
     const zh = getSubmissionSourceReasonCopy(item, "zh-CN");
@@ -154,6 +173,37 @@ describe("submission source reason copy", () => {
       ? ["上次调用是否计费尚无法确认。重试可能再次消耗额度。", "上次调用是否完成尚不确定，再次调用可能重复消耗额度。"]
       : ["The previous call’s billing status is unknown. Retrying may use additional quota.", "It is unclear whether the previous call completed. Calling again may use quota twice."]
     ).toContain(getSubmissionSourceReasonCopy(item, locale).nextStep);
+  });
+
+  it.each([
+    ["invalid_source_role", "资料角色无法识别", "The source role is not recognized"],
+    ["programming_tests_json_invalid", "编程测试 JSON 无效", "Programming-test JSON is invalid"],
+    ["source_docx_invalid", "DOCX 文件结构无效", "The DOCX structure is invalid"],
+    ["source_empty", "文件为空", "The file is empty"],
+    ["source_filename_too_long", "文件名过长", "The filename is too long"],
+    ["source_too_large", "文件超过上传上限", "The file exceeds the upload limit"],
+    ["source_type_not_allowed", "此角色不允许该文件类型", "This file type is not allowed for this role"],
+    ["submission_source_type_not_allowed", "学生作答不允许该文件类型", "This file type is not allowed for student submissions"],
+  ])("routes upload-contract reason %s to actionable bilingual guidance", (code, zhTitle, enTitle) => {
+    for (const [locale, title] of [["zh-CN", zhTitle], ["en-US", enTitle]] as const) {
+      const copy = getSubmissionSourceReasonCopy(source({ reason_code: code, failure_phase: "source_read" }), locale);
+      expect(copy.title).toBe(title);
+      expect(copy.description.trim().length).toBeGreaterThan(0);
+      expect(copy.nextStep?.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it.each(["zh-CN", "en-US"] as const)("explains the OCR role prohibition without granting an opt-in in %s", (locale) => {
+    const copy = getSubmissionSourceReasonCopy(source({
+      reason_code: "material_ocr_not_allowed_for_role", failure_phase: "source_read", retryable: false,
+    }), locale);
+    expect(copy.title).toBe(locale === "zh-CN" ? "此类资料不允许 OCR" : "OCR is not allowed for this material role");
+    expect(copy.description).toMatch(locale === "zh-CN" ? /评分标准.*编程测试/ : /rubrics.*programming tests/i);
+    expect(copy.nextStep).toContain("PDF");
+    expect(copy.nextStep).toContain("TXT");
+    expect(copy.nextStep).toContain("MD");
+    expect(copy.nextStep).toContain("JSON");
+    expect(copy.nextStep).not.toMatch(/启用|开启|enable|switch.*model/i);
   });
 
   it.each([
