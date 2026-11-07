@@ -8,7 +8,7 @@ import {
   LoaderCircle,
   Users,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, type ComponentType, type ReactNode } from "react";
+import { lazy, Suspense, type ComponentType, type ReactNode } from "react";
 import { Link, Navigate, useLocation, useParams } from "react-router-dom";
 import { useTask, useTaskFinalization, useTaskResult } from "@/api/hooks/tasks";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
@@ -75,10 +75,6 @@ export function FinalResultsWorkspacePage() {
   const waitingForFreshTaskStatus = Boolean(
     task && taskQuery.isFetching && !RESULT_WORKSPACE_STATUSES.has(task.status),
   );
-
-  useEffect(() => {
-    window.scrollTo({ top: 0, behavior: "auto" });
-  }, [questionId, section, studentId]);
 
   if (!taskId) return <Navigate replace to="/history" />;
   if (taskQuery.isLoading || waitingForFreshTaskStatus) {

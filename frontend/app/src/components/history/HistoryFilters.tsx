@@ -1,6 +1,7 @@
 import { GroundedAskAnswer } from "@/components/tasks/GroundedAskAnswer";
-import { Search, X } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { X } from "lucide-react";
+import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
+import type { HistoryKeywordMatch } from "./historyQuery";
 import { AskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
@@ -8,91 +9,68 @@ import type {
   HistoryCourseFacet,
   HistoryInterpretation,
   HistorySort,
-  TaskHistoryQuery,
   TaskStatus,
   TaskTag,
 } from "@/types";
-import { cn } from "@/lib/cn";
-import { buildSemesterOptions, formatSemesterLabel } from "@/lib/semesters";
-import {
-  HISTORY_STAGE_KEYS,
-  HISTORY_STATUS_OPTIONS,
-  TAG_TONE_CLASSES,
-} from "./historyPresentation";
+import { formatSemesterLabel } from "@/lib/semesters";
+import { HISTORY_STAGE_KEYS } from "./historyPresentation";
 
 interface HistoryFiltersProps {
-  query: TaskHistoryQuery;
+  dashboard: boolean;
+  value: string;
+  onEdit: (value: string) => void;
+  choices: HistoryKeywordMatch[];
+  onChoose: (choice: HistoryKeywordMatch) => void;
+  canClear: boolean;
+  onNameSearch: () => void;
   courses: HistoryCourseFacet[];
   tags: TaskTag[];
   interpretation: HistoryInterpretation | null;
   smartError: boolean;
   isInterpreting: boolean;
-  onChange: (patch: Partial<TaskHistoryQuery>) => void;
   onInterpret: (query: string) => void;
   onCancelInterpret: () => void;
   onRemoveCondition: (field: string) => void;
-  onClearSmart: () => void;
   onClear: () => void;
 }
 
 export function HistoryFilters({
-  query,
+  dashboard, value, onEdit, choices, onChoose, canClear, onNameSearch,
   courses,
   tags,
   interpretation,
   smartError,
   isInterpreting,
-  onChange,
   onInterpret,
   onCancelInterpret,
   onRemoveCondition,
-  onClearSmart,
   onClear,
 }: HistoryFiltersProps) {
   const { locale, t } = useI18n();
-  const [keywordDraft, setKeywordDraft] = useState(query.q ?? "");
-  const [smartDraft, setSmartDraft] = useState("");
-
-  useEffect(() => setKeywordDraft(query.q ?? ""), [query.q]);
-
-  function submitKeyword(event: FormEvent) {
-    event.preventDefault();
-    onChange({ q: keywordDraft.trim() || undefined });
-  }
-
+  const zh = locale === "zh-CN";
   return (
-    <section
-      aria-label={t("historyFilterRegion")}
-      className="rounded-[10px] border bg-card px-4 py-4 sm:px-6"
-    >
-      <div className="grid min-w-0 gap-2 lg:grid-cols-2">
-        <form className="flex min-w-0 gap-2" onSubmit={submitKeyword}>
-          <label className="relative min-w-0 flex-1">
-            <span className="sr-only">{t("historySearchLabel")}</span>
-            <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              value={keywordDraft}
-              onChange={(event) => setKeywordDraft(event.target.value)}
-              className="h-9 w-full rounded-full border bg-background pl-9 pr-3 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-              placeholder={t("historySearchPlaceholder")}
-            />
-          </label>
-          <button type="submit" className="h-9 shrink-0 rounded-full border bg-background px-5 text-[13px] font-medium text-foreground transition-colors hover:border-primary/40 hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            {t("historySearchAction")}
-          </button>
-        </form>
-        <AskQueryBar locale={locale} value={smartDraft} pending={isInterpreting}
-          label={t("historySmartLabel")} placeholder={t("historySmartPlaceholder")}
-          onChange={(value) => { setSmartDraft(value); if (!value.trim()) onClearSmart(); }}
-          onCancel={onCancelInterpret} onApply={onInterpret} />
+    <section aria-label={t("historyFilterRegion")} className={dashboard ? "my-6" : undefined}>
+      <div className={dashboard ? "grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 sm:gap-x-5" : ""}>
+        {dashboard && <>
+          <SmarTAIMascot variant={isInterpreting ? "grading" : "thinking"} size="md" className="h-14 w-20 sm:row-span-2 sm:h-20 sm:w-28" />
+          <p className="w-fit rounded-2xl rounded-bl-sm bg-primary/[0.07] px-3 py-2 text-sm text-foreground">
+            {zh ? "我可以按学期找作业，也能帮你找出待复核的批改。" : "I can find grading tasks by semester or show which ones need review."}
+          </p>
+        </>}
+        <div className={dashboard ? "col-span-2 min-w-0 sm:col-span-1" : "min-w-0"}>
+          <AskQueryBar locale={locale} value={value} pending={isInterpreting} mascotOutside={dashboard}
+            label={t("historySmartLabel")} placeholder={`${t("historySearchPlaceholder")} · ${t("historySmartPlaceholder")}`}
+            onChange={onEdit} onCancel={onCancelInterpret} onApply={onInterpret}
+            onClearWhenEmpty={canClear ? onClear : undefined} />
+        </div>
       </div>
-
-      <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-1" role="group" aria-label={t("historyFilterRegion")}>
-        <button type="button" className="h-8 shrink-0 px-2 text-[13px] font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring" onClick={onClear}>
-          {t("historyClearFilters")}
-        </button>
-      </div>
-
+      {choices.length > 0 && <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label={t("historySmartAmbiguity")}>
+        <span className="text-xs text-muted-foreground">{zh ? "你想按哪一项查找？" : "Which match would you like to use?"}</span>
+        {choices.map(choice => <button key={choice.field + choice.id} type="button" onClick={() => onChoose(choice)}
+          className="rounded-full border px-2.5 py-1 text-xs hover:text-primary focus-visible:ring-2 focus-visible:ring-ring">
+          {t(choice.field === "q" ? "historyColumnTask" : choice.field === "course_id" ? "historyCourse" : "historyTags")} · {choice.label}
+        </button>)}
+      </div>}
       <GroundedAskAnswer execution={interpretation?.execution} locale={locale} />
       {interpretation && !interpretation.execution ? (
         <div className="mt-3 border-t pt-3" aria-live="polite">
@@ -113,9 +91,6 @@ export function HistoryFilters({
                 <X aria-hidden="true" className="h-3 w-3 shrink-0" />
               </button>
             ))}
-            <button type="button" className="text-xs font-medium text-primary outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring" onClick={onClearSmart}>
-              {t("historySmartClear")}
-            </button>
           </div>
           <p className="mt-2 text-xs leading-5 text-muted-foreground">
             {interpretation.conditions.length
@@ -139,6 +114,10 @@ export function HistoryFilters({
       ) : null}
 
       {smartError ? <p className="mt-3 text-xs text-amber-700 dark:text-amber-300" role="status">{t("historySmartFailure")}</p> : null}
+      {(smartError || interpretation?.execution?.recognized === false) && value.trim() && [...value.trim()].length <= 200 &&
+        <button type="button" className="mt-2 rounded text-xs font-medium text-primary hover:underline focus-visible:ring-2 focus-visible:ring-ring" onClick={onNameSearch}>
+          {zh ? "按任务名称查找这段文字" : "Find this text in task names"}
+        </button>}
     </section>
   );
 }

@@ -14,17 +14,19 @@ interface AskQueryBarProps {
   onChange: (value: string) => void;
   onApply: (value: string) => void;
   onCancel?: () => void;
+  onClearWhenEmpty?: () => void;
   pending?: boolean;
   placeholder: string;
   label?: string;
   className?: string;
+  mascotOutside?: boolean;
   feedback?: ReactNode;
   onFocus?: () => void;
   onBlur?: () => void;
 }
 
 /** The same editable, IME-safe input and controls on every Ask surface. */
-export function AskQueryBar({ locale, value, onChange, onApply, onCancel, pending = false, placeholder, label, className, feedback, onFocus, onBlur }: AskQueryBarProps) {
+export function AskQueryBar({ locale, value, onChange, onApply, onCancel, onClearWhenEmpty, pending = false, placeholder, label, className, mascotOutside, feedback, onFocus, onBlur }: AskQueryBarProps) {
   const zh = locale === "zh-CN";
   const composing = useRef(false);
   const input = useImeSafeQuery({ value, onCommit: onChange, onDraftChange: onCancel });
@@ -34,7 +36,7 @@ export function AskQueryBar({ locale, value, onChange, onApply, onCancel, pendin
         event.preventDefault();
         if (!composing.current && !pending && input.draftValue.trim()) onApply(input.commitDraft());
       }}>
-        <SmarTAIMascot variant={pending ? "grading" : "thinking"} size="xs" />
+        {!mascotOutside && <SmarTAIMascot variant={pending ? "grading" : "thinking"} size="xs" />}
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">{label ?? (zh ? "Ask SmarTAI：筛选与排序" : "Ask SmarTAI: filter and sort")}</span>
           <input
@@ -50,9 +52,12 @@ export function AskQueryBar({ locale, value, onChange, onApply, onCancel, pendin
             onFocus={onFocus}
             onBlur={(event) => { input.handleBlur(event); composing.current = false; onBlur?.(); }}
           />
-          {input.draftValue ? <button type="button" aria-label={zh ? "清空查询" : "Clear query"}
+          {(input.draftValue || onClearWhenEmpty) ? <button type="button" aria-label={zh ? "清空查询" : "Clear query"}
             className="absolute right-1 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-            onMouseDown={(event) => event.preventDefault()} onClick={() => input.commitValue("")}>
+            onMouseDown={(event) => event.preventDefault()} onClick={() => {
+              input.commitValue("");
+              if (!value) onClearWhenEmpty?.();
+            }}>
             <X aria-hidden="true" className="h-4 w-4" />
           </button> : null}
         </label>

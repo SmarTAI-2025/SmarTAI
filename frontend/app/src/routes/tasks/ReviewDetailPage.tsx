@@ -18,7 +18,7 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigationType, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { normalizeAPIError } from "@/api/client";
 import { useTask, useTaskResult, useTaskFinalization, useUpdateCorrectionReview } from "@/api/hooks/tasks";
@@ -61,6 +61,7 @@ function ReviewDetailForm() {
   const [blockedReviews, setBlockedReviews] = useState<ReviewBlocker[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
+  const preserveScroll = useNavigationType() === "REPLACE" && location.state?.preserveScroll === true;
   const taskQuery = useTask(taskId);
   const resultQuery = useTaskResult(taskId);
   const updateReview = useUpdateCorrectionReview();
@@ -114,7 +115,6 @@ function ReviewDetailForm() {
   activeStudentKeyRef.current = `${taskId ?? ""}:${student?.id ?? ""}`;
   const initializedStudentRef = useRef<string | null>(null);
   const positionedRouteRef = useRef<string | null>(null);
-  const resetScrollForStudentRef = useRef<string | null>(null);
   const searchParamsRef = useRef(searchParams);
 
   useEffect(() => {
@@ -187,7 +187,7 @@ function ReviewDetailForm() {
     if (value.trim()) next.set(key, value);
     else next.delete(key);
     searchParamsRef.current = next;
-    setSearchParams(next, { replace: true });
+    setSearchParams(next, { replace: true, state: { preserveScroll: true } });
   }, [setSearchParams]);
 
   const goToStudent = useCallback((nextStudentId: string) => {
@@ -195,11 +195,8 @@ function ReviewDetailForm() {
       toast.info(savingNavigationMessage);
       return;
     }
-    const anchorQuestionId = activeQuestion?.id ?? visibleQuestions[0]?.id ?? model.questions[0]?.id;
-    if (!anchorQuestionId) return;
-    resetScrollForStudentRef.current = nextStudentId;
-    navigate(buildHref(nextStudentId, anchorQuestionId));
-  }, [activeQuestion?.id, buildHref, model.questions, navigate, savingNavigationMessage, visibleQuestions]);
+    navigate(buildHref(nextStudentId, "all"));
+  }, [buildHref, navigate, savingNavigationMessage]);
 
   const scrollToQuestion = useCallback((targetId: string, behavior: ScrollBehavior = "smooth") => {
     setActiveQuestionId(targetId);
@@ -218,8 +215,8 @@ function ReviewDetailForm() {
   }, [activeQuestionId, dirty, scrollToQuestion]);
 
   useEffect(() => {
-    if (!visibleQuestions.length || !studentId) return;
-    const requested = visibleQuestions.find((question) => question.id === requestedQuestionId) ?? visibleQuestions[0];
+    const requested = visibleQuestions.find(question => question.id === requestedQuestionId);
+    if (preserveScroll || !requested || !studentId) return;
     // Repeat issue navigation must reposition even when its URL is unchanged.
     const routeKey = `${location.key}:${studentId}:${requestedQuestionId}:${questionQuery}`;
     if (positionedRouteRef.current === routeKey) return;
@@ -228,19 +225,14 @@ function ReviewDetailForm() {
       secondFrame = window.requestAnimationFrame(() => {
         positionedRouteRef.current = routeKey;
         setActiveQuestionId(requested.id);
-        if (resetScrollForStudentRef.current === studentId) {
-          resetScrollForStudentRef.current = null;
-          window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-        } else {
-          scrollToQuestion(requested.id, "auto");
-        }
+        scrollToQuestion(requested.id, "auto");
       });
     });
     return () => {
       window.cancelAnimationFrame(firstFrame);
       if (secondFrame) window.cancelAnimationFrame(secondFrame);
     };
-  }, [location.key, questionQuery, requestedQuestionId, scrollToQuestion, studentId, visibleQuestions]);
+  }, [location.key, preserveScroll, questionQuery, requestedQuestionId, scrollToQuestion, studentId, visibleQuestions]);
 
   useEffect(() => {
     if (!visibleQuestions.length) return;
