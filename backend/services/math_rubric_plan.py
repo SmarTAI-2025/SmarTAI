@@ -965,12 +965,9 @@ def _canonicalize_explanation(context: dict, explanation: _Explanation) -> _Expl
     return explanation.model_copy(update={"routes": tuple(routes)})
 
 
-def _source_requirements(context: dict) -> tuple[list[tuple[Decimal, str]], list[tuple[str, str, Decimal]], list[_PartBudget]]:
+def _source_requirements(context: dict) -> tuple[list[tuple[Decimal, str]], list[tuple[str, str, Decimal]]]:
     """Read only source requirements; impossible ledgers need no model repair."""
     original, maximum = context["criterion"], context["max_score"]
-    budgets = _subpart_budgets(context)
-    if budgets:
-        return [], [], budgets
     exemptions, _ = _source_policies(original, maximum)
     floor_rules: list[tuple[Decimal, str]] = []
     allocations: list[tuple[str, str, Decimal]] = []
@@ -997,7 +994,7 @@ def _source_requirements(context: dict) -> tuple[list[tuple[Decimal, str]], list
             if mode == "deductions" and value == 0 and any(clause in q for q in exemptions):
                 continue
             allocations.append((clause, mode, value))
-    return floor_rules, allocations, []
+    return floor_rules, allocations
 
 
 def _validate_source_rules(context: dict, explanation: _Explanation) -> None:
@@ -1008,7 +1005,8 @@ def _validate_source_rules(context: dict, explanation: _Explanation) -> None:
                for route in explanation.routes):
             raise ValueError("holistic_policies_must_remain_in_source")
         return
-    floor_rules, allocations, budgets = _source_requirements(context)
+    budgets = _subpart_budgets(context)
+    floor_rules, allocations = ([], []) if budgets else _source_requirements(context)
     for route in explanation.routes:
         if route.mode == "holistic":
             if route.minimum_score:
@@ -1115,7 +1113,8 @@ provider failures retain the existing execution/retry semantics.
     )
     try:
         try:
-            _source_requirements(context)
+            if not _subpart_budgets(context):
+                _source_requirements(context)
         except ValueError as exc:
             if str(exc) in _UNREPRESENTABLE_RULES:
                 failures.append(str(exc))
