@@ -6,6 +6,7 @@ still uses the final question identity. Teacher text remains the source of truth
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Literal
 
@@ -74,6 +75,18 @@ def render_rubric(definition: RubricDefinition, *, language="zh") -> str:
     return "\n".join(lines)
 
 
+_PROOF_REQUEST = re.compile(r"\b(?:prove|disprove|show that|establish that)\b|证明|求证|试证", re.I)
+_OPEN_PROOF_RULE = {
+    "zh": "对题目要求证明的结论，以下分项给出参考证明的评分依据。题目或教师未限定方法时，"
+          "其他完整有效的证明同样可得该结论的全部配分。部分证明按实际建立的推论和覆盖的情形给分。"
+          "指定的方法、独立子问及其配分须分别满足。",
+    "en": "For each conclusion to be proved, the items describe credit for a reference proof. "
+          "Unless the question or teacher prescribes a method, another valid complete proof earns "
+          "the full allocation for that conclusion. Credit a partial proof for the implications and "
+          "cases actually established. Preserve required methods, distinct subquestions and their allocations.",
+}
+
+
 def generated_rubric(problem: dict, definition: RubricDefinition, *, language="zh"):
     """Validate against original teacher rules BEFORE rendering AI additions."""
     original = str(problem.get("criterion") or "")
@@ -90,14 +103,20 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
     ))
     # Existing teacher material is adopted, never replaced with a generated view.
     canonical_definition = RubricDefinition.model_validate(explanation.model_dump(exclude={"effective_criterion"}))
+    proof_points = (problem.get("type") == "推理题" and _PROOF_REQUEST.search(str(problem.get("stem") or ""))
+                    and len(explanation.routes) == 1 and explanation.routes[0].mode == "points")
     # Only a fresh generated definition (or its exact saved rendering) can
     # supply generated policies. Existing teacher prose, including exceptions,
     # remains authoritative even if a model proposes a simpler item ledger.
     generated_definition = not original or (
         _question_input(problem)["criterion_source"] == "ai"
-        and original in {render_rubric(canonical_definition, language=lang) for lang in ("zh", "en")}
+        and any((original.removeprefix(rule + "\n") if proof_points else original)
+                == render_rubric(canonical_definition, language=lang) for lang, rule in _OPEN_PROOF_RULE.items())
     )
     criterion = original or render_rubric(canonical_definition, language=language)
+    if not original and proof_points:
+        # Freeze method equivalence in the same source that both teachers and graders read.
+        criterion = _OPEN_PROOF_RULE["zh" if language == "zh" else "en"] + "\n" + criterion
     completed = {**problem, "criterion": criterion}
     if not original:
         completed["ai_completion_provenance"] = {

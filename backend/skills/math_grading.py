@@ -6,6 +6,7 @@ verify individual relations; only the frozen rubric determines point budgets.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from contextlib import contextmanager
 from contextvars import ContextVar
 from decimal import Decimal, ROUND_HALF_UP
@@ -13,7 +14,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError, field_validator
 
 from backend.models import ExpertResult, GradingConfidence, StepScore
 from backend.skills.base import (
@@ -180,8 +181,45 @@ class ExpertRevision(BaseModel):
     assessment: MathAssessment
 
 
+class ReviewCitation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str
+    verdict: Literal["supported", "refuted", "unknown"]
+
+
+class PointAward(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: str
+    score: float = Field(ge=0, allow_inf_nan=False)
+    reason: str = Field(min_length=1)
+    citations: list[ReviewCitation] = Field(default_factory=list, max_length=8)
+
+
+class PointRevision(BaseModel):
+    """A sourced edit to one expert's disputed point awards."""
+    model_config = ConfigDict(extra="forbid")
+
+    expert_index: int = Field(ge=0, strict=True)
+    reason: str = Field(min_length=1)
+    comment: str = Field(min_length=1, description="Updated overall feedback for this vote.")
+    awards: list[PointAward] = Field(min_length=1, max_length=80)
+
+
+class PointReview(BaseModel):
+    """Narrow generation schema when the entire dispute is ordinary point credit."""
+    revisions: list[SkipValidation[PointRevision]] = Field(max_length=10)
+
+
+_REVIEW_ENTRY = TypeAdapter(PointRevision | ExpertRevision)
+_EXPERT_INDEX = TypeAdapter(int)
+
+
 class ExpertReview(BaseModel):
-    revisions: list[ExpertRevision] = Field(default_factory=list, max_length=10)
+    # Parse the envelope once, then validate each expert's independent revision.
+    # Both the first request and a format repair advertise only complete revisions here.
+    revisions: list[SkipValidation[ExpertRevision]] = Field(max_length=10)
 
 
 def _json(value) -> str:
@@ -701,6 +739,113 @@ def _schedule_checks(draft, problem, answer, plan):
     return scheduled, rejected
 
 
+def _apply_point_revision(revision, old, disputed, catalog):
+    proposed = {award.item_id: award for award in revision.awards}
+    existing = {award.item_id: award for award in old.awards}
+    if len(proposed) != len(revision.awards) or not proposed.keys() <= existing.keys():
+        raise ValueError("review_expected_unique_disputed_awards")
+    for key in proposed.keys() - disputed:
+        # Some providers echo context rows. Keep the original row (including
+        # its reasons and evidence) and reject any change to its accounting.
+        if existing[key].score != proposed[key].score:
+            raise ValueError("review_changed_undisputed_award")
+    edits = [award for award in revision.awards if award.item_id in disputed]
+    if not edits:
+        raise ValueError("review_expected_unique_disputed_awards")
+    # The model cites immutable lines, not another expert's private claim IDs.
+    # Construct scoped claims locally; the usual ledger validates source and credit.
+    claims = []
+    used_ids = {c.id for c in old.claims}
+    replacements = {}
+    for edit in edits:
+        ids = []
+        for citation in edit.citations:
+            if citation.source_id not in catalog:
+                raise ValueError("invalid_claim_source_id")
+            claim_id = f"review_{len(used_ids)}"
+            while claim_id in used_ids:
+                claim_id += "_"
+            used_ids.add(claim_id)
+            kind = "statement" if citation.source_id.startswith("student:") else "omission"
+            claims.append(Claim(id=claim_id, kind=kind, source_id=citation.source_id,
+                                verdict=citation.verdict, reason=edit.reason, item_ids=[edit.item_id]))
+            ids.append(claim_id)
+        if not ids:
+            raise ValueError("review_changed_award_requires_evidence")
+        replacements[edit.item_id] = Award(item_id=edit.item_id, score=edit.score, reason=edit.reason, claim_ids=ids)
+    data = old.model_dump()
+    data.update(awards=[replacements.get(award.item_id, award).model_dump() for award in old.awards],
+                claims=data["claims"] + [claim.model_dump() for claim in claims],
+                comment=revision.comment)
+    return revision.model_copy(update={"awards": edits}), MathAssessment.model_validate(data)
+
+
+def _review_error_code(exc):
+    if isinstance(exc, StructuredOutputInvalidError) and isinstance(exc.__cause__, ValueError):
+        exc = exc.__cause__
+    if isinstance(exc, ValidationError):
+        return "revision_schema_invalid"
+    # Never persist provider text or Pydantic's messages containing source data.
+    code = str(exc)
+    if code in {
+        "duplicate_expert_revision", "review_source_or_expert_not_found", "review_changed_claim_identity",
+        "review_requires_complete_assessment", "review_expected_unique_disputed_awards",
+        "review_changed_award_requires_evidence",
+        "review_changed_undisputed_award",
+        "invalid_claim_source_id", "claim_excerpt_conflicts_with_source_id", "claim_not_in_student_answer_or_rubric",
+        "award_claim_not_mapped_to_item", "invalid_award", "omission_is_not_evidence_of_credit",
+        "omission_requires_original_obligation", "review_must_address_each_scoped_evidence_result",
+        "duplicate_or_empty_claim_id", "conditional_credit_exceeds_item", "default_adjustment_not_in_plan",
+    }:
+        return code
+    return "invalid_mathematical_ledger"
+
+
+def _review_index(entry):
+    value = entry.get("expert_index") if isinstance(entry, dict) else getattr(entry, "expert_index", None)
+    try:
+        return None if isinstance(value, bool) else _EXPERT_INDEX.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _generated_proof_guidance(problem):
+    from backend.services.math_rubric_plan import _question_input
+    if problem.type != "推理题" or _question_input(problem)["criterion_source"] != "ai":
+        return ""
+    return (
+        "\nThis proof rubric was AI-generated. Read the question's actual proof obligation first. "
+        "Unless the question or teacher specifies a method, an item describing a reference step is one "
+        "way to earn its allocated credit. For another route, identify the corresponding mathematical "
+        "work (premise or witness, decisive inference, conclusion) in the student's text. A counterexample "
+        "to a different necessary condition can prove the same negative claim. Credit a complete valid "
+        "proof across the applicable items even when its lemma is different. Keep item budgets, independent "
+        "subquestions, explicit instructions and real gaps intact. Give the precise missing implication "
+        "if withholding credit. An unsupported conclusion alone does not earn the reasoning points.\n"
+    )
+
+
+def _point_review_evidence(assessment, trace, disputed):
+    """Present disputed credit and its cited passages without model-local editing IDs."""
+    claims = {claim.id: claim for claim in assessment.claims}
+    awards = []
+    for award in assessment.awards:
+        if award.item_id not in disputed:
+            continue
+        evidence = []
+        for key in award.claim_ids:
+            claim = claims[key]
+            evidence.append({"kind": claim.kind, "source_id": claim.source_id,
+                             "quote": claim.quote if claim.kind == "statement" else claim.source_quote,
+                             "verdict": claim.verdict, "reason": claim.reason})
+        awards.append({"item_id": award.item_id, "score": award.score, "reason": award.reason,
+                       "evidence": evidence})
+    result = {"awards": awards, "comment": assessment.comment}
+    if "proof_audit" in trace:
+        result["proof_audit"] = trace["proof_audit"]
+    return result
+
+
 async def review_math_experts(problem, answer, experts, provider, *, language="en", grading_setup=None):
     """Resolve concrete disagreements once, retaining weights and provenance."""
     from backend.services.math_grading_context import get_math_plan
@@ -726,77 +871,136 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
     if not (disputed or other_dispute or requested_review) or not take_review_budget():
         return experts
 
-    def validate_review(review):
-        try:
-            indices = [revision.expert_index for revision in review.revisions]
-            if len(indices) != len(set(indices)):
-                raise ValueError("duplicate_expert_revision")
-            for revision in review.revisions:
-                index = revision.expert_index
-                if index >= len(experts) or match_source_quote(answer.content or "", revision.source_quote) is None:
-                    raise ValueError("review_source_or_expert_not_found")
-                old, candidate = assessments[index], revision.assessment
-                if len(route_ids) == 1 and old is not None and old.awards and not requested_review:
-                    new_awards = _award_signatures(candidate)
-                    if any(new_awards.get(key) != value for key, value in signatures[index].items() if key not in disputed):
-                        raise ValueError("review_changed_undisputed_award")
-                _assessment_validator(plan, answer, problem, original=old,
-                    evidence=traces[index].get("evidence", []))(candidate)
-        except (ValueError, StructuredOutputInvalidError) as exc:
-            error = StructuredOutputInvalidError("Invalid targeted mathematical review.")
-            error.repair_context = _json({"validation_error": str(exc),
-                "detail": getattr(exc, "repair_context", None),
-                "review": review.model_dump(mode="json"),
-                "repair_scope": "Correct this review using the original experts and source. "
-                    "Keep established claim IDs/quotes and undisputed awards; do not invent student work."})
-            raise error from exc
+    catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
+    # Keep alternative route selection, explicit binary policies and
+    # conditional/dependent credit on the complete-ledger review path.
+    compact = bool(disputed and len(plan.routes) == 1 and plan.routes[0].mode == "points"
+                   and plan.allow_partial_credit and not frozen_binary_rule(plan)
+                   and not any(item.default_adjustments for item in plan.routes[0].items if item.id in disputed)
+                   and all(a and a.awards for a in assessments) and any(key.startswith("student:") for key in catalog)
+                   and not requested_review and not any(t.get("evidence") for t in traces))
+    accepted = {}
+    validation_issues = []
+    last_review = None
+    rejected_indices = set()
 
+    def validate_review(review):
+        nonlocal last_review
+        if review is last_review:
+            return
+        accepted.clear()
+        rejected_indices.clear()
+        indices = [_review_index(raw) for raw in review.revisions]
+        counts = Counter(indices)
+        issues = []
+        repair_details = []
+        for raw, index in zip(review.revisions, indices):
+            revision = None
+            try:
+                revision = _REVIEW_ENTRY.validate_python(raw)
+                if index is None or not 0 <= index < len(experts):
+                    raise ValueError("review_source_or_expert_not_found")
+                if counts[index] != 1:
+                    raise ValueError("duplicate_expert_revision")
+                old, trace = assessments[index], traces[index]
+                if isinstance(revision, PointRevision):
+                    if not compact:
+                        raise ValueError("review_requires_complete_assessment")
+                    revision, candidate = _apply_point_revision(revision, old, disputed, catalog)
+                else:
+                    if match_source_quote(answer.content or "", revision.source_quote) is None:
+                        raise ValueError("review_source_or_expert_not_found")
+                    candidate = revision.assessment
+                    if len(route_ids) == 1 and old is not None and old.awards and not requested_review:
+                        new_awards = _award_signatures(candidate)
+                        if any(new_awards.get(key) != value for key, value in signatures[index].items() if key not in disputed):
+                            raise ValueError("review_changed_undisputed_award")
+                _assessment_validator(plan, answer, problem, original=old,
+                    evidence=trace.get("evidence", []))(candidate)
+                score, steps = score_assessment(candidate, plan, answer.content or "", problem_text=problem.stem)
+                accepted[index] = revision, candidate, score, steps
+            except ValueError as exc:
+                issues.append({"expert_index": index if index is not None and 0 <= index < len(experts) else None,
+                               "code": _review_error_code(exc)})
+                # Give the model its rejected edit and detailed grounding context
+                # on repair. Only the bounded error codes go to the private trace.
+                if revision is not None:
+                    repair_details.append({"revision": revision.model_dump(mode="json"),
+                                           "detail": getattr(exc, "repair_context", None)})
+                elif isinstance(exc, ValidationError):
+                    repair_details.append({"fields": exc.errors(include_input=False, include_url=False,
+                                                               include_context=False)})
+                if index is not None:
+                    rejected_indices.add(index)
+        if issues:
+            validation_issues.append(issues)
+        if issues and not accepted:
+            error = StructuredOutputInvalidError("Invalid targeted mathematical review.")
+            error.repair_context = _json({"validation_errors": issues, "rejected": repair_details,
+                "repair_scope": "Correct the listed revisions using the original votes, source catalog and "
+                    "disputed items. Return only source-cited edits for the requested format and preserve undisputed awards."})
+            raise error
+        last_review = review
+
+    review_format = PointReview if compact else ExpertReview
+    proof_guidance = _generated_proof_guidance(problem)
+    if proof_guidance:
+        proof_guidance += (
+            "Check the domain of the actual argument against the quantifiers in the problem. A generated "
+            "rubric example is not evidence that a proof of only a special case covers all cases. "
+            "Likewise, a proof covering every case earns credit without repeating the reference example.\n"
+        )
+    instructions = (
+        "Return a PointRevision for each expert with an evidenced error. Give the zero-based expert_index, "
+        "reason, updated overall comment, and ONLY the disputed awards "
+        "that need a change. For each edited award provide citations [{source_id, verdict}] from the supplied "
+        "source_catalog, with the reason explaining how the passage supports this amount. Student lines "
+        "support written work; rubric/question lines identify omissions. Use these shared source IDs for "
+        "every changed item, including zero credit. The program manages private claim IDs, retains every "
+        "unmodified award and merges the cited edits into the original vote."
+        if compact else
+        "For each correction give expert_index, reason, source_quote verbatim from the student answer, "
+        "and a complete MathAssessment. Preserve undisputed awards unless an explicit needs_review concern "
+        "provides source evidence for correcting them. Preserve existing claim IDs and exact quotes. "
+        "A direct grade is a valid vote. Resolve pending tool evidence even on an unchanged score. "
+        "Supply evidence_judgments for every supported/refuted evidence_id, with applicability and "
+        "source-based reason. Use applies only for a claim-wide result; use partial for a narrower result. "
+        "For explicit zero/full rules, include binary_correct judging the entire final answer."
+    )
     try:
+        review_evidence = ([_point_review_evidence(a, t, disputed) for a, t in zip(assessments, traces)]
+                           if compact else traces)
         review, response = await structured_llm_call(
-            provider, output_model=ExpertReview,
+            provider, output_model=review_format,
             system_prompt=build_system_prompt(
-                "Review only the disputed mathematical scoring points against original student text, "
-                "frozen rubric and supplied scoped tool evidence. This is the only review pass. "
-                "Return revisions only when a specific error in an expert's judgment can be supported "
-                "by the original text; source_quote must be verbatim from the student answer. "
-                "A revision contains expert_index (zero-based), reason, source_quote, and complete "
-                "MathAssessment. Preserve undisputed awards unless an explicit needs_review concern "
-                "provides source evidence for correcting them. Keep existing claim IDs and their "
-                "exact quotes unchanged; add new IDs only for newly identified original text. "
-                "Do not invent consensus or change the "
-                "rubric. Unknown tools are not evidence of an error. Empty revisions is valid. "
-                "Also resolve pending tool evidence, even when experts agree on the score. "
-                "A direct grade is a valid vote, not a reason to skip a dispute. "
-                "Include a revision even if its score stays the same when resolving evidence. "
-                "In its assessment return evidence_judgments for every supplied supported/refuted "
-                "evidence_id with applicability (applies/partial/not_applicable/uncertain) and source-based reason. "
-                "Use applies only when the result covers this assertion and agrees with its verdict; "
-                "use partial with an explanation when it covers only part of the claim. "
-                "Explain concrete residual disagreement; produce no mandatory-review instructions."
-                " For explicit zero/full rules, include binary_correct judging the entire final answer."
+                "Review disputed scoring once against the original student work and the frozen rubric. "
+                "Identify what the text establishes before comparing the awards. A valid alternative proof "
+                "can meet the same obligation; a missing substantive implication cannot be supplied by you. "
+                "Keep defensible differences in partial credit. Never average or aim for consensus here. "
+                "Return an explicit empty revisions list if neither vote has a source-grounded error. "
+                "Submit at most one revision per expert. Unknown tools are not evidence of error. "
+                "Keep teacher review suggestions optional. "
+                + proof_guidance
+                + instructions
                 + ("\n" + REVIEW_INSTRUCTION + " After the complete review JSON, append PROOF_AUDIT "
                    "followed by a separate JSON object mapping each revised proof expert's index "
                    "(string) to an audit object with the same steps/context_source_ids shape as its trace. "
                    "This optional appendix must never be placed inside a revision or assessment."
                    if any("proof_audit" in trace for trace in traces) else "")
                 + authoritative_score_instruction(problem.max_score)
-                + "\nJSON Schema:\n" + _json(ExpertReview.model_json_schema()), language, grading_setup,
+                + "\nJSON Schema:\n" + _json(review_format.model_json_schema()), language, grading_setup,
                 **({"output_instruction": OUTPUT_INSTRUCTION} if any("proof_audit" in trace for trace in traces) else {})),
             user_prompt=_json({"problem": problem.stem, "reference": problem.reference_answer,
                                "answer": answer.content, "plan": plan.model_dump(mode="json"),
-                               "source_catalog": {key: value[0] for key, value in
-                                   source_catalog(answer.content or "", problem.stem, plan.original_criterion).items()},
-                               "disputed_item_ids": sorted(disputed), "experts": traces}),
+                               "source_catalog": {key: value[0] for key, value in catalog.items()},
+                               "disputed_item_ids": sorted(disputed), "experts": review_evidence}),
             validate_output=validate_review,
         )
         # Mock callers may bypass structured_llm_call's validator; this is also
         # a final guard before applying any revision to the valid votes.
         validate_review(review)
         revised = list(experts)
-        for revision in review.revisions:
-            index = revision.expert_index
-            old, candidate = assessments[index], revision.assessment
-            score, steps = score_assessment(candidate, plan, answer.content or "", problem_text=problem.stem)
+        for index, (revision, candidate, score, steps) in accepted.items():
             trace = dict(traces[index])
             if "assessment" in trace:
                 trace["original_assessment"] = trace["assessment"]
@@ -810,6 +1014,8 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                     answer.content or "", problem.stem, plan, previous=trace["proof_audit"])
             trace.pop("review_advisory", None)
             trace["targeted_review"] = {"provider": provider.provider_id, "reason": revision.reason}
+            if isinstance(revision, PointRevision):
+                trace["targeted_review"]["item_ids"] = [award.item_id for award in revision.awards]
             if steps:
                 label = "定向复核依据：" if language == "zh" else "Targeted review: "
                 steps[0] = steps[0].model_copy(update={"desc": steps[0].desc + "\n" + label + revision.reason})
@@ -819,13 +1025,29 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                 "score": score, "steps": steps, "comment": candidate.comment,
                 "raw_output": _json(trace),
             })
+        if validation_issues or (not accepted and (disputed or other_dispute)):
+            for index, expert in enumerate(revised):
+                trace = dict(read_math_trace(expert))
+                status = "retained"
+                if index in accepted:
+                    status = "revised"
+                elif index in rejected_indices:
+                    status = "invalid_revision"
+                trace["review_diagnostic"] = {"status": status, "validation_issues": validation_issues}
+                revised[index] = expert.model_copy(update={"raw_output": _json(trace)})
         return [_with_pending_advice(expert, language) for expert in revised]
     except Exception as exc:
         if _critical_failure(exc):
             raise
         retained = []
+        failure_stage = "provider_or_runtime"
+        if isinstance(exc, StructuredOutputInvalidError):
+            failure_stage = ("revision_validation" if str(exc) == "Invalid targeted mathematical review."
+                             else "response_format_or_attempt_limit")
         for expert, trace in zip(experts, traces):
-            trace = dict(trace, review_failure=type(exc).__name__)
+            trace = dict(trace, review_failure=type(exc).__name__, review_diagnostic={
+                "status": "failed", "stage": failure_stage, "error_type": type(exc).__name__,
+                "validation_issues": validation_issues})
             retained.append(_with_pending_advice(expert.model_copy(update={"raw_output": _json(trace)}), language))
         return retained  # A failed optional review never erases valid grades.
 
@@ -872,7 +1094,7 @@ class MathGradingSkill(GradingSkill):
         # prompt or legacy scoring branch to become a silent fallback.
         template = (Path(__file__).resolve().parents[1] / "prompts" /
                     f"{self.template_name}.txt").read_text(encoding="utf-8")
-        return template + "\n" + LEDGER_INSTRUCTION + "\nINPUT DATA:\n" + _json({
+        return template + "\n" + LEDGER_INSTRUCTION + _generated_proof_guidance(problem) + "\nINPUT DATA:\n" + _json({
             "problem": problem.stem, "reference_answer": problem.reference_answer,
             "student_answer": answer.content, "rubric_plan": plan.model_dump(mode="json"),
             "binary_rule": frozen_binary_rule(plan),
@@ -940,6 +1162,11 @@ class MathGradingSkill(GradingSkill):
                 return await self._direct(problem, answer, plan, prompt, unit, chunks, started=started)
             system = build_system_prompt(
                 "Grade only the submitted work under the frozen rubric. "
+                "For each point item identify the obligation, locate the student's relevant passage, "
+                "then decide whether it establishes the obligation, makes partial progress, or contradicts it. "
+                "Apply the same evidence threshold to a reference method and a valid alternative. "
+                "Where a proof is implicit, distinguish a consequence of the written premises from a "
+                "substantive missing premise. Award only what the text and rubric support. "
                 "Do not reconstruct missing student steps. Give concise checkable scoring evidence. "
                 "The tool may verify only a limited mathematical relation, never a whole answer. "
                 "Return MathAssessment with the selected route, actual source claims and item ledger. "
