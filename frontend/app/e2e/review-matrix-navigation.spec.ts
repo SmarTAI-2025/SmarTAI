@@ -52,6 +52,7 @@ for (const stage of ["submissions", "grading"]) for (const demo of [false, true]
       await link.click({ timeout: 5_000 });
       await expect(page).toHaveURL(new URL(href!, page.url()).href);
       await expect(page.locator('[data-question-id="q1"]')).toBeVisible();
+      await expect(page.getByRole("main")).toHaveCount(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     }
     await page.screenshot({ path: testInfo.outputPath("matrix-details.png"), fullPage: false });
