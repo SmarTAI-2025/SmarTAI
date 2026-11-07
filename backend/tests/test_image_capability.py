@@ -102,6 +102,7 @@ def saved(owner):
 
 @pytest.mark.parametrize("outcome,state,reason", [
     ("answer", "passed", "image_probe_answer_correct"),
+    ("answer_at_limit", "passed", "image_probe_answer_correct"),
     ("I support images", "inconclusive", "image_probe_answer_incorrect"),
     ("wrong", "inconclusive", "image_probe_answer_incorrect"),
     ("truncated", "inconclusive", "image_probe_response_truncated"),
@@ -119,9 +120,12 @@ async def test_opt_in_probe_is_single_and_checks_answer(outcome, state, reason, 
     pixels, answer = make_image_challenge()
     monkeypatch.setattr(experts, "make_image_challenge", lambda: (pixels, answer))
     monkeypatch.setattr(settings, "custom_provider_verification_cooldown_seconds", 0)
-    call = AsyncMock(side_effect=outcome) if isinstance(outcome, Exception) else AsyncMock(return_value=SimpleNamespace(
-        content=answer if outcome in {"answer", "truncated"} else outcome,
-        finish_reason="length" if outcome == "truncated" else "stop"))
+    if isinstance(outcome, Exception):
+        call = AsyncMock(side_effect=outcome)
+    else:
+        content = {"answer": answer, "answer_at_limit": answer, "truncated": answer[:-1]}.get(outcome, outcome)
+        finish_reason = "length" if outcome in {"answer_at_limit", "truncated"} else "stop"
+        call = AsyncMock(return_value=SimpleNamespace(content=content, finish_reason=finish_reason))
     provider.ainvoke_vision = call
     monkeypatch.setattr(experts, "build_provider", lambda config: provider)
     response = await experts.verify_provider_image(provider_id, current=user, registry=registry)
