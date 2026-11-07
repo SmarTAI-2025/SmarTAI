@@ -312,7 +312,6 @@ export function GradingHistoryPanel({ dashboard = false, deletion }: { dashboard
             sort={interpretation?.execution ? manualSort ?? undefined : query.sort}
             onFilter={handleChange}
             onRetry={() => void historyQuery.refetch()}
-            onClear={clearAll}
           />
         </div>
 

@@ -28,7 +28,6 @@ interface HistoryTaskTableProps {
   sort?: TaskHistoryQuery["sort"];
   onFilter: (patch: Partial<TaskHistoryQuery>) => void;
   onRetry: () => void;
-  onClear: () => void;
 }
 
 export function HistoryTaskTable({
@@ -42,14 +41,13 @@ export function HistoryTaskTable({
   sort,
   onFilter,
   onRetry,
-  onClear,
 }: HistoryTaskTableProps) {
   const { t } = useI18n();
   return (
     <section aria-label={t("historyTableRegion")} className="w-full">
       <div className="overflow-visible pb-2 md:overflow-x-auto">
-        <div role="table" aria-label={t("historyTableRegion")} aria-busy={isLoading} className="min-w-0 text-left">
-          <div role="row" className={cn("grid h-[42px] items-center px-px text-[13px] font-semibold leading-4 text-muted-foreground", TASK_LIST_COLUMNS)}>
+        <div role="table" aria-label={t("historyTableRegion")} aria-busy={isLoading} className={cn("min-w-0 text-left [overflow-wrap:anywhere]", TASK_LIST_COLUMNS)}>
+          <div role="row" className="col-span-full grid grid-cols-subgrid min-h-[42px] items-center px-px text-[13px] font-semibold leading-4 text-muted-foreground">
             <SortableTableHead as="div" className="px-[14px]"
               direction={sort === "name_asc" ? "asc" : sort === "name_desc" ? "desc" : null}
               onSort={() => onFilter({ sort: sort === "name_asc" ? "name_desc" : "name_asc" })}>{t("historyColumnTask")}</SortableTableHead>
@@ -70,7 +68,7 @@ export function HistoryTaskTable({
             <div role="columnheader" className="text-center">{t("historyColumnActions")}</div>
           </div>
 
-          <div role="rowgroup" className="overflow-visible rounded-[8px] border bg-card">
+          <div role="rowgroup" className="col-span-full grid grid-cols-subgrid overflow-visible rounded-[8px] border bg-card">
             {isLoading ? <HistoryLoadingRows /> : null}
             {!isLoading && errorMessage ? (
               <HistoryTableMessage
@@ -84,9 +82,8 @@ export function HistoryTaskTable({
               <HistoryTableMessage
                 title={hasFilters ? t("historyNoMatchesTitle") : t("historyEmptyTitle")}
                 description={hasFilters ? t("historyNoMatchesDescription") : t("historyEmptyDescription")}
-                actionLabel={hasFilters ? t("historyClearFilters") : t("historyCreateTask")}
+                actionLabel={hasFilters ? undefined : t("historyCreateTask")}
                 actionTo={hasFilters ? undefined : "/tasks/new"}
-                onAction={hasFilters ? onClear : undefined}
               />
             ) : null}
             {!isLoading && !errorMessage ? tasks.map((task) => (
@@ -126,24 +123,24 @@ function HistoryTaskRow({
   ].filter((value): value is string => Boolean(value));
 
   return (
-    <div role="row" className={cn("grid min-h-[76px] items-center border-t text-[13px] leading-4 first:border-t-0 hover:bg-slate-50/70 md:min-h-[62px] dark:hover:bg-slate-800/30", TASK_LIST_COLUMNS)}>
+    <div role="row" className="col-span-full grid grid-cols-subgrid min-h-[76px] items-center border-t text-[13px] leading-4 first:border-t-0 hover:bg-slate-50/70 md:min-h-[62px] dark:hover:bg-slate-800/30">
       <div role="cell" className="min-w-0 px-[14px] py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Link to={destination} className="min-w-0 truncate font-semibold text-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring" title={task.name}>
+          <Link to={destination} className="min-w-0 font-semibold text-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring" title={task.name}>
             {task.name}
           </Link>
           {task.needs_attention ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" title={t("historyNeedsAttention")} /> : null}
         </div>
-        <div className="mt-1 hidden min-w-0 items-center gap-1 overflow-visible whitespace-nowrap md:flex">
+        <div className="mt-1 hidden min-w-0 items-center gap-1 overflow-visible md:flex">
           {task.semester_id ? (
-            <span title={formatSemesterLabel(task.semester_id, t)} className="max-w-[132px] truncate rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 outline-none hover:border-primary/30 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <span title={formatSemesterLabel(task.semester_id, t)} className="max-w-full rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 outline-none hover:border-primary/30 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
               {formatSemesterLabel(task.semester_id, t)}
             </span>
           ) : null}
         </div>
         <div className="mt-1 flex min-w-0 items-center gap-1 md:hidden">
           <HistoryTagPopover task={task} tags={tags} />
-          <span title={mobileMetadata.join(" · ")} className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+          <span title={mobileMetadata.join(" · ")} className="min-w-0 flex-1 text-[11px] text-muted-foreground">
             {mobileMetadata.length ? mobileMetadata.join(" · ") : t("historyMetadataUnset")}
           </span>
         </div>
@@ -152,26 +149,25 @@ function HistoryTaskRow({
 
       <div role="cell" className="hidden min-w-0 flex-wrap items-center gap-1 px-[14px] md:flex">
           {course ? (
-            <span title={course.name} className="max-w-[100px] truncate rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 outline-none hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
+            <span title={course.name} className="max-w-full rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 outline-none hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
               {course.name}
             </span>
           ) : null}
-          {taskTags.slice(0, 2).map((tag) => (
-            <span key={tag.id} title={tag.name} className={cn("max-w-[82px] truncate rounded-full border px-2 py-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring", TAG_TONE_CLASSES[tag.color])}>
+          {taskTags.map((tag) => (
+            <span key={tag.id} title={tag.name} className={cn("max-w-full rounded-full border px-2 py-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring", TAG_TONE_CLASSES[tag.color])}>
               {tag.name}
             </span>
           ))}
-          {taskTags.length > 2 ? <span className="text-[11px] text-muted-foreground">+{taskTags.length - 2}</span> : null}
-          {!course && taskTags.length === 0 ? <span className="truncate text-[11px] text-muted-foreground">{t("dashboardCourseUnset")}</span> : null}
+          {!course && taskTags.length === 0 ? <span className="text-[11px] text-muted-foreground">{t("dashboardCourseUnset")}</span> : null}
           <HistoryTagPopover task={task} tags={tags} />
       </div>
 
       <div role="cell" className="min-w-0 px-1 py-2 text-center">
-        <Link to={destination} title={t(HISTORY_STAGE_KEYS[task.status])} className={cn("inline-flex min-h-7 max-w-full items-center justify-center rounded-full px-3 py-1 text-[13px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring md:h-7 md:py-0", historyStatusTone(task.status))}>
-          <span className="min-w-0 break-words md:truncate">{t(HISTORY_STAGE_KEYS[task.status])}</span>
+        <Link to={destination} title={t(HISTORY_STAGE_KEYS[task.status])} className={cn("inline-flex min-h-7 max-w-full items-center justify-center rounded-full px-3 py-1 text-[13px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring", historyStatusTone(task.status))}>
+          <span className="min-w-0">{t(HISTORY_STAGE_KEYS[task.status])}</span>
         </Link>
         <div className="mt-1 flex min-w-0 items-center gap-1 md:hidden">
-          <Link to={destination} className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring">
+          <Link to={destination} className="min-w-0 flex-1 text-[11px] font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring">
             {t(HISTORY_ACTION_KEYS[task.status])}
           </Link>
         </div>
@@ -181,7 +177,7 @@ function HistoryTaskRow({
       <div role="cell" className="hidden px-[14px] tabular-nums text-muted-foreground md:block">{formatHistoryEta(task.eta_seconds, locale)}</div>
       <div role="cell" className="hidden px-[14px] tabular-nums text-muted-foreground md:block">{formatHistoryTime(task.updated_at, locale)}</div>
       <div role="cell" className="hidden min-w-0 items-center gap-1 px-[14px] md:flex">
-          <Link to={destination} title={t(HISTORY_ACTION_KEYS[task.status])} className="min-w-0 flex-1 truncate font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring">
+          <Link to={destination} title={t(HISTORY_ACTION_KEYS[task.status])} className="min-w-0 flex-1 font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring">
           {t(HISTORY_ACTION_KEYS[task.status])}
         </Link>
       </div>
@@ -203,9 +199,9 @@ function HistoryProgressCell({ task }: { task: TaskLite }) {
 function HistoryLoadingRows() {
   const { t } = useI18n();
   return (
-    <div role="status" aria-label={t("loading")}>
+    <div role="status" aria-label={t("loading")} className="col-span-full grid grid-cols-subgrid">
       {Array.from({ length: 5 }, (_, index) => (
-        <div key={index} className={cn("grid h-[76px] animate-pulse items-center border-t first:border-t-0 md:h-[62px]", TASK_LIST_COLUMNS)}>
+        <div key={index} className="col-span-full grid grid-cols-subgrid h-[76px] animate-pulse items-center border-t first:border-t-0 md:h-[62px]">
           <Skeleton className="mx-[14px] w-40" />
           <Skeleton className="mx-[14px] hidden w-20 md:block" />
           <Skeleton className="mx-auto w-16" />
@@ -233,17 +229,17 @@ function HistoryTableMessage({
 }: {
   title: string;
   description: string;
-  actionLabel: string;
+  actionLabel?: string;
   actionTo?: string;
   onAction?: () => void;
 }) {
   const actionClass = "mt-3 inline-flex h-8 items-center rounded-md border bg-background px-3 text-xs font-semibold text-primary outline-none hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring";
   return (
-    <div role="row" className="flex min-h-[200px] items-center justify-center px-6 py-10 text-center">
+    <div role="row" className="col-span-full flex min-h-[200px] items-center justify-center px-6 py-10 text-center">
       <div role="cell">
         <p className="text-sm font-semibold text-foreground">{title}</p>
         <p className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">{description}</p>
-        {actionTo ? <Link to={actionTo} className={actionClass}>{actionLabel}</Link> : <button type="button" className={actionClass} onClick={onAction}>{actionLabel}</button>}
+        {actionTo ? <Link to={actionTo} className={actionClass}>{actionLabel}</Link> : onAction && <button type="button" className={actionClass} onClick={onAction}>{actionLabel}</button>}
       </div>
     </div>
   );

@@ -49,7 +49,7 @@ export function HistoryFilters({
   const { locale, t } = useI18n();
   const zh = locale === "zh-CN";
   return (
-    <section aria-label={t("historyFilterRegion")} className={dashboard ? "my-6" : "rounded-[10px] border bg-card px-4 py-4 sm:px-6"}>
+    <section aria-label={t("historyFilterRegion")} className={dashboard ? "my-6" : undefined}>
       <div className={dashboard ? "grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 sm:gap-x-5" : ""}>
         {dashboard && <>
           <SmarTAIMascot variant={isInterpreting ? "grading" : "thinking"} size="md" className="h-14 w-20 sm:row-span-2 sm:h-20 sm:w-28" />
@@ -60,7 +60,8 @@ export function HistoryFilters({
         <div className={dashboard ? "col-span-2 min-w-0 sm:col-span-1" : "min-w-0"}>
           <AskQueryBar locale={locale} value={value} pending={isInterpreting} mascotOutside={dashboard}
             label={t("historySmartLabel")} placeholder={`${t("historySearchPlaceholder")} · ${t("historySmartPlaceholder")}`}
-            onChange={onEdit} onCancel={onCancelInterpret} onApply={onInterpret} />
+            onChange={onEdit} onCancel={onCancelInterpret} onApply={onInterpret}
+            onClearWhenEmpty={canClear ? onClear : undefined} />
         </div>
       </div>
       {choices.length > 0 && <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label={t("historySmartAmbiguity")}>
@@ -69,11 +70,6 @@ export function HistoryFilters({
           className="rounded-full border px-2.5 py-1 text-xs hover:text-primary focus-visible:ring-2 focus-visible:ring-ring">
           {t(choice.field === "q" ? "historyColumnTask" : choice.field === "course_id" ? "historyCourse" : "historyTags")} · {choice.label}
         </button>)}
-      </div>}
-      {(!dashboard || canClear) && <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-1" role="group" aria-label={t("historyFilterRegion")}>
-        <button type="button" className="h-8 shrink-0 px-2 text-[13px] font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring" onClick={onClear}>
-          {t("historyClearFilters")}
-        </button>
       </div>}
       <GroundedAskAnswer execution={interpretation?.execution} locale={locale} />
       {interpretation && !interpretation.execution ? (
@@ -95,9 +91,6 @@ export function HistoryFilters({
                 <X aria-hidden="true" className="h-3 w-3 shrink-0" />
               </button>
             ))}
-            <button type="button" className="text-xs font-medium text-primary outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring" onClick={onClear}>
-              {t("historySmartClear")}
-            </button>
           </div>
           <p className="mt-2 text-xs leading-5 text-muted-foreground">
             {interpretation.conditions.length

@@ -15,6 +15,7 @@ for (const width of [390, 1024, 1280, 1440, 1920]) {
     });
     const course = { id: "cs", name: "计算机基础", code: "CS101" };
     const tag = { id: "mid", name: "期中", color: "teal" };
+    const tags = [tag];
     const task = { task_id: "practice", name: "数据结构练习", semester_id: "2026-2027-autumn", owner_id: "teacher",
       course_id: course.id, tag_ids: [tag.id], workflow_revision: 1, status: "graded", problem_count: 2,
       student_count: 1, kb_docs: {}, kb_doc_count: 0, created_at: 1, updated_at: 2, progress_percent: 100, eta_seconds: 0 };
@@ -27,13 +28,13 @@ for (const width of [390, 1024, 1280, 1440, 1920]) {
       if (path === "/auth/me") return json({ id: "teacher", username: "示例教师", role: "teacher", is_active: true });
       if (path === "/auth/activity") return json({ token: "synthetic-teacher" });
       if (path === "/knowledge/activity") return json({ items: [], total: 0, active_count: 0 });
-      if (path === "/tags/") return json([tag]);
+      if (path === "/tags/") return json(tags);
       if (path === "/tasks/") {
         if (!url.searchParams.has("page")) return json(Object.fromEntries(tasks.map(t => [t.task_id, t])));
         const items = tasks.filter(t => t.name.includes(url.searchParams.get("q") ?? "") &&
           (!url.searchParams.has("course_id") || t.course_id === url.searchParams.get("course_id")) &&
           (!url.searchParams.has("tag_ids") || t.tag_ids.includes(url.searchParams.get("tag_ids")!)));
-        return json({ items, total: items.length, available_facets: { semesters: [], statuses: {}, courses: [course], tags: [tag] } });
+        return json({ items, total: items.length, available_facets: { semesters: [], statuses: {}, courses: [course], tags } });
       }
       if (path === "/analytics/ask") {
         const body = request.postDataJSON();
@@ -88,6 +89,68 @@ for (const width of [390, 1024, 1280, 1440, 1920]) {
       console.log(`Dashboard at ${width}px: left=${bounds!.x}, right=${bounds!.x + bounds!.width}, width=${bounds!.width}`);
     }
     await page.screenshot({ path: testInfo.outputPath("dashboard.png") });
+    if (width === 1440 || width === 390) {
+      const shortName = task.name, shortCourse = course.name;
+      const longName = "微积分期末综合作业".repeat(6) + "VectorCalculusHomework".repeat(3);
+      const longCourse = "计算机科学与技术专业跨学期实验课程".repeat(4);
+      for (const surface of ["dashboard", "history"]) {
+        async function measure(name: string, courseName: string) {
+          task.name = name;
+          course.name = courseName;
+          await page.goto(`/${surface}`);
+          const list = surface === "dashboard"
+            ? page.getByRole("region", { name: "需要关注的任务" })
+            : page.getByRole("table", { name: "历史任务列表" });
+          const title = list.getByText(name, { exact: true });
+          const metadata = list.getByText(courseName, { exact: surface === "history" && width >= 768 }).filter({ visible: true });
+          await expect(title).toBeVisible();
+          await expect(metadata).toBeVisible();
+          const lineCounts = [];
+          for (const label of [title, metadata]) {
+            const measured = await label.evaluate(element => {
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const lines = [...range.getClientRects()];
+              const box = (element.closest('[role="cell"]') ?? element).getBoundingClientRect();
+              // WebKit's glyph bounds can extend beyond CSS line-height; the row is the visible vertical boundary.
+              const row = (element.closest('[role="row"], article') ?? element).getBoundingClientRect();
+              return { lines: new Set(lines.map(line => Math.round(line.top))).size,
+                fits: lines.every(line => line.left >= box.left - 1 && line.right <= box.right + 1 &&
+                  line.top >= row.top - 1 && line.bottom <= row.bottom + 1),
+                clipped: element.scrollWidth > element.clientWidth + 1 && getComputedStyle(element).overflowX === "hidden" };
+            });
+            expect(measured.fits).toBe(true);
+            expect(measured.clipped).toBe(false);
+            lineCounts.push(measured.lines);
+          }
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+          await expect(list.getByRole("button", { name: `删除任务 · ${name}` })).toBeVisible();
+          const cells = list.getByRole("columnheader");
+          const widths = width < 1280 ? [] : await cells.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
+          return { widths, lineCounts };
+        }
+        const original = await measure(shortName, shortCourse);
+        if (width === 1440) {
+          const longerTask = await measure(longName, shortCourse);
+          const longerCourse = await measure(shortName, longCourse);
+          expect(longerTask.widths[0]).toBeGreaterThan(original.widths[0] + 10);
+          expect(longerCourse.widths[1]).toBeGreaterThan(original.widths[1] + 10);
+        }
+        tags.push({ id: "third", name: "综合应用", color: "blue" }, { id: "fourth", name: "跨章节", color: "slate" });
+        task.tag_ids.push("third", "fourth");
+        const both = await measure(longName, longCourse);
+        const longList = page.getByRole(surface === "history" ? "table" : "region", { name: surface === "history" ? "历史任务列表" : "需要关注的任务" });
+        await expect(longList.getByText("跨章节", { exact: width >= 768 && surface === "history" }).filter({ visible: true })).toBeVisible();
+        tags.splice(1);
+        task.tag_ids.splice(1);
+        expect(both.lineCounts[0]).toBeGreaterThan(1);
+        expect(both.lineCounts[1]).toBeGreaterThan(1);
+        await page.screenshot({ path: testInfo.outputPath(`${surface}-long-content.png`) });
+      }
+      task.name = shortName;
+      course.name = shortCourse;
+      await page.goto("/dashboard");
+    }
     await run("哪些批改需要复核？");
     const results = page.getByRole("table", { name: "历史任务列表" });
     await expect(results.getByRole("link", { name: task.name, exact: true })).toBeVisible();
@@ -95,6 +158,10 @@ for (const width of [390, 1024, 1280, 1440, 1920]) {
 
     await page.goto("/history");
     await expect(page.getByRole("textbox")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "清空筛选" })).toHaveCount(0);
+    const filterBox = page.getByRole("region", { name: "历史任务筛选" });
+    await expect(filterBox).toHaveCSS("border-top-width", "0px");
+    await expect(filterBox.getByRole("search")).toHaveCSS("border-top-width", "1px");
     if (width >= 768) await expect(results.getByRole("columnheader")).toHaveText(headings);
     for (const [text, param, value] of [["结构", "q", "结构"], ["CS101", "course", "cs"], ["期中", "tags", "mid"]]) {
       await run(text);

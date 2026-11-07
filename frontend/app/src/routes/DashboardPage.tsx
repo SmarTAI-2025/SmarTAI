@@ -265,16 +265,16 @@ function DashboardTaskTable({
         role="table"
         aria-label={t("dashboardAttentionTasks")}
         aria-busy={isLoading}
-        className="w-full overflow-hidden rounded-[8px] border text-left"
+        className={cn("w-full overflow-hidden rounded-[8px] border text-left [overflow-wrap:anywhere]", TASK_LIST_COLUMNS)}
       >
         <div
           role="row"
-          className={cn("grid h-[42px] items-center border-b text-[12px] font-semibold leading-[15px] text-muted-foreground", TASK_LIST_COLUMNS)}
+          className="col-span-full grid grid-cols-subgrid min-h-[42px] items-center border-b text-[12px] font-semibold leading-[15px] text-muted-foreground"
         >
           {DASHBOARD_TASK_HEADINGS.map(key => <div key={key} role="columnheader"
             className={key === "historyColumnStage" || key === "historyColumnActions" ? "text-center" : "px-3"}>{t(key)}</div>)}
         </div>
-        <div role="rowgroup" className="min-h-55 bg-card">
+        <div role="rowgroup" className="col-span-full grid min-h-55 grid-cols-subgrid bg-card">
           {isLoading ? <DesktopLoadingRows label={t("loading")} /> : null}
           {!isLoading && errorMessage ? (
             <CompactTableMessage
@@ -297,7 +297,7 @@ function DashboardTaskTable({
             : null}
           {!isLoading && !errorMessage && tasks.length > 0
             ? Array.from({ length: Math.max(0, 5 - tasks.length) }, (_, index) => (
-                <div key={`empty-row-${index}`} role="presentation" className="h-11 border-t bg-card" />
+                <div key={`empty-row-${index}`} role="presentation" className="col-span-full h-11 border-t bg-card" />
               ))
             : null}
         </div>
@@ -359,18 +359,18 @@ function DesktopTaskRow({ task, courseTags, deletion }: DashboardTaskProps) {
   return (
     <div
       role="row"
-      className={cn("grid h-11 items-center border-t text-[13px] leading-4 first:border-t-0", TASK_LIST_COLUMNS)}
+      className="col-span-full grid grid-cols-subgrid min-h-11 items-center py-1 border-t text-[13px] leading-4 first:border-t-0"
     >
       <div role="cell" className="min-w-0 px-3">
         <Link
           to={getTaskDestination(task)}
-          className="block truncate font-semibold text-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
+          className="block font-semibold text-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
           title={task.name}
         >
           {task.name}
         </Link>
       </div>
-      <div role="cell" title={courseTags} className="truncate px-3 text-muted-foreground">
+      <div role="cell" title={courseTags} className="min-w-0 px-3 text-muted-foreground">
         {courseTags || t("dashboardCourseUnset")}
       </div>
       <div role="cell" className="min-w-0 px-1 text-center">
@@ -388,7 +388,7 @@ function DesktopTaskRow({ task, courseTags, deletion }: DashboardTaskProps) {
       <div role="cell" className="min-w-0 px-3">
         <Link
           to={getTaskDestination(task)}
-          className="block truncate font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
+          className="block font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
         >
           {t(ACTION_KEYS[task.status])}
         </Link>
@@ -405,13 +405,13 @@ function MobileTaskCard({ task, courseTags, deletion }: DashboardTaskProps) {
   const progressValue = getProgressValue(task, progressQuery.progress, progressQuery.percent);
 
   return (
-    <article className="relative">
+    <article className="relative [overflow-wrap:anywhere]">
       <Link to={getTaskDestination(task)}
         className="grid gap-3 rounded-[10px] border bg-card p-4 outline-none transition-colors hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">{task.name}</p>
-            {courseTags && <p className="mt-1 truncate text-xs text-muted-foreground">{courseTags}</p>}
+            <p className="text-sm font-semibold">{task.name}</p>
+            {courseTags && <p className="mt-1 text-xs text-muted-foreground">{courseTags}</p>}
             <p className="mt-1 text-xs text-muted-foreground">{formatTaskTime(task.updated_at, true, locale)}</p>
           </div>
           <StatusPill status={task.status}>{t(STAGE_KEYS[task.status])}</StatusPill>
@@ -437,7 +437,7 @@ function StatusPill({
     <span
       title={typeof children === "string" ? children : undefined}
       className={cn(
-        "inline-flex h-7 max-w-full items-center justify-center overflow-hidden text-ellipsis whitespace-nowrap rounded-full px-3 text-[12px] font-semibold xl:text-[13px]",
+        "inline-flex min-h-7 max-w-full items-center justify-center rounded-full px-3 py-1 text-center text-[12px] font-semibold xl:text-[13px]",
         taskStatusTone(status),
       )}
     >
@@ -562,7 +562,7 @@ function CompactTableMessage({
   const actionClassName = "mt-3 inline-flex h-7 items-center rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground outline-none hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring";
 
   return (
-    <div role="row" className="h-full">
+    <div role="row" className="col-span-full h-full">
       <div role="cell" aria-colspan={7} className="flex h-full flex-col items-center justify-center px-6 text-center">
         <p className="text-sm font-semibold">{title}</p>
         <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">{description}</p>
@@ -584,7 +584,7 @@ function DesktopLoadingRows({ label }: { label: string }) {
         <div
           key={index}
           role="row"
-          className={cn("grid h-11 animate-pulse items-center border-t first:border-t-0", TASK_LIST_COLUMNS)}
+          className="col-span-full grid grid-cols-subgrid h-11 animate-pulse items-center border-t first:border-t-0"
         >
           {DASHBOARD_TASK_HEADINGS.map((_, cell) => (
             <div key={cell} role="cell" className="px-3">

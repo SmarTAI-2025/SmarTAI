@@ -6,9 +6,9 @@ export { formatSemesterLabel } from "@/lib/semesters";
 import { TASK_STAGE_KEYS as HISTORY_STAGE_KEYS } from "@/lib/taskPresentation";
 export { TASK_STAGE_KEYS as HISTORY_STAGE_KEYS, TASK_ACTION_KEYS as HISTORY_ACTION_KEYS, taskStatusTone as historyStatusTone } from "@/lib/taskPresentation";
 
-// Both task tables use these eight tracks on desktop. On a phone the history row
-// folds secondary metadata under its task and stage labels.
-export const TASK_LIST_COLUMNS = "grid-cols-[minmax(0,1fr)_96px_74px] md:grid-cols-[minmax(90px,1.6fr)_minmax(88px,1.1fr)_minmax(92px,1fr)_60px_84px_90px_76px_72px] xl:grid-cols-[minmax(180px,1.8fr)_minmax(148px,1.2fr)_minmax(120px,1fr)_96px_110px_124px_108px_80px]";
+// Size the tracks once from every visible header and row. Text columns can borrow
+// unused width; the action track always has room for its two icon buttons.
+export const TASK_LIST_COLUMNS = "grid grid-cols-[minmax(0,auto)_minmax(5rem,auto)_minmax(4.5rem,max-content)] md:grid-cols-[minmax(7rem,auto)_minmax(6rem,auto)_minmax(5rem,auto)_minmax(3.5rem,auto)_minmax(4.5rem,auto)_minmax(5rem,auto)_minmax(4.5rem,auto)_minmax(4.5rem,max-content)]";
 
 export function taskCourseAndTags(task: TaskLite, facets?: Pick<HistoryFacets, "courses" | "tags">) {
   const course = facets?.courses.find(item => item.id === task.course_id);

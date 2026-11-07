@@ -122,6 +122,15 @@ describe("Current task Ask SmarTAI", () => {
     expect(screen.queryByText(/暂时无法分析这个问题/)).not.toBeInTheDocument();
   });
 
+  it("clears filters opened from a link using only the cross inside the empty search field", () => {
+    mount("/history?attention=true");
+    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(screen.queryByRole("button", { name: "清空筛选" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清空查询" }));
+    expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ needs_attention: true }), true);
+    expect(screen.queryByRole("button", { name: "清空查询" })).not.toBeInTheDocument();
+  });
+
   it("sorts task history on the server and reverses a second header click", async () => {
     mount();
     fireEvent.click(screen.getByRole("button", { name: "任务，当前未排序；点击升序" }));
@@ -137,7 +146,7 @@ describe("Current task Ask SmarTAI", () => {
     mount();
     ask();
     await waitFor(() => expect(mocks.interpret).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole("button", { name: "清空筛选" }));
+    fireEvent.click(screen.getByRole("button", { name: "清空查询" }));
     await act(async () => finish(interpretation));
     expect(screen.queryByText(interpretation.explanation)).not.toBeInTheDocument();
     expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ unfinished: true }), true);
@@ -239,7 +248,7 @@ describe("Current task Ask SmarTAI", () => {
     expect(mocks.state.mock.calls.filter(([id]) => id === "task-1")).toHaveLength(completedCalls);
 
     const callsBeforeClear = mocks.state.mock.calls.length;
-    fireEvent.click(screen.getByRole("button", { name: "清空筛选" }));
+    fireEvent.click(screen.getByRole("button", { name: "清空查询" }));
     await act(async () => { await vi.advanceTimersByTimeAsync(3_010); });
     expect(mocks.state).toHaveBeenCalledTimes(callsBeforeClear);
     expect(tasks[0].status).toBe("grading");
