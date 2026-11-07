@@ -144,7 +144,7 @@ def test_actual_multi_expert_reviews_items_once_and_keeps_custom_weights(votes, 
 
     async def reply(provider, *, output_model, user_prompt, **kwargs):
         calls.append(output_model.__name__)
-        if output_model is engine.ExpertReview:
+        if output_model is engine.PointReview:
             payload = json.loads(user_prompt)
             assert payload["answer"] == case["answer"]
             assert payload["disputed_item_ids"]
@@ -164,7 +164,7 @@ def test_actual_multi_expert_reviews_items_once_and_keeps_custom_weights(votes, 
     with patch.object(engine, "structured_llm_call", reply), \
             patch.object(engine.kb_tool, "retrieve_for_grading", AsyncMock(return_value=[])):
         result = asyncio.run(run())
-    assert calls.count("MathAssessment") == 2 and calls.count("ExpertReview") == 1
+    assert calls.count("MathAssessment") == 2 and calls.count("PointReview") == 1
     assert result.score == expected
     assert sum(step.score for step in result.steps) == pytest.approx(expected)
     assert len({engine.read_math_trace(e)["plan_id"] for e in result.expert_results}) == 1
