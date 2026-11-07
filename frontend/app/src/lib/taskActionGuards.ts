@@ -1,5 +1,6 @@
-import { programmingArchiveGuidance } from "@/lib/submissionSourceOutcomes";
+import { programmingArchiveGuidance, truncatedLocatorCopy } from "@/lib/submissionSourceOutcomes";
 import { isTaskAwaitingGrading } from "@/lib/taskFlow";
+import { pdfLocalLimitCopy } from "@/lib/submissionSourceOutcomes";
 import { getAPIErrorCode, getAPIErrorDetail, normalizeAPIError } from "@/api/client";
 import type { Locale } from "@/i18n/messages";
 import {
@@ -221,6 +222,7 @@ export interface RecoverableErrorContext {
   taskId?: string;
   returnTo?: string;
   providerFailures?: ProviderFailure[];
+  savedStems?: number;
 }
 
 const BYOK_CODES = new Set([
@@ -881,6 +883,15 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "pdf_render_limit_exceeded" || code === "pdf_structure_limit_exceeded") {
+    const { title, description, nextStep } = pdfLocalLimitCopy[code](locale);
+    return {
+      title, description: [description, nextStep].join(locale === "zh-CN" ? "" : " "),
+      actionLabel: tx(locale, "重试失败项", "Retry failed files"),
+      actionKind: "retry", tone: "warning", technicalDetails,
+    };
+  }
+
   if (code === "pdf_evidence_busy" || code === "source_extent_unavailable") {
     return {
       title: code === "pdf_evidence_busy"
@@ -889,6 +900,18 @@ export function classifyRecoverableError(
       description: tx(locale, "本次 PDF 本地读取未完成，不是模型服务报错。请稍后重试失败项；原文件和已保存结果会保留，无需重新打包。", "Local PDF reading did not complete. This is not a model-service error. Retry failed files later; originals and saved results are retained, with no need to repack."),
       actionLabel: tx(locale, "重试失败项", "Retry failed files"),
       actionKind: "retry", tone: "warning", technicalDetails,
+    };
+  }
+
+  if (code === "scan_response_truncated") {
+    const { title, description, nextStep } = truncatedLocatorCopy(locale);
+    const count = context.savedStems;
+    const saved = typeof count === "number" && Number.isInteger(count) && count >= 0
+      ? tx(locale, `已保存 ${count} 个题干。`, `${count} question ${count === 1 ? "text is" : "texts are"} saved.`)
+      : "";
+    return {
+      title, description: [description, saved, nextStep].filter(Boolean).join(locale === "zh-CN" ? "" : " "),
+      actionLabel: tx(locale, "重试失败项", "Retry failed items"), actionKind: "retry", tone: "warning", technicalDetails,
     };
   }
 
@@ -1451,10 +1474,10 @@ function providerConfigurationErrorCopy(
       "Return to Models & BYOK, save the Baidu OCR API Key / Secret Key again, then reselect the recognition service.",
     ],
     provider_permission_denied: [
-      "OCR 账号没有服务权限",
-      "The OCR account lacks service permission",
-      "请在百度控制台确认已开通文档解析权限，或替换为有权限的 API Key / Secret Key。",
-      "Confirm Document Parsing access in the Baidu console or replace the API Key / Secret Key with an authorized pair.",
+      "服务商账号没有所需权限",
+      "The provider account lacks the required permission",
+      "请在对应服务商控制台检查当前服务或模型的访问权限，或更换有权限的凭据。",
+      "Check access to this service or model in the provider console, or use authorized credentials.",
     ],
     provider_region_unsupported: [
       "模型服务不支持当前网络地区",
@@ -1464,12 +1487,6 @@ function providerConfigurationErrorCopy(
     ],
     shared_pool_daily_limit_reached: ["共享模型日额度已用完。", "Shared model daily allowance exhausted.", "请等待 UTC 00:00 重置、联系管理员调整，或在模型与 BYOK 页面配置自己的模型。", "Wait for UTC midnight, contact an administrator, or use your own BYOK model."],
     shared_pool_disabled: ["平台共享模型当前关闭。", "The shared model pool is disabled.", "请在模型与 BYOK 页面配置自己的模型。", "Configure your own BYOK model."],
-    provider_quota_exceeded: [
-      "OCR 额度已用完",
-      "The OCR quota is exhausted",
-      "请在百度控制台检查当前活动额度与用量，额度恢复后再重试。",
-      "Check the current campaign quota and usage in the Baidu console, then retry after quota is available.",
-    ],
     provider_message_payload_not_supported: [
       "当前协议无法发送这类输入",
       "The selected protocol cannot encode this input",

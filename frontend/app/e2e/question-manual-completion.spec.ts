@@ -63,6 +63,7 @@ for (const paused of [false, true]) test(`${paused ? "paused" : "failed"} questi
   await expect(page).toHaveURL(/questions\/q2\/content#question-q2$/);
   const card = page.locator('[data-question-id="q2"]');
   await expect(card.locator("textarea")).toHaveCount(0);
+  await expect(page.getByRole("main")).toHaveCount(1);
   await card.getByRole("button", { name: "标答 / 解题步骤 · 修改", exact: true }).click();
   await card.getByRole("button", { name: "修改第 2 题满分与评分标准", exact: true }).click();
   await expect(card.locator("textarea")).toHaveCount(2);

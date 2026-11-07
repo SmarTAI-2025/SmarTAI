@@ -22,6 +22,7 @@ from backend.domain.errors import PDF_EVIDENCE_STATUS_CODES, PdfEvidenceError, R
 from backend.recognition.models import EvidenceModel, NormalizedRegionV1
 from backend.recognition.planner import PageObservationV1
 from backend.tools import file_processing
+from backend.tools.pdf_render_limits import MAX_RENDER_PIXELS, MAX_RENDER_SIDE, fit_full_page_scale
 from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
 
 if TYPE_CHECKING:
@@ -183,8 +184,8 @@ class PdfRenderResult(PdfEnvelope):
     operation: Literal["render"]
     page_number: PageNumber
     region: Region
-    width: int = Field(strict=True, ge=1, le=8192)
-    height: int = Field(strict=True, ge=1, le=8192)
+    width: int = Field(strict=True, ge=1, le=MAX_RENDER_SIDE)
+    height: int = Field(strict=True, ge=1, le=MAX_RENDER_SIDE)
     content_type: Literal["image/png"]
     payload_b64: str = Field(min_length=1, max_length=DETAIL_RESPONSE_BYTES, repr=False)
 
@@ -332,6 +333,14 @@ def decode_image_payload(result: ImagePreparedResult) -> bytes:
     return decode_pdf_payload(result)
 
 
+def recognition_page_render(page: PdfDetailPage, region: Region, purpose: str) -> PdfRenderRequest:
+    request = PdfRenderRequest(page_number=page.page_number, region=region)
+    if purpose != "submissions" or region != (0, 0, 1, 1):
+        return request
+    scale = fit_full_page_scale(page.width_points, page.height_points, request.scale)
+    return PdfRenderRequest(page_number=page.page_number, region=region, scale=scale)
+
+
 def whole_page_render_size(width_points: float, height_points: float, *, scale: float = 2) -> tuple[int, int]:
     """Match MuPDF's pixel rounding without opening or parsing any document."""
     from pymupdf import Matrix, Rect
@@ -381,7 +390,7 @@ def validate_evidence_result(payload: object, request: PdfRequest | ImagePrepare
         valid = (
             result.page_number == request.page_number <= result.total_pages
             and all(abs(a - b) <= 0.000001 for a, b in zip(result.region, request.region))
-            and result.width * result.height <= 16_000_000
+            and result.width * result.height <= MAX_RENDER_PIXELS
         )
         decode_pdf_payload(result)
     elif isinstance(result, PdfContactSheetResult) and isinstance(request, PdfContactSheetRequest):

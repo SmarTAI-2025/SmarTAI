@@ -580,7 +580,7 @@ function ReviewDetailForm() {
                   requiredReviewKeys.has(reviewCellKey(student.id, question.id)),
                 )}
               />
-              <main className="min-w-0 space-y-5">
+              <div className="min-w-0 space-y-5">
                 {visibleQuestions.map((question, index) => {
                   const correction = correctionByQuestionId.get(question.id);
                   const draft = drafts[question.id] ?? {
@@ -609,7 +609,7 @@ function ReviewDetailForm() {
                     />
                   );
                 })}
-              </main>
+              </div>
             </div>
           ) : (
             <PageState title={tx(locale, "当前筛选没有题目", "No questions match this filter")} action={tx(locale, "清空题目筛选", "Clear question filter")} onAction={() => setFilter("question", "")} />

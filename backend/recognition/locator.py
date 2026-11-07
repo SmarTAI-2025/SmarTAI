@@ -11,6 +11,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
+from backend.knowledge.structure import exercise_page_marks
 from backend.recognition.models import EvidenceModel, NormalizedRegionV1, RecognitionSourceRefV1
 from backend.tools.pdf_evidence import PdfDetailPage, PdfIndexPage
 
@@ -277,10 +278,50 @@ def _locate_one(request: NativeLocatorRequestV1, target: str) -> NativeTargetLoc
     return NativeTargetLocationV1(**values, status="unlocated", reason_codes=reasons)
 
 
+def _apply_exercise_page_hints(locations, pages):
+    # A printed section and its exercise list may start on an earlier page.
+    # Fill only missing page hints, preserving competing anchors and user scope.
+    unresolved = {loc.target: loc for loc in locations if loc.status == "unlocated" and not loc.evidence
+                  and re.fullmatch(r"\d+(?:\.\d+){2,}", loc.target)}
+    if not unresolved:
+        return
+    details = {page.page_number: page for page in pages}
+    texts = ((page.page_number, page.native_text if page.observation.native_quality == "clean" else None)
+             for page in pages)
+    matches = {}
+    ambiguous_sections = set()
+    chapters = {page.page_number: {number for number, kind, _ in _contexts(page) if kind == "chapter"}
+                for page in pages if page.observation.native_quality == "clean"}
+    for mark in exercise_page_marks(texts, chapters_by_page=chapters):
+        if mark.kind == "reset":
+            ambiguous_sections.add(mark.number)
+        elif mark.number in unresolved:
+            # Multiple starts or a possible continuation still need disambiguation.
+            matches[mark.number] = None if mark.number in matches else mark
+
+    for target, mark in matches.items():
+        section, local_number = target.rsplit(".", 1)
+        if mark is None or mark.kind != "label" or section in ambiguous_sections:
+            continue
+        page = details[mark.page]
+        start = mark.end - len(local_number)
+        if page.native_text[mark.start:mark.end].strip() != local_number:
+            continue
+        if any(number != section.split(".")[0] for number in chapters[mark.page]):
+            continue
+        loc = unresolved[target]
+        loc.status, loc.resolved_scope = "hinted", "page_only"
+        loc.selected_pages = [mark.page]
+        loc.candidate_pages = sorted({*loc.candidate_pages, mark.page})
+        loc.evidence = [_proof(page, start, mark.end, "local_label")]
+        loc.reason_codes = ["native_exercise_sequence_page_hint"]
+
+
 def locate_native_targets(request: NativeLocatorRequestV1) -> NativeLocatorResultV1:
     """Return bounded page candidates; this function never searches unseen pages."""
     request = NativeLocatorRequestV1.model_validate(request.model_dump(warnings=False))
     locations = [_locate_one(request, target) for target in request.targets]
+    _apply_exercise_page_hints(locations, request.detail_pages)
     selected = sorted({number for location in locations for number in location.selected_pages})
     over_budget = len(selected) > 24 or any(
         location.status == "needs_detail" and len(location.candidate_pages) > 24 for location in locations

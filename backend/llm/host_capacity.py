@@ -24,6 +24,7 @@ import stat
 import tempfile
 import threading
 import time
+from contextlib import ExitStack
 
 
 MAX_HOST_CONCURRENCY = 50
@@ -31,6 +32,10 @@ _IS_WINDOWS = os.name == "nt"
 _FENCE_ERROR = "LLM host capacity fence is unavailable"
 _lease_fds: set[int] = set()
 _lease_lock = threading.RLock()
+
+
+class _NoFileDescriptors(RuntimeError):
+    pass
 
 
 def _after_fork_child() -> None:
@@ -141,10 +146,20 @@ class HostLease:
             pass
 
 
+class _IdleHostLease(ExitStack):
+    """Release all acquired slots together, including on a failed partial acquisition."""
+
+    def release(self) -> None:
+        with _lease_lock:
+            self.close()
+
+
 class HostCapacity:
     """Try an OS permit without waiting, clamping all callers to 50 slots."""
 
-    def __init__(self, directory: str | os.PathLike[str] | None = None):
+    def __init__(self, directory: str | os.PathLike[str] | None = None, *,
+                 recovery_seconds: float = 65.0):
+        self.recovery_seconds = max(65.0, recovery_seconds)
         self.directory = Path(directory) if directory is not None else _default_directory()
         self._directory_fd: int | None = None
         try:
@@ -177,7 +192,12 @@ class HostCapacity:
                 if self._directory_fd is None:
                     raise OSError("capacity directory is closed")
                 flags |= os.O_NOFOLLOW
-                fd = os.open(name, flags, 0o600, dir_fd=self._directory_fd)
+                try:
+                    fd = os.open(name, flags, 0o600, dir_fd=self._directory_fd)
+                except FileNotFoundError:
+                    # Concurrent first creation can return ENOENT on macOS.
+                    # Only accept an existing winner through the same pinned directory.
+                    fd = os.open(name, flags & ~os.O_CREAT, dir_fd=self._directory_fd)
             else:
                 before = os.lstat(self.directory)
                 _validate_entry(before, directory=True)
@@ -198,9 +218,11 @@ class HostCapacity:
                     raise OSError("capacity file changed")
             _validate_entry(os.fstat(fd), directory=False)
             return fd
-        except (OSError, ImportError):
+        except (OSError, ImportError) as exc:
             if fd is not None:
                 os.close(fd)
+            if isinstance(exc, OSError) and exc.errno in (errno.EMFILE, errno.ENFILE):
+                raise _NoFileDescriptors(_FENCE_ERROR) from None
             raise RuntimeError(_FENCE_ERROR) from None
 
     def try_start(self, key: str, rpm: int, *, min_interval: float = 0.0) -> bool:
@@ -288,11 +310,11 @@ class HostCapacity:
                         type(t) not in (int, float) or not math.isfinite(t) for t in starts
                     ):
                         raise ValueError("invalid quota window")
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, OverflowError):
                     # Old unjournaled writes may already be torn. Persist a
                     # bounded quiet period rather than fail forever or burst.
                     # Commit that protection BEFORE clearing the damaged RPM.
-                    repair(max(65.0, interval))
+                    repair(max(self.recovery_seconds, interval))
                     self._write_state(fd, name, [])
                     return False
                 # A reset invalidates the whole prior clock epoch. Do not
@@ -340,8 +362,8 @@ class HostCapacity:
                     if (not isinstance(state, list) or len(state) != 2
                             or any(type(t) not in (int, float) or not math.isfinite(t) for t in state)):
                         raise ValueError("invalid cooldown")
-                except (ValueError, TypeError):
-                    state = [now, now + 65.0]
+                except (ValueError, TypeError, OverflowError):
+                    state = [now, now + max(self.recovery_seconds, seconds or 0.0)]
                     self._write_state(fd, name, state)
                 recorded, until = state
                 if now < recorded:  # monotonic clock reset after a host reboot
@@ -363,20 +385,40 @@ class HostCapacity:
                 _lease_fds.discard(fd)
                 os.close(fd)
 
+    def _try_acquire_slot(self, slot: int) -> HostLease | None:
+        fd = self._open_slot(slot)
+        try:
+            with _lease_lock:
+                if _try_lock(fd):
+                    _lease_fds.add(fd)
+                    return HostLease(fd)
+        except (OSError, ImportError):
+            os.close(fd)
+            raise RuntimeError(_FENCE_ERROR) from None
+        os.close(fd)
+        return None
+
+    def try_acquire_idle(self) -> _IdleHostLease | None:
+        # Older workers already use these slots. Holding every slot also keeps
+        # a worker with a stale healthy memory sample from starting a new call.
+        with _IdleHostLease() as held:
+            for slot in range(MAX_HOST_CONCURRENCY):
+                try:
+                    lease = self._try_acquire_slot(slot)
+                except _NoFileDescriptors:
+                    return None  # Keep waiting without tying up a partial set.
+                if lease is None:
+                    return None
+                held.enter_context(lease)
+            return held.pop_all()
+
     def try_acquire(self, limit: int = MAX_HOST_CONCURRENCY) -> HostLease | None:
         if not isinstance(limit, int) or isinstance(limit, bool):
             raise ValueError("host capacity limit must be an integer")
         for slot in range(max(0, min(limit, MAX_HOST_CONCURRENCY))):
-            fd = self._open_slot(slot)
-            try:
-                with _lease_lock:
-                    if _try_lock(fd):
-                        _lease_fds.add(fd)
-                        return HostLease(fd)
-            except (OSError, ImportError):
-                os.close(fd)
-                raise RuntimeError(_FENCE_ERROR) from None
-            os.close(fd)
+            lease = self._try_acquire_slot(slot)
+            if lease is not None:
+                return lease
         return None
 
     def close(self) -> None:

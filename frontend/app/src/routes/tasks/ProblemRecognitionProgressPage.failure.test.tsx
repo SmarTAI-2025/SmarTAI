@@ -55,6 +55,19 @@ vi.mock("@/i18n/I18nProvider", () => ({
 }));
 
 describe("ProblemRecognitionProgressPage generation failure", () => {
+  it("shows the locator output limit, the saved stem count and available recovery actions", () => {
+    failureCode = "scan_response_truncated";
+    generationProgress = { preparation_counts: { stems: 3, questions: 7, reference_answers: 0, rubrics: 0 } };
+    render(<MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}>
+      <Routes><Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByRole("heading", { name: "查找题号所在页时，模型输出被截断" })).toBeVisible();
+    expect(screen.getByText(/未能返回完整的候选页码/)).toHaveTextContent("已保存 3 个题干");
+    expect(screen.getByText(/未能返回完整的候选页码/)).toHaveTextContent("填写页码范围");
+    expect(screen.getByRole("button", { name: "重试失败项" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "人工继续处理" })).toBeVisible();
+  });
+
   it("shows the persisted failed page and refusal without enabling an unacknowledged retry", () => {
     failureCode = "provider_submit_uncertain";
     generationProgress = { provider_failures: [{ code: "provider_recitation_blocked", pages: [8] }] };
@@ -74,6 +87,15 @@ describe("ProblemRecognitionProgressPage generation failure", () => {
     expect(screen.getByRole("heading", { name: "模型服务暂时不可用" })).toBeInTheDocument();
     expect(screen.getByText(/HTTP 503/)).toHaveTextContent("重试时会复用已识别资料");
     expect(screen.getByRole("button", { name: "重试失败项" })).toBeDisabled();
+  });
+
+  it("explains possible extra model usage when retrying a truncated page search", () => {
+    failureCode = "scan_response_truncated";
+    generationProgress = {};
+    render(<MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}>
+      <Routes><Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByText(/用同一模型重试时/)).toHaveTextContent("增加等待时间和模型用量");
   });
 
   it.each([

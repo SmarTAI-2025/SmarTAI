@@ -56,6 +56,14 @@ export function getSubmissionSourceReasonCopy(
 
 type ReasonFactory = (locale: Locale, source: SubmissionSourceOutcome) => SubmissionSourceReasonCopy;
 
+export function truncatedLocatorCopy(locale: Locale) {
+  return {
+    title: tx(locale, "查找题号所在页时，模型输出被截断", "Model output was cut off while locating questions"),
+    description: tx(locale, "模型达到本次输出上限，未能返回完整的候选页码。原资料已保留。", "The model reached its output limit before returning a complete set of candidate pages. Your source file is saved."),
+    nextStep: tx(locale, "知道页码时，可返回修改配置并填写页码范围。也可更换识别模型后重试，或人工继续处理。", "If you know the pages, enter the page range in settings. You can also switch recognition models and retry, or continue manually."),
+  };
+}
+
 export function getSubmissionPageErrorLabel(source: SubmissionSourceOutcome, error: SubmissionPageError, locale: Locale): string {
   const reason = REASON_COPY[error.error_code]?.(locale, source).title
     ?? tx(locale, "该页尚未成功识别，请重试或查看诊断信息", "This page was not recognized; retry or inspect the diagnostic details");
@@ -63,6 +71,19 @@ export function getSubmissionPageErrorLabel(source: SubmissionSourceOutcome, err
     && error.status_code >= 100 && error.status_code <= 599 ? ` (HTTP ${error.status_code})` : "";
   return tx(locale, `第 ${error.page} 页：${reason}${status}`, `Page ${error.page}: ${reason}${status}`);
 }
+
+export const pdfLocalLimitCopy = {
+  pdf_render_limit_exceeded: (locale: Locale) => ({
+    title: tx(locale, "PDF 页面转图超出限制", "PDF page rendering exceeded its limit"),
+    description: tx(locale, "本地生成页面图像时触发了尺寸限制，模型没有收到该图像。", "The local renderer hit an image size limit before it could send the page image to the model."),
+    nextStep: tx(locale, "请将受影响的页面按标准纸张大小重新导出，或选择人工继续处理。", "Export the affected pages at a standard paper size, or continue manually."),
+  }),
+  pdf_structure_limit_exceeded: (locale: Locale) => ({
+    title: tx(locale, "PDF 页面结构无法完整读取", "The PDF page structure could not be read"),
+    description: tx(locale, "本地解析 PDF 页面结构时触发了保护限制。更换模型仍需经过这一步。", "Local PDF structure analysis reached a safety limit. Switching models still requires this step."),
+    nextStep: tx(locale, "请将受影响的页面扁平化后重新导出，或选择人工继续处理。", "Flatten and re-export the affected pages, or continue manually."),
+  }),
+};
 
 const REASON_COPY: Record<string, ReasonFactory> = {
   question_preparation_time_limit_reached: (locale) => ({
@@ -201,9 +222,9 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   pdf_invalid_request: recognitionFileCopy,
   pdf_page_out_of_range: recognitionFileCopy,
   pdf_processing_failed: recognitionProcessingCopy,
-  pdf_render_limit_exceeded: recognitionLimitCopy,
+  pdf_render_limit_exceeded: pdfLocalLimitCopy.pdf_render_limit_exceeded,
   pdf_response_too_large: recognitionLimitCopy,
-  pdf_structure_limit_exceeded: recognitionLimitCopy,
+  pdf_structure_limit_exceeded: pdfLocalLimitCopy.pdf_structure_limit_exceeded,
   provider_credentials_required: recognitionProviderCopy,
   shared_pool_daily_limit_reached: (locale) => ({
     title: tx(locale, "共享模型日额度已用完。", "Shared model daily allowance exhausted."),
@@ -267,6 +288,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     description: tx(locale, "请查看识别结果，重试未完成的部分。", "Check the recognition results and retry the unfinished parts."),
   }),
   target_location_needs_hint: recognitionScopeCopy,
+  scan_response_truncated: truncatedLocatorCopy,
   target_selection_limit_exceeded: recognitionScopeCopy,
   visual_capability_unavailable: recognitionProviderCopy,
   workflow_failed: (locale) => ({
@@ -326,7 +348,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   provider_auth_failed: (locale, source) => providerCopy(locale, source, "模型凭据无效或无权限", "The model credentials were rejected", "到 BYOK 检查 API Key、模型权限和余额后重试。", "Check the API key, model permission, and balance in BYOK, then retry."),
   provider_region_unsupported: (locale, source) => providerCopy(locale, source, "模型服务不支持当前网络地区", "The model service does not support the current network region", "请使用供应商支持的接入环境或另选已获授权的模型。", "Use a provider-supported access environment or another authorized model."),
   ocr_credential_not_found: (locale, source) => providerCopy(locale, source, "所选 OCR 凭据已不存在", "The selected OCR credential no longer exists", "返回 BYOK 保存百度 OCR 的 API Key / Secret Key，并重新选择识别服务。", "Save the Baidu OCR API Key / Secret Key in BYOK and select the recognition service again."),
-  provider_permission_denied: (locale, source) => providerCopy(locale, source, "OCR 账号没有服务权限", "The OCR account lacks service permission", "在百度控制台确认已开通文档解析权限，或更换有权限的 API Key / Secret Key。", "Confirm Document Parsing access in the Baidu console or replace the API Key / Secret Key with an authorized pair."),
+  provider_permission_denied: (locale, source) => providerCopy(locale, source, "模型账号没有服务权限", "The model account lacks service permission", "在对应服务商控制台检查模型或识别服务权限，或更换有权限的凭据后重试。", "Check model or recognition service access in the provider console, or switch to authorized credentials and retry."),
   provider_quota_exceeded: (locale, source) => providerCopy(locale, source, "服务商余额或额度已用完", "Provider credits or quota exhausted", "在对应服务商控制台检查余额与额度；恢复后重试，或切换模型。", "Check credits and quota in the provider console, then retry after recovery or switch models."),
   provider_unavailable: (locale, source) => providerCopy(locale, source, "OCR 服务暂时不可用", "The OCR service is temporarily unavailable", "请稍后重试。", "Please try again later."),
   provider_submit_uncertain: (locale, source) => providerCopy(locale, source, "识别未完成，重试需确认", "Recognition did not complete; confirm before retrying", "上次调用是否完成尚不确定，再次调用可能重复消耗额度。", "It is unclear whether the previous call completed. Calling again may use quota twice."),

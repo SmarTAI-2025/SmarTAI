@@ -9,7 +9,7 @@ from backend.domain.errors import PdfEvidenceError, RecognitionError
 from backend.recognition.budget import RecognitionBudget
 from backend.recognition.engine import EngineReadInputV1, RecognitionEngine
 from backend.recognition.executor import (
-    ImageDetailPageV1, ReadUnitV1, RecognitionReadBatchV1, _snapshot, build_read_batch,
+    ImageDetailPageV1, ReadUnitV1, RecognitionReadBatchV1, _can_continue_after_failure, _snapshot, build_read_batch,
 )
 from backend.recognition.local_limits import bounded_recognition_progress
 from backend.recognition.models import NormalizedRegionV1, RecognitionSourceRefV1
@@ -109,10 +109,14 @@ async def read_image_plan(
                 if candidate.status == "error":
                     failed.add(1)
                     stops.append(candidate.safe_error_code or "recognition_response_invalid")
+                    if _can_continue_after_failure(outcome, engine):
+                        continue
                     break
                 if candidate.finish_reason == "refused" or "provider_refused" in candidate.warning_codes:
                     failed.add(1)
                     stops.append(candidate.safe_error_code or "provider_content_blocked")
+                    if _can_continue_after_failure(outcome, engine):
+                        continue
                     break
     except (RecognitionError, PdfEvidenceError) as exc:
         stops.append(exc.code)

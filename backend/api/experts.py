@@ -650,10 +650,10 @@ async def verify_provider_image(
             # Keep the single optional probe bounded without clipping a short answer.
             max_output_tokens=256,
         ), timeout=max(5, min(int(settings.llm_timeout), int(settings.custom_provider_verification_timeout_seconds))))
-        if getattr(response, "finish_reason", None) == "length":
-            reason = "image_probe_response_truncated"
-        elif response.content.strip() == answer:
+        if response.content.strip() == answer:
             state, reason = "passed", "image_probe_answer_correct"
+        elif getattr(response, "finish_reason", None) == "length":
+            reason = "image_probe_response_truncated"
     except Exception as exc:
         if is_explicit_image_rejection(exc):
             state, reason = "unsupported", "provider_vision_not_supported"

@@ -356,16 +356,10 @@ def classify_background_error(
     for item in chain:
         status_code = _http_status(item)
         details = getattr(item, "details", None)
-        if status_code == 400 and isinstance(details, dict):
-            error = details.get("error", details)
-            if isinstance(error, dict):
-                if "user location is not supported" in str(error.get("message", "")).lower():
-                    return "provider_region_unsupported"
-                reasons = error.get("details", [])
-                if isinstance(reasons, list) and any(isinstance(d, dict) and d.get("reason") in {
-                    "API_KEY_INVALID", "API_KEY_EXPIRED", "API_KEY_SERVICE_BLOCKED",
-                } for d in reasons):
-                    return "provider_auth_failed"
+        if status_code == 400:
+            from backend.llm.provider_errors import google_configuration_error
+            if code := google_configuration_error(details):
+                return code
         if status_code in {401, 403}:
             return "provider_auth_failed"
         if status_code == 404:

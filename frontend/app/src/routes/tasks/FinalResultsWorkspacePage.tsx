@@ -146,7 +146,7 @@ export function FinalResultsWorkspacePage() {
 
       <WorkspaceNavigation locale={locale} root={root} section={section} />
 
-      <main className="mt-5 min-w-0">
+      <div className="mt-5 min-w-0">
         <WorkspaceContent
           locale={locale}
           section={section}
@@ -158,7 +158,7 @@ export function FinalResultsWorkspacePage() {
           result={result}
           provisional={provisional}
         />
-      </main>
+      </div>
     </div>
   );
 }

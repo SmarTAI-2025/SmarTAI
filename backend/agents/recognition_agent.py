@@ -14,6 +14,7 @@ from pydantic import Field, ValidationError, model_validator
 
 from backend.domain.errors import PdfEvidenceError, RecognitionError
 from backend.recognition.budget import BudgetSnapshot, RecognitionBudget, validate_budget_accounting, validate_budget_timing
+from backend.recognition.cache_identity import model_cache_identity
 from backend.recognition.engine import EngineLocateInputV1, LocatorImageV1, RecognitionEngine
 from backend.recognition.executor import RecognitionReadBatchV1, read_pdf_plan
 from backend.recognition.image_executor import read_image_plan
@@ -33,6 +34,10 @@ from backend.tools.pdf_evidence import (
 if TYPE_CHECKING:
     from backend.progress.tracker import ProgressReporter
     from backend.services.recognition_local_evidence import RecognitionLocalEvidenceReader
+
+
+LOCATOR_OUTPUT_TOKENS = 4096
+_RETRY_LOCATOR_OUTPUT_TOKENS = 16384
 
 
 class RecognitionReadRequestV1(EvidenceModel):
@@ -216,12 +221,14 @@ class RecognitionAgent:
     def __init__(self, engine: RecognitionEngine | None, *, capacity: RecognitionCapacity,
                  progress: ProgressReporter | None = None, clock: Callable[[], float] = time.monotonic,
                  local_reader: RecognitionLocalEvidenceReader | None = None,
-                 call_service=None, elapsed_seconds: float = 0, repair_admission=None):
+                 call_service=None, elapsed_seconds: float = 0, repair_admission=None,
+                 truncated_locator_key: str | None = None):
         self.engine, self.capacity, self.progress, self.clock = engine, capacity, progress, clock
         self.local_reader = local_reader
         self.call_service = call_service
         self.elapsed_seconds = elapsed_seconds
         self.repair_admission = repair_admission
+        self.truncated_locator_key = truncated_locator_key
 
     async def read(self, request: RecognitionReadRequestV1, source_bytes: bytes, *, authorized_owner_id: str) -> RecognitionWorkflowReadV1:
         raw, _budget = await self._read(request, source_bytes, authorized_owner_id=authorized_owner_id)
@@ -411,7 +418,7 @@ class RecognitionAgent:
                 if self.progress:
                     await self.progress.set_current_step("recognition_locate", message="Locating candidate source pages")
                 budget.assert_context(request.source, policy, self.engine.capabilities)
-                token_limit = budget.output_limit(4096)
+                token_limit = budget.output_limit(LOCATOR_OUTPUT_TOKENS)
                 numbers = ordered[offset:offset + width]
                 images, evidence = [], []
                 for part in range(0, len(numbers), 8):
@@ -430,9 +437,21 @@ class RecognitionAgent:
                     evidence.append(LocatorSheetEvidenceV1(metadata=PdfContactSheetMetadata.model_validate(
                         {field: getattr(sheet, field) for field in PdfContactSheetMetadata.model_fields}),
                         payload_sha256=hashlib.sha256(payload).hexdigest()))
-                outcome = await run_locator_call(self.engine, EngineLocateInputV1(
-                    purpose=request.purpose, targets=remaining, images=images, max_output_tokens=token_limit,
-                ), source=request.source, policy=policy, capabilities=capabilities, budget=budget, capacity=self.capacity, progress=self.progress,
+                locate_input = EngineLocateInputV1(purpose=request.purpose, targets=remaining, images=images,
+                                                   max_output_tokens=token_limit)
+                if self.truncated_locator_key and capabilities.bounded_output_tokens and token_limit == LOCATOR_OUTPUT_TOKENS:
+                    from backend.skills.recognition_reader import LOCATOR_PROMPT_VERSION
+                    key = model_cache_identity(request.source, locate_input, capabilities=capabilities,
+                                               policy=policy, prompt_version=LOCATOR_PROMPT_VERSION).key
+                    if key == self.truncated_locator_key:
+                        # The explicit retry can spend more on this exact failed sheet.
+                        # Leave one ordinary read's allowance in the remaining run budget.
+                        read_allowance = budget.output_limit()
+                        available = budget.output_limit(_RETRY_LOCATOR_OUTPUT_TOKENS + read_allowance)
+                        token_limit = max(token_limit, available - read_allowance)
+                        locate_input = locate_input.model_copy(update={"max_output_tokens": token_limit})
+                outcome = await run_locator_call(self.engine, locate_input,
+                    source=request.source, policy=policy, capabilities=capabilities, budget=budget, capacity=self.capacity, progress=self.progress,
                     call_session=call_session)
                 result = parse_scan_locations(outcome.candidate, requested_targets=remaining, inspected_pages=sorted(numbers))
                 calls.append(LocatorCallEvidenceV1(sheets=evidence, result=result, requested_output_tokens=token_limit,
