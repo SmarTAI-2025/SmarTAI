@@ -179,7 +179,12 @@ class HostCapacity:
                 if self._directory_fd is None:
                     raise OSError("capacity directory is closed")
                 flags |= os.O_NOFOLLOW
-                fd = os.open(name, flags, 0o600, dir_fd=self._directory_fd)
+                try:
+                    fd = os.open(name, flags, 0o600, dir_fd=self._directory_fd)
+                except FileNotFoundError:
+                    # Concurrent first creation can return ENOENT on macOS.
+                    # Only accept an existing winner through the same pinned directory.
+                    fd = os.open(name, flags & ~os.O_CREAT, dir_fd=self._directory_fd)
             else:
                 before = os.lstat(self.directory)
                 _validate_entry(before, directory=True)
