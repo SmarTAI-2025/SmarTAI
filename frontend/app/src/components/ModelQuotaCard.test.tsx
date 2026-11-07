@@ -11,7 +11,8 @@ it("shows actual counts, exhaustion explanation, and refresh", async () => {
   const get = vi.spyOn(apiClient,"get").mockResolvedValue({data:{resets_at:"2026-10-04T00:00:00Z",shared_pool_enabled:true,shared:{requests:2,request_limit:2,estimated_input_tokens:4,estimated_token_limit:100},history:{requests:1,request_limit:-1}}});
   mount();
   expect(await screen.findByText(/共享模型日额度已用完/)).toBeInTheDocument();
-  expect(screen.getByText(/任务 Ask 调用/)).toHaveTextContent("1 / 无限制");
+  expect(screen.getByText(/共享模型请求/)).toHaveTextContent("2 / 2");
+  expect(screen.queryByText(/任务 Ask 调用/)).not.toBeInTheDocument();
   expect(screen.getByText(/失败和中断/)).toHaveTextContent("不代表实际 token 或费用");
   await userEvent.click(screen.getByRole("button",{name:"刷新用量"}));
   expect(get).toHaveBeenCalledTimes(2);

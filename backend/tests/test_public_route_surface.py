@@ -9,6 +9,7 @@ from backend.models import User
 
 
 RETIRED_REQUESTS = [
+    ("POST", "/tasks/query/interpret"),
     ("GET", "/courses/old/students"),
     ("POST", "/courses/old/enroll"),
     ("GET", "/assignments"),
@@ -47,6 +48,9 @@ def test_retired_workflows_are_unmounted_for_every_role(monkeypatch, environment
     assert "/courses/{course_id}/enroll" not in paths
     # Assignment-scoped knowledge is a shared internal adapter, not an LMS flow.
     assert not any(path.startswith("/assignments") and "/knowledge" not in path for path in paths)
+    assert "/tasks/query/interpret" not in paths
+    assert "get" in paths["/tasks/"]
+    assert "post" in paths["/analytics/ask"]
     assert "/tasks/{task_id}/result" in paths
     assert "/courses" in paths and "/courses/search" in paths
     assert "/auth/register/request" in paths

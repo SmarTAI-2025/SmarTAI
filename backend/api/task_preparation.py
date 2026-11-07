@@ -77,7 +77,7 @@ from backend.models import (
 from backend.progress.tracker import get_or_create_reporter, get_reporter, remove_reporter
 from backend.services import source_files as source_file_service
 from backend.services import task_facade
-from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE
+from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE, require_current_source_timeout_profile
 from backend.services.teacher_score_constraints import teacher_score_requirements
 from backend.services.stage_provider_routing import (
     StageProviderRoute,
@@ -1547,6 +1547,8 @@ async def _start_question_preparation(
         if manual_saved_sources is not None or (retry_source_contract is not None and (
                 "manual_saved_sources" in retry_source_contract or retry_source_contract.get("question_preparation_version") != 2)):
             raise InvalidTransition("Saved-text AI recovery has been retired.", code="saved_text_recovery_retired")
+        if retry_source_contract is not None:
+            require_current_source_timeout_profile(retry_source_contract.get("recognition_timeout_profile"))
         workflow = workflow_repository.get_live_workflow(
             task_id, owner_id=current.id
         )
@@ -1718,6 +1720,7 @@ async def _start_question_preparation(
             operation_type="question_preparation", input_hash=operation_hash,
         )
         if replay is not None:
+            require_current_source_timeout_profile((replay.payload or {}).get("recognition_timeout_profile"))
             # A repeated start request is only an idempotency lookup. Failed
             # work may advance an attempt solely through the explicit retry
             # endpoint, which first validates its frozen prepared sources.
@@ -1756,9 +1759,8 @@ async def _start_question_preparation(
                 "job_id": active.id,
                 "workflow_revision": workflow.workflow_revision,
             }
-        # A retry must retain the original OCR identity, including legacy
-        # timeouts, so a deployment cannot bypass a pending provider submit.
-        timeout_contract = (replay.payload or {}) if replay is not None else retry_source_contract
+        # Validated current work retains its execution scope and pending marker.
+        execution_contract = (replay.payload or {}) if replay is not None else retry_source_contract
         operation_payload = {
             "question_preparation_version": 2,
             **({"retry_origin_id": retry_origin_id} if retry_origin_id and replay is None else {}),
@@ -1780,13 +1782,10 @@ async def _start_question_preparation(
             **({"generation_language": request.generation_language} if request.generation_language else {}),
             "score_policy": request.score_policy.model_dump(mode="json"),
             "recognition_provider_id": recognition_provider_id,
-            "recognition_timeout_profile": (
-                timeout_contract.get("recognition_timeout_profile")
-                if timeout_contract is not None else SOURCE_TIMEOUT_PROFILE
-            ),
+            "recognition_timeout_profile": SOURCE_TIMEOUT_PROFILE,
             "recognition_execution_scope": (
-                timeout_contract.get("recognition_execution_scope")
-                if timeout_contract is not None else f"{task_id}:{operation_hash}"
+                execution_contract.get("recognition_execution_scope")
+                if execution_contract is not None else f"{task_id}:{operation_hash}"
             ),
             "provider_configuration_fingerprint": (
                 provider_configuration_fingerprint
@@ -2003,6 +2002,7 @@ async def retry_question_preparation(
         payload = dict(failed.payload or {})
         if "manual_saved_sources" in payload or payload.get("question_preparation_version") != 2:
             raise InvalidTransition("Saved-text AI recovery has been retired.", code="saved_text_recovery_retired")
+        require_current_source_timeout_profile(payload.get("recognition_timeout_profile"))
         frozen_provider_id = payload.get("recognition_provider_id")
         if not isinstance(frozen_provider_id, str) or not frozen_provider_id:
             raise InvalidTransition(
@@ -2133,6 +2133,7 @@ def _rehydrate_question_preparation_inputs(operation):
     payload = dict(operation.payload or {})
     if "manual_saved_sources" in payload or payload.get("question_preparation_version") != 2:
         raise InvalidTransition("Saved-text AI recovery has been retired.", code="saved_text_recovery_retired")
+    require_current_source_timeout_profile(payload.get("recognition_timeout_profile"))
     if (
         payload.get("contract_version") != 1
         or payload.get("owner_id") != operation.owner_id
@@ -2387,6 +2388,7 @@ async def _recognize_saved_question_sources(sources, *, operation, route, regist
     Frozen source inputs stay immutable, including their prepared-text hash.
     Recognition artifacts provide the existing durable cache on safe retries.
     """
+    require_current_source_timeout_profile((operation.payload or {}).get("recognition_timeout_profile"))
     retry_key = (f"{operation.operation_id}:{operation.attempt}"
                  if (operation.payload or {}).get("retry_origin_id") or operation.attempt > 1 else None)
     resolved = []

@@ -15,7 +15,7 @@ from backend.recognition.planner import EngineCapabilitiesV1
 from backend.recognition.runtime import RecognitionCapacity, run_initial_read
 from backend.services.execution_control import current_execution, run_controlled
 from backend.services.question_source_batches import read_question_pdf_batches
-from backend.services.recognition_timeouts import LEGACY_SOURCE_TIMEOUT_PROFILE, SOURCE_TIMEOUT_PROFILE, apply_source_timeout_profile
+from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE, apply_source_timeout_profile
 
 
 class Clock:
@@ -58,16 +58,15 @@ def read_request(data=b"test-pdf", **changes):
 
 
 def apply(request, engine, **kwargs):
-    return apply_source_timeout_profile(request, engine=engine, timeout_profile=LEGACY_SOURCE_TIMEOUT_PROFILE, **kwargs)
+    return apply_source_timeout_profile(request, engine=engine, timeout_profile=SOURCE_TIMEOUT_PROFILE, **kwargs)
 
 
-@pytest.mark.parametrize("profile", [None, LEGACY_SOURCE_TIMEOUT_PROFILE, "source-response-300-v1", "source-response-600-v1", SOURCE_TIMEOUT_PROFILE])
 @pytest.mark.parametrize("kind", ["vision", "ocr", "native", "knowledge"])
-def test_all_product_sources_share_one_response_policy(profile, kind):
+def test_all_product_sources_share_one_response_policy(kind):
     engine = None if kind == "native" else VisionEngine(candidate_kind="ocr" if kind == "ocr" else "vision")
     request = read_request(purpose="knowledge" if kind == "knowledge" else "problems")
     before = request.model_dump_json()
-    selected = apply_source_timeout_profile(request, engine=engine, timeout_profile=profile)
+    selected = apply_source_timeout_profile(request, engine=engine, timeout_profile=SOURCE_TIMEOUT_PROFILE)
     assert selected.policy.per_call_seconds == 180 and selected.policy.timeout_mode == "response_only"
     ignored = {"timeout_mode", "per_call_seconds"}
     assert {k: v for k, v in selected.policy.model_dump().items() if k not in ignored} == {
@@ -118,8 +117,8 @@ async def test_legacy_deadline_only_attributes_its_own_429_wait():
 
 
 
-@pytest.mark.parametrize("profile", ["", "source-300-v2", 300])
-def test_unknown_profile_fails_closed_even_without_a_model(profile):
+@pytest.mark.parametrize("profile", [None, "", "source-300-v1", "source-response-300-v1", "source-response-600-v1", 300])
+def test_retired_missing_or_invalid_profile_fails_closed_even_without_a_model(profile):
     with pytest.raises(RecognitionError, match="recognition_request_invalid"):
         apply_source_timeout_profile(read_request(), engine=None, timeout_profile=profile)
 
@@ -144,8 +143,7 @@ async def test_twelve_slow_pages_complete_without_cumulative_ocr_cutoff():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("profile,per_call,total", [(None, 180, 600), (LEGACY_SOURCE_TIMEOUT_PROFILE, 180, 600)])
-async def test_each_pdf_batch_gets_the_selected_frozen_policy(profile, per_call, total):
+async def test_each_pdf_batch_gets_the_current_response_policy():
     seen = []
 
     async def run(request, *_args, **_kwargs):
@@ -162,9 +160,9 @@ async def test_each_pdf_batch_gets_the_selected_frozen_policy(profile, per_call,
     original = read_request()
     _, summary = await read_question_pdf_batches(
         service=SimpleNamespace(run=run), request=original, content=b"test-pdf", engine=VisionEngine(),
-        total_pages=20, reporter=ProgressReporter("timeout-batches"), timeout_profile=profile,
+        total_pages=20, reporter=ProgressReporter("timeout-batches"),
     )
     assert [request.pages for request in seen] == [list(range(1, 13)), list(range(13, 21))]
-    assert all(request.policy.per_call_seconds == per_call and request.policy.total_seconds == total for request in seen)
+    assert all(request.policy.per_call_seconds == 180 and request.policy.timeout_mode == "response_only" for request in seen)
     assert original.policy.per_call_seconds == 120
     assert summary["coverage"]["processed_pages"] == list(range(1, 21))

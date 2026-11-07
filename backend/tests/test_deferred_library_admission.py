@@ -91,7 +91,8 @@ async def test_all_deferred_roles_propagate_library_admission_policy(monkeypatch
         content_type=mime, size_bytes=len(body), content_sha256=record.payload['sha256'],
         expires_at=time.time() + 300)
     operation = SimpleNamespace(owner_id=owner, assignment_id=task, operation_id=record.id,
-        attempt=record.attempt, payload={}, update_progress=_ignore_progress)
+        attempt=record.attempt, payload={"recognition_timeout_profile": "source-response-180-v1"},
+        update_progress=_ignore_progress)
     from backend.services.stage_provider_routing import StageProviderRoute
     seen = []
     validate = service.validate_upload_content

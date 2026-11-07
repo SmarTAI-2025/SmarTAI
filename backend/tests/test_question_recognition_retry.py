@@ -57,7 +57,8 @@ async def test_saved_pdf_explicit_retry_reaches_failed_leaf(tmp_path, monkeypatc
     )
     sources = [(draft, "", {"recognition_pending": True, "source_ref": {"stored_file_id": source.id}})]
     operation = SimpleNamespace(owner_id=draft.owner_id, assignment_id=draft.task_id,
-                                operation_id="parent", attempt=1, payload={}, update_progress=AsyncMock())
+                                operation_id="parent", attempt=1,
+                                payload={"recognition_timeout_profile": "source-response-180-v1"}, update_progress=AsyncMock())
     route = StageProviderRoute(route_id="selected", kind="llm", provider=SimpleNamespace())
 
     async def read():
@@ -76,12 +77,12 @@ async def test_saved_pdf_explicit_retry_reaches_failed_leaf(tmp_path, monkeypatc
         assert len(agent.engine.reads) == before
     else:
         monkeypatch.setattr(agent.engine, "recognize", original)
-        operation.payload = {"acknowledged_restart_from": "parent:1"}
+        operation.payload.update(acknowledged_restart_from="parent:1")
     agent.engine.initial[1] = "Q2. x = -2"
     operation.attempt = retry_attempt
     if new_parent:
         operation.operation_id = "acknowledged-parent"
-        operation.payload = {"retry_origin_id": "parent", "acknowledged_restart_from": "parent:1"}
+        operation.payload.update(retry_origin_id="parent", acknowledged_restart_from="parent:1")
     recovered = await read()
     assert "Q1" in recovered[0][1] and "Q2" in recovered[0][1]
     assert recovered[0][2]["recognition"]["coverage"]["processed_pages"] == [1, 2]

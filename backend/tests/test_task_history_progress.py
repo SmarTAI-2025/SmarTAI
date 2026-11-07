@@ -98,6 +98,20 @@ def test_history_sorts_all_owned_tasks_before_pagination_with_unknowns_last(hist
     assert set(calls) == {"slow", "fast"}
 
 
+def test_history_list_still_filters_names_courses_and_tags(history):
+    client, items, _ = history
+    items["draft"].update(name="Algebra quiz", course_id="algebra", tag_ids=["weekly"])
+    items["complete"].update(name="Algebra exam", course_id="algebra", tag_ids=["final"])
+    for params, expected in [
+        ({"q": "QUIZ"}, {"draft"}),
+        ({"course_id": "algebra"}, {"draft", "complete"}),
+        ({"tag_ids": "final"}, {"complete"}),
+    ]:
+        response = client.get("/tasks/", params={"page": 1, **params})
+        assert response.status_code == 200
+        assert {item["task_id"] for item in response.json()["items"]} == expected
+
+
 def test_dashboard_mapping_contract_does_not_fetch_progress(history):
     client, items, calls = history
     response = client.get("/tasks/")

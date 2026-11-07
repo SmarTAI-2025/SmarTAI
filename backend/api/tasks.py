@@ -6,9 +6,6 @@ JobStore is imported here.
 """
 from __future__ import annotations
 
-from backend.agents.history_query_agent import interpret_history_query
-from backend.progress.tracker import ProgressReporter
-
 import asyncio
 import hashlib
 import json
@@ -45,7 +42,6 @@ from backend.db import (
 from backend.domain.errors import DomainError, InvalidTransition, NotFound, ValidationError, VersionConflict
 from backend.knowledge.service import ingest_document
 from backend.llm.registry import (
-    resolve_owner_default_provider,
     ExpertRegistry,
     get_scoped_expert_registry,
     resolve_owner_default_provider_id,
@@ -87,10 +83,6 @@ class UpdateTaskRequest(BaseModel):
     semester_id: str | None = Field(default=None, max_length=64)
     course_id: str | None = Field(default=None, max_length=64)
     tag_ids: list[str] | None = Field(default=None, max_length=30)
-
-
-class InterpretTaskQueryRequest(BaseModel):
-    query: str = Field(min_length=1, max_length=500)
 
 
 class GradeRequest(BaseModel):
@@ -292,34 +284,6 @@ def _history_facets(items: list[dict], owner_id: str) -> dict:
         "semesters": sorted({item["semester_id"] for item in items if item.get("semester_id")}),
         "courses": [{"id": course.id, "name": course.name, "code": course.code} for course in courses],
         "tags": rendered_tags, "statuses": statuses,
-    }
-
-
-@router.post("/query/interpret")
-async def interpret_task_query(
-    request: InterpretTaskQueryRequest,
-    current: User = Depends(require_teacher),
-    registry: ExpertRegistry = Depends(get_scoped_expert_registry),
-):
-    """Use bounded semantic routing after owner-scoped deterministic filters."""
-    try:
-        task_map = task_facade.list_tasks(owner_id=current.id)
-        facets = _history_facets(list(task_map.values()), current.id)
-    except DomainError as exc:
-        return domain_error_response(exc)
-    query_id = f"query_{hashlib.sha256(request.query.encode()).hexdigest()[:12]}"
-    result = await interpret_history_query(
-        request.query,
-        semesters=facets["semesters"],
-        courses=facets["courses"],
-        tags=[{"id": tag["id"], "name": tag["name"]} for tag in facets["tags"]],
-        provider=resolve_owner_default_provider(current.id, registry),
-        reporter=ProgressReporter(query_id),
-        owner_id=current.id,
-    )
-    return {
-        **result,
-        "query_id": query_id,
     }
 
 
