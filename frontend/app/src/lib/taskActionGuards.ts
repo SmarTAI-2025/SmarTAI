@@ -1403,10 +1403,10 @@ function providerConfigurationErrorCopy(
       "Return to Models & BYOK, save the Baidu OCR API Key / Secret Key again, then reselect the recognition service.",
     ],
     provider_permission_denied: [
-      "模型账号没有服务权限",
-      "The model account lacks service permission",
-      "请在对应服务商控制台检查模型或识别服务权限，或更换有权限的凭据后重试。",
-      "Check model or recognition service access in the provider console, or switch to authorized credentials and retry.",
+      "服务商账号没有所需权限",
+      "The provider account lacks the required permission",
+      "请在对应服务商控制台检查当前服务或模型的访问权限，或更换有权限的凭据。",
+      "Check access to this service or model in the provider console, or use authorized credentials.",
     ],
     provider_region_unsupported: [
       "模型服务不支持当前网络地区",

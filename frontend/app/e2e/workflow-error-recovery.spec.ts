@@ -92,7 +92,7 @@ for (const stage of ["problems", "submissions"] as const) {
       const consoleErrors: string[] = [];
       page.on("console", message => { if (message.type() === "error") consoleErrors.push(message.text()); });
       await page.goto(`/tasks/recovery-task/${stage}/progress`);
-      await expect(page.getByRole("heading", { name: locale === "zh-CN" ? "模型账号没有服务权限" : "The model account lacks service permission" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: locale === "zh-CN" ? "服务商账号没有所需权限" : "The provider account lacks the required permission" })).toBeVisible();
       await expect(page.getByText(/百度控制台|Baidu console/)).toHaveCount(0);
       const retry = page.getByRole("button", { name: /重试失败项|Retry failed/i });
       await expect(retry).toBeEnabled();
