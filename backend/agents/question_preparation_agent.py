@@ -189,7 +189,8 @@ def provider_submission_is_uncertain(exc: BaseException) -> bool:
         seen.add(id(current))
         if getattr(current, "submission_may_exist", None) is True:
             return True
-        current = current.__cause__ or current.__context__
+        # An implicit context may belong to an earlier request or retry.
+        current = current.__cause__
     return False
 
 

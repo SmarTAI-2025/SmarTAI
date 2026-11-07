@@ -54,3 +54,26 @@ async def test_rejection_evidence_cannot_clear_unknown_or_unrelated_attempts(kin
     with pytest.raises(Exception) as caught:
         await _SubmissionSafeProvider(Provider()).ainvoke([])
     assert provider_submission_is_uncertain(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('suppress', [True, False])
+async def test_previous_unknown_attempt_does_not_mark_current_google_rejection_uncertain(suppress):
+    previous = RuntimeError('different request')
+    previous.submission_may_exist = True
+
+    class Provider:
+        async def ainvoke(self, messages):
+            try:
+                raise previous
+            except RuntimeError:
+                error = ClientError(400, {'error': {'code': 400, 'status': 'FAILED_PRECONDITION',
+                                                  'message': 'User location is not supported for the API use.'}})
+                if suppress:
+                    raise error from None
+                raise error
+
+    with pytest.raises(Exception) as caught:
+        await _SubmissionSafeProvider(Provider()).ainvoke([])
+    assert not provider_submission_is_uncertain(caught.value)
+    assert classify_background_error(caught.value, 'question_preparation_failed') == 'provider_region_unsupported'
