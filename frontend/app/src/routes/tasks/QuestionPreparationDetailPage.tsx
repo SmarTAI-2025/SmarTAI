@@ -110,7 +110,6 @@ function QuestionPreparationDetailPageForm() {
         positionedPathRef.current = pathKey;
         const requestedAnchor = decodeURIComponent(location.hash.replace(/^#/, ""));
         if (requestedAnchor === questionAnchorId(target.q_id)) scrollQuestionIntoView(target.q_id, "auto");
-        else window.scrollTo({ top: 0, left: 0, behavior: "auto" });
       });
     });
     return () => {

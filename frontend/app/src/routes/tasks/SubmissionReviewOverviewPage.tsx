@@ -29,7 +29,6 @@ import {
   getAnswerState,
   formatSubmissionFlag,
   getSubmissionReviewStats,
-  studentNeedsAttention,
   type SubmissionAnswerState,
   type SubmissionQuestion,
   type SubmissionReviewFilter,
@@ -146,12 +145,9 @@ export function SubmissionReviewOverviewPage() {
     setSearchParams(next, { replace: true });
   }
 
-  const attentionStudent = selection.students.find((student) => studentNeedsAttention(student, selection.questions));
-  const detailStudent = attentionStudent ?? selection.students[0];
-  const detailQuestion = detailStudent
-    ? firstReviewQuestion(detailStudent, selection.questions)
-    : null;
   const returnSearch = searchParams.toString();
+  const firstStudent = selection.students[0];
+  const detailHref = taskId && firstStudent ? studentReviewPath(taskId, firstStudent.stu_id, null, returnSearch) : undefined;
   const queueItems = taskId
     ? buildSubmissionQueueItems(selection.students, selection.questions, taskId, returnSearch, locale, taskQuery.data?.submission_sources)
     : [];
@@ -375,7 +371,7 @@ export function SubmissionReviewOverviewPage() {
                 note={locale === "zh-CN" ? `显示 ${selection.students.length}/${students.length} 位学生 · ${selection.questions.length}/${questions.length} 道题` : `Showing ${selection.students.length}/${students.length} students · ${selection.questions.length}/${questions.length} questions`}
                 leftAction={addStudentButton}
 
-                back={{ href: `/tasks/${taskId}/students/${encodeURIComponent(Object.values(taskQuery.data?.student_data ?? {})[0]?.stu_id ?? "")}`, label: locale === "zh-CN" ? "查看作答详情" : "View Submission Details" }}
+                back={{ href: detailHref, disabled: !detailHref, label: locale === "zh-CN" ? "查看作答详情" : "View Submission Details" }}
                 next={{ label: t("submissionReviewEnterGradingSetup"), disabled: batchProgress !== null, onClick: () => {
                   const issues = submissionReviewBlockers(taskQuery.data, locale);
                   if (issues.length) setBlocked(issues);
@@ -470,10 +466,7 @@ function SubmissionMatrix({
         <tbody className="divide-y">
           {students.map((student) => {
             const answers = answerMap(student);
-            const entryQuestion = firstReviewQuestion(student, questions);
-            const entryHref = entryQuestion
-              ? studentReviewPath(taskId, student.stu_id, entryQuestion.id, returnSearch)
-              : studentPath(taskId, student.stu_id);
+            const entryHref = studentReviewPath(taskId, student.stu_id, null, returnSearch);
             return (
               <tr key={student.stu_id} className="h-[52px] bg-card transition-colors hover:bg-muted/25">
                 <td
@@ -643,23 +636,17 @@ function studentPath(taskId: string, studentId: string) {
   return `/tasks/${encodeURIComponent(taskId)}/students/${encodeURIComponent(studentId)}`;
 }
 
-function studentReviewPath(taskId: string, studentId: string, questionId: string, returnSearch: string) {
-  const params = new URLSearchParams({ question: questionId });
+function studentReviewPath(taskId: string, studentId: string, questionId: string | null, returnSearch: string) {
+  const params = new URLSearchParams();
+  if (questionId) params.set("question", questionId);
   if (returnSearch) params.set("returnParams", returnSearch);
-  return `${studentPath(taskId, studentId)}?${params.toString()}`;
+  return studentPath(taskId, studentId) + (params.size ? `?${params}` : "");
 }
 
 function identityReviewPath(taskId: string, studentId: string, returnSearch: string) {
   const params = new URLSearchParams({ identity: "edit" });
   if (returnSearch) params.set("returnParams", returnSearch);
   return `${studentPath(taskId, studentId)}?${params.toString()}`;
-}
-
-function firstReviewQuestion(student: StudentSubmission, questions: SubmissionQuestion[]) {
-  const answers = answerMap(student);
-  return questions.find((question) => getAnswerState(answers.get(question.id)) === "flagged")
-    ?? questions[0]
-    ?? null;
 }
 
 function buildSubmissionQueueItems(

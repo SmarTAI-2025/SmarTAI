@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { createBrowserRouter, Navigate, Outlet, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, Navigate, Outlet, RouterProvider, useLocation, useNavigationType } from "react-router-dom";
 import { WorkspaceSession } from "@/components/auth/WorkspaceSession";
 import { AppShell } from "@/components/layout/AppShell";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -111,7 +111,24 @@ function routeElement(element: React.ReactNode) {
 
 import { LocalizedDraftLeaveProvider as DraftLeaveProvider } from "@/hooks/useDraftLeave";
 
-const router = createBrowserRouter([{ element: <DraftLeaveProvider><Outlet /></DraftLeaveProvider>, children: [
+function PublicRouteLayout() {
+  const { pathname, state } = useLocation();
+  const previousPath = React.useRef<string | null>(null);
+  const preserveScroll = useNavigationType() === "REPLACE" && state?.preserveScroll === true;
+  React.useLayoutEffect(() => {
+    const previous = window.history.scrollRestoration;
+    window.history.scrollRestoration = "manual";
+    return () => { window.history.scrollRestoration = previous; };
+  }, []);
+  React.useLayoutEffect(() => {
+    if (previousPath.current === pathname) return;
+    previousPath.current = pathname;
+    if (!preserveScroll && !window.location.hash) window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [pathname, preserveScroll]);
+  return <DraftLeaveProvider><Outlet /></DraftLeaveProvider>;
+}
+
+const router = createBrowserRouter([{ element: <PublicRouteLayout />, children: [
   { path: "/", element: routeElement(<FrontierLandingPage />), errorElement: <RouteRecoveryPage /> },
   { path: "/frontier", element: <Navigate to="/" replace /> },
   { path: "/frontier/enter", element: routeElement(<FrontierDemoEntryPage />), errorElement: <RouteRecoveryPage /> },

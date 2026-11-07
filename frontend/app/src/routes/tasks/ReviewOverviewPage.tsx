@@ -104,13 +104,8 @@ export function ReviewOverviewPage() {
     ? `/tasks/${encodeURIComponent(taskId)}/review${searchParams.toString() ? `?${searchParams.toString()}` : ""}`
     : "";
   const visibleReviewItems = pendingReviewItems.filter((item) => selection.matchedCellKeys.has(reviewCellKey(item.student.id, item.question.id)));
-  const firstTarget = visibleReviewItems.find((item) => effectiveCorrectionScore(item.correction) === null) ?? visibleReviewItems[0]
-    ?? (selection.students[0] && selection.questions[0]
-      ? { student: selection.students[0], question: selection.questions[0] } as Pick<ReviewItem, "student" | "question">
-      : null);
-  const targetHref = taskId && firstTarget
-    ? reviewDetailHref(taskId, firstTarget.student.id, firstTarget.question.id, overviewReturnTo)
-    : null;
+  const firstStudent = selection.students[0];
+  const targetHref = taskId && firstStudent ? reviewDetailHref(taskId, firstStudent.id, "all", overviewReturnTo) : undefined;
   const disagreementCount = model.students.reduce(
     (total, student) => total + student.corrections.filter(correction => !isCorrectionReviewConfirmed(correction) && isExpertDisagreement(correction)).length,
     0,
@@ -258,7 +253,7 @@ export function ReviewOverviewPage() {
               ? (locale === "zh-CN" ? `还有 ${remainingReviewCount} 个关键问题需要处理。` : `${remainingReviewCount} required items need correction.`)
               : copy(locale, "readyHint")}
 
-            back={{ href: targetHref ?? `/tasks/${taskId}/review`, label: locale === "zh-CN" ? "查看批改详情" : "View Grading Details" }}
+            back={{ href: targetHref, disabled: !targetHref, label: locale === "zh-CN" ? "查看批改详情" : "View Grading Details" }}
             next={{ id: "confirm-review-complete", label: locale === "zh-CN" ? "查看结果分析" : "View Results & Analysis", disabled: confirmReviews.isPending, onClick: () => readyForConfirmation ? viewResults() : setBlockedDialog(true) }}
           >
             {batchError ? <p role="alert" className="mt-3 text-sm text-destructive">{locale === "en-US"
@@ -377,13 +372,7 @@ function ReviewHeatmap({
             <tbody className="divide-y">
               {students.map((student) => {
                 const correctionByQuestion = new Map(student.corrections.map((correction) => [correction.q_id, correction]));
-                const entryQuestion = questions.find((question) => {
-                  const key = reviewCellKey(student.id, question.id);
-                  return reviewByKey.has(key) && !confirmedKeys.has(key);
-                }) ?? questions[0];
-                const entryHref = entryQuestion
-                  ? reviewDetailHref(taskId, student.id, entryQuestion.id, returnTo)
-                  : null;
+                const entryHref = questions.length ? reviewDetailHref(taskId, student.id, "all", returnTo) : null;
                 return (
                   <tr key={student.id} className="h-[52px] bg-card transition-colors hover:bg-muted/25">
                     <th

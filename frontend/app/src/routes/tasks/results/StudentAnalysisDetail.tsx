@@ -64,7 +64,6 @@ export function StudentAnalysisDetail({ locale, taskId, studentId, model }: { lo
 
   const goToStudent = useCallback((nextStudentId: string) => {
     navigate(buildHref(nextStudentId, activeQuestionId, false));
-    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
   }, [activeQuestionId, buildHref, navigate]);
 
   const scrollToQuestion = useCallback((nextQuestionId: string) => {
