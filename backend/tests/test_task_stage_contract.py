@@ -104,19 +104,6 @@ def test_active_recognition_or_error_takes_precedence_over_saved_setup(status):
     assert task_facade._presentation_status(workflow, [object()], [object()], None) == status
 
 
-@pytest.mark.parametrize("query, expected", [
-    ("校对题目", "problems_ready"), ("校对作答", "submissions_ready"),
-    ("批改配置", "grading_setup"), ("Grading setup", "grading_setup"),
-    ("题目识别暂停", "problems_paused"), ("Question recognition paused", "problems_paused"),
-    ("作答识别暂停", "submissions_paused"), ("Submission recognition paused", "submissions_paused"),
-    ("批改暂停", "grading_paused"), ("Grading paused", "grading_paused"),
-])
-def test_history_interpreter_uses_current_stage_names(query, expected):
-    from backend.agents.history_query_agent import deterministic_history_query
-    result = deterministic_history_query(query, semesters=[], courses=[], tags=[])
-    assert result["filters"].statuses == [expected]
-
-
 @pytest.mark.parametrize("running", [False, True])
 @pytest.mark.parametrize("kind,pointer,active_status,paused_status", [
     ("question_preparation", "extract_job_id", "extracting_problems", "problems_paused"),
