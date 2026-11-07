@@ -320,7 +320,7 @@ function QuestionPreparationDetailPageForm() {
             </div>
           </aside>
 
-          <main className="min-w-0 space-y-5">
+          <div className="min-w-0 space-y-5">
             {filtered.map((problem, index) => (
               <QuestionPackageCard
                 key={problem.q_id}
@@ -352,7 +352,7 @@ function QuestionPreparationDetailPageForm() {
                 else navigate(`/tasks/${taskId}/submissions/upload`);
               } }}
             />
-          </main>
+          </div>
         </div>
       )}
       </div>
