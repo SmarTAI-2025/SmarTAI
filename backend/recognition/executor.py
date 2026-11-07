@@ -327,10 +327,14 @@ checks here do not replace the caller's storage ACL and operation lease.
             if candidate.status == "error":
                 failed.update(numbers)
                 stops.append(candidate.safe_error_code or "recognition_response_invalid")
+                if _can_continue_after_failure(outcome, engine):
+                    continue
                 break
             if candidate.finish_reason == "refused" or "provider_refused" in candidate.warning_codes:
                 failed.update(numbers)
                 stops.append(candidate.safe_error_code or "provider_content_blocked")
+                if _can_continue_after_failure(outcome, engine):
+                    continue
                 break
     except (RecognitionError, PdfEvidenceError) as exc:
         stops.append(exc.code)
@@ -338,6 +342,27 @@ checks here do not replace the caller's storage ACL and operation lease.
     return build_read_batch(source=source, plan=plan, pages=detail_pages, units=units,
                             native_pages=native_pages, failed=failed, stops=stops, started=started,
                             call_session=call_session)
+
+
+def _can_continue_after_failure(outcome, engine) -> bool:
+    """A refused page does not condemn the next; run-wide stops stay authoritative."""
+    if outcome.submission_may_exist:
+        return False
+    from backend.llm.provider_errors import CONFIGURATION_FAILURES, CONTENT_FAILURES
+    candidate = outcome.candidate
+    if (candidate.safe_error_code in CONTENT_FAILURES or candidate.finish_reason == "refused"
+            or "provider_refused" in candidate.warning_codes):
+        return True
+    if candidate.safe_error_code not in CONFIGURATION_FAILURES:
+        return False
+    from backend.llm.providers import BaseProvider
+    from backend.llm.registry import _GuardedSharedProvider
+    from backend.services.execution_control import current_execution, provider_key
+    provider, control = getattr(engine, "provider", None), current_execution()
+    # Only the real LLM boundary can count these attempts. Standalone OCR and
+    # unknown engines retain their old fail-fast behavior.
+    return (isinstance(provider, (BaseProvider, _GuardedSharedProvider)) and control is not None
+            and provider_key(provider) not in control.blocked)
 
 
 def build_read_batch(

@@ -37,13 +37,25 @@ async def test_rate_wait_persistence(route, response_only, retry_kind, outcome, 
         if outcome == 'hang':
             await asyncio.Event().wait()
         raise RuntimeError('synthetic status persistence failure')
+    # This fixture's cancellation predicate performs no I/O. Starting a real
+    # worker under the artificial 20ms status deadline races unrelated CPU load.
+    def not_cancelled():
+        return False
+
+    to_thread = asyncio.to_thread
+    async def run_in_thread(func, *args, **kwargs):
+        if func is not_cancelled:
+            return func()
+        return await to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, 'to_thread', run_in_thread)
     job_id = 'four-pr-retry-status'
     reporter = get_or_create_reporter(job_id)
     try:
         async with provider_for(route, invoke, monkeypatch) as provider:
             with request_timeouts.response_timeout_scope(.1, response_only=True) if response_only else nullcontext():
                 result = await asyncio.wait_for(run_controlled(
-                    job_id, lambda: False,
+                    job_id, not_cancelled,
                     invoke_with_retry(provider, MESSAGES), persist_progress=save,
                 ), 1)
         assert result.content == 'complete' and len(calls) == 2

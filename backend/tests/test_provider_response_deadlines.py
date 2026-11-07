@@ -141,15 +141,25 @@ async def turns():
 async def test_queue_and_guard_do_not_spend_complete_response_time(route, scheduler, monkeypatch):
     scheduler.host_capacity.capacity = 0
     events, states = [], []
+    loop = asyncio.get_running_loop()
+    now = loop.time()
+    monkeypatch.setattr(loop, "time", lambda: now)
+    guard_entered, release_guard = asyncio.Event(), asyncio.Event()
+    if route == "gemini_proxy":
+        # This test controls admission/authorization time, not OS thread timing.
+        # Other provider tests keep the real AnyIO construction boundary.
+        async def build_inline(build):
+            return build()
+        monkeypatch.setattr("anyio.to_thread.run_sync", build_inline)
 
     async def guard():
         events.append("guard")
-        await asyncio.sleep(0.06)  # Longer than the response limit.
+        guard_entered.set()
+        await release_guard.wait()
 
     async def invoke(options):
         events.append("request")
         assert options["read" if route.startswith("relay_") else "timeout"] == 0.04
-        await asyncio.sleep(0.01)
         return SimpleNamespace(content="read")
 
     async with provider_for(route, invoke, monkeypatch) as provider:
@@ -161,11 +171,22 @@ async def test_queue_and_guard_do_not_spend_complete_response_time(route, schedu
 
         task = asyncio.create_task(work())
         try:
-            await asyncio.sleep(0.06)  # Queue wait also exceeds response time.
+            await turns()
+            assert scheduler.pending
+            now += 0.06  # Queue wait exceeds the response limit, without wall-time jitter.
+            await turns()
             assert events == [] and not task.done()
             scheduler.host_capacity.capacity = 50
             scheduler.wake.set()
-            result = await asyncio.wait_for(task, 1)
+            await turns()
+            assert guard_entered.is_set()
+            now += 0.06  # Authorization also exceeds the response limit.
+            await turns()
+            assert events == ["guard"] and not task.done()
+            release_guard.set()
+            await turns()
+            assert task.done()
+            result = task.result()
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)

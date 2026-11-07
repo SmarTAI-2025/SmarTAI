@@ -530,16 +530,34 @@ class BaseProvider(ABC):
                             control.rate_started(self, started_at=admitted_at)
                         yield
                     except Exception as exc:
+                        from backend.llm.provider_errors import (
+                            CONTENT_FAILURES, configuration_failure_code, normalized_error_code, upstream_http_status,
+                        )
+                        normalized = normalized_error_code(exc, self.provider_type)
+                        if control is not None and getattr(exc, "code", None) == "provider_model_access_denied":
+                            normalized = "provider_permission_denied"
+                        if (control is not None and getattr(exc, "code", None) == "provider_auth_failed"
+                                and getattr(exc, "status_code", None) == 403):
+                            normalized = "provider_permission_denied"
+                        failure = exc
+                        if normalized is not None:
+                            failure = ProviderRequestError(normalized, status_code=upstream_http_status(exc))
+                        configuration_code = configuration_failure_code(failure)
+                        if control is not None:
+                            control.record_configuration_result(self, configuration_code)
                         from backend.llm.provider_limits import exhausted_quota_code
-                        code = exhausted_quota_code(exc)
+                        code = exhausted_quota_code(failure)
                         if control is not None and code:
                             control.block(self, code)
                         if not code:
                             from backend.services.background_errors import provider_failure_diagnostic
                             from backend.tools.structured_llm import _provider_retry_after
-                            failure = provider_failure_diagnostic(exc)
+                            diagnostic = provider_failure_diagnostic(failure)
                             if (getattr(exc, "status_code", None) == 429
-                                    or (failure is not None and failure.http_status == 429)):
+                                    or (diagnostic is not None and diagnostic.http_status == 429)) and (
+                                        configuration_code is None
+                                        and getattr(failure, "code", None) not in CONTENT_FAILURES
+                                    ):
                                 # All callers (including raw/vision calls) pass
                                 # here before the rejected slot is released.
                                 hint = _provider_retry_after(exc)
@@ -556,12 +574,18 @@ class BaseProvider(ABC):
                                 scheduler.record_adaptive_failure(key, admitted_at)
                         else:
                             scheduler.record_adaptive_failure(key, admitted_at)
+                        if failure is not exc:
+                            raise failure from exc
                         raise
                     except BaseException:
+                        if control is not None:
+                            control.record_configuration_result(self)
                         scheduler.record_adaptive_failure(key, admitted_at)
                         raise
                     else:
                         deadline.reschedule(None)
+                        if control is not None:
+                            control.record_configuration_result(self)
                         before = scheduler.adjustment_count(key)
                         if self._adaptive_binding is not None:
                             update = scheduler.record_adaptive_success(
@@ -1407,7 +1431,14 @@ class SafeRelayProvider(BaseProvider):
             raise ProviderRequestError(_transport_error_code(exc)) from exc
         if response.status_code >= 400:
             code = _response_error_code(response.status_code)
-            if response.status_code == 403:
+            from backend.llm.provider_errors import structured_error_code
+            try:
+                code = structured_error_code(response.json(), self.provider_type) or code
+            except ValueError:
+                pass
+            if response.status_code == 402 and self.provider_type == "deepseek":
+                code = "provider_quota_exceeded"
+            if response.status_code == 403 and code == "provider_auth_failed":
                 # Classify only the upstream's explicit team/model access rejection.
                 # Neither the raw message nor arbitrary upstream codes leave this layer.
                 try:
@@ -1418,7 +1449,7 @@ class SafeRelayProvider(BaseProvider):
                 except ValueError:
                     pass
             from backend.llm.provider_limits import exhausted_quota_code
-            if response.status_code == 429:
+            if response.status_code == 429 and code == "provider_rate_limited":
                 code = exhausted_quota_code(response.text) or code
             has_images = any(isinstance(m.content, list) and any(
                 isinstance(block, dict) and block.get("type") == "image_url"
