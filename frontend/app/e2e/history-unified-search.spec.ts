@@ -203,6 +203,10 @@ for (const width of [390, 1024, 1280, 1440, 1920]) {
     await expect(attention.getByText(other.name, { exact: true })).toHaveCount(0);
     await expect(results.getByRole("link", { name: other.name, exact: true })).toHaveCount(0);
     expect(deletes).toEqual(["/tasks/practice", "/tasks/vectors"]);
+    if (width >= 1280) {
+      const emptyTable = attention.getByRole("table");
+      await expect(emptyTable.getByRole("cell")).toHaveAttribute("aria-colspan", String(await emptyTable.getByRole("columnheader").count()));
+    }
     if (width < 1024) await page.getByRole("button", { name: "打开导航" }).click();
     const guide = page.getByRole("navigation").getByRole("link", { name: "使用指南" });
     await expect(guide).toHaveAttribute("href", "/guide/?lang=zh");

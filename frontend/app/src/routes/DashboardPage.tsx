@@ -563,7 +563,7 @@ function CompactTableMessage({
 
   return (
     <div role="row" className="col-span-full h-full">
-      <div role="cell" aria-colspan={7} className="flex h-full flex-col items-center justify-center px-6 text-center">
+      <div role="cell" aria-colspan={DASHBOARD_TASK_HEADINGS.length} className="flex h-full flex-col items-center justify-center px-6 text-center">
         <p className="text-sm font-semibold">{title}</p>
         <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">{description}</p>
         {actionTo ? (
