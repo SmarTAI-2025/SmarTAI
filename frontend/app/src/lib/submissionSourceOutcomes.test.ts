@@ -36,7 +36,10 @@ describe("submission source reason copy", () => {
       expect(copy.title).toBe(title);
       expect(copy.nextStep).toContain(locale === "zh-CN" ? "人工继续处理" : "continue manually");
       expect(getSubmissionPageErrorLabel(item, { page: 1, error_code: code }, locale)).toContain(title);
-      expect(classifyRecoverableError(code, { locale })).toMatchObject({ title, actionKind: "retry" });
+      const recovery = classifyRecoverableError(code, { locale });
+      expect(recovery).toMatchObject({ title, actionKind: "retry" });
+      expect(recovery.description).toContain(copy.description);
+      expect(recovery.description).toContain(copy.nextStep);
     }
   });
 

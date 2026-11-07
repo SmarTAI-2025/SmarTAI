@@ -883,9 +883,9 @@ export function classifyRecoverableError(
   }
 
   if (code === "pdf_render_limit_exceeded" || code === "pdf_structure_limit_exceeded") {
-    const { title, description } = pdfLocalLimitCopy[code](locale);
+    const { title, description, nextStep } = pdfLocalLimitCopy[code](locale);
     return {
-      title, description,
+      title, description: [description, nextStep].join(locale === "zh-CN" ? "" : " "),
       actionLabel: tx(locale, "重试失败项", "Retry failed files"),
       actionKind: "retry", tone: "warning", technicalDetails,
     };
