@@ -25,7 +25,7 @@ from backend.recognition.runtime import RecognitionCapacity, region_budget_key, 
 from backend.tools.pdf_evidence import (
     ImagePreparedMetadata,
     PdfDetailPage, PdfDetailResult, PdfExportResult, PdfPagesRequest,
-    PdfRenderRequest, PdfRenderResult, decode_pdf_payload, read_pdf_evidence,
+    PdfRenderResult, decode_pdf_payload, read_pdf_evidence, recognition_page_render,
 )
 
 if TYPE_CHECKING:
@@ -294,7 +294,13 @@ checks here do not replace the caller's storage ACL and operation lease.
                 if not isinstance(rendered, PdfExportResult):
                     raise RecognitionError("recognition_response_invalid")
             else:
-                rendered = await pdf_read(PdfRenderRequest(page_number=numbers[0], region=region.as_tuple()))
+                command = recognition_page_render(by_number[numbers[0]], region.as_tuple(), plan.purpose)
+                try:
+                    rendered = await pdf_read(command)
+                except PdfEvidenceError as exc:
+                    if exc.code == "pdf_render_limit_exceeded":
+                        failed.add(command.page_number)
+                    raise
                 if not isinstance(rendered, PdfRenderResult):
                     raise RecognitionError("recognition_response_invalid")
             payload = decode_pdf_payload(rendered)

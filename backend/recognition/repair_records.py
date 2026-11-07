@@ -23,7 +23,7 @@ class RepairImageEvidenceV1(EvidenceModel):
     width: int = Field(strict=True, ge=1, le=8192)
     height: int = Field(strict=True, ge=1, le=8192)
     content_type: Literal["image/png"] = "image/png"
-    preparation: Literal["pdf_render_scale_2", "oriented_image"]
+    preparation: Literal["pdf_render_scale_2", "pdf_render_fitted", "oriented_image"]
     image_preparation: ImagePreparedMetadata | None = None
 
     @model_validator(mode="after")

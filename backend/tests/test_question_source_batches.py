@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from backend.domain.errors import RecognitionError
+from backend.domain.errors import PdfEvidenceError, RecognitionError
 from backend.progress.tracker import ProgressReporter
 from backend.recognition.models import RecognitionUsageV1
 from backend.services import question_sources
@@ -12,6 +12,34 @@ from backend.services.question_source_batches import read_question_pdf_batches
 from backend.services.stage_provider_routing import StageProviderRoute
 from backend.tests.test_recognition_agent import pdf, request
 from backend.tests.test_recognition_v2_artifacts import setup
+from backend.tools.pdf_evidence import PdfRenderRequest
+
+
+@pytest.mark.asyncio
+async def test_local_render_failure_records_the_page_before_model_dispatch(tmp_path, monkeypatch):
+    from backend.services import recognition_local_evidence, recognition_runs
+
+    agent, req, data, results = setup(tmp_path, pdf=True)
+    service = recognition_runs.RecognitionRunService(store=results.store, capacity=agent.capacity)
+    read = recognition_local_evidence.read_pdf_evidence
+
+    async def fail_render(content, command, **kwargs):
+        if isinstance(command, PdfRenderRequest):
+            raise PdfEvidenceError("pdf_render_limit_exceeded")
+        return await read(content, command, **kwargs)
+
+    monkeypatch.setattr(recognition_local_evidence, "read_pdf_evidence", fail_render)
+    with pytest.raises(RecognitionError, match="pdf_render_limit_exceeded") as caught:
+        await read_question_pdf_batches(
+            service=service, request=req, content=data, engine=agent.engine, total_pages=1,
+            reporter=ProgressReporter("local-render"), binding=results.binding,
+            allow_partial=True, on_pages=AsyncMock(),
+        )
+    assert agent.engine.reads == []
+    assert caught.value.details["page_diagnostics"] == {
+        "total_pages": 1, "processed_pages": [], "failed_pages": [1], "unprocessed_pages": [],
+        "page_errors": [dict(page=1, error_code="pdf_render_limit_exceeded", status_code=None)],
+    }
 
 
 @pytest.mark.asyncio

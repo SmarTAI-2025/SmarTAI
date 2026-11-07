@@ -19,8 +19,9 @@ from backend.recognition.repair_response import REPAIR_PROMPT_VERSION, parse_rep
 from backend.recognition.repair_selection import select_repair_targets
 from backend.recognition.runtime import RecognitionCapacity, region_budget_key, run_repair_call
 from backend.tools.pdf_evidence import (
-    ImagePrepareRequest, ImagePreparedMetadata, ImagePreparedResult, PdfRenderRequest,
-    PdfRenderResult, decode_pdf_payload, read_image_evidence, read_pdf_evidence, whole_page_render_size,
+    ImagePrepareRequest, ImagePreparedMetadata, ImagePreparedResult,
+    PdfRenderResult, decode_pdf_payload, read_image_evidence, read_pdf_evidence,
+    recognition_page_render, whole_page_render_size,
 )
 
 if TYPE_CHECKING:
@@ -67,15 +68,22 @@ def _records(raw):
     return result
 
 
+def _pdf_recheck_render(raw, context):
+    page = next(page for page in raw.read_batch.pages if page.page_number == context.page_number)
+    command = recognition_page_render(page, context.region.as_tuple(), raw.request.purpose)
+    preparation = "pdf_render_scale_2" if command.scale == 2 else "pdf_render_fitted"
+    return page, command, preparation
+
+
 def _validate_image(raw, target, unit, image):
     if (image.source_sha256 != raw.request.source.input_sha256
             or image.page_number != target.context.page_number or image.region != target.context.region):
         raise ValueError("recheck image must retain its source page and exact region")
     if raw.request.source.content_type == "application/pdf":
-        if image.preparation != "pdf_render_scale_2" or image.image_preparation is not None:
+        page, command, preparation = _pdf_recheck_render(raw, target.context)
+        if image.preparation != preparation or image.image_preparation is not None:
             raise ValueError("PDF recheck cannot invent image-source metadata")
-        page = next(page for page in raw.read_batch.pages if page.page_number == image.page_number)
-        if (image.width, image.height) != whole_page_render_size(page.width_points, page.height_points):
+        if (image.width, image.height) != whole_page_render_size(page.width_points, page.height_points, scale=command.scale):
             raise ValueError("PDF recheck dimensions disagree with source geometry")
     elif image.preparation != "oriented_image" or image.image_preparation != unit.image_preparation:
         raise ValueError("recheck must preserve the inspected image transformation")
@@ -215,20 +223,21 @@ def build_rechecked_document(initial: RecognitionAssemblyV1, execution: RepairEx
     return RecognitionDocumentV1.model_validate(document.model_dump(warnings=False)), None
 
 
-async def _prepare_image(source_bytes, source, target, budget, progress, *, total_pages, local_reader=None):
+async def _prepare_image(source_bytes, raw, target, budget, progress, *, local_reader=None):
+    source = raw.request.source
     context = target.context
     if source.content_type == "application/pdf":
-        command = PdfRenderRequest(page_number=context.page_number, region=context.region.as_tuple(), scale=2)
+        _, command, preparation = _pdf_recheck_render(raw, context)
         if local_reader is not None:
             result = (await local_reader.read(source_bytes, command, timeout_seconds=budget.local_timeout(10, "read"))).evidence
         else:
             result = await read_pdf_evidence(
                 source_bytes, command, timeout_seconds=budget.local_timeout(10, "read"), progress=progress,
             )
-        if (not isinstance(result, PdfRenderResult) or result.total_pages != total_pages
+        if (not isinstance(result, PdfRenderResult) or result.total_pages != raw.total_pages
                 or result.page_number != context.page_number or result.region != context.region.as_tuple()):
             raise RecognitionError("recognition_response_invalid")
-        preparation, metadata, region = "pdf_render_scale_2", None, result.region
+        metadata, region = None, result.region
     else:
         command = ImagePrepareRequest(content_type=source.content_type, region=context.region.as_tuple())
         if local_reader is not None:
@@ -311,8 +320,8 @@ async def recheck_recognition(
                 if progress:
                     await progress.set_current_step("recognition_recheck", message="Rechecking uncertain source evidence")
                 token_limit = budget.output_limit(2048)
-                payload, image = await _prepare_image(source_bytes, source, target, budget, progress,
-                                                      total_pages=raw.total_pages, local_reader=local_reader)
+                payload, image = await _prepare_image(source_bytes, raw, target, budget, progress,
+                                                      local_reader=local_reader)
                 unit = units[target.unit_id]
                 try:
                     _validate_image(raw, target, unit, image)

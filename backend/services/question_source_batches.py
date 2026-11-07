@@ -77,6 +77,9 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
             # A page completion is deliberately not a question-boundary claim.
             await on_pages(ready)
         failed_pages.update(document.coverage.failed_pages)
+        if run.safe_error_code == "pdf_render_limit_exceeded":
+            page_errors.extend(dict(page=number, error_code=run.safe_error_code, status_code=None)
+                               for number in document.coverage.failed_pages)
         code = image_quality_failure(run.safe_error_code or "question_source_incomplete", document)
         if run.safe_error_code or document.coverage.failed_pages:
             failure_codes.append(code)

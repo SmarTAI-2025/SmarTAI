@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SubmissionSourceOutcome } from "@/types";
 import { getSubmissionPageErrorLabel, getSubmissionSourceReasonCopy } from "./submissionSourceOutcomes";
+import { classifyRecoverableError } from "./taskActionGuards";
 
 function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOutcome {
   return {
@@ -24,6 +25,21 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 }
 
 describe("submission source reason copy", () => {
+  it.each([
+    ["pdf_render_limit_exceeded", "PDF 页面转图超出限制", "PDF page rendering exceeded its limit"],
+    ["pdf_structure_limit_exceeded", "PDF 页面结构无法完整读取", "The PDF page structure could not be read"],
+  ])("shows the local cause of %s on the file, page and retry card", (code, zh, en) => {
+    for (const locale of ["zh-CN", "en-US"] as const) {
+      const item = source({ reason_code: code, failure_phase: "source_read" });
+      const title = locale === "zh-CN" ? zh : en;
+      const copy = getSubmissionSourceReasonCopy(item, locale);
+      expect(copy.title).toBe(title);
+      expect(copy.nextStep).toContain(locale === "zh-CN" ? "人工继续处理" : "continue manually");
+      expect(getSubmissionPageErrorLabel(item, { page: 1, error_code: code }, locale)).toContain(title);
+      expect(classifyRecoverableError(code, { locale })).toMatchObject({ title, actionKind: "retry" });
+    }
+  });
+
   describe.each([
     {
       code: "question_preparation_time_limit_reached",

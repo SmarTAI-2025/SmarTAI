@@ -55,11 +55,11 @@ class Engine:
                                        input_tokens=4, output_tokens=7)
 
 
-def source_file(*, pdf=False, pages=1):
+def source_file(*, pdf=False, pages=1, page_size=(160, 180)):
     if pdf:
         document = fitz.open()
         for number in range(1, pages + 1):
-            document.new_page(width=160, height=180).insert_text((20, 40), f"Q{number}. x = -2")
+            document.new_page(width=page_size[0], height=page_size[1]).insert_text((20, 40), f"Q{number}. x = -2")
         payload = document.tobytes()
         document.close()
         return payload, "application/pdf"
@@ -68,9 +68,9 @@ def source_file(*, pdf=False, pages=1):
     return stream.getvalue(), "image/png"
 
 
-async def initial_read(engine=None, *, pdf=False, pages=1, policy=None, purpose="submissions", clock=None):
+async def initial_read(engine=None, *, pdf=False, pages=1, page_size=(160, 180), policy=None, purpose="submissions", clock=None):
     engine = engine or Engine()
-    data, content_type = source_file(pdf=pdf, pages=pages)
+    data, content_type = source_file(pdf=pdf, pages=pages, page_size=page_size)
     source = RecognitionSourceRefV1(owner_id="owner", scope="submission_source", business_id="submission",
                                      content_type=content_type, input_sha256=hashlib.sha256(data).hexdigest())
     request = RecognitionReadRequestV1(source=source, purpose=purpose, policy=policy or RecognitionPolicyV1(force_visual=True))
@@ -122,6 +122,22 @@ async def test_empty_recovery_retains_initial_empty_and_recovers_only_page_read_
     assert result.document.usage.empty_recovery_calls == 1 and result.document.confidence == "low"
     assert initial.document.coverage.failed_pages == [1]
     assert RecognitionAssemblyV1.model_validate_json(result.model_dump_json()) == result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [(2560, 1600), (4200, 250)])
+async def test_oversized_submission_page_fits_initial_and_recheck_in_the_same_pixels(size):
+    engine = Engine()
+    initial, data, kwargs = await initial_read(engine, pdf=True, page_size=size)
+    result = await recheck_recognition(initial, data, **kwargs)
+    assert len(engine.reads) == len(engine.repairs) == 1
+    assert engine.reads[0].payload == engine.repairs[0].payload
+    image = result.repair_execution.calls[0].image
+    assert image.preparation == "pdf_render_fitted"
+    assert max(image.width, image.height) <= 8192
+    assert image.width * image.height <= 16_000_000
+    assert image.width > size[0] and image.height > size[1]
+    assert result.document.coverage.processed_pages == [1]
 
 
 @pytest.mark.asyncio
