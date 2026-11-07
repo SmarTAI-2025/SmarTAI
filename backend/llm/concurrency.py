@@ -26,6 +26,7 @@ HARD_LIMIT = 50
 INITIAL_SECONDS = 120.0
 MEMORY_PER_CALL = 32 * 1024 * 1024
 MEMORY_SAMPLE_SECONDS = 5.0
+_MIB = 1024**2
 logger = logging.getLogger(__name__)
 
 
@@ -92,6 +93,41 @@ def read_memory() -> tuple[int, int] | None:
     except (OSError, ValueError, KeyError, IndexError):
         # Unreadable Linux metrics must not disable the memory guard.
         return (0, 2 * 1024**3)
+
+
+def memory_pressure_clear(proc: Path = Path("/proc"), root: Path = Path("/sys/fs/cgroup")) -> bool:
+    """Only spend host headroom when PSI is quiet and no v2 group has its own ceiling."""
+    try:
+        group = next(line.removeprefix("0::") for line in (proc / "self/cgroup").read_text().splitlines()
+                     if line.startswith("0::/"))
+        if ".." in Path(group).parts or "memory" not in (root / "cgroup.controllers").read_text().split():
+            return False
+        directory = root / group.lstrip("/")
+        while directory != root:
+            if any((directory / name).read_text().strip() != "max" for name in ("memory.high", "memory.max")):
+                return False
+            directory = directory.parent
+        # A cgroup namespace can expose a limited group as its apparent root.
+        for name in ("memory.high", "memory.max"):
+            path = root / name
+            if path.exists() and path.read_text().strip() != "max":
+                return False
+        for line in (proc / "pressure/memory").read_text().splitlines():
+            name, *fields = line.split()
+            if name == "some":
+                values = dict(field.split("=", 1) for field in fields)
+                return float(values["avg10"]) == 0 and float(values["avg60"]) == 0
+    except (OSError, KeyError, ValueError, StopIteration):
+        pass
+    return False
+
+
+def _small_request_fits(sample, cost: int) -> bool:
+    if sample is None:
+        return False
+    available, total = sample
+    return (1536 * _MIB <= total <= 2048 * _MIB and 0 < cost <= 2 * MEMORY_PER_CALL
+            and available - cost >= max(384 * _MIB, total // 5))
 
 
 def request_memory(messages: list[Any]) -> int:
@@ -186,13 +222,16 @@ class _Lease:
 
 
 class ModelScheduler:
-    def __init__(self, *, memory_reader=read_memory, host_capacity=None, clock=time.monotonic):
+    def __init__(self, *, memory_reader=read_memory, pressure_clear=memory_pressure_clear,
+                 host_capacity=None, clock=time.monotonic):
         if host_capacity is None:
             from backend.config import settings
             from backend.llm.host_capacity import HostCapacity
             host_capacity = HostCapacity(recovery_seconds=float(settings.llm_rate_limit_retry_seconds))
         self.host_capacity = host_capacity
         self.memory_reader = memory_reader
+        self.pressure_clear = pressure_clear
+        self.quiet_small_host = False
         self.clock = clock
         self.budgets: dict[str, _Budget] = {}
         self.endpoints: dict[str, int] = {}
@@ -417,30 +456,36 @@ class ModelScheduler:
                 budget.blocked_until = max(budget.blocked_until, until)
         return None if until is None else max(0.0, until - self.clock())
 
-    def _memory_allows(self, cost: int, now: float) -> bool:
+    def _memory_slot_limit(self, cost: int, now: float) -> int:
         if now - self.memory_at >= MEMORY_SAMPLE_SECONDS:
             self.memory_sample = self.memory_reader()
             self.memory_at = now
             self.memory_sample_active = self.memory_active
+            self.quiet_small_host = False
             if self.memory_sample is not None:
                 available, total = self.memory_sample
                 reserve = max(512 * 1024**2, total // 4)
+                if available < reserve + 2 * MEMORY_PER_CALL and _small_request_fits(self.memory_sample, MEMORY_PER_CALL):
+                    self.quiet_small_host = self.pressure_clear()
                 if self.active == 0 or self.memory_peak_budget is None:
                     self.memory_peak_budget = max(0, available - reserve)
         if self.memory_sample is None:
             # Local non-Linux validation retains the hard host cap. Production
             # Lightsail/Linux additionally uses the whole-host memory guard.
-            return True
+            return HARD_LIMIT
         available, total = self.memory_sample
         reserve = max(512 * 1024**2, total // 4)
         # Keep the idle-sampled peak budget until the active batch drains:
         # waiting SDK calls may not have allocated their response buffers yet.
         # The live check is separate, so existing RSS is not subtracted twice.
         unsampled = max(0, self.memory_active - self.memory_sample_active)
-        return (
-            self.memory_active + cost <= self.memory_peak_budget
-            and available - unsampled - cost >= reserve
-        )
+        if self.memory_active + cost <= self.memory_peak_budget and available - unsampled - cost >= reserve:
+            return HARD_LIMIT
+        # Slot zero is the same OS lock for every worker. At most one small
+        # request across the host can use the lower reserve at any time.
+        if self.active == 0 and self.quiet_small_host and _small_request_fits(self.memory_sample, cost):
+            return 1
+        return 0
 
     async def acquire(self, *, key: str, rpm: int, owner: str, endpoint: str,
                       endpoint_limit: int, memory: int, ready=None) -> _Lease:
@@ -489,7 +534,7 @@ class ModelScheduler:
             budget.starts.popleft()
         if now < budget.next_start or (budget.rpm > 0 and len(budget.starts) >= budget.rpm):
             return False
-        return self._memory_allows(waiter.memory, now)
+        return True
 
     def _dispatch(self) -> bool:
         if self.active >= HARD_LIMIT:
@@ -501,11 +546,21 @@ class ModelScheduler:
         for candidate in self.queue:
             if not self._eligible(candidate, now):
                 continue
-            host = self.host_capacity.try_acquire(HARD_LIMIT)
+            limit = self._memory_slot_limit(candidate.memory, now)
+            if not limit:
+                continue
+            host = self.host_capacity.try_acquire(limit)
             if host is None:
+                if limit == 1:
+                    continue  # A smaller request may fit with the normal reserve.
                 return False
             budget = self.budgets[candidate.key]
             try:
+                if limit == 1 and not (_small_request_fits(self.memory_reader(), candidate.memory)
+                                       and self.pressure_clear()):
+                    self.quiet_small_host = False
+                    host.release()
+                    continue
                 try_start = getattr(self.host_capacity, "try_start", None)
                 allowed = try_start is None or try_start(candidate.key, budget.rpm, min_interval=budget.interval)
             except Exception:
