@@ -47,6 +47,12 @@ for (const language of ['zh', 'en'] as const) {
 
     await page.locator('.book-tabs [data-book="manual"]').click();
     await expect(page.locator('.chapter[data-group="manual"]:visible')).toHaveCount(1);
+    await page.locator('#search').fill('Ask SmarTAI');
+    await page.locator('.search-result a[href="#workspace-2"]').click();
+    await expect(page.locator('#search')).toHaveValue('');
+    await expect(page.locator('#workspace-2')).toBeVisible();
+    await expect(page.locator('#workspace-2')).toContainText('80%');
+    await expect(page.locator('#workspace-2 img').first()).toHaveAttribute('src', /history-task-search\.jpg$/);
     await page.locator('#search').fill('API');
     await expect(page.locator('#search-results')).toBeVisible();
     await expect(page.locator('.search-result')).not.toHaveCount(0);

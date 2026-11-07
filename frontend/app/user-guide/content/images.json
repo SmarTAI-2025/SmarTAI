@@ -12,17 +12,17 @@
   {
     "id": "02-workspace",
     "chapter": "workspace",
-    "src": "assets/captures/zh/02-workspace.jpg",
-    "caption": "工作台汇总任务阶段，并提供继续处理的入口。",
+    "src": "assets/captures/zh/workspace-task-search.jpg",
+    "caption": "在工作台的统计卡下方可以找到 Ask SmarTAI。",
     "afterSection": 0,
     "width": 2800,
-    "height": 2482
+    "height": 2680
   },
   {
     "id": "03-history",
     "chapter": "workspace",
-    "src": "assets/captures/zh/03-history.jpg",
-    "caption": "历史任务按阶段展示进度，可搜索并回到对应处理页面。",
+    "src": "assets/captures/zh/history-task-search.jpg",
+    "caption": "输入“高数”，找到对应的批改任务。",
     "afterSection": 1,
     "width": 2800,
     "height": 2000
@@ -58,11 +58,11 @@
   {
     "id": "02-workspace-overview",
     "chapter": "quickstart",
-    "src": "assets/captures/zh/02-workspace.jpg",
+    "src": "assets/captures/zh/workspace-task-search.jpg",
     "caption": "从工作台新建任务，或继续处于不同阶段的作业。",
     "afterSection": 0,
     "width": 2800,
-    "height": 2482
+    "height": 2680
   },
   {
     "id": "05-library",

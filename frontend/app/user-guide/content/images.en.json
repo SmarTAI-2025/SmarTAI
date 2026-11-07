@@ -12,17 +12,17 @@
   {
     "id": "02-workspace",
     "chapter": "workspace",
-    "src": "assets/captures/en/02-workspace.jpg",
-    "caption": "The workspace summarizes task stages and provides actions to continue processing.",
+    "src": "assets/captures/en/workspace-task-search.jpg",
+    "caption": "Find Ask SmarTAI below the summary cards on your workspace.",
     "afterSection": 0,
     "width": 2800,
-    "height": 2482
+    "height": 2680
   },
   {
     "id": "03-history",
     "chapter": "workspace",
-    "src": "assets/captures/en/03-history.jpg",
-    "caption": "Task history shows progress by stage, with search and links back to the relevant processing pages.",
+    "src": "assets/captures/en/history-task-search.jpg",
+    "caption": "Searching for “Week 6” brings up the matching grading task.",
     "afterSection": 1,
     "width": 2800,
     "height": 2000
@@ -58,11 +58,11 @@
   {
     "id": "02-workspace-overview",
     "chapter": "quickstart",
-    "src": "assets/captures/en/02-workspace.jpg",
+    "src": "assets/captures/en/workspace-task-search.jpg",
     "caption": "Create a task from the workspace or resume assignments at different stages.",
     "afterSection": 0,
     "width": 2800,
-    "height": 2482
+    "height": 2680
   },
   {
     "id": "05-library",
