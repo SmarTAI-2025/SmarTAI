@@ -1,4 +1,5 @@
 import type {
+  HistoryFacets,
   HistoryInterpretation,
   HistorySort,
   TaskHistoryQuery,
@@ -183,4 +184,25 @@ function setWhenPresent(params: URLSearchParams, key: string, value?: string) {
 
 function unique<T>(values: T[]): T[] {
   return [...new Set(values)];
+}
+
+export interface HistoryKeywordMatch {
+  field: "q" | "course_id" | "tag_ids";
+  id: string;
+  label: string;
+}
+
+/** Keep a name match available even if a course or a tag has the same text. */
+export function historyKeywordMatches(value: string, hasNames: boolean, facets?: HistoryFacets): HistoryKeywordMatch[] {
+  const needle = value.toLowerCase();
+  const matches: HistoryKeywordMatch[] = hasNames ? [{ field: "q", id: value, label: value }] : [];
+  for (const course of facets?.courses ?? []) {
+    if ([course.name, course.code].some(text => text?.toLowerCase().includes(needle))) {
+      matches.push({ field: "course_id", id: course.id, label: course.name });
+    }
+  }
+  for (const tag of facets?.tags ?? []) {
+    if (tag.name.toLowerCase().includes(needle)) matches.push({ field: "tag_ids", id: tag.id, label: tag.name });
+  }
+  return matches;
 }

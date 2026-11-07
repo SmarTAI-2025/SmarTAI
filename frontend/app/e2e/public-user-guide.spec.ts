@@ -8,7 +8,7 @@ for (const language of ['zh', 'en'] as const) {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto('/');
     const homeBrand = await page.locator('.frontier-nav .frontier-wordmark-image').boundingBox();
-    const guide = page.locator('.frontier-nav nav a', { hasText: language === 'zh' ? '用户手册' : 'User manual' });
+    const guide = page.locator('.frontier-nav nav a', { hasText: language === 'zh' ? '使用指南' : 'User guide' });
     await expect(guide).toHaveAttribute('href', `/guide/?lang=${language}`);
     await guide.click();
     await expect(page.locator('body')).toHaveAttribute('data-language', language);
@@ -120,7 +120,7 @@ for (const width of [320, 390, 820, 1024, 1920]) {
     await page.locator('.topbar a[href="/frontier/enter"]').click();
     await expect(page).toHaveURL(/\/frontier\/enter|\/login/);
     await page.goto('/');
-    await expect(page.getByRole('link', { name: 'User manual', exact: true }).filter({ visible: true })).toHaveCount(1);
+    await expect(page.getByRole('link', { name: 'User guide', exact: true }).filter({ visible: true })).toHaveCount(1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
     await page.screenshot({ path: testInfo.outputPath(`landing-en-${width}.png`) });
   });

@@ -4,12 +4,12 @@ import type { TagColor } from "@/types";
 import { tagKeys, taskKeys } from "./keys";
 import { useFrontierWorkspace } from "@/lib/frontierContext";
 
-export function useTags() {
+export function useTags(enabled = true) {
   const frontier = useFrontierWorkspace();
   return useQuery({
     queryKey: tagKeys.list(),
     queryFn: tagsApi.listTags,
-    enabled: !frontier,
+    enabled: enabled && !frontier,
   });
 }
 

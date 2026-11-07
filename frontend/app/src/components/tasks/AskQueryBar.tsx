@@ -18,13 +18,14 @@ interface AskQueryBarProps {
   placeholder: string;
   label?: string;
   className?: string;
+  mascotOutside?: boolean;
   feedback?: ReactNode;
   onFocus?: () => void;
   onBlur?: () => void;
 }
 
 /** The same editable, IME-safe input and controls on every Ask surface. */
-export function AskQueryBar({ locale, value, onChange, onApply, onCancel, pending = false, placeholder, label, className, feedback, onFocus, onBlur }: AskQueryBarProps) {
+export function AskQueryBar({ locale, value, onChange, onApply, onCancel, pending = false, placeholder, label, className, mascotOutside, feedback, onFocus, onBlur }: AskQueryBarProps) {
   const zh = locale === "zh-CN";
   const composing = useRef(false);
   const input = useImeSafeQuery({ value, onCommit: onChange, onDraftChange: onCancel });
@@ -34,7 +35,7 @@ export function AskQueryBar({ locale, value, onChange, onApply, onCancel, pendin
         event.preventDefault();
         if (!composing.current && !pending && input.draftValue.trim()) onApply(input.commitDraft());
       }}>
-        <SmarTAIMascot variant={pending ? "grading" : "thinking"} size="xs" />
+        {!mascotOutside && <SmarTAIMascot variant={pending ? "grading" : "thinking"} size="xs" />}
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">{label ?? (zh ? "Ask SmarTAI：筛选与排序" : "Ask SmarTAI: filter and sort")}</span>
           <input

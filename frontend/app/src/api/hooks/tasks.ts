@@ -34,11 +34,17 @@ export function useTasks() {
   });
 }
 
-export function useTaskHistory(query: TaskHistoryQuery) {
-  const queryKey = historyQueryKey(query);
-  return useQuery({
-    queryKey: taskKeys.history(queryKey),
+export function taskHistoryOptions(query: TaskHistoryQuery) {
+  return {
+    queryKey: taskKeys.history(historyQueryKey(query)),
     queryFn: () => tasksApi.listTaskHistory(query),
+  };
+}
+
+export function useTaskHistory(query: TaskHistoryQuery, enabled = true) {
+  return useQuery({
+    ...taskHistoryOptions(query),
+    enabled,
     placeholderData: (previous) => previous,
     refetchInterval: (historyQuery) => {
       const data = historyQuery.state.data;
