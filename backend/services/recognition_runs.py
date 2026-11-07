@@ -17,7 +17,7 @@ import uuid
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
-from backend.agents.recognition_agent import RecognitionAgent, RecognitionReadRequestV1
+from backend.agents.recognition_agent import LOCATOR_OUTPUT_TOKENS, RecognitionAgent, RecognitionReadRequestV1
 from backend.db import workflow_repository
 from backend.domain.errors import DomainError, LeaseLost, RecognitionError, RECOGNITION_ERROR_CODES
 from backend.recognition.cache_identity import final_cache_identity, model_cache_identity
@@ -63,6 +63,19 @@ class RecognitionRunResultV1:
 
 def _zero():
     return RecognitionUsageV1(input_tokens=0, output_tokens=0)
+
+
+def _truncated_locator_key(row):
+    if (row.terminal_summary or {}).get("error_code") != "scan_response_truncated":
+        return None
+    calls = (row.checkpoint or {}).get("calls") or []
+    if isinstance(calls, list) and calls and isinstance(calls[-1], dict):
+        last = calls[-1]
+        if (last.get("kind") == "locator" and last.get("state") == "stored"
+                and last.get("submission_may_exist") is False
+                and last.get("requested_output_tokens") == last.get("output_tokens") == LOCATOR_OUTPUT_TOKENS):
+            return last.get("identity_key")
+    return None
 
 
 async def _storage_step(awaitable, *, response_only):
@@ -381,10 +394,14 @@ class RecognitionRunService:
             # A stable parent attempt gives one retry child; successful leaf
             # artifacts keep their original identity and can still be reused.
             retry_hash = hashlib.sha256(f"{identity.key}:explicit-retry:{retry_key}".encode()).hexdigest()
+            retry_payload = dict(identity_key=identity.key, binding=binding.model_dump(), retry_origin_id=row.id)
+            truncated_key = _truncated_locator_key(row)
+            if request.purpose == "problems" and truncated_key:
+                retry_payload["truncated_locator_key"] = truncated_key
             row, _ = await _storage_step(run_in_threadpool(
                 self.repository.create_operation, assignment_id=assignment_id, owner_id=authorized_owner_id,
                 operation_type=OPERATION_TYPE, input_hash=retry_hash, retry_existing=False,
-                payload=dict(identity_key=identity.key, binding=binding.model_dump(), retry_origin_id=row.id),
+                payload=retry_payload,
             ), response_only=response_only)
         if row.terminal_summary is not None:
             return await self._restored(row, request, identity,
@@ -473,6 +490,7 @@ class RecognitionRunService:
             async with asyncio.timeout(remaining):
                 assembly = await RecognitionAgent(engine, capacity=self.capacity, progress=progress,
                                                    local_reader=local, call_service=calls,
+                                                   truncated_locator_key=(row.payload or {}).get("truncated_locator_key"),
                                                    repair_admission=repair_admission,
                                                    elapsed_seconds=max(0, self.clock() - checkpoint.started_at)).recognize(
                     request, source_bytes, authorized_owner_id=authorized_owner_id, prompt_version=prompt_version,

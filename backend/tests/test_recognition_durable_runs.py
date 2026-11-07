@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -234,6 +235,46 @@ async def test_explicit_retry_reuses_successful_pages_without_replaying_on_refre
     with pytest.raises(RecognitionError):
         await service.run(request, data, **{**args, "authorized_owner_id": "other"})
     assert len(engine.reads) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("total_budget,retry_limit", [(32768, 16384), (12000, 7903)])
+async def test_manual_retry_increases_only_the_exact_stored_truncated_locator(tmp_path, total_budget, retry_limit):
+    from backend.tests.test_recognition_agent import Engine
+
+    service, req, data, _ = runner(tmp_path, pdf=True, pages=9)
+    req = req.model_copy(update={"scope": "targets", "targets": ["X9"],
+                                 "policy": RecognitionPolicyV1(force_visual=True, max_output_tokens=total_budget)})
+    engine = Engine()
+
+    def response(unit):
+        last_sheet = unit.images[0].page_numbers == [9]
+        if last_sheet and len(engine.locates) == 2:
+            return RecognitionCandidateV1(kind="vision", status="empty", text="", provider_route_id="selected",
+                                          input_tokens=8, output_tokens=4096, finish_reason="length")
+        location = {"target": "X9", "status": "candidate" if last_sheet else "not_visible",
+                    "pages": [9] if last_sheet else [], "evidence": "visible label" if last_sheet else ""}
+        return engine.candidate(json.dumps({"locations": [location]}))
+
+    engine.locations = response
+    first = await run(service, req, data, engine)
+    assert first.safe_error_code == "scan_response_truncated"
+    await run(service, req, data, engine)  # Refresh cannot authorize another call.
+    assert [unit.max_output_tokens for unit in engine.locates] == [4096, 4096]
+    args = dict(engine=engine, prompt_version="faithful-reader-v1", authorized_owner_id=req.source.owner_id,
+                retry_key="user-retry:1")
+    retried = await service.run(req, data, **args)
+    assert retried.safe_error_code is None
+    # A not-visible result is not cacheable as positive location evidence.
+    # Its new observation on manual retry still uses the ordinary limit.
+    assert [(unit.images[0].page_numbers, unit.max_output_tokens) for unit in engine.locates] == [
+        (list(range(1, 9)), 4096), ([9], 4096), (list(range(1, 9)), 4096), ([9], retry_limit)]
+    assert len(engine.reads) == 1 and engine.reads[0].max_output_tokens == 4096
+    restored = await service.run(req, data, **args)
+    assert restored.operation_id == retried.operation_id
+    assert restored.safe_error_code == retried.safe_error_code
+    assert restored.status == ("already_done" if retried.status == "completed" else retried.status)
+    assert len(engine.locates) == 4
 
 
 def test_durable_budget_pending_unknown_duplicate_and_limits():

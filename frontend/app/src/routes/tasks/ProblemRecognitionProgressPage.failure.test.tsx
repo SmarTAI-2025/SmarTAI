@@ -89,6 +89,15 @@ describe("ProblemRecognitionProgressPage generation failure", () => {
     expect(screen.getByRole("button", { name: "重试失败项" })).toBeDisabled();
   });
 
+  it("explains possible extra model usage when retrying a truncated page search", () => {
+    failureCode = "scan_response_truncated";
+    generationProgress = {};
+    render(<MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}>
+      <Routes><Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByText(/用同一模型重试时/)).toHaveTextContent("增加等待时间和模型用量");
+  });
+
   it.each([
     ["question_preparation_time_limit_reached", "本次题目处理已达到有效处理时限", "1.5 小时，排队不计时", "已达到有效处理时限"],
     ["question_preparation_wall_time_limit_reached", "本次题目处理已达到总时限", "2.5 小时总时限，自首次开始运行起，之后等待计入", "已达到总时限"],

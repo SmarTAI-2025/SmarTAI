@@ -135,6 +135,11 @@ export function ProblemRecognitionProgressPage() {
       finally { setOpeningManual(false); }
     };
     const submissionUncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryFailure) === "provider_submit_uncertain";
+    if (progressFailure === "scan_response_truncated") {
+      info.description += locale === "zh-CN"
+        ? " 用同一模型重试时，这次被截断的定位请求可能会使用更多输出 token，增加等待时间和模型用量。"
+        : " Retrying with the same model may give this truncated page search a larger output allowance, increasing wait time and token usage.";
+    }
     if (submissionUncertain) {
       info.description += locale === "zh-CN"
         ? " 重试时会复用已识别资料，并继续未完成的题目。"
