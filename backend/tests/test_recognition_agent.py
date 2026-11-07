@@ -79,6 +79,21 @@ async def read(data, engine=None, **kwargs):
 
 
 @pytest.mark.asyncio
+async def test_continued_exercise_list_selects_the_full_resolution_page_without_a_locator_call():
+    data = pdf(["EXERCISES\n1. First exercise.\nSec. 4.3\n51",
+                "2. A new exercise.\n3. Another exercise.\n52\nChap. 4"])
+    engine = Engine()
+    result = await read(data, engine, scope="targets", targets=["4.3.2", "4.3.3"],
+                        policy=RecognitionPolicyV1(force_visual=True))
+    assert not engine.locates and not result.unlocated_targets
+    assert result.selected_pages == [2] and [call.page_number for call in engine.reads] == [2]
+    for loc in result.native_location.locations:
+        assert loc.reason_codes == ["native_exercise_sequence_page_hint"]
+        assert loc.resolved_scope == "page_only"
+        assert [proof.matched_text for proof in loc.evidence] == [loc.target.rsplit(".", 1)[1]]
+
+
+@pytest.mark.asyncio
 async def test_whole_native_document_is_zero_model_calls_without_false_quality_claim():
     data = pdf(["A literal paragraph.", "A second source paragraph."])
     result = await read(data)

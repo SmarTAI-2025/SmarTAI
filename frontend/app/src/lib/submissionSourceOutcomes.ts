@@ -56,6 +56,14 @@ export function getSubmissionSourceReasonCopy(
 
 type ReasonFactory = (locale: Locale, source: SubmissionSourceOutcome) => SubmissionSourceReasonCopy;
 
+export function truncatedLocatorCopy(locale: Locale) {
+  return {
+    title: tx(locale, "查找题号所在页时，模型输出被截断", "Model output was cut off while locating questions"),
+    description: tx(locale, "模型达到本次输出上限，未能返回完整的候选页码。原资料已保留。", "The model reached its output limit before returning a complete set of candidate pages. Your source file is saved."),
+    nextStep: tx(locale, "知道页码时，可返回修改配置并填写页码范围。也可更换识别模型后重试，或人工继续处理。", "If you know the pages, enter the page range in settings. You can also switch recognition models and retry, or continue manually."),
+  };
+}
+
 export function getSubmissionPageErrorLabel(source: SubmissionSourceOutcome, error: SubmissionPageError, locale: Locale): string {
   const reason = REASON_COPY[error.error_code]?.(locale, source).title
     ?? tx(locale, "该页尚未成功识别，请重试或查看诊断信息", "This page was not recognized; retry or inspect the diagnostic details");
@@ -267,6 +275,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     description: tx(locale, "请查看识别结果，重试未完成的部分。", "Check the recognition results and retry the unfinished parts."),
   }),
   target_location_needs_hint: recognitionScopeCopy,
+  scan_response_truncated: truncatedLocatorCopy,
   target_selection_limit_exceeded: recognitionScopeCopy,
   visual_capability_unavailable: recognitionProviderCopy,
   workflow_failed: (locale) => ({

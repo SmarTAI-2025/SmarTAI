@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import re
+from typing import Literal, NamedTuple
 
 _NUMBER = r"\d+(?:[ \t]*\.[ \t]*\d+)+"
 _SECTION = re.compile(r"(?im)^[ \t]*(?:sec(?:tion)?\.?[ \t]*)(" + _NUMBER + r")(?![\w.])[^\n]*")
@@ -35,41 +36,37 @@ def _page_text(chunks):
     return text
 
 
-def exercise_hints(chunks):
-    pages = defaultdict(list)
-    for chunk in chunks:
-        page = chunk.metadata.get("page_number")
-        if type(page) is int and page > 0:
-            pages[(chunk.document_id, chunk.content_version, page)].append(chunk)
-    hints = defaultdict(set)
-    continuations = defaultdict(set)
+class ExercisePageMark(NamedTuple):
+    number: str
+    page: int
+    start: int
+    end: int
+    kind: Literal["label", "continuation", "reset"]
+
+
+def exercise_page_marks(pages):
+    """Yield exercise label spans and possible continuations in one ordered source."""
     previous = None
-    for key, page_chunks in sorted(pages.items()):
-        text = _page_text(page_chunks)
+    for page, text in pages:
         if text is None:
             previous = None
             continue
         tail_start = max(0, len(text) - len("\n".join(text.rstrip().splitlines()[-5:])) - 1)
         printed = [m for m in _PAGE.finditer(text) if m.start() >= tail_start or m.start() > len(text) * .8]
         printed_page = int(printed[-1][1]) if printed else None
-        continuous = bool(previous and key[:2] == previous[0][:2] and key[2] == previous[0][2] + 1
+        continuous = bool(previous and page == previous[0] + 1
                           and printed_page is not None and previous[1] is not None and printed_page == previous[1] + 1)
         section = previous[2] if continuous else None
         active = previous[3] if continuous else False
         last = previous[4] if continuous else None
         anchors = list(_LABEL.finditer(text))
         if active and anchors and last is not None and int(anchors[0][1]) <= last:
+            yield ExercisePageMark(section, page, 0, 0, "reset")
             active = False
         if active and section and last is not None and anchors and anchors[0].start() > 0:
             head = text[:anchors[0].start()].strip()
             if head and not _SECTION.search(head) and not _HEADING.search(head) and not _EXERCISES.search(head):
-                identifier = "id:" + section + "." + str(last)
-                before = [c for c in pages[previous[0]] if identifier in hints[c.id]]
-                after = [c for c in page_chunks if c.metadata["start"] < anchors[0].start()]
-                for first in before:
-                    for second in after:
-                        hints[second.id].add(identifier)
-                        continuations[first.id].add(second.id)
+                yield ExercisePageMark(f"{section}.{last}", page, 0, anchors[0].start(), "continuation")
         sections = list(_SECTION.finditer(text))
         headings = list(_HEADING.finditer(text))
         footers = [m for m in sections if (m.start() >= tail_start or m.start() > len(text) * .8)
@@ -83,20 +80,44 @@ def exercise_hints(chunks):
             section = footer_section
         events = [(m.start(), "section", _number(m[1])) for m in headings + sections if m not in footers]
         events += [(m.start(), "exercises", None) for m in _EXERCISES.finditer(text)]
-        events += [(m.start(), "label", int(m[1])) for m in anchors]
+        events += [(m.start(), "label", m) for m in anchors]
         for start, kind, value in sorted(events):
             if kind == "section":
                 section, active, last = value, False, None
             elif kind == "exercises":
                 active, last = True, None
             elif active and section:
-                if last is not None and value <= last:
+                number = int(value[1])
+                if last is not None and number <= last:
+                    yield ExercisePageMark(section, page, start, start, "reset")
                     active = False
                     continue
-                identifier = "id:" + section + "." + str(value)
-                for chunk in page_chunks:
-                    if chunk.metadata["start"] <= start < chunk.metadata["end"]:
+                yield ExercisePageMark(f"{section}.{number}", page, start, value.end(1), "label")
+                last = number
+        previous = (page, printed_page, section, active, last)
+
+
+def exercise_hints(chunks):
+    sources = defaultdict(lambda: defaultdict(list))
+    for chunk in chunks:
+        page = chunk.metadata.get("page_number")
+        if type(page) is int and page > 0:
+            sources[(chunk.document_id, chunk.content_version)][page].append(chunk)
+    hints = defaultdict(set)
+    continuations = defaultdict(set)
+    for pages in sources.values():
+        texts = ((page, _page_text(group)) for page, group in sorted(pages.items()))
+        for mark in exercise_page_marks(texts):
+            identifier = "id:" + mark.number
+            if mark.kind == "label":
+                for chunk in pages[mark.page]:
+                    if chunk.metadata["start"] <= mark.start < chunk.metadata["end"]:
                         hints[chunk.id].add(identifier)
-                last = value
-        previous = (key, printed_page, section, active, last)
+            elif mark.kind == "continuation":
+                before = [c for c in pages[mark.page - 1] if identifier in hints[c.id]]
+                for chunk in pages[mark.page]:
+                    if before and chunk.metadata["start"] < mark.end:
+                        hints[chunk.id].add(identifier)
+                        for first in before:
+                            continuations[first.id].add(chunk.id)
     return hints, continuations

@@ -138,6 +138,19 @@ def test_no_implicit_section_inheritance_or_adjacent_page_expansion():
     assert result.missing_targets == ["1.1.11"]
 
 
+@pytest.mark.parametrize("next_page,text", [
+    (3, "3. Source page missing.\n53\nChap. 4\n"),
+    (2, "3. Printed page missing.\n54\nChap. 4\n"),
+    (2, "3. Different chapter.\n52\nChap. 7\n"),
+    (2, "3. First occurrence.\n3. Competing occurrence.\n52\nChap. 4\n"),
+    (2, "4.4 NEXT SECTION\nEXERCISES\n3. Different section.\n52\n"),
+])
+def test_inherited_exercise_hint_requires_unambiguous_contiguous_source(next_page, text):
+    pages = [detail(1, "EXERCISES\n1. First exercise.\nSec. 4.3\n51\n"), detail(next_page, text)]
+    result = locate(["4.3.3"], pages)
+    assert result.missing_targets == ["4.3.3"] and not result.selected_pages
+
+
 def test_duplicates_need_hint_and_do_not_choose_first_page():
     pages = [detail(1, "1.2 Question A\n"), detail(3, "1.2 Question B\n")]
     result = locate(["1.2"], pages)
