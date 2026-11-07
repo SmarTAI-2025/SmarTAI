@@ -193,8 +193,8 @@ class HostCapacity:
                 try:
                     fd = os.open(name, flags, 0o600, dir_fd=self._directory_fd)
                 except FileNotFoundError:
-                    # Concurrent first creation on Darwin can report ENOENT
-                    # even though the other worker has now created the file.
+                    # Concurrent first creation can return ENOENT on macOS.
+                    # Only accept an existing winner through the same pinned directory.
                     fd = os.open(name, flags & ~os.O_CREAT, dir_fd=self._directory_fd)
             else:
                 before = os.lstat(self.directory)
