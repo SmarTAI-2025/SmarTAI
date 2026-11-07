@@ -44,7 +44,7 @@ class ExercisePageMark(NamedTuple):
     kind: Literal["label", "continuation", "reset"]
 
 
-def exercise_page_marks(pages):
+def exercise_page_marks(pages, *, chapters_by_page=None):
     """Yield exercise label spans and possible continuations in one ordered source."""
     previous = None
     for page, text in pages:
@@ -63,10 +63,16 @@ def exercise_page_marks(pages):
         if active and anchors and last is not None and int(anchors[0][1]) <= last:
             yield ExercisePageMark(section, page, 0, 0, "reset")
             active = False
-        if active and section and last is not None and anchors and anchors[0].start() > 0:
-            head = text[:anchors[0].start()].strip()
+        # The locator has explicit chapter evidence even on pages without a section.
+        # A contradictory chapter breaks the chain before any later page can inherit it.
+        chapters = chapters_by_page.get(page, ()) if chapters_by_page else ()
+        if section and any(chapter != section.split(".")[0] for chapter in chapters):
+            section, active, last = None, False, None
+        head_end = anchors[0].start() if anchors else (printed[-1].start() if printed else 0)
+        if active and section and last is not None and head_end > 0:
+            head = text[:head_end].strip()
             if head and not _SECTION.search(head) and not _HEADING.search(head) and not _EXERCISES.search(head):
-                yield ExercisePageMark(f"{section}.{last}", page, 0, anchors[0].start(), "continuation")
+                yield ExercisePageMark(f"{section}.{last}", page, 0, head_end, "continuation")
         sections = list(_SECTION.finditer(text))
         headings = list(_HEADING.finditer(text))
         footers = [m for m in sections if (m.start() >= tail_start or m.start() > len(text) * .8)
@@ -95,6 +101,8 @@ def exercise_page_marks(pages):
                 yield ExercisePageMark(f"{section}.{number}", page, start, value.end(1), "label")
                 last = number
         previous = (page, printed_page, section, active, last)
+        if section and any(chapter != section.split(".")[0] for chapter in chapters):
+            previous = None
 
 
 def exercise_hints(chunks):

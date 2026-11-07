@@ -307,3 +307,18 @@ def test_snapshot_revalidation_and_output_do_not_alias_caller():
     request.targets.append("other")
     with pytest.raises(ValidationError):
         locate_native_targets(request)
+
+
+@pytest.mark.parametrize("chapter", ["Chapter 5", "第 5 章"])
+def test_conflicting_chapter_cannot_leak_old_section_onto_next_page(chapter):
+    pages = [detail(1, "EXERCISES\n1. First.\nSec. 4.3\n51\n"),
+             detail(2, f"{chapter}\n2. New chapter exercise.\n52\n"),
+             detail(3, "3. More from the new chapter.\n53\n")]
+    assert locate(["4.3.3"], pages).selected_pages == []
+
+
+def test_unlabelled_continuation_does_not_select_only_the_start_page():
+    pages = [detail(1, "EXERCISES\n1. First.\nSec. 4.3\n51\n"),
+             detail(2, "2. Prove the following:\n52\n"),
+             detail(3, "(b) Give a second proof under these assumptions.\n53\n")]
+    assert locate(["4.3.2"], pages).selected_pages == []

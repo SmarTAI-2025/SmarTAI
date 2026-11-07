@@ -290,7 +290,9 @@ def _apply_exercise_page_hints(locations, pages):
              for page in pages)
     matches = {}
     ambiguous_sections = set()
-    for mark in exercise_page_marks(texts):
+    chapters = {page.page_number: {number for number, kind, _ in _contexts(page) if kind == "chapter"}
+                for page in pages if page.observation.native_quality == "clean"}
+    for mark in exercise_page_marks(texts, chapters_by_page=chapters):
         if mark.kind == "reset":
             ambiguous_sections.add(mark.number)
         elif mark.number in unresolved:
@@ -305,7 +307,7 @@ def _apply_exercise_page_hints(locations, pages):
         start = mark.end - len(local_number)
         if page.native_text[mark.start:mark.end].strip() != local_number:
             continue
-        if any(kind == "chapter" and number != section.split(".")[0] for number, kind, _ in _contexts(page)):
+        if any(number != section.split(".")[0] for number in chapters[mark.page]):
             continue
         loc = unresolved[target]
         loc.status, loc.resolved_scope = "hinted", "page_only"
