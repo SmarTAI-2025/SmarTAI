@@ -495,11 +495,18 @@ def test_lower_reserve_requires_quiet_psi_and_unlimited_visible_cgroups(tmp_path
     psi = proc / "pressure/memory"
     psi.write_text("some avg10=0.00 avg60=0.00 avg300=0.02 total=53\n")
     (root / "slice/service").mkdir(parents=True)
-    (root / "cgroup.controllers").touch()
+    (root / "cgroup.controllers").write_text("cpu io memory\n")
     for group in (root / "slice", root / "slice/service"):
         for name in ("memory.high", "memory.max"):
             (group / name).write_text("max\n")
     assert memory_pressure_clear(proc, root)
+    # In a hybrid hierarchy memory may belong to v1. An apparently
+    # unlimited v2 root then says nothing about the actual memory limit.
+    (proc / "self/cgroup").write_text("4:memory:/limited\n0::/\n")
+    (root / "cgroup.controllers").write_text("cpu io\n")
+    assert not memory_pressure_clear(proc, root)
+    (proc / "self/cgroup").write_text("0::/slice/service\n")
+    (root / "cgroup.controllers").write_text("cpu io memory\n")
     for group in (root, root / "slice", root / "slice/service"):
         for name in ("memory.high", "memory.max"):
             (group / name).write_text("300000000")

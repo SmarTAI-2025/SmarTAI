@@ -100,7 +100,7 @@ def memory_pressure_clear(proc: Path = Path("/proc"), root: Path = Path("/sys/fs
     try:
         group = next(line.removeprefix("0::") for line in (proc / "self/cgroup").read_text().splitlines()
                      if line.startswith("0::/"))
-        if not (root / "cgroup.controllers").is_file() or ".." in Path(group).parts:
+        if ".." in Path(group).parts or "memory" not in (root / "cgroup.controllers").read_text().split():
             return False
         directory = root / group.lstrip("/")
         while directory != root:
