@@ -342,3 +342,23 @@ async def test_unaligned_paid_output_is_not_treated_as_safe_deferred_work():
             content=b"pdf", engine=None, total_pages=2, reporter=ProgressReporter("batches"))
     assert caught.value.code == "question_source_incomplete"
     assert run.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("top_code", ["provider_content_blocked", "pdf_render_limit_exceeded"])
+async def test_mixed_page_errors_preserve_each_pages_own_failure(top_code):
+    result = fake_result([1, 2, 3], error=top_code)
+    coverage = result.assembly.document.coverage
+    coverage.processed_pages, coverage.failed_pages = [1], [2, 3]
+    batch = result.assembly.raw.read_batch
+    batch.stop_codes = ["provider_content_blocked", "pdf_render_limit_exceeded"]
+    batch.units = [SimpleNamespace(page_numbers=[2], candidate=SimpleNamespace(
+        status="error", safe_error_code="provider_content_blocked", upstream_status_code=403))]
+    _, summary = await read_question_pdf_batches(
+        service=SimpleNamespace(run=AsyncMock(return_value=result)), request=request(b"pdf"), content=b"pdf",
+        engine=None, total_pages=3, reporter=ProgressReporter("mixed-errors"), allow_partial=True,
+    )
+    assert sorted(summary["page_diagnostics"]["page_errors"], key=lambda item: item["page"]) == [
+        dict(page=2, error_code="provider_content_blocked", status_code=403),
+        dict(page=3, error_code="pdf_render_limit_exceeded", status_code=None),
+    ]

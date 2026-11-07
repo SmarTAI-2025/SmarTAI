@@ -77,18 +77,25 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
             # A page completion is deliberately not a question-boundary claim.
             await on_pages(ready)
         failed_pages.update(document.coverage.failed_pages)
-        if run.safe_error_code == "pdf_render_limit_exceeded":
-            page_errors.extend(dict(page=number, error_code=run.safe_error_code, status_code=None)
-                               for number in document.coverage.failed_pages)
         code = image_quality_failure(run.safe_error_code or "question_source_incomplete", document)
         if run.safe_error_code or document.coverage.failed_pages:
             failure_codes.append(code)
         read_batch = getattr(getattr(run.assembly, "raw", None), "read_batch", None)
+        unassigned_failures = set(document.coverage.failed_pages)
         for unit in getattr(read_batch, "units", []):
-            if unit.candidate.status == "error":
-                page_errors.extend(dict(page=number, error_code=unit.candidate.safe_error_code or "recognition_response_invalid",
-                    status_code=unit.candidate.upstream_status_code) for number in unit.page_numbers
-                    if number in document.coverage.failed_pages)
+            candidate = unit.candidate
+            refused = (getattr(candidate, "finish_reason", None) == "refused"
+                       or "provider_refused" in getattr(candidate, "warning_codes", ()))
+            if candidate.status == "error" or refused:
+                cause = candidate.safe_error_code or ("provider_content_blocked" if refused else "recognition_response_invalid")
+                page_errors.extend(dict(page=number, error_code=cause, status_code=candidate.upstream_status_code)
+                                   for number in unit.page_numbers if number in document.coverage.failed_pages)
+                unassigned_failures.difference_update(unit.page_numbers)
+        # Local rendering stops before a model read unit exists. Earlier failed
+        # reads in this batch retain their own page diagnostics.
+        if "pdf_render_limit_exceeded" in getattr(read_batch, "stop_codes", ()):
+            page_errors.extend(dict(page=number, error_code="pdf_render_limit_exceeded", status_code=None)
+                               for number in sorted(unassigned_failures))
         pending = document.coverage.unprocessed_pages
         if native_partial:
             failed_pages.update(pending)
