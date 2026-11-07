@@ -52,6 +52,23 @@ def test_separate_instances_share_slots_and_release_is_idempotent(tmp_path):
     c.release()
 
 
+def test_exclusive_admission_releases_partial_slots_on_descriptor_exhaustion(tmp_path, monkeypatch):
+    host = HostCapacity(tmp_path / "permits")
+    original_fstat = os.fstat
+    with monkeypatch.context() as patch:
+        count = 0
+        def limited_fstat(fd):
+            nonlocal count
+            count += 1
+            if count == 3:
+                raise OSError(errno.EMFILE, "no file descriptors")
+            return original_fstat(fd)
+        patch.setattr(os, "fstat", limited_fstat)
+        assert host.try_acquire_idle() is None
+    with host.try_acquire_idle():
+        assert host.try_acquire() is None
+
+
 def test_all_callers_are_fenced_at_fifty(tmp_path):
     capacity = HostCapacity(tmp_path / "permits")
     leases = [capacity.try_acquire(1000) for _ in range(MAX_HOST_CONCURRENCY)]
@@ -65,16 +82,17 @@ def test_all_callers_are_fenced_at_fifty(tmp_path):
                 lease.release()
 
 
-def test_subprocess_shares_capacity_and_crash_releases_slots(tmp_path):
+@pytest.mark.parametrize("exclusive", [False, True])
+def test_subprocess_shares_capacity_and_crash_releases_slots(tmp_path, exclusive):
     directory = tmp_path / "permits"
     capacity = HostCapacity(directory)
-    local = capacity.try_acquire(2)
-    assert local is not None
+    local = None if exclusive else capacity.try_acquire(2)
+    assert exclusive or local is not None
     script = """
 import os, sys
 from backend.llm.host_capacity import HostCapacity
 capacity = HostCapacity(sys.argv[1])
-lease = capacity.try_acquire(2)
+lease = capacity.try_acquire_idle() if sys.argv[2] == "exclusive" else capacity.try_acquire(2)
 assert lease is not None
 assert capacity.try_acquire(2) is None
 print('locked', flush=True)
@@ -82,7 +100,7 @@ sys.stdin.readline()
 os._exit(23)
 """
     child = subprocess.Popen(
-        [sys.executable, "-u", "-c", script, str(directory)],
+        [sys.executable, "-u", "-c", script, str(directory), "exclusive" if exclusive else "normal"],
         cwd=Path(__file__).resolve().parents[2],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True,
@@ -93,11 +111,12 @@ os._exit(23)
         child.stdin.write("crash\n")
         child.stdin.flush()
         assert child.wait(timeout=10) == 23
-        recovered = capacity.try_acquire(2)
+        recovered = capacity.try_acquire_idle() if exclusive else capacity.try_acquire(2)
         assert recovered is not None
         recovered.release()
     finally:
-        local.release()
+        if local is not None:
+            local.release()
         if child.poll() is None:
             child.kill()
             child.wait(timeout=10)

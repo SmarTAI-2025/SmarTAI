@@ -481,8 +481,8 @@ class ModelScheduler:
         unsampled = max(0, self.memory_active - self.memory_sample_active)
         if self.memory_active + cost <= self.memory_peak_budget and available - unsampled - cost >= reserve:
             return HARD_LIMIT
-        # Slot zero is the same OS lock for every worker. At most one small
-        # request across the host can use the lower reserve at any time.
+        # A lower-reserve request must be the only model call on this host.
+        # Other workers can have reserved buffers not yet reflected in RSS.
         if self.active == 0 and self.quiet_small_host and _small_request_fits(self.memory_sample, cost):
             return 1
         return 0
@@ -543,17 +543,24 @@ class ModelScheduler:
         # Across all owners, take the earliest eligible logical call. Skipping
         # cooling/rate/capacity-blocked calls never changes their queue order.
         now = self.clock()
+        idle_host_busy = False
         for candidate in self.queue:
             if not self._eligible(candidate, now):
                 continue
             limit = self._memory_slot_limit(candidate.memory, now)
             if not limit:
                 continue
-            host = self.host_capacity.try_acquire(limit)
-            if host is None:
-                if limit == 1:
-                    continue  # A smaller request may fit with the normal reserve.
-                return False
+            if limit == 1:
+                if idle_host_busy:
+                    continue
+                host = self.host_capacity.try_acquire_idle()
+                if host is None:
+                    idle_host_busy = True
+                    continue  # A smaller request may still fit the ordinary reserve.
+            else:
+                host = self.host_capacity.try_acquire(limit)
+                if host is None:
+                    return False
             budget = self.budgets[candidate.key]
             try:
                 if limit == 1 and not (_small_request_fits(self.memory_reader(), candidate.memory)

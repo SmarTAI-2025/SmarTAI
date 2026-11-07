@@ -52,6 +52,9 @@ class FakeHost:
         self.peak = max(self.peak, self.active)
         return FakeHostLease(self)
 
+    def try_acquire_idle(self):
+        return self.try_acquire(1)
+
 
 @pytest.fixture
 def clock():
@@ -545,6 +548,48 @@ async def test_small_host_shares_one_lower_reserve_slot_across_workers(tmp_path,
             host.close()
 
 
+@pytest.mark.asyncio
+async def test_low_reserve_does_not_overlap_ordinary_work_in_either_order(tmp_path, clock):
+    from backend.llm.host_capacity import HostCapacity
+
+    mib = 1024**2
+    available = [650]
+    hosts = [HostCapacity(tmp_path / "permits") for _ in range(2)]
+    normal, low = [ModelScheduler(clock=clock, host_capacity=host, pressure_clear=lambda: True,
+                                  memory_reader=lambda: (available[0] * mib, 1906 * mib)) for host in hosts]
+    tasks = []
+    try:
+        async with normal.lease(**call("first")):
+            # The second ordinary request holds a nonzero slot and may still allocate its buffers.
+            ordinary = await normal.acquire(**call("ordinary", memory=64 * mib))
+        try:
+            available[0] = 450
+            pending = asyncio.create_task(low.acquire(**call("low", memory=40 * mib)))
+            tasks.append(pending)
+            await turns()
+            assert not pending.done()
+            assert not low.budgets["low"].starts
+        finally:
+            ordinary.release()
+        low.wake.set()
+        exclusive = await asyncio.wait_for(pending, 2)
+        try:
+            # The other worker still has a healthy cached sample.
+            follower = asyncio.create_task(normal.acquire(**call("follower")))
+            tasks.append(follower)
+            await turns()
+            assert not follower.done()
+            assert not normal.budgets["follower"].starts
+        finally:
+            exclusive.release()
+        normal.wake.set()
+        (await asyncio.wait_for(follower, 2)).release()
+    finally:
+        await cleanup(tasks)
+        for host in hosts:
+            host.close()
+
+
 @pytest.mark.parametrize("total,available,cost,quiet,expected", [
     (1906, 450, 40, True, 1), (1906, 423, 40, True, 0),
     (1906, 450, 40, False, 0), (1906, 480, 65, True, 0),
@@ -558,9 +603,11 @@ def test_small_host_reserve_boundaries(clock, host, total, available, cost, quie
 
 
 @pytest.mark.asyncio
-async def test_fresh_memory_check_releases_slot_before_rate_admission(clock, host):
-    samples = iter([450, 380])
-    scheduler = ModelScheduler(clock=clock, host_capacity=host, pressure_clear=lambda: True,
+@pytest.mark.parametrize("after_lock,still_quiet", [(380, True), (450, False)])
+async def test_fresh_memory_check_releases_slot_before_rate_admission(clock, host, after_lock, still_quiet):
+    samples = iter([450, after_lock])
+    pressures = iter([True, still_quiet])
+    scheduler = ModelScheduler(clock=clock, host_capacity=host, pressure_clear=lambda: next(pressures),
                                memory_reader=lambda: (next(samples) * 1024**2, 1906 * 1024**2))
     task = asyncio.create_task(scheduler.acquire(**call(memory=40 * 1024**2)))
     try:
