@@ -831,7 +831,7 @@ function StudentAnswerReviewForm() {
                 </div>
               </aside>
 
-              <main className="min-w-0 space-y-5">
+              <div className="min-w-0 space-y-5">
                 {filteredQuestions.map((question, index) => (
                   <AnswerReviewCard
                     key={question.id}
@@ -865,7 +865,7 @@ function StudentAnswerReviewForm() {
                     t={t}
                   />
                 ))}
-              </main>
+              </div>
             </div>
           ) : (
             <div className="mt-4 flex min-h-[260px] items-center justify-center rounded-[10px] border bg-card px-6 text-center">
