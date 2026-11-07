@@ -28,7 +28,7 @@ from backend.agents.ingest_agent import (
 )
 from backend.config import settings
 from backend.llm.endpoint_policy import ProviderEndpointError
-from backend.llm.providers import BaseProvider
+from backend.llm.providers import BaseProvider, _request_definitely_rejected
 from backend.domain.errors import ValidationError
 from backend.services.programming_test_contract import adapt_programming_cases
 from backend.models import (
@@ -137,6 +137,10 @@ def _provider_submission_may_exist(exc: Exception) -> bool:
     explicit = getattr(exc, "submission_may_exist", None)
     if isinstance(explicit, bool):
         return explicit
+    # Use the same request-local SDK evidence as the response deadline owner;
+    # Google exposes HTTP status in `code`, often behind a LangChain cause.
+    if _request_definitely_rejected(exc):
+        return False
     if isinstance(exc, ProviderEndpointError):
         return False
     # DNS/TCP/TLS establishment and pool admission fail before an HTTP request
@@ -185,7 +189,8 @@ def provider_submission_is_uncertain(exc: BaseException) -> bool:
         seen.add(id(current))
         if getattr(current, "submission_may_exist", None) is True:
             return True
-        current = current.__cause__ or current.__context__
+        # An implicit context may belong to an earlier request or retry.
+        current = current.__cause__
     return False
 
 
