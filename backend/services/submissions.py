@@ -20,6 +20,7 @@ from backend.db import assignment_repository, course_repository, submission_repo
 from backend.domain import education
 from backend.domain.errors import AssignmentClosed, NotFound, ValidationError
 from backend.tools.file_processing import extract_files_from_archive
+from backend.services.programming_submission_mapping import SOURCE_LANGUAGE_FLAGS
 
 if TYPE_CHECKING:
     from backend.llm.providers import BaseProvider
@@ -32,7 +33,7 @@ def _resolve_question_map(assignment_id: str) -> dict[str, education.QuestionDTO
 
 
 def _build_answers(question_map: dict[str, education.QuestionDTO],
-                   raw_answers: list[dict]) -> list[dict]:
+                   raw_answers: list[dict], *, native_mapping=False) -> list[dict]:
     out: list[dict] = []
     for ans in raw_answers:
         q_id = ans.get("q_id") or ans.get("question_q_id")
@@ -47,7 +48,8 @@ def _build_answers(question_map: dict[str, education.QuestionDTO],
             "type": q.type,
             "number": ans.get("number", q.number),
             "content": ans.get("content", ""),
-            "flag": ans.get("flag", []),
+            "flag": [flag for flag in ans.get("flag", [])
+                     if native_mapping or (flag not in SOURCE_LANGUAGE_FLAGS and not flag.startswith("programming_source_entry:"))],
         })
     return out
 
@@ -62,6 +64,7 @@ def _problem_store(
             "type": question.type,
             "stem": question.stem,
             "criterion": question.criterion,
+            **({"test_cases": question.test_cases} if question.test_cases else {}),
         }
         for question in questions
     }

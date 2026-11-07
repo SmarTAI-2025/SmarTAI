@@ -166,7 +166,7 @@ def material_candidates_never_execute_code(request, monkeypatch):
         pytest.fail("Material recognition/generation/review must not execute code")
 
     for module, name in ((code_interpreter, "run_sandbox"), (code_interpreter, "run_python_subprocess"),
-                         (code_interpreter, "_run_function_call"), (grading_runner, "run_grading_request"),
+                         (code_interpreter, "_run_case"), (grading_runner, "run_grading_request"),
                          (programming, "run_sandbox")):
         monkeypatch.setattr(module, name, forbidden)
     yield

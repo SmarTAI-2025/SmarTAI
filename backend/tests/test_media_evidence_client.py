@@ -28,6 +28,15 @@ async def test_real_media_worker_round_trips_share_existing_lifecycle():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("format,mime", [("BMP", "image/bmp"), ("TIFF", "image/tiff")])
+async def test_internal_worker_keeps_legacy_image_codecs_without_granting_upload_permission(format, mime):
+    prepared = await read_image_evidence(encoded_image(format=format), ImagePrepareRequest(content_type=mime))
+    assert (prepared.width, prepared.height) == (12, 8)
+    assert prepared.content_type == "image/png"
+    assert decode_image_payload(prepared).startswith(b"\x89PNG\r\n\x1a\n")
+
+
+@pytest.mark.asyncio
 async def test_image_progress_does_not_clear_parent_counters_or_leak_payload_in_argv(monkeypatch):
     body = encoded_image()
     process, launch = install_process(monkeypatch, json.dumps(image_response(body)).encode())

@@ -1,0 +1,17 @@
+{
+  "duplicate_number_problems.txt": {
+    "sha256": "3a68acb0a4c00fae2a5ad2e9fd6f30a3a87012bdb1b81b32ebb2ee093af14074",
+    "bytes": 216,
+    "synthetic": true
+  },
+  "duplicate_number_rubric.txt": {
+    "sha256": "08aa32831289e005720546f1d7db9c3668c43f6bd5e945c55044577325c38b45",
+    "bytes": 107,
+    "synthetic": true
+  },
+  "long_shared_definition.txt": {
+    "sha256": "aad9c76da2a601909edf02577fd4090396f1d79b074b8c39712fb8effc04c123",
+    "bytes": 27756,
+    "synthetic": true
+  }
+}

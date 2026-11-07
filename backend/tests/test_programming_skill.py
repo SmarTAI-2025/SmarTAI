@@ -1,16 +1,4 @@
-"""Unit tests for the rewritten ProgrammingSkill (sandbox 4-tier ladder).
-
-Coverage:
-  - Teacher test cases present       → cases_source="teacher", sandbox runs
-  - No teacher cases, LLM generates  → cases_source="llm_generated", sandbox runs
-  - Complexity keyword in stem/code  → cases_source="skipped_complex", no sandbox
-  - Non-Python student code          → cases_source="skipped_lang", no sandbox
-  - LLM marks all infeasible         → cases_source="skipped_complex"
-  - LLM returns 20 cases             → only 8 actually run
-
-Run with:
-    python -m pytest backend/tests/test_programming_skill.py -v
-"""
+"""Programming grading through shared preparation and per-answer execution."""
 from __future__ import annotations
 
 import os
@@ -26,7 +14,6 @@ from backend.skills.programming import (
     ProgrammingSkill,
     _detect_language,
     _scan_complexity_keywords,
-    _coerce_test_cases,
     MAX_LLM_GENERATED_CASES,
 )
 
@@ -91,24 +78,6 @@ def test_scan_complexity_keywords_hits_tkinter():
 
 def test_scan_complexity_keywords_clean():
     assert _scan_complexity_keywords("def add(a, b): return a + b") is None
-
-
-def test_coerce_test_cases_from_dicts():
-    raw = [
-        {"input": "1\n2", "expected_output": "3", "description": "1+2"},
-        {"input": "5\n7", "expected_output": "12", "description": "5+7"},
-    ]
-    out = _coerce_test_cases(raw)
-    assert len(out) == 2
-    assert all(isinstance(tc, TestCase) for tc in out)
-    assert out[0].input == "1\n2"
-
-
-def test_coerce_test_cases_from_models():
-    raw = [TestCase(input="x", expected_output="y", description="z")]
-    out = _coerce_test_cases(raw)
-    assert len(out) == 1
-    assert out[0].description == "z"
 
 
 # ─── grade() — teacher cases ─────────────────────────────────────────────────
@@ -264,7 +233,8 @@ async def test_prog_non_python_skipped(monkeypatch):
 
     skill = ProgrammingSkill(provider=_fake_provider())
     result = await skill.grade(problem, answer, student_id="s1")
-    assert "Python" in result.comment
+    assert result.programming_evidence.execution_status == "unsupported"
+    assert result.programming_evidence.requires_human_review
     assert "AI code review" in result.comment
 
 
@@ -303,56 +273,18 @@ async def test_prog_llm_marks_all_infeasible(monkeypatch):
 
     skill = ProgrammingSkill(provider=_fake_provider())
     result = await skill.grade(problem, answer, student_id="s1")
-    assert "outside the sandbox" in result.comment
+    assert result.error_kind == "programming_cases_unavailable"
+    assert result.programming_evidence.score_status == "unavailable"
 
 
-# ─── grade() — LLM returns >8 cases ──────────────────────────────────────────
+def test_generated_suite_count_bound():
+    from pydantic import ValidationError
+    from backend.skills.programming import TestCaseList
 
-@pytest.mark.asyncio
-async def test_prog_caps_at_max_llm_generated_cases(monkeypatch):
-    problem = _make_problem(test_cases=None)
-    answer = _make_answer(PYTHON_ADD_CODE)
-
-    async def fake_gen(provider, problem, function_name=None):
-        return [
-            TestCase(input=f"{i}\n{i}", expected_output=str(2 * i),
-                     description=f"case {i}", source="llm_generated",
-                     sandbox_feasible=True)
-            for i in range(20)
-        ], None
-
-    monkeypatch.setattr("backend.skills.programming._generate_test_cases", fake_gen)
-
-    captured_cases = []
-
-    async def fake_sandbox(code, test_cases, *, language, per_case_timeout):
-        captured_cases.extend(test_cases)
-        from backend.tools.code_interpreter import ExecutionReport, TestResult
-        results = [
-            TestResult(test=tc, passed=True, actual_output=tc.expected_output, error="", duration_ms=1)
-            for tc in test_cases
-        ]
-        return ExecutionReport(
-            passed_count=len(results), total_count=len(results),
-            pass_rate=1.0, results=results, summary="all pass",
-        )
-
-    monkeypatch.setattr("backend.skills.programming.run_sandbox", fake_sandbox)
-
-    fake_output = MagicMock(
-        score=10.0, max_score=10.0, confidence=1.0,
-        comment="Great.", steps=[], logs="",
-    )
-    fake_raw = MagicMock(content="{}", duration_ms=50)
-
-    async def fake_call(*a, **kw):
-        return fake_output, fake_raw
-
-    monkeypatch.setattr("backend.skills.programming.structured_llm_call", fake_call)
-
-    skill = ProgrammingSkill(provider=_fake_provider())
-    await skill.grade(problem, answer, student_id="s1")
-    assert len(captured_cases) == MAX_LLM_GENERATED_CASES
+    cases = [TestCase(input=str(i), expected_output=str(i)) for i in range(MAX_LLM_GENERATED_CASES)]
+    assert TestCaseList(cases=cases).cases == cases
+    with pytest.raises(ValidationError):
+        TestCaseList(cases=cases + [TestCase(input="more", expected_output="more")])
 
 
 # ─── grade() — empty student code ────────────────────────────────────────────
@@ -371,7 +303,9 @@ async def test_prog_no_code():
 
 @pytest.mark.parametrize("language,expected", [("zh", "沙箱测评"), ("en", "Sandbox skipped")])
 def test_programming_metadata_respects_feedback_language(language, expected):
-    from backend.skills.programming import _format_metadata
-    result = _format_metadata("skipped_lang", "unknown", None, 0, language=language)
-    assert expected in result
-    assert ("沙箱测评" in result) == (language == "zh")
+    from types import SimpleNamespace
+    from backend.skills.programming_evidence import describe_run
+    evidence, examples = describe_run(SimpleNamespace(
+        status="unsupported", reason="programming_language_unsupported", evidence_id=""), language, _make_problem())
+    assert expected in evidence.safe_summary and not examples
+    assert evidence.requires_human_review

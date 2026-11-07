@@ -224,7 +224,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
       : selected.size > knowledgeUploadMaxBytes(selected.name)
         ? tx(locale, `文件超过 ${knowledgeUploadMaxBytes(selected.name) / 1024 / 1024} MiB，请拆分文件或减小文件大小后重新上传；不支持压缩包。`, `The file exceeds ${knowledgeUploadMaxBytes(selected.name) / 1024 / 1024} MiB. Split it or reduce the file size before uploading again; archives are not supported.`)
         : !matchesUploadExtension(selected.name, KNOWLEDGE_SOURCE_EXTENSIONS)
-          ? tx(locale, "资料库仅支持 PDF、TXT、Markdown 和静态 JPG/JPEG/PNG/BMP/TIF/TIFF/WEBP 图片。请先导出为支持的格式，不要只修改扩展名。", "The library supports PDF, TXT, Markdown and static JPG/JPEG/PNG/BMP/TIF/TIFF/WEBP images. Export to a supported format; do not just rename the extension.")
+          ? tx(locale, "资料库仅支持 DOCX、PDF、TXT、Markdown 和静态 JPG/JPEG/PNG/BMP/TIF/TIFF/WEBP 图片。请先导出为支持的格式，不要只修改扩展名。", "The library supports DOCX, PDF, TXT, Markdown and static JPG/JPEG/PNG/BMP/TIF/TIFF/WEBP images. Export to a supported format; do not just rename the extension.")
           : null;
     setFile(error ? null : selected);
     setUploadError(error);
@@ -254,9 +254,16 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
         nativeOnly,
         recognitionRouteId: nativeOnly ? undefined : recognitionRouteId || undefined,
       });
-      toast.success(result.created
-        ? result.parse_status === "ready" ? tx(locale, "资料已上传并解析", "Material uploaded and parsed") : tx(locale, "资料已保存，已进入处理队列", "Material saved and queued")
-        : tx(locale, "相同资料已存在，已复用原文件", "The same material already exists and was reused"));
+      const readError = result.ingestion?.error_code;
+      if (readError?.startsWith("source_docx_") || readError === "source_text_too_large") {
+        toast.warning(tx(locale, "原件已保存，正文未读完", "Original saved; reading incomplete"), {
+          description: userFacingError(readError, locale),
+        });
+      } else {
+        toast.success(result.created
+          ? result.parse_status === "ready" ? tx(locale, "资料已上传并解析", "Material uploaded and parsed") : tx(locale, "资料已保存，已进入处理队列", "Material saved and queued")
+          : tx(locale, "相同资料已存在，已复用原文件", "The same material already exists and was reused"));
+      }
       if (!localDraft.isCurrent()) return;
       if (!await localDraft.clear({ file, nativeOnly, recognitionRouteId, courseId, groupId, category, labels })) return;
       if (!localDraft.isCurrent()) return;
@@ -268,7 +275,7 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
       const description = quotaExceeded
         ? knowledgeStorageQuotaCopy(locale).description
         : code === "source_content_type_not_allowed" || code === "invalid_course_material"
-          ? tx(locale, "文件内容无法作为资料读取。请确认文件能正常打开，并重新导出为 PDF、TXT、Markdown 或支持的静态图片后上传。", "The file content could not be read as course material. Check that it opens, then export it again as PDF, TXT, Markdown or a supported static image.")
+          ? tx(locale, "文件内容无法作为资料读取。请确认文件能正常打开，并重新导出为 DOCX、PDF、TXT、Markdown 或支持的静态图片后上传。", "The file content could not be read as course material. Check that it opens, then export it again as DOCX, PDF, TXT, Markdown or a supported static image.")
           : code === "material_label_too_long"
             ? tx(locale, "单个标签不能超过 60 个字符，请缩短后再上传。", "Each label must be at most 60 characters. Shorten it before uploading.")
             : code === "too_many_material_labels"

@@ -7,6 +7,7 @@ import {
   correctionReviewReasonIds,
   hasExpertDisagreement,
   hasPartialExperts,
+  pendingProgrammingReview,
   validExpertResults,
   isLowConfidence,
   reviewReasonLabel,
@@ -59,7 +60,7 @@ function buildReviewItem(
       ? "expert-disagreement"
       : "review";
   const priority =
-    (missingScore ? 100 : 0) +
+    (attention === "blocking" ? 100 : 0) +
     (lowConfidence ? 40 : 0) +
     (expertDisagreement ? 20 : 0) +
     (confidence === null ? 0 : 1 - confidence);
@@ -86,6 +87,9 @@ export function correctionReviewNotes(correction: Correction, locale: Locale) {
   if (correctionReviewBlocked(correction)) {
     add(text("缺少有效分数，请填写", "Enter a valid score"), "blocking");
   }
+  const programming = pendingProgrammingReview(correction);
+  if (programming) add(reviewReasonLabel(programming, locale), "blocking");
+  if (correctionReviewReasonIds(correction).includes("programming_extra_boundary")) add(reviewReasonLabel("programming_extra_boundary", locale));
   const experts = validExpertResults(correction);
   const multi = new Set((correction.expert_results ?? []).map(expert => expert.provider_id || expert.provider)).size > 1 || hasPartialExperts(correction);
   if (experts.length) {

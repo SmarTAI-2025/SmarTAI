@@ -65,6 +65,7 @@ def test_material_preflight_reaches_shared_reader_without_applying(client_regist
     assert response.status_code >= 400, response.text
     read.assert_awaited_once()
     assert read.call_args.kwargs["purpose"] == {"criterion":"rubric", "reference_answer":"reference", "test_cases":"test_cases"}[target]
+    assert read.call_args.kwargs["allow_vision"] is True
     mutate.assert_not_called()
 
 

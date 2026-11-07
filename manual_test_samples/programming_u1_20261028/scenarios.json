@@ -1,0 +1,34 @@
+[
+  {
+    "id": "platform_unavailable",
+    "type": "CONSTRUCTED_EVENT_NOT_OBSERVED_INCIDENT",
+    "submission": "S17-S01",
+    "event": {
+      "runner": "unavailable",
+      "executed": false,
+      "student_failure_count": null,
+      "score": null
+    },
+    "expected_action": "未评分，环境恢复后重试；不扣分"
+  },
+  {
+    "id": "incorrect_expected",
+    "type": "CONSTRUCTED_EVENT_NOT_OBSERVED_INCIDENT",
+    "submission": "S18-S01",
+    "case_id": "PY-S01-T01",
+    "original_expected": "7\n",
+    "mathematically_expected": "6\n",
+    "expected_action": "保留冲突，教师复核用例前不执行/不评分"
+  },
+  {
+    "id": "platform_timeout",
+    "type": "CONSTRUCTED_EVENT_NOT_OBSERVED_INCIDENT",
+    "source_file": "submissions/S13_stdin_correct.py",
+    "event": {
+      "worker_lost": true,
+      "completion_unknown": true,
+      "score": null
+    },
+    "expected_action": "执行结果未知不等于学生超时；恢复后重试，不能据此扣分"
+  }
+]

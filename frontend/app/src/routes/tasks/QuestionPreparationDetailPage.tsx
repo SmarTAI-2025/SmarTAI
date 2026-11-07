@@ -1,3 +1,4 @@
+import { getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
 import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
 import { questionReviewConfirmed, questionReviewIssues, questionReviewNotes, questionReviewBlocked, questionReviewNextBlocked, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
@@ -670,6 +671,31 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   );
 }
 
+function testCaseSaveError(error: unknown, locale: string) {
+  if (getAPIErrorCode(error) !== "invalid_programming_test_cases") {
+    return tx(locale, "保存失败，请重试。", "Save failed. Try again.");
+  }
+  const details = getAPIErrorDetail(error)?.details;
+  const meta = details && typeof details === "object" ? details as Record<string, unknown> : {};
+  const n = meta.case_number;
+  const label = typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 50
+    ? tx(locale, `样例 ${n} 未保存。`, `Test case ${n} was not saved. `)
+    : tx(locale, "测试样例未保存。", "Test cases were not saved. ");
+  if (meta.issue === "case_limit") {
+    return label + tx(locale, "每题最多 50 个样例，请核对样例列表。", "Check the list of test cases. Each question supports up to 50.");
+  }
+  if (meta.issue === "conflicting_expectations") {
+    return label + tx(locale, "同一输入有不同的预期结果，请核对。", "The same input has different expected results. Check the expected values.");
+  }
+  if (meta.issue === "arguments") {
+    return label + tx(locale, "请核对输入与函数参数的数量、名称和格式。", "Check the number, names and format of the function arguments.");
+  }
+  if (meta.issue === "expected_result") {
+    return label + tx(locale, "请核对预期结果及其格式。", "Check the expected result and its format.");
+  }
+  return label + tx(locale, "请核对输入、预期结果和题目的调用要求。", "Check the input, expected result and how the question requires the code to be called.");
+}
+
 function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyChange, onSave }: {
   fieldKey: string;
   problem: ProblemInfo;
@@ -684,7 +710,7 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
   const [editing, setEditing] = useState(manualEditing && !readOnly);
   const [cases, setCases] = useState<TestCase[]>(original);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const dirty = editing && JSON.stringify(cases) !== JSON.stringify(original);
   useEffect(() => { if (!editing && !localDraft.savedAt) setCases(original); }, [editing, original]);
   useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
@@ -695,13 +721,13 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
 
   async function save() {
     if (localDraft.conflict) return;
-    setError(false);
+    setError(null);
     try {
       if (!await localDraft.runFormal(() => onSave(problem, cases), { cases })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
-    } catch {
-      setError(true);
+    } catch (cause) {
+      setError(testCaseSaveError(cause, locale));
     }
   }
 
@@ -712,7 +738,7 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
           <h4 className="text-sm font-bold text-foreground">{tx(locale, "测试样例", "Test Cases")}</h4>
           <p className="mt-1 text-xs text-muted-foreground">{tx(locale, `${exampleCount} 个公开样例 · ${hiddenCount} 个隐藏测试`, `${exampleCount} examples · ${hiddenCount} hidden tests`)}</p>
         </div>
-        {!readOnly ? <button type="button" onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(false); }); else setEditing(true); }} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold hover:bg-muted">{editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}{editing ? tx(locale, "取消", "Cancel") : tx(locale, "修改", "Edit")}</button> : null}
+        {!readOnly ? <button type="button" onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(null); }); else setEditing(true); }} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold hover:bg-muted">{editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}{editing ? tx(locale, "取消", "Cancel") : tx(locale, "修改", "Edit")}</button> : null}
       </div>
 
       {editing ? (
@@ -733,7 +759,7 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
           ))}
           <button type="button" onClick={() => setCases([...cases, emptyTestCase(cases.length + 1)])} className="inline-flex h-9 items-center gap-2 rounded-[7px] border px-3 text-xs font-semibold hover:bg-muted"><Plus aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "添加测试样例", "Add Test Case")}</button>
           <div className="flex items-center justify-between gap-3 border-t pt-3">
-            <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error ? tx(locale, "保存失败，请重试。", "Save failed. Try again.") : tx(locale, "隐藏测试只对教师可见。", "Hidden tests are visible only to teachers.")}</p>
+            <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error ?? tx(locale, "隐藏测试只对教师可见。", "Hidden tests are visible only to teachers.")}</p>
             <button type="button" disabled={saving || localDraft.formalPending || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存测试样例", "Save Test Cases")}</button>
           </div>
         </div>

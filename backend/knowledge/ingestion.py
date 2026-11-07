@@ -27,6 +27,7 @@ from backend.skills.recognition_reader import PROMPT_VERSION
 from backend.storage import get_storage
 from backend.tools.pdf_evidence import PdfIndexRequest, read_pdf_evidence
 from backend.rag.chunker import MAX_FILE_BYTES
+from backend.services.upload_contract import UploadContractError, upload_limit, validate_upload
 
 logger = logging.getLogger(__name__)
 POLICY = "knowledge-economy-v1"
@@ -64,23 +65,37 @@ def frozen_configuration(owner_id, registry, requested_route_id=None, *, native_
 
 
 def _read_source(job):
+    maximum = upload_limit("knowledge_max_bytes", MAX_FILE_BYTES)
     document = get_document(job.document_id, job.owner_id)
     if document is None:
         raise RecognitionError("recognition_source_unavailable")
     stored = get_file(file_id=document.stored_file_id, owner_id=job.owner_id)
-    if stored is None or stored.availability_status != "available" or stored.size_bytes > MAX_FILE_BYTES:
+    if stored is None or stored.availability_status != "available" or stored.size_bytes > maximum:
         raise RecognitionError("recognition_source_unavailable")
     storage = get_storage()
     if stored.storage_backend != storage.name:
         raise RecognitionError("recognition_source_unavailable")
     with storage.open(stored.storage_key) as stream:
-        body = stream.read(MAX_FILE_BYTES + 1)
+        body = stream.read(maximum + 1)
     if len(body) != stored.size_bytes or hashlib.sha256(body).hexdigest() != document.sha256:
         raise RecognitionError("recognition_source_mismatch")
+    try:
+        validate_upload("course_knowledge", stored.original_name, body)
+    except UploadContractError as exc:
+        raise RecognitionError(exc.code) from None
     return document, body
 
 
 async def native_units(filename, body):
+    if Path(filename).suffix.lower() == ".docx":
+        from fastapi import HTTPException
+        from backend.tools.file_processing import _extract_docx_text
+        try:
+            text = await _extract_docx_text(body, slot_timeout_seconds=None)
+        except HTTPException as exc:
+            raise RecognitionError(exc.detail["code"]) from None
+        return dict(units=[text[i:i + 80000] for i in range(0, len(text), 80000)] or [""],
+                    unit="section", warning_codes=[])
     process = await asyncio.create_subprocess_exec(sys.executable, "-B", "-m", "backend.knowledge.native_worker",
         Path(filename).suffix.lower(), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     try:
@@ -165,7 +180,8 @@ class KnowledgeIngestionWorker:
         except (DomainError, ValueError, OSError, TimeoutError) as exc:
             code = exc.code if isinstance(exc, DomainError) else "knowledge_ingestion_failed"
             try:
-                await run_in_threadpool(repo.release, job, status="paused", error=code)
+                immutable = code in {"source_docx_limit_exceeded", "source_docx_invalid", "source_docx_incomplete", "source_text_too_large"}
+                await run_in_threadpool(repo.release, job, status="failed" if immutable else "paused", error=code)
             except DomainError:
                 pass
         finally:

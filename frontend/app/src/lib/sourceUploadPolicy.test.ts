@@ -3,7 +3,7 @@ import { canSaveSourceToLibrary, KNOWLEDGE_SOURCE_EXTENSIONS, IMAGE_SOURCE_EXTEN
 
 describe("source upload contracts", () => {
   it("keeps the library and task image format sets aligned with decoder limits", () => {
-    expect(KNOWLEDGE_SOURCE_EXTENSIONS).toEqual(sourceUploadExtensions("problem"));
+    expect(KNOWLEDGE_SOURCE_EXTENSIONS.filter(ext => IMAGE_SOURCE_EXTENSIONS.some(image => image === ext))).toEqual(IMAGE_SOURCE_EXTENSIONS);
     for (const extension of IMAGE_SOURCE_EXTENSIONS) {
       expect(canSaveSourceToLibrary(`scan${extension.toUpperCase()}`)).toBe(true);
       expect(knowledgeUploadMaxBytes(`scan${extension}`)).toBe(10 * 1024 * 1024);
