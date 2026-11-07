@@ -30,6 +30,8 @@ from backend.services.math_strictness import Adjustment, LEDGER_INSTRUCTION
 from backend.services.binary_scoring import frozen_binary_rule
 
 TRACE_VERSION = "math_evidence_v2"
+_MAX_ASSESSMENT_CLAIMS = 80
+_MAX_CITATIONS_PER_EDIT = 8
 _review_budget = ContextVar("math_review_budget", default=None)
 
 
@@ -136,7 +138,7 @@ class EvidenceJudgment(BaseModel):
 class MathAssessment(BaseModel):
     route_id: str
     route_reason: str
-    claims: list[Claim] = Field(default_factory=list, max_length=80)
+    claims: list[Claim] = Field(default_factory=list, max_length=_MAX_ASSESSMENT_CLAIMS)
     checks: list[Verification] = Field(default_factory=list, max_length=8)
     awards: list[Award] = Field(default_factory=list, max_length=80)
     deductions: list[Deduction] = Field(default_factory=list, max_length=80)
@@ -194,7 +196,7 @@ class PointAward(BaseModel):
     item_id: str
     score: float = Field(ge=0, allow_inf_nan=False)
     reason: str = Field(min_length=1)
-    citations: list[ReviewCitation] = Field(default_factory=list, max_length=8)
+    citations: list[ReviewCitation] = Field(default_factory=list, max_length=_MAX_CITATIONS_PER_EDIT)
 
 
 class PointRevision(BaseModel):
@@ -874,10 +876,15 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
     catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
     # Keep alternative route selection, explicit binary policies and
     # conditional/dependent credit on the complete-ledger review path.
+    # A point edit appends one claim per citation. Use the complete format
+    # when a permitted edit could overflow any vote's original ledger.
+    max_added_claims = len(disputed) * _MAX_CITATIONS_PER_EDIT
     compact = bool(disputed and len(plan.routes) == 1 and plan.routes[0].mode == "points"
                    and plan.allow_partial_credit and not frozen_binary_rule(plan)
                    and not any(item.default_adjustments for item in plan.routes[0].items if item.id in disputed)
-                   and all(a and a.awards for a in assessments) and any(key.startswith("student:") for key in catalog)
+                   and all(a and a.awards and len(a.claims) + max_added_claims <= _MAX_ASSESSMENT_CLAIMS
+                           for a in assessments)
+                   and any(key.startswith("student:") for key in catalog)
                    and not requested_review and not any(t.get("evidence") for t in traces))
     accepted = {}
     validation_issues = []

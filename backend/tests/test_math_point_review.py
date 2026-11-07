@@ -1,9 +1,12 @@
 """Offline wire-level regressions for sourced, independently validated vote changes."""
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from backend.agents.multi_expert import _weighted_average_fallback
+from backend.llm.providers import LLMResponse
 from backend.services.math_grading_context import math_plans_context
 from backend.services.math_rubric_plan import POINT_EVIDENCE_GUIDANCE
 from backend.skills import math_grading as grading
@@ -30,6 +33,57 @@ async def review(*payloads):
     with math_plans_context({p.q_id: plan}), grading.math_review_scope():
         result = await grading.review_math_experts(p, a, experts, provider)
     return experts, result, calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count,citations,items_disputed,expect_points", [
+    (72, 8, 1, True), (73, 8, 1, False),
+    (79, 1, 1, False), (79, 2, 1, False), (80, 1, 1, False),
+    (64, 8, 2, True), (65, 8, 2, False),
+])
+async def test_review_preserves_correction_at_claim_capacity(count, citations, items_disputed, expect_points):
+    p = problem()
+    plan = plan_for(p)
+    lines = [f"6*{i}={6*i}" for i in range(1, count + 1)]
+    a = answer("\n".join(lines))
+    # Put the large ledger on the second vote. Every original claim is used.
+    draft = assessment(method=1)
+    draft.claims = [grading.Claim(id=f"c{i}", source_id=f"student:{i}", item_ids=["method", "result"],
+                                  verdict="supported", reason="Recorded computation.")
+                    for i in range(1, count + 1)]
+    draft.awards[0].claim_ids = [c.id for c in draft.claims]
+    draft.awards[1].claim_ids = [draft.claims[-1].id]
+    result_credit = 1 if items_disputed == 2 else 0
+    peer = assessment(method=8, result=result_credit, text=lines[0])
+    experts = [expert_for(d, plan, a.content) for d in (peer, draft)]
+
+    updated = draft.model_copy(deep=True)
+    updated.awards[0].score = 6
+    updated.awards[1].score = result_credit
+    full = {"expert_index": 1, "source_quote": lines[0], "reason": "Restore earned credit.",
+            "assessment": updated.model_dump()}
+    edits = [{"item_id": award.item_id, "score": award.score, "reason": award.reason,
+              "citations": [{"source_id": f"student:{i}", "verdict": "supported"}
+                            for i in range(1, citations + 1)]} for award in updated.awards[:items_disputed]]
+    point = point_edit(index=1, awards=edits)
+    formats = []
+
+    async def respond(messages):
+        points = "PointRevision" in messages[0].content
+        formats.append(points)
+        return LLMResponse(content=json.dumps({"revisions": [point if points else full]}),
+                           provider="offline", model="fixed", duration_ms=1)
+
+    with math_plans_context({p.q_id: plan}), grading.math_review_scope():
+        result = await grading.review_math_experts(p, a, experts, SimpleNamespace(provider_id="offline", ainvoke=respond))
+    assert result[0] == experts[0]
+    assert [e.score for e in result] == [8 + result_credit, 6 + result_credit]
+    assert _weighted_average_fallback(p, result).score == 7 + result_credit
+    assert formats == [expect_points]
+    trace = grading.read_math_trace(result[1])
+    assert trace["original_assessment"] == grading.read_math_trace(experts[1])["assessment"]
+    assert trace["assessment"]["claims"][:count] == trace["original_assessment"]["claims"]
+    assert len(trace["assessment"]["claims"]) == (count + citations * items_disputed if expect_points else count)
 
 
 @pytest.mark.asyncio
