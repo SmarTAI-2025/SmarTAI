@@ -199,7 +199,7 @@ RECOGNITION_ERROR_CODES = frozenset({
     "recognition_artifact_scope_unsupported",
     "recognition_source_unavailable", "source_extent_unavailable", "recognition_assembly_limit", "submission_time_limit_reached",
     "recognition_already_running",
-    "target_location_needs_hint", "target_selection_limit_exceeded", "visual_capability_unavailable",
+    "target_location_needs_hint", "target_selection_limit_exceeded", "scan_response_truncated", "visual_capability_unavailable",
     "recognition_cache_not_success", "recognition_cache_corrupt", "recognition_cache_unavailable",
     "recognition_cache_source_unavailable",
     "provider_credentials_required", "provider_vision_not_supported", "provider_auth_failed",

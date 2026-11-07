@@ -1,4 +1,4 @@
-import { programmingArchiveGuidance } from "@/lib/submissionSourceOutcomes";
+import { programmingArchiveGuidance, truncatedLocatorCopy } from "@/lib/submissionSourceOutcomes";
 import { isTaskAwaitingGrading } from "@/lib/taskFlow";
 import { pdfLocalLimitCopy } from "@/lib/submissionSourceOutcomes";
 import { getAPIErrorCode, getAPIErrorDetail, normalizeAPIError } from "@/api/client";
@@ -222,6 +222,7 @@ export interface RecoverableErrorContext {
   taskId?: string;
   returnTo?: string;
   providerFailures?: ProviderFailure[];
+  savedStems?: number;
 }
 
 const BYOK_CODES = new Set([
@@ -899,6 +900,18 @@ export function classifyRecoverableError(
       description: tx(locale, "本次 PDF 本地读取未完成，不是模型服务报错。请稍后重试失败项；原文件和已保存结果会保留，无需重新打包。", "Local PDF reading did not complete. This is not a model-service error. Retry failed files later; originals and saved results are retained, with no need to repack."),
       actionLabel: tx(locale, "重试失败项", "Retry failed files"),
       actionKind: "retry", tone: "warning", technicalDetails,
+    };
+  }
+
+  if (code === "scan_response_truncated") {
+    const { title, description, nextStep } = truncatedLocatorCopy(locale);
+    const count = context.savedStems;
+    const saved = typeof count === "number" && Number.isInteger(count) && count >= 0
+      ? tx(locale, `已保存 ${count} 个题干。`, `${count} question ${count === 1 ? "text is" : "texts are"} saved.`)
+      : "";
+    return {
+      title, description: [description, saved, nextStep].filter(Boolean).join(locale === "zh-CN" ? "" : " "),
+      actionLabel: tx(locale, "重试失败项", "Retry failed items"), actionKind: "retry", tone: "warning", technicalDetails,
     };
   }
 

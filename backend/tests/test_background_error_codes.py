@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
-from backend.domain.errors import ValidationError
+from backend.domain.errors import RecognitionError, ValidationError
 from backend.llm.endpoint_policy import ProviderEndpointError
 from backend.llm.providers import ProviderRequestError
 from backend.llm.registry import SharedPoolLimitError
@@ -16,6 +16,11 @@ def test_classifier_reads_stable_domain_message_when_domain_code_is_generic():
     error = ValidationError("no_provider_configured")
 
     assert classify_background_error(error, "grading_failed") == "no_provider_configured"
+
+
+def test_locator_truncation_survives_background_error_projection():
+    error = RecognitionError("scan_response_truncated")
+    assert classify_background_error(error, "question_preparation_failed") == "scan_response_truncated"
 
 
 def test_classifier_walks_wrapped_provider_cause():

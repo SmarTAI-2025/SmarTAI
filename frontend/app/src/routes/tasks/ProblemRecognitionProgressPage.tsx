@@ -116,6 +116,7 @@ export function ProblemRecognitionProgressPage() {
     const info = classifyRecoverableError(failureWithPages, {
       locale,
       providerFailures: progressQuery.progress?.provider_failures,
+      savedStems: progressQuery.progress?.preparation_counts?.stems,
       phase: progressQuery.progress?.current_step ?? progressQuery.progress?.phase ?? "question_preparation",
       taskId,
       jobId: taskState?.last_failed_job_id,
