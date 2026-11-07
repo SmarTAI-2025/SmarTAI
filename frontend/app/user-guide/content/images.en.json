@@ -13,19 +13,19 @@
     "id": "02-workspace",
     "chapter": "workspace",
     "src": "assets/captures/en/workspace-task-search.jpg",
-    "caption": "Find Ask SmarTAI below the summary cards on your workspace.",
+    "caption": "Follow the link under “Next step” in the assignment’s row to resume it.",
     "afterSection": 0,
-    "width": 2800,
-    "height": 2680
+    "width": 2596,
+    "height": 438
   },
   {
     "id": "03-history",
     "chapter": "workspace",
     "src": "assets/captures/en/history-task-search.jpg",
-    "caption": "Searching for “Week 6” brings up the matching grading task.",
+    "caption": "Searching for “Week 6” returns “Calculus · Week 6.” Select that name in the results to open the assignment.",
     "afterSection": 1,
-    "width": 2800,
-    "height": 2000
+    "width": 2088,
+    "height": 422
   },
   {
     "id": "04-byok",
@@ -54,15 +54,6 @@
     "afterSection": 2,
     "width": 2600,
     "height": 342
-  },
-  {
-    "id": "02-workspace-overview",
-    "chapter": "quickstart",
-    "src": "assets/captures/en/workspace-task-search.jpg",
-    "caption": "Create a task from the workspace or resume assignments at different stages.",
-    "afterSection": 0,
-    "width": 2800,
-    "height": 2680
   },
   {
     "id": "05-library",
@@ -141,7 +132,7 @@
     "id": "14-submission-review",
     "chapter": "submissions",
     "src": "assets/captures/en/14-submission-review.jpg",
-    "caption": "Review answers by student and question; items requiring attention are grouped below.",
+    "caption": "Each row is a student and each question has a column. Select a status icon to open that student’s answer to that question.",
     "afterSection": 2,
     "width": 2800,
     "height": 2000
@@ -194,20 +185,12 @@
   {
     "id": "19-review-matrix",
     "chapter": "review",
-    "src": "assets/captures/en/19-review-matrix.jpg",
-    "caption": "The review matrix shows per-question results and distinguishes required actions from recommended reviews.",
+    "src": "assets/captures/en/score-review-queue.jpg",
+    "caption": "Under “Action required,” select the student and question to open that answer.",
     "afterSection": 0,
-    "width": 2800,
-    "height": 2000
-  },
-  {
-    "id": "20-review-detail",
-    "chapter": "review",
-    "src": "assets/captures/en/20-review-detail.jpg",
-    "caption": "View scoring steps, confidence, and each expert’s original results.",
-    "afterSection": 1,
-    "width": 1034,
-    "height": 2644
+    "width": 588,
+    "height": 360,
+    "maxWidth": 350
   },
   {
     "id": "20b-teacher-result",
@@ -237,15 +220,6 @@
     "height": 2200
   },
   {
-    "id": "22b-question-detail-analysis",
-    "chapter": "results",
-    "src": "assets/captures/en/22b-question-detail-analysis.jpg",
-    "caption": "Question details bring statistics and question materials together for checking.",
-    "afterSection": 0,
-    "width": 2800,
-    "height": 3450
-  },
-  {
     "id": "23-student-analysis",
     "chapter": "results",
     "src": "assets/captures/en/23-student-analysis.jpg",
@@ -257,11 +231,11 @@
   {
     "id": "24-visual-analysis",
     "chapter": "results",
-    "src": "assets/captures/en/24-visual-analysis.jpg",
-    "caption": "Describe your analysis request in Ask; view the default score-percentage distribution directly below.",
+    "src": "assets/captures/en/visual-analysis-ask.jpg",
+    "caption": "Select an example above the search box to fill it in, then select “Ask SmarTAI” to generate the chart.",
     "afterSection": 2,
-    "width": 2800,
-    "height": 4598
+    "width": 2560,
+    "height": 570
   },
   {
     "id": "24b-default-charts",
@@ -303,7 +277,7 @@
     "id": "API1c-add",
     "chapter": "api-smartai",
     "src": "assets/captures/en/API1c-add.jpg",
-    "caption": "Both entry points open “Models & BYOK.” Click “Add model configuration” inside the red box at the upper right.",
+    "caption": "Select “Add configuration” at the top right of the configuration page.",
     "afterSection": 1,
     "width": 2800,
     "height": 1732

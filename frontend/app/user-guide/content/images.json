@@ -13,19 +13,19 @@
     "id": "02-workspace",
     "chapter": "workspace",
     "src": "assets/captures/zh/workspace-task-search.jpg",
-    "caption": "在工作台的统计卡下方可以找到 Ask SmarTAI。",
+    "caption": "在作业所在行点“下一步”下的链接，就能回到该作业当前的处理页面。",
     "afterSection": 0,
-    "width": 2800,
-    "height": 2680
+    "width": 2596,
+    "height": 438
   },
   {
     "id": "03-history",
     "chapter": "workspace",
     "src": "assets/captures/zh/history-task-search.jpg",
-    "caption": "输入“高数”，找到对应的批改任务。",
+    "caption": "搜索“高数”后，下方列出匹配的作业。点列表中的“高数第六周作业”即可打开。",
     "afterSection": 1,
-    "width": 2800,
-    "height": 2000
+    "width": 1688,
+    "height": 422
   },
   {
     "id": "04-byok",
@@ -54,15 +54,6 @@
     "afterSection": 2,
     "width": 2600,
     "height": 342
-  },
-  {
-    "id": "02-workspace-overview",
-    "chapter": "quickstart",
-    "src": "assets/captures/zh/workspace-task-search.jpg",
-    "caption": "从工作台新建任务，或继续处于不同阶段的作业。",
-    "afterSection": 0,
-    "width": 2800,
-    "height": 2680
   },
   {
     "id": "05-library",
@@ -141,7 +132,7 @@
     "id": "14-submission-review",
     "chapter": "submissions",
     "src": "assets/captures/zh/14-submission-review.jpg",
-    "caption": "按学生和题目校对作答；下方集中列出需要处理的项目。",
+    "caption": "每行是一名学生，每列是一道题。点状态图标查看这名学生在该题的作答。",
     "afterSection": 2,
     "width": 2800,
     "height": 2000
@@ -194,20 +185,12 @@
   {
     "id": "19-review-matrix",
     "chapter": "review",
-    "src": "assets/captures/zh/19-review-matrix.jpg",
-    "caption": "复核矩阵显示逐题结果，并区分需要处理与建议处理。",
+    "src": "assets/captures/zh/score-review-queue.jpg",
+    "caption": "在“需要处理”中点学生姓名和题号，直接打开这份作答。",
     "afterSection": 0,
-    "width": 2800,
-    "height": 2000
-  },
-  {
-    "id": "20-review-detail",
-    "chapter": "review",
-    "src": "assets/captures/zh/20-review-detail.jpg",
-    "caption": "查看评分步骤、置信度及各专家原始结果。",
-    "afterSection": 1,
-    "width": 1034,
-    "height": 2460
+    "width": 588,
+    "height": 360,
+    "maxWidth": 350
   },
   {
     "id": "20b-teacher-result",
@@ -237,15 +220,6 @@
     "height": 2200
   },
   {
-    "id": "22b-question-detail-analysis",
-    "chapter": "results",
-    "src": "assets/captures/zh/22b-question-detail-analysis.jpg",
-    "caption": "题目详情将统计指标与题目材料放在一起核对。",
-    "afterSection": 0,
-    "width": 2800,
-    "height": 3420
-  },
-  {
     "id": "23-student-analysis",
     "chapter": "results",
     "src": "assets/captures/zh/23-student-analysis.jpg",
@@ -257,11 +231,11 @@
   {
     "id": "24-visual-analysis",
     "chapter": "results",
-    "src": "assets/captures/zh/24-visual-analysis.jpg",
-    "caption": "在 Ask 描述分析需求；下方可直接查看默认得分率分布。",
+    "src": "assets/captures/zh/visual-analysis-ask.jpg",
+    "caption": "点搜索框上方的示例即可填入问题，再点“Ask SmarTAI”生成图表。",
     "afterSection": 2,
-    "width": 2800,
-    "height": 4390
+    "width": 2560,
+    "height": 570
   },
   {
     "id": "24b-default-charts",
@@ -303,7 +277,7 @@
     "id": "API1c-add",
     "chapter": "api-smartai",
     "src": "assets/captures/zh/API1c-add.jpg",
-    "caption": "两种入口都会进入“模型与 BYOK”页。点击右上角红框内的“添加模型配置”。",
+    "caption": "在配置页右上角点“添加模型配置”。",
     "afterSection": 1,
     "width": 2800,
     "height": 1732

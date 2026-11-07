@@ -32,13 +32,17 @@ for (const language of ['zh', 'en'] as const) {
       const failures: string[] = [];
       for (const node of nodes) {
         const image = new Image(); image.src = (node as HTMLImageElement).src;
-        try { await image.decode(); if (!image.naturalWidth) failures.push(image.src); }
+        try {
+          await image.decode();
+          if (image.naturalWidth !== Number(node.getAttribute('width')) ||
+              image.naturalHeight !== Number(node.getAttribute('height'))) failures.push(image.src);
+        }
         catch { failures.push(image.src); }
       }
       return failures;
     });
     expect(imageFailures).toEqual([]);
-    await expect(page.locator('.figure img')).toHaveCount(35);
+    await expect(page.locator('.figure img')).toHaveCount(32);
     for (const id of chapters) {
       await page.evaluate(chapter => { location.hash = chapter; }, id);
       await expect(page.locator(`article#${id}`)).toBeVisible();
@@ -69,13 +73,14 @@ for (const language of ['zh', 'en'] as const) {
     await expect(page).toHaveURL(new RegExp(`lang=${other}#questions-4$`));
     expect(await page.evaluate(() => localStorage.getItem('smartai_locale'))).toBe(other === 'en' ? 'en-US' : 'zh-CN');
 
-    await page.evaluate(() => { location.hash = 'quickstart'; });
-    await page.locator('#quickstart .zoom-image').first().click();
+    await page.evaluate(() => { location.hash = 'workspace-2'; });
+    await page.locator('#workspace-2 .zoom-image').click();
     await expect(page.locator('#lightbox')).toBeVisible();
     await page.locator('#lightbox-image').evaluate(image => (image as HTMLImageElement).decode());
     await page.keyboard.press('Escape');
     await expect(page.locator('#lightbox')).not.toBeVisible();
-    await page.locator('#quickstart .figure img').first().evaluate(image => (image as HTMLImageElement).decode());
+    await page.evaluate(() => { location.hash = 'quickstart'; });
+    await expect(page.locator('#quickstart')).toBeVisible();
     await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await page.screenshot({ path: testInfo.outputPath(`manual-${other}-desktop.png`) });
     await page.evaluate(() => { location.hash = 'api-minimax'; });
