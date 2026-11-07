@@ -27,7 +27,6 @@ for (const width of [390, 1024, 1280, 1440, 1920]) {
       if (path === "/auth/me") return json({ id: "teacher", username: "示例教师", role: "teacher", is_active: true });
       if (path === "/auth/activity") return json({ token: "synthetic-teacher" });
       if (path === "/knowledge/activity") return json({ items: [], total: 0, active_count: 0 });
-      if (path === "/courses/") return json([course]);
       if (path === "/tags/") return json([tag]);
       if (path === "/tasks/") {
         if (!url.searchParams.has("page")) return json(Object.fromEntries(tasks.map(t => [t.task_id, t])));

@@ -117,7 +117,7 @@ function HistoryTaskRow({
   deletion: TaskListDeletion;
 }) {
   const { locale, t } = useI18n();
-  const { course, taskTags } = taskCourseAndTags(task, courses, tags);
+  const { course, taskTags } = taskCourseAndTags(task, { courses, tags });
   const destination = getTaskDestination(task);
   const mobileMetadata = [
     task.semester_id ? formatSemesterLabel(task.semester_id, t) : null,

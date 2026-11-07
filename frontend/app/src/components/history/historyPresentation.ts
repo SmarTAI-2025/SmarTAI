@@ -1,5 +1,5 @@
 import type { MessageKey } from "@/i18n/messages";
-import type { HistoryCourseFacet, TagColor, TaskLite, TaskStatus, TaskTag } from "@/types";
+import type { HistoryFacets, TagColor, TaskLite, TaskStatus } from "@/types";
 
 export { formatSemesterLabel } from "@/lib/semesters";
 
@@ -10,9 +10,9 @@ export { TASK_STAGE_KEYS as HISTORY_STAGE_KEYS, TASK_ACTION_KEYS as HISTORY_ACTI
 // folds secondary metadata under its task and stage labels.
 export const TASK_LIST_COLUMNS = "grid-cols-[minmax(0,1fr)_96px_74px] md:grid-cols-[minmax(90px,1.6fr)_minmax(88px,1.1fr)_minmax(92px,1fr)_60px_84px_90px_76px_72px] xl:grid-cols-[minmax(180px,1.8fr)_minmax(148px,1.2fr)_minmax(120px,1fr)_96px_110px_124px_108px_80px]";
 
-export function taskCourseAndTags(task: TaskLite, courses: HistoryCourseFacet[] = [], tags: TaskTag[] = []) {
-  const course = courses.find(item => item.id === task.course_id);
-  const taskTags = (task.tag_ids ?? []).flatMap(id => tags.find(tag => tag.id === id) ?? []);
+export function taskCourseAndTags(task: TaskLite, facets?: Pick<HistoryFacets, "courses" | "tags">) {
+  const course = facets?.courses.find(item => item.id === task.course_id);
+  const taskTags = (task.tag_ids ?? []).flatMap(id => facets?.tags.find(tag => tag.id === id) ?? []);
   return { course, taskTags, text: [course?.name, ...taskTags.map(tag => tag.name)].filter(Boolean).join(" · ") };
 }
 

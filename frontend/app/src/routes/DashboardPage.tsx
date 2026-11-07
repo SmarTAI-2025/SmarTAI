@@ -1,9 +1,10 @@
 import { userFacingError } from "@/lib/taskActionGuards";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { useCourses, useExperts, useTags, useTasks } from "@/api/hooks";
+import { useExperts, useTaskHistory, useTasks } from "@/api/hooks";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { KnowledgeActivityPanel } from "@/components/knowledge-base/KnowledgeActivityPanel";
+import { DEFAULT_HISTORY_QUERY } from "@/components/history/historyQuery";
 import { TaskListActions, useTaskListDeletion, type TaskListDeletion } from "@/components/history/TaskListActions";
 import { formatHistoryEta, formatHistoryTime, taskCourseAndTags, TASK_LIST_COLUMNS } from "@/components/history/historyPresentation";
 import { GradingHistoryPanel } from "@/components/history/GradingHistoryPanel";
@@ -253,9 +254,10 @@ function DashboardTaskTable({
   const { t } = useI18n();
   const isDesktop = useMediaQuery("(min-width: 1280px)");
 
-  const courseQuery = useCourses();
-  const tagQuery = useTags();
-  const courseTags = (task: TaskLite) => taskCourseAndTags(task, courseQuery.data, tagQuery.data).text;
+  const needsMetadata = tasks.some(task => task.course_id || task.tag_ids?.length);
+  const history = useTaskHistory(DEFAULT_HISTORY_QUERY, needsMetadata);
+  const facets = history.data?.available_facets ?? history.data?.facets;
+  const courseTags = (task: TaskLite) => taskCourseAndTags(task, facets).text;
 
   if (isDesktop) {
     return (
@@ -403,22 +405,23 @@ function MobileTaskCard({ task, courseTags, deletion }: DashboardTaskProps) {
   const progressValue = getProgressValue(task, progressQuery.progress, progressQuery.percent);
 
   return (
-    <article className="relative grid gap-3 rounded-[10px] border bg-card p-4 transition-colors hover:border-primary/40">
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <Link to={getTaskDestination(task)} className="block truncate text-sm font-semibold after:absolute after:inset-0 focus-visible:ring-2 focus-visible:ring-ring">{task.name}</Link>
-          {courseTags && <p className="mt-1 truncate text-xs text-muted-foreground">{courseTags}</p>}
-          <p className="mt-1 text-xs text-muted-foreground">
-            {formatTaskTime(task.updated_at, true, locale)}
-          </p>
+    <article className="relative">
+      <Link to={getTaskDestination(task)}
+        className="grid gap-3 rounded-[10px] border bg-card p-4 outline-none transition-colors hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">{task.name}</p>
+            {courseTags && <p className="mt-1 truncate text-xs text-muted-foreground">{courseTags}</p>}
+            <p className="mt-1 text-xs text-muted-foreground">{formatTaskTime(task.updated_at, true, locale)}</p>
+          </div>
+          <StatusPill status={task.status}>{t(STAGE_KEYS[task.status])}</StatusPill>
         </div>
-        <StatusPill status={task.status}>{t(STAGE_KEYS[task.status])}</StatusPill>
-      </div>
-      <div className="flex items-center justify-between gap-4 text-xs text-muted-foreground">
-        <span>{t("dashboardColumnProgress")}{t("dashboardLabelSeparator")}{progressValue}</span>
-        <span className="ml-auto font-medium text-primary">{t(ACTION_KEYS[task.status])}</span>
-        <div className="relative"><TaskListActions task={task} deletion={deletion} /></div>
-      </div>
+        <div className="flex min-h-8 items-center justify-between gap-3 pr-[76px] text-xs text-muted-foreground">
+          <span>{t("dashboardColumnProgress")}{t("dashboardLabelSeparator")}{progressValue}</span>
+          <span className="font-medium text-primary">{t(ACTION_KEYS[task.status])}</span>
+        </div>
+      </Link>
+      <div className="absolute bottom-4 right-4"><TaskListActions task={task} deletion={deletion} /></div>
     </article>
   );
 }
