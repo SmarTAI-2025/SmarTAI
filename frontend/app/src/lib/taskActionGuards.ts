@@ -1,5 +1,6 @@
 import { programmingArchiveGuidance } from "@/lib/submissionSourceOutcomes";
 import { isTaskAwaitingGrading } from "@/lib/taskFlow";
+import { pdfLocalLimitCopy } from "@/lib/submissionSourceOutcomes";
 import { getAPIErrorCode, getAPIErrorDetail, normalizeAPIError } from "@/api/client";
 import type { Locale } from "@/i18n/messages";
 import {
@@ -877,6 +878,15 @@ export function classifyRecoverableError(
         : tx(locale, "本次有效处理时间已达到 2.5 小时，排队不计时。", "This run reached 2.5 hours of active processing, excluding queue time. "))
         + tx(locale, "已保存的批改结果会保留；可重试失败项，或人工核对并补齐分数。", "Saved grading results are retained. Retry failed items, or review and complete the scores manually."),
       actionLabel: tx(locale, "重试失败项", "Retry failed items"),
+      actionKind: "retry", tone: "warning", technicalDetails,
+    };
+  }
+
+  if (code === "pdf_render_limit_exceeded" || code === "pdf_structure_limit_exceeded") {
+    const { title, description } = pdfLocalLimitCopy[code](locale);
+    return {
+      title, description,
+      actionLabel: tx(locale, "重试失败项", "Retry failed files"),
       actionKind: "retry", tone: "warning", technicalDetails,
     };
   }

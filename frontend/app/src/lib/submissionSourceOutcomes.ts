@@ -64,6 +64,19 @@ export function getSubmissionPageErrorLabel(source: SubmissionSourceOutcome, err
   return tx(locale, `第 ${error.page} 页：${reason}${status}`, `Page ${error.page}: ${reason}${status}`);
 }
 
+export const pdfLocalLimitCopy = {
+  pdf_render_limit_exceeded: (locale: Locale) => ({
+    title: tx(locale, "PDF 页面转图超出限制", "PDF page rendering exceeded its limit"),
+    description: tx(locale, "本地生成页面图像时触发了尺寸限制，模型没有收到该图像。", "The local renderer hit an image size limit before it could send the page image to the model."),
+    nextStep: tx(locale, "请将受影响的页面按标准纸张大小重新导出，或选择人工继续处理。", "Export the affected pages at a standard paper size, or continue manually."),
+  }),
+  pdf_structure_limit_exceeded: (locale: Locale) => ({
+    title: tx(locale, "PDF 页面结构无法完整读取", "The PDF page structure could not be read"),
+    description: tx(locale, "本地解析 PDF 页面结构时触发了保护限制。更换模型仍需经过这一步。", "Local PDF structure analysis reached a safety limit. Switching models still requires this step."),
+    nextStep: tx(locale, "请将受影响的页面扁平化后重新导出，或选择人工继续处理。", "Flatten and re-export the affected pages, or continue manually."),
+  }),
+};
+
 const REASON_COPY: Record<string, ReasonFactory> = {
   question_preparation_time_limit_reached: (locale) => ({
     title: tx(locale, "本次题目处理已达到有效处理时限", "This question preparation run reached its active processing limit"),
@@ -201,9 +214,9 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   pdf_invalid_request: recognitionFileCopy,
   pdf_page_out_of_range: recognitionFileCopy,
   pdf_processing_failed: recognitionProcessingCopy,
-  pdf_render_limit_exceeded: recognitionLimitCopy,
+  pdf_render_limit_exceeded: pdfLocalLimitCopy.pdf_render_limit_exceeded,
   pdf_response_too_large: recognitionLimitCopy,
-  pdf_structure_limit_exceeded: recognitionLimitCopy,
+  pdf_structure_limit_exceeded: pdfLocalLimitCopy.pdf_structure_limit_exceeded,
   provider_credentials_required: recognitionProviderCopy,
   shared_pool_daily_limit_reached: (locale) => ({
     title: tx(locale, "共享模型日额度已用完。", "Shared model daily allowance exhausted."),

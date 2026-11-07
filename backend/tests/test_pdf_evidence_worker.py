@@ -309,6 +309,27 @@ def test_oversized_render_is_rejected_before_allocating_pixmap(monkeypatch, widt
     assert_error(reply(body, "render", page_number=1, scale=1), "pdf_render_limit_exceeded")
 
 
+def test_dense_vector_page_keeps_text_and_path_bounds_without_segment_analysis(monkeypatch):
+    with fitz.open() as document:
+        page = document.new_page()
+        page.insert_text((20, 30), "Vector fixture")
+        path = page.new_shape()
+        for x in range(10, 30):
+            path.draw_line((x, 50), (x, 100))
+        path.finish()
+        path.commit()
+        body = document.tobytes()
+
+    monkeypatch.setattr(worker, "MAX_STRUCTURE_ITEMS", 4)
+    indexed = reply(body)["pages"][0]
+    detail = reply(body, "detail", pages=[1])["pages"][0]
+    assert indexed["observation"] == detail["observation"]
+    assert {"layout", "diagram"} <= set(indexed["observation"]["risks"])
+    assert detail["native_text"].strip() == "Vector fixture"
+    assert [block["kind"] for block in detail["blocks"]] == ["text", "drawing"]
+    assert reply(body, "render", page_number=1)["status"] == "ok"
+
+
 def test_internal_failure_does_not_echo_exception_or_partial_content(monkeypatch):
     def fail(*args, **kwargs):
         raise RuntimeError("PRIVATE_PROBLEM_AND_STUDENT_DATA")

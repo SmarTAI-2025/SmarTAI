@@ -12,8 +12,10 @@ import pymupdf as fitz
 
 if __package__:
     from . import image_evidence_worker
+    from .pdf_render_limits import MAX_RENDER_PIXELS, MAX_RENDER_SIDE
 else:
     import image_evidence_worker
+    from pdf_render_limits import MAX_RENDER_PIXELS, MAX_RENDER_SIDE
 
 CONTRACT = "smartai.pdf.evidence"
 MAX_INPUT_BYTES = 100 * 1024 * 1024
@@ -24,9 +26,7 @@ MAX_STRUCTURE_ITEMS = 100_000
 MAX_BLOCKS = 10_000
 MAX_INDEX_BYTES = 512 * 1024
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
-MAX_RENDER_PIXELS = 16_000_000
 MAX_RENDER_RGB_BYTES = 48 * 1024 * 1024
-MAX_RENDER_SIDE = 8192
 OPERATIONS = frozenset({"index", "detail", "render", "export_pages", "contact_sheet", "image_prepare"})
 ERROR_CODES = frozenset({
     "pdf_invalid_request", "pdf_input_too_large", "pdf_invalid", "pdf_encrypted",
@@ -253,24 +253,27 @@ def _page_evidence(page, targets: list[str], *, detail: bool) -> dict:
             risks.add("diagram")
             blocks.append({"order_index": len(blocks), "kind": "image", "region": region,
                            "text": "", "native_char_start": None, "native_char_end": None})
+    # Dense pen strokes can exceed the segment-analysis budget on an ordinary
+    # page. Retain each path's bounds for visual reading without traversing
+    # its segments to infer table lines. The block and text limits still apply.
+    inspect_segments = item_count + sum(len(path.get("items", ())) for path in drawings) <= MAX_STRUCTURE_ITEMS
     for drawing in drawings:
-        items = drawing.get("items", [])
-        item_count += len(items)
-        if item_count > MAX_STRUCTURE_ITEMS:
-            raise EvidenceFailure("pdf_structure_limit_exceeded")
         region = _normalized_box(page, drawing["rect"], visual)
         if region is None:
             continue
         risks.add("diagram")
-        for item in items:
+        blocks.append({"order_index": len(blocks), "kind": "drawing", "region": region,
+                       "text": "", "native_char_start": None, "native_char_end": None})
+        if not inspect_segments:
+            risks.add("layout")
+            continue
+        for item in drawing.get("items", ()):
             if item[0] == "re":
                 horizontal += 2
                 vertical += 2
             elif item[0] == "l":
                 horizontal += abs(item[1][1] - item[2][1]) < 0.1
                 vertical += abs(item[1][0] - item[2][0]) < 0.1
-        blocks.append({"order_index": len(blocks), "kind": "drawing", "region": region,
-                       "text": "", "native_char_start": None, "native_char_end": None})
     if horizontal >= 2 and vertical >= 2:
         risks.add("table")
     if annotation_refs:
