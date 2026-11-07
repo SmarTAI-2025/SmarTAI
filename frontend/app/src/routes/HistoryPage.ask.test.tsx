@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@/i18n/I18nProvider";
@@ -129,6 +129,66 @@ describe("Current task Ask SmarTAI", () => {
     fireEvent.click(screen.getByRole("button", { name: "清空查询" }));
     expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ needs_attention: true }), true);
     expect(screen.queryByRole("button", { name: "清空查询" })).not.toBeInTheDocument();
+  });
+
+  it("applies only the new course while the cleared tag URL is still in flight", async () => {
+    mocks.lookup.mockResolvedValue({ items: [], total: 0, available_facets: {
+      courses: [{ id: "algebra", name: "线性代数" }], tags: [{ id: "midterm", name: "期中" }],
+    } });
+    let holdClear = false;
+    let release!: () => void;
+    const clearing = new Promise<void>(resolve => { release = resolve; });
+    const router = createMemoryRouter([{ path: "/history", element: <HistoryPage />, hydrateFallbackElement: null, loader: async ({ request }) => {
+      const params = new URL(request.url).searchParams;
+      if (holdClear && !params.has("tags") && !params.has("course")) await clearing;
+      return null;
+    } }], { initialEntries: ["/history"] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClients.push(client);
+    try {
+      render(<QueryClientProvider client={client}><I18nProvider><RouterProvider router={router} /></I18nProvider></QueryClientProvider>);
+      const input = await screen.findByRole("textbox");
+      ask("期中");
+      await waitFor(() => expect(router.state.location.search).toContain("tags=midterm"));
+      fireEvent.submit(input.closest("form")!);
+      fireEvent.submit(input.closest("form")!);
+      holdClear = true;
+      fireEvent.click(screen.getByRole("button", { name: "清空查询" }));
+      expect(router.state.location.search).toContain("tags=midterm");
+      ask("线性代数");
+      await waitFor(() => expect(router.state.location.search).toContain("course=algebra"));
+      expect(new URLSearchParams(router.state.location.search).has("tags")).toBe(false);
+      expect(mocks.history).toHaveBeenLastCalledWith({ page: 1, page_size: 25, sort: "updated_desc", course_id: "algebra" }, true);
+    } finally {
+      release();
+      router.dispose();
+    }
+  });
+
+  it("keeps a newer search when the clear navigation finishes during its model request", async () => {
+    let releaseClear!: () => void;
+    const clearing = new Promise<void>(resolve => { releaseClear = resolve; });
+    let finishAsk!: (result: HistoryInterpretation) => void;
+    mocks.interpret.mockReturnValue(new Promise(resolve => { finishAsk = resolve; }));
+    const router = createMemoryRouter([{ path: "/history", element: <HistoryPage />, hydrateFallbackElement: null,
+      loader: ({ request }) => new URL(request.url).searchParams.has("tags") ? null : clearing,
+    }], { initialEntries: ["/history?tags=midterm"] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClients.push(client);
+    try {
+      render(<QueryClientProvider client={client}><I18nProvider><RouterProvider router={router} /></I18nProvider></QueryClientProvider>);
+      fireEvent.click(await screen.findByRole("button", { name: "清空查询" }));
+      ask();
+      await waitFor(() => expect(mocks.interpret).toHaveBeenCalledTimes(1));
+      await act(async () => releaseClear());
+      expect(new URLSearchParams(router.state.location.search).has("tags")).toBe(false);
+      await act(async () => finishAsk(interpretation));
+      await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(
+        expect.objectContaining({ unfinished: true }), true));
+    } finally {
+      releaseClear();
+      router.dispose();
+    }
   });
 
   it("sorts task history on the server and reverses a second header click", async () => {

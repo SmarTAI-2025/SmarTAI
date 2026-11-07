@@ -4,8 +4,8 @@ import { isTaskProcessing } from "@/lib/taskFlow";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { taskKeys } from "@/api/hooks/keys";
 import { getTaskState, listTasks } from "@/api/tasks";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigationType, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigationType, useSearchParams } from "react-router-dom";
 import {
   useInterpretTaskHistoryQuery,
   useTags,
@@ -41,6 +41,8 @@ export function GradingHistoryPanel({ dashboard = false, deletion }: { dashboard
   const { locale, t } = useI18n();
   const [searchParams, setSearchParams] = useSearchParams();
   const query = useMemo(() => parseHistorySearchParams(searchParams), [searchParams]);
+  const latestQuery = useRef(query);
+  const location = useLocation();
   const queryClient = useQueryClient();
   const navigationType = useNavigationType();
   const [draft, setDraft] = useState(query.q ?? "");
@@ -54,19 +56,20 @@ export function GradingHistoryPanel({ dashboard = false, deletion }: { dashboard
   const [smartError, setSmartError] = useState(false);
   const interpretationRequest = useRef(0);
   useEffect(() => () => { interpretationRequest.current += 1; }, []);
-  useEffect(() => {
+  // A replace written by this panel may commit after the next search starts.
+  // Only external navigation (including Back/Forward) resets the current intent.
+  useLayoutEffect(() => {
+    if (navigationType === "REPLACE" && location.state?.taskHistoryFilters === true) return;
+    latestQuery.current = query;
     interpretationRequest.current += 1;
     setCheckingKeyword(false);
     setChoices([]);
-    if (navigationType === "POP") {
-      setDraft(searchParams.get("q") ?? "");
-      setInterpretation(null);
-      setSmartError(false);
-      conversation.current = [];
-      appliedKeyword.current = null;
-    }
-  }, [searchParams, navigationType]);
-
+    setDraft(query.q ?? "");
+    setInterpretation(null);
+    setSmartError(false);
+    conversation.current = [];
+    appliedKeyword.current = null;
+  }, [location.key, location.state, navigationType, query]);
 
   const hasFilters = countHistoryFilters(query) > 0;
   const showResults = !dashboard || hasFilters || Boolean(interpretation?.execution?.selection || interpretation?.conditions.length);
@@ -103,26 +106,26 @@ export function GradingHistoryPanel({ dashboard = false, deletion }: { dashboard
   const tasks = orderedTasks ? orderedTasks.slice((query.page - 1) * query.page_size, query.page * query.page_size) : data?.items ?? [];
   const errorMessage = !orderedTasks && historyQuery.error ? userFacingError(historyQuery.error, locale) : null;
 
+  const writeQuery = useCallback((next: TaskHistoryQuery) => {
+    latestQuery.current = next;
+    setSearchParams(serializeHistoryQuery(next), { replace: true, state: { taskHistoryFilters: true } });
+  }, [setSearchParams]);
+
   useEffect(() => {
     if (!data || historyQuery.isPlaceholderData) return;
     const lastPage = Math.max(1, Math.ceil(total / query.page_size));
-    if (query.page > lastPage) {
-      setSearchParams(serializeHistoryQuery(patchHistoryQuery(query, { page: lastPage }, { keepPage: true })), { replace: true });
+    if (query.page > lastPage && serializeHistoryQuery(query).toString() === serializeHistoryQuery(latestQuery.current).toString()) {
+      writeQuery(patchHistoryQuery(query, { page: lastPage }, { keepPage: true }));
     }
-  }, [data, historyQuery.isPlaceholderData, total, query, setSearchParams]);
-
-  function writeQuery(next: TaskHistoryQuery) {
-    setSearchParams(serializeHistoryQuery(next), { replace: true });
-  }
+  }, [data, historyQuery.isPlaceholderData, total, query, writeQuery]);
 
   function handleChange(patch: Partial<TaskHistoryQuery>, keepPage = false) {
-    interpretationRequest.current += 1;
+    cancelInterpretation();
     if (!interpretation?.execution || !(patch.sort || patch.page || patch.page_size)) {
       setInterpretation(null);
     }
     if (patch.sort) setManualSort(patch.sort);
-    setSmartError(false);
-    writeQuery(patchHistoryQuery(query, patch, { keepPage }));
+    writeQuery(patchHistoryQuery(latestQuery.current, patch, { keepPage }));
   }
 
   function clearAll() {
@@ -135,7 +138,7 @@ export function GradingHistoryPanel({ dashboard = false, deletion }: { dashboard
     setInterpretation(null);
     setSmartError(false);
     interpretQuery.reset();
-    writeQuery({ ...DEFAULT_HISTORY_QUERY, page_size: query.page_size });
+    writeQuery({ ...DEFAULT_HISTORY_QUERY, page_size: latestQuery.current.page_size });
   }
 
   function cancelInterpretation() {
@@ -148,7 +151,7 @@ export function GradingHistoryPanel({ dashboard = false, deletion }: { dashboard
 
   function keywordBase() {
     // Replace the previous search term while preserving independently linked filters.
-    return patchHistoryQuery(query, { q: undefined,
+    return patchHistoryQuery(latestQuery.current, { q: undefined,
       ...(appliedKeyword.current ? { [appliedKeyword.current]: undefined } : {}) });
   }
 
@@ -218,8 +221,8 @@ export function GradingHistoryPanel({ dashboard = false, deletion }: { dashboard
       setManualSort(null);
       if (result.execution) {
         if (result.execution.recognized) conversation.current = [...conversation.current, value].slice(-4);
-        if (result.execution.recognized) writeQuery({ ...DEFAULT_HISTORY_QUERY, page_size: query.page_size });
-      } else writeQuery(applyHistoryInterpretation(query, result));
+        if (result.execution.recognized) writeQuery({ ...DEFAULT_HISTORY_QUERY, page_size: latestQuery.current.page_size });
+      } else writeQuery(applyHistoryInterpretation(latestQuery.current, result));
     } catch {
       if (request !== interpretationRequest.current) return;
       setInterpretation(null);
@@ -231,7 +234,7 @@ export function GradingHistoryPanel({ dashboard = false, deletion }: { dashboard
 
   function handleRemoveCondition(field: string) {
     cancelInterpretation();
-    const next = clearHistoryCondition(query, field);
+    const next = clearHistoryCondition(latestQuery.current, field);
     writeQuery(next);
     setInterpretation((current) => {
       if (!current) return null;
