@@ -70,7 +70,6 @@ export const pdfLocalLimitCopy = {
 };
 
 const REASON_COPY: Record<string, ReasonFactory> = {
-  ...pdfLocalLimitCopy,
   question_preparation_time_limit_reached: (locale) => ({
     title: tx(locale, "本次题目处理已达到有效处理时限", "This question preparation run reached its active processing limit"),
     description: tx(locale, "本次有效处理时间已达到 1.5 小时，排队不计时；已保存的题干、参考答案和评分标准会保留。", "This run reached 1.5 hours of active processing, excluding queue time. Saved question text, reference answers, and rubrics are retained."),
@@ -140,7 +139,9 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   pdf_invalid_request: recognitionFileCopy,
   pdf_page_out_of_range: recognitionFileCopy,
   pdf_processing_failed: recognitionProcessingCopy,
+  pdf_render_limit_exceeded: pdfLocalLimitCopy.pdf_render_limit_exceeded,
   pdf_response_too_large: recognitionLimitCopy,
+  pdf_structure_limit_exceeded: pdfLocalLimitCopy.pdf_structure_limit_exceeded,
   provider_credentials_required: recognitionProviderCopy,
   shared_pool_daily_limit_reached: (locale) => ({
     title: tx(locale, "共享模型日额度已用完。", "Shared model daily allowance exhausted."),
