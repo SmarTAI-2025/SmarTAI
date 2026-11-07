@@ -24,6 +24,7 @@ from backend.tools import knowledge as kb_tool
 from backend.tools.structured_llm import PermanentLLMError, TransientLLMError, structured_llm_call
 from backend.tools.structured_llm import StructuredOutputInvalidError
 from backend.services.math_source_evidence import SourceMatch, match_source_quote, source_catalog
+from backend.services.math_rubric_plan import SUBPART_ALLOCATION
 from backend.services.math_proof_audit import inspect_audit, read_appendix, REVIEW_INSTRUCTION, OUTPUT_INSTRUCTION
 from backend.services.math_strictness import Adjustment, LEDGER_INSTRUCTION
 from backend.services.binary_scoring import frozen_binary_rule
@@ -171,6 +172,17 @@ class DirectMathGrade(BaseModel):
         if not value.strip():
             raise ValueError("direct_grade_requires_scoring_evidence")
         return value
+
+
+class SubpartGrade(BaseModel):
+    """Minimal fallback for a known points ledger; a single proposed total is insufficient."""
+    claims: list[Claim] = Field(default_factory=list, max_length=80)
+    awards: list[Award] = Field(min_length=1, max_length=80)
+    confidence: GradingConfidence
+
+    def assessment(self, plan) -> MathAssessment:
+        return MathAssessment(route_id=plan.routes[0].id, route_reason=plan.original_criterion,
+                              claims=self.claims, awards=self.awards, confidence=self.confidence, comment="")
 
 
 class ExpertRevision(BaseModel):
@@ -357,6 +369,9 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
             if (award.score > item.points or not set(award.claim_ids) <= claims.keys()
                     or not award.reason.strip() or (award.score > 0 and not award.claim_ids)):
                 raise ValueError("invalid_award")
+            if (plan.compilation_reason == SUBPART_ALLOCATION and not plan.allow_partial_credit
+                    and award.score not in (0, item.points)):
+                raise ValueError("partial_credit_disabled")
             if any(item_id not in claims[key].item_ids for key in award.claim_ids):
                 raise ValueError("award_claim_not_mapped_to_item")
             if award.score > 0 and all(claims[key].kind == "omission" for key in award.claim_ids):
@@ -489,6 +504,11 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
         steps.append(StepScore(step_no=len(steps) + 1, desc=desc,
                                score=float(current - previous), is_correct=correct))
         previous = current
+    if plan.compilation_reason == SUBPART_ALLOCATION:
+        # Keep trace IDs aligned with the displayed steps, even if the model returned them out of order.
+        assessment.awards = [awards[item_id] for item_id in items]
+        assessment.score = score
+        assessment.comment = " + ".join(f"{step.score:g}" for step in steps) + f" = {score:g}"
     return score, steps
 
 
@@ -1069,6 +1089,25 @@ class MathGradingSkill(GradingSkill):
 
     async def _direct(self, problem, answer, plan, prompt, unit, chunks, *, fallback=None, started=None):
         await self._substep(unit, "llm_grade")
+        if plan.compilation_reason == SUBPART_ALLOCATION:
+            validate = _assessment_validator(plan, answer, problem)
+            result, response = await structured_llm_call(
+                self.provider, output_model=SubpartGrade,
+                system_prompt=build_system_prompt(
+                    "Grade each labelled subpart under its frozen allocation. Return one award for each item ID "
+                    "with its score and a reason specific to that part. Link credit to the submitted work using "
+                    "claims and source_catalog. Missing answers earn zero. The program computes the total.\n"
+                    + _json(SubpartGrade.model_json_schema()), self.language, self.grading_setup),
+                user_prompt=prompt, validate_output=lambda value: validate(value.assessment(plan)))
+            draft = result.assessment(plan)
+            score, steps = score_assessment(draft, plan, answer.content or "", problem_text=problem.stem)
+            return ExpertResult(provider=self.provider.provider_id, score=score, max_score=problem.max_score,
+                confidence=draft.confidence, comment=draft.comment, steps=steps,
+                knowledge_citations=kb_tool.citations(chunks), duration_ms=max(response.duration_ms or 0,
+                    (perf_counter() - started) * 1000 if started is not None else 0),
+                raw_output=_json({"version": TRACE_VERSION, "plan_id": plan.plan_id,
+                                  "assessment": draft.model_dump(mode="json"), "evidence": [],
+                                  **({"fallback": fallback} if fallback else {})}))
         rule = frozen_binary_rule(plan)
         def validate(result):
             if rule:
