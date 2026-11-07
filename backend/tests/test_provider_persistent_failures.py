@@ -267,3 +267,33 @@ async def test_refused_page_is_retained_and_manual_retry_reuses_successes(tmp_pa
     assert retried.status == "completed", retried.safe_error_code
     assert [call.page_number for call in engine.reads] == [1, 2, 3, 1]
     assert [record.origin for record in retried.assembly.raw.read_batch.provenance] == ["dispatch", "cache_hit", "cache_hit"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("details,expected", [
+    ({"message": "User location is not supported for the API use."}, "provider_region_unsupported"),
+    ({"details": [{"reason": "API_KEY_INVALID"}]}, "provider_auth_failed"),
+    ({"message": "Invalid argument"}, None),
+])
+async def test_google_400_stops_only_confirmed_configuration_failures(monkeypatch, scheduler, details, expected):
+    from google.genai.errors import ClientError
+
+    sent = []
+    async def reject(_):
+        sent.append(1)
+        try:
+            raise ClientError(400, {"error": {"code": 400, **details}})
+        except ClientError as cause:
+            raise RuntimeError("SDK wrapper") from cause
+
+    async with provider_for("gemini", reject, monkeypatch) as provider:
+        async def job():
+            for _ in range(4):
+                with pytest.raises(Exception) as caught:
+                    await llm.ainvoke_with_rate_retry(provider, MESSAGES)
+                if expected and len(sent) == 1:
+                    assert getattr(caught.value, "status_code", None) == 400
+                    assert getattr(caught.value, "code", None) == expected
+            assert list(current_execution().blocked.values()) == ([expected] if expected else [])
+        await run_controlled("google-400", lambda: False, job())
+    assert len(sent) == (3 if expected else 4)

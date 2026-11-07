@@ -61,6 +61,23 @@ def structured_error_code(body, provider_type: str) -> str | None:
     return None
 
 
+def google_configuration_error(details) -> str | None:
+    """Recognize the Google SDK's specific HTTP 400 configuration diagnostics."""
+    if not isinstance(details, dict):
+        return None
+    error = details.get("error", details)
+    if not isinstance(error, dict):
+        return None
+    if "user location is not supported" in str(error.get("message", "")).lower():
+        return "provider_region_unsupported"
+    reasons = error.get("details", [])
+    if isinstance(reasons, list) and any(isinstance(item, dict) and item.get("reason") in {
+        "API_KEY_INVALID", "API_KEY_EXPIRED", "API_KEY_SERVICE_BLOCKED",
+    } for item in reasons):
+        return "provider_auth_failed"
+    return None
+
+
 def normalized_error_code(exc: BaseException, provider_type: str) -> str | None:
     """Find authoritative SDK fields through explicit causes, never old context."""
     from backend.domain.errors import DomainError
@@ -72,6 +89,9 @@ def normalized_error_code(exc: BaseException, provider_type: str) -> str | None:
             return None  # Application permissions/fencing are not vendor evidence.
         for name in ("body", "details", "response_json"):
             if code := structured_error_code(getattr(exc, name, None), provider_type):
+                return code
+        if provider_type == "gemini" and upstream_http_status(exc) == 400:
+            if code := google_configuration_error(getattr(exc, "details", None)):
                 return code
         if provider_type == "deepseek" and upstream_http_status(exc) == 402:
             return "provider_quota_exceeded"

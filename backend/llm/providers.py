@@ -530,7 +530,9 @@ class BaseProvider(ABC):
                             control.rate_started(self, started_at=admitted_at)
                         yield
                     except Exception as exc:
-                        from backend.llm.provider_errors import CONTENT_FAILURES, configuration_failure_code, normalized_error_code
+                        from backend.llm.provider_errors import (
+                            CONTENT_FAILURES, configuration_failure_code, normalized_error_code, upstream_http_status,
+                        )
                         normalized = normalized_error_code(exc, self.provider_type)
                         if control is not None and getattr(exc, "code", None) == "provider_model_access_denied":
                             normalized = "provider_permission_denied"
@@ -539,7 +541,7 @@ class BaseProvider(ABC):
                             normalized = "provider_permission_denied"
                         failure = exc
                         if normalized is not None:
-                            failure = ProviderRequestError(normalized, status_code=getattr(exc, "status_code", None))
+                            failure = ProviderRequestError(normalized, status_code=upstream_http_status(exc))
                         configuration_code = configuration_failure_code(failure)
                         if control is not None:
                             control.record_configuration_result(self, configuration_code)
