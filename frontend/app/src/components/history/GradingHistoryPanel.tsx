@@ -45,7 +45,7 @@ export function GradingHistoryPanel({ dashboard = false, deletion }: { dashboard
   const location = useLocation();
   const queryClient = useQueryClient();
   const navigationType = useNavigationType();
-  const [draft, setDraft] = useState(query.q ?? "");
+  const [editedDraft, setDraft] = useState<string | null>(null);
   const appliedKeyword = useRef<HistoryKeywordMatch["field"] | null>(null);
   const [choices, setChoices] = useState<HistoryKeywordMatch[]>([]);
   const [checkingKeyword, setCheckingKeyword] = useState(false);
@@ -56,6 +56,27 @@ export function GradingHistoryPanel({ dashboard = false, deletion }: { dashboard
   const [smartError, setSmartError] = useState(false);
   const interpretationRequest = useRef(0);
   useEffect(() => () => { interpretationRequest.current += 1; }, []);
+  const hasFilters = countHistoryFilters(query) > 0;
+  const showResults = !dashboard || hasFilters || Boolean(interpretation?.execution?.selection || interpretation?.conditions.length);
+  const historyQuery = useTaskHistory(query, showResults);
+  const tagsQuery = useTags(showResults);
+  const data = historyQuery.data;
+  const facets = data?.available_facets ?? data?.facets ?? EMPTY_FACETS;
+  const tags = tagsQuery.data ?? facets.tags;
+  const activeFacets: HistoryKeywordMatch[] = [];
+  if (query.course_id) {
+    const course = facets.courses.find(item => item.id === query.course_id);
+    activeFacets.push({ field: "course_id", id: query.course_id, label: course?.name ?? query.course_id });
+  }
+  for (const id of query.tag_ids ?? []) {
+    const tag = tags.find(item => item.id === id) ?? facets.tags.find(item => item.id === id);
+    activeFacets.push({ field: "tag_ids", id, label: tag?.name ?? id });
+  }
+  const singleFacet = !query.q && activeFacets.length === 1 ? activeFacets[0] : undefined;
+  const restoredField = singleFacet?.field ?? null;
+  const draft = editedDraft ?? query.q ?? singleFacet?.label ?? "";
+  const otherFacets = activeFacets.filter(facet => facet !== singleFacet || facet.label !== draft);
+
   // A replace written by this panel may commit after the next search starts.
   // Only external navigation (including Back/Forward) resets the current intent.
   useLayoutEffect(() => {
@@ -64,20 +85,13 @@ export function GradingHistoryPanel({ dashboard = false, deletion }: { dashboard
     interpretationRequest.current += 1;
     setCheckingKeyword(false);
     setChoices([]);
-    setDraft(query.q ?? "");
+    setDraft(null);
     setInterpretation(null);
     setSmartError(false);
     conversation.current = [];
-    appliedKeyword.current = null;
-  }, [location.key, location.state, navigationType, query]);
+    appliedKeyword.current = restoredField;
+  }, [location.key, location.state, navigationType, query, restoredField]);
 
-  const hasFilters = countHistoryFilters(query) > 0;
-  const showResults = !dashboard || hasFilters || Boolean(interpretation?.execution?.selection || interpretation?.conditions.length);
-  const historyQuery = useTaskHistory(query, showResults);
-  const tagsQuery = useTags(showResults);
-  const data = historyQuery.data;
-  const facets = data?.available_facets ?? data?.facets ?? EMPTY_FACETS;
-  const tags = tagsQuery.data ?? facets.tags;
   const selectedTasks = interpretation?.execution?.selection?.kind === "tasks" ? interpretation.execution.tasks : undefined;
   const activeSelectedTasks = useMemo(() => selectedTasks?.filter(task => isTaskProcessing(task.status)) ?? [], [selectedTasks]);
   const liveStates = useQueries({
@@ -299,7 +313,11 @@ export function GradingHistoryPanel({ dashboard = false, deletion }: { dashboard
 
       {showResults && <>
         <div className="mt-6 flex w-full items-center justify-between gap-4 px-1 text-xs text-muted-foreground" aria-live="polite">
-          <span>{countText}</span>
+          <span>{countText}{otherFacets.map(facet => (
+            <span key={`${facet.field}:${facet.id}`} className="ml-2 [overflow-wrap:anywhere]">
+              {t(facet.field === "course_id" ? "historyCourse" : "historyTags")} · {facet.label}
+            </span>
+          ))}</span>
           {historyQuery.isFetching && !historyQuery.isLoading ? <span>{t("loading")}</span> : null}
         </div>
 

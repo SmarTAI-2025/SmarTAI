@@ -131,6 +131,31 @@ describe("Current task Ask SmarTAI", () => {
     expect(screen.queryByRole("button", { name: "清空查询" })).not.toBeInTheDocument();
   });
 
+  it.each([["course=C1", "线性代数"], ["tags=T1", "期中"]])("restores the keyword from %s and replaces it on the next name search", async (params, label) => {
+    const data = { items: [{ name: "矩阵练习" }], total: 1, available_facets: {
+      courses: [{ id: "C1", name: "线性代数" }], tags: [{ id: "T1", name: "期中" }],
+    } };
+    mocks.history.mockReturnValue({ data });
+    mocks.lookup.mockResolvedValue(data);
+    mount(`/history?${params}&attention=true`);
+    expect(screen.getByRole("textbox")).toHaveValue(label);
+    ask("矩阵");
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(
+      { page: 1, page_size: 25, sort: "updated_desc", q: "矩阵", needs_attention: true }, true));
+  });
+
+  it("shows all linked course and tag names alongside an independent search term, even with no matches", () => {
+    mocks.history.mockReturnValue({ data: { items: [], total: 0, available_facets: {
+      courses: [{ id: "C1", name: "线性代数" }], tags: [{ id: "T1", name: "期中" }, { id: "T2", name: "补交" }],
+    } } });
+    mount("/history?q=矩阵&course=C1&tags=T1,T2");
+    expect(screen.getByRole("textbox")).toHaveValue("矩阵");
+    for (const label of ["线性代数", "期中", "补交"]) expect(screen.getByText(label, { exact: false })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "清空查询" }));
+    expect(screen.queryByText(/线性代数/)).not.toBeInTheDocument();
+    expect(mocks.history).toHaveBeenLastCalledWith({ page: 1, page_size: 25, sort: "updated_desc" }, true);
+  });
+
   it("applies only the new course while the cleared tag URL is still in flight", async () => {
     mocks.lookup.mockResolvedValue({ items: [], total: 0, available_facets: {
       courses: [{ id: "algebra", name: "线性代数" }], tags: [{ id: "midterm", name: "期中" }],
