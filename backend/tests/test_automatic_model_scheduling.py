@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from backend.llm.concurrency import (
-    HARD_LIMIT, MEMORY_PER_CALL, ModelScheduler, initial_concurrency,
+    HARD_LIMIT, MEMORY_PER_CALL, ModelScheduler, initial_concurrency, memory_pressure_clear,
     quota_key, target_concurrency,
 )
 from backend.llm.providers import (
@@ -487,6 +487,83 @@ async def test_memory_sampling_is_cached_and_keeps_peak_reservations(clock, host
         await cleanup(tasks)
 
 
+def test_lower_reserve_requires_quiet_psi_and_unlimited_visible_cgroups(tmp_path):
+    proc, root = tmp_path / "proc", tmp_path / "cgroup"
+    (proc / "self").mkdir(parents=True)
+    (proc / "self/cgroup").write_text("0::/slice/service\n")
+    (proc / "pressure").mkdir()
+    psi = proc / "pressure/memory"
+    psi.write_text("some avg10=0.00 avg60=0.00 avg300=0.02 total=53\n")
+    (root / "slice/service").mkdir(parents=True)
+    (root / "cgroup.controllers").touch()
+    for group in (root / "slice", root / "slice/service"):
+        for name in ("memory.high", "memory.max"):
+            (group / name).write_text("max\n")
+    assert memory_pressure_clear(proc, root)
+    for group in (root, root / "slice", root / "slice/service"):
+        for name in ("memory.high", "memory.max"):
+            (group / name).write_text("300000000")
+            assert not memory_pressure_clear(proc, root)
+            (group / name).write_text("max")
+    for pressure in ("some avg10=0.22 avg60=0.00", "some avg10=0.00 avg60=0.04", "some avg10=0"):
+        psi.write_text(pressure)
+        assert not memory_pressure_clear(proc, root)
+    psi.unlink()
+    assert not memory_pressure_clear(proc, root)
+
+
+@pytest.mark.asyncio
+async def test_small_host_shares_one_lower_reserve_slot_across_workers(tmp_path, clock):
+    from backend.llm.host_capacity import HostCapacity
+
+    hosts = [HostCapacity(tmp_path / "permits") for _ in range(2)]
+    schedulers = [ModelScheduler(clock=clock, host_capacity=host, pressure_clear=lambda: True,
+                                 memory_reader=lambda: (450 * 1024**2, 1906 * 1024**2)) for host in hosts]
+    tasks = [asyncio.create_task(s.acquire(**call(f"model-{i}", memory=40 * 1024**2)))
+             for i, s in enumerate(schedulers)]
+    try:
+        await turns(50)
+        assert sum(t.done() for t in tasks) == 1
+        first = next(i for i, t in enumerate(tasks) if t.done())
+        lease = tasks[first].result()
+        assert sum(s.memory_active for s in schedulers) == 40 * 1024**2
+        lease.release()
+        schedulers[1 - first].wake.set()
+        next_lease = await asyncio.wait_for(tasks[1 - first], 1)
+        next_lease.release()
+        assert all(s.memory_active == s.active == 0 for s in schedulers)
+    finally:
+        await cleanup(tasks)
+        for host in hosts:
+            host.close()
+
+
+@pytest.mark.parametrize("total,available,cost,quiet,expected", [
+    (1906, 450, 40, True, 1), (1906, 423, 40, True, 0),
+    (1906, 450, 40, False, 0), (1906, 480, 65, True, 0),
+    (1024, 450, 40, True, 0), (3072, 750, 32, True, 0),
+    (1906, 552, 40, False, HARD_LIMIT), (2048, 440, 40, True, 0),
+])
+def test_small_host_reserve_boundaries(clock, host, total, available, cost, quiet, expected):
+    scheduler = ModelScheduler(clock=clock, host_capacity=host, pressure_clear=lambda: quiet,
+                               memory_reader=lambda: (available * 1024**2, total * 1024**2))
+    assert scheduler._memory_slot_limit(cost * 1024**2, clock()) == expected
+
+
+@pytest.mark.asyncio
+async def test_fresh_memory_check_releases_slot_before_rate_admission(clock, host):
+    samples = iter([450, 380])
+    scheduler = ModelScheduler(clock=clock, host_capacity=host, pressure_clear=lambda: True,
+                               memory_reader=lambda: (next(samples) * 1024**2, 1906 * 1024**2))
+    task = asyncio.create_task(scheduler.acquire(**call(memory=40 * 1024**2)))
+    try:
+        await turns()
+        assert not task.done() and not scheduler.budgets["model"].starts
+        assert host.active == scheduler.active == scheduler.memory_active == 0
+    finally:
+        await cleanup([task])
+
+
 @pytest.mark.asyncio
 async def test_materialized_memory_is_not_subtracted_twice(clock, host):
     available = [1024 * 1024**2]
@@ -670,7 +747,7 @@ async def test_only_explicit_zhipu_concurrency_response_lowers_automatic_ceiling
 async def test_low_memory_queue_can_outlast_response_limit_without_sending_or_spending_quota(clock, host, monkeypatch):
     from backend.config import settings
     scheduler = ModelScheduler(clock=clock, host_capacity=host,
-                               memory_reader=lambda: (541 * 1024**2, 1906 * 1024**2))
+                               memory_reader=lambda: (400 * 1024**2, 1906 * 1024**2))
     monkeypatch.setattr("backend.llm.providers.get_scheduler", lambda: scheduler)
     monkeypatch.setattr(settings, "llm_timeout", 600)
     loop = asyncio.get_running_loop()
