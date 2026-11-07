@@ -188,8 +188,9 @@ class _Lease:
 class ModelScheduler:
     def __init__(self, *, memory_reader=read_memory, host_capacity=None, clock=time.monotonic):
         if host_capacity is None:
+            from backend.config import settings
             from backend.llm.host_capacity import HostCapacity
-            host_capacity = HostCapacity()
+            host_capacity = HostCapacity(recovery_seconds=float(settings.llm_rate_limit_retry_seconds))
         self.host_capacity = host_capacity
         self.memory_reader = memory_reader
         self.clock = clock

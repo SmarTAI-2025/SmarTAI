@@ -211,3 +211,39 @@ def test_non_contention_lock_errors_fail_closed(tmp_path, monkeypatch):
     capacity = HostCapacity(tmp_path / "permits")
     with pytest.raises(RuntimeError, match="^LLM host capacity fence is unavailable$"):
         capacity.try_acquire(1)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-relative open")
+@pytest.mark.parametrize("winner", ["regular", "missing", "symlink"])
+def test_first_open_race_only_accepts_valid_existing_file(tmp_path, monkeypatch, winner):
+    capacity = HostCapacity(tmp_path / "capacity")
+    real_open = os.open
+    calls = []
+
+    def raced_open(name, flags, *args, **kwargs):
+        calls.append(flags)
+        if len(calls) == 1:
+            if winner == "regular":
+                os.close(real_open(name, flags, *args, **kwargs))
+            elif winner == "symlink":
+                target = tmp_path / "outside"
+                target.write_text("untouched")
+                (capacity.directory / name).symlink_to(target)
+            raise FileNotFoundError(errno.ENOENT, "concurrent first creation", name)
+        return real_open(name, flags, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", raced_open)
+        try:
+            if winner == "regular":
+                lease = capacity.try_acquire(1)
+                assert lease is not None
+                lease.release()
+            else:
+                with pytest.raises(RuntimeError, match="host capacity fence"):
+                    capacity.try_acquire(1)
+        finally:
+            capacity.close()
+    assert len(calls) == 2 and not calls[1] & os.O_CREAT
+    if winner == "symlink":
+        assert (tmp_path / "outside").read_text() == "untouched"
