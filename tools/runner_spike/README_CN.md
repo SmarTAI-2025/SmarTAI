@@ -16,7 +16,7 @@ python tools/runner_spike/harness.py probe --runtime docker
 Oracle 若使用 Podman，把三条命令中的 `docker` 改为 `podman`。只有四项检查
 全部显示 `passed: true` 才算候选运行时通过：
 
-- `production_env_cleared`：宿主进程持有哨兵密钥，但学生代码及容器父进程都没有生产前缀环境变量；
+- `production_env_cleared` 在启动前按容器 ID 检查配置。变量须在允许清单内，镜像自带的 PATH、Python 版本和公开校验信息须与该镜像 ID 的值相同，宿主测试哨兵不得传入。启动后，学生子进程须只收到规定环境，能读自己的环境且因权限被拒绝读取 PID 1 的环境。探针只报告核查结果。
 - `network_disabled`：外部 TCP 和 DNS 都失败；
 - `directory_isolated`：宿主哨兵不可见，根目录、输入、`/tmp`、`/var/tmp`、`/run` 均不可写，只有 `/work` 可写；
 - `process_limit`：超过 `--pids-limit=16` 后创建进程失败。

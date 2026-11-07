@@ -6,11 +6,16 @@ from copy import deepcopy
 
 from fastapi.concurrency import run_in_threadpool
 
-from backend.agents.ingest_agent import _ocr_identity_candidate
+from backend.agents.ingest_agent import recover_native_submission_result, _ocr_identity_candidate
+from backend.models import is_programming_question_type
+from backend.services.programming_submission_mapping import is_source_file, may_contain_source
 from backend.db import assignment_repository, source_outcome_repository, workflow_repository
 from backend.domain.errors import InvalidTransition, NotFound, ValidationError, VersionConflict
 from backend.domain.source_outcomes import safe_source_diagnostic
 from backend.services import task_facade
+from backend.services.submission_archive_ownership import (
+    MULTIPLE_SOURCE_FILES, PROJECT_MESSAGE, archive_code_paths, archive_layout, apply_member_identity,
+)
 from backend.services.submission_source_pipeline import PreparedSubmissionSource, prepare_submission_sources
 from backend.tools.file_processing import ARCHIVE_EXTENSIONS
 
@@ -71,6 +76,7 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
             expected_attempt=row.attempt, expected_checkpoint_revision=row.checkpoint_revision,
             expected_lease_token=row.lease_token, stage="manual_sources",
             checkpoint={"source_state_refs": row.payload["source_state_refs"]}, artifact_refs=origin.artifact_refs)
+        problems = {q.q_id: task_facade._serialize_problem(q) for q in questions}
         if count_handoff:
             saved_source = next((result for result in source_outcome_repository.list_source_results(
                 operation_id=origin.id, owner_id=owner_id, attempt=origin.attempt)
@@ -89,11 +95,21 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
                 content=upload["content"], filename=upload["filename"], content_type=upload["content_type"],
                 owner_id=owner_id, task_id=task_id, job_id=row.id, job_attempt=row.attempt,
                 operation_lease_token=row.lease_token, ocr_skill=None,
-                reuse_source=lambda *_args: True)
+                reuse_source=lambda raw, *_: not may_contain_source(raw.filename, problems))
             # The container fallback means enumeration failed; it is not one student.
             unknown_count = bool(len(sources) == 1 and sources[0].pre_error_code
                 and sources[0].filename == upload["filename"]
                 and upload["filename"].lower().endswith(ARCHIVE_EXTENSIONS))
+        codes, owners, uncertain, blocked = set(), {}, set(), set()
+        mode = upload.get("identity_mode", "filename")
+        programming = any(is_programming_question_type(q.type) for q in questions)
+        if (not unknown_count and upload["filename"].lower().endswith(ARCHIVE_EXTENSIONS)
+                and (programming or any(is_source_file(s.filename) for s in sources))):
+            codes = await archive_code_paths(sources, problems)
+            owners, uncertain, blocked = archive_layout([s.filename for s in sources if not s.pre_error_code], codes,
+                upload.get("roster_entries") if mode == "roster" else [], programming=programming)
+            if all(s.filename in blocked for s in sources):
+                raise InvalidTransition(PROJECT_MESSAGE, code=MULTIPLE_SOURCE_FILES)
         originals = {source.id: source for source in source_outcome_repository.list_sources(
             operation_id=row.id, owner_id=owner_id, attempt=row.attempt)}
         current = workflow_repository.get_operation(row.id, owner_id=owner_id)
@@ -116,8 +132,20 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
         saved_ids = {result.student["stu_id"] for result in reusable.values()}
         recorded_sources = {source.source_id} if unknown_count else set()
         for student_index, source in enumerate(sources):
+            if source.filename in blocked:
+                source_outcome_repository.record_outcome(source_id=source.source_id, owner_id=owner_id,
+                    student_candidate=None, unknown_question_ids=[], retryable=False,
+                    expected_attempt=row.attempt, expected_lease_token=row.lease_token,
+                    status="parse_failed", stable_error_code=source.pre_error_code or MULTIPLE_SOURCE_FILES,
+                    failure_phase=source.failure_phase or "archive", matched_answer_count=0)
+                continue
             saved = reusable.get((source.filename, originals[source.source_id].sha256))
-            if saved is not None:
+            had_saved_identity = saved is not None
+            if source.text and may_contain_source(source.filename, problems):
+                saved = await recover_native_submission_result(source, problems, saved)
+            if saved is not None and saved.student is not None:
+                saved = apply_member_identity(saved, owners.get(source.filename), source.filename in uncertain,
+                    mode if had_saved_identity else "manual_review", native=source.filename in codes)
                 student = deepcopy(saved.student)
                 outcome = dict(status=saved.status, stable_error_code=saved.stable_error_code,
                     failure_phase=saved.failure_phase, matched_answer_count=saved.matched_answer_count)
@@ -129,14 +157,18 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
                     outcome.update(status="parse_failed", stable_error_code=reason, failure_phase=phase)
             else:
                 candidate_id, candidate_name, _ = _ocr_identity_candidate("", source.filename)
+                if source.filename in owners:
+                    hint = owners[source.filename]
+                    candidate_id, candidate_name = hint.student_id, hint.name or "[Unknown Student]"
                 if unknown_count:
                     candidate_id, candidate_name = f"manual-{student_index + 1}", "[Unknown Student]"
                 student = dict(stu_id=candidate_id, stu_name=candidate_name, stu_ans=[],
                     identity_status="needs_review", identity_match_method="manual_review")
-                reason, phase = safe_source_diagnostic("parse_failed", origin.error_code, "recognition")
+                reason, phase = safe_source_diagnostic("parse_failed", saved.stable_error_code if saved else origin.error_code,
+                                                       saved.failure_phase if saved else "recognition")
                 outcome = dict(status="parse_failed", stable_error_code=reason,
                     failure_phase=phase, matched_answer_count=0)
-            if student["stu_id"] in used_ids or (saved is None and student["stu_id"] in saved_ids):
+            if student["stu_id"] in used_ids or (not had_saved_identity and student["stu_id"] in saved_ids):
                 student["stu_id"] = f"{student['stu_id']}-{source.source_id[-8:]}"
                 student["identity_status"] = "needs_review"
             used_ids.add(student["stu_id"])

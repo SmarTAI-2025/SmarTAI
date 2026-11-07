@@ -286,12 +286,32 @@ export function correctionReviewBlocked(correction: Correction): boolean {
 export function correctionReviewAttention(correction: Correction): ReviewAttention {
   if (correctionReviewNextBlocked(correction)) return "blocking";
   return !isCorrectionReviewConfirmed(correction) && (isLowConfidence(correction) || hasPartialExperts(correction) || hasExpertDisagreement(correction)
-    || correctionReviewReasonIds(correction).some(reason => MATH_REVIEW_REASONS.includes(reason))) ? "advisory" : "none";
+    || correctionReviewReasonIds(correction).some(reason => MATH_REVIEW_REASONS.includes(reason) || reason === "programming_extra_boundary")) ? "advisory" : "none";
 }
 
-/** Only an unusable saved score blocks the next stage. */
+const programmingReviewReasons = ["programming_partial_evidence_conflict", "programming_teacher_tests_passed_deduction", "programming_teacher_tests_failed_full_credit",
+  "programming_ai_only", "programming_code_review_only", "programming_interface_only"];
+
+export function pendingProgrammingReview(correction: Correction): string | undefined {
+  const reasons = new Set(correctionReviewReasonIds(correction));
+  for (const expert of correction.expert_results ?? []) {
+    const evidence = expert.programming_evidence;
+    if (expert.error_kind || evidence?.contract !== "smartai.programming_evidence" || evidence.score_status !== "provisional") continue;
+    if (evidence.partial_check?.status === "confirmed") reasons.add("programming_partial_evidence_conflict");
+    if (evidence.score_review_reason && programmingReviewReasons.includes(evidence.score_review_reason)) reasons.add(evidence.score_review_reason);
+    else if (evidence.execution_status !== "executed") reasons.add("programming_code_review_only");
+    else if ((evidence.teacher_tests?.total ?? 0) > 0 && ["target_function_missing", "signature_mismatch"].includes(evidence.primary_reason ?? "")) reasons.add("programming_interface_only");
+    else reasons.add("programming_ai_only");
+  }
+  const reason = programmingReviewReasons.find((id) => reasons.has(id));
+  if (!reason || (validReviewScore(correction.teacher_score, correction.max_score) &&
+      (correction.review_status === "confirmed" || correction.teacher_score !== aiCorrectionScore(correction)))) return undefined;
+  return reason;
+}
+
+
 export function correctionReviewNextBlocked(correction: Correction): boolean {
-  return correctionReviewBlocked(correction);
+  return correctionReviewBlocked(correction) || Boolean(pendingProgrammingReview(correction));
 }
 
 export function validExpertResults(correction: Correction) {
@@ -342,6 +362,13 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
   const english: Record<string, string> = {
     grading_paused: "Paused before grading finished", partial_experts: "Some experts completed",
     high_indecisiveness: "Experts disagree", low_confidence: "Low confidence", score_spread_high: "Large score difference",
+    programming_extra_boundary: "An additional input produced a different result. See the feedback for the example.",
+    programming_partial_evidence_conflict: "The evidence does not support one or more deductions. Check the rubric awards.",
+    programming_teacher_tests_passed_deduction: "All teacher tests passed. Review the suggested deduction against the rubric.",
+    programming_teacher_tests_failed_full_credit: "A teacher test failed. Review the suggestion of full credit against the rubric.",
+    programming_interface_only: "The required function could not be called. Check the score for the implementation.",
+    programming_ai_only: "Only AI-generated tests were run. Confirm or adjust the score.",
+    programming_code_review_only: "Code review only. Confirm or adjust the score.",
     math_scoring_uncertainty: "Scoring evidence needs checking",
     math_expert_disagreement: "Expert disagreement; review suggested.",
     math_verification_conflict: "Verification evidence still needs checking.",
@@ -357,6 +384,13 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     high_indecisiveness: "专家分歧较大",
     minority_veto: "个别模型评分偏离较大",
     low_confidence: "置信度偏低",
+    programming_extra_boundary: "额外输入的结果与标答有别，可在评语中查看样例。",
+    programming_partial_evidence_conflict: "核对发现部分扣分与依据不符，请按教师标准核实分项。",
+    programming_teacher_tests_passed_deduction: "教师用例全部通过，请按评分标准复核模型建议的扣分。",
+    programming_teacher_tests_failed_full_credit: "有教师用例未通过，请按评分标准复核模型建议的满分。",
+    programming_interface_only: "无法按题目要求调用函数，请核对实现思路应得的分数。",
+    programming_ai_only: "仅执行了 AI 生成的用例，请确认或修改分数。",
+    programming_code_review_only: "仅有源码审查结果，请确认或修改分数。",
     math_scoring_uncertainty: "评分依据仍有疑点，建议核对",
     math_expert_disagreement: "专家分歧，建议复核。",
     math_verification_conflict: "核验结果与评分依据待核对。",

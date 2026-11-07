@@ -6,6 +6,11 @@ export function submissionRequiresReupload(sources: SubmissionSourceOutcome[] | 
   return unfinished.length > 0 && unfinished.every(source => source.status === "failed" && source.requires_reupload === true);
 }
 
+export function programmingArchiveGuidance(locale: Locale): string {
+  return tx(locale, "请按每名学生一份完整源码重新打包，用学号和姓名标记文件或学生目录。多文件工程请先整理成独立单文件。",
+    "Repack one self-contained source file per student. Label each file or student folder with the student ID and name. Combine multi-file projects before uploading.");
+}
+
 export interface SubmissionSourceReasonCopy {
   title: string;
   description: string;
@@ -20,6 +25,9 @@ export function getSubmissionSourceReasonCopy(
     title: tx(locale, "教师已完成处理", "Resolved by the teacher"),
     description: tx(locale, "原文件和识别记录已保留。", "Original files and recognition records are retained."),
   };
+  if (source.status === "manual_review" && source.reason_code === "submission_programming_multiple_files") {
+    return REASON_COPY[source.reason_code](locale, source);
+  }
   if (source.status === "manual_review") return {
     title: tx(locale, "识别未完成，等待人工处理", "Recognition incomplete; awaiting manual review"),
     description: tx(locale, "原文件和已完成识别已保留。请逐题补齐作答或确认未作答。", "Originals and completed recognition are preserved. Complete each answer or confirm it is blank."),
@@ -107,6 +115,73 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   operation_cancelled: (locale) => ({
     title: tx(locale, "已手动暂停，尚未完成识别", "Manually paused before recognition completed"),
     description: tx(locale, "原文件和已完成识别已保留。可以继续识别未完成部分，也可以人工继续处理。", "Originals and completed recognition are preserved. Resume the unfinished work or continue manually."),
+  }),
+  invalid_source_role: (locale) => ({
+    title: tx(locale, "资料角色无法识别", "The source role is not recognized"),
+    description: tx(locale, "无法确定这份资料的用途，系统没有按更宽的文件权限读取。", "The source purpose is unknown; broader file permissions were not used."),
+    nextStep: tx(locale, "选择正确的资料用途后重新上传；若仍出现，请联系管理员核对上传入口。", "Choose the correct source purpose and upload again. If this persists, ask an administrator to check the upload entry point."),
+  }),
+  material_ocr_not_allowed_for_role: (locale) => ({
+    title: tx(locale, "此类资料不允许 OCR", "OCR is not allowed for this material role"),
+    description: tx(locale, "评分标准与编程测试资料只允许非视觉读取；本次没有进行 OCR。", "Rubrics and programming tests only allow non-visual reading; no OCR was performed for this attempt."),
+    nextStep: tx(locale, "请上传可复制文字的原生 PDF、TXT 或 MD；编程测试也可使用合法 JSON。", "Upload a native text-based PDF, TXT or MD file. Programming tests may also use valid JSON."),
+  }),
+  programming_tests_json_invalid: (locale) => ({
+    title: tx(locale, "编程测试 JSON 无效", "Programming-test JSON is invalid"),
+    description: tx(locale, "测试资料未通过严格 JSON 数据校验，不会被当作代码执行。", "The test material failed strict JSON data validation and is not treated as executable code."),
+    nextStep: tx(locale, "保存为合法 UTF-8 JSON，修正语法并移除 NaN、Infinity 等非有限数字后重新上传。", "Save valid UTF-8 JSON, fix syntax errors and remove non-finite numbers such as NaN or Infinity, then upload again."),
+  }),
+  source_docx_limit_exceeded: (locale) => fileCopy(locale, "DOCX 超过读取上限", "The DOCX exceeds reading limits", "拆分文档或缩小内嵌资源后重新上传。", "Split the document or reduce embedded resources, then upload again."),
+  source_docx_invalid: (locale) => ({
+    title: tx(locale, "DOCX 文件结构无效", "The DOCX structure is invalid"),
+    description: tx(locale, "文件未通过 Office 容器结构检查；普通 ZIP 改名不能成为 DOCX。", "The file failed Office container checks; renaming an ordinary ZIP does not make it a DOCX."),
+    nextStep: tx(locale, "从原应用重新导出完整、未损坏的文件；也可改用当前用途支持的文字 PDF 或 TXT。", "Export an intact file again from its source application, or use a text-based PDF or TXT supported for this purpose."),
+  }),
+  source_docx_incomplete: (locale) => ({
+    title: tx(locale, "DOCX 内容尚未完整读取", "DOCX reading is incomplete"),
+    description: tx(locale, "原件已保存，但包含当前原生读取无法完整处理的内容；这不是学生答错。", "The original is saved, but some content cannot be read completely by the native reader; this is not a student mistake."),
+    nextStep: tx(locale, "保留完整原件，改用可核对的 PDF／图片或人工复核；不要把缺失编号、图片、域或批注的部分文本当作完整作答。", "Keep the complete original and use a verifiable PDF/image or manual review. Do not treat text missing numbering, images, fields or comments as a complete answer."),
+  }),
+  source_docx_busy: (locale) => ({
+    title: tx(locale, "DOCX 读取正忙", "DOCX extraction is busy"),
+    description: tx(locale, "本次 DOCX 尚未完成读取；这不是学生答错。", "This DOCX has not finished reading; this is not a student mistake."),
+    nextStep: tx(locale, "稍后通过现有重试入口继续读取，不需要为此开启学生代码执行。", "Retry reading later through the existing retry action; student-code execution does not need to be enabled."),
+  }),
+  source_docx_unavailable: (locale) => ({
+    title: tx(locale, "DOCX 读取服务暂时不可用", "The DOCX reader is temporarily unavailable"),
+    description: tx(locale, "服务器未完成原生文档读取。", "The server could not finish reading the document."),
+    nextStep: tx(locale, "稍后重试同一份文件。", "Retry the same file shortly."),
+  }),
+  source_docx_timeout: (locale) => ({
+    title: tx(locale, "DOCX 读取超时", "DOCX extraction timed out"),
+    description: tx(locale, "DOCX 未在读取时限内完成处理；这不是学生答错。", "DOCX reading did not finish within its time limit; this is not a student mistake."),
+    nextStep: tx(locale, "可重试读取；持续失败时保留原件，改用文字 PDF／TXT 或联系管理员。", "Retry reading. If it keeps failing, preserve the original and use a text-based PDF/TXT or contact an administrator."),
+  }),
+  source_empty: (locale) => ({
+    title: tx(locale, "文件为空", "The file is empty"),
+    description: tx(locale, "上传原件没有内容，无法开始读取。", "The uploaded original has no content, so reading cannot start."),
+    nextStep: tx(locale, "检查原文件大小，重新保存有内容的文件后上传。", "Check the original file size, save a file with content and upload again."),
+  }),
+  source_filename_too_long: (locale) => ({
+    title: tx(locale, "文件名过长", "The filename is too long"),
+    description: tx(locale, "文件名超过当前上传入口的长度限制。", "The filename exceeds the length limit for this upload entry point."),
+    nextStep: tx(locale, "缩短文件名并保留正确扩展名，再重新上传。", "Shorten the filename while keeping the correct extension, then upload again."),
+  }),
+  source_text_too_large: (locale) => fileCopy(locale, "正文超过读取上限", "Extracted text exceeds the limit", "请将原文拆分或缩短后重新上传。", "Split or shorten the document and upload it again."),
+  source_too_large: (locale) => ({
+    title: tx(locale, "文件超过上传上限", "The file exceeds the upload limit"),
+    description: tx(locale, "原件大小超过当前资料用途或入口的生效上限。", "The original exceeds the effective size limit for this source purpose or entry point."),
+    nextStep: tx(locale, "按当前入口显示的限制缩小或拆分文件，再重新上传。", "Reduce or split the file to fit the limit shown for this entry point, then upload again."),
+  }),
+  source_type_not_allowed: (locale) => ({
+    title: tx(locale, "此角色不允许该文件类型", "This file type is not allowed for this role"),
+    description: tx(locale, "文件扩展名不在所选资料用途的允许范围内。", "The extension is not allowed for the selected source purpose."),
+    nextStep: tx(locale, "按当前用途的允许格式重新导出；不要仅修改后缀或更换资料分类来绕过限制。", "Export to a format allowed for this purpose; do not merely rename the extension or change its category to bypass the restriction."),
+  }),
+  submission_source_type_not_allowed: (locale) => ({
+    title: tx(locale, "学生作答不允许该文件类型", "This file type is not allowed for student submissions"),
+    description: tx(locale, "这份学生源文件未通过格式检查，不是学生答错或得到零分。", "This student source failed the format check; it is not an incorrect answer or a zero grade."),
+    nextStep: tx(locale, "按学生作答入口的允许格式重新导出；ZIP 内的每份作答也须符合该限制。名单请使用独立名单入口。", "Export to a format allowed by the student-submission entry point. Each answer inside a ZIP must also comply. Use the separate roster entry point for rosters."),
   }),
   image_format_mismatch: recognitionFileCopy,
   image_input_too_large: recognitionLimitCopy,
@@ -401,7 +476,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   source_decode_failed: (locale) => fileCopy(locale, "文本编码无法读取", "The text encoding could not be read", "请把文本另存为 UTF-8，或上传 PDF/图片版本。", "Save the text as UTF-8, or upload a PDF/image version."),
   submission_source_content_type_mismatch: (locale) => fileCopy(locale, "文件内容与扩展名或类型不一致", "The file contents do not match its name or declared type", "不要只修改扩展名；请从原应用重新导出为受支持的 PDF、TXT、JPG、PNG 或 WebP 后上传。", "Do not only rename the extension. Export the file again as a supported PDF, TXT, JPG, PNG, or WebP, then upload it."),
   submission_source_empty: (locale) => fileCopy(locale, "文件没有可识别内容", "The file contains no recognizable content", "检查是否为空白页、空文件或只包含不可见字符。", "Check for a blank page, empty file, or invisible-only content."),
-  submission_source_unsupported: (locale) => fileCopy(locale, "文件类型暂不支持", "This file type is not supported", "转换为 PDF、TXT、MD、MARKDOWN、JPG、JPEG、PNG、BMP、TIF、TIFF 或 WebP 后重新上传。", "Convert it to PDF, TXT, MD, MARKDOWN, JPG, JPEG, PNG, BMP, TIF, TIFF, or WebP and upload again."),
+  submission_source_unsupported: (locale) => fileCopy(locale, "文件类型暂不支持", "This file type is not supported", "请重新上传单文件源码（.py、.c、.cc、.cpp），或支持的 DOCX、PDF、文本、Markdown 或图片。旧版 .doc 请另存为 .docx。", "Upload single-file source (.py, .c, .cc, .cpp), or a supported DOCX, PDF, text, Markdown or image file. Save legacy .doc files as .docx."),
   submission_source_too_large: (locale) => fileCopy(locale, "文件超过处理上限", "The file exceeds the processing limit", "压缩图片，或拆分 PDF/压缩包后重新上传。", "Compress the image or split the PDF/archive, then upload again."),
   ocr_input_invalid: (locale) => fileCopy(locale, "文件内容不是有效的 OCR 输入", "The file is not valid OCR input", "从原应用重新导出文件，不要只修改扩展名。", "Export the file again from its source application; do not only rename the extension."),
   ocr_unsupported_file: (locale) => fileCopy(locale, "百度 OCR 不支持该文件格式", "Baidu OCR does not support this file format", "转换为 PDF、JPG、PNG、BMP 或 TIFF，或更换识别模型。", "Convert it to PDF, JPG, PNG, BMP, or TIFF, or choose another recognition model."),
@@ -425,6 +500,10 @@ const REASON_COPY: Record<string, ReasonFactory> = {
     nextStep: tx(locale, "稍后重试；持续失败时联系管理员，或改用 ZIP 上传。", "Retry later. If it persists, contact an administrator or upload a ZIP instead."),
   }),
   submission_archive_empty: (locale) => archiveCopy(locale, "压缩包中没有学生文件", "The archive contains no student files", "确认压缩包不是空的，且文件没有全部放在系统隐藏目录中。", "Make sure the archive is not empty and files are not all in hidden system folders."),
+  submission_programming_multiple_files: (locale) => ({
+    title: tx(locale, "多份源码的学生归属需要核对", "Check which source files belong to each student"),
+    description: programmingArchiveGuidance(locale),
+  }),
   submission_archive_directories_only: (locale) => archiveCopy(locale, "压缩包中只找到目录，没有学生文件", "The archive contains folders but no student files", "普通多层文件夹可以读取；请确认文件夹中包含 PDF 等受支持文件后重新打包上传。", "Ordinary nested folders are supported. Include supported files such as PDFs inside the folders, then repack and upload."),
   submission_archive_nested_unsupported: (locale) => archiveMemberCopy(locale, "压缩包内仍是压缩包，暂不支持继续解压", "This archive member is another archive and cannot be unpacked", "请先解压内层压缩包，再将其中的 PDF 等受支持文件重新打包上传；可以保留普通文件夹。", "Unpack the inner archive first, then repack its supported files, such as PDFs, and upload again. Ordinary folders can be retained."),
   submission_archive_invalid: (locale) => archiveCopy(locale, "压缩包损坏或结构不安全", "The archive is damaged or unsafe", "请重新打包为未加密的 ZIP 后上传。", "Create a new, unencrypted ZIP and upload it again."),

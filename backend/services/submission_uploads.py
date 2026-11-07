@@ -14,12 +14,15 @@ from backend.db import submission_upload_repository
 from backend.domain.errors import DomainError, ValidationError
 from backend.services.recognition_artifacts import RecognitionArtifactBindingV1
 from backend.services.question_sources import read_question_source
+from backend.services.programming_submission_mapping import is_source_file, native_source
+from backend.services.submission_archive_ownership import MULTIPLE_SOURCE_FILES, PROJECT_MESSAGE, archive_code_paths
+from backend.services.upload_contract import INDIVIDUAL_SUBMISSION_MAX_BYTES, UploadContractError, upload_limit, validate_submission_upload
 from backend.services.stage_provider_routing import StageProviderRoute, stage_provider_configuration_fingerprint
 from backend.storage import get_storage
-from backend.tools.file_processing import extract_raw_files_from_archive, inspect_upload_content
+from backend.tools.file_processing import ARCHIVE_EXTENSIONS, extract_raw_files_from_archive, inspect_upload_content
 from backend.progress.tracker import ProgressReporter
 
-MAX_UPLOAD_BYTES = 64 * 1024 * 1024
+MAX_UPLOAD_BYTES = INDIVIDUAL_SUBMISSION_MAX_BYTES
 MAX_TRANSCRIPT_CHARS = 200_000
 MAX_CANDIDATE_BYTES = 4 * 1024 * 1024
 
@@ -39,11 +42,20 @@ def _read_candidate(storage, stored):
     return json.loads(content)
 
 
+async def _individual_project(members, problems):
+    if len(members) < 2 or any(item.pre_error_code for item in members):
+        return False
+    if len(members) > 24:
+        return sum(is_source_file(item.filename) for item in members) > 1
+    codes = await archive_code_paths(members, problems)
+    return sum(item.filename in codes for item in members) > 1
+
+
 async def recognize_submission_upload(*, assignment_id, student_id, actor_id, source,
                                       filename, content, content_type, provider, registry=None):
     from backend.services.submissions import _build_answers, _problem_store
 
-    if not content or len(content) > MAX_UPLOAD_BYTES:
+    if not content or len(content) > upload_limit("individual_submission_max_bytes", MAX_UPLOAD_BYTES):
         raise ValidationError("Upload exceeds the supported byte limit.", code="submission_upload_limit_exceeded")
     await run_in_threadpool(submission_repository.validate_submission_access,
                             assignment_id, student_id=student_id)
@@ -51,6 +63,10 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
     teacher_id = assignment.teacher_id
     if actor_id not in {teacher_id, student_id}:
         raise ValidationError("Upload actor is not authorized.")
+    try:
+        validate_submission_upload(filename, content)
+    except UploadContractError as exc:
+        raise ValidationError("The submission upload is not allowed.", code=exc.code, details=exc.details) from None
     questions = await run_in_threadpool(assignment_repository.get_questions_by_assignment, assignment_id=assignment_id)
     if not questions:
         raise ValidationError("Assignment has no questions")
@@ -101,6 +117,12 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
                 owner_id=teacher_id, kind="submission_parse_candidate_v1",
                 original_name_prefix=candidate_name, submission_revision_id=revision_id)
             if candidate is not None:
+                # Pre-policy staged candidates may have merged several source files
+                # into one transcript. Check the immutable ZIP before publication.
+                if filename.lower().endswith(ARCHIVE_EXTENSIONS) and not (operation.checkpoint or {}).get("single_source_checked"):
+                    members = await run_in_threadpool(extract_raw_files_from_archive, content, filename, content_type=content_type)
+                    if await _individual_project(members, problems):
+                        raise ValidationError(PROJECT_MESSAGE, code=MULTIPLE_SOURCE_FILES)
                 answers = await run_in_threadpool(_read_candidate, storage, candidate)
             else:
                 if (operation.checkpoint or {}).get("parser_pending"):
@@ -108,7 +130,8 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
                                           code="provider_submit_uncertain")
                 raw_sources = await run_in_threadpool(extract_raw_files_from_archive,
                     content, filename, content_type=content_type)
-                if not raw_sources or len(raw_sources) > 24:
+                project = await _individual_project(raw_sources, problems)
+                if not raw_sources or (len(raw_sources) > 24 and not project):
                     raise ValidationError("A single student upload supports up to 24 source files.",
                                           code="submission_upload_limit_exceeded")
                 originals = await run_in_threadpool(file_repository.list_files,
@@ -128,6 +151,14 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
                     return stored
 
                 await persist_original(filename, content, inspect_upload_content(content, filename, content_type).content_type)
+                if project:
+                    # For larger projects the ZIP itself preserves every original
+                    # path/byte without exceeding the individual member cap.
+                    if len(raw_sources) <= 24:
+                        for item in raw_sources:
+                            await persist_original(item.filename, item.content, item.content_type)
+                    raise ValidationError(PROJECT_MESSAGE, code=MULTIPLE_SOURCE_FILES)
+                native = False
                 texts = []
                 for item in raw_sources:
                     if item.pre_error_code or item.content is None:
@@ -139,20 +170,24 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
                         content=item.content, filename=item.filename, content_type=item.content_type,
                         route=route, registry=registry, stored_file_id=stored.id, purpose="submissions",
                         reporter=reporter, binding=binding)
-                    texts.append(f"[Source file: {item.filename}]\n{result.text}")
+                    if len(raw_sources) == 1:
+                        native = await run_in_threadpool(native_source, item.filename, result.text, problems) is not None
+                    texts.append(result.text if native else f"[Source file: {item.filename}]\n{result.text}")
                     if sum(map(len, texts)) > MAX_TRANSCRIPT_CHARS:
                         raise ValidationError("Submission text exceeds the parse budget; it was not truncated.",
                                               code="submission_upload_limit_exceeded")
-                await checkpoint("submission_parser_pending", parser_pending=True)
+                if not native:
+                    await checkpoint("submission_parser_pending", parser_pending=True)
                 parsed = (await parse_student_answer_sources(
-                    [SubmissionSourceInput(revision_id, originals[0].id, filename, "text/plain", "\n\n".join(texts))],
+                    [SubmissionSourceInput(revision_id, stored.id if native else originals[0].id,
+                        raw_sources[0].filename if native else filename, "text/plain", "\n\n".join(texts))],
                     problems, provider, reporter=reporter, single_attempt=True,
                 ))[0]
                 if parsed.student is None or parsed.unknown_question_ids:
                     raise ValidationError("Answers could not be mapped reliably.",
                                           code=parsed.stable_error_code or "no_matching_answer")
                 raw_answers = parsed.student.get("stu_ans") or []
-                answers = _build_answers({q.q_id: q for q in questions}, raw_answers)
+                answers = _build_answers({q.q_id: q for q in questions}, raw_answers, native_mapping=native)
                 if len({a["q_id"] for a in answers}) != len(answers):
                     raise ValidationError("Duplicate question mapping.", code="no_matching_answer")
                 data = json.dumps(answers, ensure_ascii=False).encode()
@@ -161,7 +196,7 @@ async def recognize_submission_upload(*, assignment_id, student_id, actor_id, so
                 candidate = await run_in_threadpool(file_repository.save_file, storage=storage,
                     owner_id=teacher_id, kind="submission_parse_candidate_v1", original_name=candidate_name,
                     content=data, content_type="application/json", submission_revision_id=revision_id, **fence)
-                await checkpoint("submission_candidate_ready", candidate_id=candidate.id)
+                await checkpoint("submission_candidate_ready", candidate_id=candidate.id, single_source_checked=True)
             current_questions = await run_in_threadpool(assignment_repository.get_questions_by_assignment,
                                                          assignment_id=assignment_id)
             if _digest(_problem_store(current_questions)) != _digest(problems):

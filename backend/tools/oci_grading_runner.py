@@ -23,6 +23,7 @@ import uuid
 
 from backend.config import settings
 from tools.runner_spike.harness import build_container_command
+from tools.runner_spike.worker import FunctionReturnUnavailable, request_digest
 
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,12 @@ logger = logging.getLogger(__name__)
 class IsolatedRunnerUnavailable(RuntimeError):
     def __init__(self):
         super().__init__("programming_execution_unavailable")
+
+
+class NativeBuildUnavailable(IsolatedRunnerUnavailable):
+    def __init__(self, reason):
+        super().__init__()
+        self.reason = reason
 
 
 def launcher_environment() -> dict[str, str]:
@@ -43,6 +50,15 @@ def launcher_environment() -> dict[str, str]:
             raise IsolatedRunnerUnavailable()
         env["DOCKER_HOST"] = docker_host
     return env
+
+
+def _reject_duplicate_fields(pairs):
+    fields = {}
+    for key, value in pairs:
+        if key in fields:
+            raise IsolatedRunnerUnavailable()
+        fields[key] = value
+    return fields
 
 
 async def _bounded_read(stream, limit=300_000):
@@ -60,7 +76,9 @@ async def _command(args, *, timeout, env):
         *args, stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
     )
-    reads = asyncio.gather(_bounded_read(process.stdout), _bounded_read(process.stderr))
+    # Worker JSON can escape each Unicode scalar or control character in all
+    # three bounded channels (stdout, stderr and a function return).
+    reads = asyncio.gather(_bounded_read(process.stdout, 3 * 65_536 * 12 + 4096), _bounded_read(process.stderr))
     try:
         async with asyncio.timeout(timeout):
             stdout, _stderr = await reads
@@ -101,49 +119,97 @@ async def _check_runtime(runtime, env):
         raise IsolatedRunnerUnavailable()
 
 
+def _store_slot(handle, container_name):
+    handle.seek(0)
+    handle.truncate()
+    handle.write(container_name)
+    handle.flush()
+    os.fsync(handle.fileno())
+
+
+async def _remove(runtime, name, env):
+    try:
+        # A cancelled grader must terminate the student immediately. Podman
+        # otherwise waits its container stop timeout, longer than our CLI
+        # deadline, and can leave the container stuck in Stopping.
+        stop = ["--time=0"] if Path(runtime).name == "podman" else []
+        await _command([runtime, "rm", "--force", *stop, name], timeout=10, env=env)
+    except Exception:
+        # --rm may already have removed it. Only a successful, exact absence
+        # query counts as cleanup evidence; a daemon failure is not absence.
+        listed = await _command([runtime, "ps", "--all", "--filter", f"name={name}",
+                                 "--format", "{{.Names}}"], timeout=5, env=env)
+        if listed.strip():
+            raise IsolatedRunnerUnavailable()
+
+
 @contextlib.asynccontextmanager
-async def _host_slot():
-    # flock spans API workers; only this service user's slots are shared. No
-    # student identifiers or source data enter lock filenames. Kernel releases
-    # a slot when a process exits; containers additionally get an inner timeout.
+async def _host_slot(runtime, env, name):
     if fcntl is None:
         raise IsolatedRunnerUnavailable()
     directory = Path(tempfile.gettempdir()) / f"smartai-oci-slots-{os.getuid()}"
     directory.mkdir(mode=0o700, exist_ok=True)
     if directory.is_symlink() or directory.stat().st_uid != os.getuid() or directory.stat().st_mode & 0o077:
         raise IsolatedRunnerUnavailable()
-    handle = None
-    try:
-        while handle is None:
-            for index in range(settings.program_runner_max_concurrent):
-                fd = os.open(directory / str(index), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-                candidate = os.fdopen(fd, "a")
+    quarantined = set()
+    while True:
+        for index in range(settings.program_runner_max_concurrent):
+            if index in quarantined:
+                continue
+            fd = os.open(directory / str(index), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "r+") as handle:
                 try:
-                    fcntl.flock(candidate, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    handle = candidate
-                    break
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
-                    candidate.close()
-            if handle is None:
-                from backend.services.submission_work_budget import wait_for_admission
-                await wait_for_admission(asyncio.sleep(0.05))
-        yield
-    finally:
-        if handle is not None:
-            handle.close()
+                    continue
+                await _check_runtime(runtime, env)
+                previous = handle.read(128)
+                if previous:
+                    if not re.fullmatch(r"smartai-oci-[0-9a-f]{32}", previous):
+                        quarantined.add(index)
+                        continue
+                    try:
+                        await _remove(runtime, previous, env)
+                    except Exception:
+                        quarantined.add(index)
+                        continue
+                # Durable before launch, including on process death. Failure to
+                # remove the old container keeps this capacity quarantined.
+                _store_slot(handle, name)
+                try:
+                    yield
+                finally:
+                    cleanup = asyncio.create_task(_remove(runtime, name, env))
+                    try:
+                        await asyncio.shield(cleanup)
+                    except asyncio.CancelledError:
+                        await cleanup
+                        _store_slot(handle, "")
+                        raise
+                    _store_slot(handle, "")
+                return
+        if len(quarantined) >= settings.program_runner_max_concurrent:
+            raise IsolatedRunnerUnavailable()
+        from backend.services.submission_work_budget import wait_for_admission
+        await wait_for_admission(asyncio.sleep(.05))
 
 
-async def _remove(runtime, name, env):
-    with contextlib.suppress(Exception):
-        await _command([runtime, "rm", "--force", name], timeout=5, env=env)
+async def run_python_oci(code, test_input="", *, timeout=5.0, memory_mb=256, max_output_chars=8192,
+                         function_call=None, bind_request=True):
+    return await run_program_oci(code, test_input, language="python", timeout=timeout, memory_mb=memory_mb,
+                                 max_output_chars=max_output_chars, function_call=function_call, bind_request=bind_request)
 
 
-async def run_python_oci(code, test_input="", *, timeout=5.0, memory_mb=256, max_output_chars=8192):
+async def run_program_oci(code, test_input="", *, language, timeout=5.0, memory_mb=256,
+                          max_output_chars=8192, function_call=None, bind_request=True):
     from backend.models import TestCase
     from backend.services.submission_work_budget import active_work
     from backend.tools.code_interpreter import TestResult
     from backend.tools.grading_runner import RunnerResult
     if settings.program_runner_mode != "oci":
+        raise IsolatedRunnerUnavailable()
+    native = language in {"c", "cpp"}
+    if language != "python" and (not native or function_call is not None or not bind_request):
         raise IsolatedRunnerUnavailable()
     runtime = shutil.which(settings.program_runner_runtime)
     if not runtime or not settings.program_runner_image:
@@ -153,17 +219,20 @@ async def run_python_oci(code, test_input="", *, timeout=5.0, memory_mb=256, max
     execution_id = uuid.uuid4().hex
     name = f"smartai-oci-{execution_id}"
     payload = {"schema_version": 1, "execution_id": execution_id, "task_type": "programming",
-               "language": "python", "code": code, "test_input": test_input, "test_cases": [],
+               "language": language, "code": code, "test_input": test_input, "test_cases": [],
                "limits": {"timeout_seconds": timeout, "memory_mb": memory_mb, "max_output_chars": max_output_chars}}
-    encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    if function_call is not None:
+        payload["function_call"] = function_call
+        bind_request = True
+    if bind_request:
+        payload["bind_request"] = True
+    digest = request_digest(payload)
+    encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
     if len(encoded) > 256 * 1024:
         raise IsolatedRunnerUnavailable()
     try:
         env = launcher_environment()
-        async with _host_slot(), active_work():
-            # Capability checks launch a CLI too; keep them under the same
-            # host-wide cap so large assignments cannot spawn an info storm.
-            await _check_runtime(runtime, env)
+        async with _host_slot(runtime, env, name), active_work():
             with tempfile.TemporaryDirectory(prefix="smartai-oci-") as tmp:
                 request = Path(tmp) / "request.json"
                 request.write_bytes(encoded)
@@ -171,31 +240,73 @@ async def run_python_oci(code, test_input="", *, timeout=5.0, memory_mb=256, max
                 args = build_container_command(runtime=runtime, image=settings.program_runner_image,
                     request_file=request, container_name=name, memory_mb=memory_mb)
                 args[2:2] = ["--pull=never", "--log-driver=none", f"--memory-swap={memory_mb}m", "--label=smartai.isolated-runner=true"]
-                try:
-                    raw = await _command(args, timeout=timeout + 12, env=env)
-                    # Strict model; do not accept a trailing forged result after
-                    # malformed output, a different execution ID, or host mode.
-                    result = RunnerResult.model_validate_json(raw)
-                    if result.execution_id != execution_id or result.isolation_mode != "oci_container" or not result.executed:
-                        raise IsolatedRunnerUnavailable()
-                    if result.exit_reason not in {"success", "runtime_error", "timeout", "output_limit", "syntax_error"}:
-                        raise IsolatedRunnerUnavailable()
-                    if len(result.stdout) > max_output_chars or len(result.stderr) > max_output_chars:
-                        raise IsolatedRunnerUnavailable()
-                    return TestResult(test=TestCase(input=test_input), passed=result.exit_reason == "success",
-                        actual_output=result.stdout, error=result.stderr, duration_ms=result.duration_ms,
-                        exit_reason=result.exit_reason.value, stdout_truncated=result.stdout_truncated,
-                        stderr_truncated=result.stderr_truncated, isolation_mode="oci_container")
-                finally:
-                    # Cancellation must not release capacity while a container
-                    # still runs. Cleanup is shielded and awaited before return.
-                    cleanup = asyncio.create_task(_remove(runtime, name, env))
-                    try:
-                        await asyncio.shield(cleanup)
-                    except asyncio.CancelledError:
-                        await cleanup
-                        raise
-    except asyncio.CancelledError:
+                if native:
+                    args.insert(2, "--tmpfs=/binary:rw,exec,nosuid,nodev,size=8m,mode=1777")
+                if bind_request:
+                    args.insert(2, "--cgroupns=private")
+                raw = await _command(args, timeout=timeout + (45 if native else 12), env=env)
+                # Strict model; do not accept a trailing forged result after
+                # malformed output, a different execution ID, or host mode.
+                # Pydantic accepts repeated keys by choosing the last. Reject
+                # ambiguity in evidence before validating the strict wire types.
+                json.loads(raw, object_pairs_hook=_reject_duplicate_fields)
+                result = RunnerResult.model_validate_json(raw, strict=True)
+                mandatory = {"schema_version", "execution_id", "executed", "exit_reason", "passed_count", "total_count",
+                             "stdout", "stderr", "duration_ms", "resource_status", "isolation_mode"}
+                if not mandatory.issubset(result.model_fields_set):
+                    raise IsolatedRunnerUnavailable()
+                if (native and not result.executed and result.execution_id == execution_id
+                        and result.isolation_mode == "oci_container" and result.request_digest == digest
+                        and result.exit_reason in {"toolchain_unavailable", "native_main_required", "native_header_unavailable"}
+                        and result.resource_status == "not_executed" and result.total_count == result.passed_count == 0):
+                    raise NativeBuildUnavailable(result.exit_reason.value)
+                if (function_call is not None and not result.executed and result.execution_id == execution_id
+                        and result.isolation_mode == "oci_container" and result.request_digest == digest
+                        and result.exit_reason == "internal_error" and result.resource_status == "not_executed"
+                        and result.total_count == result.passed_count == 0
+                        and result.stderr == "programming_return_value_unavailable"):
+                    raise FunctionReturnUnavailable()
+                if result.execution_id != execution_id or result.isolation_mode != "oci_container" or not result.executed:
+                    raise IsolatedRunnerUnavailable()
+                allowed = {"success", "runtime_error", "timeout", "output_limit"}
+                if native:
+                    allowed.update({"compile_error", "link_error"})
+                else:
+                    allowed.add("syntax_error")
+                if bind_request:
+                    allowed.update({"memory_limit", "pid_limit"})
+                if function_call is not None:
+                    allowed.update({"target_function_missing", "signature_mismatch"})
+                if result.exit_reason not in allowed:
+                    raise IsolatedRunnerUnavailable()
+                success = result.exit_reason == "success"
+                if (result.total_count != 1 or result.passed_count != int(success)
+                        or (bind_request and result.request_digest != digest)
+                        or (success and (result.stdout_truncated or result.stderr_truncated))
+                        or ((function_call is not None and success) != (result.return_value is not None))
+                        or (result.return_value is not None and len(result.return_value) > max_output_chars)):
+                    raise IsolatedRunnerUnavailable()
+                expected_status = {"compile_error": "unknown", "link_error": "unknown", "success": "within_limits", "runtime_error": "unknown", "syntax_error": "unknown",
+                                   "timeout": "timeout", "output_limit": "output_limit",
+                                   "target_function_missing": "unknown", "signature_mismatch": "unknown",
+                                   "memory_limit": "memory_limit_exceeded", "pid_limit": "pid_limit_exceeded"}
+                if result.resource_status != expected_status[result.exit_reason.value]:
+                    raise IsolatedRunnerUnavailable()
+                if (result.process_exit_code is not None and result.termination_signal is not None
+                        or success and (result.termination_signal is not None or result.process_exit_code not in (None, 0))
+                        or result.exit_reason == "memory_limit" and not result.cgroup_oom_kills
+                        or result.exit_reason == "pid_limit" and not result.cgroup_pid_denials):
+                    raise IsolatedRunnerUnavailable()
+                if len(result.stdout) > max_output_chars or len(result.stderr) > max_output_chars:
+                    raise IsolatedRunnerUnavailable()
+                return TestResult(test=TestCase(input=test_input), passed=success, resource_status=result.resource_status.value,
+                    actual_output=result.stdout, stdout=result.stdout, return_value=result.return_value,
+                    process_exit_code=result.process_exit_code, termination_signal=result.termination_signal,
+                    cgroup_oom_kills=result.cgroup_oom_kills, cgroup_pid_denials=result.cgroup_pid_denials,
+                    execution_id=execution_id, request_digest=digest, error=result.stderr, duration_ms=result.duration_ms,
+                    exit_reason=result.exit_reason.value, stdout_truncated=result.stdout_truncated,
+                    stderr_truncated=result.stderr_truncated, isolation_mode="oci_container")
+    except (asyncio.CancelledError, NativeBuildUnavailable, FunctionReturnUnavailable):
         raise
     except Exception as exc:
         raise IsolatedRunnerUnavailable() from exc

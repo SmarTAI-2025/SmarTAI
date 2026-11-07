@@ -279,8 +279,12 @@ async def test_baidu_uses_same_durable_boundary_and_retains_unknown_usage(tmp_pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("format,mime", [("BMP", "image/bmp"), ("TIFF", "image/tiff")])
-async def test_existing_single_frame_formats_use_same_safe_worker(tmp_path, monkeypatch, format, mime):
+@pytest.mark.parametrize("format,mime,allowed", [
+    ("PNG", "image/png", True), ("JPEG", "image/jpeg", True),
+    ("BMP", "image/bmp", True), ("TIFF", "image/tiff", True),
+    ("WEBP", "image/webp", True),
+])
+async def test_upload_image_formats_follow_role_contract(tmp_path, monkeypatch, format, mime, allowed):
     from backend.db import file_repository
     _agent, request, _data, results = setup(tmp_path)
     stream = io.BytesIO()
@@ -292,11 +296,20 @@ async def test_existing_single_frame_formats_use_same_safe_worker(tmp_path, monk
     provider, _engine = llm(text="1. x = -2")
     registry = SimpleNamespace(list_configs=lambda: [dict(provider_id=provider.provider_id, enabled=True)])
     monkeypatch.setattr(question_sources, "get_storage", lambda: results.store.storage)
-    result = await question_sources.read_question_source(
+    args = dict(
         owner_id=request.source.owner_id, task_id=request.source.business_id, content=data,
         filename=stored.original_name, content_type=mime, stored_file_id=stored.id,
         route=StageProviderRoute(route_id=provider.provider_id, kind="llm", provider=provider), registry=registry,
     )
+    if not allowed:
+        with pytest.raises(RecognitionError) as caught:
+            await question_sources.read_question_source(**args)
+        assert caught.value.code == "source_type_not_allowed"
+        provider.ainvoke_vision.assert_not_awaited()
+        with results.store.storage.open(stored.storage_key) as original:
+            assert original.read() == data
+        return
+    result = await question_sources.read_question_source(**args)
     assert result.text == "1. x = -2" and provider.ainvoke_vision.await_count == 1
     assert provider.ainvoke_vision.call_args.args[1][0].media_type == "image/png"
 

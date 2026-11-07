@@ -1,4 +1,5 @@
 """Regression for the real Demo's prepared stdin/function interface mismatch."""
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,10 +16,11 @@ async def test_prepared_generated_cases_call_function_and_preserve_real_failure(
                               function_args=[xs], expected_return=expected)
                       for xs, expected in [([], "[]"), ([0, 0], "[0.5, 0.5]"),
                                            ([1000, 1000], "[0.5, 0.5]")]]
-    stored = ([TestCase(source="llm_generated", input="[0,0]", expected_output="[0.5,0.5]")]
+    stored = ([TestCase(source="llm_generated", input=json.dumps(c.function_args[0]),
+                        expected_output=c.expected_return) for c in function_cases]
               if legacy else function_cases)
     problem = ProblemInfo(q_id="q1", number="1", type="编程题", max_score=10,
-        stem="Implement the required function:\ndef stable_softmax(xs):\n    ...", criterion="Numerical stability", test_cases=stored)
+        stem="Implement the required function:\ndef stable_softmax(xs):\nxs is a list of numbers.", criterion="Numerical stability", test_cases=stored)
     answer = StudentAnswerInfo(q_id="q1", number="1", type="编程题", content=(
         "import math\ndef stable_softmax(xs):\n"
         "    if not xs: return []\n    exps = [math.exp(x) for x in xs]\n"
@@ -42,9 +44,9 @@ async def test_prepared_generated_cases_call_function_and_preserve_real_failure(
     assert "AI-generated" in result.comment
     assert "teacher-provided" not in result.comment
     prompt = grade.call_args.kwargs["user_prompt"]
-    assert "SANDBOX_RAN_LLM_FUNCTION_CALL_CASES" in prompt
+    assert json.loads(prompt)["case_examples"][0]["outcome"] == "runtime_error"
     assert "OverflowError" in reports[0].results[2].error
-    assert generate.await_count == int(legacy)
+    generate.assert_not_awaited()  # Adapt even historical saved rows without replacing their expectations.
     assert problem.test_cases == stored  # Do not rewrite saved teacher material.
 
 

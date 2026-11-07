@@ -1,0 +1,55 @@
+{
+  "problem": "实现 def sum_positive(nums): 返回列表中严格大于0的整数之和；重复值逐个计入，空列表返回0；长度0..100，元素-1000..1000。与PY-F03可共用一份完整源码及helper。",
+  "rubric": "重复值贡献正确4分；正负筛选的数值贡献正确2分（零贡献为0，允许等价的>=0实现）；非重复普通求和正确2分；约定函数接口和空序列返回正确2分。\nsum(set(...))丢重复值只扣重复值4分，不能因为4/5通过而给8分；确认缺交0分。",
+  "solution_code": "def sum_positive(nums):\n    return sum(x for x in nums if x > 0)\n",
+  "submitted_source": "def sum_positive(nums):\n    return sum(set(x for x in nums if x > 0))\n",
+  "max_score": 10.0,
+  "case_examples": [
+    {
+      "case_id": "233367abb25af23f79f735f7341f3ddad3c0fb71f3632c3cd0adf08ff1856227",
+      "case_label": "case-4",
+      "source": "teacher",
+      "outcome": "wrong_answer",
+      "call_arguments": "{\"args\": [[2, 2, 3]], \"kwargs\": {}}",
+      "expected": "7",
+      "actual": "5",
+      "case_number": 4
+    },
+    {
+      "case_id": "41fef459a16036318b078480d653303086c31fe1a5391ed21a0d1a3631956dcd",
+      "case_label": "case-1",
+      "source": "teacher",
+      "outcome": "passed",
+      "call_arguments": "{\"args\": [[]], \"kwargs\": {}}",
+      "expected": "0",
+      "actual": "0"
+    },
+    {
+      "case_id": "9938e9408e3954c92fbe4bf2785bca60a5ac18ac0f163b13c3504005a3079160",
+      "case_label": "case-2",
+      "source": "teacher",
+      "outcome": "passed",
+      "call_arguments": "{\"args\": [[1, 2, 3]], \"kwargs\": {}}",
+      "expected": "6",
+      "actual": "6"
+    },
+    {
+      "case_id": "27036132080c115166f840a92e52107452aef897034d012b8245aaf51230134b",
+      "case_label": "case-3",
+      "source": "teacher",
+      "outcome": "passed",
+      "call_arguments": "{\"args\": [[-2, 0, 5]], \"kwargs\": {}}",
+      "expected": "5",
+      "actual": "5"
+    },
+    {
+      "case_id": "e932a9215b7eb6e53de6d1946b7a680d3f106b1cf0f9a1a3e08c138c056ab648",
+      "case_label": "case-5",
+      "source": "teacher",
+      "outcome": "passed",
+      "call_arguments": "{\"args\": [[-4, -1]], \"kwargs\": {}}",
+      "expected": "0",
+      "actual": "0"
+    }
+  ]
+}

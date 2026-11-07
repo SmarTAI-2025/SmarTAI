@@ -1,0 +1,33 @@
+
+> smartai-react-app@0.1.0 e2e
+> npm run typecheck:e2e && playwright test e2e/question-analysis-materials.spec.ts --output=/private/tmp/smartai-u2-browser/existing-results
+
+
+> smartai-react-app@0.1.0 typecheck:e2e
+> tsc -p tsconfig.e2e.json
+
+[WebServer] (node:62181) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] (node:62274) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 14 tests using 1 worker
+
+(node:62279) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/question-analysis-materials.spec.ts:72:5 › six function samples and unconfirmed sources en-US 1440 (1.6s)
+  ✓   2 [chromium] › e2e/question-analysis-materials.spec.ts:72:5 › six function samples and unconfirmed sources en-US 390 (1.2s)
+  ✓   3 [chromium] › e2e/question-analysis-materials.spec.ts:108:3 › stdin, nested arguments, empty and missing fields en-US (1.9s)
+  ✓   4 [chromium] › e2e/question-analysis-materials.spec.ts:138:5 › source and material lifecycle ai en-US (4.3s)
+  ✓   5 [chromium] › e2e/question-analysis-materials.spec.ts:138:5 › source and material lifecycle imported en-US (4.3s)
+  ✓   6 [chromium] › e2e/question-analysis-materials.spec.ts:138:5 › source and material lifecycle recognized en-US (4.2s)
+  ✓   7 [chromium] › e2e/question-analysis-materials.spec.ts:138:5 › source and material lifecycle teacher en-US (4.3s)
+  ✓   8 [chromium] › e2e/question-analysis-materials.spec.ts:72:5 › six function samples and unconfirmed sources zh-CN 1440 (1.2s)
+  ✓   9 [chromium] › e2e/question-analysis-materials.spec.ts:72:5 › six function samples and unconfirmed sources zh-CN 390 (1.2s)
+  ✓  10 [chromium] › e2e/question-analysis-materials.spec.ts:108:3 › stdin, nested arguments, empty and missing fields zh-CN (1.9s)
+  ✓  11 [chromium] › e2e/question-analysis-materials.spec.ts:138:5 › source and material lifecycle ai zh-CN (4.2s)
+  ✓  12 [chromium] › e2e/question-analysis-materials.spec.ts:138:5 › source and material lifecycle imported zh-CN (4.3s)
+  ✓  13 [chromium] › e2e/question-analysis-materials.spec.ts:138:5 › source and material lifecycle recognized zh-CN (4.3s)
+  ✓  14 [chromium] › e2e/question-analysis-materials.spec.ts:138:5 › source and material lifecycle teacher zh-CN (4.3s)
+
+  14 passed (55.1s)

@@ -33,8 +33,8 @@ import type { SubmissionIdentityMode } from "@/types";
 
 const SUBMISSION_SUFFIXES = [
   ".zip", ".rar", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
-  ".txt", ".md", ".markdown", ".pdf", ".jpg", ".jpeg", ".png",
-  ".bmp", ".tif", ".tiff", ".webp",
+  ".txt", ".md", ".markdown", ".docx", ".pdf", ".jpg", ".jpeg", ".png",
+  ".bmp", ".tif", ".tiff", ".webp", ".py", ".c", ".cc", ".cpp",
 ] as const;
 const SUBMISSION_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
 const ROSTER_SUFFIXES = [".csv", ".tsv", ".txt"] as const;
@@ -576,7 +576,7 @@ function localizeSubmissionError(
   const code = submissionErrorCode(error);
   if (code === "submission_retry_requires_reupload") return userFacingError(error, locale);
   if (code === "submission_source_unsupported") return t("submissionUploadUnsupported");
-  if (code.startsWith("submission_roster_")) return userFacingError(error, locale);
+  if (code.startsWith("source_docx_") || code.startsWith("submission_roster_")) return userFacingError(error, locale);
   // Keep immediate HTTP validation consistent with background file failures.
   // Only known file repairs and processing retries use the shared guidance;
   // unknown HTTP errors retain the safe generic fallback below.

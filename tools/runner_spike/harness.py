@@ -24,6 +24,21 @@ CONTAINER_STARTUP_GRACE_SECONDS = 10.0
 SPIKE_TICKET = "XTS-W1-RUNNER-SPIKE"
 RUNNER_DIR = Path(__file__).resolve().parent
 _SECRET_ENV_NAME = "SMARTAI_SPIKE_PRODUCTION_SECRET"
+# Independent acceptance policy for the child's complete environment.
+_PROBE_CHILD_ENV = {
+    "HOME": "/work", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+    "PATH": "/usr/local/bin:/usr/bin:/bin", "TMPDIR": "/work",
+    "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1", "PYTHONHASHSEED": "0",
+}
+# The supervisor also inherits the official Python image metadata and OCI
+# runtime defaults. Reject extra variables, unexpected values and the canary.
+_PROBE_CONFIG_PATTERNS = {
+    **{key: re.escape(value) for key, value in _PROBE_CHILD_ENV.items()},
+    "PATH": r"(?:(?:/usr/local|/usr)?/s?bin:)*(?:/usr/local|/usr)?/s?bin",
+    "HOSTNAME": "smartai-runner", "container": "podman|docker",
+    "GPG_KEY": "[A-Fa-f0-9]{40}", "PYTHON_SHA256": "[a-f0-9]{64}",
+    "PYTHON_VERSION": r"[0-9]+\.[0-9]+\.[0-9]+",
+}
 _ABSOLUTE_PATH_RE = re.compile(r"(?<![\w.])/(?:[^/\s\"'():,]+/)+[^/\s\"'():,]+")
 
 
@@ -188,12 +203,60 @@ def _remove_container(runtime: str, container_name: str) -> None:
         pass
 
 
+def _checked_probe_env(entries: Any, canary: str) -> dict[str, str]:
+    if not isinstance(entries, list):
+        raise RunnerSpikeError("invalid probe container environment")
+    values = {}
+    for entry in entries:
+        if not isinstance(entry, str):
+            raise RunnerSpikeError("invalid probe container environment")
+        key, sep, value = entry.partition("=")
+        pattern = _PROBE_CONFIG_PATTERNS.get(key)
+        if (not sep or key in values or pattern is None
+                or not re.fullmatch(pattern, value) or canary in value):
+            raise RunnerSpikeError("unexpected probe container environment; values withheld")
+        values[key] = value
+    return values
+
+
+def _verified_env_probe_start(command: list[str], env: dict[str, str]) -> list[str]:
+    """Inspect the exact container we will start, without exposing its env in the report."""
+    runtime = command[0]
+
+    def query(args: list[str]) -> str:
+        return subprocess.check_output([runtime, *args], env=env, stdin=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL, timeout=10, text=True).strip()
+
+    try:
+        container_id = query(["create", *command[2:]])
+        if not re.fullmatch(r"[0-9a-f]{64}", container_id):
+            raise RunnerSpikeError("invalid probe container identity")
+        metadata = query(["container", "inspect", "--format", "{{.Image}} {{json .Config.Env}}", container_id])
+        image_id, _, entries = metadata.partition(" ")
+        if not re.fullmatch(r"(?:sha256:)?[0-9a-f]{64}", image_id):
+            raise RunnerSpikeError("invalid probe image identity")
+        configured = _checked_probe_env(json.loads(entries), env[_SECRET_ENV_NAME])
+        image_env = query(["image", "inspect", "--format", "{{json .Config.Env}}", image_id])
+        base = _checked_probe_env(json.loads(image_env), env[_SECRET_ENV_NAME])
+    except (OSError, subprocess.SubprocessError, ValueError):
+        raise RunnerSpikeError("could not verify the probe container environment") from None
+
+    if _PROBE_CHILD_ENV.keys() - configured.keys():
+        raise RunnerSpikeError("incomplete probe container environment")
+    # The runtime must not substitute a host value under an allowed image key.
+    for key in ("PATH", "GPG_KEY", "PYTHON_SHA256", "PYTHON_VERSION"):
+        if configured.get(key) != base.get(key):
+            raise RunnerSpikeError("probe environment differs from the image; values withheld")
+    return [runtime, "start", "--attach", container_id]
+
+
 def run_request(
     request: dict[str, Any],
     *,
     runtime: str,
     image: str = DEFAULT_IMAGE,
     launcher_env: dict[str, str] | None = None,
+    verify_probe_env: bool = False,
 ) -> dict[str, Any]:
     """Run one request with an outer wall timeout and guaranteed cleanup."""
 
@@ -218,6 +281,10 @@ def run_request(
             memory_mb=memory_mb,
         )
         try:
+            if verify_probe_env:
+                if not launcher_env or not launcher_env.get(_SECRET_ENV_NAME):
+                    raise RunnerSpikeError("missing probe launcher canary")
+                command = _verified_env_probe_start(command, launcher_env)
             completed = subprocess.run(
                 command,
                 stdin=subprocess.DEVNULL,
@@ -282,31 +349,20 @@ def run_probe(*, runtime: str, image: str = DEFAULT_IMAGE) -> dict[str, Any]:
 
     checks: list[dict[str, Any]] = []
     launcher_env = os.environ.copy()
-    launcher_env[_SECRET_ENV_NAME] = "must-not-cross-container-boundary"
+    launcher_env[_SECRET_ENV_NAME] = uuid.uuid4().hex
 
-    env_code = f"""import json, os
+    env_code = f"""import errno, json, os
 from pathlib import Path
-prefixes = ("SMARTAI_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "GOOGLE_",
-            "ZHIPU_", "DATABASE_", "AWS_", "S3_")
-
-def forbidden_keys(names):
-    return sorted(name for name in names
-                  if name.startswith(prefixes) or name == "JWT_SECRET")
-
-child_forbidden = forbidden_keys(os.environ)
+child_clean = dict(os.environ) == {_PROBE_CHILD_ENV!r}
+self_readable = b"HOME=/work" in Path("/proc/self/environ").read_bytes().split(bytes([0]))
 try:
-    parent_entries = Path("/proc/1/environ").read_bytes().split(b"\\0")
-    parent_names = [entry.split(b"=", 1)[0].decode(errors="replace")
-                    for entry in parent_entries if b"=" in entry]
-    parent_forbidden = forbidden_keys(parent_names)
-    parent_readable = True
-except OSError:
-    parent_forbidden = []
-    parent_readable = False
-print(json.dumps({{"sentinel_present": {_SECRET_ENV_NAME!r} in os.environ,
-                  "child_forbidden_keys": child_forbidden,
-                  "parent_forbidden_keys": parent_forbidden,
-                  "parent_readable": parent_readable}}, sort_keys=True))
+    # Opening is enough to detect exposure; never read or print secret bytes.
+    with open("/proc/1/environ", "rb"):
+        parent_denied = False
+except OSError as exc:
+    parent_denied = exc.errno in (errno.EACCES, errno.EPERM)
+print(json.dumps({{"child_environment_clean": child_clean, "self_environ_readable": self_readable,
+                  "parent_is_pid1": os.getppid() == 1, "parent_environ_access_denied": parent_denied}}))
 """
     network_code = """import json, socket
 tcp_blocked = False
@@ -362,10 +418,9 @@ print(json.dumps({{"host_visible": host_visible,
             (
                 "production_env_cleared",
                 env_code,
-                lambda detail: detail.get("sentinel_present") is False
-                and detail.get("child_forbidden_keys") == []
-                and detail.get("parent_forbidden_keys") == []
-                and detail.get("parent_readable") is True,
+                lambda detail: all(detail.get(key) is True for key in (
+                    "child_environment_clean", "self_environ_readable", "parent_is_pid1", "parent_environ_access_denied"
+                )),
                 5.0,
             ),
             (
@@ -388,14 +443,19 @@ print(json.dumps({{"host_visible": host_visible,
             ),
         ]
         for name, code, predicate, timeout in probe_specs:
+            verify_env = name == "production_env_cleared"
             try:
                 response = run_request(
                     _base_request(f"spike:{name}", code, timeout=timeout),
                     runtime=runtime,
                     image=image,
                     launcher_env=launcher_env,
+                    verify_probe_env=verify_env,
                 )
-                checks.append(_probe_result(name, response, predicate))
+                check = _probe_result(name, response, predicate)
+                if verify_env and isinstance(check["detail"], dict):
+                    check["detail"]["configured_environment_verified"] = True
+                checks.append(check)
             except RunnerSpikeError as exc:
                 checks.append({"name": name, "passed": False, "detail": str(exc)})
 

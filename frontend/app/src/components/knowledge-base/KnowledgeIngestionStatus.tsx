@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronRight, Pause, Play, RefreshCw, RotateCcw } from "lucide-react";
 import { getJSON, postJSON, postMultipart } from "@/api/client";
 import type { KnowledgeIngestionSummary } from "@/types/personalKnowledge";
-import { backgroundErrorTitle } from "@/lib/taskActionGuards";
+import { backgroundErrorTitle, userFacingError } from "@/lib/taskActionGuards";
 import { useFrontierWorkspace } from "@/lib/frontierContext";
 import { listStageProviders } from "@/api/experts";
 import { modelDisplayName, sortByProvider } from "@/lib/modelPresentation";
@@ -109,7 +109,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
     <div className="mt-2 max-w-xs space-y-2 break-words">
       {summary.total_pages ? <p>{zh ? "可检索 / 空白 / 未完整识别" : "Searchable / blank / incomplete"}: {summary.searchable_pages ?? 0} / {summary.blank_pages ?? 0} / {summary.failed_pages ?? 0}</p> : null}
       {summary.partially_searchable_pages ? <p>{zh ? "可检索页中仍有内容缺口" : "Searchable pages with content gaps"}: {summary.partially_searchable_pages}</p> : null}
-      {summary.error_code ? <p role="status">{backgroundErrorTitle(summary.error_code, zh ? "zh-CN" : "en-US")}</p> : null}
+      {summary.error_code ? <p role="status">{summary.error_code.startsWith("source_docx_") ? userFacingError(summary.error_code, zh ? "zh-CN" : "en-US") : backgroundErrorTitle(summary.error_code, zh ? "zh-CN" : "en-US")}</p> : null}
       <div className="max-h-60 space-y-2 overflow-y-auto">
         {coverage?.pages.filter((page) => !["searchable", "searchable_with_warning", "blank_confirmed"].includes(page.state)).map((page) => <p key={page.page_number}>{page.page_number}: {pageStateLabel(page.state, zh)}{page.error_code ? ` · ${backgroundErrorTitle(page.error_code, zh ? "zh-CN" : "en-US")}` : ""}</p>)}
       </div>

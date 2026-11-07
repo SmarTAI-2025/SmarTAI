@@ -1,0 +1,681 @@
+{
+  "kind": "real Chromium UI with fixed API responses; no actual persistence, model, or OCI",
+  "source_sha": "4ac06c80299196d94d6a490984ebe03f5329072f",
+  "frontend": "http://127.0.0.1:5188",
+  "backend": "http://127.0.0.1:8188",
+  "started_at": "2026-10-28T06:23:58.887Z",
+  "real_model_calls": 0,
+  "real_oci_executions": 0,
+  "checks": [
+    {
+      "id": "UI-01",
+      "result": "pass",
+      "observation": "stdin editor sends exact input/output and reads fixed API saved state after reload/reopen",
+      "persisted_in_real_backend": false
+    },
+    {
+      "id": "UI-05",
+      "result": "pass",
+      "observation": "Unsaved stdin edits show the original cancellation dialog; discarding sends no PUT, retains the fixed API saved cases/revision, and reload/reopen restores the saved values",
+      "unsaved_input": "9\n9\n",
+      "unsaved_expected_output": "18",
+      "saved_cases": [
+        {
+          "input": "5\n7\n",
+          "expected_output": "12",
+          "source": "teacher",
+          "visibility": "example",
+          "sandbox_feasible": true,
+          "description": "U2 synthetic stdin"
+        }
+      ],
+      "put_count_before": 1,
+      "put_count_after": 1,
+      "workflow_revision_before": 2,
+      "workflow_revision_after": 2,
+      "evidence_layer": "real browser controls and fixed API state only",
+      "persisted_in_real_backend": false
+    },
+    {
+      "id": "UI-02",
+      "result": "pass",
+      "observation": "Synthetic 409 save rejected; editor keeps unsaved value and fixed API saved value remains unchanged"
+    },
+    {
+      "id": "UI-03",
+      "result": "existing_gap_reproduced",
+      "observation": "Function viewer uses function_args/expected_return, editor only changes input/expected_output; saved function fields remain original",
+      "function_editor_initial": {
+        "input": "",
+        "expected_output": ""
+      },
+      "saved_case": {
+        "input": "[5]",
+        "expected_output": "5",
+        "function_name": "fib",
+        "function_args": [
+          0
+        ],
+        "expected_return": "0",
+        "io_mode": "function",
+        "source": "teacher",
+        "sandbox_feasible": true
+      },
+      "viewer_after_reload": [
+        "[\n  0\n]",
+        "0"
+      ],
+      "real_execution": "not tested here"
+    },
+    {
+      "id": "UI-04",
+      "result": "pass",
+      "observation": "Empty test list is visibly incomplete; does not display successful execution evidence"
+    },
+    {
+      "id": "UI-result-normal",
+      "result": "rendered_fixture",
+      "score_from_fixture": 10,
+      "comment_from_fixture": "U2 模拟结果：正常作答，固定响应10分。",
+      "finalization_from_fixture": {
+        "task_id": "u2-browser",
+        "task_status": "graded",
+        "workflow_revision": 3,
+        "remaining_review_count": 0,
+        "required_review_count": 0,
+        "confirmed_required_count": 0,
+        "remaining_reviews": [],
+        "ready_for_confirmation": true,
+        "final_result_version": 0,
+        "final_result_dirty": false,
+        "analysis_status": "not_generated",
+        "available_result_versions": 0
+      },
+      "result_route_observed": "/tasks/u2-browser/results/questions/q1",
+      "analysis_blocked_for_required_review": false,
+      "confirmation_evidence": null,
+      "observed_body": [
+        "result-normal.txt",
+        "review-normal.txt"
+      ],
+      "implication": "Only display and fixture-driven review gate verified, not scoring correctness or actual failure attribution"
+    },
+    {
+      "id": "UI-result-partial",
+      "result": "rendered_fixture",
+      "score_from_fixture": 6,
+      "comment_from_fixture": "U2 模拟结果：边界错误，固定响应6分。",
+      "finalization_from_fixture": {
+        "task_id": "u2-browser",
+        "task_status": "graded",
+        "workflow_revision": 3,
+        "remaining_review_count": 0,
+        "required_review_count": 0,
+        "confirmed_required_count": 0,
+        "remaining_reviews": [],
+        "ready_for_confirmation": true,
+        "final_result_version": 0,
+        "final_result_dirty": false,
+        "analysis_status": "not_generated",
+        "available_result_versions": 0
+      },
+      "result_route_observed": "/tasks/u2-browser/results/questions/q1",
+      "analysis_blocked_for_required_review": false,
+      "confirmation_evidence": null,
+      "observed_body": [
+        "result-partial.txt",
+        "review-partial.txt"
+      ],
+      "implication": "Only display and fixture-driven review gate verified, not scoring correctness or actual failure attribution"
+    },
+    {
+      "id": "UI-result-student-error",
+      "result": "rendered_fixture",
+      "score_from_fixture": 0,
+      "comment_from_fixture": "U2 模拟结果：学生代码运行异常。",
+      "finalization_from_fixture": {
+        "task_id": "u2-browser",
+        "task_status": "graded",
+        "workflow_revision": 3,
+        "remaining_review_count": 0,
+        "required_review_count": 0,
+        "confirmed_required_count": 0,
+        "remaining_reviews": [],
+        "ready_for_confirmation": true,
+        "final_result_version": 0,
+        "final_result_dirty": false,
+        "analysis_status": "not_generated",
+        "available_result_versions": 0
+      },
+      "result_route_observed": "/tasks/u2-browser/results/questions/q1",
+      "analysis_blocked_for_required_review": false,
+      "confirmation_evidence": null,
+      "observed_body": [
+        "result-student-error.txt",
+        "review-student-error.txt"
+      ],
+      "implication": "Only display and fixture-driven review gate verified, not scoring correctness or actual failure attribution"
+    },
+    {
+      "id": "UI-result-execution-failure",
+      "result": "rendered_fixture",
+      "score_from_fixture": null,
+      "comment_from_fixture": "U2 模拟结果：执行平台不可用，不能据此扣分。",
+      "finalization_from_fixture": {
+        "task_id": "u2-browser",
+        "task_status": "graded",
+        "workflow_revision": 3,
+        "remaining_review_count": 1,
+        "required_review_count": 1,
+        "confirmed_required_count": 0,
+        "remaining_reviews": [
+          {
+            "student_id": "S1",
+            "q_id": "q1",
+            "reasons": [
+              "llm_failed"
+            ],
+            "confirmed": false
+          }
+        ],
+        "ready_for_confirmation": false,
+        "final_result_version": 0,
+        "final_result_dirty": false,
+        "analysis_status": "not_generated",
+        "available_result_versions": 0
+      },
+      "result_route_observed": "/tasks/u2-browser/review",
+      "analysis_blocked_for_required_review": true,
+      "confirmation_evidence": {
+        "displayed_score": "无有效分数",
+        "final_score_input": "",
+        "review_status_displayed": "缺少有效分数 · 需处理",
+        "validation_message": "SmarTAI 没有生成有效分数，请先手动输入最终分。",
+        "task_write_count_before": 3,
+        "task_write_count_after": 3,
+        "task_write_requests_added": [],
+        "evidence_layer": "real UI validation with fixed API fixture; no actual scoring, persistence or publication"
+      },
+      "observed_body": [
+        "result-execution-failure.txt",
+        "review-execution-failure.txt"
+      ],
+      "implication": "Only display and fixture-driven review gate verified, not scoring correctness or actual failure attribution"
+    }
+  ],
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/source-files"
+    },
+    {
+      "method": "PUT",
+      "path": "/tasks/u2-browser/problems/q1",
+      "body": {
+        "test_cases": [
+          {
+            "input": "5\n7\n",
+            "expected_output": "12",
+            "source": "teacher",
+            "visibility": "example",
+            "sandbox_feasible": true,
+            "description": "U2 synthetic stdin"
+          }
+        ],
+        "expected_workflow_revision": 1
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/source-files"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/source-files"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/activity",
+      "body": {}
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/source-files"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/activity",
+      "body": {}
+    },
+    {
+      "method": "PUT",
+      "path": "/tasks/u2-browser/problems/q1",
+      "body": {
+        "test_cases": [
+          {
+            "input": "5\n7\n",
+            "expected_output": "13",
+            "source": "teacher",
+            "visibility": "example",
+            "sandbox_feasible": true,
+            "description": "U2 synthetic stdin"
+          }
+        ],
+        "expected_workflow_revision": 2
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/source-files"
+    },
+    {
+      "method": "PUT",
+      "path": "/tasks/u2-browser/problems/q1",
+      "body": {
+        "test_cases": [
+          {
+            "input": "[5]",
+            "expected_output": "5",
+            "function_name": "fib",
+            "function_args": [
+              0
+            ],
+            "expected_return": "0",
+            "io_mode": "function",
+            "source": "teacher",
+            "sandbox_feasible": true
+          }
+        ],
+        "expected_workflow_revision": 2
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/source-files"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/source-files"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/source-files"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/result"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/finalization"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/result"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/finalization"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/activity",
+      "body": {}
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/result"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/finalization"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/result"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/finalization"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/activity",
+      "body": {}
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/result"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/finalization"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/result"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/finalization"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/activity",
+      "body": {}
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/result"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/finalization"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/result"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/teacher_comments"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/finalization"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/experts/available"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/result"
+    },
+    {
+      "method": "GET",
+      "path": "/tasks/u2-browser/finalization"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/activity",
+      "body": {}
+    }
+  ],
+  "unexpected_requests": [],
+  "external_attempts": [],
+  "console": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 409 (Conflict)"
+    }
+  ],
+  "page_errors": [],
+  "served_build": {
+    "app_dir": "/Users/annie/.codex/worktrees/programming-u2-baseline/SmarTAI/frontend/app",
+    "index_sha256": "0324ef723fc1d79e61f93043cbe26470f73d58d1e2c957dbf7c3e91d3ae16091",
+    "scripts": [
+      {
+        "path": "/assets/app-DHOxLo2l.js",
+        "sha256": "e4c4fd00e5551ca01e5189315160d3488a40470fda366b5f1551964afb6a4dec"
+      }
+    ],
+    "package_lock_sha256": "7ae4c47ef046edf34986bd07bd7d7ad7bb9e6e85223d43d5e49cb74e3c900dea",
+    "verification": "local dist index and scripts byte-identical to HTTP responses before browser launch"
+  },
+  "console_classification": "Expected single HTTP 409 console error from deliberately rejected save; no framework/runtime page errors",
+  "completed": true,
+  "finished_at": "2026-10-28T06:24:12.005Z"
+}

@@ -10,7 +10,7 @@ from backend.skills.math_grading import MathAssessment, Claim, EvidenceJudgment
 from backend.tests.test_calculation_skill import _make_problem as calc_problem, _make_answer as calc_answer
 from backend.tests.test_programming_skill import _make_problem as prog_problem, _make_answer as prog_answer, PYTHON_ADD_CODE
 from backend.tools import knowledge
-from backend.tools.code_interpreter import ExecutionReport
+from backend.tools.code_interpreter import ExecutionReport, TestResult as CaseResult
 
 
 @pytest.mark.asyncio
@@ -26,7 +26,7 @@ async def test_selected_textbook_is_reference_only_and_has_system_citations(monk
 
     async def grade(route, **kwargs):
         assert route is provider
-        prompts.append(kwargs["user_prompt"])
+        prompts.append((kwargs["system_prompt"] + "\n" if kind == "programming" else "") + kwargs["user_prompt"])
         if kind == "calculation":
             return (MathAssessment(route_id="holistic", route_reason="Apply the original standard",
                     claims=[Claim(id="c", quote="6 * 7 = 42", verdict="supported", reason="Correct arithmetic")],
@@ -47,7 +47,8 @@ async def test_selected_textbook_is_reference_only_and_has_system_citations(monk
 
         async def sandbox(code, test_cases, **kwargs):
             assert code == PYTHON_ADD_CODE and test_cases == cases
-            return ExecutionReport(passed_count=1, total_count=1, pass_rate=1, results=[], summary="pass")
+            return ExecutionReport(passed_count=1, total_count=1, pass_rate=1, results=[
+                CaseResult(test_cases[0], True, "3", "", 1, exit_reason="success")], summary="pass")
 
         monkeypatch.setattr("backend.skills.programming.run_sandbox", sandbox)
         skill = ProgrammingSkill(provider, task_id="grading-run:frozen")

@@ -1,0 +1,41 @@
+{
+  "steps": [
+    {
+      "step_no": 1,
+      "desc": "重复值贡献正确：学生使用set(x for x in nums if x > 0)去重，导致重复值（如[2,2,3]）只计入一次，实际应计入两次，因此重复值贡献错误。",
+      "max_points": 4,
+      "score": 0,
+      "is_correct": false
+    },
+    {
+      "step_no": 2,
+      "desc": "正负筛选的数值贡献正确：函数正确筛选大于0的数值，零值不参与，符合正负筛选要求，此部分正确。",
+      "max_points": 2,
+      "score": 2,
+      "is_correct": true
+    },
+    {
+      "step_no": 3,
+      "desc": "非重复普通求和正确：函数对正数求和，但因使用set导致重复值被去重，未实现‘重复值逐个计入’，因此求和过程错误。",
+      "max_points": 2,
+      "score": 0,
+      "is_correct": false
+    },
+    {
+      "step_no": 4,
+      "desc": "约定函数接口和空序列返回正确：函数签名和空列表返回0均正确，符合要求。",
+      "max_points": 2,
+      "score": 2,
+      "is_correct": true
+    }
+  ],
+  "max_score": 10.0,
+  "confidence": 0.98,
+  "deduction_basis": [
+    "failed_teacher_cases: 4, rubric_quote: '重复值贡献正确4分；sum(set(...))丢重复值只扣重复值4分，不能因为4/5通过而给8分；确认缺交0分。', source_quote: 'return sum(set(x for x in nums if x > 0))'"
+  ],
+  "boundary_case": {
+    "args": [2, 2, 3],
+    "expected": 7
+  }
+}
