@@ -460,6 +460,11 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
 }) {
   const originalScore = String(problem.max_score ?? 10);
   const originalCriterion = problem.criterion ?? "";
+  const legacyRubricNotes = (problem.preparation_issues ?? [])
+    .filter(issue => issue.code === "math_rubric_advisory" && issue.status === "open"
+      && issue.details?.reason !== "teacher_rule_interpretation")
+    .map(issue => issue.details?.message)
+    .filter((message): message is string => typeof message === "string" && Boolean(message.trim()));
   const manualEditing = useManualEditor(problem, ["criterion"]);
   const [editing, setEditing] = useState(manualEditing && !readOnly);
   const [scoreDraft, setScoreDraft] = useState(originalScore);
@@ -564,6 +569,10 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           <RubricPointStatus summary={savedSummary} locale={locale} />
         </div>
       )}
+      {legacyRubricNotes.length > 0 && <aside role="note" className="mt-4 rounded-md bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
+        <h4 className="font-semibold">{tx(locale, "评分标准待核对", "Rubric details to review")}</h4>
+        {[...new Set(legacyRubricNotes)].map(note => <p key={note} className="mt-1 whitespace-pre-line">{note}</p>)}
+      </aside>}
       {Boolean(problem.alternative_rules?.length) && <div className="mt-4 space-y-2 border-t pt-3">
         <h4 className="text-sm font-semibold">{tx(locale, "其他解法评分标准", "Scoring alternative methods")}</h4>
         {problem.alternative_rules?.map(part => <div key={part.id} className="text-sm leading-6">
