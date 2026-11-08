@@ -158,3 +158,71 @@ async def test_byok_image_probe_observes_saved_interval_even_in_a_fresh_schedule
         await asyncio.gather(task, return_exceptions=True)
         if scheduler._adaptive_refresh_task:
             await scheduler._adaptive_refresh_task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("platform_url", ["", "https://api.openai.com/v1", "https://api.openai.com/v1/"])
+@pytest.mark.parametrize("training_source", ["byok", "platform"])
+async def test_matching_platform_and_byok_share_cooldown_but_learn_from_their_own_calls(
+    monkeypatch, platform_url, training_source,
+):
+    from backend.tests.test_adaptive_admission_lifecycle import seed, MASTER_KEY
+
+    config, stored = seed("my-key")
+    monkeypatch.setattr(settings, "provider_encryption_key", MASTER_KEY)
+    monkeypatch.setattr(settings, "shared_pool_enabled", True)
+    monkeypatch.setattr(settings, "openai_api_key", config.api_key)
+    monkeypatch.setattr(settings, "openai_model", config.model)
+    monkeypatch.setattr(settings, "openai_api_base", platform_url)
+    for name in ("gemini", "zhipu", "anthropic", "deepseek", "moonshot", "qwen"):
+        monkeypatch.setattr(settings, name + "_api_key", "")
+    monkeypatch.setattr("backend.llm.registry._shared_pool_usage.consume", lambda *args, **kwargs: None)
+    platform = ExpertRegistry(shared_owner_id="anonymous").pick_default()
+    owner = _build_scoped_registry(SimpleNamespace(id="my-key", role="teacher")).get(stored.id)
+    clock = FakeClock()
+    scheduler = ModelScheduler(clock=clock, host_capacity=FakeHost(), memory_reader=lambda: None)
+    monkeypatch.setattr(providers, "get_scheduler", lambda: scheduler)
+    sends = []
+    async def invoke(*args, **kwargs):
+        sends.append(clock())
+        if len(sends) == 1:
+            raise providers.ProviderRequestError("provider_rate_limited", status_code=429)
+        return AIMessage(content="ok")
+    monkeypatch.setattr(providers.OpenAIProvider, "_get_client", AsyncMock(return_value=SimpleNamespace(ainvoke=invoke)))
+    trainer, other = (owner, platform) if training_source == "byok" else (platform, owner)
+    messages = [HumanMessage(content="read")]
+    with pytest.raises(providers.ProviderRequestError, match="provider_rate_limited"):
+        await trainer.ainvoke(messages)
+    # Either source must wait out a 429 from the same underlying quota.
+    admitted = asyncio.Event()
+    acquire = scheduler.acquire
+    async def observe(**kwargs):
+        admitted.set()
+        return await acquire(**kwargs)
+    monkeypatch.setattr(scheduler, "acquire", observe)
+    queued = asyncio.create_task(other.ainvoke(messages))
+    try:
+        await asyncio.wait_for(admitted.wait(), 2)
+        clock.advance(64, scheduler)
+        for _ in range(8):
+            await asyncio.sleep(0)
+        assert sends == [100]
+        clock.advance(1, scheduler)
+        await asyncio.wait_for(queued, 2)
+        assert sends == [100, 165]
+        # Only the source with three successes may save a provisional estimate.
+        for _ in range(3):
+            clock.advance(2, scheduler)
+            await trainer.ainvoke(messages)
+        clock.advance(2, scheduler)
+        await other.ainvoke(messages)
+        _, fingerprint = platform._provider._adaptive_source
+        owned = repository.get_provider_config("my-key", stored.id, master_key=MASTER_KEY).adaptive_limits
+        shared = repository.load_adaptive_states({"p": (None, fingerprint)})["p"]["profile"]
+        assert (owned is not None) == (training_source == "byok")
+        assert (shared is not None) == (training_source == "platform")
+    finally:
+        queued.cancel()
+        await asyncio.gather(queued, return_exceptions=True)
+        if scheduler._adaptive_refresh_task:
+            await scheduler._adaptive_refresh_task

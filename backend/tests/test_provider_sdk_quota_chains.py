@@ -45,14 +45,25 @@ def response_body(kind):
 
 
 @pytest.fixture
-def http_response(monkeypatch):
+def http_response(monkeypatch, scheduler):
     """Intercept both transports used by the locked SDKs, before any network I/O."""
     from google.genai._api_client import BaseApiClient
     monkeypatch.setattr(BaseApiClient, "_use_aiohttp", lambda self: False)
     state = {"body": {}, "calls": 0}
+    grants = 0
+    acquire = scheduler.acquire
+    async def counted_acquire(**kwargs):
+        nonlocal grants
+        permit = await acquire(**kwargs)
+        grants += 1
+        return permit
+    monkeypatch.setattr(scheduler, "acquire", counted_acquire)
 
     def send(self, request, **kwargs):
         state["calls"] += 1
+        # These SDK scenarios execute one logical call at a time. A retry
+        # inside the SDK, or outside admission, has no new permit for its send.
+        assert scheduler.active == 1 and grants == state["calls"]
         module = httpx2 if isinstance(request, httpx2.Request) else httpx
         return module.Response(429, request=request, json=state["body"], headers={"retry-after": "1"})
 
