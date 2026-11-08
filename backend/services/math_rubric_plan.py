@@ -10,6 +10,7 @@ import json
 import re
 import unicodedata
 from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
@@ -24,6 +25,7 @@ from backend.services.math_strictness import Adjustment, strictness_policy
 
 SCHEMA_VERSION = "math_rubric_v3"
 INTERPRETATION_VERSION = "math_rubric_interpretation_v8"
+SUBPART_ALLOCATION = "explicit_subpart_allocation"
 Score = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Text = Annotated[str, Field(min_length=1, max_length=20000)]
 
@@ -46,6 +48,10 @@ class MathRubricExemption(BaseModel):
     id: Text
     description: Text
     source_quote: Text
+
+
+def _allocated_points(items) -> Decimal:
+    return sum((Decimal(str(item.points)) for item in items), Decimal(0))
 
 
 class MathRubricRoute(BaseModel):
@@ -135,9 +141,7 @@ class MathRubricPlan(_Explanation):
         for route in self.routes:
             if Decimal(str(route.minimum_score)) > maximum:
                 raise ValueError("minimum exceeds the question maximum")
-            if route.mode == "points" and sum(
-                (Decimal(str(item.points)) for item in route.items), Decimal(0)
-            ) != maximum:
+            if route.mode == "points" and _allocated_points(route.items) != maximum:
                 raise ValueError("point allocations must equal the question maximum")
         if self.binary_policy is not None:
             from backend.services.binary_scoring import freeze_binary_policy
@@ -281,15 +285,192 @@ def _build_plan(context: dict, explanation: _Explanation, *, status="compiled", 
     return MathRubricPlan(plan_id=_content_hash(payload), **payload)
 
 
+@dataclass(frozen=True)
+class _PartBudget:
+    label: str
+    stem: str
+    points: Decimal
+    quote: str
+    steps: tuple[tuple[str, Decimal], ...] = ()
+
+
+def _subpart_budgets(context) -> list[_PartBudget]:
+    """Recognize complete source budgets. Unrecognized text remains with the general compiler."""
+    if context["type"] not in {"计算题", "推理题", "概念题", "其他", "其它"}:
+        return []
+    rule = context["criterion"]
+    amount = rf"({_NUMBER})"
+    match = re.fullmatch(
+        rf"(?:每(?:个|道)?\s*(?:小问|小题|问)\s*(?:为|占|计)?\s*{amount}\s*分"
+        rf"|each\s+(?:subquestion|sub-question|subpart|part)\s+(?:is\s+worth\s+)?{amount}\s+(?:points?|marks?)"
+        rf"|{amount}\s+(?:points?|marks?)\s+(?:per|for each)\s+(?:subquestion|sub-question|subpart|part))[。.]?",
+        unicodedata.normalize("NFKC", rule).strip(), re.I)
+    if not match and not re.match(r"(?:第|小问|part)?\s*[(（]", rule.lstrip(), re.I):
+        return []
+    from backend.services.question_structure import build_major_question_structure
+
+    parsed = build_major_question_structure(context, major_order=0).subparts
+    parts = [(p.label, p.stem) for p in parsed]
+    structure = context["question_structure"]
+    if structure and structure["subparts"]:
+        saved = [(p["label"], p["stem"]) for p in structure["subparts"]]
+        if parts and saved != parts:
+            return []
+        parts = saved
+    if (not 2 <= len(parts) <= 80 or len(rule) > 20000
+            or any(not isinstance(label, str) or not label.strip() or not isinstance(stem, str)
+                   or not stem.strip() or len(label) + len(stem) + 1 > 20000 for label, stem in parts)
+            or len({unicodedata.normalize("NFKC", label).strip().casefold() for label, _ in parts}) != len(parts)):
+        return []
+    try:
+        if match:
+            unit = _number_value(next(value for value in match.groups() if value is not None))
+            budgets = [_PartBudget(label, stem, unit, rule) for label, stem in parts]
+        else:
+            budgets = _listed_part_budgets(rule, parts)
+    except ValueError:
+        return []
+    if (not budgets or any(b.points <= 0 for b in budgets)
+            or _allocated_points(budgets) != Decimal(str(context["max_score"]))):
+        return []
+    by_label = {b.label: b.points for b in budgets}
+    for label, points in context["teacher_subpart_points"].items():
+        if not re.fullmatch(r"\d+(?:\.\d+)?", points) or by_label.get(label) != Decimal(points):
+            return []
+    return budgets
+
+
+_INCLUDES = re.compile(r"其中|包括|包含|分解为|分配为|\bincluding\b|\bof which\b", re.I)
+
+
+def _listed_part_budgets(rule, parts):
+    """Explicit labelled subtotals, optionally followed by an included list of scored steps."""
+    from backend.services.question_structure import _allocation_marker_pattern
+
+    headers = []
+    for label, stem in parts:
+        marker = _allocation_marker_pattern(label)
+        matches = list(re.finditer(rf"(?:^|(?<=[。；;\n]))\s*{marker}\s*[:：]?\s*(?:共|满分)?\s*"
+                                   rf"({_NUMBER})\s*(?:分|points?\b|marks?\b)", rule, re.I))
+        if len(matches) != 1:
+            return []
+        headers.append((matches[0], label, stem))
+    headers.sort(key=lambda h: h[0].start())
+    if rule[:headers[0][0].start()].strip():
+        return []
+    budgets = {}
+    for i, (header, label, stem) in enumerate(headers):
+        end = headers[i + 1][0].start() if i + 1 < len(headers) else len(rule)
+        quote = rule[header.start():end].strip(" \t\r\n。；;")
+        tail = rule[header.end():end].strip(" \t\r\n,，:：。；;.")
+        points = _number_value(header[1])
+        steps = []
+        if tail:
+            intro = _INCLUDES.match(tail)
+            if not intro:
+                return []
+            for clause in _source_clauses(tail[intro.end():].lstrip(" :：")):
+                step = re.fullmatch(rf"(.+?)\s*({_NUMBER})\s*(?:分|points?\b|marks?\b)", clause, re.I)
+                if (not step or len(_scoring_amounts(clause)) != 1
+                        or any(p.search(clause) for p in (_DEDUCTION, _CAP_MARKER, _FLOOR_MARKER, _EXEMPTION, _POLICY_LIMITATION))
+                        or re.search(r"若|如果|否则|例如|举例|\b(?:if|otherwise|example)\b", clause, re.I)):
+                    return []
+                steps.append((clause, _number_value(step[2])))
+            if (not steps or any(v <= 0 for _, v in steps) or len(dict(steps)) != len(steps)
+                    or sum((v for _, v in steps), Decimal(0)) != points):
+                return []
+        budgets[label] = _PartBudget(label, stem, points, quote, tuple(steps))
+    return [budgets[label] for label, _ in parts]
+
+
+def _labelled_items(items, label):
+    from backend.services.question_structure import _allocation_marker_pattern
+
+    marker = re.compile(_allocation_marker_pattern(label), re.I)
+    return [item for item in items if marker.match(item.description.lstrip())
+            or item.description.lstrip().startswith(label + " ")]
+
+
+def _budget_items(route, budget):
+    leaves = _labelled_items(route.items, budget.label)
+    if len({item.description.strip() for item in leaves}) != len(leaves):
+        raise ValueError("ambiguous_source_allocation")
+    if route.mode != "points" or _allocated_points(leaves) != budget.points:
+        raise ValueError("source_allocation_changed_or_omitted")
+    if any(item.source_quote and not match_source_quote(budget.quote, item.source_quote) for item in leaves):
+        raise ValueError("source_allocation_changed_or_omitted")
+    if budget.steps:
+        ordered = []
+        used = set()
+        for clause, value in budget.steps:
+            named = _AMOUNT.sub("", clause).strip()
+            matches = [item for item in leaves if Decimal(str(item.points)) == value
+                       and clause in item.source_quote and (named in item.description
+                           or sum(step in item.source_quote for step, _ in budget.steps) == 1)]
+            exact = [item for item in matches if item.description.strip() == f"{budget.label} {clause}"]
+            matches = exact or matches
+            if len(matches) != 1 or matches[0].id in used:
+                raise ValueError("source_allocation_changed_or_omitted")
+            used.add(matches[0].id)
+            ordered.append(matches[0])
+        if len(used) != len(leaves):
+            raise ValueError("unsourced_additional_allocation")
+        return ordered
+    return leaves
+
+
+def subpart_plan(context, *, teacher_notes="", candidate=None) -> MathRubricPlan | None:
+    if teacher_notes.strip() and candidate is None:
+        return None
+    budgets = _subpart_budgets(context)
+    if not budgets or sum(max(len(b.steps), 1) for b in budgets) > 80:
+        return None
+    rule = context["criterion"]
+    if candidate is not None and len(candidate.routes) == 1:
+        route = candidate.routes[0]
+        if route.mode == "points" and len(route.items) <= 80:
+            proposal = _Explanation(**candidate.model_dump(include={
+                "routes", "follow_through", "numerical_policy", "advisories"}),
+                effective_criterion=getattr(candidate, "effective_criterion", rule))
+            try:
+                canonical = _validated_explanation(context, proposal)
+            except ValueError:
+                pass  # Keep the explicit parent budgets if the proposed finer ledger cannot be grounded.
+            else:
+                route = canonical.routes[0]
+                ordered = tuple(item for b in budgets for item in _budget_items(route, b))
+                canonical = canonical.model_copy(update={"routes": (route.model_copy(update={"items": ordered}),)})
+                return _build_plan(context, canonical, reason=SUBPART_ALLOCATION)
+    if teacher_notes.strip():
+        return None  # Additional teacher policies need their verified interpretation.
+    items = []
+    for i, b in enumerate(budgets, 1):
+        for j, (description, points) in enumerate(b.steps or ((b.stem, b.points),), 1):
+            items.append(MathRubricItem(id=f"sp{i}.{j}" if b.steps else f"sp{i}",
+                description=f"{b.label} {description}", points=float(points),
+                source_quote=b.quote, source=context["criterion_source"]))
+    explanation = _Explanation(effective_criterion=(
+        "Assess each labelled part independently. Explain only that part in its award. "
+        "The program totals the ordered awards."),
+        routes=(MathRubricRoute(id="subparts", description=rule, applies_when="always", mode="points", items=items),),
+        follow_through=_FOLLOW_THROUGH, numerical_policy=_NUMERICAL_POLICY)
+    _validate_source_rules(context, explanation)
+    return _build_plan(context, explanation, reason=SUBPART_ALLOCATION)
+
+
 def fallback_math_rubric_plan(problem, *, reason="unavailable_item_allocation", grading_setup=None,
                              bind_preferences=True) -> MathRubricPlan:
-    """No model call. Preserve all source restrictions in a holistic plan."""
+    """Use a verified allocation when available, otherwise preserve the complete original rule."""
     from backend.services.rubric_drafts import saved_draft, bind_draft, retarget_draft
     prior = saved_draft(problem, grading_setup=grading_setup)
     if prior is not None:
         return (bind_draft(prior, problem, grading_setup=grading_setup) if bind_preferences
                 else retarget_draft(prior, problem).plan)
     context = _question_input(problem)
+    setup = _mapping(grading_setup) if grading_setup is not None else {}
+    explicit = subpart_plan(context, teacher_notes=str(setup.get("teacher_notes") or ""))
+    if explicit:
+        return _with_preferences(explicit, grading_setup) if bind_preferences else explicit
     plan = _build_plan(context, _Explanation(
         effective_criterion=(
             "Apply the original criterion as a whole within the question maximum. Preserve its "
@@ -362,6 +543,10 @@ holistic: empty items, use when the restrictions cannot reliably fit a numeric i
 criterion. Never erase a rule merely to fit the schema.
 
 Each item needs an id, description, source_quote, points, source=provided|ai, max_occurrences.
+For an explicit subpart budget, start each contributing item's description with its original part
+label. If the work warrants multiple steps, divide that part's budget among its steps. Include
+only scored leaves, never the parent subtotal as an additional award. A finer allocation absent
+from the teacher's rubric is AI-supplied and must not be attributed to a teacher quotation.
 description is readable display text; source_quote independently quotes the original rule,
 including its amount and any repetition limit, without translation or mathematical formatting.
 Use an empty source_quote only for a genuine AI addition with no original allocation.
@@ -879,7 +1064,8 @@ def _validate_source_rules(context: dict, explanation: _Explanation) -> None:
                for route in explanation.routes):
             raise ValueError("holistic_policies_must_remain_in_source")
         return
-    floor_rules, allocations = _source_requirements(context)
+    budgets = _subpart_budgets(context)
+    floor_rules, allocations = ([], []) if budgets else _source_requirements(context)
     for route in explanation.routes:
         if route.mode == "holistic":
             if route.minimum_score:
@@ -893,6 +1079,11 @@ def _validate_source_rules(context: dict, explanation: _Explanation) -> None:
         elif route.minimum_score:
             raise ValueError("invented_minimum")
         covered_ids = set()
+        for budget in budgets:
+            leaves = _budget_items(route, budget)
+            if any(item.id in covered_ids for item in leaves):
+                raise ValueError("ambiguous_source_allocation")
+            covered_ids.update(item.id for item in leaves)
         for clause, mode, value in allocations:
             matches = [item for item in route.items if route.mode == mode
                        and clause in item.source_quote and Decimal(str(item.points)) == value]
@@ -901,7 +1092,7 @@ def _validate_source_rules(context: dict, explanation: _Explanation) -> None:
             if len(matches) != 1 or matches[0].id in covered_ids:
                 raise ValueError("ambiguous_source_allocation")
             covered_ids.update(item.id for item in matches)
-        if allocations and covered_ids != {item.id for item in route.items}:
+        if (allocations or budgets) and covered_ids != {item.id for item in route.items}:
             raise ValueError("unsourced_additional_allocation")
         for item in route.items:
             if route.mode == "deductions":
@@ -981,7 +1172,8 @@ provider failures retain the existing execution/retry semantics.
     )
     try:
         try:
-            _source_requirements(context)
+            if not _subpart_budgets(context):
+                _source_requirements(context)
         except ValueError as exc:
             if str(exc) in _UNREPRESENTABLE_RULES:
                 failures.append(str(exc))
@@ -1000,9 +1192,11 @@ provider failures retain the existing execution/retry semantics.
     else:
         canonical = _validated_explanation(context, explanation)
         holistic = all(route.mode == "holistic" for route in canonical.routes)
-        plan = _build_plan(context, canonical,
-            status="holistic" if holistic else ("repaired" if failures else "compiled"),
-            reason=failures[0] if failures else ("model_selected_holistic" if holistic else ""))
+        plan = subpart_plan(context, teacher_notes=preferences["teacher_notes"], candidate=canonical)
+        if plan is None:
+            plan = _build_plan(context, canonical,
+                status="holistic" if holistic else ("repaired" if failures else "compiled"),
+                reason=failures[0] if failures else ("model_selected_holistic" if holistic else ""))
         # Authenticated setup is part of plan identity; question hash remains
         # question-only. Fallback applies the same settings above.
         if bind_preferences:

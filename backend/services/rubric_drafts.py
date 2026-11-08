@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.services.math_rubric_plan import (
     MathRubricPlan, MathRubricRoute, _Explanation, _build_plan, _content_hash,
     _mapping, _question_input, _validated_explanation, _with_preferences,
+    SUBPART_ALLOCATION, subpart_plan,
 )
 
 
@@ -95,7 +96,11 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
         # Completing a sibling field does not reinterpret an unchanged rubric.
         # The caller seals this verified plan against the completed response.
         return original, prior
-    explanation = _validated_explanation(_question_input(problem), _Explanation(
+    context = _question_input(problem)
+    explicit = subpart_plan(context, candidate=definition)
+    if explicit:
+        return original, RubricDraft(content_fingerprint=draft_fingerprint(problem), plan=explicit)
+    explanation = _validated_explanation(context, _Explanation(
         **definition.model_dump(), effective_criterion=(
             "按以下结构化评分项执行；页面标准与此底稿一致。" if language == "zh" else
             "Apply these structured routes; the displayed rubric uses the same definition."
@@ -158,6 +163,12 @@ def saved_draft(problem, *, grading_setup=None) -> RubricDraft | None:
             or draft.plan.original_criterion != context["criterion"]
             or draft.plan.max_score != context["max_score"]):
         return None
+    # An older cached interpretation may have discarded an unambiguous allocation.
+    # Only preparation reads this cache; a running run uses its own frozen plan.
+    if draft.plan.compilation_reason != SUBPART_ALLOCATION:
+        explicit = subpart_plan(context, teacher_notes=draft.teacher_notes, candidate=draft.plan)
+        if explicit:
+            return draft.model_copy(update={"plan": explicit})
     return draft
 
 
