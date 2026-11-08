@@ -51,11 +51,12 @@ from backend.llm.provider_catalog import (
 from backend.llm.registry import (
     ExpertRegistry,
     _build_scoped_registry,
+    build_configured_provider,
     get_scoped_expert_registry,
     provider_encryption_not_configured_error,
     resolve_owner_default_provider_id,
 )
-from backend.llm.providers import ProviderRequestError, VisionImage, build_provider, validate_provider_api_key
+from backend.llm.providers import ProviderRequestError, VisionImage, validate_provider_api_key
 from backend.llm.image_capability import make_image_challenge, IMAGE_CHALLENGE_PROMPT, is_explicit_image_rejection
 from backend.models import ProviderConfig, ProviderType, User, WireProtocol
 from backend.services.stage_provider_routing import list_stage_provider_options
@@ -286,7 +287,7 @@ def add_key(
     if not registry.uses_shared_pool():
         provider_id = registry.register(
             config,
-            provider_id=record.id,
+            provider_id=record.id, stored=record,
         )
     return {
         "status": "success",
@@ -501,7 +502,7 @@ def update_provider(
     if not registry.uses_shared_pool():
         registry.register(
             config,
-            provider_id=provider_id,
+            provider_id=provider_id, stored=updated,
         )
     return {
         "status": "success",
@@ -629,9 +630,9 @@ async def verify_provider_image(
         if stored is None or registry.get(provider_id) is None:
             raise HTTPException(404, detail="Provider not found")
         # Build from the SAME stored snapshot used by the eventual CAS.
-        provider = build_provider(stored.config.model_copy(update={
+        provider = build_configured_provider(stored.config.model_copy(update={
             "image_capability_status": "unverified", "scheduling_owner": current.id,
-        }))
+        }), stored=stored)
     if is_user_defined_provider_endpoint(provider.config.provider_type, provider.config.base_url, provider.config.wire_protocol):
         if not settings.custom_provider_endpoints_available:
             raise HTTPException(403, detail={"code": "custom_provider_endpoints_disabled"})

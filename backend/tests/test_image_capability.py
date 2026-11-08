@@ -127,7 +127,7 @@ async def test_opt_in_probe_is_single_and_checks_answer(outcome, state, reason, 
         finish_reason = "length" if outcome in {"answer_at_limit", "truncated"} else "stop"
         call = AsyncMock(return_value=SimpleNamespace(content=content, finish_reason=finish_reason))
     provider.ainvoke_vision = call
-    monkeypatch.setattr(experts, "build_provider", lambda config: provider)
+    monkeypatch.setattr("backend.llm.registry.build_provider", lambda config: provider)
     response = await experts.verify_provider_image(provider_id, current=user, registry=registry)
     assert response["image_capability_status"] == state
     assert response["image_reason"] == reason
@@ -150,7 +150,7 @@ async def test_probe_cannot_overwrite_edited_configuration_or_cross_owner(monkey
         update_provider_config(user.id, provider_id, old.config.model_copy(update={"api_key": "changed"}), master_key=settings.provider_encryption_key)
         return SimpleNamespace(content="wrong")
     registry.get(provider_id).ainvoke_vision = edit_during_call
-    monkeypatch.setattr(experts, "build_provider", lambda config: registry.get(provider_id))
+    monkeypatch.setattr("backend.llm.registry.build_provider", lambda config: registry.get(provider_id))
     with pytest.raises(HTTPException) as rejected:
         await experts.verify_provider_image(provider_id, current=user, registry=registry)
     assert rejected.value.status_code == 409
@@ -186,7 +186,7 @@ async def test_probe_builds_from_latest_stored_snapshot_even_if_registry_is_old(
         assert config.model == "new-model" and config.api_key == "new-key"
         assert config.scheduling_owner == user.id
         return SimpleNamespace(config=config, ainvoke_vision=AsyncMock(return_value=SimpleNamespace(content=answer)))
-    monkeypatch.setattr(experts, "build_provider", build)
+    monkeypatch.setattr("backend.llm.registry.build_provider", build)
     response = await experts.verify_provider_image(provider_id, current=user, registry=old_registry)
     assert response["image_capability_status"] == "passed"
 

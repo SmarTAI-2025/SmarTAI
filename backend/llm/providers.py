@@ -493,7 +493,9 @@ class BaseProvider(ABC):
             rpm = max(0, int(self.config.rpm or 0))
             if self._adaptive_binding is not None:
                 identity, profile, revision, recorder = self._adaptive_binding
-                scheduler.bind_adaptive(key, rpm, identity, profile, revision, source=self._adaptive_source)
+                await provider_local_step(scheduler.bind_provider_admission(
+                    key, rpm, identity, profile, revision, source=self._adaptive_source,
+                ))
             interrupt = control.interruptible_call(
                 self, lambda: admitted or (scope is not None and scope.submission_may_exist),
                 in_flight=lambda: admitted,
@@ -611,7 +613,7 @@ class BaseProvider(ABC):
                     else:
                         await scheduler.refresh_adaptive(force=True)
                 except Exception:
-                    logger.warning("Unable to persist BYOK admission estimate")
+                    logger.warning("Unable to persist model admission estimate")
             await provider_local_step(report_provider_state(self, "processing"), best_effort=True)
         except TimeoutError as exc:
             if not deadline.expired():
@@ -1529,6 +1531,7 @@ PROVIDER_CLASSES: Dict[str, type[BaseProvider]] = {
 
 
 def build_provider(config: ProviderConfig) -> BaseProvider:
+    """Construct a protocol adapter. Product callers use registry.build_configured_provider."""
     protocol = effective_wire_protocol(config.provider_type, config.wire_protocol)
     normalized_config = config.model_copy(update={"wire_protocol": protocol})
     if is_user_defined_provider_endpoint(

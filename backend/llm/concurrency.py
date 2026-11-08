@@ -248,7 +248,7 @@ class ModelScheduler:
         self._thread_limiter = None
         self._adaptive_keys: dict[str, str] = {}
         self._adaptive_revisions: dict[str, float] = {}
-        self._adaptive_sources: dict[str, tuple[str, str]] = {}
+        self._adaptive_sources: dict[str, tuple[str | None, str]] = {}
         self._adaptive_refresh_after = 0.0
         self._adaptive_refresh_lock = asyncio.Lock()
         self._adaptive_refresh_task: asyncio.Task | None = None
@@ -273,8 +273,23 @@ class ModelScheduler:
     def limit(self, key: str, rpm: int) -> int:
         return self.budget(key, rpm).limit
 
+    async def bind_provider_admission(self, key: str, rpm: int, identity: str, profile: dict | None,
+                                      revision: float, *, source: tuple[str | None, str] | None) -> None:
+        if source is not None and source[0] is None and identity not in self._adaptive_keys:
+            # Load once per scheduling loop, before even the first send after a
+            # restart. Concurrent owners wait for the same initial read.
+            async with self._adaptive_refresh_lock:
+                if identity in self._adaptive_keys:
+                    return
+                from backend.db.provider_repository import load_adaptive_states
+                states = await asyncio.to_thread(load_adaptive_states, {identity: source})
+                profile = states[identity]["profile"]
+                self.bind_adaptive(key, rpm, identity, profile, revision, source=source)
+        else:
+            self.bind_adaptive(key, rpm, identity, profile, revision, source=source)
+
     def bind_adaptive(self, key: str, rpm: int, identity: str, profile: dict | None,
-                      revision: float, *, source: tuple[str, str] | None = None) -> None:
+                      revision: float, *, source: tuple[str | None, str] | None = None) -> None:
         from backend.llm.adaptive_admission import AdaptiveAdmission, valid_profile
         if revision < self._adaptive_revisions.get(identity, -math.inf):
             return  # A running task may still hold an edited/deleted snapshot.
