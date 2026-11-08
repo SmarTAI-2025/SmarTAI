@@ -297,7 +297,7 @@ class ExpertRegistry:
         registry_id = provider_id or provider.provider_id
         with self._lock:
             self._providers[registry_id] = provider
-            self._configs[registry_id] = provider.config
+            self._configs[registry_id] = config
             self._verification[registry_id] = {
                 "verification_status": verification_status,
                 "last_checked_at": last_checked_at,
@@ -469,6 +469,10 @@ class ExpertRegistry:
             out: List[Dict[str, object]] = []
             for pid, c in self._configs.items():
                 verification = self._verification.get(pid, {})
+                # Live image evidence belongs to this owner's adapter. Keep
+                # the original config for frozen workflow serialization.
+                provider = self._providers.get(pid)
+                image_config = provider.config if provider is not None else c
                 resolved_display_name = candidate_labels[pid]
                 if candidate_counts[resolved_display_name.casefold()] > 1:
                     resolved_display_name = (
@@ -494,10 +498,10 @@ class ExpertRegistry:
                     "scope": "shared" if self._uses_shared_pool else "owner",
                     "is_shared": self._uses_shared_pool,
                     "editable": not self._uses_shared_pool,
-                    "supports_vision": getattr(self._providers.get(pid), "supports_vision", None),
-                    "image_capability_status": c.image_capability_status,
-                    "image_checked_at": _iso_utc_timestamp(c.image_checked_at),
-                    "image_reason": c.image_reason,
+                    "supports_vision": getattr(provider, "supports_vision", None),
+                    "image_capability_status": image_config.image_capability_status,
+                    "image_checked_at": _iso_utc_timestamp(image_config.image_checked_at),
+                    "image_reason": image_config.image_reason,
                     "verification_status": (
                         "platform_managed" if self._uses_shared_pool
                         else verification.get("verification_status", "unverified")
