@@ -507,6 +507,12 @@ def test_base_unit_uses_primary_budgets_and_respects_literal_teacher_increment()
     assert _base_unit(parts, "") == 1
     half_parts = PartRubric.model_validate(fixture()["questions"][2]).parts
     assert _base_unit(half_parts, "") == .5
+    for amount, unit in [(2, 1), (1.25, .25)]:
+        single = half_parts[0]
+        step = single.steps[0].model_copy(update={"total_pts": amount})
+        face = single.model_copy(update={"total_pts": amount, "steps": (step,)})
+        assert _base_unit([face], "") == unit
+        assert _base_unit([face], f"最小给分单位为{amount}分。") == amount
     assert _base_unit(half_parts, "最小给分单位为0.25分。") == .25
     with pytest.raises(ValueError, match="increment"):
         _base_unit(half_parts, "以1分为计分单位。")
@@ -892,6 +898,7 @@ def test_multiline_support_keeps_each_real_span_and_cannot_merge_error_origins()
     for bad in ("student:1, student:2", "student:1, student:99", "student:1, invented"):
         assert not _supporting_spans(text, bad, catalog)
     assert not _student_span(text, "student:1, student:4")
+    assert not _student_span("student:1, student:4", "student:1, student:4")
     rules = PartRubric.model_validate(dict(id="q", label="1", stem="Prove the claim.", total_pts=2,
         parts=[dict(id="p", total_pts=2, steps=[dict(id="s", total_pts=2, criterion="Establish the claim.")])]))
     data = dict(part_id="p", method="reference", relevance="complete", target_quote="part:p",
@@ -1097,3 +1104,81 @@ def test_deduction_evidence_remains_available_only_on_the_applicable_repair_cont
     schema = StepsOnlyRepair.model_json_schema()
     assert schema["$defs"]["PartDecision"]["properties"]["errors"]["maxItems"] == 0
     assert "#/$defs/ErrorEvent" not in json.dumps(schema)
+
+
+@pytest.mark.parametrize("cap,expected", [({"fraction": "1/1"}, 6), ({"fraction": "1/3"}, 2), ({"points": 0}, 0)])
+def test_complete_independent_method_settles_at_its_own_frozen_cap(cap, expected):
+    # The determinant proof does not contain either step of the elimination proof.
+    question = "Prove that the matrix is invertible."
+    rules = PartRubric.model_validate(dict(
+        id="q", label="1", stem=question, total_pts=6, parts=[dict(
+            id="p", total_pts=6, alternative=dict(maximum=cap, source_quote="Alternative method policy"),
+            steps=[dict(id="row", criterion="Reduce by row operations", total_pts=3),
+                   dict(id="pivots", criterion="Identify both pivots", total_pts=3)],
+        )],
+    ))
+    answer = "Its determinant is 1*3 - 2*1 = 1. Hence it is invertible."
+    complete = PartDecision(
+        part_id="p", target_quote="part:p", student_quote="student:1", relevance="complete",
+        method="alternative", reference_method="Gaussian elimination", student_method="determinant",
+        progress="The calculated nonzero determinant implies invertibility.",
+    )
+    score, rows = settle_parts(rules, [complete], answer, question)
+    assert score == expected
+    assert [(r.part_id, r.item_id, r.score) for r in rows] == [("p", None, expected)]
+    if expected == 6:
+        # An explicit teacher marking scheme can require particular intermediate work.
+        teacher_part = rules.parts[0].model_copy(update={"alternative": type(rules.parts[0].alternative)()})
+        teacher_rules = rules.model_copy(update={"rubric_origin": "teacher", "parts": (teacher_part,)})
+        with pytest.raises(ValueError, match="required step IDs"):
+            settle_parts(teacher_rules, [complete], answer, question)
+    for changes in ({"relevance": "partial"}, {"method": "minor_variant"},
+                    {"student_quote": "student:9"},
+                    {"steps": [dict(id="row", outcome="missed", evidence="", reason="No row operations")]}):
+        invalid = PartDecision.model_validate({**complete.model_dump(), **changes})
+        with pytest.raises(ValueError):
+            settle_parts(rules, [invalid], answer, question)
+
+
+@pytest.mark.asyncio
+async def test_multiline_missed_step_supplies_one_earlier_origin_at_the_grading_entry():
+    from backend.models import ProblemInfo, StudentAnswerInfo
+    from backend.services.math_grading_context import math_plans_context
+    from backend.services.rubric_drafts import bind_draft
+    from backend.skills.base import get_skill_for_type
+    from backend.tests.test_question_material_format_repair import Provider
+
+    row = _rows([dict(number="2", type="计算题", stem="Find the sum, then double it.", max_score=4)])["q1"]
+    raw = dict(id="q1", label="2", stem=row["stem"], total_pts=4, parts=[dict(
+        id="p", total_pts=4, steps=[dict(id="sum", criterion="Sum both entries", total_pts=2),
+                                      dict(id="double", criterion="Double the sum", total_pts=2, follow_through_keep=.5)])])
+    criterion, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    row.update(criterion=criterion, ai_completion_provenance={"criterion": {"source_kind": "ai_generated"}})
+    p = ProblemInfo(**row)
+    p._math_rubric_source = {"presentation": {k: row[k] for k in ("question_structure", "ai_completion_provenance")}}
+    answer = StudentAnswerInfo(q_id=p.q_id, number=p.number, type=p.type, content="Entries: 1 and 2.\nSum = 4.\nDouble = 8.")
+    plan = bind_draft(retarget_draft(draft, row), p)
+    vote = dict(part_id="p", target_quote="part:p", student_quote="student:1, student:2, student:3",
+                progress="The sum is wrong, but the doubling is consistent.", relevance="partial", method="reference",
+                steps=[dict(id="sum", outcome="missed", evidence="student:1, student:2", reason="Bad addition."),
+                       dict(id="double", outcome="follow_through", evidence="student:3", error_source="student:2",
+                            reason="Doubled the stated sum.")])
+    response = json.dumps(dict(comment="Checked", confidence=.9, part_decisions=[vote]))
+    provider = Provider([response] * 4)
+    with math_plans_context({p.q_id: plan}):
+        result = await get_skill_for_type(p.type)(provider, language="en").grade(p, answer)
+    assert result.error_kind is None
+    assert result.score == 1 and [step.score for step in result.steps] == [0, 1]
+    assert all("residual concern" in call[-1].content for call in provider.calls[1:])
+
+    def settle(earlier, origin, *, allow=True):
+        data = deepcopy(vote)
+        data["steps"][0]["evidence"] = earlier
+        data["steps"][1]["error_source"] = origin
+        return settle_parts(plan.part_rubric, [PartDecision(**data)], answer.content, p.stem, allow_partial=allow)[0]
+
+    assert settle("student:1, student:2", "student:2", allow=False) == 0
+    for support, origin in [("student:1, student:3", "student:2"), ("student:1, student:2", "student:1, student:2"),
+                             ("student:1, student:3", "student:3"), ("student:1, student:9", "student:1")]:
+        with pytest.raises(ValueError, match="distinct earlier error"):
+            settle(support, origin)

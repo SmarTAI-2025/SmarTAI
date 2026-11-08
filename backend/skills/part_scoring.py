@@ -62,8 +62,14 @@ An unfamiliar argument is not automatically unrelated: identify what it establis
 Separate uncertainty from blank work. For a required omitted target, cite the original
 obligation, do not fabricate a student quote. A different notation/order is minor_variant.
 Use alternative only for a materially different strategy. Name both strategies then apply
-only that part's alternative policy. Unless a method is explicitly required, map valid
-alternative reasoning to the same goals; do not require copying the solution.
+only that part's alternative policy. Check every distinct requested result and direction against
+the submitted work, including independent deliverables. For a complete independent solution,
+cite the decisive student passage and explain why it proves the full requested result in progress.
+When the steps were AI-generated or there is an explicit alternative policy, a complete alternative
+can leave steps empty. The server awards that policy's maximum. A different notation, reordering
+or shorter instance of the same derivation is a minor_variant; score its mathematical goals.
+For a partially correct alternative, map its progress onto the goals or use the explicit deduction
+schedule. Withhold an item for a missing method only if the question or teacher required it.
 Use step IDs with earned/missed/follow_through for points; do not report numeric awards.
 Follow-through needs the same source as a diagnosed missed step or independent error, and correct downstream work.
 For a target_item deduction, use target_id from part.answer_refs to identify the affected target.
@@ -88,6 +94,8 @@ def _student_span(answer, fragment):
 
     match = re.fullmatch(r"student:([1-9]\d*)", fragment)
     if not match:
+        if fragment.startswith("student:"):
+            return None
         return match_source_quote(answer, fragment)
     lines = answer.splitlines(keepends=True)
     index = int(match[1]) - 1
@@ -138,17 +146,21 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
     by_id = {d.part_id: d for d in decisions}
     if len(by_id) != len(decisions) or set(by_id) != {p.id for p in rules.parts}:
         raise ValueError("Return exactly one judgment for each frozen part ID.")
-    wrong_evidence = [
-        step.evidence
+    # Step evidence may cite several source lines. Each is a possible origin
+    # in its own right; the unquoted text between them is never evidence.
+    verified_errors = {
+        (span.start, span.end)
         for decision in decisions
-        for step in decision.steps
-        if step.outcome == "missed" and step.evidence
-    ]
+        for step in decision.steps if step.outcome == "missed"
+        for span in support(step.evidence)
+    }
     for part in rules.parts:
         decision = by_id[part.id]
         if part.deductions or (decision.method == "alternative" and part.alternative.deduct_per_error is not None):
-            wrong_evidence.extend(event.origin_quote for event in decision.errors)
-    verified_errors = {_student_span(answer, excerpt) for excerpt in wrong_evidence}
+            for event in decision.errors:
+                origin = _student_span(answer, event.origin_quote)
+                if origin is not None:
+                    verified_errors.add((origin.start, origin.end))
     total = Fraction(0)
     rows = []
     for part in rules.parts:
@@ -200,6 +212,11 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                     "Omit earned steps and deduction events, or classify supported progress as partial."
                 )
             amounts = [(None, Fraction(0), d.progress)]
+        elif (alternative and d.relevance == "complete" and not d.steps and part.steps
+              and (rules.rubric_origin == "ai" or part.alternative.source_quote)):
+            # A complete independent argument can establish the goal without performing
+            # any of the example route's intermediate steps. Keep its own cap and audit row.
+            amounts = [(None, cap, d.progress)]
         elif part.steps and not use_alt_rate:
             decisions_for_steps = d.steps
             if (
@@ -238,7 +255,7 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                     downstream = support(awarded.evidence)
                     if (
                         not origin
-                        or origin not in verified_errors
+                        or (origin.start, origin.end) not in verified_errors
                         or origin.end > min(span.start for span in downstream)
                     ):
                         raise ValueError(

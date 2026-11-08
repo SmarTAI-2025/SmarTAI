@@ -648,7 +648,13 @@ total_pts and exactly one of steps (budgets sum to total_pts) or deductions (pos
 per supported error; they do not sum to total_pts). Reference solutions can contain detailed
 unscored steps for either kind. Make goals method-independent unless the task requires a method. In a generated proof rubric, each
 criterion names the mathematical obligation and acceptable evidence. Put sample computations,
-chosen notation and the reference route in the reference answer. If a proof can make meaningful
+chosen notation and the reference route in the reference answer. For each AI-authored step,
+check whether a different sufficient argument could earn its points as written. If a student
+would have to pretend to use the sample method, rewrite the step around the conclusion to establish.
+For a universally quantified claim, retain the original domain in the scored obligation. Do not append
+a new sufficient shortcut to the criterion. A proof on a proper subset is a case result; the remaining
+cases must be established for full credit. Preserve explicit source cases and teacher policies.
+If a proof can make meaningful
 partial progress, budget distinct, separately assessable obligations before seeing student work.
 A change of names supplied by the question, rewriting a definition, or restating an already proved
 equivalence cannot consume an independent budget. Separate a genuinely new implication, condition
