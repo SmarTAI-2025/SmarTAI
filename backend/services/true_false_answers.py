@@ -86,7 +86,10 @@ def reference_decisions(reference, labels):
     from backend.services.question_structure import build_major_question_structure
 
     from types import SimpleNamespace
-    exact = submitted_truth_values(reference, [SimpleNamespace(id=label, label=label) for label in labels])
+
+    exact = submitted_truth_values(
+        reference, [SimpleNamespace(id=label, label=label) for label in labels]
+    )
     if exact is not None:
         return exact
     plain = reference.replace("**", "").replace("__", "")
@@ -111,6 +114,35 @@ def reference_decisions(reference, labels):
             return None
         verdicts[part.label] = _SIGNS[match[1].lower()]
     return verdicts if set(verdicts) == set(labels) else None
+
+
+class DecisionReferenceConflict(ValueError):
+    """The immutable stated policy and an adopted verdict need reconciliation."""
+
+
+def adopted_truth_key(rules, stem, reference):
+    """A key can grade autonomously only when the adopted reference establishes every verdict."""
+    if not reference or not is_decision_only(stem, rules.teacher_rubric or ""):
+        return {}
+    if not all(part.label and len(part.steps) == 1 for part in rules.parts):
+        return {}
+    flags = reference_decisions(reference, [part.label for part in rules.parts])
+    if flags is None:
+        return {}
+    key = {}
+    for part in rules.parts:
+        verdict = flags[part.label]
+        stated = re.fullmatch(
+            r"\s*(?:判断为|答案(?:为|是|[:：])|answer\s*[:：]?\s+)(正确|错误|真|假|true|false)[。.!！]?\s*",
+            part.steps[0].criterion,
+            re.I,
+        )
+        if stated and _SIGNS[stated[1].lower()] != verdict:
+            raise DecisionReferenceConflict(
+                f"{part.label}: the scoring rule and the adopted reference give opposite verdicts."
+            )
+        key[part.id] = verdict
+    return key
 
 
 def decision_budgets(problem):
@@ -158,9 +190,9 @@ def decision_definition(problem, allocated, key, language):
         pid = source.get("subpart_id") or f"p{rank}"
         truth[pid] = key[source["label"]]
         criterion = (
-            ("判断为正确" if truth[pid] else "判断为错误")
+            "判断与本问标答一致。"
             if language == "zh"
-            else ("Answer true" if truth[pid] else "Answer false")
+            else "The decision agrees with this part’s reference answer."
         )
         parts.append(
             dict(

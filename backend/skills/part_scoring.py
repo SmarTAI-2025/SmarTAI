@@ -71,7 +71,10 @@ a repeated consequence has the same origin. For an alternative with an explicit 
 use rule_id='alternative'. Do not mix the normal and alternative deductions.
 For an attempted but incorrect single judgment, use incorrect; for an omitted part use unanswered.
 For complete work on a single-step part the part's located evidence is sufficient; leave steps empty
-or supply the one named earned step. For incorrect, unrelated, unanswered or uncertain parts return no steps/errors. An unresolved judgment
+or supply the one named earned step. For unrelated, unanswered or uncertain parts omit steps and errors.
+For incorrect work on a points route omit steps or list missed steps. For partial or incorrect work on
+a deduction route (including an applicable alternative deduction), supply the located independent errors.
+When allow_partial_credit is false, a follow_through outcome earns zero; independently earned steps still count. An unresolved judgment
 needs teacher review. For complete work return no errors and satisfy all applicable steps.
 Include optional sourced claims/checks only for a mathematical verification. Omit route_id,
 route_reason, score, awards and deductions. The program settles the parts and the question.
@@ -213,7 +216,7 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                         keep = (
                             0.5 if rules.rubric_origin == "ai" and allow_partial else 0
                         )
-                    credit *= _amount(keep)
+                    credit *= _amount(keep) if allow_partial else 0
                 elif awarded.outcome == "missed":
                     credit = Fraction(0)
                 amounts.append((step.id, credit * cap / maximum, awarded.reason))

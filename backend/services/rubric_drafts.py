@@ -239,11 +239,18 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
 def retarget_draft(draft: RubricDraft, problem) -> RubricDraft:
     """Seal a generated candidate after sibling fields in its response are known."""
     payload = draft.plan.model_dump(mode="json", exclude={"plan_id"})
-    payload["input_fingerprint"] = _content_hash(_question_input(problem))
+    context = _question_input(problem)
+    payload["input_fingerprint"] = _content_hash(context)
     if draft.plan.part_rubric:
-        context = _question_input(problem)
-        payload["part_rubric"]["id"] = context["q_id"] or draft.plan.part_rubric.id
+        from backend.services.true_false_answers import adopted_truth_key
+
+        rules = draft.plan.part_rubric
+        payload["part_rubric"]["id"] = context["q_id"] or rules.id
         payload["part_rubric"]["label"] = context["number"]
+        key = adopted_truth_key(rules, context["stem"], context["reference_answer"])
+        payload.pop("expected_truth_by_part", None)
+        if key:
+            payload["expected_truth_by_part"] = key
     plan = MathRubricPlan(plan_id=_content_hash(payload), **payload)
     return draft.model_copy(update={"content_fingerprint": draft_fingerprint(problem), "plan": plan})
 
@@ -268,6 +275,14 @@ def saved_draft(problem, *, grading_setup=None) -> RubricDraft | None:
             or draft.plan.original_criterion != context["criterion"]
             or draft.plan.max_score != context["max_score"]):
         return None
+    if draft.plan.part_rubric and draft.plan.expected_truth_by_part:
+        from backend.services.true_false_answers import DecisionReferenceConflict, adopted_truth_key
+        try:
+            key = adopted_truth_key(draft.plan.part_rubric, context["stem"], context["reference_answer"])
+        except DecisionReferenceConflict:
+            return None
+        if key != draft.plan.expected_truth_by_part:
+            return retarget_draft(draft, problem)
     # An older cached interpretation may have discarded an unambiguous allocation.
     # Only preparation reads this cache; a running run uses its own frozen plan.
     if draft.plan.part_rubric is None and draft.plan.compilation_reason != SUBPART_ALLOCATION:

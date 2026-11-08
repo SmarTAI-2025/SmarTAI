@@ -603,7 +603,12 @@ _PREFERENCES_POLICY = (
 def _with_preferences(plan, grading_setup):
     setup = _mapping(grading_setup) if grading_setup is not None else {}
     if plan.part_rubric is not None:
-        return plan
+        allow_partial = setup.get("allow_partial_credit", True)
+        if allow_partial == plan.allow_partial_credit:
+            return plan
+        payload = plan.model_dump(mode="json", exclude={"plan_id"})
+        payload["allow_partial_credit"] = allow_partial
+        return MathRubricPlan(plan_id=_content_hash(payload), **payload)
     preferences = {"strictness": 50,
                    "allow_partial_credit": setup.get("allow_partial_credit", True),
                    "teacher_notes": str(setup.get("teacher_notes") or "")}

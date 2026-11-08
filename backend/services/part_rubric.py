@@ -616,7 +616,12 @@ Always include parts (one unnumbered part with null label/stem for an unsplit qu
 Preserve the original question and all explicit teacher policies. For each known part give
 total_pts and exactly one of steps (budgets sum to total_pts) or deductions (positive amounts
 per supported error; they do not sum to total_pts). Reference solutions can contain detailed
-unscored steps for either kind. Make goals method-independent unless the task requires a method.
+unscored steps for either kind. Make goals method-independent unless the task requires a method. In a generated proof rubric, each
+criterion names the mathematical obligation and acceptable evidence. Put sample computations,
+chosen notation and the reference route in the reference answer. If a proof can make meaningful
+partial progress, budget distinct, separately assessable obligations before seeing student work.
+Do not give multiple budgets to repeats of the same inference. State which hypotheses/cases are
+substantive. A valid direct implication or equivalence chain may meet more than one independent goal.
 Extract explicit source rules with exact source_quote evidence. Only fill missing ordinary
 rules using AI; report which teacher fields were unclear or missing in teacher_gaps.
 Do not report the absence of alternative-method rules or the use of AI as a defect.
