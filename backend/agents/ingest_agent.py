@@ -2217,7 +2217,8 @@ Rules:
 
 
 from backend.services.rubric_drafts import RubricDefinition, RubricDraft, generated_rubric, retarget_draft
-from backend.services.math_rubric_plan import _question_input
+from backend.domain.question_types import normalize_question_type
+from backend.services.math_rubric_plan import POINT_EVIDENCE_GUIDANCE, _question_input
 
 
 class AICompletionCandidateOutput(BaseModel):
@@ -2325,8 +2326,12 @@ async def generate_missing_question_materials(
             "notation, identifiers, executable code, JSON keys and test input/output values. "
             "Language selection must not change the question, grading criteria, point allocations or answers."
         )
+    rubric_guidance = ""
+    if any(row["target"] == "criterion" and normalize_question_type(problems_data[row["q_id"]].get("type"))
+           in {"计算题", "推理题", "概念题", "其他"} for row in target_rows):
+        rubric_guidance = "\nFor requested non-programming criteria only: " + POINT_EVIDENCE_GUIDANCE
     messages = [
-        SystemMessage(content=AI_COMPLETION_SYSTEM_PROMPT + language_instruction
+        SystemMessage(content=AI_COMPLETION_SYSTEM_PROMPT + language_instruction + rubric_guidance
             + "\nRubric definition schema:\n" + json.dumps(RubricDefinition.model_json_schema(), ensure_ascii=False)),
         HumanMessage(content=(
             "[Generation request]\n"

@@ -47,6 +47,38 @@ def explanation(**changes):
     }
 
 
+@pytest.mark.parametrize("header", ["以下三个评分点各1分。", "The following 3 items are worth 1 point each."])
+def test_whole_numbered_list_can_share_one_explicit_point_weight(header):
+    context = rubric._question_input(question(criterion=header + "\n1. State the premise.\n"
+                                              "2. Apply the rule.\n3. Give the conclusion.", max_score=3))
+    items = [item(str(i), text, 1) for i, text in enumerate(
+        ("State the premise", "Apply the rule", "Give the conclusion"))]
+    draft = rubric._Explanation.model_validate(explanation(routes=[route(items=items)]))
+    validated = rubric._validated_explanation(context, draft)
+    assert [v.points for v in validated.routes[0].items] == [1, 1, 1]
+    wrong = deepcopy(items)
+    wrong[0]["points"], wrong[1]["points"] = 0, 2
+    with pytest.raises(ValueError, match="source_amount_changed"):
+        rubric._validated_explanation(context, rubric._Explanation.model_validate(
+            explanation(routes=[route(items=wrong)])))
+    repeated = deepcopy(items)
+    repeated[1]["source_quote"] = repeated[0]["source_quote"]
+    with pytest.raises(ValueError, match="ambiguous_source_allocation|source_allocation_changed_or_omitted"):
+        rubric._validated_explanation(context, rubric._Explanation.model_validate(
+            explanation(routes=[route(items=repeated)])))
+
+
+@pytest.mark.parametrize("criterion", [
+    "以下三个评分点各1分。\n1. 前提\n2. 推导",
+    "以下三个评分点各1分。\n1. 前提\n1. 推导\n3. 结论",
+    "以下三个评分点各1分。第二项除外。\n1. 前提\n2. 推导\n3. 结论",
+    "如果使用方法甲，以下三个评分点各1分。\n1. 前提\n2. 推导\n3. 结论",
+    "以下三个评分点各1分。\n1. 前提\n2. 推导2分\n3. 结论",
+])
+def test_ambiguous_or_conflicting_lists_do_not_inherit_uniform_allocation(criterion):
+    assert rubric._uniform_point_list(rubric._question_input(question(criterion=criterion, max_score=3))) is None
+
+
 class ReplayProvider:
     """Runs the real structured call/repair layer without network or credentials."""
     provider_id = "rubric-local-replay"
