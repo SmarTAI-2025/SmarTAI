@@ -54,7 +54,7 @@ def test_admin_knowledge_merge_preserves_existing_users(previous_head, tmp_path,
     command.upgrade(cfg, "head")
     with engine.connect() as connection:
         assert connection.execute(text("SELECT password_hash, auth_version FROM users WHERE id='existing'")).one() == ("legacy-hash", 0)
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == ["0032_provider_admission"]
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == ["0033_shared_admission"]
     assert {"admin_audit_logs", "admin_usage_events", "knowledge_ingestions", "business_configuration", "user_storage_configuration"} <= set(inspect(engine).get_table_names())
 
 
@@ -256,7 +256,7 @@ def test_mail_migrations_extend_provider_routing_as_one_head(tmp_path, monkeypat
     script = ScriptDirectory.from_config(cfg)
 
     assert [revision.revision for revision in script.get_revisions("heads")] == [
-        "0032_provider_admission"
+        "0033_shared_admission"
     ]
 
     command.upgrade(cfg, "0012_provider_routing_pref")

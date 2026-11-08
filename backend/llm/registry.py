@@ -11,9 +11,11 @@ Swap to persistent storage (SQLite, Redis) later without changing callers.
 from __future__ import annotations
 from backend.llm.image_capability import can_attempt_images
 
+import hmac
 import logging
+from functools import partial
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
+from typing import TYPE_CHECKING, Dict, List, Optional, Any
 from threading import Lock
 from urllib.parse import urlsplit
 
@@ -21,19 +23,47 @@ from fastapi import Depends, HTTPException, status
 from langchain_core.messages import HumanMessage
 
 from backend.config import settings
-from backend.llm.concurrency import initial_concurrency
+from backend.llm.concurrency import initial_concurrency, quota_key
 from backend.llm.endpoint_policy import (
     ProviderEndpointError,
     is_user_defined_provider_endpoint,
 )
 from backend.models import ProviderConfig
-from backend.llm.providers import BaseProvider, LLMResponse, ProviderRequestError, VisionImage, build_provider
+from backend.llm.providers import BaseProvider, LLMResponse, ProviderRequestError, VisionImage, build_provider, endpoint_key
 from backend.llm.provider_catalog import (
     PROVIDER_CATALOG_BY_TYPE,
     effective_wire_protocol,
 )
 
+if TYPE_CHECKING:
+    from backend.db.provider_repository import StoredProviderConfig
+
 logger = logging.getLogger(__name__)
+
+
+def build_configured_provider(config: ProviderConfig, *, stored: StoredProviderConfig | None,
+                              shared_pool: bool = False) -> BaseProvider:
+    """Attach the admission identity to the same snapshot that will send the request."""
+    from backend.db.provider_repository import record_adaptive_limits, record_shared_adaptive_limits
+
+    provider = build_provider(config)
+    if stored is not None:
+        owner = config.scheduling_owner
+        provider._adaptive_source = (owner, stored.id)
+        provider._adaptive_binding = (
+            f"{owner}:{stored.id}", stored.adaptive_limits, stored.updated_at,
+            partial(record_adaptive_limits, owner, stored.id, expected_updated_at=stored.updated_at),
+        )
+    elif shared_pool:
+        # All owners using these platform credentials share one durable estimate.
+        # Keep the scheduler's raw quota digest out of persistent storage.
+        key = quota_key(config, endpoint_key(config))
+        fingerprint = hmac.digest(settings.jwt_secret.encode(), f"platform-admission:{key}".encode(), "sha256").hex()
+        provider._adaptive_source = (None, fingerprint)
+        provider._adaptive_binding = (
+            f"platform:{fingerprint}", None, 0.0, partial(record_shared_adaptive_limits, fingerprint),
+        )
+    return provider
 
 
 def provider_encryption_not_configured_error(
@@ -218,7 +248,6 @@ class ExpertRegistry:
             return
         provider_id = self.register(config)
         if self._shared_owner_id and self._shared_owner_id != "anonymous":
-            from functools import partial
             from backend.db.shared_image_repository import shared_image_evidence, record_shared_image_rejection
             snapshot = shared_image_evidence(self._shared_owner_id, config)
             provider = self._providers[provider_id]
@@ -232,6 +261,7 @@ class ExpertRegistry:
         config: ProviderConfig,
         provider_id: str | None = None,
         *,
+        stored: StoredProviderConfig | None = None,
         verification_status: str = "unverified",
         last_checked_at: float | None = None,
         verification_error_code: str | None = None,
@@ -263,7 +293,7 @@ class ExpertRegistry:
         config = config.model_copy(update={
             "scheduling_owner": self._shared_owner_id or "anonymous",
         })
-        provider = build_provider(config)
+        provider = build_configured_provider(config, stored=stored, shared_pool=self._uses_shared_pool)
         registry_id = provider_id or provider.provider_id
         with self._lock:
             self._providers[registry_id] = provider
@@ -439,6 +469,10 @@ class ExpertRegistry:
             out: List[Dict[str, object]] = []
             for pid, c in self._configs.items():
                 verification = self._verification.get(pid, {})
+                # Live image evidence belongs to this owner's adapter. Keep
+                # the original config for frozen workflow serialization.
+                provider = self._providers.get(pid)
+                image_config = provider.config if provider is not None else c
                 resolved_display_name = candidate_labels[pid]
                 if candidate_counts[resolved_display_name.casefold()] > 1:
                     resolved_display_name = (
@@ -464,10 +498,10 @@ class ExpertRegistry:
                     "scope": "shared" if self._uses_shared_pool else "owner",
                     "is_shared": self._uses_shared_pool,
                     "editable": not self._uses_shared_pool,
-                    "supports_vision": getattr(self._providers.get(pid), "supports_vision", None),
-                    "image_capability_status": c.image_capability_status,
-                    "image_checked_at": _iso_utc_timestamp(c.image_checked_at),
-                    "image_reason": c.image_reason,
+                    "supports_vision": getattr(provider, "supports_vision", None),
+                    "image_capability_status": image_config.image_capability_status,
+                    "image_checked_at": _iso_utc_timestamp(image_config.image_checked_at),
+                    "image_reason": image_config.image_reason,
                     "verification_status": (
                         "platform_managed" if self._uses_shared_pool
                         else verification.get("verification_status", "unverified")
@@ -761,26 +795,18 @@ def _build_scoped_registry(current) -> ExpertRegistry:
         for stored in stored_configs:
             registry.register(
                 stored.config,
-                provider_id=stored.id,
+                provider_id=stored.id, stored=stored,
                 verification_status=stored.verification_status,
                 last_checked_at=stored.last_checked_at,
                 verification_error_code=stored.verification_error_code,
             )
             provider = registry.get(stored.id)
             if provider is not None:
-                from functools import partial
                 from backend.db.provider_repository import record_image_rejection
                 provider._image_rejection_recorder = partial(
                     record_image_rejection, current.id, stored.id,
                     expected_updated_at=stored.updated_at,
                 )
-                from backend.db.provider_repository import record_adaptive_limits
-                provider._adaptive_binding = (
-                    f"{current.id}:{stored.id}", stored.adaptive_limits, stored.updated_at,
-                    partial(record_adaptive_limits, current.id, stored.id,
-                            expected_updated_at=stored.updated_at),
-                )
-                provider._adaptive_source = (current.id, stored.id)
     except ValueError as exc:
         logger.error("Unable to load encrypted provider configurations for user %s", current.id)
         raise HTTPException(503, detail="Saved provider credentials cannot be loaded.") from exc

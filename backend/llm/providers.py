@@ -37,6 +37,7 @@ from backend.llm.endpoint_policy import (
     build_safe_provider_clients,
     effective_provider_base_url,
     is_user_defined_provider_endpoint,
+    normalize_provider_endpoint,
     provider_operation_url,
 )
 from backend.llm.provider_catalog import effective_wire_protocol
@@ -281,12 +282,11 @@ _ENDPOINT_BREAKERS: Dict[str, "_EndpointBreaker"] = {}
 
 
 def endpoint_key(config: ProviderConfig) -> str:
-    """Guard key shared by every provider pointed at the same relay host."""
-    return (
-        getattr(config, "endpoint_identity", None)
-        or config.base_url
-        or f"{config.provider_type}:default"
-    )
+    """Use the canonical endpoint for scheduling without changing configuration snapshots."""
+    if identity := getattr(config, "endpoint_identity", None):
+        return identity
+    _, identity = normalize_provider_endpoint(config.provider_type, config.base_url, config.wire_protocol)
+    return identity
 
 
 def _is_overload_failure(exc: BaseException) -> bool:
@@ -491,9 +491,12 @@ class BaseProvider(ABC):
             scheduler = get_scheduler()
             key = quota_key(self.config, endpoint_key(self.config))
             rpm = max(0, int(self.config.rpm or 0))
+            identity = revision = None
             if self._adaptive_binding is not None:
                 identity, profile, revision, recorder = self._adaptive_binding
-                scheduler.bind_adaptive(key, rpm, identity, profile, revision, source=self._adaptive_source)
+                await provider_local_step(scheduler.bind_provider_admission(
+                    key, rpm, identity, profile, revision, source=self._adaptive_source,
+                ))
             interrupt = control.interruptible_call(
                 self, lambda: admitted or (scope is not None and scope.submission_may_exist),
                 in_flight=lambda: admitted,
@@ -520,12 +523,13 @@ class BaseProvider(ABC):
                         deadline.reschedule(asyncio.get_running_loop().time() + (
                             float(settings.llm_timeout) if response_timeout is None else response_timeout
                         ))
+                    learner = None
                     try:
                         admitted = True
                         admitted_at = scheduler.clock()
                         active_at_start = scheduler.budgets[key].active
                         busy_at_start = sum(scheduler.budgets[key].requests.values()) > active_at_start
-                        scheduler.record_adaptive_start(key, admitted_at)
+                        learner = scheduler.start_adaptive_sample(key, identity, revision, admitted_at)
                         if control is not None:
                             control.rate_started(self, started_at=admitted_at)
                         yield
@@ -549,57 +553,47 @@ class BaseProvider(ABC):
                         code = exhausted_quota_code(failure)
                         if control is not None and code:
                             control.block(self, code)
-                        if not code:
-                            from backend.services.background_errors import provider_failure_diagnostic
-                            from backend.tools.structured_llm import _provider_retry_after
-                            diagnostic = provider_failure_diagnostic(failure)
-                            if (getattr(exc, "status_code", None) == 429
-                                    or (diagnostic is not None and diagnostic.http_status == 429)) and (
-                                        configuration_code is None
-                                        and getattr(failure, "code", None) not in CONTENT_FAILURES
-                                    ):
-                                # All callers (including raw/vision calls) pass
-                                # here before the rejected slot is released.
-                                hint = _provider_retry_after(exc)
-                                seconds = max(65.0, float(settings.llm_rate_limit_retry_seconds), hint or 0.0)
-                                until = await scheduler.record_rate_limit(
-                                    key, rpm, seconds,
-                                    run=control.job_id if control is not None else "unscoped",
-                                    started_at=admitted_at, active=active_at_start,
-                                    extend=hint is not None and hint > 65.0,
-                                )
-                                if control is not None:
-                                    control.rate_limited(self, started_at=admitted_at, until=until)
-                            else:
-                                scheduler.record_adaptive_failure(key, admitted_at)
-                        else:
-                            scheduler.record_adaptive_failure(key, admitted_at)
+                        from backend.services.background_errors import provider_failure_diagnostic
+                        from backend.tools.structured_llm import _provider_retry_after
+                        diagnostic = None if code else provider_failure_diagnostic(failure)
+                        rate_limited = getattr(exc, "status_code", None) == 429 or (
+                            diagnostic is not None and diagnostic.http_status == 429
+                        )
+                        if (rate_limited and not code and configuration_code is None
+                                and getattr(failure, "code", None) not in CONTENT_FAILURES):
+                            # All callers (including raw/vision calls) pass
+                            # here before the rejected slot is released.
+                            hint = _provider_retry_after(exc)
+                            seconds = max(65.0, float(settings.llm_rate_limit_retry_seconds), hint or 0.0)
+                            until = await scheduler.record_rate_limit(
+                                key, rpm, seconds,
+                                run=control.job_id if control is not None else "unscoped",
+                                started_at=admitted_at, active=active_at_start,
+                                extend=hint is not None and hint > 65.0, learner=learner,
+                            )
+                            if control is not None:
+                                control.rate_limited(self, started_at=admitted_at, until=until)
+                        elif learner is not None:
+                            learner.finished(admitted_at, success=False)
                         if failure is not exc:
                             raise failure from exc
                         raise
                     except BaseException:
                         if control is not None:
                             control.record_configuration_result(self)
-                        scheduler.record_adaptive_failure(key, admitted_at)
+                        if learner is not None:
+                            learner.finished(admitted_at, success=False)
                         raise
                     else:
                         deadline.reschedule(None)
                         if control is not None:
                             control.record_configuration_result(self)
-                        before = scheduler.adjustment_count(key)
-                        if self._adaptive_binding is not None:
-                            update = scheduler.record_adaptive_success(
-                                key, identity, revision, admitted_at,
-                                run=control.job_id if control is not None else "unscoped", busy=busy_at_start,
-                            )
-                        else:
-                            scheduler.record_adaptive_success(
-                                key, "", 0, admitted_at,
-                                run=control.job_id if control is not None else "unscoped", busy=busy_at_start,
-                            )
+                        update, adjusted = scheduler.record_adaptive_success(
+                            key, identity, learner, admitted_at,
+                            run=control.job_id if control is not None else "unscoped", busy=busy_at_start,
+                        )
                         if control is not None:
-                            control.rate_recovered(self, started_at=admitted_at,
-                                                   adjusted=scheduler.adjustment_count(key) != before)
+                            control.rate_recovered(self, started_at=admitted_at, adjusted=adjusted)
                     finally:
                         if control is not None:
                             control.rate_finished(self, started_at=admitted_at)
@@ -611,7 +605,7 @@ class BaseProvider(ABC):
                     else:
                         await scheduler.refresh_adaptive(force=True)
                 except Exception:
-                    logger.warning("Unable to persist BYOK admission estimate")
+                    logger.warning("Unable to persist model admission estimate")
             await provider_local_step(report_provider_state(self, "processing"), best_effort=True)
         except TimeoutError as exc:
             if not deadline.expired():
@@ -1529,6 +1523,7 @@ PROVIDER_CLASSES: Dict[str, type[BaseProvider]] = {
 
 
 def build_provider(config: ProviderConfig) -> BaseProvider:
+    """Construct a protocol adapter. Product callers use registry.build_configured_provider."""
     protocol = effective_wire_protocol(config.provider_type, config.wire_protocol)
     normalized_config = config.model_copy(update={"wire_protocol": protocol})
     if is_user_defined_provider_endpoint(
