@@ -348,6 +348,10 @@ async def _extract_problems_call(
     multiple small calls (workaround for relays that hang on bigger bodies)
     while sharing the exact prompt and parsing contract.
     """
+    # OCR commonly inserts spaces around the dots in textbook headings.
+    # Give the extractor grounded label hints while preserving the literal source text.
+    dotted_headers = [{"printed": match[1], "number": re.sub(r"\s+", "", match[1])}
+                      for match in re.finditer(r"(?m)^\s*(\d+(?:[.．][ \t]+\d+)+)(?=[①-⑳\s])", text)]
     confirmed_candidates = confirmed_candidates or []
     if structure_mode == "extract_from_source":
         candidate_context = [
@@ -417,6 +421,10 @@ async def _extract_problems_call(
         "and source=teacher. Never combine values from different examples. "
         "Do not create new test cases. Never claim a created case was supplied by the teacher."
         if partial_source else "")
+    if dotted_headers:
+        user_content += ("\n[Source heading typography] Ignore scan spaces inside a dotted question number. "
+                     "A following circled marker belongs to the printed heading. Preserve the full number.\n"
+                     + json.dumps(dotted_headers[:200], ensure_ascii=False))
     messages = [
         SystemMessage(content=PROB_SYSTEM_PROMPT + recovery_guidance),
         HumanMessage(content=user_content),
@@ -2304,6 +2312,23 @@ async def generate_missing_question_materials(
             ),
         })
 
+    from backend.services.count_witnesses import marked_counts, reference_error
+    from backend.services.growth_order import ordered_growth_classes
+    count_checks = {}
+    for problem in problem_context:
+        growth = ordered_growth_classes(problem["stem"])
+        if growth:
+            problem["source_growth_order"] = growth
+            problem["growth_order_instruction"] = "List all source functions in this derived increasing order. The inner lists have equal asymptotic growth."
+        checks = marked_counts(problem["stem"])
+        if checks:
+            count_checks[problem["q_id"]] = checks
+            problem["source_execution_checks"] = checks
+            problem["execution_check_instruction"] = (
+                "Use these traces of the source code to check your derivation, including boundary inputs. "
+                "exact means the count is independent of the input; samples can disprove but cannot prove a formula. "
+                "For each marked part give its reasoning and finish with the total count. For a result-only task let each rubric item refer to the verified answer for its part. Do not restate a second, potentially contradictory formula in the criterion. Preserve any teacher answer literally."
+            )
     # Give the generator the same explicit entry that will validate its output.
     test_questions = {target["q_id"] for target in target_rows if target["target"] == "test_cases"}
     for row in problem_context:
@@ -2384,6 +2409,12 @@ async def generate_missing_question_materials(
                     or candidate.q_id != expected["q_id"]
                     or candidate.target != expected["target"]):
                 raise StructuredOutputInvalidError("Generated material targets were missing, duplicated or invalid.")
+            if candidate.target == "reference_answer" and candidate.q_id in count_checks:
+                issue = reference_error(candidate.text_value, count_checks[candidate.q_id])
+                if issue:
+                    error = StructuredOutputInvalidError("Reference count contradicts the source program.")
+                    error.repair_context = issue
+                    raise error
             seen.add(candidate.target_id)
             if candidate.target == "test_cases":
                 if len(candidate.test_cases) > request_context["test_case_count"]:

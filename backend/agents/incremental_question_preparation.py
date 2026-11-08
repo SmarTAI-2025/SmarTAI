@@ -585,6 +585,7 @@ class IncrementalQuestionPreparation:
             await self.schedule_ready()
             return
         pages, scheduled, tasks, planned = {}, set(), [], set()
+        conflicts_by_page = {}
         numbered = draft.role == "problem"
         targeted = numbered and bool(self.wanted)
         limit = max(1, int(settings.source_chunk_chars or 24000))
@@ -617,6 +618,9 @@ class IncrementalQuestionPreparation:
                     labels.extend(f"Source page {page}: {line}" for line in _source_section_labels(pages[page]))
                 if labels:
                     context += "\nEarlier source page labels (context only; respect later section changes):\n" + "\n".join(labels)[-limit:]
+            conflicts = sorted({label for page in unit.pages for label in conflicts_by_page.get(page, ())})
+            if conflicts:
+                context += "\nFormula transcription conflict in printed question(s): " + ", ".join(conflicts)
             identity = _digest([unit.pages, unit.text])
             if identity in scheduled:
                 return
@@ -648,12 +652,13 @@ class IncrementalQuestionPreparation:
                 planned.add(self._chunk_key(draft, chunk, index, context, complete))
                 tasks.append(asyncio.create_task(self._chunk(draft, chunk, index, 0,
                     complete=complete, source_context=context, expected_numbers=expected,
-                    allow_empty_material=True)))
+                    allow_empty_material=True, formula_conflicts=conflicts)))
 
         async def on_pages(ready):
             await self.operation.heartbeat()
             for page in ready:
                 pages[page["page_number"]] = page["text"]
+                conflicts_by_page[page["page_number"]] = page.get("formula_conflicts", [])
             # Explicit IDs can depend on a section printed on an earlier page
             # (including its footer). Preserve the selected source as one text
             # scope, as before page batching; OCR itself remains independent.
@@ -734,9 +739,12 @@ class IncrementalQuestionPreparation:
                             labels = _source_section_labels(text[prefix_end:start])
                             context = "\n".join(part for part in [prefix, *labels] if part)[-limit:]
                             offset = start + 1
+                    conflicts = sorted({label for labels in conflicts_by_page.values() for label in labels})
+                    if conflicts:
+                        context += "\nFormula transcription conflict in printed question(s): " + ", ".join(conflicts)
                     planned.add(self._chunk_key(draft, chunk, index, context, not incomplete))
                     tasks.append(asyncio.create_task(self._chunk(draft, chunk, index, len(chunks),
-                        complete=False if incomplete else None, expected_numbers=expected, source_context=context)))
+                        complete=False if incomplete else None, expected_numbers=expected, source_context=context, formula_conflicts=conflicts)))
             # Publish the partition before awaiting its work. A stop after the
             # final object write can then recover the right version without AI.
             async with self.lock:
@@ -782,7 +790,7 @@ class IncrementalQuestionPreparation:
         return f"{kind}:{draft.source_token}:{index}:{_digest([text, draft.structure_mode, draft.extraction_hint, source_context, complete is False])}"
 
     async def _chunk(self, draft, text, index, count, *, complete=None, source_context="", expected_numbers=(),
-                     allow_empty_material=False):
+                     allow_empty_material=False, formula_conflicts=()):
         kind = "extract" if draft.role == "problem" else "material"
         if kind == "extract" and self.wanted:
             # Page headings establish boundaries, not the teacher's selection.
@@ -811,6 +819,12 @@ class IncrementalQuestionPreparation:
                                         structure_mode=draft.structure_mode, extraction_hint=draft.extraction_hint,
                                         manage_progress_lifecycle=False, allow_empty=True, partial_source=True,
                                         source_context=source_context)
+                                    for extracted in data.values():
+                                        if any(normalize_question_number(extracted.get(field)) in formula_conflicts
+                                               for field in ("number", "source_display_number") if extracted.get(field)):
+                                            issue = _issue("q1", "stem", "recognition_partial", "blocking", [draft.source_token])
+                                            issue["details"]["reason"] = "conflicting_printed_formula"
+                                            extracted.setdefault("preparation_issues", []).append(issue)
                                     if retained:
                                         data = dedupe_extracted_problems(_rows([*retained, *data.values()]))
                                     actual = {normalize_question_number(row.get(field))
