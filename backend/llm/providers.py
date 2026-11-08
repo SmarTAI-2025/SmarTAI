@@ -37,6 +37,7 @@ from backend.llm.endpoint_policy import (
     build_safe_provider_clients,
     effective_provider_base_url,
     is_user_defined_provider_endpoint,
+    normalize_provider_endpoint,
     provider_operation_url,
 )
 from backend.llm.provider_catalog import effective_wire_protocol
@@ -281,12 +282,11 @@ _ENDPOINT_BREAKERS: Dict[str, "_EndpointBreaker"] = {}
 
 
 def endpoint_key(config: ProviderConfig) -> str:
-    """Guard key shared by every provider pointed at the same relay host."""
-    return (
-        getattr(config, "endpoint_identity", None)
-        or config.base_url
-        or f"{config.provider_type}:default"
-    )
+    """Use the canonical endpoint for scheduling without changing configuration snapshots."""
+    if identity := getattr(config, "endpoint_identity", None):
+        return identity
+    _, identity = normalize_provider_endpoint(config.provider_type, config.base_url, config.wire_protocol)
+    return identity
 
 
 def _is_overload_failure(exc: BaseException) -> bool:

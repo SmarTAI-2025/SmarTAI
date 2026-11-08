@@ -27,7 +27,6 @@ from backend.llm.concurrency import initial_concurrency, quota_key
 from backend.llm.endpoint_policy import (
     ProviderEndpointError,
     is_user_defined_provider_endpoint,
-    normalize_provider_endpoint,
 )
 from backend.models import ProviderConfig
 from backend.llm.providers import BaseProvider, LLMResponse, ProviderRequestError, VisionImage, build_provider, endpoint_key
@@ -47,9 +46,6 @@ def build_configured_provider(config: ProviderConfig, *, stored: StoredProviderC
     """Attach the admission identity to the same snapshot that will send the request."""
     from backend.db.provider_repository import record_adaptive_limits, record_shared_adaptive_limits
 
-    # Environment and stored configurations can spell an official endpoint differently.
-    url, endpoint = normalize_provider_endpoint(config.provider_type, config.base_url, config.wire_protocol)
-    config = config.model_copy(update={"base_url": url, "endpoint_identity": endpoint})
     provider = build_provider(config)
     if stored is not None:
         owner = config.scheduling_owner
@@ -301,7 +297,7 @@ class ExpertRegistry:
         registry_id = provider_id or provider.provider_id
         with self._lock:
             self._providers[registry_id] = provider
-            self._configs[registry_id] = config
+            self._configs[registry_id] = provider.config
             self._verification[registry_id] = {
                 "verification_status": verification_status,
                 "last_checked_at": last_checked_at,
