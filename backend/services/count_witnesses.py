@@ -235,7 +235,8 @@ _COUNT_REQUEST = re.compile(
     r"(?:试|请)?(?:确定|求出?|计算|统计)(?:下列|以下)?(?:各|每个|每段)?"
     r"(?:程序段|代码段|程序)?(?:中)?(?:前置以记号|标记为|标有|以)?\s*[@＠]\s*(?:标记的|的)?语句(?:的)?(?:频度|执行次数)"
     r"|(?:find|give|determine|count)\s+(?:the\s+)?(?:frequency|execution count|number of executions)"
-    r"\s+of\s+(?:the\s+)?(?:@[- ]marked|marked)\s+statement",
+    r"\s+of\s+(?:the\s+)?(?:@[- ]marked|marked)\s+statement"
+    r"|how many times does (?:the )?(?:@[- ]marked|marked) statement execute\??",
     re.I,
 )
 _POSITIVE_N = re.compile(
@@ -301,6 +302,10 @@ def marked_counts(stem):
     parts = [(p.label, p.stem) for p in structure.subparts]
     if not parts:
         code = re.fullmatch(r"(.*?)```(?:c|cpp|C)?\s*\n(.*?)\n```\s*", stem, re.S)
+        if code is None:
+            # A source page can have a plain code block below the question.
+            # Require a caption boundary and let the C parser consume the entire body.
+            code = re.fullmatch(r"([^\n]+[：:。?？])[^\S\n]*\n(.*)", stem.strip(), re.S)
         if not code or not _COUNTS.search(code[1]) or "```" in code[2]:
             return {}
         context = code[1].replace("$", "")
@@ -422,6 +427,8 @@ def evaluate_expression(text, n):
 
 
 def counterexample(formula, witness):
+    if not isinstance(formula, str):
+        return None
     if "exact" in witness:
         if re.search(r"\bn\b", formula or ""):
             return None
@@ -445,7 +452,7 @@ def _answer_parts(text, witnesses):
 
 
 def reference_error(text, witnesses):
-    """Only challenge an identifiable final mathematical result of a numbered part."""
+    """Only challenge an identifiable final mathematical result of an identified answer."""
     if not witnesses or not text:
         return None
     parts = _answer_parts(text, witnesses)

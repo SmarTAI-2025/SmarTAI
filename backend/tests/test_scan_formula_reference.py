@@ -321,3 +321,13 @@ def test_unrecognized_local_domain_only_disables_that_parts_parametric_samples()
     stem = "设 n 为正整数。求 @ 语句频度。\n(1) i=0; // only when n is a square\nwhile(i<n){ @ i++; }\n(2) i=0;while(i<n){ @ i++; }"
     assert set(marked_counts(stem)) == {"(2)"}
     assert not counterexample("n", {"exact": 3})
+
+
+def test_plain_singleton_uses_full_program_and_english_restricted_domain():
+    stem = "Let n be a positive integer and n != 1. Determine the execution count of the marked statement:\ni=1; while(i<n) { @ i++; }"
+    witnesses = marked_counts(stem)
+    assert set(witnesses["question"]["samples"]) == {"2", "4", "5"}
+    assert not reference_error("n-1", witnesses)
+    assert reference_error("n", witnesses)
+    assert not marked_counts(stem + "\nOnly consider prime n.")
+    assert not counterexample(None, {"exact": 3})

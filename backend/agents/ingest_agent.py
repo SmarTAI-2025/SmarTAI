@@ -2204,6 +2204,12 @@ Rules:
   stated definition rather than importing a convention from memory. If a referenced definition
   is absent and necessary, omit the affected candidates rather than inventing it. Never make a
   scoring criterion demand an unsupported conclusion or one particular valid proof method.
+- For a proof, first derive the minimal argument under exactly the stated hypotheses. Independently
+  substitute the proposed witnesses into the ORIGINAL target and simplify both sides in their written
+  order, including the last displayed equality. For an equivalence check both implications; for a
+  universal statement check whether the same derivation covers excluded or exceptional cases. Keep only
+  the checked proof. A correct conclusion does not repair a false intermediate equality. Omit optional
+  generalizations beyond the question. Never treat an example of a proof as a prescribed method.
 - solution_code: only for programming questions; return reference implementation text, never run it.
 - test_cases: only for programming questions; return structured cases, at most the requested count.
 - Match the question's required interface. For a function implementation, use io_mode="function",
