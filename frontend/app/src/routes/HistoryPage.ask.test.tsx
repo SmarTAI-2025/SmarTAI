@@ -1,13 +1,13 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@/i18n/I18nProvider";
 import type { HistoryInterpretation, TaskLite } from "@/types";
 import { HistoryPage } from "./HistoryPage";
 
-const mocks = vi.hoisted(() => ({ history: vi.fn(), interpret: vi.fn(), state: vi.fn() }));
-vi.mock("@/api/tasks", () => ({ getTaskState: mocks.state }));
+const mocks = vi.hoisted(() => ({ history: vi.fn(), interpret: vi.fn(), state: vi.fn(), lookup: vi.fn(), allTasks: vi.fn() }));
+vi.mock("@/api/tasks", () => ({ getTaskState: mocks.state, listTaskHistory: mocks.lookup, listTasks: mocks.allTasks }));
 vi.mock("@/components/history/HistoryTagPopover", () => ({ HistoryTagPopover: () => null }));
 vi.mock("@/components/knowledge-base/KnowledgeActivityPanel", () => ({ KnowledgeActivityPanel: () => <div>教材进度测试面板</div> }));
 vi.mock("@/api/hooks", () => ({
@@ -25,8 +25,8 @@ function mount(initial = "/history") {
   return client;
 }
 afterEach(() => { queryClients.splice(0).forEach(client => client.clear()); vi.useRealTimers(); });
-function ask() {
-  fireEvent.change(screen.getByRole("textbox", { name: "SmarTAI 智能筛选任务" }), { target: { value: "还有什么没有批完" } });
+function ask(value = "还有什么没有批完") {
+  fireEvent.change(screen.getByRole("textbox", { name: "SmarTAI 智能筛选任务" }), { target: { value } });
   fireEvent.click(screen.getByRole("button", { name: "Ask SmarTAI" }));
 }
 const interpretation: HistoryInterpretation = {
@@ -37,6 +37,7 @@ const interpretation: HistoryInterpretation = {
 describe("Current task Ask SmarTAI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.lookup.mockResolvedValue({ items: [], total: 0 });
     mocks.state.mockReset().mockImplementation(async (taskId: string) => ({ task_id: taskId, status: "grading" }));
     window.localStorage.removeItem("smartai_locale");
     mocks.history.mockReturnValue({ data: { items: [], total: 0 }, isLoading: false, isFetching: false, error: null });
@@ -47,7 +48,7 @@ describe("Current task Ask SmarTAI", () => {
     expect(screen.getByText("教材进度测试面板")).toBeInTheDocument();
     expect(mocks.history).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("tab", { name: "作业批改" }));
-    expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_asc" }));
+    expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_asc" }), true);
     fireEvent.click(screen.getByRole("tab", { name: "教材识别" }));
     expect(screen.getByText("教材进度测试面板")).toBeInTheDocument();
   });
@@ -63,7 +64,7 @@ describe("Current task Ask SmarTAI", () => {
     expect(screen.getByText("教材进度测试面板")).toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole("tab", { name: "教材识别" }), { key: "Home" });
     expect(screen.getByRole("tab", { name: "作业批改" })).toHaveFocus();
-    expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_asc" }));
+    expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_asc" }), true);
     fireEvent.keyDown(screen.getByRole("tab", { name: "作业批改" }), { key: "End" });
     expect(screen.getByRole("tab", { name: "暂存草稿" })).toHaveFocus();
     expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", "drafts-history-tab");
@@ -73,18 +74,154 @@ describe("Current task Ask SmarTAI", () => {
     mocks.interpret.mockResolvedValue(interpretation);
     mount();
     ask();
-    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ unfinished: true })));
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ unfinished: true }), true));
     expect(screen.queryByText(interpretation.explanation)).not.toBeInTheDocument();
     expect(mocks.interpret).toHaveBeenCalledExactlyOnceWith("还有什么没有批完");
-    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ unfinished: true })));
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ unfinished: true }), true));
+  });
+
+  it("finds a name outside the first page without a model and retains linked filters", async () => {
+    mocks.lookup.mockResolvedValue({ items: [{ name: "第一页" }], total: 35 });
+    mocks.allTasks.mockResolvedValue({ last: { name: "第三十五份作业" } });
+    mount("/history?attention=true");
+    ask("三十五");
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ q: "三十五", needs_attention: true }), true));
+    expect(mocks.interpret).not.toHaveBeenCalled();
+  });
+
+  it("lets a teacher distinguish a task, course and tag with the same name", async () => {
+    mocks.lookup.mockResolvedValue({ items: [{ name: "期中作业" }], total: 1, available_facets: {
+      courses: [{ id: "C1", name: "期中讲评" }], tags: [{ id: "T1", name: "期中" }],
+    } });
+    mount();
+    ask("期中");
+    expect(await screen.findByRole("button", { name: "任务 · 期中" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "课程 · 期中讲评" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "标签 · 期中" }));
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ tag_ids: ["T1"] }), true));
+    expect(mocks.interpret).not.toHaveBeenCalled();
+  });
+
+  it("does not send a model request after an in-flight keyword lookup was cleared", async () => {
+    let finish!: (value: unknown) => void;
+    mocks.lookup.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    mount();
+    ask();
+    fireEvent.click(screen.getByRole("button", { name: "清空查询" }));
+    await act(async () => finish({ items: [], total: 0 }));
+    expect(mocks.interpret).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+
+  it("offers a deliberate literal lookup when the model is unavailable", async () => {
+    mocks.interpret.mockRejectedValue(new Error("provider unavailable"));
+    mount();
+    ask("试卷 Z");
+    fireEvent.click(await screen.findByRole("button", { name: "按任务名称查找这段文字" }));
+    expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ q: "试卷 Z" }), true);
+    expect(screen.queryByText(/暂时无法分析这个问题/)).not.toBeInTheDocument();
+  });
+
+  it("clears filters opened from a link using only the cross inside the empty search field", () => {
+    mount("/history?attention=true");
+    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(screen.queryByRole("button", { name: "清空筛选" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清空查询" }));
+    expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ needs_attention: true }), true);
+    expect(screen.queryByRole("button", { name: "清空查询" })).not.toBeInTheDocument();
+  });
+
+  it.each([["course=C1", "线性代数"], ["tags=T1", "期中"]])("restores the keyword from %s and replaces it on the next name search", async (params, label) => {
+    const data = { items: [{ name: "矩阵练习" }], total: 1, available_facets: {
+      courses: [{ id: "C1", name: "线性代数" }], tags: [{ id: "T1", name: "期中" }],
+    } };
+    mocks.history.mockReturnValue({ data });
+    mocks.lookup.mockResolvedValue(data);
+    mount(`/history?${params}&attention=true`);
+    expect(screen.getByRole("textbox")).toHaveValue(label);
+    ask("矩阵");
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(
+      { page: 1, page_size: 25, sort: "updated_desc", q: "矩阵", needs_attention: true }, true));
+  });
+
+  it("shows all linked course and tag names alongside an independent search term, even with no matches", () => {
+    mocks.history.mockReturnValue({ data: { items: [], total: 0, available_facets: {
+      courses: [{ id: "C1", name: "线性代数" }], tags: [{ id: "T1", name: "期中" }, { id: "T2", name: "补交" }],
+    } } });
+    mount("/history?q=矩阵&course=C1&tags=T1,T2");
+    expect(screen.getByRole("textbox")).toHaveValue("矩阵");
+    for (const label of ["线性代数", "期中", "补交"]) expect(screen.getByText(label, { exact: false })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "清空查询" }));
+    expect(screen.queryByText(/线性代数/)).not.toBeInTheDocument();
+    expect(mocks.history).toHaveBeenLastCalledWith({ page: 1, page_size: 25, sort: "updated_desc" }, true);
+  });
+
+  it("applies only the new course while the cleared tag URL is still in flight", async () => {
+    mocks.lookup.mockResolvedValue({ items: [], total: 0, available_facets: {
+      courses: [{ id: "algebra", name: "线性代数" }], tags: [{ id: "midterm", name: "期中" }],
+    } });
+    let holdClear = false;
+    let release!: () => void;
+    const clearing = new Promise<void>(resolve => { release = resolve; });
+    const router = createMemoryRouter([{ path: "/history", element: <HistoryPage />, hydrateFallbackElement: null, loader: async ({ request }) => {
+      const params = new URL(request.url).searchParams;
+      if (holdClear && !params.has("tags") && !params.has("course")) await clearing;
+      return null;
+    } }], { initialEntries: ["/history"] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClients.push(client);
+    try {
+      render(<QueryClientProvider client={client}><I18nProvider><RouterProvider router={router} /></I18nProvider></QueryClientProvider>);
+      const input = await screen.findByRole("textbox");
+      ask("期中");
+      await waitFor(() => expect(router.state.location.search).toContain("tags=midterm"));
+      fireEvent.submit(input.closest("form")!);
+      fireEvent.submit(input.closest("form")!);
+      holdClear = true;
+      fireEvent.click(screen.getByRole("button", { name: "清空查询" }));
+      expect(router.state.location.search).toContain("tags=midterm");
+      ask("线性代数");
+      await waitFor(() => expect(router.state.location.search).toContain("course=algebra"));
+      expect(new URLSearchParams(router.state.location.search).has("tags")).toBe(false);
+      expect(mocks.history).toHaveBeenLastCalledWith({ page: 1, page_size: 25, sort: "updated_desc", course_id: "algebra" }, true);
+    } finally {
+      release();
+      router.dispose();
+    }
+  });
+
+  it("keeps a newer search when the clear navigation finishes during its model request", async () => {
+    let releaseClear!: () => void;
+    const clearing = new Promise<void>(resolve => { releaseClear = resolve; });
+    let finishAsk!: (result: HistoryInterpretation) => void;
+    mocks.interpret.mockReturnValue(new Promise(resolve => { finishAsk = resolve; }));
+    const router = createMemoryRouter([{ path: "/history", element: <HistoryPage />, hydrateFallbackElement: null,
+      loader: ({ request }) => new URL(request.url).searchParams.has("tags") ? null : clearing,
+    }], { initialEntries: ["/history?tags=midterm"] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClients.push(client);
+    try {
+      render(<QueryClientProvider client={client}><I18nProvider><RouterProvider router={router} /></I18nProvider></QueryClientProvider>);
+      fireEvent.click(await screen.findByRole("button", { name: "清空查询" }));
+      ask();
+      await waitFor(() => expect(mocks.interpret).toHaveBeenCalledTimes(1));
+      await act(async () => releaseClear());
+      expect(new URLSearchParams(router.state.location.search).has("tags")).toBe(false);
+      await act(async () => finishAsk(interpretation));
+      await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(
+        expect.objectContaining({ unfinished: true }), true));
+    } finally {
+      releaseClear();
+      router.dispose();
+    }
   });
 
   it("sorts task history on the server and reverses a second header click", async () => {
     mount();
     fireEvent.click(screen.getByRole("button", { name: "任务，当前未排序；点击升序" }));
-    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_asc" })));
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_asc" }), true));
     fireEvent.click(screen.getByRole("button", { name: "任务，当前升序；点击降序" }));
-    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_desc" })));
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "name_desc" }), true));
     expect(screen.queryByRole("combobox", { name: "排序" })).not.toBeInTheDocument();
   });
 
@@ -93,31 +230,32 @@ describe("Current task Ask SmarTAI", () => {
     mocks.interpret.mockReturnValue(new Promise<HistoryInterpretation>((resolve) => { finish = resolve; }));
     mount();
     ask();
-    fireEvent.click(screen.getByRole("button", { name: "清空筛选" }));
+    await waitFor(() => expect(mocks.interpret).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "清空查询" }));
     await act(async () => finish(interpretation));
     expect(screen.queryByText(interpretation.explanation)).not.toBeInTheDocument();
-    expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ unfinished: true }));
+    expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ unfinished: true }), true);
   });
 
   it("clearing Ask restores default sorting instead of earlier manual filters", async () => {
     mocks.interpret.mockResolvedValue(interpretation);
     mount("/history?sort=name_desc&page=2&status=grading");
     ask();
-    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ unfinished: true })));
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ unfinished: true }), true));
     fireEvent.change(screen.getByRole("textbox", { name: "SmarTAI 智能筛选任务" }), { target: { value: "" } });
-    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "updated_desc", page: 1 })));
-    expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ unfinished: true }));
-    expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ status: "grading" }));
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "updated_desc", page: 1 }), true));
+    expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ unfinished: true }), true);
+    expect(mocks.history).toHaveBeenLastCalledWith(expect.not.objectContaining({ status: "grading" }), true);
   });
 
   it.each([["进度", "progress"], ["预计剩余", "eta"]])("sorts %s on the server, reverses and resets pagination", async (label, key) => {
     mocks.history.mockReturnValue({ data: { items: [], total: 70 }, isLoading: false, error: null });
     mount("/history?page=2");
     fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${label}，`) }));
-    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: `${key}_asc`, page: 1 })));
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: `${key}_asc`, page: 1 }), true));
     expect(screen.getByRole("columnheader", { name: label })).toHaveAttribute("aria-sort", "ascending");
     fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${label}，`) }));
-    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: `${key}_desc`, page: 1 })));
+    await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith(expect.objectContaining({ sort: `${key}_desc`, page: 1 }), true));
     expect(screen.getByRole("columnheader", { name: label })).toHaveAttribute("aria-sort", "descending");
   });
 
@@ -195,7 +333,7 @@ describe("Current task Ask SmarTAI", () => {
     expect(mocks.state.mock.calls.filter(([id]) => id === "task-1")).toHaveLength(completedCalls);
 
     const callsBeforeClear = mocks.state.mock.calls.length;
-    fireEvent.click(screen.getByRole("button", { name: "清空筛选" }));
+    fireEvent.click(screen.getByRole("button", { name: "清空查询" }));
     await act(async () => { await vi.advanceTimersByTimeAsync(3_010); });
     expect(mocks.state).toHaveBeenCalledTimes(callsBeforeClear);
     expect(tasks[0].status).toBe("grading");

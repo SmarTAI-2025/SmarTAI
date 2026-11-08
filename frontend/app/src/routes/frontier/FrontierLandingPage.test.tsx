@@ -24,7 +24,7 @@ describe("FrontierLandingPage", () => {
     expect(screen.getByLabelText("SmarTAI promotional film with English narration")).toBeInTheDocument();
   });
 
-  it.each([['zh-CN', '用户手册', 'zh'], ['en-US', 'User manual', 'en']])(
+  it.each([['zh-CN', '使用指南', 'zh'], ['en-US', 'User guide', 'en']])(
     'links to the public manual in the current %s language', (locale, label, language) => {
       window.localStorage.setItem('smartai_locale', locale);
       render(<I18nProvider><MemoryRouter><FrontierLandingPage /></MemoryRouter></I18nProvider>);

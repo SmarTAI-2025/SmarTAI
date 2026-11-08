@@ -43,8 +43,17 @@ for (const edit of [false, true]) test(`confirm a required blank answer through 
     await card.getByRole("button", { name: "修改", exact: true }).click();
     await card.locator("textarea").fill("   \n ");
   }
-  await card.getByRole("button", { name: edit ? "第 1 题 · 保存并确认" : "第 1 题 · 待确认", exact: true }).click();
+  const confirm = card.getByRole("button", { name: edit ? "第 1 题 · 保存并确认" : "第 1 题 · 待确认", exact: true });
+  await confirm.evaluate(button => button.addEventListener("click", () => {
+    document.body.dataset.confirmPosition = String(window.scrollY);
+  }, { once: true }));
+  await confirm.click();
   await expect(card.getByRole("button", { name: "第 1 题 · 已确认", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => Number(document.body.dataset.confirmPosition))).toBeGreaterThan(0);
+  expect(await page.evaluate(() => {
+    const limit = document.documentElement.scrollHeight - innerHeight;
+    return Math.abs(window.scrollY - Math.min(Number(document.body.dataset.confirmPosition), limit));
+  })).toBeLessThan(8);
   await page.reload();
   await expect(card.getByRole("button", { name: "第 1 题 · 已确认", exact: true })).toBeVisible();
   await page.goto("/tasks/blank-answer/submissions");

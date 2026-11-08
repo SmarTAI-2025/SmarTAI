@@ -32,7 +32,7 @@ import {
   type FocusEvent,
   type ReactNode,
 } from "react";
-import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigationType, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useTask, useUpdateStudentAnswer, useUpdateStudentIdentity } from "@/api/hooks/tasks";
@@ -98,6 +98,7 @@ function StudentAnswerReviewForm() {
   const { taskId, studentId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
+  const preserveScroll = useNavigationType() === "REPLACE" && location.state?.preserveScroll === true;
   const navigate = useNavigate();
   const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
@@ -125,8 +126,6 @@ function StudentAnswerReviewForm() {
   const questionFilterParam = searchParams.get("questionFilter") ?? "";
   const initializedStudentRef = useRef<string | null>(null);
   const positionedRouteRef = useRef<string | null>(null);
-  const selectedQuestionRef = useRef(requestedQuestionId);
-  const resetScrollForStudentRef = useRef<string | null>(null);
 
   const students = useMemo(
     () => Object.values(taskQuery.data?.student_data ?? {}).sort(compareStudents),
@@ -176,9 +175,6 @@ function StudentAnswerReviewForm() {
     refreshTask: taskQuery.refetch,
   });
 
-  useEffect(() => {
-    if (requestedQuestionId) selectedQuestionRef.current = requestedQuestionId;
-  }, [requestedQuestionId]);
 
   useEffect(() => {
     if (!student || identitySavingStudent) return;
@@ -237,8 +233,8 @@ function StudentAnswerReviewForm() {
 
 
   useEffect(() => {
-    if (!filteredQuestions.length) return;
-    const requested = filteredQuestions.find((question) => (question.id === requestedQuestionId || question.qId === requestedQuestionId)) ?? filteredQuestions[0];
+    const requested = filteredQuestions.find(question => question.id === requestedQuestionId || question.qId === requestedQuestionId);
+    if (preserveScroll || !requested || !requestedQuestionId) return;
     // Repeat issue navigation must reposition even when its URL is unchanged.
     const routeKey = `${location.key}:${studentId ?? ""}:${requestedQuestionId}:${questionFilterParam}`;
     if (positionedRouteRef.current === routeKey) return;
@@ -247,18 +243,14 @@ function StudentAnswerReviewForm() {
       secondFrame = window.requestAnimationFrame(() => {
         positionedRouteRef.current = routeKey;
         setActiveQuestionId(requested.id);
-        if (resetScrollForStudentRef.current === studentId) {
-          resetScrollForStudentRef.current = null;
-          window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-        } else if (requestedQuestionId && (requested.id === requestedQuestionId || requested.qId === requestedQuestionId)) scrollQuestionIntoView(requested.id, "auto");
-        else window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        scrollQuestionIntoView(requested.id, "auto");
       });
     });
     return () => {
       window.cancelAnimationFrame(firstFrame);
       if (secondFrame) window.cancelAnimationFrame(secondFrame);
     };
-  }, [filteredQuestions, location.key, questionFilterParam, requestedQuestionId, studentId]);
+  }, [filteredQuestions, location.key, preserveScroll, questionFilterParam, requestedQuestionId, studentId]);
 
   useEffect(() => {
     if (!filteredQuestions.length) return;
@@ -329,28 +321,24 @@ function StudentAnswerReviewForm() {
       if (value.trim()) next.set(key, value);
       else next.delete(key);
       return next;
-    }, { replace: true });
+    }, { replace: true, state: { preserveScroll: true } });
   }
 
   function confirmLeave() { return true; }
 
   function goToStudent(target: StudentSubmission | null) {
-    const selectedQuestion = filteredQuestions.find((question) => question.id === selectedQuestionRef.current) ?? activeQuestion;
-    const anchorQuestionId = selectedQuestion?.qId ?? selectedQuestion?.id ?? requestedQuestionId;
-    if (!target || !taskId || !anchorQuestionId || !confirmLeave()) return;
+    if (!target || !taskId || !confirmLeave()) return;
     const nextSearch = new URLSearchParams(searchParams);
     nextSearch.delete("studentFilter");
-    nextSearch.set("question", anchorQuestionId);
+    nextSearch.delete("question");
     nextSearch.delete("from");
-    resetScrollForStudentRef.current = target.stu_id;
     navigate({
       pathname: studentPath(taskId, target.stu_id),
-      search: `?${nextSearch.toString()}`,
+      search: nextSearch.toString(),
     });
   }
 
   function scrollToQuestion(targetId: string, behavior: ScrollBehavior = "smooth") {
-    selectedQuestionRef.current = targetId;
     setActiveQuestionId(targetId);
     scrollQuestionIntoView(targetId, behavior);
   }
@@ -580,12 +568,11 @@ function StudentAnswerReviewForm() {
       nextSearch.delete("identity");
       if (result.student.stu_id !== student.stu_id) {
         replacingStudentRoute = true;
-        resetScrollForStudentRef.current = result.student.stu_id;
         navigate({
           pathname: studentPath(taskId, result.student.stu_id),
           search: nextSearch.toString() ? `?${nextSearch.toString()}` : "",
-        }, { replace: true });
-      } else setSearchParams(nextSearch, { replace: true });
+        }, { replace: true, state: { preserveScroll: true } });
+      } else setSearchParams(nextSearch, { replace: true, state: { preserveScroll: true } });
     } catch (error) {
       if (identityDraft.isCurrent()) {
         setIdentityOpen(true);

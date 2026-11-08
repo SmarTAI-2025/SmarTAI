@@ -8,7 +8,7 @@ for (const language of ['zh', 'en'] as const) {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto('/');
     const homeBrand = await page.locator('.frontier-nav .frontier-wordmark-image').boundingBox();
-    const guide = page.locator('.frontier-nav nav a', { hasText: language === 'zh' ? '用户手册' : 'User manual' });
+    const guide = page.locator('.frontier-nav nav a', { hasText: language === 'zh' ? '使用指南' : 'User guide' });
     await expect(guide).toHaveAttribute('href', `/guide/?lang=${language}`);
     await guide.click();
     await expect(page.locator('body')).toHaveAttribute('data-language', language);
@@ -32,13 +32,17 @@ for (const language of ['zh', 'en'] as const) {
       const failures: string[] = [];
       for (const node of nodes) {
         const image = new Image(); image.src = (node as HTMLImageElement).src;
-        try { await image.decode(); if (!image.naturalWidth) failures.push(image.src); }
+        try {
+          await image.decode();
+          if (image.naturalWidth !== Number(node.getAttribute('width')) ||
+              image.naturalHeight !== Number(node.getAttribute('height'))) failures.push(image.src);
+        }
         catch { failures.push(image.src); }
       }
       return failures;
     });
     expect(imageFailures).toEqual([]);
-    await expect(page.locator('.figure img')).toHaveCount(35);
+    await expect(page.locator('.figure img')).toHaveCount(32);
     for (const id of chapters) {
       await page.evaluate(chapter => { location.hash = chapter; }, id);
       await expect(page.locator(`article#${id}`)).toBeVisible();
@@ -47,6 +51,12 @@ for (const language of ['zh', 'en'] as const) {
 
     await page.locator('.book-tabs [data-book="manual"]').click();
     await expect(page.locator('.chapter[data-group="manual"]:visible')).toHaveCount(1);
+    await page.locator('#search').fill('Ask SmarTAI');
+    await page.locator('.search-result a[href="#workspace-2"]').click();
+    await expect(page.locator('#search')).toHaveValue('');
+    await expect(page.locator('#workspace-2')).toBeVisible();
+    await expect(page.locator('#workspace-2')).toContainText('80%');
+    await expect(page.locator('#workspace-2 img').first()).toHaveAttribute('src', /history-task-search\.jpg$/);
     await page.locator('#search').fill('API');
     await expect(page.locator('#search-results')).toBeVisible();
     await expect(page.locator('.search-result')).not.toHaveCount(0);
@@ -63,13 +73,14 @@ for (const language of ['zh', 'en'] as const) {
     await expect(page).toHaveURL(new RegExp(`lang=${other}#questions-4$`));
     expect(await page.evaluate(() => localStorage.getItem('smartai_locale'))).toBe(other === 'en' ? 'en-US' : 'zh-CN');
 
-    await page.evaluate(() => { location.hash = 'quickstart'; });
-    await page.locator('#quickstart .zoom-image').first().click();
+    await page.evaluate(() => { location.hash = 'workspace-2'; });
+    await page.locator('#workspace-2 .zoom-image').click();
     await expect(page.locator('#lightbox')).toBeVisible();
     await page.locator('#lightbox-image').evaluate(image => (image as HTMLImageElement).decode());
     await page.keyboard.press('Escape');
     await expect(page.locator('#lightbox')).not.toBeVisible();
-    await page.locator('#quickstart .figure img').first().evaluate(image => (image as HTMLImageElement).decode());
+    await page.evaluate(() => { location.hash = 'quickstart'; });
+    await expect(page.locator('#quickstart')).toBeVisible();
     await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await page.screenshot({ path: testInfo.outputPath(`manual-${other}-desktop.png`) });
     await page.evaluate(() => { location.hash = 'api-minimax'; });
@@ -120,7 +131,7 @@ for (const width of [320, 390, 820, 1024, 1920]) {
     await page.locator('.topbar a[href="/frontier/enter"]').click();
     await expect(page).toHaveURL(/\/frontier\/enter|\/login/);
     await page.goto('/');
-    await expect(page.getByRole('link', { name: 'User manual', exact: true }).filter({ visible: true })).toHaveCount(1);
+    await expect(page.getByRole('link', { name: 'User guide', exact: true }).filter({ visible: true })).toHaveCount(1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
     await page.screenshot({ path: testInfo.outputPath(`landing-en-${width}.png`) });
   });

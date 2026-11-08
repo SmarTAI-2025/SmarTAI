@@ -1,6 +1,6 @@
 import { SortableTableHead } from "@/components/ui/SortableTableHead";
-import { MoreHorizontal, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { TaskListActions, type TaskListDeletion } from "./TaskListActions";
+import { taskCourseAndTags, TASK_LIST_COLUMNS } from "./historyPresentation";
 import { Link } from "react-router-dom";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
@@ -23,17 +23,12 @@ interface HistoryTaskTableProps {
   tags: TaskTag[];
   isLoading: boolean;
   errorMessage: string | null;
-  isDeleting: boolean;
-  deletingTaskId: string | null;
+  deletion: TaskListDeletion;
   hasFilters: boolean;
   sort?: TaskHistoryQuery["sort"];
   onFilter: (patch: Partial<TaskHistoryQuery>) => void;
-  onDelete: (task: TaskLite) => void;
   onRetry: () => void;
-  onClear: () => void;
 }
-
-const COLUMNS = "grid-cols-[minmax(0,1fr)_140px] md:grid-cols-[minmax(280px,1fr)_215px_120px_120px_160px_185px]";
 
 export function HistoryTaskTable({
   tasks,
@@ -41,25 +36,23 @@ export function HistoryTaskTable({
   tags,
   isLoading,
   errorMessage,
-  isDeleting,
-  deletingTaskId,
+  deletion,
   hasFilters,
   sort,
   onFilter,
-  onDelete,
   onRetry,
-  onClear,
 }: HistoryTaskTableProps) {
   const { t } = useI18n();
   return (
     <section aria-label={t("historyTableRegion")} className="w-full">
       <div className="overflow-visible pb-2 md:overflow-x-auto">
-        <div role="table" aria-label={t("historyTableRegion")} aria-busy={isLoading} className="min-w-0 text-left md:min-w-[1080px]">
-          <div role="row" className={cn("grid h-[42px] items-center text-[13px] font-semibold leading-4 text-muted-foreground", COLUMNS)}>
+        <div role="table" aria-label={t("historyTableRegion")} aria-busy={isLoading} className={cn("min-w-0 text-left [overflow-wrap:anywhere]", TASK_LIST_COLUMNS)}>
+          <div role="row" className="col-span-full grid grid-cols-subgrid min-h-[42px] items-center px-px text-[13px] font-semibold leading-4 text-muted-foreground">
             <SortableTableHead as="div" className="px-[14px]"
               direction={sort === "name_asc" ? "asc" : sort === "name_desc" ? "desc" : null}
               onSort={() => onFilter({ sort: sort === "name_asc" ? "name_desc" : "name_asc" })}>{t("historyColumnTask")}</SortableTableHead>
-            <SortableTableHead as="div" className="px-[14px]"
+            <div role="columnheader" className="hidden px-[14px] md:block">{t("dashboardColumnCourseTags")}</div>
+            <SortableTableHead as="div" className="px-1 text-center"
               direction={sort === "stage_asc" ? "asc" : sort === "stage_desc" ? "desc" : null}
               onSort={() => onFilter({ sort: sort === "stage_asc" ? "stage_desc" : "stage_asc" })}>{t("historyColumnStage")}</SortableTableHead>
             <SortableTableHead as="div" className="hidden px-[14px] md:block"
@@ -72,9 +65,10 @@ export function HistoryTaskTable({
               direction={sort === "updated_asc" ? "asc" : sort === "updated_desc" ? "desc" : null}
               onSort={() => onFilter({ sort: sort === "updated_asc" ? "updated_desc" : "updated_asc" })}>{t("historyColumnUpdated")}</SortableTableHead>
             <div role="columnheader" className="hidden px-[14px] md:block">{t("historyColumnNext")}</div>
+            <div role="columnheader" className="text-center">{t("historyColumnActions")}</div>
           </div>
 
-          <div role="rowgroup" className="overflow-visible rounded-[8px] border bg-card">
+          <div role="rowgroup" className="col-span-full grid grid-cols-subgrid overflow-visible rounded-[8px] border bg-card">
             {isLoading ? <HistoryLoadingRows /> : null}
             {!isLoading && errorMessage ? (
               <HistoryTableMessage
@@ -88,9 +82,8 @@ export function HistoryTaskTable({
               <HistoryTableMessage
                 title={hasFilters ? t("historyNoMatchesTitle") : t("historyEmptyTitle")}
                 description={hasFilters ? t("historyNoMatchesDescription") : t("historyEmptyDescription")}
-                actionLabel={hasFilters ? t("historyClearFilters") : t("historyCreateTask")}
+                actionLabel={hasFilters ? undefined : t("historyCreateTask")}
                 actionTo={hasFilters ? undefined : "/tasks/new"}
-                onAction={hasFilters ? onClear : undefined}
               />
             ) : null}
             {!isLoading && !errorMessage ? tasks.map((task) => (
@@ -99,10 +92,7 @@ export function HistoryTaskTable({
                 task={task}
                 courses={courses}
                 tags={tags}
-                deleting={isDeleting && deletingTaskId === task.task_id}
-                deleteDisabled={isDeleting}
-                onFilter={onFilter}
-                onDelete={() => onDelete(task)}
+                deletion={deletion}
               />
             )) : null}
           </div>
@@ -116,23 +106,15 @@ function HistoryTaskRow({
   task,
   courses,
   tags,
-  deleting,
-  deleteDisabled,
-  onFilter,
-  onDelete,
+  deletion,
 }: {
   task: TaskLite;
   courses: HistoryCourseFacet[];
   tags: TaskTag[];
-  deleting: boolean;
-  deleteDisabled: boolean;
-  onFilter: (patch: Partial<TaskHistoryQuery>) => void;
-  onDelete: () => void;
+  deletion: TaskListDeletion;
 }) {
   const { locale, t } = useI18n();
-  const course = courses.find((item) => item.id === task.course_id);
-  const tagsById = useMemo(() => new Map(tags.map((tag) => [tag.id, tag])), [tags]);
-  const taskTags = (task.tag_ids ?? []).map((tagId) => tagsById.get(tagId)).filter((tag): tag is TaskTag => Boolean(tag));
+  const { course, taskTags } = taskCourseAndTags(task, { courses, tags });
   const destination = getTaskDestination(task);
   const mobileMetadata = [
     task.semester_id ? formatSemesterLabel(task.semester_id, t) : null,
@@ -141,52 +123,53 @@ function HistoryTaskRow({
   ].filter((value): value is string => Boolean(value));
 
   return (
-    <div role="row" className={cn("grid min-h-[76px] items-center border-t text-[13px] leading-4 first:border-t-0 hover:bg-slate-50/70 md:min-h-[62px] dark:hover:bg-slate-800/30", COLUMNS)}>
+    <div role="row" className="col-span-full grid grid-cols-subgrid min-h-[76px] items-center border-t text-[13px] leading-4 first:border-t-0 hover:bg-slate-50/70 md:min-h-[62px] dark:hover:bg-slate-800/30">
       <div role="cell" className="min-w-0 px-[14px] py-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Link to={destination} className="min-w-0 truncate font-semibold text-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring" title={task.name}>
+          <Link to={destination} className="min-w-0 font-semibold text-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring" title={task.name}>
             {task.name}
           </Link>
           {task.needs_attention ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" title={t("historyNeedsAttention")} /> : null}
         </div>
-        <div className="mt-1 hidden min-w-0 items-center gap-1 overflow-visible whitespace-nowrap md:flex">
+        <div className="mt-1 hidden min-w-0 items-center gap-1 overflow-visible md:flex">
           {task.semester_id ? (
-            <span title={formatSemesterLabel(task.semester_id, t)} className="max-w-[132px] truncate rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 outline-none hover:border-primary/30 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <span title={formatSemesterLabel(task.semester_id, t)} className="max-w-full rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 outline-none hover:border-primary/30 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
               {formatSemesterLabel(task.semester_id, t)}
             </span>
           ) : null}
-          {course ? (
-            <span title={course.name} className="max-w-[100px] truncate rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 outline-none hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
-              {course.name}
-            </span>
-          ) : null}
-          {taskTags.slice(0, 2).map((tag) => (
-            <span key={tag.id} title={tag.name} className={cn("max-w-[82px] truncate rounded-full border px-2 py-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring", TAG_TONE_CLASSES[tag.color])}>
-              {tag.name}
-            </span>
-          ))}
-          {taskTags.length > 2 ? <span className="text-[11px] text-muted-foreground">+{taskTags.length - 2}</span> : null}
-          {!task.semester_id && !course && taskTags.length === 0 ? <span className="truncate text-[11px] text-muted-foreground">{t("historyMetadataUnset")}</span> : null}
-          <HistoryTagPopover task={task} tags={tags} />
         </div>
         <div className="mt-1 flex min-w-0 items-center gap-1 md:hidden">
           <HistoryTagPopover task={task} tags={tags} />
-          <span title={mobileMetadata.join(" · ")} className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+          <span title={mobileMetadata.join(" · ")} className="min-w-0 flex-1 text-[11px] text-muted-foreground">
             {mobileMetadata.length ? mobileMetadata.join(" · ") : t("historyMetadataUnset")}
           </span>
         </div>
         <p className="mt-1 text-[11px] text-muted-foreground md:hidden">{formatHistoryTime(task.updated_at, locale)}</p>
       </div>
 
-      <div role="cell" className="min-w-0 px-2 py-2 md:px-[14px]">
-        <Link to={destination} title={t(HISTORY_STAGE_KEYS[task.status])} className={cn("inline-flex min-h-7 max-w-full items-center rounded-full px-3 py-1 text-[13px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring md:h-7 md:max-w-[185px] md:py-0", historyStatusTone(task.status))}>
-          <span className="min-w-0 break-words md:truncate">{t(HISTORY_STAGE_KEYS[task.status])}</span>
+      <div role="cell" className="hidden min-w-0 flex-wrap items-center gap-1 px-[14px] md:flex">
+          {course ? (
+            <span title={course.name} className="max-w-full rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 outline-none hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
+              {course.name}
+            </span>
+          ) : null}
+          {taskTags.map((tag) => (
+            <span key={tag.id} title={tag.name} className={cn("max-w-full rounded-full border px-2 py-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring", TAG_TONE_CLASSES[tag.color])}>
+              {tag.name}
+            </span>
+          ))}
+          {!course && taskTags.length === 0 ? <span className="text-[11px] text-muted-foreground">{t("dashboardCourseUnset")}</span> : null}
+          <HistoryTagPopover task={task} tags={tags} />
+      </div>
+
+      <div role="cell" className="min-w-0 px-1 py-2 text-center">
+        <Link to={destination} title={t(HISTORY_STAGE_KEYS[task.status])} className={cn("inline-flex min-h-7 max-w-full items-center justify-center rounded-full px-3 py-1 text-[13px] font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring", historyStatusTone(task.status))}>
+          <span className="min-w-0">{t(HISTORY_STAGE_KEYS[task.status])}</span>
         </Link>
         <div className="mt-1 flex min-w-0 items-center gap-1 md:hidden">
-          <Link to={destination} className="min-w-0 flex-1 truncate text-[11px] font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring">
+          <Link to={destination} className="min-w-0 flex-1 text-[11px] font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring">
             {t(HISTORY_ACTION_KEYS[task.status])}
           </Link>
-          <HistoryTaskActions destination={destination} deleting={deleting} deleteDisabled={deleteDisabled} onDelete={onDelete} />
         </div>
       </div>
 
@@ -194,15 +177,12 @@ function HistoryTaskRow({
       <div role="cell" className="hidden px-[14px] tabular-nums text-muted-foreground md:block">{formatHistoryEta(task.eta_seconds, locale)}</div>
       <div role="cell" className="hidden px-[14px] tabular-nums text-muted-foreground md:block">{formatHistoryTime(task.updated_at, locale)}</div>
       <div role="cell" className="hidden min-w-0 items-center gap-1 px-[14px] md:flex">
-          <Link to={destination} title={t(HISTORY_ACTION_KEYS[task.status])} className="min-w-0 flex-1 truncate font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring">
+          <Link to={destination} title={t(HISTORY_ACTION_KEYS[task.status])} className="min-w-0 flex-1 font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring">
           {t(HISTORY_ACTION_KEYS[task.status])}
         </Link>
-        <HistoryTaskActions
-          destination={destination}
-          deleting={deleting}
-          deleteDisabled={deleteDisabled}
-          onDelete={onDelete}
-        />
+      </div>
+      <div role="cell" className="flex justify-center">
+        <TaskListActions task={task} deletion={deletion} />
       </div>
     </div>
   );
@@ -216,67 +196,20 @@ function HistoryProgressCell({ task }: { task: TaskLite }) {
   return <div role="cell" className="hidden px-[14px] tabular-nums text-muted-foreground md:block">{value}</div>;
 }
 
-function HistoryTaskActions({
-  destination,
-  deleting,
-  deleteDisabled,
-  onDelete,
-}: {
-  destination: string;
-  deleting: boolean;
-  deleteDisabled: boolean;
-  onDelete: () => void;
-}) {
-  const { t } = useI18n();
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function close(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    }
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("pointerdown", close);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", close);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open]);
-
-  return (
-    <div ref={rootRef} className="relative shrink-0">
-      <button type="button" aria-label={t("historyMoreActions")} aria-expanded={open} onClick={() => setOpen((value) => !value)} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
-        <MoreHorizontal aria-hidden="true" className="h-4 w-4" />
-      </button>
-      {open ? (
-        <div role="menu" className="absolute right-0 top-8 z-30 w-40 rounded-lg border bg-card p-1.5 shadow-xl">
-          <Link to={destination} role="menuitem" className="flex rounded-md px-2.5 py-2 text-sm text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">{t("historyOpenTask")}</Link>
-          <button type="button" role="menuitem" disabled={deleteDisabled} onClick={onDelete} className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-danger outline-none hover:bg-rose-50 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 dark:hover:bg-rose-950/40">
-            <Trash2 aria-hidden="true" className="h-4 w-4" />
-            {deleting ? t("historyDeletePending") : t("historyDelete")}
-          </button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function HistoryLoadingRows() {
   const { t } = useI18n();
   return (
-    <div role="status" aria-label={t("loading")}>
+    <div role="status" aria-label={t("loading")} className="col-span-full grid grid-cols-subgrid">
       {Array.from({ length: 5 }, (_, index) => (
-        <div key={index} className={cn("grid h-[76px] animate-pulse items-center border-t first:border-t-0 md:h-[62px]", COLUMNS)}>
+        <div key={index} className="col-span-full grid grid-cols-subgrid h-[76px] animate-pulse items-center border-t first:border-t-0 md:h-[62px]">
           <Skeleton className="mx-[14px] w-40" />
-          <Skeleton className="mx-[14px] w-28" />
+          <Skeleton className="mx-[14px] hidden w-20 md:block" />
+          <Skeleton className="mx-auto w-16" />
           <Skeleton className="mx-[14px] hidden w-14 md:block" />
           <Skeleton className="mx-[14px] hidden w-12 md:block" />
           <Skeleton className="mx-[14px] hidden w-24 md:block" />
-          <Skeleton className="mx-[14px] hidden w-24 md:block" />
+          <Skeleton className="mx-[14px] hidden w-16 md:block" />
+          <Skeleton className="mx-auto w-12" />
         </div>
       ))}
     </div>
@@ -296,17 +229,17 @@ function HistoryTableMessage({
 }: {
   title: string;
   description: string;
-  actionLabel: string;
+  actionLabel?: string;
   actionTo?: string;
   onAction?: () => void;
 }) {
   const actionClass = "mt-3 inline-flex h-8 items-center rounded-md border bg-background px-3 text-xs font-semibold text-primary outline-none hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring";
   return (
-    <div role="row" className="flex min-h-[200px] items-center justify-center px-6 py-10 text-center">
+    <div role="row" className="col-span-full flex min-h-[200px] items-center justify-center px-6 py-10 text-center">
       <div role="cell">
         <p className="text-sm font-semibold text-foreground">{title}</p>
         <p className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">{description}</p>
-        {actionTo ? <Link to={actionTo} className={actionClass}>{actionLabel}</Link> : <button type="button" className={actionClass} onClick={onAction}>{actionLabel}</button>}
+        {actionTo ? <Link to={actionTo} className={actionClass}>{actionLabel}</Link> : onAction && <button type="button" className={actionClass} onClick={onAction}>{actionLabel}</button>}
       </div>
     </div>
   );

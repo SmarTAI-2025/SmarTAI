@@ -1,9 +1,13 @@
 import { userFacingError } from "@/lib/taskActionGuards";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { useExperts, useTasks } from "@/api/hooks";
+import { useExperts, useTaskHistory, useTasks } from "@/api/hooks";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { KnowledgeActivityPanel } from "@/components/knowledge-base/KnowledgeActivityPanel";
+import { DEFAULT_HISTORY_QUERY } from "@/components/history/historyQuery";
+import { TaskListActions, useTaskListDeletion, type TaskListDeletion } from "@/components/history/TaskListActions";
+import { formatHistoryEta, formatHistoryTime, taskCourseAndTags, TASK_LIST_COLUMNS } from "@/components/history/historyPresentation";
+import { GradingHistoryPanel } from "@/components/history/GradingHistoryPanel";
 import { LocalDraftManager } from "@/components/ui/LocalDraftManager";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
@@ -45,22 +49,6 @@ const STATUS_PRIORITY: Record<TaskStatus, number> = {
   finalized: 5,
 };
 
-const ATTENTION_KEYS: Record<TaskStatus, MessageKey> = {
-  problems_paused: "taskActionContinueRecognition",
-  submissions_paused: "taskActionContinueRecognition",
-  grading_paused: "taskActionContinueGrading",
-  draft: "dashboardAttentionAddProblems",
-  extracting_problems: "dashboardAttentionRecognizing",
-  problems_ready: "dashboardAttentionReviewProblems",
-  parsing_submissions: "dashboardAttentionRecognizing",
-  submissions_ready: "dashboardAttentionReviewSubmissions",
-  grading_setup: "dashboardStageGradingSetup",
-  grading: "dashboardAttentionGrading",
-  graded: "dashboardAttentionReviewResults",
-  finalized: "dashboardAttentionFinalized",
-  error: "dashboardAttentionResolveError",
-};
-
 type MetricTone = "primary" | "warning" | "accent" | "neutral";
 
 interface DashboardCounts {
@@ -73,6 +61,7 @@ interface DashboardCounts {
 export function DashboardPage() {
   const { locale, t } = useI18n();
   const tasksQuery = useTasks();
+  const deletion = useTaskListDeletion();
   const expertsQuery = useExperts();
 
   const tasks = useMemo(
@@ -160,6 +149,8 @@ export function DashboardPage() {
         </Link>
       </section>
 
+      <GradingHistoryPanel dashboard deletion={deletion} />
+
       <section aria-label={t("dashboardAttentionTasks")} className="mt-10">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-base font-semibold">{t("dashboardAttentionTasks")}</h2>
@@ -169,6 +160,7 @@ export function DashboardPage() {
         </div>
         <DashboardTaskTable
           tasks={visibleTasks}
+          deletion={deletion}
           isLoading={tasksQuery.isLoading}
           errorMessage={blockingTasksError}
           onRetry={() => void tasksQuery.refetch()}
@@ -179,6 +171,7 @@ export function DashboardPage() {
 
       <div className="mt-8"><KnowledgeActivityPanel compact /></div>
 
+      {deletion.dialog}
       <DashboardInsight
         counts={counts}
         tasks={visibleTasks}
@@ -240,13 +233,20 @@ function MetricCard({
   );
 }
 
+const DASHBOARD_TASK_HEADINGS = [
+  "historyColumnTask", "dashboardColumnCourseTags", "historyColumnStage", "historyColumnProgress",
+  "historyColumnEta", "historyColumnUpdated", "historyColumnNext", "historyColumnActions",
+] as const;
+
 function DashboardTaskTable({
   tasks,
+  deletion,
   isLoading,
   errorMessage,
   onRetry,
 }: {
   tasks: TaskLite[];
+  deletion: TaskListDeletion;
   isLoading: boolean;
   errorMessage: string | null;
   onRetry: () => void;
@@ -254,27 +254,27 @@ function DashboardTaskTable({
   const { t } = useI18n();
   const isDesktop = useMediaQuery("(min-width: 1280px)");
 
+  const needsMetadata = tasks.some(task => task.course_id || task.tag_ids?.length);
+  const history = useTaskHistory(DEFAULT_HISTORY_QUERY, needsMetadata);
+  const facets = history.data?.available_facets ?? history.data?.facets;
+  const courseTags = (task: TaskLite) => taskCourseAndTags(task, facets).text;
+
   if (isDesktop) {
     return (
       <div
         role="table"
         aria-label={t("dashboardAttentionTasks")}
         aria-busy={isLoading}
-        className="w-[1090px] max-w-full text-left"
+        className={cn("w-full overflow-hidden rounded-[8px] border text-left [overflow-wrap:anywhere]", TASK_LIST_COLUMNS)}
       >
         <div
           role="row"
-          className="grid h-[42px] grid-cols-[230px_150px_140px_130px_130px_140px_170px] items-center border-b text-[12px] font-semibold leading-[15px] text-muted-foreground"
+          className="col-span-full grid grid-cols-subgrid min-h-[42px] items-center border-b text-[12px] font-semibold leading-[15px] text-muted-foreground"
         >
-          <div role="columnheader" className="px-3">{t("dashboardColumnTask")}</div>
-          <div role="columnheader" className="px-3">{t("dashboardColumnCourseTags")}</div>
-          <div role="columnheader" className="px-3">{t("dashboardColumnStage")}</div>
-          <div role="columnheader" className="px-3">{t("dashboardColumnProgress")}</div>
-          <div role="columnheader" className="px-3">{t("dashboardColumnEta")}</div>
-          <div role="columnheader" className="px-3">{t("dashboardColumnAttention")}</div>
-          <div role="columnheader" className="px-3">{t("dashboardColumnNext")}</div>
+          {DASHBOARD_TASK_HEADINGS.map(key => <div key={key} role="columnheader"
+            className={key === "historyColumnStage" || key === "historyColumnActions" ? "text-center" : "px-3"}>{t(key)}</div>)}
         </div>
-        <div role="rowgroup" className="min-h-55 overflow-hidden rounded-b-[8px] border-x border-b bg-card">
+        <div role="rowgroup" className="col-span-full grid min-h-55 grid-cols-subgrid bg-card">
           {isLoading ? <DesktopLoadingRows label={t("loading")} /> : null}
           {!isLoading && errorMessage ? (
             <CompactTableMessage
@@ -293,11 +293,11 @@ function DashboardTaskTable({
             />
           ) : null}
           {!isLoading && !errorMessage
-            ? tasks.map((task) => <DesktopTaskRow key={task.task_id} task={task} />)
+            ? tasks.map((task) => <DesktopTaskRow key={task.task_id} task={task} courseTags={courseTags(task)} deletion={deletion} />)
             : null}
           {!isLoading && !errorMessage && tasks.length > 0
             ? Array.from({ length: Math.max(0, 5 - tasks.length) }, (_, index) => (
-                <div key={`empty-row-${index}`} role="presentation" className="h-11 border-t bg-card" />
+                <div key={`empty-row-${index}`} role="presentation" className="col-span-full h-11 border-t bg-card" />
               ))
             : null}
         </div>
@@ -333,39 +333,47 @@ function DashboardTaskTable({
         </div>
       ) : null}
       {!isLoading && !errorMessage
-        ? tasks.map((task) => <MobileTaskCard key={task.task_id} task={task} />)
+        ? tasks.map((task) => <MobileTaskCard key={task.task_id} task={task} courseTags={courseTags(task)} deletion={deletion} />)
         : null}
     </div>
   );
 }
 
-function DesktopTaskRow({ task }: { task: TaskLite }) {
-  const { t } = useI18n();
+interface DashboardTaskProps {
+  task: TaskLite;
+  courseTags: string;
+  deletion: TaskListDeletion;
+}
+
+function DesktopTaskRow({ task, courseTags, deletion }: DashboardTaskProps) {
+  const { locale, t } = useI18n();
   const isProcessing = isTaskProcessing(task.status);
   const progressQuery = useTaskProgress(task.task_id, { enabled: isProcessing });
   const progressValue = getProgressValue(task, progressQuery.progress, progressQuery.percent);
-  const eta = isProcessing && progressQuery.progress?.phase !== "done"
+  const complete = task.status === "graded" || task.status === "finalized";
+  const etaSeconds = complete ? 0 : progressQuery.data?.eta_seconds ?? task.eta_seconds;
+  const eta = etaSeconds == null && isProcessing && progressQuery.progress?.phase !== "done"
     ? t("dashboardEtaEstimating")
-    : "—";
+    : formatHistoryEta(etaSeconds, locale);
 
   return (
     <div
       role="row"
-      className="grid h-11 grid-cols-[230px_150px_140px_130px_130px_140px_170px] items-center border-t text-[13px] leading-4 first:border-t-0"
+      className="col-span-full grid grid-cols-subgrid min-h-11 items-center py-1 border-t text-[13px] leading-4 first:border-t-0"
     >
       <div role="cell" className="min-w-0 px-3">
         <Link
           to={getTaskDestination(task)}
-          className="block truncate font-semibold text-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
+          className="block font-semibold text-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
           title={task.name}
         >
           {task.name}
         </Link>
       </div>
-      <div role="cell" className="truncate px-3 text-muted-foreground">
-        {t("dashboardCourseUnset")}
+      <div role="cell" title={courseTags} className="min-w-0 px-3 text-muted-foreground">
+        {courseTags || t("dashboardCourseUnset")}
       </div>
-      <div role="cell" className="px-3">
+      <div role="cell" className="min-w-0 px-1 text-center">
         <Link to={getTaskDestination(task)} className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <StatusPill status={task.status}>{t(STAGE_KEYS[task.status])}</StatusPill>
         </Link>
@@ -376,46 +384,45 @@ function DesktopTaskRow({ task }: { task: TaskLite }) {
       <div role="cell" className="px-3 tabular-nums text-muted-foreground">
         {eta}
       </div>
-      <div role="cell" className="px-3">
-        <AttentionPill status={task.status}>{t(ATTENTION_KEYS[task.status])}</AttentionPill>
-      </div>
+      <div role="cell" className="px-3 text-muted-foreground">{formatHistoryTime(task.updated_at, locale)}</div>
       <div role="cell" className="min-w-0 px-3">
         <Link
           to={getTaskDestination(task)}
-          className="block truncate font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
+          className="block font-medium text-muted-foreground outline-none hover:text-primary focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring"
         >
           {t(ACTION_KEYS[task.status])}
         </Link>
       </div>
+      <div role="cell" className="flex justify-center"><TaskListActions task={task} deletion={deletion} /></div>
     </div>
   );
 }
 
-function MobileTaskCard({ task }: { task: TaskLite }) {
+function MobileTaskCard({ task, courseTags, deletion }: DashboardTaskProps) {
   const { locale, t } = useI18n();
   const isProcessing = isTaskProcessing(task.status);
   const progressQuery = useTaskProgress(task.task_id, { enabled: isProcessing });
   const progressValue = getProgressValue(task, progressQuery.progress, progressQuery.percent);
 
   return (
-    <Link
-      to={getTaskDestination(task)}
-      className="grid gap-3 rounded-[10px] border bg-card p-4 outline-none transition-colors hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold">{task.name}</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {formatTaskTime(task.updated_at, true, locale)}
-          </p>
+    <article className="relative [overflow-wrap:anywhere]">
+      <Link to={getTaskDestination(task)}
+        className="grid gap-3 rounded-[10px] border bg-card p-4 outline-none transition-colors hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">{task.name}</p>
+            {courseTags && <p className="mt-1 text-xs text-muted-foreground">{courseTags}</p>}
+            <p className="mt-1 text-xs text-muted-foreground">{formatTaskTime(task.updated_at, true, locale)}</p>
+          </div>
+          <StatusPill status={task.status}>{t(STAGE_KEYS[task.status])}</StatusPill>
         </div>
-        <StatusPill status={task.status}>{t(STAGE_KEYS[task.status])}</StatusPill>
-      </div>
-      <div className="flex items-center justify-between gap-4 text-xs text-muted-foreground">
-        <span>{t("dashboardColumnProgress")}{t("dashboardLabelSeparator")}{progressValue}</span>
-        <span className="font-medium text-primary">{t(ACTION_KEYS[task.status])}</span>
-      </div>
-    </Link>
+        <div className="flex min-h-8 items-center justify-between gap-3 pr-[76px] text-xs text-muted-foreground">
+          <span>{t("dashboardColumnProgress")}{t("dashboardLabelSeparator")}{progressValue}</span>
+          <span className="font-medium text-primary">{t(ACTION_KEYS[task.status])}</span>
+        </div>
+      </Link>
+      <div className="absolute bottom-4 right-4"><TaskListActions task={task} deletion={deletion} /></div>
+    </article>
   );
 }
 
@@ -430,29 +437,8 @@ function StatusPill({
     <span
       title={typeof children === "string" ? children : undefined}
       className={cn(
-        "inline-flex h-7 min-w-[112px] max-w-[116px] items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-full px-3 text-[12px] font-semibold xl:text-[13px]",
+        "inline-flex min-h-7 max-w-full items-center justify-center rounded-full px-3 py-1 text-center text-[12px] font-semibold xl:text-[13px]",
         taskStatusTone(status),
-      )}
-    >
-      {children}
-    </span>
-  );
-}
-
-function AttentionPill({
-  status,
-  children,
-}: {
-  status: TaskStatus;
-  children: ReactNode;
-}) {
-  return (
-    <span
-      className={cn(
-        "inline-flex h-7 min-w-[112px] max-w-[116px] items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-full px-3 text-[12px] font-semibold xl:text-[13px]",
-        status === "error" && "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-200",
-        status !== "error" && !["graded", "finalized"].includes(status) && "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-200",
-        ["graded", "finalized"].includes(status) && "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200",
       )}
     >
       {children}
@@ -576,8 +562,8 @@ function CompactTableMessage({
   const actionClassName = "mt-3 inline-flex h-7 items-center rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground outline-none hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring";
 
   return (
-    <div role="row" className="h-full">
-      <div role="cell" aria-colspan={7} className="flex h-full flex-col items-center justify-center px-6 text-center">
+    <div role="row" className="col-span-full h-full">
+      <div role="cell" aria-colspan={DASHBOARD_TASK_HEADINGS.length} className="flex h-full flex-col items-center justify-center px-6 text-center">
         <p className="text-sm font-semibold">{title}</p>
         <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">{description}</p>
         {actionTo ? (
@@ -598,9 +584,9 @@ function DesktopLoadingRows({ label }: { label: string }) {
         <div
           key={index}
           role="row"
-          className="grid h-11 animate-pulse grid-cols-[230px_150px_140px_130px_130px_140px_170px] items-center border-t first:border-t-0"
+          className="col-span-full grid grid-cols-subgrid h-11 animate-pulse items-center border-t first:border-t-0"
         >
-          {Array.from({ length: 7 }, (__, cell) => (
+          {DASHBOARD_TASK_HEADINGS.map((_, cell) => (
             <div key={cell} role="cell" className="px-3">
               <div className="h-3 rounded bg-muted" style={{ width: `${48 + ((index + cell) % 4) * 10}%` }} />
             </div>
