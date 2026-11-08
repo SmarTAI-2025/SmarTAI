@@ -34,6 +34,8 @@ GradingConfidence = Annotated[float, BeforeValidator(_optional_confidence)]
 RecognitionConfidence = Annotated[float | None, BeforeValidator(confidence_value)]
 
 class StepScore(BaseModel):
+    part_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
+    item_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
     step_no: int
     desc: str
     is_correct: bool

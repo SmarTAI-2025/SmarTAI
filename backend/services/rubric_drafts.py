@@ -7,11 +7,13 @@ still uses the final question identity. Teacher text remains the source of truth
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
+from backend.services.part_rubric import PartRubric, bind_parts, render_parts
 from backend.services.math_rubric_plan import (
     MathRubricPlan, MathRubricRoute, _Explanation, _build_plan, _content_hash,
     _mapping, _question_input, _validated_explanation, _with_preferences,
@@ -19,12 +21,20 @@ from backend.services.math_rubric_plan import (
 )
 
 
-class RubricDefinition(BaseModel):
+class WrittenRubricDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    routes: tuple[MathRubricRoute, ...] = Field(min_length=1, max_length=16)
-    follow_through: str = Field(min_length=1, max_length=20000)
-    numerical_policy: str = Field(min_length=1, max_length=20000)
+    part_rubric: PartRubric
+    expected_truth_by_part: dict[str, StrictBool] = Field(default_factory=dict, strict=True, exclude_if=lambda v: not v)
+
+
+class RubricDefinition(WrittenRubricDefinition):
+    """Accept historic route definitions when loading prior generations."""
+
+    part_rubric: PartRubric | None = Field(default=None, exclude_if=lambda v: v is None)
+    routes: tuple[MathRubricRoute, ...] = Field(default=(), max_length=16)
+    follow_through: str = Field(default="Preserve the frozen follow-through rule.", min_length=1, max_length=20000)
+    numerical_policy: str = Field(default="Use the stated precision and units.", min_length=1, max_length=20000)
     advisories: tuple[str, ...] = Field(default=(), max_length=20)
 
 
@@ -46,7 +56,31 @@ def draft_fingerprint(problem) -> str:
                           if k not in {"q_id", "number", "teacher_subpart_points"}})
 
 
-def render_rubric(definition: RubricDefinition, *, language="zh") -> str:
+class RubricAllocationError(ValueError):
+    """Model-safe feedback containing only known subpart labels and budgets."""
+
+
+def _item_subpart(item, labels):
+    from backend.services.question_structure import _allocation_marker_pattern
+
+    # An explicit parent ID can bind a step even when the prose contains no
+    # numeral. Never assign a subpart by the item's position in the reply.
+    from_id = next((label for index, label in enumerate(labels, 1)
+                    if item.id.casefold() == label.casefold() or re.fullmatch(
+                        rf"(?:sp|subpart[_-]?){index}(?:[.:-][a-z0-9_-]+)?", item.id, re.I)), None)
+    mentions = [label for label in labels if re.search(_allocation_marker_pattern(label), item.description, re.I)]
+    heading = next((label for label in mentions if re.match(
+        _allocation_marker_pattern(label), item.description.lstrip(), re.I)), None)
+    if from_id and heading and from_id != heading:
+        raise RubricAllocationError(f"Conflicting subpart assignment: item ID names {from_id}, description starts with {heading}.")
+    if from_id or heading:
+        return from_id or heading
+    if len(mentions) == 1:
+        return mentions[0]
+    raise RubricAllocationError("Each scoring item needs one explicit parent subpart. Use its label in the description or spN in its ID.")
+
+
+def render_rubric(definition: RubricDefinition, *, language="zh", subpart_labels=()) -> str:
     """One deterministic view of the same scoring data used by the grader."""
     zh = language == "zh"
     lines = []
@@ -64,7 +98,12 @@ def render_rubric(definition: RubricDefinition, *, language="zh") -> str:
             adjustment = ""
             if item.default_adjustments:
                 adjustment = "；未指定政策按批改严格度调整" if zh else "; unspecified policies follow grading strictness"
-            lines.append(f"- {item.description}：{points}{limit}{adjustment}")
+            if subpart_labels and route.mode == "points" and len(definition.routes) == 1:
+                label = _item_subpart(item, subpart_labels)
+                description = item.description.replace("\n", "\n  ")
+                lines.append(f"- {label} [{points}] {description}{adjustment}")
+            else:
+                lines.append(f"- {item.description}：{points}{limit}{adjustment}")
         if route.minimum_score:
             condition = ("非空作答" if route.minimum_condition == "nonblank" else "") if zh else (
                 "For nonblank answers, " if route.minimum_condition == "nonblank" else "")
@@ -97,9 +136,70 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
         # The caller seals this verified plan against the completed response.
         return original, prior
     context = _question_input(problem)
+    if definition.part_rubric is not None:
+        try:
+            rules = bind_parts(definition.part_rubric, {**problem, "criterion_source": context["criterion_source"]})
+        except ValueError as exc:
+            raise RubricAllocationError(str(exc)) from exc
+        from backend.services.true_false_answers import is_decision_only, reference_decisions
+        truth_key = definition.expected_truth_by_part
+        if truth_key and set(truth_key) != {part.id for part in rules.parts}:
+            from backend.services.part_rubric import canonical_label
+            aliases = {canonical_label(part.label, rules.label): part.id for part in rules.parts}
+            mapped = {aliases.get(canonical_label(key, rules.label), key): value for key, value in truth_key.items()}
+            if len(mapped) == len(truth_key):
+                truth_key = mapped
+        decision_only = is_decision_only(context["stem"], rules.teacher_rubric or "")
+        if truth_key and (not decision_only or set(truth_key) != {part.id for part in rules.parts}
+                          or not all(len(part.steps) == 1 for part in rules.parts)):
+            raise RubricAllocationError(
+                f"Return one decision step per part and one boolean per part ID. Required IDs: "
+                f"{[p.id for p in rules.parts]}; received {list(truth_key)}."
+            )
+        if truth_key:
+            explicit_key = reference_decisions(problem.get("reference_answer") or "", [p.label for p in rules.parts]) if all(p.label for p in rules.parts) else None
+            if explicit_key and any(explicit_key[p.label] != truth_key[p.id] for p in rules.parts):
+                raise RubricAllocationError("The truth key contradicts the labelled verdicts in the adopted reference answer.")
+            for part in rules.parts:
+                explicit = re.search(r"(?:判(?:断)?(?:.*?为)?|答案(?:为|是))\s*(正确|错误|真|假)[。.!！]?\s*$", part.steps[0].criterion)
+                if explicit and truth_key[part.id] != (explicit[1] in {"正确", "真"}):
+                    raise RubricAllocationError(f"{part.id}: the truth key and the stated expected decision disagree.")
+        criterion = original or render_parts(rules, language)
+        completed = {**problem, "criterion": criterion}
+        if not original:
+            completed["ai_completion_provenance"] = {**(problem.get("ai_completion_provenance") or {}),
+                                                    "criterion":{"source_kind":"ai_generated"}}
+        explanation = _Explanation(routes=(MathRubricRoute(id="parts", description="Apply the frozen per-part rubric.",
+            applies_when="always", mode="holistic"),), effective_criterion=criterion,
+            follow_through=definition.follow_through, numerical_policy=definition.numerical_policy,
+            advisories=(*rules.teacher_gaps, *(("教师评分规则的识别置信度低，请核对原文。" if language == "zh" else "Low confidence interpreting the teacher rubric. Check the original wording.",) if rules.low_confidence else ())))
+        base = _build_plan(_question_input(completed), explanation, reason="frozen_part_rubric")
+        body = base.model_dump(mode="json", exclude={"plan_id"})
+        body["part_rubric"] = rules.model_dump(mode="json")
+        if truth_key:
+            body["expected_truth_by_part"] = truth_key
+        plan = MathRubricPlan(**body, plan_id=_content_hash(body))
+        return criterion, RubricDraft(content_fingerprint=draft_fingerprint(completed), plan=plan)
     explicit = subpart_plan(context, candidate=definition)
     if explicit:
         return original, RubricDraft(content_fingerprint=draft_fingerprint(problem), plan=explicit)
+    labels = [part["label"] for part in (context.get("question_structure") or {}).get("subparts", [])]
+    if not original and labels and len(definition.routes) == 1 and definition.routes[0].mode == "points":
+        amounts = {}
+        for item in definition.routes[0].items:
+            label = _item_subpart(item, labels)
+            value = Decimal(str(item.points))
+            if value != value.quantize(Decimal("0.01")):
+                raise RubricAllocationError(f"Use at most two decimal places for the budget of {label}.")
+            amounts[label] = amounts.get(label, Decimal(0)) + value
+        missing = [label for label in labels if label not in amounts]
+        total = sum(amounts.values(), Decimal(0))
+        maximum = Decimal(str(context["max_score"]))
+        if missing or total != maximum:
+            raise RubricAllocationError(
+                f"Missing subparts: {', '.join(missing) or 'none'}. "
+                f"Item budgets total {total:g}; required {maximum:g}. "
+                "Cover every listed subpart and correct the item budgets to the required total.")
     explanation = _validated_explanation(context, _Explanation(
         **definition.model_dump(), effective_criterion=(
             "按以下结构化评分项执行；页面标准与此底稿一致。" if language == "zh" else
@@ -116,9 +216,10 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
     generated_definition = not original or (
         _question_input(problem)["criterion_source"] == "ai"
         and any((original.removeprefix(rule + "\n") if proof_points else original)
-                == render_rubric(canonical_definition, language=lang) for lang, rule in _OPEN_PROOF_RULE.items())
+                == render_rubric(canonical_definition, language=lang, subpart_labels=shape)
+                for shape in ((), labels) for lang, rule in _OPEN_PROOF_RULE.items())
     )
-    criterion = original or render_rubric(canonical_definition, language=language)
+    criterion = original or render_rubric(canonical_definition, language=language, subpart_labels=labels)
     if not original and proof_points:
         # Freeze method equivalence in the same source that both teachers and graders read.
         criterion = _OPEN_PROOF_RULE["zh" if language == "zh" else "en"] + "\n" + criterion
@@ -139,6 +240,10 @@ def retarget_draft(draft: RubricDraft, problem) -> RubricDraft:
     """Seal a generated candidate after sibling fields in its response are known."""
     payload = draft.plan.model_dump(mode="json", exclude={"plan_id"})
     payload["input_fingerprint"] = _content_hash(_question_input(problem))
+    if draft.plan.part_rubric:
+        context = _question_input(problem)
+        payload["part_rubric"]["id"] = context["q_id"] or draft.plan.part_rubric.id
+        payload["part_rubric"]["label"] = context["number"]
     plan = MathRubricPlan(plan_id=_content_hash(payload), **payload)
     return draft.model_copy(update={"content_fingerprint": draft_fingerprint(problem), "plan": plan})
 
@@ -159,13 +264,13 @@ def saved_draft(problem, *, grading_setup=None) -> RubricDraft | None:
     setup = _mapping(grading_setup) if grading_setup is not None else {}
     context = _question_input(problem)
     if (draft.content_fingerprint != draft_fingerprint(problem)
-            or draft.teacher_notes != str(setup.get("teacher_notes") or "")
+            or (not draft.plan.part_rubric and draft.teacher_notes != str(setup.get("teacher_notes") or ""))
             or draft.plan.original_criterion != context["criterion"]
             or draft.plan.max_score != context["max_score"]):
         return None
     # An older cached interpretation may have discarded an unambiguous allocation.
     # Only preparation reads this cache; a running run uses its own frozen plan.
-    if draft.plan.compilation_reason != SUBPART_ALLOCATION:
+    if draft.plan.part_rubric is None and draft.plan.compilation_reason != SUBPART_ALLOCATION:
         explicit = subpart_plan(context, teacher_notes=draft.teacher_notes, candidate=draft.plan)
         if explicit:
             return draft.model_copy(update={"plan": explicit})
@@ -176,14 +281,86 @@ def bind_draft(draft: RubricDraft, problem, *, grading_setup=None) -> MathRubric
     if draft.content_fingerprint != draft_fingerprint(problem):
         raise ValueError("rubric_draft_content_changed")
     setup = _mapping(grading_setup) if grading_setup is not None else {}
-    if draft.teacher_notes != str(setup.get("teacher_notes") or ""):
+    if not draft.plan.part_rubric and draft.teacher_notes != str(setup.get("teacher_notes") or ""):
         raise ValueError("rubric_draft_teacher_policy_changed")
     plan = retarget_draft(draft, problem).plan
     return _with_preferences(plan, grading_setup)
 
 
+def edit_alternatives(problem, presentation, updates):
+    """Apply edits against the displayed IDs under the question's revision lock."""
+    from backend.services.part_rubric import read_alternative
+
+    current = saved_draft(problem)
+    if not current or not current.plan.part_rubric:
+        raise ValueError("This rubric has changed. Reload the question.")
+    rules = current.plan.part_rubric
+    if not updates or updates.keys() - {part.id for part in rules.parts}:
+        raise ValueError("Unknown or missing scoring part.")
+    overrides = dict(presentation.get("alternative_rules") or {})
+    parts = []
+    for part in rules.parts:
+        if part.id in updates:
+            text = updates[part.id].strip()
+            policy = read_alternative(text, maximum=part.total_pts)
+            overrides[part.id] = {"text": text, "label": part.label, "stem": part.stem}
+            part = part.model_copy(update={"alternative": policy})
+        parts.append(part)
+    presentation["alternative_rules"] = overrides
+    problem._math_rubric_source = {**problem._math_rubric_source, "presentation": presentation}
+    body = current.plan.model_dump(mode="json", exclude={"plan_id"})
+    body["part_rubric"] = rules.model_copy(update={
+        "parts": tuple(parts), "rubric_version": rules.rubric_version + 1,
+    }).model_dump(mode="json")
+    body["input_fingerprint"] = _content_hash(_question_input(problem))
+    plan = MathRubricPlan(plan_id=_content_hash(body), **body)
+    presentation["rubric_draft"] = current.model_copy(update={
+        "plan": plan, "content_fingerprint": draft_fingerprint(problem),
+    }).model_dump(mode="json")
+
+
+async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter=None):
+    """Only missing/stale semantic content reaches the bounded compiler."""
+    import json
+    from backend.domain.errors import ValidationError
+    from backend.services.part_rubric import PART_INSTRUCTION
+    from backend.tools.structured_llm import structured_llm_call, StructuredOutputInvalidError
+
+    context = _question_input(problem)
+    language = (_mapping(grading_setup).get("feedback_language") if grading_setup else None) or "zh"
+    source = {**context}
+    if context["criterion_source"] == "ai":
+        source["ai_completion_provenance"] = {"criterion": {}}
+    draft = None
+
+    def validate(candidate):
+        nonlocal draft
+        _, draft = generated_rubric(source, RubricDefinition.model_validate(candidate.model_dump()), language=language)
+
+    try:
+        await structured_llm_call(provider, system_prompt=(
+            PART_INSTRUCTION + "\nReturn the written rubric definition in " + language + ".\n" +
+            json.dumps(WrittenRubricDefinition.model_json_schema(), ensure_ascii=False)),
+            user_prompt=json.dumps(context, ensure_ascii=False), output_model=WrittenRubricDefinition,
+            validate_output=validate)
+    except StructuredOutputInvalidError as exc:
+        raise ValidationError("The scoring rules could not be validated. Review this question's rubric.",
+                              code="invalid_structured_rubric") from exc
+    return retarget_draft(draft, problem)
+
+
+def requires_part_rubric(problem):
+    row = _mapping(problem)
+    source = row.get("source") or getattr(problem, "_math_rubric_source", {}) or {}
+    presentation = source.get("presentation") or {}
+    draft = row.get("rubric_draft") or presentation.get("rubric_draft") or {}
+    return presentation.get("rubric_schema_version") == 2 or bool((draft.get("plan") or {}).get("part_rubric"))
+
+
 async def compile_draft(problem, provider, *, grading_setup=None, reporter=None):
     """Only missing/stale semantic content reaches the bounded compiler."""
+    if requires_part_rubric(problem):
+        return await compile_parts_draft(problem, provider, grading_setup=grading_setup, reporter=reporter)
     from backend.services.math_rubric_plan import prepare_math_rubric_plan
 
     setup = dict(_mapping(grading_setup)) if grading_setup is not None else {}

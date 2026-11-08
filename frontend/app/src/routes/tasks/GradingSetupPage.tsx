@@ -72,7 +72,7 @@ function GradingSetupPageForm() {
   const appliedServerKeyRef = useRef<string | null>(null);
   const conflictServerKeyRef = useRef<string | null>(null);
   const initialSetupRef = useRef<string | null>(null);
-  const allowLeaveRef = useRef(false);
+  const leave = useDraftLeave();
   const preserveSyncNoticeRef = useRef(false);
   const [setup, setSetup] = useState<GradingSetup | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -225,8 +225,7 @@ function GradingSetupPageForm() {
       setSyncNoticeKey(null);
       if (!await localDraft.clear({ setup, advancedOpen })) return;
       if (!localDraft.isCurrent()) return;
-      allowLeaveRef.current = true;
-      navigate(`/tasks/${taskId}/grading/preflight`);
+      leave.discardAndLeave(() => navigate(`/tasks/${taskId}/grading/preflight`));
     } catch (error) {
       setSaveFailure(error);
       const normalized = normalizeAPIError(error);
@@ -848,11 +847,6 @@ function StrategySection({
   onChange: (updater: (current: GradingSetup) => GradingSetup) => void;
 }) {
   const multipleModels = setup.selected_provider_ids.length > 1;
-  const strictnessLabel: "lenient" | "standard" | "strict" = setup.strictness < 35
-    ? "lenient"
-    : setup.strictness > 65
-      ? "strict"
-      : "standard";
   const toneKey = setup.feedback_tone === "encouraging"
     ? "toneEncouraging"
     : setup.feedback_tone === "strict"
@@ -873,23 +867,7 @@ function StrategySection({
       <h2 id="grading-strategy-title" className="text-[20px] font-bold leading-7 text-foreground">{gradingSetupText(locale, "strategyTitle")}</h2>
       <p className="sr-only">{gradingSetupText(locale, "strategyDescription")}</p>
 
-      <label className="mt-3 block">
-        <span className="flex items-center justify-between gap-4 text-[14px] font-semibold leading-5 text-foreground">
-          <span>{gradingSetupText(locale, "strictness")}</span>
-          <span className="shrink-0 text-primary">{gradingSetupText(locale, strictnessLabel)} · {setup.strictness}</span>
-        </span>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={setup.strictness}
-          onChange={(event) => onChange((current) => ({ ...current, strictness: Number(event.target.value) }))}
-          className="grading-range mt-3 w-full"
-          style={{ "--range-progress": `${setup.strictness}%` } as CSSProperties}
-        />
-        <span className="mt-1.5 flex justify-between text-[13px] leading-5 text-muted-foreground"><span>{gradingSetupText(locale, "lenient")}</span><span>{gradingSetupText(locale, "standard")}</span><span>{gradingSetupText(locale, "strict")}</span></span>
-      </label>
+
 
       <div className="mt-3 border-t">
         <label className="flex min-h-[64px] cursor-pointer items-center gap-3 py-3">
@@ -1049,7 +1027,7 @@ function CenteredState({ title, description, action }: { title: string; descript
 }
 
 function cloneSetup(setup: GradingSetup): GradingSetup {
-  return { ...setup, low_confidence_threshold: LOW_CONFIDENCE_THRESHOLD, selected_provider_ids: [...setup.selected_provider_ids], ...(setup.expert_weights ? { expert_weights: { ...setup.expert_weights } } : {}) };
+  return { ...setup, strictness: 50, low_confidence_threshold: LOW_CONFIDENCE_THRESHOLD, selected_provider_ids: [...setup.selected_provider_ids], ...(setup.expert_weights ? { expert_weights: { ...setup.expert_weights } } : {}) };
 }
 
 function serializeSetup(setup: GradingSetup): string {

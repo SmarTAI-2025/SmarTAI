@@ -43,6 +43,17 @@ async def setup(monkeypatch, text="one"):
     return owner, task, operation, pipeline
 
 
+def mock_supplied_rule_interpretation(monkeypatch):
+    from backend.services import rubric_drafts
+    async def compile_rule(row, *_args, **_kwargs):
+        definition = rubric_drafts.RubricDefinition(part_rubric=dict(
+            id=row["q_id"], label=row["number"], stem=row["stem"], total_pts=row["max_score"],
+            parts=[dict(id="p1", total_pts=row["max_score"], steps=[dict(
+                id="s1", criterion=row["criterion"], total_pts=row["max_score"])])]))
+        return rubric_drafts.generated_rubric(row, definition)[1]
+    monkeypatch.setattr(rubric_drafts, "compile_parts_draft", compile_rule)
+
+
 def persisted(owner, operation):
     saved = workflow_repository.get_operation(operation.operation_id, owner_id=owner)
     file_id = saved.checkpoint["questions_extracted_artifact_id"]
@@ -174,6 +185,7 @@ async def test_recovered_u_tex_is_saved_once_without_changing_teacher_material(m
 @pytest.mark.asyncio
 @pytest.mark.parametrize("count", [9, 10, 28])
 async def test_real_worker_roundtrip_multiple_snapshot_sizes(monkeypatch, count):
+    mock_supplied_rule_interpretation(monkeypatch)
     owner, task, operation, _ = await setup(monkeypatch)
     monkeypatch.setattr(inc, "_chunk_problem_text", lambda *_: [str(i) for i in range(1, count + 1)])
     monkeypatch.setattr(inc, "_extract_problems_call", AsyncMock(
@@ -185,7 +197,7 @@ async def test_real_worker_roundtrip_multiple_snapshot_sizes(monkeypatch, count)
     assert list(rows) == [f"q{i}" for i in range(1, count + 1)]
     assert [rows[f"q{i}"]["number"] for i in range(1, count + 1)] == [str(i) for i in range(1, count + 1)]
     assert task_facade.get_task(task_id=task, owner_id=owner)["problem_count"] == count
-    assert len(saved.checkpoint["incremental_unit_artifacts"]) == count
+    assert len(saved.checkpoint["incremental_unit_artifacts"]) == 2 * count
 
 
 @pytest.mark.asyncio
@@ -217,13 +229,22 @@ async def test_retired_worker_rejects_before_resolving_any_provider(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_two_hundred_questions_save_independent_fields_with_bounded_current_manifest(monkeypatch):
+    mock_supplied_rule_interpretation(monkeypatch)
     owner, task, operation, _ = await setup(monkeypatch)
     monkeypatch.setattr(inc, "_extract_problems_call", AsyncMock(return_value=inc._rows([row(i) for i in range(1, 201)])))
     calls = []
     async def generate(data, targets, *args, **kwargs):
-        calls.append(data["q1"]["number"])
-        return [generated(target["target"], "A complete explanation." if target["target"] == "reference_answer"
-                          else "Full credit for a correct explanation.") for target in targets]
+        from backend.services.rubric_drafts import RubricDefinition, generated_rubric, retarget_draft
+        source = data["q1"]
+        calls.append(source["number"])
+        definition = RubricDefinition(part_rubric=dict(id="q1", stem=source["stem"], label=source["number"],
+            total_pts=10, parts=[dict(id="p", total_pts=10, steps=[dict(id="s", criterion="Explain.", total_pts=10)])]))
+        criterion, draft = generated_rubric(source, definition)
+        completed = {**source, "reference_answer": "A complete explanation.", "criterion": criterion,
+                     "ai_completion_provenance": {target["target"]: {"source_kind":"ai_generated"} for target in targets}}
+        candidates = [generated(target["target"], completed[target["target"]]) for target in targets]
+        next(c for c in candidates if c.target == "criterion").rubric_draft = retarget_draft(draft, completed).model_dump(mode="json")
+        return candidates
     monkeypatch.setattr(inc, "generate_missing_question_materials", generate)
     await api.run_durable_question_preparation(operation)
     saved, rows = persisted(owner, operation)
@@ -345,6 +366,44 @@ async def test_large_projection_recovers_from_durable_units_without_ai(monkeypat
     assert [value["number"] for value in rows.values()] == ["1", "2"]
     assert all(value["stem"] == "A" * 4_500 for value in rows.values())
     assert extract.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_interrupted_batch_restores_uncompacted_units_without_a_model(monkeypatch):
+    from backend.services.task_execution import stop_task_run
+
+    owner, task, operation, pipeline = await setup(monkeypatch)
+    source_rows = inc._rows([row(i) for i in range(1, 35)])
+    extract = AsyncMock(return_value=source_rows)
+    monkeypatch.setattr(inc, "_extract_problems_call", extract)
+    generation_started = asyncio.Event()
+
+    async def wait_for_response(*args, **kwargs):
+        generation_started.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(inc, "generate_missing_question_materials", wait_for_response)
+    runner = asyncio.create_task(pipeline.run())
+    try:
+        await asyncio.wait_for(generation_started.wait(), 10)
+        saved = workflow_repository.get_operation(operation.operation_id, owner_id=owner)
+        assert saved.checkpoint["incremental_view_from_units"] is True
+        assert saved.checkpoint["questions_extracted_artifact_id"] is None
+    finally:
+        runner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await runner
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    stop_task_run(task_id=task, owner_id=owner, job_id=operation.operation_id,
+                  expected_revision=workflow.workflow_revision)
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    response = await api.manually_complete_question_preparation(task, operation.operation_id,
+        api.ManualQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision),
+        current=SimpleNamespace(id=owner))
+    assert response["status"] == "ready_for_review"
+    recovered = task_facade.get_task(task_id=task, owner_id=owner, full=True)["problem_data"]
+    assert [item["stem"] for item in recovered.values()] == [item["stem"] for item in source_rows.values()]
+    assert extract.await_count == 1
 
 
 @pytest.mark.asyncio

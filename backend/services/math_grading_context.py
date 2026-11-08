@@ -16,7 +16,7 @@ from backend.models import ProblemInfo
 if TYPE_CHECKING:
     from backend.services.math_rubric_plan import MathRubricPlan
 
-MATH_GRADING_ENGINE_VERSION = "math_evidence_v2"
+MATH_GRADING_ENGINE_VERSION = "math_evidence_v3"
 ENGINE_EVENT = "grading_math_engine"
 PLAN_EVENT = "grading_math_rubric_plan"
 _current_plans: ContextVar[dict[str, "MathRubricPlan"] | None] = ContextVar(
@@ -171,7 +171,7 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
         fallback_math_rubric_plan, math_rubric_fingerprint,
     )
     from backend.progress.grading_activity import observe_auxiliary_request
-    from backend.services.rubric_drafts import saved_draft, bind_draft, compile_draft, remember_draft
+    from backend.services.rubric_drafts import saved_draft, bind_draft, compile_draft, remember_draft, requires_part_rubric
 
     checkpoints = current_checkpoints()
     plans = {}
@@ -222,6 +222,9 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
                         "prepare_grading_criteria",
                     )
                 if provider is None or not callable(getattr(provider, "ainvoke", None)):
+                    if requires_part_rubric(problem):
+                        from backend.domain.errors import ValidationError as RuleValidationError
+                        raise RuleValidationError("A validated scoring rubric is required.", code="invalid_structured_rubric")
                     plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
                 else:
                     try:
@@ -243,7 +246,7 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
                         raise
                     except Exception as exc:
                         # Cancellation derives from BaseException and is not caught.
-                        if _has_critical_plan_failure(
+                        if requires_part_rubric(problem) or _has_critical_plan_failure(
                             exc, (CheckpointWriteError, DomainError, SQLAlchemyError),
                         ):
                             raise
@@ -251,6 +254,9 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
                         plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
                 if (plan.input_fingerprint != math_rubric_fingerprint(problem)
                         or plan.max_score != problem.max_score):
+                    if requires_part_rubric(problem):
+                        from backend.domain.errors import ValidationError as RuleValidationError
+                        raise RuleValidationError("Scoring rules changed during preparation.", code="invalid_structured_rubric")
                     plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
                 if checkpoints is not None:
                     checkpoints.save_math_plan(problem, plan)

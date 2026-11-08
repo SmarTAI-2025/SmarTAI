@@ -133,6 +133,7 @@ class UpdateProblemRequest(BaseModel):
     type: str | None = Field(default=None, min_length=1, max_length=64)
     stem: str | None = None
     criterion: str | None = None
+    alternative_rule_edits: dict[str, str] = Field(default_factory=dict, max_length=100)
     max_score: float | None = Field(
         default=None,
         gt=0,

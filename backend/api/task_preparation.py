@@ -2547,6 +2547,7 @@ async def run_durable_question_preparation(operation) -> None:
         )
         await pipeline.copy_retry_units()
         packages = await pipeline.run()
+        packages = await pipeline.freeze_supplied_rules(packages)
         # Final publication remains one fenced transaction. Incremental drafts
         # already exist independently if this transaction fails or loses its lease.
         await _run_question_preparation(

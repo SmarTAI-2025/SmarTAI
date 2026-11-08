@@ -400,7 +400,7 @@ def test_nonblank_minimum_does_not_grant_blank_answer_points():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("blank_credit", [0, 2])
-async def test_blank_answer_uses_actual_rubric_once_without_empty_deduction_full_marks(
+async def test_confirmed_blank_is_zero_before_any_model_or_nonblank_floor(
     monkeypatch, provider, blank_credit
 ):
     p = problem(criterion=f"Blank answers earn {blank_credit} points; otherwise deduct errors.")
@@ -415,9 +415,8 @@ async def test_blank_answer_uses_actual_rubric_once_without_empty_deduction_full
     monkeypatch.setattr(grading, "structured_llm_call", call)
     with math_plans_context({"q1": plan}):
         result = await CalculationSkill(provider).grade(p, answer(""))
-    assert result.score == blank_credit and not result.error_kind
-    assert call.await_count == 1
-    assert call.await_args.kwargs["output_model"] is grading.DirectMathGrade
+    assert result.score == 0 and not result.error_kind
+    call.assert_not_awaited()
 
 
 def test_holistic_evidence_is_separate_from_brief_comment():

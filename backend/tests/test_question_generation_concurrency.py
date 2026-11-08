@@ -705,6 +705,7 @@ def test_subpart_rubric_is_regenerated_unless_teacher_material_was_imported():
 
 @pytest.mark.asyncio
 async def test_generation_request_carries_bounded_subpart_contract(monkeypatch):
+    from backend.tests.part_rubric_fixtures import definition_for
     problems = _problems(1)
     captured = {}
 
@@ -723,6 +724,7 @@ async def test_generation_request_carries_bounded_subpart_contract(monkeypatch):
                     "target_id": "q1:criterion",
                     "q_id": "q1",
                     "target": "criterion",
+                    "rubric_definition": definition_for(problems["q1"], budgets=[4,6]),
                     "text_value": "(a) 4 points (b) 6 points",
                 },
             ],
@@ -741,7 +743,7 @@ async def test_generation_request_carries_bounded_subpart_contract(monkeypatch):
     assert structure["scoring_unit"] == "major_question"
     assert [part["label"] for part in structure["subparts"]] == ["(a)", "(b)"]
     assert all("stem" not in part and "source_span_ids" not in part for part in structure["subparts"])
-    assert "sum equals that major question's max_score" in captured["system"]
+    assert "budgets sum to total_pts" in captured["system"]
     assert [candidate.target_id for candidate in result] == [
         "q1:reference_answer",
         "q1:criterion",

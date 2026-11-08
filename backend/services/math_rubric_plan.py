@@ -20,6 +20,7 @@ from backend.tools.structured_llm import (
     StructuredOutputBoundsError, StructuredOutputInvalidError, structured_llm_call,
 )
 from backend.services.math_source_evidence import match_source_quote
+from backend.services.part_rubric import PartRubric
 from backend.services.math_strictness import Adjustment, strictness_policy
 
 
@@ -121,6 +122,8 @@ class FrozenBinaryPolicy(BaseModel):
 class MathRubricPlan(_Explanation):
     """Immutable JSON-safe internal contract; route order is significant."""
 
+    expected_truth_by_part: dict[str, bool] = Field(default_factory=dict, exclude_if=lambda v: not v)
+    part_rubric: PartRubric | None = Field(default=None, exclude_if=lambda v: v is None)
     schema_version: Literal["math_rubric_v3"] = SCHEMA_VERSION
     plan_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -202,6 +205,8 @@ def _question_input(problem: Any) -> dict[str, Any]:
            ("q_id", "number", "type", "stem", "criterion", "reference_answer")},
         "max_score": maximum,
         "criterion_source": criterion_source,
+        **({"alternative_rules": presentation["alternative_rules"]}
+           if presentation.get("alternative_rules") else {}),
         "question_structure": structure_input,
         "teacher_subpart_points": {
             str(label): str(points)
@@ -305,7 +310,7 @@ def _subpart_budgets(context) -> list[_PartBudget]:
         rf"|each\s+(?:subquestion|sub-question|subpart|part)\s+(?:is\s+worth\s+)?{amount}\s+(?:points?|marks?)"
         rf"|{amount}\s+(?:points?|marks?)\s+(?:per|for each)\s+(?:subquestion|sub-question|subpart|part))[。.]?",
         unicodedata.normalize("NFKC", rule).strip(), re.I)
-    if not match and not re.match(r"(?:第|小问|part)?\s*[(（]", rule.lstrip(), re.I):
+    if not match and not re.match(r"(?:第|小[问题]|(?:sub)?part\b|[(（])", rule.lstrip(), re.I):
         return []
     from backend.services.question_structure import build_major_question_structure
 
@@ -597,7 +602,9 @@ _PREFERENCES_POLICY = (
 
 def _with_preferences(plan, grading_setup):
     setup = _mapping(grading_setup) if grading_setup is not None else {}
-    preferences = {"strictness": setup.get("strictness", 50),
+    if plan.part_rubric is not None:
+        return plan
+    preferences = {"strictness": 50,
                    "allow_partial_credit": setup.get("allow_partial_credit", True),
                    "teacher_notes": str(setup.get("teacher_notes") or "")}
     payload = plan.model_dump(mode="json", exclude={"plan_id"})
@@ -1135,7 +1142,7 @@ provider failures retain the existing execution/retry semantics.
     context = _question_input(problem)
     setup = _mapping(grading_setup) if grading_setup is not None else {}
     preferences = {
-        "strictness": setup.get("strictness", 50),
+        "strictness": 50,
         "allow_partial_credit": setup.get("allow_partial_credit", True),
         "teacher_notes": str(setup.get("teacher_notes") or ""),
     }

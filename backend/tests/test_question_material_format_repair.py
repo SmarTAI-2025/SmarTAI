@@ -88,6 +88,8 @@ async def test_missing_subpart_is_repaired_within_the_same_question():
     from backend.tests.test_question_preparation_recovery import _questions, _candidates
     problems = _questions(1)
     correct = [item.model_dump(mode="json") for item in _candidates("q1")]
+    from backend.tests.part_rubric_fixtures import definition_for
+    next(item for item in correct if item["target"]=="criterion")["rubric_definition"] = definition_for(problems["q1"],budgets=[4,6])
     incomplete = [dict(item) for item in correct]
     next(item for item in incomplete if item["target"] == "reference_answer")["text_value"] = "(a) Only the first subpart."
     provider = Provider([json.dumps({"candidates": incomplete}), json.dumps({"candidates": correct})])

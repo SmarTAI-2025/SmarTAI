@@ -217,6 +217,12 @@ def _apply_math_review_advisory(correction: Correction) -> Correction:
     for expert in correction.expert_results:
         trace = read_math_trace(expert) if _is_successful_expert(expert) else None
         assessment = trace.get("assessment") if trace else None
+        if isinstance(assessment, dict):
+            decisions = assessment.get("part_decisions") or []
+            if any(d.get("method") == "alternative" and d.get("relevance") in {"partial", "complete"} for d in decisions):
+                reasons.append("math_alternative_method")
+            if any(d.get("relevance") == "uncertain" for d in decisions):
+                reasons.append("math_verification_conflict")
         if trace and trace.get("review_advisory"):
             # Classify only an already-active advisory; do not add review triggers.
             if trace.get("review_pending"):
@@ -691,7 +697,9 @@ def _weighted_average_fallback(
         ]
         comment = "\n\n———\n\n".join(parts)
 
-    final_score = min(max(float(weighted_score.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)), 0.0), problem.max_score)
+    from backend.services.grading_scores import score_quantum
+    quantum = score_quantum(step for expert in expert_results for step in expert.steps)
+    final_score = min(max(float(weighted_score.quantize(quantum, rounding=ROUND_HALF_UP)), 0.0), problem.max_score)
     from backend.skills.math_grading import weighted_math_steps
     return _apply_math_review_advisory(Correction(
         q_id=problem.q_id,
@@ -723,7 +731,7 @@ def _expert_to_correction(
     return _apply_math_review_advisory(Correction(
         q_id=q_id,
         type=q_type,
-        score=round_ai_score(expert.score, expert.max_score),
+        score=round_ai_score(expert.score, expert.max_score, expert.steps),
         max_score=expert.max_score,
         confidence=expert.confidence,
         comment=expert.comment,

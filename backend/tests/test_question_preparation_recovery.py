@@ -33,6 +33,17 @@ from backend.tests.test_task_background_workflows import (
 
 
 class _RecoveryRegistry(_Registry):
+    class Provider:
+        provider_id = "test-provider"
+        supports_vision = False
+        async def ainvoke(self, messages):
+            from backend.llm.providers import LLMResponse
+            from backend.tests.part_rubric_fixtures import definition_for
+            context = json.loads(messages[-1].content)
+            assert "criterion" in context and "max_score" in context
+            return LLMResponse(content=json.dumps(definition_for(context)), model="test-model", provider="test", duration_ms=1)
+    provider = Provider()
+
     def __init__(self, model: str = "test-model") -> None:
         self.model = model
 
@@ -382,8 +393,9 @@ def _install_incremental_preparer(
         if q_id in failures:
             raise ProviderRequestError("provider_rate_limited", status_code=429)
         requested = {target["target"] for target in targets}
-        return [candidate.model_copy(update={"q_id": "q1", "target_id": "q1:" + candidate.target})
-                for candidate in _candidates(q_id) if candidate.target in requested]
+        from backend.tests.part_rubric_fixtures import freeze_reply
+        return freeze_reply(row, [candidate.model_copy(update={"q_id":"q1", "target_id":"q1:"+candidate.target})
+                for candidate in _candidates(q_id) if candidate.target in requested])
 
     async def finish(self, key, rows=None, error=None):
         nonlocal stopped

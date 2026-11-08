@@ -57,6 +57,9 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
   if (issue.code === "source_conflict" && issue.details?.reason === "test_case_output_conflict") return locale === "zh-CN"
     ? "测试用例中，同一输入对应了不同预期输出，请核对。"
     : "Test cases have different expected outputs for the same input. Please review.";
+  if (issue.details?.reason === "invalid_structured_rubric") return locale === "zh-CN"
+    ? "评分标准尚未完整识别，请对照教师原文修正。" : "The scoring rules are incomplete. Check the original rubric.";
+  if (issue.code === "math_rubric_advisory" && issue.details?.reason === "teacher_rule_interpretation" && typeof issue.details?.message === "string") return issue.details.message;
   if (issue.code === "math_rubric_advisory") return locale === "zh-CN"
     ? "本题评分标准有待核对的内容。" : "Some rubric details need review.";
   if (issue.details?.review_display_reason === "empty_stem") return locale === "zh-CN"

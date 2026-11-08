@@ -16,6 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError, field_validator
 
+from backend.skills.part_scoring import INSTRUCTION as PART_SCORING_INSTRUCTION, PartDecision, settle_parts
 from backend.models import ExpertResult, GradingConfidence, StepScore
 from backend.skills.base import (
     GradingSkill, authoritative_score_instruction, build_system_prompt,
@@ -136,18 +137,9 @@ class EvidenceJudgment(BaseModel):
     reason: str = Field(min_length=1)
 
 
-class MathAssessment(BaseModel):
-    route_id: str
-    route_reason: str
+class EvidenceAssessment(BaseModel):
     claims: list[Claim] = Field(default_factory=list, max_length=_MAX_ASSESSMENT_CLAIMS)
     checks: list[Verification] = Field(default_factory=list, max_length=8)
-    awards: list[Award] = Field(default_factory=list, max_length=80)
-    deductions: list[Deduction] = Field(default_factory=list, max_length=80)
-    score: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-    binary_correct: bool | None = Field(default=None, strict=True, description=(
-        "For an explicit whole-question zero/full rule only: whether the entire final answer "
-        "satisfies that rule. Judge correctness independently of the proposed numerical score."
-    ))
     confidence: GradingConfidence = 0.0
     rationale: str = ""  # Detailed evidence for holistic scoring; comment stays concise.
     comment: str = Field(description=(
@@ -157,6 +149,30 @@ class MathAssessment(BaseModel):
     ))
     needs_review: bool = False
     evidence_judgments: list[EvidenceJudgment] = Field(default_factory=list, max_length=8)
+
+
+
+
+class FrozenPartAssessment(EvidenceAssessment):
+    """Wire shape for frozen written rubrics, including independent review."""
+    model_config = ConfigDict(extra="forbid")
+    part_decisions: list[PartDecision] = Field(min_length=1, max_length=100)
+
+    def assessment(self):
+        return MathAssessment(route_id="parts", route_reason="Frozen part rules", **self.model_dump())
+
+
+class MathAssessment(EvidenceAssessment):
+    part_decisions: list[PartDecision] = Field(default_factory=list, max_length=100, exclude_if=lambda v:not v)
+    route_id: str
+    route_reason: str
+    awards: list[Award] = Field(default_factory=list, max_length=80)
+    deductions: list[Deduction] = Field(default_factory=list, max_length=80)
+    score: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    binary_correct: bool | None = Field(default=None, strict=True, description=(
+        "For an explicit whole-question zero/full rule only: whether the entire final answer "
+        "satisfies that rule. Judge correctness independently of the proposed numerical score."
+    ))
 
 
 class DirectMathGrade(BaseModel):
@@ -391,6 +407,11 @@ def _default_fraction(kind, item, claims, targets, origin, plan):
 
 def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_text="") -> tuple[float, list[StepScore]]:
     """Validate and sum one selected rubric route; no CAS-result score rules."""
+    if plan.part_rubric is not None:
+        if assessment.route_id != "parts" or assessment.awards or assessment.deductions:
+            raise ValueError("Use the frozen parts only, without a second question-level ledger.")
+        return settle_parts(plan.part_rubric, assessment.part_decisions, answer, problem_text,
+                            allow_partial=plan.allow_partial_credit)
     claims = _claim_map(assessment, answer, plan, problem_text=problem_text)
     if answer.strip() and not claims:
         raise ValueError("detailed_assessment_requires_claims")
@@ -570,6 +591,13 @@ def _deduction_signature(assessment: MathAssessment) -> tuple:
                         for item in assessment.deductions))
 
 
+def _part_signature(assessment):
+    return tuple(sorted((part.part_id, part.relevance, part.method,
+        tuple(sorted((step.id, step.outcome) for step in part.steps)),
+        tuple(sorted((error.rule_id, error.origin_quote) for error in part.errors)))
+        for part in assessment.part_decisions))
+
+
 def _award_signatures(assessment):
     quotes = {claim.id: claim.quote for claim in assessment.claims}
     return {award.item_id: (award.score, award.conditional_credit, award.adjustment,
@@ -585,6 +613,7 @@ def math_scoring_disagreement(experts: list[ExpertResult]) -> bool:
             continue
         assessment = MathAssessment.model_validate(trace["assessment"])
         signatures.add((trace.get("plan_id"), assessment.route_id, expert.score,
+                        _part_signature(assessment),
                         tuple(sorted(_award_signatures(assessment).items())),
                         _deduction_signature(assessment)))
     scores = {expert.score for expert in experts if not expert.error_kind and read_math_trace(expert)}
@@ -885,7 +914,7 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
     item_ids = set().union(*(signature.keys() for signature in signatures))
     disputed = {key for key in item_ids
                 if len({signature.get(key) for signature in signatures}) > 1}
-    other_dispute = (len(route_ids) > 1 or
+    other_dispute = (len({_part_signature(a) for a in assessments if a is not None}) > 1 or len(route_ids) > 1 or
                      len({expert.score for expert in experts}) > 1 or
                      len({_deduction_signature(a) for a in assessments if a is not None}) > 1)
     requested_review = any(a.needs_review for a in assessments if a is not None) or any(
@@ -1014,7 +1043,7 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                    "(string) to an audit object with the same steps/context_source_ids shape as its trace. "
                    "This optional appendix must never be placed inside a revision or assessment."
                    if any("proof_audit" in trace for trace in traces) else "")
-                + authoritative_score_instruction(problem.max_score)
+                + (PART_SCORING_INSTRUCTION if plan.part_rubric else authoritative_score_instruction(problem.max_score))
                 + "\nJSON Schema:\n" + _json(review_format.model_json_schema()), language, grading_setup,
                 **({"output_instruction": OUTPUT_INSTRUCTION} if any("proof_audit" in trace for trace in traces) else {})),
             user_prompt=_json({"problem": problem.stem, "reference": problem.reference_answer,
@@ -1088,6 +1117,26 @@ def weighted_math_steps(experts, weights, maximum, score):
     same_route = len({trace.get("assessment", {}).get("route_id") for trace in traces}) == 1
     keys = [[award["item_id"] for award in trace.get("assessment", {}).get("awards", [])]
             for trace in traces]
+    if all(trace.get("assessment", {}).get("part_decisions") for trace in traces):
+        keys = [[(step.part_id, step.item_id) for step in expert.steps] for expert in experts]
+        if keys and any(group != keys[0] for group in keys):
+            # A method-specific deduction may have one subtotal where another
+            # expert has three steps. Compare the common frozen part IDs.
+            parts = list(dict.fromkeys(step.part_id for expert in experts for step in expert.steps))
+            reduced = []
+            for expert in experts:
+                totals = []
+                for index, part_id in enumerate(parts, 1):
+                    leaves = [step for step in expert.steps if step.part_id == part_id]
+                    totals.append(StepScore(step_no=index, part_id=part_id, item_id=None,
+                        score=float(sum((_points(step.score) for step in leaves), Decimal(0))),
+                        desc="\n".join(step.desc for step in leaves) or expert.comment,
+                        is_correct=bool(leaves) and all(step.is_correct for step in leaves)))
+                reduced.append(expert.model_copy(update={"steps": totals}))
+            experts = reduced
+            keys = [parts for _ in experts]
+    from backend.services.grading_scores import score_quantum
+    quantum = score_quantum(experts[0].steps)
     if same_route and keys[0] and all(key == keys[0] for key in keys) and all(
             len(expert.steps) == len(keys[0]) for expert in experts):
         result, subtotal, previous = [], Decimal(0), Decimal(0)
@@ -1095,9 +1144,10 @@ def weighted_math_steps(experts, weights, maximum, score):
             amount = sum(_points(expert.steps[index].score) * weight
                          for expert, weight in zip(experts, weights)) / sum(weights)
             subtotal += amount
-            current = _points(_rounded(subtotal, maximum))
+            current = min(_points(maximum), subtotal.quantize(quantum, rounding=ROUND_HALF_UP))
             desc = join_expert_feedback((expert.provider, expert.steps[index].desc) for expert in experts)
             result.append(StepScore(step_no=index + 1, desc=desc, score=float(current - previous),
+                                    part_id=experts[0].steps[index].part_id, item_id=experts[0].steps[index].item_id,
                                     is_correct=all(expert.steps[index].is_correct for expert in experts)))
             previous = current
         if _points(score) == previous:
@@ -1121,14 +1171,30 @@ class MathGradingSkill(GradingSkill):
         # prompt or legacy scoring branch to become a silent fallback.
         template = (Path(__file__).resolve().parents[1] / "prompts" /
                     f"{self.template_name}.txt").read_text(encoding="utf-8")
-        return template + "\n" + LEDGER_INSTRUCTION + _generated_proof_guidance(problem) + "\nINPUT DATA:\n" + _json({
+        return (PART_SCORING_INSTRUCTION if plan.part_rubric else template + "\n" + LEDGER_INSTRUCTION) + _generated_proof_guidance(problem) + "\nINPUT DATA:\n" + _json({
             "problem": problem.stem, "reference_answer": problem.reference_answer,
-            "student_answer": answer.content, "rubric_plan": plan.model_dump(mode="json"),
-            "binary_rule": frozen_binary_rule(plan),
+            "student_answer": answer.content,
+            "rubric_plan": plan.part_rubric.model_dump(mode="json") if plan.part_rubric else plan.model_dump(mode="json"),
+            "binary_rule": None if plan.part_rubric else frozen_binary_rule(plan),
+            **({"frozen_targets": {f"part:{part.id}": part.stem or problem.stem
+                                    for part in plan.part_rubric.parts}} if plan.part_rubric else {}),
             "source_catalog": {key: value[0] for key, value in
                 source_catalog(answer.content or "", problem.stem, plan.original_criterion).items()},
+            **({"required_decisions": [{
+                "part_id": part.id, "target_quote": f"part:{part.id}",
+                "step_ids": [step.id for step in part.steps], "deduction_ids": [rule.id for rule in part.deductions],
+            } for part in plan.part_rubric.parts]} if plan.part_rubric else {}),
             "retrieved_material": context,
         })
+
+    async def _assess(self, plan, *, system_prompt, user_prompt, validator):
+        if plan.part_rubric:
+            assessment, response = await structured_llm_call(self.provider,
+                output_model=FrozenPartAssessment, system_prompt=system_prompt, user_prompt=user_prompt,
+                validate_output=lambda candidate: validator(candidate.assessment()))
+            return assessment.assessment(), response
+        return await structured_llm_call(self.provider, output_model=MathAssessment,
+            system_prompt=system_prompt, user_prompt=user_prompt, validate_output=validator)
 
     async def _verify(self, draft, problem, answer, plan):
         from backend.tools.math_verification import MathVerificationRequest, verify_math
@@ -1172,6 +1238,34 @@ class MathGradingSkill(GradingSkill):
         chunks, evidence, draft, duration = [], [], None, 0.0
         diagnostic = {}
         try:
+            if not (answer.content or "").strip():
+                if any(flag in {"recognition_partial", "parse_failed", "recognition_failed", "recognition_manual_pending", "no_matching_answer"}
+                       or flag.startswith(("recognition_failed_pages:", "recognition_unprocessed_pages:", "recognition_invalid_fields:"))
+                       for flag in (answer.flag or [])):
+                    raise ValueError("Unresolved recognition cannot be graded as blank.")
+                return ExpertResult(provider=self.provider.provider_id, score=0, max_score=problem.max_score,
+                    confidence=1, comment="空白作答 / Blank answer", steps=[],
+                    raw_output=_json({"version":TRACE_VERSION,"plan_id":plan.plan_id,"blank":True}))
+            if plan.part_rubric and plan.expected_truth_by_part:
+                from backend.services.true_false_answers import submitted_truth_values
+                choices = submitted_truth_values(answer.content, plan.part_rubric.parts, question_label=plan.part_rubric.label)
+                if choices is not None:
+                    judgments = []
+                    for part in plan.part_rubric.parts:
+                        correct = choices[part.id] == plan.expected_truth_by_part[part.id]
+                        reason = ("判断正确" if correct else "判断错误") if self.language == "zh" else (
+                            "Correct judgment" if correct else "Incorrect judgment")
+                        judgments.append(PartDecision(part_id=part.id, target_quote=f"part:{part.id}",
+                            student_quote=answer.content, progress=reason, method="reference",
+                            relevance="complete" if correct else "incorrect"))
+                    assessment = MathAssessment(route_id="parts", route_reason="Exact labelled judgments",
+                        part_decisions=judgments, confidence=1, comment="逐项核对判断答案。" if self.language == "zh"
+                        else "Compared each labelled judgment with the frozen answer key.")
+                    score, steps = score_assessment(assessment, plan, answer.content, problem_text=problem.stem)
+                    return ExpertResult(provider=self.provider.provider_id, score=score, max_score=problem.max_score,
+                        confidence=1, steps=steps, comment=assessment.comment,
+                        raw_output=_json({"version": TRACE_VERSION, "plan_id": plan.plan_id,
+                                          "assessment": assessment.model_dump(mode="json"), "exact_truth_match": True}))
             await self._substep(unit, "retrieve_knowledge")
             try:
                 chunks = await kb_tool.retrieve_for_grading(
@@ -1183,10 +1277,6 @@ class MathGradingSkill(GradingSkill):
                 # Reference retrieval is optional evidence, not a grade gate.
                 chunks = []
             prompt = self._prompt(problem, answer, plan, kb_tool.context_text(chunks))
-            if not (answer.content or "").strip():
-                # There are no student claims to build. Preserve any explicit
-                # teacher blank-answer policy with one direct grading call.
-                return await self._direct(problem, answer, plan, prompt, unit, chunks, started=started)
             system = build_system_prompt(
                 "Grade only the submitted work under the frozen rubric. "
                 "For each point item identify the obligation, locate the student's relevant passage, "
@@ -1206,12 +1296,16 @@ class MathGradingSkill(GradingSkill):
                 + authoritative_score_instruction(problem.max_score)
                 + "\nJSON Schema:\n" + _json(MathAssessment.model_json_schema()), self.language, self.grading_setup,
                 **({"output_instruction": OUTPUT_INSTRUCTION} if self.template_name == "proof" else {}))
+            if plan.part_rubric:
+                system = build_system_prompt(PART_SCORING_INSTRUCTION + "\nUse the supplied part and student line IDs "
+                    "for target_quote, student_quote and step evidence. Only include conventional claims when "
+                    "requesting mathematical verification. All arithmetic is performed by the server. Schema:\n"
+                    + _json(FrozenPartAssessment.model_json_schema()), self.language, self.grading_setup)
             try:
                 await self._substep(unit, "llm_grade")
-                draft, response = await structured_llm_call(
-                    self.provider, system_prompt=system, user_prompt=prompt,
-                    output_model=MathAssessment,
-                    validate_output=_assessment_validator(plan, answer, problem, diagnostic=diagnostic))
+                draft, response = await self._assess(
+                    plan, system_prompt=system, user_prompt=prompt,
+                    validator=_assessment_validator(plan, answer, problem, diagnostic=diagnostic))
                 duration += response.duration_ms or 0
                 score, steps = score_assessment(draft, plan, answer.content or "", problem_text=problem.stem)
             except Exception as exc:
@@ -1253,18 +1347,21 @@ class MathGradingSkill(GradingSkill):
             usable_evidence = any(item["status"] in {"supported", "refuted"}
                                   and item["claim_id"] in claims for item in evidence)
             review_failure = None
-            review_pending = usable_evidence
+            relevance_check = bool(plan.part_rubric and any(
+                d.relevance != "unanswered"
+                for d in draft.part_decisions))
+            review_pending = usable_evidence or relevance_check
             proof_concerns = (proof_audit or {}).get("review_concerns", [])
-            if (usable_evidence or draft.needs_review or proof_concerns) and take_review_budget(local=True):
+            if (usable_evidence or relevance_check or draft.needs_review or proof_concerns) and take_review_budget(local=True):
                 await self._substep(unit, "llm_grade")
                 try:
-                    reviewed, response = await structured_llm_call(
-                        self.provider, system_prompt=system,
+                    reviewed, response = await self._assess(
+                        plan, system_prompt=system,
                         user_prompt=prompt + "\nAPPLY SCOPED EVIDENCE (one pass):\n" + _json({
                             "draft": draft.model_dump(mode="json"), "evidence": evidence,
                             **({"proof_concerns": proof_concerns, "proof_instruction": REVIEW_INSTRUCTION}
                                if proof_audit is not None else {}),
-                            "instruction": "Check affected scoring points against original text and rubric. "
+                            "instruction": "Independently verify relevance and method against each exact target. Unrelated true statements earn no academic credit. Check affected scoring points against original text and rubric. "
                             "Check that the tool's assumed conditions really hold. Unknown is not incorrect. "
                             "Return a complete ledger with a concrete score; retain supported credit. "
                             "Do not extend the tool result to a different relation or the entire answer. "
@@ -1276,8 +1373,8 @@ class MathGradingSkill(GradingSkill):
                             "Use applies only for a claim-wide result consistent with its verdict; partial "
                             "requires explaining the limited scope. Explain any decision not to apply a result using the original conditions. "
                             "State a specific residual concern only when teacher attention would help.",
-                        }), output_model=MathAssessment,
-                        validate_output=_assessment_validator(plan, answer, problem, original=draft, evidence=evidence))
+                        }),
+                        validator=_assessment_validator(plan, answer, problem, original=draft, evidence=evidence))
                     _claim_map(reviewed, answer.content or "", plan, problem_text=problem.stem)
                     _validate_claim_identity(draft, reviewed, answer=answer.content or "", plan=plan,
                                              problem_text=problem.stem)
@@ -1286,7 +1383,7 @@ class MathGradingSkill(GradingSkill):
                     if proof_audit is not None:
                         proof_audit = inspect_audit(read_appendix(getattr(response, "content", None)), draft,
                             answer.content or "", problem.stem, plan, previous=proof_audit)
-                    review_pending = _evidence_pending(draft, evidence)
+                    review_pending = _evidence_pending(draft, evidence) or any(part.relevance == "uncertain" for part in draft.part_decisions)
                     duration += response.duration_ms or 0
                 except Exception as exc:
                     if _critical_failure(exc):
@@ -1323,6 +1420,15 @@ class MathGradingSkill(GradingSkill):
 
     async def _direct(self, problem, answer, plan, prompt, unit, chunks, *, fallback=None, started=None):
         await self._substep(unit, "llm_grade")
+        if plan.part_rubric is not None:
+            result, response = await self._assess(plan,
+                system_prompt=PART_SCORING_INSTRUCTION + _json(FrozenPartAssessment.model_json_schema()),
+                user_prompt=prompt, validator=_assessment_validator(plan,answer,problem))
+            score,steps=score_assessment(result,plan,answer.content,problem_text=problem.stem)
+            return ExpertResult(provider=self.provider.provider_id,score=score,max_score=problem.max_score,
+                confidence=result.confidence,comment=result.comment,steps=steps,duration_ms=response.duration_ms or 0,
+                raw_output=_json({"version":TRACE_VERSION,"plan_id":plan.plan_id,"assessment":result.model_dump(mode="json"),
+                                  "review_pending":True,"review_advisory":True,"evidence":[]}))
         if plan.compilation_reason == SUBPART_ALLOCATION:
             validate = _assessment_validator(plan, answer, problem)
             result, response = await structured_llm_call(

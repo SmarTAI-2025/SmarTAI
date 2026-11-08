@@ -281,11 +281,11 @@ async def test_normal_grading_fanout_shares_standard_and_merges_only_corrected_p
 async def test_shared_evidence_guidance_scoped_to_requested_written_rubric(kind, expected):
     from backend.agents.ingest_agent import generate_missing_question_materials
     from backend.tests.test_math_rubric_plan import ReplayProvider
-    from backend.tests.test_unified_rubric_drafts import choice_definition, choice_question
+    from backend.tests.test_unified_rubric_drafts import choice_definition, choice_question, written_choice_definition
 
     question = {**choice_question(), "type": kind}
     provider = ReplayProvider({"candidates": [{"q_id": "q1", "target_id": "q1:criterion",
-        "target": "criterion", "rubric_definition": choice_definition()}]})
+        "target": "criterion", "rubric_definition": written_choice_definition() if expected else choice_definition()}]})
     await generate_missing_question_materials({"q1": question}, [
         {"q_id": "q1", "target_id": "q1:criterion", "target": "criterion"}
     ], 1, provider)

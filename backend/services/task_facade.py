@@ -937,7 +937,7 @@ def _math_rubric_advisory(question, plan, language: str) -> list[dict]:
         "issue_id": f"math-rubric:{question.q_id}:{plan.input_fingerprint}",
         "q_id": question.q_id, "field": "rubric", "code": "math_rubric_advisory",
         "severity": "warning", "status": "open",
-        "details": {"message": "\n".join(advice)},
+        "details": {"message": "\n".join(advice), **({"reason": "teacher_rule_interpretation"} if plan.part_rubric else {})},
     }]
 
 
@@ -1013,8 +1013,19 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
             review_status="needs_review",
         ).model_dump()
     rubric_summary = summarize_rubric_points(
-        question.criterion or "", max_score, structure
+        question.criterion or "", max_score, structure, rubric_draft=presentation.get("rubric_draft")
     ).model_dump()
+    from backend.services.part_rubric import alternative_text
+    from backend.services.math_grading_context import problem_from_question
+    from backend.services.rubric_drafts import saved_draft
+    if math_plan is None and presentation.get("rubric_draft"):
+        verified = saved_draft(problem_from_question(question))
+        math_plan = verified.plan if verified else None
+    alternatives = []
+    if math_plan and math_plan.part_rubric:
+        alternatives = [{"id": part.id, "label": part.label,
+                         "text": alternative_text(part, zh=feedback_language == "zh")}
+                        for part in math_plan.part_rubric.parts]
     # Give the editor valid old function-only rows in its existing text fields.
     # Invalid legacy data must remain visible so the teacher can correct it.
     cases = question.test_cases
@@ -1037,6 +1048,7 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
             "max_score_review_status", "needs_review"
         ),
         "question_structure": structure,
+        "alternative_rules": alternatives,
         "rubric_point_summary": rubric_summary,
         "review_status": presentation.get("review_status", "needs_review"),
         "reference_answer": question.reference_answer,
@@ -1694,6 +1706,7 @@ def _question_preparation_retry_checkpoint(
         updates.update(incremental_version=1, incremental_unit_artifacts=dict(incremental_refs),
                        incremental_empty_units=list(empty_units), incremental_inflight_units=[],
                        incremental_incomplete_units=list(checkpoint.get("incremental_incomplete_units") or []),
+                       material_repair_feedback=dict(checkpoint.get("material_repair_feedback") or {}),
                        incremental_saving_units=dict(checkpoint.get("incremental_saving_units") or {}),
                        incremental_source_invalidations=dict(checkpoint.get("incremental_source_invalidations") or {}),
                        incremental_completed_sources=list(checkpoint.get("incremental_completed_sources") or []),
@@ -2518,7 +2531,7 @@ def _replace_draft_questions(
                 rubric_summary = validate_rubric_points(
                     str(raw.get("criterion") or ""),
                     float(raw.get("max_score") or 10),
-                    structure,
+                    structure, rubric_draft=raw.get("rubric_draft"),
                 )
             except QuestionRubricValidationError as exc:
                 if manual_recovery:
@@ -2550,6 +2563,7 @@ def _replace_draft_questions(
                     "material_provenance": raw.get("material_provenance", {}),
                     "ai_completion_provenance": raw.get("ai_completion_provenance", {}),
                     "rubric_draft": raw.get("rubric_draft"),
+                    "rubric_schema_version": 2,
                     "preparation_issues": raw.get("preparation_issues", []),
                 },
             }
@@ -4116,7 +4130,7 @@ def apply_question_patches_atomic(
                 rubric_summary = validate_rubric_points(
                     str(fields.get("criterion", question.criterion) or ""),
                     fields.get("max_score", question.max_score),
-                    structure,
+                    structure, rubric_draft=presentation_updates.get("rubric_draft", current_presentation.get("rubric_draft")),
                 )
             except QuestionRubricValidationError as exc:
                 raise ValidationError(
@@ -5525,7 +5539,7 @@ def update_problem(
     now = time.time()
     substantive = bool({
         "number", "type", "stem", "criterion", "max_score", "reference_answer",
-        "solution_code", "test_cases",
+        "solution_code", "test_cases", "alternative_rule_edits",
     }.intersection(patch))
     with session_scope() as session:
         workflow_row = workflow_repository.lock_workflow_revision(
@@ -5554,6 +5568,18 @@ def update_problem(
             )}
         elif patch.get("review_status") == "confirmed" and question.test_cases:
             _validated_test_cases(question.stem, question.type, question.test_cases)
+        if "alternative_rule_edits" in patch:
+            from backend.services.math_grading_context import problem_from_question
+            from backend.services.rubric_drafts import edit_alternatives
+            try:
+                edit_alternatives(problem_from_question(question), presentation, patch["alternative_rule_edits"])
+            except (TypeError, ValueError) as exc:
+                raise ValidationError(str(exc), code="invalid_alternative_rule") from exc
+        if "criterion" in patch and patch["criterion"] != question.criterion:
+            presentation["rubric_schema_version"] = 2
+            provenance = dict(presentation.get("ai_completion_provenance") or {})
+            provenance.pop("criterion", None)
+            presentation["ai_completion_provenance"] = provenance
         original_problem = _serialize_problem(question)
         if test_cases_edited and is_programming_question_type(patch.get("type", question.type)):
             patch["test_cases"] = _attribute_edited_test_cases(
@@ -5658,7 +5684,7 @@ def update_problem(
             rubric_summary = validate_rubric_points(
                 str(patch.get("criterion", question.criterion) or ""),
                 patch.get("max_score", question.max_score),
-                structure,
+                structure, rubric_draft=presentation.get("rubric_draft"),
             )
         except QuestionRubricValidationError as exc:
             raise ValidationError(
