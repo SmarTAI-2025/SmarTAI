@@ -878,3 +878,26 @@ async def test_lifted_definition_preserves_structure_and_never_overrides_conflic
             )
         else:
             assert "one authoritative definition" in feedback["q1:criterion"]
+
+
+def test_multiline_support_keeps_each_real_span_and_cannot_merge_error_origins():
+    from backend.services.math_source_evidence import source_catalog
+    from backend.skills.part_scoring import _student_span, _supporting_spans
+
+    text = "first implication\n\nunrelated remark\nlast implication"
+    catalog = source_catalog(text, "", "")
+    assert [s.text for s in _supporting_spans(text, "student:1, student:4", catalog)] == [
+        "first implication", "last implication"
+    ]
+    for bad in ("student:1, student:2", "student:1, student:99", "student:1, invented"):
+        assert not _supporting_spans(text, bad, catalog)
+    assert not _student_span(text, "student:1, student:4")
+    rules = PartRubric.model_validate(dict(id="q", label="1", stem="Prove the claim.", total_pts=2,
+        parts=[dict(id="p", total_pts=2, steps=[dict(id="s", total_pts=2, criterion="Establish the claim.")])]))
+    data = dict(part_id="p", method="reference", relevance="complete", target_quote="part:p",
+                student_quote="student:1, student:4", progress="The two implications establish the claim.",
+                steps=[{"id":"s","outcome":"earned","evidence":"student:1, student:4","reason":"Both implications."}])
+    assert settle_parts(rules, [PartDecision(**data)], text, rules.stem)[0] == 2
+    data["steps"][0]["evidence"] = "student:1, student:99"
+    with pytest.raises(ValueError, match="located student evidence"):
+        settle_parts(rules, [PartDecision(**data)], text, rules.stem)

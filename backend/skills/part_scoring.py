@@ -48,7 +48,8 @@ class PartDecision(Frozen):
 INSTRUCTION = """
 Return exactly one part_decisions entry per frozen part ID; use the supplied IDs unchanged.
 target_quote may be the exact key part:<part_id>; the server resolves this to the frozen obligation.
-For student_quote, step.evidence and error_source prefer student:<line number> from source_catalog.
+For student_quote and step.evidence cite a student:<line number> from source_catalog or a comma-separated
+list of those IDs when an argument spans lines. Use one exact origin for error_source and origin_quote.
 These keys point to the original text. Do not translate or paraphrase mathematical evidence.
 When a line contains several decisions, identify the specific statement and reasoning in progress.
 For deduction origins on the same line, quote each distinct erroneous expression or missing target.
@@ -97,11 +98,43 @@ def _student_span(answer, fragment):
     return SourceMatch(line, start, start + len(line), "exact")
 
 
+def _supporting_spans(answer, fragment, catalog):
+    """Resolve each cited line independently. Never fill in text between listed lines."""
+    from backend.services.math_source_evidence import SourceMatch
+
+    fragment = fragment.strip()
+    if not fragment.startswith("student:"):
+        match = match_source_quote(answer, fragment)
+        return (match,) if match else ()
+    span_ids = re.split(r"\s*[,，;；]\s*|\s+(?=student:)", fragment.strip())
+    spans = []
+    for key in span_ids:
+        if key not in catalog:
+            # The index is bounded, but the original answer may legitimately
+            # contain more lines. Verify the explicit address against the source.
+            if not re.fullmatch(r"student:[1-9]\d*", key):
+                return ()
+            match = _student_span(answer, key)
+            if not match:
+                return ()
+            spans.append(match)
+            continue
+        line, start, end = catalog[key]
+        spans.append(SourceMatch(line, start, end, "exact"))
+    return tuple(spans)
+
+
 def _amount(value):
     return Fraction(str(value))
 
 
 def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
+    from backend.services.math_source_evidence import source_catalog
+    catalog = source_catalog(answer, "", "")
+
+    def support(fragment):
+        return _supporting_spans(answer, fragment, catalog)
+
     by_id = {d.part_id: d for d in decisions}
     if len(by_id) != len(decisions) or set(by_id) != {p.id for p in rules.parts}:
         raise ValueError("Return exactly one judgment for each frozen part ID.")
@@ -127,7 +160,7 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
             raise ValueError(
                 f"{part.id}: use target_quote=part:{part.id} or an exact quote of this obligation."
             )
-        if d.relevance != "unanswered" and not _student_span(answer, d.student_quote):
+        if d.relevance != "unanswered" and not support(d.student_quote):
             raise ValueError(
                 f"{part.id}: cite both the actual obligation and the submitted evidence."
             )
@@ -156,7 +189,7 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
             # A points-only rule has no deduction ledger. Located observations
             # on an incorrect response explain zero and cannot charge it twice.
             observed_errors = (d.relevance == "incorrect" and part.steps and not use_alt_rate
-                               and all(_student_span(answer, event.evidence) or match_source_quote(scope, event.evidence)
+                               and all(support(event.evidence) or match_source_quote(scope, event.evidence)
                                        for event in d.errors))
             if ((d.errors and not observed_errors) or len(seen_steps) != len(d.steps)
                     or seen_steps - {step.id for step in part.steps}
@@ -193,20 +226,18 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                 )
             for step in part.steps:
                 awarded = actual[step.id]
-                if awarded.outcome != "missed" and not _student_span(
-                    answer, awarded.evidence
-                ):
+                if awarded.outcome != "missed" and not support(awarded.evidence):
                     raise ValueError(
                         f"{step.id}: positive credit needs located student evidence."
                     )
                 credit = _amount(step.total_pts)
                 if awarded.outcome == "follow_through":
                     origin = _student_span(answer, awarded.error_source)
-                    downstream = _student_span(answer, awarded.evidence)
+                    downstream = support(awarded.evidence)
                     if (
                         not origin
                         or origin not in verified_errors
-                        or origin.end > downstream.start
+                        or origin.end > min(span.start for span in downstream)
                     ):
                         raise ValueError(
                             f"{step.id}: cite a distinct earlier error and the sound dependent work."
@@ -238,7 +269,7 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                 raise ValueError("Duplicate deduction event ID.")
             for event in d.errors:
                 if not (
-                    _student_span(answer, event.evidence)
+                    support(event.evidence)
                     or match_source_quote(scope, event.evidence)
                 ):
                     raise ValueError(
