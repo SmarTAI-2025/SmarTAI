@@ -497,3 +497,14 @@ def test_located_error_observation_on_zero_award_cannot_be_deducted_or_allow_cre
     earned = {**decision.model_dump(), "steps":[dict(id="s",outcome="earned",evidence="student:1",reason="Inconsistent")]}
     with pytest.raises(ValueError,match="zero credit"):
         settle_parts(rules,[PartDecision(**earned)],"n-1","Give the count.")
+
+
+def test_base_unit_uses_primary_budgets_and_respects_literal_teacher_increment():
+    from backend.services.part_rubric import _base_unit
+    parts = PartRubric.model_validate(fixture()["questions"][0]).parts
+    assert _base_unit(parts, "") == 1
+    half_parts = PartRubric.model_validate(fixture()["questions"][2]).parts
+    assert _base_unit(half_parts, "") == .5
+    assert _base_unit(half_parts, "最小给分单位为0.25分。") == .25
+    with pytest.raises(ValueError, match="increment"):
+        _base_unit(half_parts, "以1分为计分单位。")

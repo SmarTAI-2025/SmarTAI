@@ -360,6 +360,29 @@ def canonical_label(label, question_label=None):
     return str(digits.index(token)) if len(token) == 1 and token in digits else token
 
 
+def _base_unit(parts, teacher):
+    """Primary awards use the teacher's increment, or the finest required division of one point."""
+    from math import gcd
+    from functools import reduce
+
+    stated = re.search(
+        r"(?:最小(?:给分|计分|评分)?(?:单位|粒度)|(?:给分|计分|评分)粒度)\s*(?:为|是|[:：])?\s*(\d+(?:\.\d+)?)\s*分"
+        r"|以\s*(\d+(?:\.\d+)?)\s*分\s*为(?:给分|计分|评分)?单位", teacher or "")
+    values = [Decimal(str(item.total_pts)) for part in parts for item in part.steps]
+    values += [Decimal(str(item.deduct_pts)) for part in parts for item in part.deductions]
+    values += [Decimal(str(part.total_pts)) for part in parts]
+    if stated:
+        unit = Decimal(stated[1] or stated[2])
+        if unit <= 0 or any(value % unit != 0 for value in values):
+            raise ValueError(f"Ordinary step budgets and deductions must use the teacher's {unit}-point increment.")
+        return float(unit)
+    # Derived caps and follow-through are fractions of an award and do not
+    # change its face value. The settlement engine applies them afterwards.
+    places = max(0, *(-value.as_tuple().exponent for value in values))
+    scale = 10 ** places
+    return float(Decimal(reduce(gcd, (int(value * scale) for value in values), scale)) / scale)
+
+
 def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
     """Bind the model proposal to known question scope and authoritative teacher text."""
     from backend.services.question_structure import _allocation_marker_pattern
@@ -524,6 +547,7 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
             "teacher_rubric": teacher or None,
             "rubric_origin": "teacher" if teacher else "ai",
             "parts": tuple(fixed),
+            "base_unit_pts": _base_unit(fixed, teacher),
             "teacher_gaps": tuple(dict.fromkeys(gaps)),
             "low_confidence": bool(teacher and rubric.low_confidence),
         }
