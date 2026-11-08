@@ -229,6 +229,64 @@ def _closed_count(block):
     return None
 
 
+# Require the entire surrounding prose to be accounted for. An unfamiliar
+# qualification can narrow the domain even when it contains no comparison sign.
+_COUNT_REQUEST = re.compile(
+    r"(?:试|请)?(?:确定|求出?|计算|统计)(?:下列|以下)?(?:各|每个|每段)?"
+    r"(?:程序段|代码段|程序)?(?:中)?(?:前置以记号|标记为|标有|以)?\s*[@＠]\s*(?:标记的|的)?语句(?:的)?(?:频度|执行次数)"
+    r"|(?:find|give|determine|count)\s+(?:the\s+)?(?:frequency|execution count|number of executions)"
+    r"\s+of\s+(?:the\s+)?(?:@[- ]marked|marked)\s+statement",
+    re.I,
+)
+_POSITIVE_N = re.compile(
+    r"(?:设|已知|假设)?\s*n\s*(?:为|是|取)\s*(?:一个|任意)?正整数"
+    r"|(?:let\s+)?n\s+(?:be|is)\s+(?:a\s+)?positive integer\b",
+    re.I,
+)
+_RELATIONS = {
+    "!=": operator.ne,
+    "<=": operator.le,
+    ">=": operator.ge,
+    "<": operator.lt,
+    ">": operator.gt,
+    "=": operator.eq,
+}
+
+
+def _domain_samples(context, comments):
+    text = re.sub(r"^\s*\d+(?:\s*\.\s*\d+)+(?:\s*[①-⑳])?\s*", "", context.strip())
+    text = _COUNT_REQUEST.sub(" ", text)
+    match = _POSITIVE_N.search(text)
+    if not match:
+        return []
+    rest = (text[: match.start()] + " " + text[match.end() :]).strip()
+    for note in comments:
+        note = note.replace("$", "").strip()
+        if re.fullmatch(r"n\s*(?:是|为)\s*不小于\s*1\s*的(?:常数|整数)", note):
+            continue
+        rest += " " + note
+    for pattern, operator_text in [
+        (r"\\neq?(?![A-Za-z])|≠|不等于", "!="),
+        (r"\\geq?(?![A-Za-z])|≥|不小于", ">="),
+        (r"\\leq?(?![A-Za-z])|≤|不大于", "<="),
+        (r"大于", ">"),
+        (r"小于", "<"),
+    ]:
+        rest = re.sub(pattern, operator_text, rest)
+    rest = re.sub(
+        r"[\s，,。.;；:：]+|且|并且|同时|\b(?:and|where)\b", " ", rest, flags=re.I
+    ).strip()
+    samples = [1, 2, 4, 5]
+    while rest:
+        relation = re.match(r"n\s*(!=|<=|>=|<|>|=)\s*(-?\d{1,8})(?=\s|$)", rest, re.I)
+        if not relation:
+            return []
+        op, limit = relation.groups()
+        samples = [n for n in samples if _RELATIONS[op](n, int(limit))]
+        rest = rest[relation.end() :].strip()
+    return samples
+
+
 def marked_counts(stem):
     if not stem or len(stem) > 32_000 or "@" not in stem or not _COUNTS.search(stem):
         return {}
@@ -280,16 +338,12 @@ def marked_counts(stem):
             depends = bool(re.search(r"\bn\b", source))
             # Only claim concrete positive-integer samples when the source supplies
             # that domain. An additional restriction may exclude the boundary.
-            if depends and (
-                not re.search(r"正整数|positive integer", context, re.I)
-                or re.search(
-                    r"[<>≤≥=]|至少|大于|小于|偶数|奇数|素数|倍数|满足|整除|但|except|even|odd|prime|at least|greater than|less than",
-                    context,
-                    re.I,
-                )
-            ):
+            comments = [
+                m[1] or m[2] for m in re.finditer(r"//([^\n]*)|/\*(.*?)\*/", body, re.S)
+            ]
+            inputs = _domain_samples(context, comments) if depends else [1]
+            if not inputs:
                 continue
-            inputs = [1, 2, 4, 5] if depends else [1]
             samples = {}
             for n in inputs:
                 trace = _Trace(n)
@@ -368,7 +422,14 @@ def evaluate_expression(text, n):
 
 
 def counterexample(formula, witness):
-    samples = witness.get("samples", {"1": witness.get("exact")})
+    if "exact" in witness:
+        if re.search(r"\bn\b", formula or ""):
+            return None
+        actual = evaluate_expression(formula, 1)
+        if actual is not None and actual != witness["exact"]:
+            return f"The marked statement executes {witness['exact']} times, but the proposed expression gives {actual}."
+        return None
+    samples = witness["samples"]
     for n, expected in samples.items():
         actual = evaluate_expression(formula, int(n))
         if actual is not None and actual != expected:
@@ -376,28 +437,35 @@ def counterexample(formula, witness):
     return None
 
 
+def _answer_parts(text, witnesses):
+    if set(witnesses) == {"question"}:
+        return {"question": text}
+    parts = build_major_question_structure({"stem": text}, major_order=0).subparts
+    return {part.label: part.stem for part in parts}
+
+
 def reference_error(text, witnesses):
     """Only challenge an identifiable final mathematical result of a numbered part."""
     if not witnesses or not text:
         return None
-    parts = build_major_question_structure({"stem": text}, major_order=0).subparts
-    if not set(witnesses).issubset({part.label for part in parts}):
+    parts = _answer_parts(text, witnesses)
+    if not set(witnesses).issubset(parts):
         return None
-    for part in parts:
-        witness = witnesses.get(part.label)
+    for label, content in parts.items():
+        witness = witnesses.get(label)
         if not witness:
             continue
         # Do not treat intermediate constants, an equation condition, or a
         # count at an example input as the final general expression.
         match = re.search(
             r"(?:频度为|执行次数为|总次数为|final count\s*[:=]|frequency is)\s*[:：]?\s*\$?([^\n$。；;]+)\$?\s*[次。.]?\s*$",
-            part.stem,
+            content,
             re.I,
         )
-        formula = match[1] if match else part.stem.strip().strip("。；;")
+        formula = match[1] if match else content.strip().strip("。；;")
         issue = counterexample(formula, witness)
         if issue:
-            return f"{part.label} {issue}"
+            return f"{label} {issue}"
     return None
 
 
@@ -405,14 +473,14 @@ def submitted_count_checks(text, witnesses):
     """A single active expression can refute a general count, or confirm a constant count."""
     if not witnesses:
         return {}
-    parts = build_major_question_structure({"stem": text}, major_order=0).subparts
+    parts = _answer_parts(text, witnesses)
     results = {}
-    for part in parts:
-        witness = witnesses.get(part.label)
+    for label, content in parts.items():
+        witness = witnesses.get(label)
         if not witness:
             continue
         expr = re.sub(
-            r"\[crossed[- ]out\s*:\s*[^\[\]]{1,180}\]", "", part.stem, flags=re.I
+            r"\[crossed[- ]out\s*:\s*[^\[\]]{1,180}\]", "", content, flags=re.I
         )
         expr = expr.strip().strip("$。；;,， ")
         array = re.fullmatch(r"\\begin\{array\}\{[lcr]\}(.+)\\end\{array\}", expr, re.S)
@@ -436,17 +504,17 @@ def submitted_count_checks(text, witnesses):
         ):
             cleaned = "isqrt(n)"
         if witness.get("formula") == cleaned:
-            results[part.label] = {"proven_formula": cleaned}
+            results[label] = {"proven_formula": cleaned}
             continue
         bad = counterexample(term, witness)
         if bad:
-            results[part.label] = {"counterexample": bad}
+            results[label] = {"counterexample": bad}
         elif (
             "exact" in witness
             and "n" not in term
             and evaluate_expression(term, 1) == witness["exact"]
         ):
-            results[part.label] = {"confirmed_exact_count": witness["exact"]}
+            results[label] = {"confirmed_exact_count": witness["exact"]}
     return results
 
 
@@ -466,7 +534,8 @@ def require_consistent_count_grades(checks, plan, draft, answer, problem):
         return
     by_id = {d.part_id: d for d in getattr(draft, "part_decisions", ())}
     for part in rubric.parts:
-        fact = checks.get(part.label)
+        label = part.label or "question"
+        fact = checks.get(label)
         d = by_id.get(part.id)
         if not fact or not d or len(part.steps) != 1 or d.method == "alternative":
             continue
@@ -478,12 +547,12 @@ def require_consistent_count_grades(checks, plan, draft, answer, problem):
             continue
         if "counterexample" in fact and d.relevance == "complete":
             raise ValueError(
-                f"{part.label} ({part.id}): {fact['counterexample']} The submitted final count cannot be complete."
+                f"{label} ({part.id}): {fact['counterexample']} The submitted final count cannot be complete."
             )
         if ("confirmed_exact_count" in fact or "proven_formula" in fact) and (
             d.relevance != "complete"
             or any(step.outcome != "earned" for step in d.steps)
         ):
             raise ValueError(
-                f"{part.label} ({part.id}): both the source trace and the submitted expression give {fact.get('confirmed_exact_count',fact.get('proven_formula'))}. Award this result-only step."
+                f"{label} ({part.id}): both the source trace and the submitted expression give {fact.get('confirmed_exact_count',fact.get('proven_formula'))}. Award this result-only step."
             )

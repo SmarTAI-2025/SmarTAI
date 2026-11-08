@@ -77,7 +77,9 @@ def test_loop_boundaries_and_source_dependent_checks_are_bounded():
     assert "n=1" in counterexample("n-1", result["(2)"])
     assert counterexample("max(1,n-1)", result["(2)"]) is None
     assert marked_counts("写出证明过程。") == {}
-    assert not marked_counts(stem.replace("n 为正整数", "n 为正整数且 n>2")).get("(2)")
+    assert set(
+        marked_counts(stem.replace("n 为正整数", "n 为正整数且 n>2"))["(2)"]["samples"]
+    ) == {"4", "5"}
     assert reference_error("(1) n-1\n(2) n-1\n(3) 9", result).startswith("(2) n=1")
 
 
@@ -255,3 +257,67 @@ async def test_preparation_saves_neighbour_and_holds_only_disputed_question(
         i["details"].get("reason") == "conflicting_printed_formula"
         for i in by_number["1.10"]["preparation_issues"]
     )
+
+
+@pytest.mark.parametrize(
+    "qualifier", ["且 n≠1", r"，且 $n\ne 1$", " where n != 1", "，n 不等于 1"]
+)
+def test_count_samples_obey_the_complete_stated_domain(qualifier):
+    stem = f"设 n 为正整数{qualifier}。求 @ 语句执行次数。\n(1) i=1; do {{ @ i++; }} while(i<n);\n(2) i=0;while(i<n){{ @ i++; }}"
+    checks = marked_counts(stem)
+    assert checks and all(set(w["samples"]) == {"2", "4", "5"} for w in checks.values())
+    assert reference_error("(1) n-1\n(2) n", checks) is None
+    assert not submitted_count_checks("(1) n-1\n(2) n", checks)
+
+
+def test_single_program_accepts_worked_answers_and_rejects_wrong_result():
+    from types import SimpleNamespace
+    from backend.services.count_witnesses import require_consistent_count_grades
+
+    stem = "求 @ 语句的执行次数。\n```c\nx=0; while(x<3){ @ x++; }\n```"
+    checks = marked_counts(stem)
+    assert reference_error("4", checks)
+    assert not reference_error("因此执行次数为 3。", checks)
+    results = submitted_count_checks("4", checks)
+    assert "counterexample" in results["question"]
+    rule = SimpleNamespace(
+        teacher_rubric=None,
+        parts=[
+            SimpleNamespace(
+                label=None,
+                id="singleton",
+                steps=[SimpleNamespace(criterion="给出执行次数")],
+            )
+        ],
+    )
+    draft = SimpleNamespace(
+        part_decisions=[
+            SimpleNamespace(
+                part_id="singleton", relevance="complete", method="reference", steps=[]
+            )
+        ]
+    )
+    with pytest.raises(ValueError, match="counterexample|cannot be complete"):
+        require_consistent_count_grades(
+            results, SimpleNamespace(part_rubric=rule), draft, "4", stem
+        )
+
+
+@pytest.mark.parametrize(
+    "qualification",
+    ["，只取斐波那契数列第十项", " that is a power of three", " 且 n mod 3 = 2"],
+)
+def test_unparsed_domain_is_never_assumed_to_contain_test_inputs(qualification):
+    source = (
+        "设 n 为正整数"
+        + qualification
+        + "。求 @ 语句频度。\n(1) i=0;while(i<n){ @ i++; }\n(2) i=0;while(i<3){ @ i++; }"
+    )
+    assert "(1)" not in marked_counts(source)
+    assert marked_counts(source)["(2)"] == {"exact": 3}
+
+
+def test_unrecognized_local_domain_only_disables_that_parts_parametric_samples():
+    stem = "设 n 为正整数。求 @ 语句频度。\n(1) i=0; // only when n is a square\nwhile(i<n){ @ i++; }\n(2) i=0;while(i<n){ @ i++; }"
+    assert set(marked_counts(stem)) == {"(2)"}
+    assert not counterexample("n", {"exact": 3})
