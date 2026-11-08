@@ -901,3 +901,199 @@ def test_multiline_support_keeps_each_real_span_and_cannot_merge_error_origins()
     data["steps"][0]["evidence"] = "student:1, student:99"
     with pytest.raises(ValueError, match="located student evidence"):
         settle_parts(rules, [PartDecision(**data)], text, rules.stem)
+
+
+def test_source_correspondence_guidance_applies_to_supplied_names_across_domains():
+    from types import SimpleNamespace
+
+    from backend.services.part_rubric import supplied_notation
+    from backend.skills.math_grading import _part_proof_evidence
+
+    examples = (
+        "The two names x, y denote the same real input. Prove that the predicates are equivalent.",
+        "Show the presentations agree (where u may be replaced by the letter v).",
+        "在给定对应下证明两个条件等价。",
+    )
+    for stem in examples:
+        quote = supplied_notation(stem)
+        assert quote and quote in stem
+        assert "one-way implication" in _part_proof_evidence(
+            SimpleNamespace(type="推理题", stem=stem)
+        )
+    stem = "Construct a bijection. Prove it is injective and surjective."
+    assert not supplied_notation(stem)
+    for obligation in (
+        "Show that this term can be replaced by zero.",
+        "Decide whether f can be replaced by g.",
+        "证明该量可以用零代替。",
+        "Can u be replaced by v?",
+    ):
+        assert not supplied_notation(obligation)
+    assert "one-way implication" not in _part_proof_evidence(
+        SimpleNamespace(type="推理题", stem=stem)
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_points_decisions_reach_fallback_with_the_rejected_field_and_addresses():
+    from backend.models import ProblemInfo, StudentAnswerInfo
+    from backend.services.math_grading_context import math_plans_context
+    from backend.services.rubric_drafts import bind_draft
+    from backend.skills.base import get_skill_for_type
+    from backend.tests.test_question_material_format_repair import Provider
+
+    row = _rows(
+        [dict(number="8", type="推理题", stem="Prove the identity.", max_score=4)]
+    )["q1"]
+    raw = dict(
+        id="q1",
+        label="8",
+        stem=row["stem"],
+        total_pts=4,
+        parts=[
+            dict(
+                id="p",
+                total_pts=4,
+                steps=[dict(id="s", total_pts=4, criterion="Establish the identity.")],
+            )
+        ],
+    )
+    criterion, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    row.update(
+        criterion=criterion,
+        ai_completion_provenance={"criterion": {"source_kind": "ai_generated"}},
+    )
+    p = ProblemInfo(**row)
+    p._math_rubric_source = {
+        "presentation": {
+            k: row[k] for k in ("question_structure", "ai_completion_provenance")
+        }
+    }
+    frozen = bind_draft(retarget_draft(draft, row), p)
+    a = StudentAnswerInfo(
+        q_id="q1", number="8", type=p.type, content="u=u by reflexivity."
+    )
+
+    def decision_with(quote):
+        return json.dumps(
+            {
+                "comment": "Checked",
+                "part_decisions": [
+                    dict(
+                        part_id="p",
+                        target_quote="part:p",
+                        student_quote=quote,
+                        progress="The written identity is reflexive.",
+                        method="reference",
+                        relevance="complete",
+                    )
+                ],
+            }
+        )
+
+    provider = Provider(
+        [
+            decision_with("unlocated rewrite"),
+            decision_with("unlocated rewrite"),
+            decision_with([1]),
+        ]
+    )
+    with math_plans_context({"q1": frozen}):
+        vote = await get_skill_for_type(p.type)(provider, language="zh").grade(p, a)
+    assert vote.score == 4 and not vote.error_kind and len(provider.calls) == 3
+    repair = json.loads(
+        provider.calls[-1][-1].content.split(
+            "Repair the rejected decision from the original sources:\n"
+        )[1]
+    )
+    assert "student_quote did not locate" in repair["validation_feedback"]
+    assert repair["student_line_ids"] == ["student:1"]
+    assert repair["parts"] == [
+        {
+            "part_id": "p",
+            "target_quote": "part:p",
+            "step_ids": ["s"],
+            "deduction_rule_ids": [],
+        }
+    ]
+
+
+def test_addressed_repair_never_fabricates_lines_or_accepts_boolean_positions():
+    from backend.skills.math_grading import AddressedPartAssessment
+    from backend.skills.part_scoring import _supporting_spans
+    from backend.services.math_source_evidence import source_catalog
+
+    args = dict(
+        part_id="p",
+        target_quote="part:p",
+        student_quote=[1, 3],
+        progress="Both cited facts are needed.",
+        method="reference",
+        relevance="complete",
+        steps=[
+            dict(
+                id="s",
+                outcome="earned",
+                evidence=[1, 3],
+                reason="Apply the two identities.",
+            )
+        ],
+    )
+
+    def parsed():
+        return (
+            AddressedPartAssessment.model_validate(
+                {"comment": "Checked.", "part_decisions": [args]}
+            )
+            .assessment()
+            .part_decisions[0]
+        )
+
+    actual = parsed()
+    assert actual.student_quote == actual.steps[0].evidence == "student:1, student:3"
+    src = "x=0\nother\ny=0"
+    assert [
+        s.text
+        for s in _supporting_spans(
+            src, actual.student_quote, source_catalog(src, "", "")
+        )
+    ] == ["x=0", "y=0"]
+    args["student_quote"] = [1, 4]
+    assert not _supporting_spans(
+        src, parsed().student_quote, source_catalog(src, "", "")
+    )
+    args["student_quote"] = [True]
+    with pytest.raises(ValueError, match="positive integers"):
+        parsed()
+
+
+def test_deduction_evidence_remains_available_only_on_the_applicable_repair_contract():
+    from backend.skills.math_grading import AddressedPartAssessment, StepsOnlyRepair
+
+    event = dict(
+        id="err",
+        rule_id="penalty",
+        evidence="student:1",
+        origin_quote="x=0",
+        reason="Wrong value.",
+    )
+    raw = dict(
+        comment="Checked",
+        part_decisions=[
+            dict(
+                part_id="p",
+                relevance="partial",
+                method="reference",
+                student_quote=[1],
+                target_quote="part:p",
+                progress="The expression has a local error.",
+                errors=[event],
+            )
+        ],
+    )
+    assert AddressedPartAssessment.model_validate(raw).part_decisions[0].errors
+    with pytest.raises(ValueError, match="errors empty"):
+        StepsOnlyRepair.model_validate(raw)
+    schema = StepsOnlyRepair.model_json_schema()
+    assert schema["$defs"]["PartDecision"]["properties"]["errors"]["maxItems"] == 0
+    assert "#/$defs/ErrorEvent" not in json.dumps(schema)

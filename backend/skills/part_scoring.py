@@ -162,7 +162,8 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
             )
         if d.relevance != "unanswered" and not support(d.student_quote):
             raise ValueError(
-                f"{part.id}: cite both the actual obligation and the submitted evidence."
+                f"{part.id}: student_quote did not locate submitted evidence. Use an exact "
+                "student:<line> address from source_catalog or a list of those addresses."
             )
         if d.method == "alternative" and (
             not d.reference_method.strip()
@@ -215,14 +216,15 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                     ),
                 )
             actual = {s.id: s for s in decisions_for_steps}
-            if (
-                len(actual) != len(decisions_for_steps)
-                or set(actual) != {s.id for s in part.steps}
-                or d.errors
-            ):
+            if d.errors:
+                raise ValueError(
+                    f"{part.id}: the points route received {len(d.errors)} deduction events. "
+                    "Leave errors empty; explain each lost point in its missed step's reason."
+                )
+            if len(actual) != len(decisions_for_steps) or set(actual) != {s.id for s in part.steps}:
                 raise ValueError(
                     f"{part.id}: required step IDs {[s.id for s in part.steps]}; received "
-                    f"{list(actual)} and {len(d.errors)} deductions. Judge each listed step once."
+                    f"{list(actual)}. Judge each listed step once."
                 )
             for step in part.steps:
                 awarded = actual[step.id]

@@ -603,6 +603,36 @@ def alternative_text(part, zh=True):
     return f"Alternative methods: maximum {amount(policy.maximum)}, minimum {amount(policy.minimum)}. {loss}"
 
 
+def supplied_notation(stem):
+    """Return an explicit notation convention; an assertion to prove is not a given."""
+    stops = ".!?。！？"
+    for match in re.finditer(
+        r"\b(?:may|can) be (?:replaced|denoted|written) by\b|"
+        r"\b(?:denote|represent) the same (?:[a-z]+ ){0,2}(?:input|variable|quantity|object)\b|"
+        r"\bunder the (?:given )?(?:identification|correspondence|substitution)\b|"
+        r"(?:可(?:以)?用.{1,50}?(?:代替|表示)|在(?:给定|上述)(?:对应|代换)下|分别记作)",
+        stem,
+        re.I,
+    ):
+        left = max(stem.rfind(c, 0, match.start()) for c in stops) + 1
+        end = min(len(stem), match.end() + 400)
+        right = next((i + 1 for i in range(match.end(), end) if stem[i] in stops), end)
+        clause = stem[max(left, match.start() - 400) : right].strip()
+        # A parenthetical 'where ...' may follow the main proof obligation.
+        context = re.split(
+            r"\bwhere\b|其中|这里", stem[left : match.end()], flags=re.I
+        )[-1]
+        if re.search(
+            r"\b(?:prove|show|verify|whether|if|only if|not|cannot)\b|"
+            r"证明|说明是否|是否|不得|不可以",
+            context,
+            re.I,
+        ) or clause.endswith(("?", "？")):
+            continue
+        return clause
+    return None
+
+
 PART_INSTRUCTION = """
 For a written math, proof or concept rubric, return part_rubric using the question schema.
 Derive the required response from the exact stem and teacher rules. For true/false, selection,
@@ -620,6 +650,9 @@ unscored steps for either kind. Make goals method-independent unless the task re
 criterion names the mathematical obligation and acceptable evidence. Put sample computations,
 chosen notation and the reference route in the reference answer. If a proof can make meaningful
 partial progress, budget distinct, separately assessable obligations before seeing student work.
+A change of names supplied by the question, rewriting a definition, or restating an already proved
+equivalence cannot consume an independent budget. Separate a genuinely new implication, condition
+or construction; the goal must admit a meaningful difference in demonstrated understanding.
 Do not give multiple budgets to repeats of the same inference. State which hypotheses/cases are
 substantive. A valid direct implication or equivalence chain may meet more than one independent goal.
 Extract explicit source rules with exact source_quote evidence. Only fill missing ordinary

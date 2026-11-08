@@ -14,8 +14,9 @@ from pathlib import Path
 from time import perf_counter
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError, field_validator, model_validator
 
+from backend.services.part_rubric import supplied_notation
 from backend.skills.part_scoring import INSTRUCTION as PART_SCORING_INSTRUCTION, PartDecision, settle_parts
 from backend.models import ExpertResult, GradingConfidence, StepScore
 from backend.skills.base import (
@@ -151,8 +152,6 @@ class EvidenceAssessment(BaseModel):
     evidence_judgments: list[EvidenceJudgment] = Field(default_factory=list, max_length=8)
 
 
-
-
 class FrozenPartAssessment(EvidenceAssessment):
     """Wire shape for frozen written rubrics, including independent review."""
     model_config = ConfigDict(extra="forbid")
@@ -162,8 +161,81 @@ class FrozenPartAssessment(EvidenceAssessment):
         return MathAssessment(route_id="parts", route_reason="Frozen part rules", **self.model_dump())
 
 
+class AddressedPartAssessment(FrozenPartAssessment):
+    """On repair, select original line numbers instead of retyping their mathematics."""
+
+    @classmethod
+    def model_json_schema(cls, *args, **kwargs):
+        schema = super().model_json_schema(*args, **kwargs)
+        addresses = {
+            "type": "array",
+            "items": {"type": "integer", "minimum": 1, "maximum": 500000},
+            "maxItems": 100,
+            "description": "Original student line numbers, e.g. [1, 3].",
+        }
+        for name, field in (
+            ("PartDecision", "student_quote"),
+            ("StepDecision", "evidence"),
+        ):
+            schema["$defs"][name]["properties"][field] = addresses
+        return schema
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_line_numbers(cls, value):
+        if not isinstance(value, dict) or not isinstance(
+            value.get("part_decisions"), list
+        ):
+            return value
+
+        def addressed(item, key):
+            if not isinstance(item, dict) or not isinstance(item.get(key), list):
+                return item
+            numbers = item[key]
+            if len(numbers) > 100 or any(
+                type(n) is not int or not 1 <= n <= 500000 for n in numbers
+            ):
+                raise ValueError("Source line numbers must be positive integers.")
+            return {**item, key: ", ".join(f"student:{n}" for n in numbers)}
+
+        parts = []
+        for raw in value["part_decisions"]:
+            part = addressed(raw, "student_quote")
+            if isinstance(part, dict) and isinstance(part.get("steps"), list):
+                part = {
+                    **part,
+                    "steps": [addressed(step, "evidence") for step in part["steps"]],
+                }
+            parts.append(part)
+        return {**value, "part_decisions": parts}
+
+
+class StepsOnlyRepair(AddressedPartAssessment):
+    """The selected frozen routes have no independently chargeable deductions."""
+
+    @classmethod
+    def model_json_schema(cls, *args, **kwargs):
+        schema = super().model_json_schema(*args, **kwargs)
+        schema["$defs"]["PartDecision"]["properties"]["errors"] = {
+            "type": "array",
+            "maxItems": 0,
+        }
+        schema["$defs"].pop("ErrorEvent", None)
+        return schema
+
+    @model_validator(mode="after")
+    def step_ledger_only(self):
+        if any(d.errors for d in self.part_decisions):
+            raise ValueError(
+                "For step scoring put error explanations in the affected step reasons; leave errors empty."
+            )
+        return self
+
+
 class MathAssessment(EvidenceAssessment):
-    part_decisions: list[PartDecision] = Field(default_factory=list, max_length=100, exclude_if=lambda v:not v)
+    part_decisions: list[PartDecision] = Field(
+        default_factory=list, max_length=100, exclude_if=lambda v: not v
+    )
     route_id: str
     route_reason: str
     awards: list[Award] = Field(default_factory=list, max_length=80)
@@ -898,7 +970,21 @@ def _review_index(entry):
 def _part_proof_evidence(problem):
     if problem.type != "推理题":
         return ""
-    return (
+    correspondence = ""
+    if supplied_notation(problem.stem):
+        correspondence = (
+            "Read the quoted notation convention in context. Use only correspondences the source actually "
+            "grants; a conjecture, requested construction, prohibition or implication to prove is still "
+            "a student obligation. Apply a granted correspondence to the student's last justified "
+            "statement and compare with the target definition, including the direction(s) that must hold. "
+            "For an identification of objects by defining conditions, establishing equivalence in both "
+            "directions under the GIVEN correspondence establishes the identification itself. Award the "
+            "identification step when this holds; write the short substitution in the scoring reason. "
+            "Do not demand the student copy the supplied names. If withholding credit, identify the "
+            "mathematical condition still missing after substitution or quote the explicit source demand "
+            "for a separately written map. A one-way implication alone does not establish equivalence. "
+        )
+    return correspondence + (
         "\nFor each scored proof obligation, check what follows from the cited student statements under "
         "the problem's hypotheses and definitions. A direct consequence of a definition, a substitution "
         "or a reversible algebraic equality may establish the goal without an extra sentence. "
@@ -1138,6 +1224,8 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                 + "\nJSON Schema:\n" + _json(review_format.model_json_schema()), language, grading_setup,
                 **({"output_instruction": OUTPUT_INSTRUCTION} if not compact_parts and any("proof_audit" in trace for trace in traces) else {})),
             user_prompt=_json({"problem": problem.stem, "reference": problem.reference_answer,
+                               **({"source_supplied_correspondence": notation}
+               if plan.part_rubric and problem.type == "推理题" and (notation := supplied_notation(problem.stem)) else {}),
                                "answer": answer.content, "plan": (plan.part_rubric if compact_parts else plan).model_dump(mode="json"),
                                "source_catalog": {key: value[0] for key, value in catalog.items()},
                                "disputed_item_ids": sorted(review_parts if compact_parts else disputed), "experts": review_evidence}),
@@ -1278,6 +1366,8 @@ class MathGradingSkill(GradingSkill):
         return ("" if plan.part_rubric else template + "\n" + LEDGER_INSTRUCTION) + _generated_proof_guidance(problem) + "\nINPUT DATA:\n" + _json({
             "problem": problem.stem, "reference_answer": problem.reference_answer,
             "student_answer": answer.content,
+            **({"source_supplied_correspondence": notation}
+               if plan.part_rubric and problem.type == "推理题" and (notation := supplied_notation(problem.stem)) else {}),
             **({"allow_partial_credit": plan.allow_partial_credit} if plan.part_rubric else {}),
             "rubric_plan": plan.part_rubric.model_dump(mode="json") if plan.part_rubric else plan.model_dump(mode="json"),
             "binary_rule": None if plan.part_rubric else frozen_binary_rule(plan),
@@ -1292,10 +1382,10 @@ class MathGradingSkill(GradingSkill):
             "retrieved_material": context,
         })
 
-    async def _assess(self, plan, *, system_prompt, user_prompt, validator):
+    async def _assess(self, plan, *, system_prompt, user_prompt, validator, part_output=FrozenPartAssessment):
         if plan.part_rubric:
             assessment, response = await structured_llm_call(self.provider,
-                output_model=FrozenPartAssessment, system_prompt=system_prompt, user_prompt=user_prompt,
+                output_model=part_output, system_prompt=system_prompt, user_prompt=user_prompt,
                 validate_output=lambda candidate: validator(candidate.assessment()))
             return assessment.assessment(), response
         return await structured_llm_call(self.provider, output_model=MathAssessment,
@@ -1423,7 +1513,7 @@ class MathGradingSkill(GradingSkill):
                 }:
                     raise
                 return await self._direct(problem, answer, plan, prompt, unit, chunks,
-                    started=started,
+                    started=started, repair_context=getattr(exc, "repair_context", None),
                     fallback={"reason": "invalid_detailed_assessment", "error_type": type(exc).__name__,
                               "draft": draft.model_dump(mode="json") if draft else diagnostic.get("draft")})
             proof_audit = (inspect_audit(read_appendix(getattr(response, "content", None)), draft, answer.content or "", problem.stem, plan)
@@ -1528,14 +1618,33 @@ class MathGradingSkill(GradingSkill):
             if cm:
                 await report_math_progress(cm.__aexit__, None, None, None)
 
-    async def _direct(self, problem, answer, plan, prompt, unit, chunks, *, fallback=None, started=None):
+    async def _direct(self, problem, answer, plan, prompt, unit, chunks, *, fallback=None, started=None, repair_context=None):
         await self._substep(unit, "llm_grade")
         if plan.part_rubric is not None:
+            # This fallback still uses the frozen decision schema. Carry forward
+            # the failed validation and supply the exact addresses it can accept.
+            output_model = (StepsOnlyRepair if all(
+                p.steps and p.alternative.deduct_per_error is None for p in plan.part_rubric.parts
+            ) else AddressedPartAssessment)
+            recovery = {
+                "validation_feedback": repair_context,
+                "student_line_ids": list(source_catalog(answer.content or "", "", "")),
+                "parts": [{"part_id": p.id, "target_quote": f"part:{p.id}",
+                           "step_ids": [step.id for step in p.steps],
+                           "deduction_rule_ids": [rule.id for rule in p.deductions]}
+                          for p in plan.part_rubric.parts],
+                "instruction": "For student_quote and each step.evidence return an array of source line numbers, "
+                               "e.g. [1,3] references student:1 and student:3. Use [] for an absent step. Keep any "
+                               "paraphrase in progress/reason. On the points route put lost credit in "
+                               "the corresponding missed step; do not add deduction events. For actual "
+                               "deductions keep each independent error grounded at its source.",
+            }
+            prompt += "\nRepair the rejected decision from the original sources:\n" + _json(recovery)
             result, response = await self._assess(plan,
                 system_prompt=build_system_prompt(
-                    PART_SCORING_INSTRUCTION + _part_proof_evidence(problem) + _json(FrozenPartAssessment.model_json_schema()),
+                    PART_SCORING_INSTRUCTION + _part_proof_evidence(problem) + "\nRepair format: student_quote and step.evidence are arrays of original line numbers.\n" + _json(output_model.model_json_schema()),
                     self.language, self.grading_setup),
-                user_prompt=prompt, validator=_assessment_validator(plan,answer,problem))
+                user_prompt=prompt, validator=_assessment_validator(plan,answer,problem),part_output=output_model)
             score,steps=score_assessment(result,plan,answer.content,problem_text=problem.stem)
             return ExpertResult(provider=self.provider.provider_id,score=score,max_score=problem.max_score,
                 confidence=result.confidence,comment=result.comment,steps=steps,duration_ms=response.duration_ms or 0,

@@ -2225,7 +2225,7 @@ _GENERATED_MATERIAL_GUIDANCE = r"""- reference_answer: a correct model answer or
 
 AI_COMPLETION_SYSTEM_PROMPT = _MATERIAL_ENVELOPE + _LEGACY_RULE_GUIDANCE + _GENERATED_MATERIAL_GUIDANCE
 
-from backend.services.part_rubric import PART_INSTRUCTION
+from backend.services.part_rubric import PART_INSTRUCTION, supplied_notation
 from backend.services.rubric_drafts import RubricAllocationError, RubricDefinition, RubricDraft, generated_rubric, retarget_draft, saved_draft
 from backend.domain.question_types import normalize_question_type
 from backend.services.math_rubric_plan import POINT_EVIDENCE_GUIDANCE, _question_input
@@ -2385,6 +2385,8 @@ async def generate_missing_question_materials(
         existing = saved_draft(problems_data[entry["q_id"]])
         if existing and existing.plan.part_rubric:
             entry["frozen_rubric"] = existing.plan.part_rubric.model_dump(mode="json")
+        if normalize_question_type(entry["type"]) == "推理题" and (notation := supplied_notation(entry["stem"])):
+            entry["source_supplied_correspondence"] = notation
         entry["rubric_question"] = {
             "id": entry["q_id"], "label": entry["number"],
             "stem": structure.get("shared_stem") or entry["stem"], "total_pts": entry["max_score"],
