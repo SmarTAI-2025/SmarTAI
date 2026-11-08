@@ -713,6 +713,12 @@ def _validate_claim_identity(original: MathAssessment, revised: MathAssessment, 
         raise ValueError("review_changed_claim_identity")
 
 
+def _assessment_for_model(draft, plan):
+    """Project the persisted ledger back onto the schema used by this model call."""
+    fields = set(FrozenPartAssessment.model_fields) if plan.part_rubric else None
+    return draft.model_dump(mode="json", include=fields)
+
+
 def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=None, evidence=None):
     """Repair local validation failures within the parser's ONE repair budget.
 
@@ -771,12 +777,15 @@ def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=No
             }.get(str(exc), "")
             error.repair_context = _json({"validation_error": str(exc), "validation_hint": hint,
                 "unresolved_sources": unresolved,
-                "preserve_claim_quotes": preserved, "draft": draft.model_dump(mode="json"),
-                "repair_scope": "Fix invalid source citations or ledger links using the original input. "
+                "preserve_claim_quotes": preserved, "draft": _assessment_for_model(draft, plan),
+                "repair_scope": ("Return the same part_decisions schema. Correct the indicated part or step, keeping "
+                    "valid source IDs. For step.evidence and student_quote use a student line ID or exact "
+                    "text, and for target_quote use part:<part_id>. Never supply a numeric score."
+                    if plan.part_rubric else "Fix invalid source citations or ledger links using the original input. "
                     "Preserve all located claim IDs and quotes. Do not invent omitted student work. "
                     "Use source_catalog IDs and empty quote fields for unresolved citations instead of "
                     "retyping or rewriting LaTeX. Do not drop claims merely to pass validation. "
-                    "Use omission evidence with a question/rubric source for a missing obligation."})
+                    "Use omission evidence with a question/rubric source for a missing obligation.")})
             raise error from exc
     return validate
 
@@ -1455,12 +1464,14 @@ class MathGradingSkill(GradingSkill):
                     reviewed, response = await self._assess(
                         plan, system_prompt=system,
                         user_prompt=prompt + "\nAPPLY SCOPED EVIDENCE (one pass):\n" + _json({
-                            "draft": draft.model_dump(mode="json"), "evidence": evidence,
+                            "draft": _assessment_for_model(draft, plan), "evidence": evidence,
                             **({"proof_concerns": proof_concerns, "proof_instruction": REVIEW_INSTRUCTION}
                                if proof_audit is not None else {}),
                             "instruction": "Independently verify relevance and method against each exact target. Unrelated true statements earn no academic credit. Check affected scoring points against original text and rubric. "
                             "Check that the tool's assumed conditions really hold. Unknown is not incorrect. "
-                            "Return a complete ledger with a concrete score; retain supported credit. "
+                            + ("Return a complete part_decisions ledger; the server calculates the score. "
+                               if plan.part_rubric else "Return a complete ledger with a concrete score; retain supported credit. ")
+                            +
                             "Do not extend the tool result to a different relation or the entire answer. "
                             "Do not propose further tools or reconstruct missing student work. "
                             "Preserve all existing claim IDs and their exact original quotes; "

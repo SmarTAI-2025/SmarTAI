@@ -783,6 +783,13 @@ async def test_part_review_only_changes_grounded_disputed_items():
         )
 
 
+    invalid = decisions[0].model_copy(update={"target_quote": "absent target"})
+    with pytest.raises(ValueError) as rejected:
+        grading._assessment_validator(plan, a, p)(vote([invalid, *decisions[1:]]))
+    repair = json.loads(rejected.value.repair_context)
+    assert "score" not in repair["draft"] and "route_id" not in repair["draft"]
+    assert grading.FrozenPartAssessment.model_validate(repair["draft"]).part_decisions[0] == invalid
+
     # A unanimous pair also receives the independent relevance check. An empty
     # valid revision list settles that check without inventing a CAS conflict.
     trace = grading.read_math_trace(experts[1])

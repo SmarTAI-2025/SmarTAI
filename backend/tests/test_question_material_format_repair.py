@@ -183,3 +183,34 @@ async def test_stdin_program_keeps_stdin_cases_without_extra_generation():
     assert len(provider.calls) == 1
     assert result[0].test_cases[0].input == "2\n3"
     assert result[0].test_cases[0].function_name is None
+
+
+@pytest.mark.asyncio
+async def test_schema_repair_names_invalid_fields_and_omits_source_values():
+    provider = Provider([
+        json.dumps({"candidates": [{"target_id": "q1:reference_answer", "q_id": "q1",
+                                   "target": "private free-form sentence"}]}),
+        json.dumps({"candidates": [{"target_id": "q1:reference_answer", "q_id": "q1",
+                                   "target": "reference_answer", "text_value": "42"}]}),
+    ])
+    result = await generate(provider)
+    assert result[0].text_value == "42" and len(provider.calls) == 2
+    repair = provider.calls[1][-1].content
+    assert '"path": ["candidates", 0, "target"]' in repair and "literal_error" in repair
+    assert "private free-form sentence" not in repair
+
+
+def test_schema_diagnostics_redact_unknown_dictionary_keys_and_values():
+    from pydantic import BaseModel, ConfigDict
+
+    from backend.tools.structured_llm import StructuredOutputInvalidError, extract_and_parse_json
+
+    class Decision(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        accepted: bool
+
+    with pytest.raises(StructuredOutputInvalidError) as failure:
+        extract_and_parse_json(json.dumps({"accepted": "secret_value", "secret_key": True}), Decision)
+    issues = json.loads(failure.value.repair_context)["invalid_fields"]
+    assert {tuple(item["path"]) for item in issues} == {("accepted",), ("<key>",)}
+    assert "secret" not in failure.value.repair_context
