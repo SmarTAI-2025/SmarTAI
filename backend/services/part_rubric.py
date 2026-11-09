@@ -631,6 +631,8 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
                     f"{label}: preserve ordered teacher step budgets {sequence[1]}."
                 )
     check_response_obligation(problem.get("stem", ""), teacher, rubric.parts)
+    from backend.services.teacher_point_allocations import validate_teacher_point_items
+    anchors = validate_teacher_point_items(rubric, ordinary)
     capped_rules = verify_teacher_numbers(teacher, rubric, maximum)
     gaps = list(rubric.teacher_gaps) if teacher else []
     mentioned = {
@@ -673,6 +675,19 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
         if policy.needs_rate(p.total_pts):
             raise ValueError(f"{p.id}: supply a positive alternative.deduct_per_error in points "
                              "for this part. Preserve the main rubric and explicit teacher constraints.")
+        if anchors:
+            def bind_item(item):
+                anchor = anchors.get((p.id, item.id))
+                if anchor is None:
+                    return item
+                condition, quote = anchor
+                # The condition seen by the expert is the teacher's own target,
+                # even when a proposal paraphrased or mislabeled the matching leaf.
+                return item.model_copy(update={"criterion": condition, "source_quote": quote})
+            p = p.model_copy(update={
+                "steps": tuple(bind_item(item) for item in p.steps),
+                "deductions": tuple(bind_item(item) for item in p.deductions),
+            })
         if not teacher:
             p = p.model_copy(
                 update={
@@ -686,7 +701,8 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
                 }
             )
         for item in (*p.steps, *p.deductions):
-            if item.source_quote and not match_source_quote(teacher, item.source_quote):
+            if (item.source_quote and (p.id, item.id) not in anchors
+                    and not match_source_quote(teacher, item.source_quote)):
                 raise ValueError(
                     "A supplied scoring rule must quote its teacher source exactly."
                 )
@@ -738,7 +754,10 @@ def render_parts(rubric, language="zh", *, full_policy=False):
         lines.append(f"标答解法评分标准（配分单位 {rubric.base_unit_pts:g} 分）" if zh
                      else f"Reference method (allocation unit {rubric.base_unit_pts:g} points)")
     for part in rubric.parts:
-        heading = part.label if full_policy else " ".join(value for value in (part.label, part.stem) if value)
+        if full_policy:
+            heading = f"{part.label or ''} 满分 {part.total_pts:g} 分".strip() if zh else f"{part.label or ''} Maximum {part.total_pts:g} points".strip()
+        else:
+            heading = " ".join(value for value in (part.label, part.stem) if value)
         if heading:
             lines.append(heading)
         prefix = f"{part.label} " if part.label else ""
@@ -749,17 +768,18 @@ def render_parts(rubric, language="zh", *, full_policy=False):
                 entry += f"（沿用错值且本步正确时折算 {float(points):g} 分）" if zh else f" (follow-through: {float(points):g} points)"
             lines.append(entry)
         if part.deductions:
-            lines.append(
-                f"{prefix}{'满分' if zh else 'Maximum '}{part.total_pts:g}{unit}"
-            )
+            if not full_policy:
+                lines.append(f"{prefix}{'满分' if zh else 'Maximum '}{part.total_pts:g}{unit}")
             for rule in part.deductions:
                 cap = ""
                 if rule.max_deduction is not None:
                     cap = f"，累计最多扣{rule.max_deduction:g}分" if zh else f", maximum deduction {rule.max_deduction:g} points"
                 if full_policy and rule.limit is not None:
                     cap += f"，最多 {rule.limit} 次" if zh else f", at most {rule.limit} events"
-                if full_policy and rule.count_by == "target_item":
-                    cap += "，同一作答目标只扣一次" if zh else ", count each target once"
+                if full_policy:
+                    counting = {"target_item": ("按作答目标", "per target"), "wrong_step": ("按错误步骤", "per wrong step"),
+                                "independent_error": ("按独立错误", "per independent error")}
+                    cap += ("，" if zh else ", ") + counting[rule.count_by][0 if zh else 1]
                 lines.append(
                     f"- {rule.criterion} ({'扣' if zh else 'deduct '}{rule.deduct_pts:g}{unit}{cap})"
                 )
@@ -846,7 +866,7 @@ Always include parts (one unnumbered part with null label/stem for an unsplit qu
 Preserve the original question and all explicit teacher policies. For each known part give
 total_pts and exactly one of steps (budgets sum to total_pts) or deductions (positive amounts
 per supported error; they do not sum to total_pts). Reference solutions can contain detailed
-unscored steps for either kind. Scope main steps to the reference strategy and its minor variants. In a generated proof rubric, each
+unscored steps for either kind. Distinguish method-independent requested conclusions from a required technique. Scope main steps to the reference strategy and its minor variants. In a generated proof rubric, each
 criterion names the mathematical obligation and acceptable evidence. Put sample computations,
 chosen notation and examples in the reference answer. Equivalent notation within the same strategy
 must satisfy the same scoring goals. A substantively different strategy uses only the independent
@@ -861,6 +881,8 @@ equivalence cannot consume an independent budget. Separate a genuinely new impli
 or construction; the goal must admit a meaningful difference in demonstrated understanding.
 Do not give multiple budgets to repeats of the same inference. State which hypotheses/cases are
 substantive. A valid direct implication or equivalence chain may meet more than one independent goal.
+Every explicit ordinary award must map to its own source condition, correct part and exact value.
+Quote the corresponding teacher allocation (condition and amount) on that precise scoring item.
 Extract explicit source rules with exact source_quote evidence. When an alternative is described in
 teacher prose, use alternative.field_sources for each expressly stated field with its exact supporting
 quote (maximum, minimum, deduct_per_error or max_deduction). Never attribute an AI default to the teacher. Only fill missing ordinary
@@ -871,7 +893,7 @@ when its maximum and minimum differ, including when the teacher gave only the ma
 Choose a rate appropriate to this part before seeing student work. Use the default maximum
 and minimum unless constrained by the question or teacher. Do not invent a cumulative cap
 or source quotation. Never encode the reference steps in the alternative.
-Preserve teacher caps, floors, exemptions and counting scopes. Use follow_through_pts for the
+Preserve teacher caps, floors, exemptions and counting scopes. For follow-through, use follow_through_pts for the
 absolute award on a sound step using an earlier wrong result. Convert a stated fraction using
 that step's own budget. The earned award replaces the full step award. Use only one representation.
 max_deduction is the cumulative loss in points; deduct_pts or deduct_per_error is the loss per event.

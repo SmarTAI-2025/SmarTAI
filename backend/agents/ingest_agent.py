@@ -2191,7 +2191,10 @@ _LEGACY_RULE_GUIDANCE = r"""- Attach rubric_definition once per question to the 
 """
 
 _GENERATED_MATERIAL_GUIDANCE = r"""- reference_answer: a correct model answer or derivation suitable for teacher review. Cover every
-  labelled subpart in question_structure, in source order, without creating separate q_ids. If an
+  labelled subpart in question_structure, in source order, without creating separate q_ids.
+  When generating a missing reference, choose one worked strategy per subpart. Keep all required
+  proof directions and deliverables; include multiple methods only if the question asks for them.
+  An independent method in a student submission is assessed using its frozen alternative policy. If an
   existing teacher answer contains only a final answer, preserve that conclusion and expand it
   into explicit, checkable solution steps rather than replacing it with an unrelated approach.
 - Check the derivation against the exact hypotheses before returning it: verify algebraic
@@ -2528,6 +2531,17 @@ async def generate_missing_question_materials(
                     or candidate.target != expected["target"]):
                 raise StructuredOutputInvalidError("Generated material target identity is invalid.")
             candidate.rubric_draft = None  # Only the server may seal a draft.
+            if candidate.target == "reference_answer":
+                source = problems_data[candidate.q_id]
+                if not source.get("reference_answer") and uses_math_grading(source.get("type") or ""):
+                    from backend.services.reference_strategy import validate_generated_reference
+                    try:
+                        validate_generated_reference(source.get("stem") or "", source.get("question_structure"),
+                                                     candidate.text_value or "", source.get("criterion") or "")
+                    except ValueError as exc:
+                        error = StructuredOutputInvalidError("Multiple primary methods for a single target.")
+                        error.repair_context = str(exc)
+                        raise error from exc
             if candidate.target_id in part_targets and not (candidate.rubric_definition and
                     candidate.rubric_definition.part_rubric and not candidate.rubric_definition.routes):
                 error = StructuredOutputInvalidError("Missing structured scoring rules.")

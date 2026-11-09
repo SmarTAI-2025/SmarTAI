@@ -307,6 +307,9 @@ def saved_draft(problem, *, grading_setup=None, allow_incomplete_alternative=Fal
             or draft.plan.original_criterion != context["criterion"]
             or draft.plan.max_score != context["max_score"]):
         return None
+    from backend.services.teacher_point_allocations import teacher_awards_match
+    if not teacher_awards_match(draft.plan.part_rubric):
+        return None
     try:
         draft = _refresh_teacher_alternatives(draft, context)
     except ValueError:
@@ -332,6 +335,11 @@ def saved_draft(problem, *, grading_setup=None, allow_incomplete_alternative=Fal
 
 
 def bind_draft(draft: RubricDraft, problem, *, grading_setup=None) -> MathRubricPlan:
+    from backend.services.teacher_point_allocations import validate_teacher_point_items
+    from backend.services.part_rubric import ordinary_criterion
+    if draft.plan.part_rubric and draft.plan.part_rubric.teacher_rubric:
+        rules = draft.plan.part_rubric
+        validate_teacher_point_items(rules, ordinary_criterion(rules.teacher_rubric))
     if draft.content_fingerprint != draft_fingerprint(problem):
         raise ValueError("rubric_draft_content_changed")
     setup = _mapping(grading_setup) if grading_setup is not None else {}

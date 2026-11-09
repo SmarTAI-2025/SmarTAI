@@ -98,6 +98,7 @@ def frozen_engine_version(manifest: dict, events: list[dict]) -> str | None:
 def plans_from_snapshots(manifest: dict, events: list[dict], *, for_grading=False) -> dict[str, "MathRubricPlan"]:
     """Restore actual plans; an old engine never supplies a new engine's rules."""
     from backend.services.math_rubric_plan import MathRubricPlan
+    from backend.services.teacher_point_allocations import teacher_awards_match
 
     if frozen_engine_version(manifest, events) != MATH_GRADING_ENGINE_VERSION:
         return {}
@@ -112,7 +113,9 @@ def plans_from_snapshots(manifest: dict, events: list[dict], *, for_grading=Fals
             plan = MathRubricPlan.model_validate(raw)
         except (ValidationError, TypeError):
             continue
-        if for_grading and plan.part_rubric and plan.part_rubric.missing_alternative_rates():
+        if for_grading and plan.part_rubric and (
+            plan.part_rubric.missing_alternative_rates() or not teacher_awards_match(plan.part_rubric)
+        ):
             continue  # Retain the historical plan for display, never mix its votes into a new ledger.
         if isinstance(qid, str) and plan.schema_version == "math_rubric_v3":
             plans[qid] = plan

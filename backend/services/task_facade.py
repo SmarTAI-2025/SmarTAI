@@ -1054,7 +1054,8 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         ),
         "question_structure": structure,
         "alternative_rules": alternatives,
-        **({"effective_criterion": render_parts(math_plan.part_rubric, feedback_language, full_policy=True)}
+        **({"effective_criterion": render_parts(math_plan.part_rubric, feedback_language, full_policy=True),
+            "rubric_version": math_plan.part_rubric.rubric_version}
            if math_plan and math_plan.part_rubric else {}),
         "rubric_point_summary": rubric_summary,
         "review_status": presentation.get("review_status", "needs_review"),
