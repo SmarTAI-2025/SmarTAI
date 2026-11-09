@@ -17,6 +17,18 @@ from backend.services.count_witnesses import (
 from backend.services.growth_order import ordered_growth_classes
 
 
+@pytest.mark.parametrize("text,stem,withdrawn", [
+    ("得 a=b。等等，让我们仔细推导这一关系。", "求 a。", True),
+    ("This gives 7. Wait, let me recalculate the derivative.", "Find the slope.", True),
+    ("乘积不对易，故该群非交换。", "证明结论。", False),
+    ("Assume the claim is false. This gives a contradiction.", "Prove the claim.", False),
+    ("得 a=b。等等，让我们仔细推导。", "分析下列推导中的错误。", False),
+])
+def test_only_unrequested_self_retractions_in_generated_work_are_flagged(text, stem, withdrawn):
+    from backend.agents.ingest_agent import _withdrawn_derivation
+    assert bool(_withdrawn_derivation(text, {"type": "推理题", "stem": stem})) == withdrawn
+
+
 def test_narrow_panel_only_when_selected_without_displacing_the_page():
     panel = NormalizedRegionV1(x0=0.1, y0=0.5, x1=0.8, y1=0.6)
     observations = [
@@ -423,3 +435,30 @@ def test_textbook_heading_and_tex_orders_keep_supported_equivalences():
         [r"n\log_{2}{n}", r"n/\log_{n}{2}"],
         ["n^{n}"],
     ]
+
+
+@pytest.mark.asyncio
+async def test_generated_reference_repair_rechecks_the_withdrawn_step():
+    import json
+    from backend.agents.ingest_agent import generate_missing_question_materials
+    from backend.tests.test_question_material_format_repair import Provider
+
+    target = dict(q_id="q1", target="reference_answer", target_id="q1:reference_answer")
+    def answer(text):
+        return json.dumps({"candidates": [{**target, "text_value": text}]}, ensure_ascii=False)
+    fixed = "代入定义得到等式两边均为 4。"
+    provider = Provider([answer("左侧为 7。等等，让我们重新算一遍。得到 4。"), answer(fixed)])
+    material, = await generate_missing_question_materials({"q1": {
+        "type": "推理题", "stem": "验证等式。", "max_score": 10}}, [target], 1, provider)
+    assert material.text_value == fixed and len(provider.calls) == 2
+    assert "Recompute" in provider.calls[1][-1].content
+
+
+def test_changed_script_survives_a_merged_expression_elsewhere_in_an_aligned_list():
+    whole = r"2.7 排列：$1,a^r,b,c,d,x_2y_2,e,f$"
+    panel = r"2.7 排列：$1,a^n,b,c,d,x_n,y^2,e,f$"
+    assert conflicting_heading(whole, panel) == "2.7"
+    assert conflicting_heading(r"2.7 排列：$1,a,b,c,d,x_2y_2,e,f$",
+                               r"2.7 排列：$1,a,b,c,d,x_2,y_2,e,f$") is None
+    assert conflicting_heading(whole, r"2.7 排列：$b,c,d,x_n,y^2,e$") is None
+    assert conflicting_heading(r"2.7 排列：$1,x^2,a,b,f$", r"2.7 排列：$1,p,q,r^3,t,f$") is None

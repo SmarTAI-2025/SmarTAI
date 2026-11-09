@@ -2257,6 +2257,21 @@ class _IndependentCompletionOutput(BaseModel):
     candidates: List[Any] = Field(default_factory=list, max_length=200)
 
 
+def _withdrawn_derivation(answer, problem):
+    """Flag an author's explicit retraction, not an ordinary proof by contradiction."""
+    if normalize_question_type(problem.get("type")) not in {"推理题", "计算题", "概念题"}:
+        return None
+    if re.search(r"纠错|改错|纠正.*错误|分析.*错|identify the (?:error|mistake)|correct the following|critique",
+                 (problem.get("stem") or "") + "\n" + (problem.get("criterion") or ""), re.I):
+        return None
+    return re.search(
+        r"(?:^|[。！？.!?;；\n])\s*(?:等等|等一下|不对|这不对)[，,。.!！ ]+\s*"
+        r"(?:让(?:我们|我)|我们|我)(?:再|重新|仔细)(?:看|算|推导|检查|思考)|"
+        r"(?:^|[.!?;\n])\s*(?:wait|hold on|that(?:'s| is) (?:wrong|incorrect))[,—.! ]+\s*"
+        r"(?:let me|let['’]s|we (?:must|need to)|I (?:must|need to))\s+"
+        r"(?:reconsider|recheck|recalculate|re-?derive|start (?:over|again)|try again)", answer or "", re.I)
+
+
 async def generate_missing_question_materials(
     problems_data: Dict[str, Dict[str, Any]],
     requested_targets: List[Dict[str, str]],
@@ -2415,6 +2430,13 @@ async def generate_missing_question_materials(
                     or candidate.q_id != expected["q_id"]
                     or candidate.target != expected["target"]):
                 raise StructuredOutputInvalidError("Generated material targets were missing, duplicated or invalid.")
+            if (candidate.target == "reference_answer" and not problems_data[candidate.q_id].get("reference_answer")
+                    and (retraction := _withdrawn_derivation(candidate.text_value, problems_data[candidate.q_id]))):
+                error = StructuredOutputInvalidError("The generated reference contains a withdrawn derivation.")
+                error.repair_context = (f"The answer retracts its own working at «{retraction[0].strip()}». "
+                                        "Recompute from the question, check the disputed step, and return one "
+                                        "coherent worked answer with only the verified derivation.")
+                raise error
             if candidate.target == "reference_answer" and candidate.q_id in count_checks:
                 issue = reference_error(candidate.text_value, count_checks[candidate.q_id])
                 if issue:

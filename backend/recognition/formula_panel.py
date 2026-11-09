@@ -2,6 +2,7 @@
 
 import re
 import unicodedata
+from difflib import SequenceMatcher
 
 _HEADING = re.compile(
     r"(?m)^[ \t#*$]*(\d+(?:[ \t]*[.．][ \t]*\d+)+)(?=[①-⑳\s.:：、$（(])"
@@ -48,6 +49,12 @@ def _scripts(item):
     ]
 
 
+def _changed_math(a, b):
+    return (any(op == other and sign == sign2 and value != value2
+                for (op, sign, value), (other, sign2, value2) in zip(_scripts(a), _scripts(b)))
+            or (a.count("log") != b.count("log") and "log" in a and "log" in b))
+
+
 def _difference(whole, panel):
     left, right = _items(whole), _items(panel)
     if min(len(left), len(right)) < 3:
@@ -56,26 +63,30 @@ def _difference(whole, panel):
         # Only assert a dropped/inserted expression when the complete shorter
         # list is embedded between shared first and last mathematical anchors.
         short, long = sorted([left, right], key=len)
+        if short[0] != long[0] or short[-1] != long[-1]:
+            return False
         remaining = iter(long)
-        return (
-            short[0] == long[0]
-            and short[-1] == long[-1]
-            and all(any(term == candidate for candidate in remaining) for term in short)
-        )
+        if all(any(term == candidate for candidate in remaining) for term in short):
+            return True
+        # A fused or missing term must not shift every comparison that follows.
+        # Require extensive unchanged context and a separate mathematical
+        # discrepancy, not just different segmentation of the same notation.
+        if len(long) > 128:
+            return False
+        alignment = SequenceMatcher(None, short, long, autojunk=False)
+        equal = sum(block.size for block in alignment.get_matching_blocks())
+        if equal < 4 or 3 * equal < 2 * len(long):
+            return False
+        return any(tag == "replace" and max(i2 - i1, j2 - j1) <= 3
+                   and _changed_math("".join(short[i1:i2]), "".join(long[j1:j2]))
+                   for tag, i1, i2, j1, j2 in alignment.get_opcodes())
     anchors = sum(a == b for a, b in zip(left, right))
     if anchors < 2 or anchors * 3 < len(right):
         return False
     for a, b in zip(left, right):
         if a == b:
             continue
-        if any(
-            op == other and sign == sign2 and value != value2
-            for (op, sign, value), (other, sign2, value2) in zip(
-                _scripts(a), _scripts(b)
-            )
-        ):
-            return True
-        if a.count("log") != b.count("log") and "log" in a and "log" in b:
+        if _changed_math(a, b):
             return True
     return False
 
