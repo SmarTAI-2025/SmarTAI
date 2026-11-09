@@ -984,7 +984,7 @@ def _part_proof_evidence(problem):
             "mathematical condition still missing after substitution or quote the explicit source demand "
             "for a separately written map. A one-way implication alone does not establish equivalence. "
         )
-    return correspondence + (
+    return "On the alternative route, use these proof checks to support the decision and independent errors only. " + correspondence + (
         "\nFor each scored proof obligation, check what follows from the cited student statements under "
         "the problem's hypotheses and definitions. A direct consequence of a definition, a substitution "
         "or a reversible algebraic equality may establish the goal without an extra sentence. "
@@ -1017,8 +1017,8 @@ def _generated_proof_guidance(problem):
         "Unless the question or teacher specifies a method, an item describing a reference step is one "
         "way to earn its allocated credit. For another route, identify the corresponding mathematical "
         "work (premise or witness, decisive inference, conclusion) in the student's text. A counterexample "
-        "to a different necessary condition can prove the same negative claim. Credit a complete valid "
-        "proof across the applicable items even when its lemma is different. Keep item budgets, independent "
+        "to a different necessary condition can prove the same negative claim. Under a per-part rubric, "
+        "settle a different strategy using only its alternative policy. Keep independent "
         "subquestions, explicit instructions and real gaps intact. Give the precise missing implication "
         "if withholding credit. An unsupported conclusion alone does not earn the reasoning points.\n"
     )
@@ -1380,6 +1380,7 @@ class MathGradingSkill(GradingSkill):
             **({"required_decisions": [{
                 "part_id": part.id, "target_quote": f"part:{part.id}",
                 "step_ids": [step.id for step in part.steps], "deduction_ids": [rule.id for rule in part.deductions],
+                "alternative_error_id": "alternative",
             } for part in plan.part_rubric.parts]} if plan.part_rubric else {}),
             "retrieved_material": context,
         })
@@ -1633,13 +1634,14 @@ class MathGradingSkill(GradingSkill):
                 "student_line_ids": list(source_catalog(answer.content or "", "", "")),
                 "parts": [{"part_id": p.id, "target_quote": f"part:{p.id}",
                            "step_ids": [step.id for step in p.steps],
-                           "deduction_rule_ids": [rule.id for rule in p.deductions]}
+                           "deduction_rule_ids": [rule.id for rule in p.deductions], "alternative_error_id": "alternative"}
                           for p in plan.part_rubric.parts],
                 "instruction": "For student_quote and each step.evidence return an array of source line numbers, "
                                "e.g. [1,3] references student:1 and student:3. Use [] for an absent step. Keep any "
                                "paraphrase in progress/reason. On the points route put lost credit in "
                                "the corresponding missed step; do not add deduction events. For actual "
-                               "deductions keep each independent error grounded at its source.",
+                               "deductions keep each independent error grounded at its source. For method=alternative, "
+                               "leave steps empty and use only rule_id=alternative for any errors.",
             }
             prompt += "\nRepair the rejected decision from the original sources:\n" + _json(recovery)
             result, response = await self._assess(plan,

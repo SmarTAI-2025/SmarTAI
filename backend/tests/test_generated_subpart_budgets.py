@@ -33,7 +33,7 @@ def definition(items):
 
 def reply(items):
     parts = [{"id": entry["id"], "label": f"({i})", "stem": f"Statement {i}.", "total_pts": entry["points"],
-              "steps": [{"id": "step", "criterion": entry["description"], "total_pts": entry["points"]}]}
+              "alternative": {"deduct_per_error":1}, "steps": [{"id": "step", "criterion": entry["description"], "total_pts": entry["points"]}]}
              for i, entry in enumerate(items, 1)]
     rubric = {"id": "q1", "label": "1.12", "stem": "Judge each statement.", "total_pts": 10, "parts": parts}
     return json.dumps({"candidates": [{"q_id": "q1", "target_id": "q1:criterion", "target": "criterion",

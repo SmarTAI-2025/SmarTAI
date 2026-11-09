@@ -80,7 +80,8 @@ def get_math_plan(problem: ProblemInfo) -> "MathRubricPlan | None":
 
     plan = (_current_plans.get() or {}).get(problem.q_id)
     if (plan is None or plan.input_fingerprint != math_rubric_fingerprint(problem)
-            or plan.max_score != problem.max_score):
+            or plan.max_score != problem.max_score
+            or (plan.part_rubric and plan.part_rubric.missing_alternative_rates())):
         return None
     # A skill cannot silently change the rules seen by the next expert.
     return plan.model_copy(deep=True)
@@ -94,7 +95,7 @@ def frozen_engine_version(manifest: dict, events: list[dict]) -> str | None:
     return version
 
 
-def plans_from_snapshots(manifest: dict, events: list[dict]) -> dict[str, "MathRubricPlan"]:
+def plans_from_snapshots(manifest: dict, events: list[dict], *, for_grading=False) -> dict[str, "MathRubricPlan"]:
     """Restore actual plans; an old engine never supplies a new engine's rules."""
     from backend.services.math_rubric_plan import MathRubricPlan
 
@@ -111,6 +112,8 @@ def plans_from_snapshots(manifest: dict, events: list[dict]) -> dict[str, "MathR
             plan = MathRubricPlan.model_validate(raw)
         except (ValidationError, TypeError):
             continue
+        if for_grading and plan.part_rubric and plan.part_rubric.missing_alternative_rates():
+            continue  # Retain the historical plan for display, never mix its votes into a new ledger.
         if isinstance(qid, str) and plan.schema_version == "math_rubric_v3":
             plans[qid] = plan
     return plans
@@ -280,7 +283,7 @@ def ensure_run_math_version(*, run_id, worker_id, questions, frozen_setup):
     manifest = (frozen_setup.input_manifest if frozen_setup else {}) or {}
     events = repository.list_events(run_id)
     version = frozen_engine_version(manifest, events)
-    plans = matching_math_plans(questions, plans_from_snapshots(manifest, events))
+    plans = matching_math_plans(questions, plans_from_snapshots(manifest, events, for_grading=True))
     completed = [
         row for row in repository.list_results_for_run(run_id) if row.q_id in math_qids
     ]

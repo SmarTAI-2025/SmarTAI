@@ -48,6 +48,15 @@ class Alternative(Frozen):
     max_deduction: Points | None = Field(default=None, exclude_if=lambda v: v is None)
     source_quote: str = Field(default="", max_length=4000)
 
+    # Needed only for teacher clauses that cannot be resolved by the deterministic reader.
+    field_sources: dict[Literal["maximum", "minimum", "deduct_per_error", "max_deduction"], Text] = Field(
+        default_factory=dict, exclude_if=lambda v: not v
+    )
+    inferred_method_cap: bool = Field(default=False, exclude_if=lambda v: not v)
+
+    def needs_rate(self, part_points) -> bool:
+        return self.deduct_per_error is None and self.minimum.resolve(part_points) < self.maximum.resolve(part_points)
+
     @model_validator(mode="after")
     def check_deduction_cap(self):
         if self.max_deduction is not None and self.deduct_per_error is None:
@@ -62,11 +71,29 @@ class Criterion(Frozen):
 
 
 class PointStep(Criterion):
+    follow_through_pts: Points | None = Field(default=None, exclude_if=lambda v: v is None)
     total_pts: Points = Field(gt=0)
     answer_refs: tuple[Key, ...] = Field(default=(), exclude_if=lambda v: not v)
     follow_through_keep: float | None = Field(
         default=None, ge=0, lt=1, allow_inf_nan=False
     )
+
+
+    @model_validator(mode="after")
+    def check_follow_through(self):
+        if self.follow_through_pts is not None and (
+            self.follow_through_keep is not None or self.follow_through_pts >= self.total_pts
+        ):
+            raise ValueError("Supply only one follow-through award, smaller than the step budget.")
+        return self
+
+    def follow_through_award(self, *, ai_default=False):
+        if self.follow_through_pts is not None:
+            return Fraction(str(self.follow_through_pts))
+        rate = self.follow_through_keep
+        if rate is None:
+            rate = 0.5 if ai_default else 0
+        return Fraction(str(rate)) * Fraction(str(self.total_pts))
 
 
 class Penalty(Criterion):
@@ -175,6 +202,9 @@ class PartRubric(Frozen):
     # Warnings concern interpretation of the teacher's ordinary rules only.
     teacher_gaps: tuple[str, ...] = Field(default=(), max_length=20)
     low_confidence: bool = False
+
+    def missing_alternative_rates(self):
+        return [p.id for p in self.parts if p.alternative.needs_rate(p.total_pts)]
 
     @model_validator(mode="after")
     def unique_parts(self):
@@ -297,11 +327,12 @@ _LOSS_CAP = re.compile(r"(?:(?:累计|合计|一共|总共)?(?:最多|至多|最
                        r"(?:累计|总)扣分(?:上限)?(?:为|是)?\s*$|(?:maximum|total|cumulative) deduction(?: of)?\s*$", re.I)
 
 
-def read_alternative(
-    text: str, *, maximum: float, fallback: Alternative | None = None
-) -> Alternative:
-    """Only score-bearing clauses enter arithmetic. Quote originals, including typos."""
-    policy = fallback or Alternative()
+class UninterpretedAlternative(ValueError):
+    """A clause needs semantic interpretation; explicit contradictions still fail."""
+
+
+def _alternative_fields(text):
+    """Parse only the fields actually stated by the teacher."""
     values = {}
     normalized = unicodedata.normalize("NFKC", text)
     for match in _POLICY_TOKEN.finditer(normalized):
@@ -340,14 +371,27 @@ def read_alternative(
         ):
             field, value = "maximum", parse_amount(token)
         else:
-            raise ValueError(
+            raise UninterpretedAlternative(
                 "Cannot determine whether this amount is a cap, floor or deduction."
             )
         if field in values and values[field] != value:
             raise ValueError(f"Conflicting alternative {field}.")
         values[field] = value
-    if not values and not re.search(r"同等|等价", text, re.I):
-        raise ValueError("Unclear alternative method policy.")
+    if not values:
+        if re.search(r"同等(?:给分|评分|待遇)|等同(?:于)?满分", text):
+            values["maximum"] = Amount(fraction="1/1")
+        else:
+            raise UninterpretedAlternative("Unclear alternative method policy.")
+
+    return values
+
+
+def read_alternative(text: str, *, maximum: float, fallback: Alternative | None = None) -> Alternative:
+    fields = _alternative_fields(text)
+    return _checked_alternative(fallback or Alternative(), fields, text, maximum)
+
+
+def _checked_alternative(policy, values, text, maximum):
     policy = Alternative.model_validate(
         {**policy.model_dump(), **values, "source_quote": text}
     )
@@ -380,6 +424,47 @@ def alternative_clauses(text):
         else:
             active = False
     return [text[start:end].strip() for start, end in spans]
+
+
+def _main_clause(clause):
+    marker = _ALT.search(clause)
+    prefix = clause[:marker.start()] if marker else ""
+    return prefix if re.search(r"[，,:：]|分|points?\b", prefix, re.I) else ""
+
+
+def ordinary_criterion(text):
+    for clause in alternative_clauses(text):
+        text = text.replace(clause, _main_clause(clause), 1)
+    return text
+
+
+def _teacher_alternative_fields(text, proposed):
+    """Recognized amounts override the proposal. Semantic-only wording needs source evidence."""
+    try:
+        fields = _alternative_fields(text)
+    except UninterpretedAlternative:
+        if not proposed.field_sources:
+            raise
+        fields = {}
+        # Still bind each independently recognizable clause deterministically.
+        for clause in re.split(r"[。；;，,\n]", text):
+            if clause.strip():
+                try:
+                    for name, amount in _alternative_fields(clause).items():
+                        if name in fields and fields[name] != amount:
+                            raise ValueError(f"Conflicting alternative {name}.")
+                        fields[name] = amount
+                except UninterpretedAlternative:
+                    continue
+    from backend.services.math_source_evidence import match_source_quote
+    for name, quote in proposed.field_sources.items():
+        if match_source_quote(text, quote):
+            value = getattr(proposed, name)
+            if value is not None:
+                fields.setdefault(name, value)
+    if not fields:
+        raise UninterpretedAlternative("Identify each explicit teacher field and quote the supporting clause.")
+    return fields
 
 
 def canonical_label(label, question_label=None):
@@ -430,10 +515,67 @@ def _base_unit(parts, teacher):
     return float(Decimal(reduce(gcd, (int(value * scale) for value in values), scale)) / scale)
 
 
+def bind_alternative(part, *, label, stem, structure, floor, question_points, teacher, override, binary=False):
+    """Bind each field once for both a model proposal and a teacher's edited text."""
+    from backend.services.question_structure import _allocation_marker_pattern
+
+    labels = [item["label"] for item in structure.get("subparts", [])]
+    shared_stem = structure.get("shared_stem", "") if labels else ""
+    teacher_clauses = []
+    ordinary = ordinary_criterion(teacher)
+    for clause in alternative_clauses(teacher):
+        named = [name for name in labels if re.search(_allocation_marker_pattern(name), clause, re.I)]
+        if not named or label in named:
+            teacher_clauses.append(clause)
+    teacher_method = ""
+    for clause in re.split(r"[。；;\n]", ordinary):
+        # Only explicit requirements placed on the student constrain another method.
+        required = re.search(r"(?:必须|务必|只能|须)\s*(?:用|使用|采用)|\bmust use\b", clause, re.I)
+        if required and not clause[:required.start()].endswith("不"):
+            named = [name for name in labels if re.search(_allocation_marker_pattern(name), clause, re.I)]
+            if not named or label in named:
+                teacher_method = clause.strip()
+                break
+    proposed = part.alternative
+    policy_text = "；".join(clause[_ALT.search(clause).start():] for clause in teacher_clauses)
+    fields = _teacher_alternative_fields(policy_text, proposed) if policy_text else {}
+    if override is not None:
+        fields.update(_teacher_alternative_fields(override, proposed))
+    source = override or "；".join(teacher_clauses)
+    required_shared = _REQUIRED.search(shared_stem)
+    restriction = shared_stem if required_shared else stem if _REQUIRED.search(stem) else teacher_method
+    inferred = False
+    share = floor / Fraction(str(question_points))
+    part_floor = share * Fraction(str(part.total_pts))
+    # Materialize exact decimal awards (including zero); keep the exact fraction
+    # for recurring values rather than changing a teacher's award by rounding.
+    decimal_points = float(part_floor)
+    share_amount = (Amount(points=decimal_points) if Fraction(str(decimal_points)) == part_floor
+                    else Amount(fraction=f"{share.numerator}/{share.denominator}"))
+    if restriction and "maximum" not in fields:
+        fields["maximum"] = share_amount
+        fields.setdefault("minimum", share_amount)
+        inferred = bool(source)
+    elif "maximum" not in fields and proposed.maximum.resolve(part.total_pts) < part_floor:
+        raise ValueError(f"{part.id}: AI alternative.maximum must be between its share of the "
+                         f"nonblank floor ({float(part_floor):g}) and its total ({part.total_pts:g}).")
+    from backend.services.math_source_evidence import match_source_quote
+    sources = {key: quote for key, quote in proposed.field_sources.items()
+               if source and match_source_quote(source, quote)}
+    defaults = Alternative(field_sources=sources, maximum=proposed.maximum,
+                           minimum=Amount(points=0) if proposed.inferred_method_cap else proposed.minimum,
+                           deduct_per_error=proposed.deduct_per_error or (part.total_pts if binary else None),
+                           max_deduction=proposed.max_deduction)
+    fields["inferred_method_cap"] = inferred
+    return _checked_alternative(defaults, fields, source or restriction or "", part.total_pts)
+
+
 def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
     """Bind the model proposal to known question scope and authoritative teacher text."""
     from backend.services.question_structure import _allocation_marker_pattern
     from backend.services.math_source_evidence import match_source_quote
+
+    from backend.services.true_false_answers import is_decision_only
 
     structure = problem.get("question_structure") or {}
     parts = structure.get("subparts") or []
@@ -460,10 +602,7 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
         and "criterion" not in (problem.get("ai_completion_provenance") or {})
         else ""
     )
-    alternates = alternative_clauses(teacher)
-    ordinary = teacher
-    for clause in alternates:
-        ordinary = ordinary.replace(clause, "")
+    ordinary = ordinary_criterion(teacher)
     expected = dict(problem.get("teacher_subpart_points") or {})
     # Source clauses constrain individual fields. A subtotal, a step budget and a
     # conditional award in the same sentence are three different quantities.
@@ -512,6 +651,7 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
         )
     overrides = {(item["label"], item["stem"]): item["text"]
                  for item in (problem.get("alternative_rules") or {}).values()}
+    binary = is_decision_only(problem.get("stem", ""), teacher)
     fixed = []
     for index, label in enumerate(labels):
         p = proposed[canonical_label(label)]
@@ -527,40 +667,12 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
                 f"Teacher assigned {label} {expected[label]} points; restore that budget."
             )
         stem = parts[index]["stem"] if parts else problem.get("stem", "")
-        shared_stem = structure.get("shared_stem", "") if parts else ""
-        required = _REQUIRED.search(stem) or _REQUIRED.search(shared_stem)
-        floor = rubric.nonblank_floor.resolve(maximum)
-        if required and _REQUIRED.search(shared_stem):
-            cap = floor / Fraction(str(maximum))
-            alternative_max = Amount(fraction=f"{cap.numerator}/{cap.denominator}")
-        elif required:
-            alternative_max = Amount(
-                points=float(min(floor, Fraction(str(p.total_pts))))
-            )
-        else:
-            alternative_max = Amount(fraction="1/1")
-        policy = Alternative(
-            maximum=alternative_max,
-            source_quote=(
-                (stem if _REQUIRED.search(stem) else shared_stem) if required else ""
-            ),
-        )
-        applicable = []
-        for clause in alternates:
-            named = [
-                l
-                for l in labels
-                if l and re.search(_allocation_marker_pattern(l), clause, re.I)
-            ]
-            if not named or label in named:
-                applicable.append(clause)
-        override = overrides.get((label or None, stem if parts else None))
-        if override is not None:
-            policy = read_alternative(override, maximum=p.total_pts)
-        elif applicable:
-            policy = read_alternative(
-                "；".join(applicable), maximum=p.total_pts, fallback=policy
-            )
+        policy = bind_alternative(p, label=label, stem=stem, structure=structure,
+            floor=rubric.nonblank_floor.resolve(maximum), question_points=maximum, teacher=teacher,
+            override=overrides.get((label or None, stem if parts else None)), binary=binary)
+        if policy.needs_rate(p.total_pts):
+            raise ValueError(f"{p.id}: supply a positive alternative.deduct_per_error in points "
+                             "for this part. Preserve the main rubric and explicit teacher constraints.")
         if not teacher:
             p = p.model_copy(
                 update={
@@ -578,12 +690,21 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
                 raise ValueError(
                     "A supplied scoring rule must quote its teacher source exactly."
                 )
+        # New snapshots materialize the conditional award before any student
+        # work is seen. Immutable historic snapshots can still contain a rate.
+        normalized_steps = []
+        for step in p.steps:
+            award = step.follow_through_award(ai_default=not teacher)
+            if Fraction(str(float(award))) == award:
+                step = step.model_copy(update={"follow_through_pts": float(award), "follow_through_keep": None})
+            normalized_steps.append(step)
         fixed.append(
             p.model_copy(
                 update={
                     "label": label or None,
                     "stem": stem if parts else None,
                     "alternative": policy,
+                    "steps": tuple(normalized_steps),
                 }
             )
         )
@@ -606,17 +727,27 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
     )
 
 
-def render_parts(rubric, language="zh"):
+def render_parts(rubric, language="zh", *, full_policy=False):
     zh = language == "zh"
     unit = "分" if zh else " points"
     lines = []
+    if full_policy:
+        floor = rubric.nonblank_floor.resolve(rubric.total_pts)
+        lines.append(f"本题满分 {rubric.total_pts:g} 分。整题未作答得 0 分。整题有书写时，保底分最低 {float(floor):g} 分。"
+                     if zh else f"Maximum {rubric.total_pts:g} points. Blank: 0. Nonblank minimum: {float(floor):g} points.")
+        lines.append(f"标答解法评分标准（配分单位 {rubric.base_unit_pts:g} 分）" if zh
+                     else f"Reference method (allocation unit {rubric.base_unit_pts:g} points)")
     for part in rubric.parts:
-        heading = " ".join(value for value in (part.label, part.stem) if value)
+        heading = part.label if full_policy else " ".join(value for value in (part.label, part.stem) if value)
         if heading:
             lines.append(heading)
         prefix = f"{part.label} " if part.label else ""
         for step in part.steps:
-            lines.append(f"- {prefix}[{step.total_pts:g}{unit}] {step.criterion}")
+            entry = f"- {prefix}[{step.total_pts:g}{unit}] {step.criterion}"
+            if full_policy:
+                points = step.follow_through_award(ai_default=rubric.rubric_origin == "ai")
+                entry += f"（沿用错值且本步正确时折算 {float(points):g} 分）" if zh else f" (follow-through: {float(points):g} points)"
+            lines.append(entry)
         if part.deductions:
             lines.append(
                 f"{prefix}{'满分' if zh else 'Maximum '}{part.total_pts:g}{unit}"
@@ -625,6 +756,10 @@ def render_parts(rubric, language="zh"):
                 cap = ""
                 if rule.max_deduction is not None:
                     cap = f"，累计最多扣{rule.max_deduction:g}分" if zh else f", maximum deduction {rule.max_deduction:g} points"
+                if full_policy and rule.limit is not None:
+                    cap += f"，最多 {rule.limit} 次" if zh else f", at most {rule.limit} events"
+                if full_policy and rule.count_by == "target_item":
+                    cap += "，同一作答目标只扣一次" if zh else ", count each target once"
                 lines.append(
                     f"- {rule.criterion} ({'扣' if zh else 'deduct '}{rule.deduct_pts:g}{unit}{cap})"
                 )
@@ -643,23 +778,29 @@ def alternative_text(part, zh=True):
             else f"{value.fraction} of the part maximum"
         )
 
+    if policy.inferred_method_cap:
+        ceiling = float(policy.maximum.resolve(part.total_pts))
+        # The explicit number makes the editable cap understandable even for a shared floor.
+        maximum_text = f"{ceiling:g}分" if zh else f"{ceiling:g} points"
+    else:
+        maximum_text = amount(policy.maximum)
     if zh:
         loss = (
             f"每个独立错误扣{policy.deduct_per_error:g}分。"
             if policy.deduct_per_error
-            else "部分完成时按已达到的评分目标给分。"
+            else ("本问另解按固定分数结算。" if not policy.needs_rate(part.total_pts) else "每个独立错误的扣分额待补全。")
         )
         if policy.max_deduction is not None:
             loss += f"累计最多扣{policy.max_deduction:g}分。"
-        return f"其他解法最高得{amount(policy.maximum)}，最低{amount(policy.minimum)}。{loss}"
+        return f"其他解法最高得{maximum_text}，最低{amount(policy.minimum)}。{loss}"
     loss = (
         f"Deduct {policy.deduct_per_error:g} points per independent error."
         if policy.deduct_per_error
-        else "Award partial credit for the goals achieved."
+        else ("Fixed score for this alternative." if not policy.needs_rate(part.total_pts) else "Per-error deduction pending.")
     )
     if policy.max_deduction is not None:
         loss += f" Maximum deduction {policy.max_deduction:g} points."
-    return f"Alternative methods: maximum {amount(policy.maximum)}, minimum {amount(policy.minimum)}. {loss}"
+    return f"Alternative methods: maximum {maximum_text}, minimum {amount(policy.minimum)}. {loss}"
 
 
 def supplied_notation(stem):
@@ -705,11 +846,11 @@ Always include parts (one unnumbered part with null label/stem for an unsplit qu
 Preserve the original question and all explicit teacher policies. For each known part give
 total_pts and exactly one of steps (budgets sum to total_pts) or deductions (positive amounts
 per supported error; they do not sum to total_pts). Reference solutions can contain detailed
-unscored steps for either kind. Make goals method-independent unless the task requires a method. In a generated proof rubric, each
+unscored steps for either kind. Scope main steps to the reference strategy and its minor variants. In a generated proof rubric, each
 criterion names the mathematical obligation and acceptable evidence. Put sample computations,
-chosen notation and the reference route in the reference answer. For each AI-authored step,
-check whether a different sufficient argument could earn its points as written. If a student
-would have to pretend to use the sample method, rewrite the step around the conclusion to establish.
+chosen notation and examples in the reference answer. Equivalent notation within the same strategy
+must satisfy the same scoring goals. A substantively different strategy uses only the independent
+alternative policy, including for partially correct work.
 For a universally quantified claim, retain the original domain in the scored obligation. Do not append
 a new sufficient shortcut to the criterion. A proof on a proper subset is a case result; the remaining
 cases must be established for full credit. Preserve explicit source cases and teacher policies.
@@ -720,10 +861,19 @@ equivalence cannot consume an independent budget. Separate a genuinely new impli
 or construction; the goal must admit a meaningful difference in demonstrated understanding.
 Do not give multiple budgets to repeats of the same inference. State which hypotheses/cases are
 substantive. A valid direct implication or equivalence chain may meet more than one independent goal.
-Extract explicit source rules with exact source_quote evidence. Only fill missing ordinary
+Extract explicit source rules with exact source_quote evidence. When an alternative is described in
+teacher prose, use alternative.field_sources for each expressly stated field with its exact supporting
+quote (maximum, minimum, deduct_per_error or max_deduction). Never attribute an AI default to the teacher. Only fill missing ordinary
 rules using AI; report which teacher fields were unclear or missing in teacher_gaps.
 Do not report the absence of alternative-method rules or the use of AI as a defect.
-Preserve teacher caps, floors, exemptions, follow-through fractions and counting scopes.
+Always propose the part's independent alternative.deduct_per_error (positive absolute points)
+when its maximum and minimum differ, including when the teacher gave only the main rubric.
+Choose a rate appropriate to this part before seeing student work. Use the default maximum
+and minimum unless constrained by the question or teacher. Do not invent a cumulative cap
+or source quotation. Never encode the reference steps in the alternative.
+Preserve teacher caps, floors, exemptions and counting scopes. Use follow_through_pts for the
+absolute award on a sound step using an earlier wrong result. Convert a stated fraction using
+that step's own budget. The earned award replaces the full step award. Use only one representation.
 max_deduction is the cumulative loss in points; deduct_pts or deduct_per_error is the loss per event.
 A count limit is a number of events, not a point amount.
 Ratios of the maximum (一半, 最多给1/3, 50%) are fractions, e.g. {"fraction":"1/3"}.
@@ -735,9 +885,7 @@ def verify_teacher_numbers(teacher, rubric, maximum):
     """Verify unambiguous teacher constraints within the part named by the source."""
     from backend.services.question_structure import _allocation_marker_pattern
 
-    ordinary = teacher
-    for clause in alternative_clauses(teacher):
-        ordinary = ordinary.replace(clause, "")
+    ordinary = ordinary_criterion(teacher)
     ordinary = unicodedata.normalize("NFKC", ordinary)
     match = re.search(
         r"(?:最低|保底|至少)(?:得|给|为|是)?\s*(\d+(?:\.\d+)?\s*(?:分|%))", ordinary
@@ -799,8 +947,8 @@ def verify_teacher_numbers(teacher, rubric, maximum):
             if p.label and re.search(_allocation_marker_pattern(p.label), clause, re.I)
         ] or rubric.parts
         if not any(
-            step.follow_through_keep is not None
-            and Fraction(str(step.follow_through_keep)) * Fraction(str(step.total_pts))
+            (step.follow_through_keep is not None or step.follow_through_pts is not None)
+            and step.follow_through_award()
             == amount.resolve(step.total_pts)
             for part in scoped
             for step in part.steps

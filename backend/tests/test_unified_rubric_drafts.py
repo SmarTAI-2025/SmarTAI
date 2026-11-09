@@ -45,7 +45,7 @@ def test_rubric_display_omits_internal_unconditional_marker_only(language, condi
 
 def written_choice_definition(maximum=4):
     return {"part_rubric": {"id": "q1", "label": "1", "stem": choice_question()["stem"], "total_pts": maximum,
-             "parts": [{"id":"p1", "label":None, "stem":None, "total_pts": maximum,
+             "parts": [{"id":"p1", "label":None, "stem":None, "total_pts": maximum, "alternative":{"deduct_per_error":maximum},
                 "steps":[{"id":"option","criterion":f"选择B（4）得{maximum}分，否则0分","total_pts":maximum}]}]}}
 
 

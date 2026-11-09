@@ -59,22 +59,25 @@ exact text (student_quote) and explain the mathematical link in progress. Correc
 that advance none of this part's obligations are unrelated. Length and true but unrelated
 equations cannot earn a point or justify starting a deduction ledger at full credit.
 An unfamiliar argument is not automatically unrelated: identify what it establishes.
+For a direct answer to a result-only question use reference. If the applicable method matters but
+cannot be identified, use undetermined with uncertain and request review. Do not guess a scoring route.
 Separate uncertainty from blank work. For a required omitted target, cite the original
 obligation, do not fabricate a student quote. A different notation/order is minor_variant.
 Use alternative only for a materially different strategy. Name both strategies then apply
 only that part's alternative policy. Check every distinct requested result and direction against
 the submitted work, including independent deliverables. For a complete independent solution,
 cite the decisive student passage and explain why it proves the full requested result in progress.
-When the steps were AI-generated or there is an explicit alternative policy, a complete alternative
-can leave steps empty. The server awards that policy's maximum. A different notation, reordering
-or shorter instance of the same derivation is a minor_variant; score its mathematical goals.
-For a partially correct alternative, map its progress onto the goals or use the explicit deduction
-schedule. Withhold an item for a missing method only if the question or teacher required it.
+For alternative, leave steps empty regardless of how the main rubric was authored. Complete work
+earns the frozen alternative maximum. On a variable alternative, partial or incorrect work needs
+one grounded error event (rule_id="alternative") per independent error or omitted obligation.
+A fixed alternative score needs no invented errors. Never charge an alternative for omitting a
+step unique to the reference method. Distinguish a genuinely different strategy from a change
+in notation or order; grade a minor_variant using the main rubric.
 Use step IDs with earned/missed/follow_through for points; do not report numeric awards.
 Follow-through needs the same source as a diagnosed missed step or independent error, and correct downstream work.
 For a target_item deduction, use target_id from part.answer_refs to identify the affected target.
 For deductions report actual distinct errors with rule_id, evidence, and origin_quote;
-a repeated consequence has the same origin. For an alternative with an explicit per-error rate
+a repeated consequence has the same origin. For an alternative error
 use rule_id='alternative'. Do not mix the normal and alternative deductions.
 For an attempted but incorrect single judgment, use incorrect; for an omitted part use unanswered.
 For complete work on a single-step part the part's located evidence is sufficient; leave steps empty
@@ -156,7 +159,7 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
     }
     for part in rules.parts:
         decision = by_id[part.id]
-        if part.deductions or (decision.method == "alternative" and part.alternative.deduct_per_error is not None):
+        if decision.method == "alternative" or part.deductions:
             for event in decision.errors:
                 origin = _student_span(answer, event.origin_quote)
                 if origin is not None:
@@ -186,6 +189,9 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
             raise ValueError(
                 f"{part.id}: name the two distinct strategies or classify a minor variant."
             )
+        if d.method == "undetermined" and d.relevance not in {"unanswered", "unrelated", "uncertain"}:
+            raise ValueError(f"{part.id}: undetermined cannot select a scoring policy. Identify the strategy "
+                             "from the work, or use uncertain and request review.")
         maximum = _amount(part.total_pts)
         alternative = d.method == "alternative"
         cap = part.alternative.maximum.resolve(maximum) if alternative else maximum
@@ -193,15 +199,16 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
             part.alternative.minimum.resolve(maximum) if alternative else Fraction(0)
         )
         amounts = []
-        use_alt_rate = alternative and part.alternative.deduct_per_error is not None
+        if alternative and d.steps:
+            raise ValueError(f"{part.id}: alternative must leave steps empty. Use only the alternative policy and its error IDs.")
         if d.relevance in {"unanswered", "unrelated", "uncertain"} or (
-            d.relevance == "incorrect" and part.steps and not use_alt_rate
+            d.relevance == "incorrect" and part.steps and not alternative
         ):
             seen_steps = {step.id for step in d.steps}
             # A model can explain why a result was missed in an error event.
             # A points-only rule has no deduction ledger. Located observations
             # on an incorrect response explain zero and cannot charge it twice.
-            observed_errors = (d.relevance == "incorrect" and part.steps and not use_alt_rate
+            observed_errors = (d.relevance == "incorrect" and part.steps and not alternative
                                and all(support(event.evidence) or match_source_quote(scope, event.evidence)
                                        for event in d.errors))
             if ((d.errors and not observed_errors) or len(seen_steps) != len(d.steps)
@@ -212,12 +219,7 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                     "Omit earned steps and deduction events, or classify supported progress as partial."
                 )
             amounts = [(None, Fraction(0), d.progress)]
-        elif (alternative and d.relevance == "complete" and not d.steps and part.steps
-              and (rules.rubric_origin == "ai" or part.alternative.source_quote)):
-            # A complete independent argument can establish the goal without performing
-            # any of the example route's intermediate steps. Keep its own cap and audit row.
-            amounts = [(None, cap, d.progress)]
-        elif part.steps and not use_alt_rate:
+        elif not alternative and part.steps:
             decisions_for_steps = d.steps
             if (
                 len(part.steps) == 1
@@ -261,28 +263,24 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                         raise ValueError(
                             f"{step.id}: cite a distinct earlier error and the sound dependent work."
                         )
-                    keep = step.follow_through_keep
-                    if keep is None:
-                        keep = (
-                            0.5 if rules.rubric_origin == "ai" and allow_partial else 0
-                        )
-                    credit *= _amount(keep) if allow_partial else 0
+                    credit = step.follow_through_award(ai_default=rules.rubric_origin == "ai") if allow_partial else Fraction(0)
                 elif awarded.outcome == "missed":
                     credit = Fraction(0)
-                amounts.append((step.id, credit * cap / maximum, awarded.reason))
+                amounts.append((step.id, credit, awarded.reason))
         else:
             if d.steps:
                 raise ValueError(
                     f"{part.id}: only the chosen deduction policy can apply."
                 )
-            if d.relevance in {"partial", "incorrect"} and not d.errors:
+            if (d.relevance in {"partial", "incorrect"} and not d.errors
+                    and (not alternative or cap > floor)):
                 raise ValueError(
                     f"{part.id}: incomplete work cannot silently earn full credit; identify the missing obligation."
                 )
             seen = set()
             targets = set()
             counts = {}
-            penalty_rules = {p.id: p for p in part.deductions}
+            penalty_rules = {} if alternative else {p.id: p for p in part.deductions}
             if len({event.id for event in d.errors}) != len(d.errors):
                 raise ValueError("Duplicate deduction event ID.")
             for event in d.errors:
@@ -301,8 +299,8 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                         "An error origin must be grounded in the work or required target."
                     )
                 rule = penalty_rules.get(event.rule_id)
-                if (use_alt_rate and event.rule_id != "alternative") or (
-                    not use_alt_rate and rule is None
+                if (alternative and event.rule_id != "alternative") or (
+                    not alternative and rule is None
                 ):
                     raise ValueError("Use only the selected deduction rule.")
                 location = _student_span(answer, event.origin_quote)
@@ -328,8 +326,11 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                     targets.add(target)
                 seen.add(identity)
                 counts[event.rule_id] = counts.get(event.rule_id, 0) + 1
-            if use_alt_rate:
-                losses = _amount(part.alternative.deduct_per_error) * len(d.errors)
+            if alternative:
+                rate = part.alternative.deduct_per_error
+                if d.errors and cap > floor and rate is None:
+                    raise ValueError(f"{part.id}: the frozen alternative is missing deduct_per_error. Complete the rubric before grading.")
+                losses = _amount(rate or 0) * len(d.errors)
                 if part.alternative.max_deduction is not None:
                     losses = min(losses, _amount(part.alternative.max_deduction))
             else:
@@ -342,13 +343,12 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
         subtotal = sum(x[1] for x in amounts)
         if d.relevance == "complete" and (subtotal != cap or d.errors):
             raise ValueError("Complete work must satisfy all applicable goals.")
-        if d.relevance == "partial" and subtotal == cap and cap > floor:
+        if (d.relevance == "partial" and subtotal == cap and cap > floor
+                and not (alternative and part.alternative.max_deduction == 0)):
             raise ValueError(
                 "Partial work cannot satisfy every goal; check relevance and missing progress."
             )
-        step_budgets = {
-            step.id: _amount(step.total_pts) * cap / maximum for step in part.steps
-        }
+        step_budgets = {} if alternative else {step.id: _amount(step.total_pts) for step in part.steps}
         for step_id, amount, reason in amounts:
             full = amount == step_budgets.get(step_id, cap) and amount > 0
             rows.append((part.id, step_id, amount, reason, full))

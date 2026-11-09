@@ -48,7 +48,7 @@ def mock_supplied_rule_interpretation(monkeypatch):
     async def compile_rule(row, *_args, **_kwargs):
         definition = rubric_drafts.RubricDefinition(part_rubric=dict(
             id=row["q_id"], label=row["number"], stem=row["stem"], total_pts=row["max_score"],
-            parts=[dict(id="p1", total_pts=row["max_score"], steps=[dict(
+            parts=[dict(id="p1", total_pts=row["max_score"], alternative={"deduct_per_error": 1}, steps=[dict(
                 id="s1", criterion=row["criterion"], total_pts=row["max_score"])])]))
         return rubric_drafts.generated_rubric(row, definition)[1]
     monkeypatch.setattr(rubric_drafts, "compile_parts_draft", compile_rule)
@@ -238,7 +238,7 @@ async def test_two_hundred_questions_save_independent_fields_with_bounded_curren
         source = data["q1"]
         calls.append(source["number"])
         definition = RubricDefinition(part_rubric=dict(id="q1", stem=source["stem"], label=source["number"],
-            total_pts=10, parts=[dict(id="p", total_pts=10, steps=[dict(id="s", criterion="Explain.", total_pts=10)])]))
+            total_pts=10, parts=[dict(id="p", total_pts=10, alternative={"deduct_per_error": 1}, steps=[dict(id="s", criterion="Explain.", total_pts=10)])]))
         criterion, draft = generated_rubric(source, definition)
         completed = {**source, "reference_answer": "A complete explanation.", "criterion": criterion,
                      "ai_completion_provenance": {target["target"]: {"source_kind":"ai_generated"} for target in targets}}

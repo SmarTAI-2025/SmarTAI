@@ -15,7 +15,7 @@ def definition_for(problem, *, budgets=None):
                   if subpart["label"] in known else (remaining / (len(subparts) - index + 1)).quantize(Decimal(".01")))
         remaining -= points
         result.append(dict(id=f"p{index}", label=subpart["label"], stem=subpart.get("stem"), total_pts=float(points),
-                           steps=[dict(id="s1", criterion="Award credit for the stated goal.", total_pts=float(points))]))
+                           alternative={"deduct_per_error": 1}, steps=[dict(id="s1", criterion="Award credit for the stated goal.", total_pts=float(points))]))
     return dict(part_rubric=dict(id=problem.get("q_id") or "q1", label=str(problem.get("number") or ""),
                                  stem=structure.get("shared_stem") or problem.get("stem") or "",
                                  total_pts=float(maximum), parts=result))

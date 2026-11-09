@@ -13,7 +13,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
-from backend.services.part_rubric import PartRubric, bind_parts, render_parts
+from backend.services.part_rubric import Key, PartRubric, Points, bind_alternative, bind_parts, render_parts
 from backend.services.math_rubric_plan import (
     MathRubricPlan, MathRubricRoute, _Explanation, _build_plan, _content_hash,
     _mapping, _question_input, _validated_explanation, _with_preferences,
@@ -42,7 +42,7 @@ class RubricDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal["rubric_draft_v1"] = "rubric_draft_v1"
-    alternative_policy_version: Literal[2] | None = Field(default=None, exclude_if=lambda v: v is None)
+    alternative_policy_version: Literal[2, 3] | None = Field(default=None, exclude_if=lambda v: v is None)
     content_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     teacher_notes: str = ""
     # Unbound means no strictness/partial-credit prose has been appended.
@@ -180,7 +180,7 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
         if truth_key:
             body["expected_truth_by_part"] = truth_key
         plan = MathRubricPlan(**body, plan_id=_content_hash(body))
-        return criterion, RubricDraft(alternative_policy_version=2, content_fingerprint=draft_fingerprint(completed), plan=plan)
+        return criterion, RubricDraft(alternative_policy_version=3, content_fingerprint=draft_fingerprint(completed), plan=plan)
     explicit = subpart_plan(context, candidate=definition)
     if explicit:
         return original, RubricDraft(content_fingerprint=draft_fingerprint(problem), plan=explicit)
@@ -264,32 +264,30 @@ def _replace_draft_parts(draft, parts, context):
     }).model_dump(mode="json")
     body["input_fingerprint"] = _content_hash(context)
     plan = MathRubricPlan(plan_id=_content_hash(body), **body)
-    return draft.model_copy(update={"alternative_policy_version": 2, "plan": plan})
+    return draft.model_copy(update={"alternative_policy_version": 3, "plan": plan})
 
 
 def _refresh_teacher_alternatives(draft, context):
     """Reinterpret stored teacher wording before adopting a preparation draft."""
-    from backend.services.part_rubric import alternative_clauses, read_alternative
-
     rules = draft.plan.part_rubric
-    if not rules or draft.alternative_policy_version == 2:
+    if not rules or draft.alternative_policy_version == 3:
         return draft
-    clauses = set(alternative_clauses(rules.teacher_rubric))
-    edits = {item["text"] for item in (context.get("alternative_rules") or {}).values()}
+    overrides = {(item["label"], item["stem"]): item["text"] for item in
+                 (context.get("alternative_rules") or {}).values()}
     updated = []
     for part in rules.parts:
-        policy = part.alternative
-        quote = policy.source_quote
-        if quote and (quote in edits or quote in clauses or all(clause in clauses for clause in quote.split("；"))):
-            policy = read_alternative(quote, maximum=part.total_pts, fallback=policy)
-        updated.append(part if policy == part.alternative else part.model_copy(update={"alternative": policy}))
+        policy = bind_alternative(part, label=part.label, stem=part.stem or context["stem"],
+            structure=context["question_structure"] or {}, floor=rules.nonblank_floor.resolve(rules.total_pts),
+            question_points=rules.total_pts, teacher=rules.teacher_rubric or "",
+            override=overrides.get((part.label, part.stem)))
+        updated.append(part if policy == part.alternative else part.model_copy(update={"alternative":policy}))
     if tuple(updated) == rules.parts:
-        return draft.model_copy(update={"alternative_policy_version": 2})
+        return draft.model_copy(update={"alternative_policy_version": 3})
     return _replace_draft_parts(draft, updated, context)
 
 
 
-def saved_draft(problem, *, grading_setup=None) -> RubricDraft | None:
+def saved_draft(problem, *, grading_setup=None, allow_incomplete_alternative=False) -> RubricDraft | None:
     row = _mapping(problem)
     source = row.get("source") or getattr(problem, "_math_rubric_source", {}) or {}
     presentation = source.get("presentation") or {} if isinstance(source, Mapping) else {}
@@ -312,6 +310,9 @@ def saved_draft(problem, *, grading_setup=None) -> RubricDraft | None:
     try:
         draft = _refresh_teacher_alternatives(draft, context)
     except ValueError:
+        return None
+    if (draft.plan.part_rubric and not allow_incomplete_alternative
+            and draft.plan.part_rubric.missing_alternative_rates()):
         return None
     if draft.plan.part_rubric and draft.plan.expected_truth_by_part:
         from backend.services.true_false_answers import DecisionReferenceConflict, adopted_truth_key
@@ -337,6 +338,8 @@ def bind_draft(draft: RubricDraft, problem, *, grading_setup=None) -> MathRubric
     if not draft.plan.part_rubric and draft.teacher_notes != str(setup.get("teacher_notes") or ""):
         raise ValueError("rubric_draft_teacher_policy_changed")
     plan = retarget_draft(_refresh_teacher_alternatives(draft, _question_input(problem)), problem).plan
+    if plan.part_rubric and (missing := plan.part_rubric.missing_alternative_rates()):
+        raise ValueError(f"Complete alternative.deduct_per_error for parts {missing} before grading.")
     return _with_preferences(plan, grading_setup)
 
 
@@ -347,15 +350,15 @@ def pending_alternatives(overrides, structure):
             if (value["label"], value["stem"]) in scopes}
 
 
-def edit_alternatives(problem, presentation, updates, *, previous=None):
+def edit_alternatives(problem, presentation, updates, *, previous=None, allow_pending=False):
     """Resolve displayed identities against the complete candidate under its revision lock."""
-    from backend.services.part_rubric import read_alternative
+    from backend.services.part_rubric import UninterpretedAlternative, read_alternative
 
     context = _question_input(problem)
     structure = context["question_structure"] or {}
     overrides = pending_alternatives(presentation.get("alternative_rules") or {}, structure)
-    current = saved_draft(problem)
-    displayed = saved_draft(previous) if previous is not None else current
+    current = saved_draft(problem, allow_incomplete_alternative=True)
+    displayed = saved_draft(previous, allow_incomplete_alternative=True) if previous is not None else current
     identities = {key: (v["label"], v["stem"]) for key, v in overrides.items()}
     if displayed and displayed.plan.part_rubric:
         identities = {p.id: (p.label, p.stem) for p in displayed.plan.part_rubric.parts}
@@ -381,17 +384,31 @@ def edit_alternatives(problem, presentation, updates, *, previous=None):
             overrides = {k: v for k, v in overrides.items() if (v["label"], v["stem"]) != (label, stem)}
             overrides[key] = {"text": text.strip(), "label": label, "stem": stem}
 
+    frozen = {(p.label, p.stem): p for p in rules.parts} if rules else {}
     policies = {}
     for item in overrides.values():
         scope = (item["label"], item["stem"])
         budget = budgets[scope]
-        policy = read_alternative(item["text"], maximum=budget if budget is not None else problem.max_score)
+        prior = frozen.get(scope)
+        try:
+            if prior:
+                policy = bind_alternative(
+                    prior, label=prior.label, stem=prior.stem or problem.stem, structure=structure,
+                    floor=rules.nonblank_floor.resolve(problem.max_score), question_points=problem.max_score,
+                    teacher=rules.teacher_rubric or "", override=item["text"],
+                )
+            else:
+                policy = read_alternative(item["text"], maximum=budget if budget is not None else problem.max_score)
+        except UninterpretedAlternative:
+            if not allow_pending:
+                raise
+            continue
         if budget is None and (policy.maximum.points or policy.minimum.points):
             raise ValueError("请先明确该小问的满分，或使用按比例的上限。 Specify the part budget for an absolute score.")
         policies[scope] = policy
     presentation["alternative_rules"] = overrides
     problem._math_rubric_source = {**problem._math_rubric_source, "presentation": presentation}
-    if not rules or not updates:
+    if not rules or not updates or len(policies) != len(overrides):
         # The changed ordinary criterion/budgets are compiled through the usual
         # preparation path. Never seal the old steps to a new question fingerprint.
         return
@@ -404,7 +421,75 @@ def edit_alternatives(problem, presentation, updates, *, previous=None):
 
 
 
-async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter=None):
+def rebind_review_edit(prior, old_problem, problem):
+    """Reuse structure only for edits whose scoring destination is unambiguous."""
+    from backend.services.part_rubric import _POLICY_TOKEN, alternative_clauses, ordinary_criterion
+    from backend.services.question_structure import _allocation_marker_pattern
+
+    if not prior or not prior.plan.part_rubric:
+        return None
+    old, new = _question_input(old_problem), _question_input(problem)
+    if any(old[k] != new[k] for k in ("stem", "number", "type", "reference_answer", "question_structure")):
+        return None
+    rules = prior.plan.part_rubric
+    old_text, new_text = old["criterion"], new["criterion"]
+    old_alts, new_alts = alternative_clauses(old_text), alternative_clauses(new_text)
+    if len(old_alts) != len(new_alts):
+        return None
+    for old_alt, new_alt in zip(old_alts, new_alts):
+        if _POLICY_TOKEN.sub("#", old_alt) != _POLICY_TOKEN.sub("#", new_alt):
+            return None
+    old_text, new_text = ordinary_criterion(old_text), ordinary_criterion(new_text)
+    parts = list(rules.parts)
+    if old_text != new_text or old["max_score"] != new["max_score"]:
+        # A single funded step for each part, with only its declared amount
+        # changed. Never reinterpret numbers in mathematical criteria or limits.
+        if any(len(p.steps) != 1 or p.steps[0].source_quote for p in parts):
+            return None
+        old_lines, new_lines = old_text.strip().splitlines(), new_text.strip().splitlines()
+        if len(old_lines) != len(parts) or len(new_lines) != len(parts):
+            return None
+        overrides = {(v["label"], v["stem"]): v["text"] for v in new.get("alternative_rules", {}).values()}
+        for i, (part, before, after) in enumerate(zip(parts, old_lines, new_lines)):
+            target = _allocation_marker_pattern(part.label) if part.label else ""
+            statement = target + r"\s*(?:[：:]\s*)?(?:正确结果给|答对(?:给|得)|满分|共)?\s*(\d+(?:\.\d+)?)\s*分[。.]?\s*"
+            was = re.fullmatch(statement, before)
+            now = re.fullmatch(statement, after)
+            if not was or not now or re.sub(r"\d+(?:\.\d+)?(?=\s*分)", "#", before) != re.sub(
+                    r"\d+(?:\.\d+)?(?=\s*分)", "#", after):
+                return None
+            if Decimal(was[1]) != Decimal(str(part.total_pts)):
+                return None
+            points = float(now[1])
+            step = part.steps[0].model_copy(update={"total_pts": points})
+            resized = part.model_copy(update={"total_pts": points, "steps": (step,)})
+            try:
+                policy = bind_alternative(
+                    resized, label=part.label, stem=part.stem or new["stem"], structure=new["question_structure"] or {},
+                    floor=rules.nonblank_floor.resolve(new["max_score"]), question_points=new["max_score"],
+                    teacher=new["criterion"], override=overrides.get((part.label, part.stem)),
+                )
+            except ValueError:
+                return None
+            parts[i] = resized.model_copy(update={"alternative": policy})
+    try:
+        data = rules.model_dump(mode="json")
+        data.update(parts=[part.model_dump(mode="json") for part in parts], total_pts=new["max_score"],
+                    rubric_version=rules.rubric_version + 1)
+        definition = RubricDefinition(part_rubric=PartRubric.model_validate(data),
+                                      expected_truth_by_part=prior.plan.expected_truth_by_part)
+        _, draft = generated_rubric(new, definition)
+        return retarget_draft(draft, problem)
+    except ValueError:
+        return None
+
+
+class _AlternativeRates(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    deduct_per_error: dict[Key, Points] = Field(min_length=1, max_length=100)
+
+
+async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter=None, previous=None, alternative_ids=None):
     """Only missing/stale semantic content reaches the bounded compiler."""
     import json
     from backend.domain.errors import ValidationError
@@ -413,20 +498,75 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
 
     context = _question_input(problem)
     language = (_mapping(grading_setup).get("feedback_language") if grading_setup else None) or "zh"
+    prior = saved_draft(problem, allow_incomplete_alternative=True)
+    if prior and prior.plan.part_rubric and (missing := prior.plan.part_rubric.missing_alternative_rates()):
+        # Older matching drafts may already have teacher-approved ordinary steps.
+        # Complete only the missing fields, once per question before expert fan-out.
+        def validate_rates(response):
+            if set(response.deduct_per_error) != set(missing) or any(v <= 0 for v in response.deduct_per_error.values()):
+                error = StructuredOutputInvalidError("Invalid alternative deduction rates.")
+                error.repair_context = f"Supply one positive deduct_per_error for each of {missing}, and no other part IDs."
+                raise error
+        try:
+            response, _ = await structured_llm_call(provider,
+                system_prompt="Complete only the missing alternative per-independent-error deductions in absolute points. "
+                              "Use the original targets, teacher rules and frozen budgets. Return the exact requested IDs.",
+                user_prompt=json.dumps({"question":context, "frozen_parts":prior.plan.part_rubric.model_dump(mode="json"),
+                                        "missing_part_ids":missing}, ensure_ascii=False),
+                output_model=_AlternativeRates, validate_output=validate_rates)
+        except StructuredOutputInvalidError as exc:
+            raise ValidationError("Complete the missing alternative deduction rates before grading.",
+                                  code="invalid_structured_rubric") from exc
+        parts = [p.model_copy(update={"alternative":p.alternative.model_copy(update={
+                        "deduct_per_error":response.deduct_per_error[p.id]})}) if p.id in missing else p
+                 for p in prior.plan.part_rubric.parts]
+        return retarget_draft(_replace_draft_parts(prior, parts, context), problem)
     source = {**context}
     if context["criterion_source"] == "ai":
         source["ai_completion_provenance"] = {"criterion": {}}
     draft = None
 
+    previous_rules = previous.plan.part_rubric if previous else None
+    request = dict(context)
+    if previous_rules:
+        request["previous_scoring_rules"] = previous_rules.model_dump(mode="json")
+        request["revision_instruction"] = (
+            "Apply the new teacher text as authoritative. Preserve unaffected obligations, stable IDs, "
+            "budgets and alternative policies. Replace superseded conditions. Previous quotes are historical."
+        )
+
     def validate(candidate):
         nonlocal draft
-        _, draft = generated_rubric(source, RubricDefinition.model_validate(candidate.model_dump()), language=language)
+        try:
+            definition = RubricDefinition.model_validate(candidate.model_dump())
+            if previous_rules and definition.part_rubric:
+                from backend.services.part_rubric import canonical_label
+                proposed = definition.part_rubric
+                previous_ids = {canonical_label(p.label): p.id for p in previous_rules.parts}
+                if any(previous_ids.get(canonical_label(p.label), p.id) != p.id for p in proposed.parts):
+                    raise RubricAllocationError(f"Keep existing scoring part IDs: {previous_ids}.")
+                if alternative_ids:
+                    policies = {p.id: p.alternative for p in proposed.parts}
+                    if not alternative_ids.issubset(policies):
+                        raise RubricAllocationError(f"Supply the edited alternatives for {sorted(alternative_ids)}.")
+                    proposed = previous_rules.model_copy(update={"parts": tuple(
+                        p.model_copy(update={"alternative": policies[p.id]}) if p.id in alternative_ids else p
+                        for p in previous_rules.parts
+                    )})
+                    definition = definition.model_copy(update={"expected_truth_by_part": previous.plan.expected_truth_by_part})
+                definition = definition.model_copy(update={"part_rubric": proposed.model_copy(
+                    update={"rubric_version": previous_rules.rubric_version + 1})})
+            _, draft = generated_rubric(source, definition, language=language)
+        except RubricAllocationError as exc:
+            error = StructuredOutputInvalidError("Invalid frozen scoring rules.")
+            error.repair_context = str(exc)
+            raise error from exc
 
     try:
         await structured_llm_call(provider, system_prompt=(
             PART_INSTRUCTION + "\nReturn the written rubric definition in " + language + ".\n" +
             json.dumps(WrittenRubricDefinition.model_json_schema(), ensure_ascii=False)),
-            user_prompt=json.dumps(context, ensure_ascii=False), output_model=WrittenRubricDefinition,
+            user_prompt=json.dumps(request, ensure_ascii=False), output_model=WrittenRubricDefinition,
             validate_output=validate)
     except StructuredOutputInvalidError as exc:
         raise ValidationError("The scoring rules could not be validated. Review this question's rubric.",

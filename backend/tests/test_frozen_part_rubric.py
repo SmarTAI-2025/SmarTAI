@@ -28,6 +28,17 @@ def fixture(name="alternatives"):
     )
 
 
+def proposed_rates(raw):
+    """Add the model's rate to these pre-deduction-policy example documents."""
+    from backend.services.part_rubric import Alternative
+    result = deepcopy(raw)
+    for part in result["parts"]:
+        alternative = part.setdefault("alternative", {})
+        if Alternative.model_validate(alternative).needs_rate(part["total_pts"]):
+            alternative["deduct_per_error"] = 1
+    return result
+
+
 def question_row(question):
     return _rows(
         [
@@ -62,7 +73,8 @@ def test_approved_files_round_trip_including_singleton_parts_and_duplicate_quest
         )
         == source
     )
-    for raw in source["questions"]:
+    for original in source["questions"]:
+        raw = proposed_rates(original)
         row = question_row(raw)
         criterion, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
         if raw.get("teacher_rubric"):
@@ -407,7 +419,7 @@ def test_alternative_edit_creates_a_new_frozen_revision_and_retains_teacher_sour
     from backend.models import ProblemInfo
     from backend.services.rubric_drafts import bind_draft, edit_alternatives
 
-    raw = fixture()["questions"][0]
+    raw = proposed_rates(fixture()["questions"][0])
     row = question_row(raw)
     criterion, old = generated_rubric(row, RubricDefinition(part_rubric=raw))
     problem = ProblemInfo.model_validate({**row, "criterion": criterion})
@@ -430,7 +442,7 @@ def test_alternative_edit_creates_a_new_frozen_revision_and_retains_teacher_sour
 
 
 def test_teacher_interpretation_preserves_explicit_numbers_and_marks_only_ordinary_gaps():
-    q = deepcopy(fixture()["questions"][0])
+    q = proposed_rates(fixture()["questions"][0])
     row = question_row(q)
     row["criterion"] = "第一问4分。第一问其他方法最高给本问的1/3，每错一处扣0.5分。"
     _, draft = generated_rubric(row, RubricDefinition(part_rubric=q))
@@ -612,7 +624,7 @@ async def test_later_generated_reference_rebinds_key_and_exact_grade_uses_final_
 def test_partial_credit_switch_is_bound_to_one_frozen_run():
     from backend.services.rubric_drafts import bind_draft
 
-    q = fixture()["questions"][0]
+    q = proposed_rates(fixture()["questions"][0])
     source = question_row(q)
     _, draft = generated_rubric(source, RubricDefinition(part_rubric=q))
     yes = bind_draft(draft, source, grading_setup={"allow_partial_credit": True})
@@ -705,7 +717,7 @@ async def test_part_review_only_changes_grounded_disputed_items():
     from backend.tests.test_math_evidence_reliability import raw_provider
     from backend.tests.test_math_grading import expert_for
 
-    raw = fixture()["questions"][2]
+    raw = proposed_rates(fixture()["questions"][2])
     row = question_row(raw)
     _, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
     p = ProblemInfo(**row)
@@ -857,6 +869,7 @@ async def test_lifted_definition_preserves_structure_and_never_overrides_conflic
 
     raw = fixture()["questions"][1]
     row = question_row(raw)
+    raw = proposed_rates(raw)
     target = {"target_id": "q1:criterion", "q_id": "q1", "target": "criterion"}
     for wrapper, ok in [
         ({}, True),
@@ -961,6 +974,7 @@ async def test_failed_points_decisions_reach_fallback_with_the_rejected_field_an
             dict(
                 id="p",
                 total_pts=4,
+                alternative={"deduct_per_error": 1},
                 steps=[dict(id="s", total_pts=4, criterion="Establish the identity.")],
             )
         ],
@@ -1021,6 +1035,7 @@ async def test_failed_points_decisions_reach_fallback_with_the_rejected_field_an
             "target_quote": "part:p",
             "step_ids": ["s"],
             "deduction_rule_ids": [],
+            "alternative_error_id": "alternative",
         }
     ]
 
@@ -1127,12 +1142,14 @@ def test_complete_independent_method_settles_at_its_own_frozen_cap(cap, expected
     assert score == expected
     assert [(r.part_id, r.item_id, r.score) for r in rows] == [("p", None, expected)]
     if expected == 6:
-        # An explicit teacher marking scheme can require particular intermediate work.
+        # Even a teacher-authored main route cannot impose steps on a classified alternative.
         teacher_part = rules.parts[0].model_copy(update={"alternative": type(rules.parts[0].alternative)()})
         teacher_rules = rules.model_copy(update={"rubric_origin": "teacher", "parts": (teacher_part,)})
-        with pytest.raises(ValueError, match="required step IDs"):
-            settle_parts(teacher_rules, [complete], answer, question)
-    for changes in ({"relevance": "partial"}, {"method": "minor_variant"},
+        assert settle_parts(teacher_rules, [complete], answer, question)[0] == 6
+    if expected:
+        with pytest.raises(ValueError):
+            settle_parts(rules, [complete.model_copy(update={"relevance": "partial"})], answer, question)
+    for changes in ({"method": "minor_variant"},
                     {"student_quote": "student:9"},
                     {"steps": [dict(id="row", outcome="missed", evidence="", reason="No row operations")]}):
         invalid = PartDecision.model_validate({**complete.model_dump(), **changes})
@@ -1150,7 +1167,7 @@ async def test_multiline_missed_step_supplies_one_earlier_origin_at_the_grading_
 
     row = _rows([dict(number="2", type="计算题", stem="Find the sum, then double it.", max_score=4)])["q1"]
     raw = dict(id="q1", label="2", stem=row["stem"], total_pts=4, parts=[dict(
-        id="p", total_pts=4, steps=[dict(id="sum", criterion="Sum both entries", total_pts=2),
+        id="p", total_pts=4, alternative={"deduct_per_error": 1}, steps=[dict(id="sum", criterion="Sum both entries", total_pts=2),
                                       dict(id="double", criterion="Double the sum", total_pts=2, follow_through_keep=.5)])])
     criterion, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
     row.update(criterion=criterion, ai_completion_provenance={"criterion": {"source_kind": "ai_generated"}})
@@ -1206,6 +1223,7 @@ def _method_rule(words="", maximum=10, *, part_id="p1"):
         parts=[
             dict(
                 id=part_id,
+                alternative={"deduct_per_error": 1},
                 total_pts=maximum,
                 steps=[dict(id="s1", total_pts=maximum, criterion="解出方程")],
             )
@@ -1339,7 +1357,10 @@ def test_atomic_rule_edit_validates_new_budget_and_can_fix_a_stale_override():
         ),
     )
     assert result["problem"]["max_score"] == 20
-    assert result["problem"]["alternative_rules"] == [dict(id="p1", label=None, text="其他解法最高15分")]
+    displayed, = result["problem"]["alternative_rules"]
+    assert displayed["id"] == "p1" and read_alternative(displayed["text"], maximum=20).maximum.points == 15
+    stored = saved_draft(problem_from_question(record())).plan.part_rubric
+    assert stored.parts[0].steps[0].total_pts == 20 and stored.parts[0].alternative.maximum.points == 15
     with pytest.raises(ApiValidationError):
         task_facade.update_problem(**args, patch=dict(max_score=5, criterion="正确结果给5分。"))
     # Recreate a row saved with the formerly accepted over-budget override.
@@ -1429,6 +1450,7 @@ def test_same_total_reallocation_uses_new_part_budgets_and_rejects_replaced_part
             label=part["label"],
             stem=part["stem"],
             total_pts=points,
+            alternative={"deduct_per_error": 1},
             steps=[dict(id="answer", total_pts=points, criterion="答对")],
         )
         for key, points, part in zip(["pa", "pb"], [4, 6], structure["subparts"])
@@ -1467,7 +1489,9 @@ def test_same_total_reallocation_uses_new_part_budgets_and_rejects_replaced_part
     result = task_facade.update_problem(
         **args, patch={"criterion": criterion, "alternative_rule_edits": {"pb": "最多给7分"}}
     )
-    assert result["problem"]["alternative_rules"] == [dict(id="pb", label="(b)", text="最多给7分")]
+    displayed = {item["id"]: item for item in result["problem"]["alternative_rules"]}
+    assert set(displayed) == {"pa", "pb"} and displayed["pb"]["label"] == "(b)"
+    assert read_alternative(displayed["pb"]["text"], maximum=8).maximum.points == 7
     with pytest.raises(ApiValidationError, match="changed scoring part"):
         task_facade.update_problem(
             **args,
