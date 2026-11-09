@@ -1182,3 +1182,318 @@ async def test_multiline_missed_step_supplies_one_earlier_origin_at_the_grading_
                              ("student:1, student:3", "student:3"), ("student:1, student:9", "student:1")]:
         with pytest.raises(ValueError, match="distinct earlier error"):
             settle(support, origin)
+
+
+def _method_rule(words="", maximum=10, *, part_id="p1"):
+    stem = "必须用配方法解方程 x²−3x+2=0。"
+    row = _rows(
+        [
+            dict(
+                number="1",
+                type="计算题",
+                stem=stem,
+                max_score=maximum,
+                criterion=f"正确结果给{maximum}分。{words}",
+                reference_answer="配方后两根为1和2。",
+            )
+        ]
+    )["q1"]
+    rules = PartRubric(
+        id="q1",
+        label="1",
+        stem=stem,
+        total_pts=maximum,
+        parts=[
+            dict(
+                id=part_id,
+                total_pts=maximum,
+                steps=[dict(id="s1", total_pts=maximum, criterion="解出方程")],
+            )
+        ],
+    )
+    _, draft = generated_rubric(row, RubricDefinition(part_rubric=rules))
+    return row, draft
+
+
+def _factorization_score(rules, **overrides):
+    answer = "(x−1)(x−2)=0，所以 x 为1或2。"
+    fields = dict(
+        part_id=rules.parts[0].id,
+        target_quote=rules.stem,
+        student_quote=answer,
+        progress="因式分解得两根",
+        method="alternative",
+        student_method="因式分解",
+        reference_method="配方",
+        relevance="complete",
+    )
+    return settle_parts(
+        rules,
+        [PartDecision(**{**fields, **overrides})],
+        overrides.get("student_quote", answer),
+        rules.stem,
+    )[0]
+
+
+@pytest.mark.parametrize(
+    ("words", "score"),
+    [
+        ("其他正确解法给满分", 10),
+        ("其他正确解法给10分", 10),
+        ("Alternative methods get full credit", 10),
+        ("Alternative methods receive full marks", 10),
+        ("其他解法不得分", 0),
+        ("其他解法不给分", 0),
+        ("其他解法给0分", 0),
+        ("", 0),
+    ],
+)
+def test_explicit_method_exception_from_teacher_through_frozen_settlement(words, score):
+    row, draft = _method_rule(words)
+    frozen = saved_draft({**row, "rubric_draft": draft.model_dump(mode="json")})
+    assert _factorization_score(frozen.plan.part_rubric) == score
+
+
+def test_alternative_loss_rate_and_cumulative_cap_are_independent_and_round_trip():
+    from backend.services.part_rubric import alternative_text
+
+    row, draft = _method_rule("其他解法最高5分，每错一处扣1分，最多扣2.5分。")
+    rule = draft.plan.part_rubric
+    part = rule.parts[0]
+    for zh in (True, False):
+        reread = read_alternative(alternative_text(part, zh=zh), maximum=10)
+        assert (
+            reread.maximum.resolve(10) == 5
+            and reread.max_deduction == 2.5
+            and reread.deduct_per_error == 1
+        )
+    lines = ["代入符号错误", "独立算错系数", "遗漏解", "验算错误"]
+    for count, expected in [(1, 4), (2, 3), (3, 2.5), (4, 2.5)]:
+        answer = "\n".join(lines[:count])
+        events = [
+            dict(id=f"e{i}", rule_id="alternative", evidence=line, origin_quote=line, reason=line)
+            for i, line in enumerate(lines[:count])
+        ]
+        assert (
+            _factorization_score(rule, student_quote=answer, relevance="partial", errors=events)
+            == expected
+        )
+    with pytest.raises(ValueError, match="Conflicting"):
+        read_alternative("其他解法给满分，但最高5分", maximum=10)
+    with pytest.raises(ValueError, match="Conflicting"):
+        read_alternative("每错扣1分，每错扣2分", maximum=10)
+
+
+def _persist_method_question():
+    from backend.db import assignment_repository
+    from backend.tests.test_major_question_structure import _seed_task_with_two_part_question
+
+    owner, task = "alternative-owner", "alternative-task"
+    _seed_task_with_two_part_question(owner, task)
+    (old,) = assignment_repository.list_questions(task, teacher_id=owner)
+    row, draft = _method_rule()
+    pres = {
+        "rubric_draft": draft.model_dump(mode="json"),
+        "question_structure": row["question_structure"],
+        "rubric_schema_version": 2,
+    }
+    assignment_repository.update_question(
+        task,
+        teacher_id=owner,
+        q_id="q1",
+        expected_version=old.version,
+        stem=row["stem"],
+        criterion=row["criterion"],
+        reference_answer=row["reference_answer"],
+        source={"presentation": pres},
+    )
+    return dict(task_id=task, owner_id=owner, q_id="q1")
+
+
+def test_atomic_rule_edit_validates_new_budget_and_can_fix_a_stale_override():
+    from backend.db import assignment_repository
+    from backend.domain.errors import ValidationError as ApiValidationError
+    from backend.services import task_facade
+    from backend.services.math_grading_context import problem_from_question
+
+    args = _persist_method_question()
+
+    def record():
+        return assignment_repository.list_questions(args["task_id"], teacher_id=args["owner_id"])[0]
+
+    before = record()
+    with pytest.raises(ApiValidationError, match="budget"):
+        task_facade.update_problem(
+            **args,
+            patch=dict(
+                max_score=5,
+                criterion="正确结果给5分。",
+                alternative_rule_edits={"p1": "其他解法最高8分"},
+            ),
+        )
+    assert (record().version, record().source) == (before.version, before.source)
+    result = task_facade.update_problem(
+        **args,
+        patch=dict(
+            max_score=20, criterion="正确结果给20分。", alternative_rule_edits={"p1": "其他解法最高15分"}
+        ),
+    )
+    assert result["problem"]["max_score"] == 20
+    assert result["problem"]["alternative_rules"] == [dict(id="p1", label=None, text="其他解法最高15分")]
+    with pytest.raises(ApiValidationError):
+        task_facade.update_problem(**args, patch=dict(max_score=5, criterion="正确结果给5分。"))
+    # Recreate a row saved with the formerly accepted over-budget override.
+    old = record()
+    assignment_repository.update_question(
+        args["task_id"],
+        teacher_id=args["owner_id"],
+        q_id="q1",
+        expected_version=old.version,
+        max_score=5,
+        criterion="正确结果给5分。",
+    )
+    assert saved_draft(problem_from_question(record())) is None
+    task_facade.update_problem(**args, patch=dict(alternative_rule_edits={"p1": "其他解法最高5分"}))
+    saved = record()
+    overrides = saved.source["presentation"]["alternative_rules"]
+    assert overrides["p1"]["text"] == "其他解法最高5分"
+    row, candidate = _method_rule(maximum=5, part_id="regenerated")
+    _, regenerated = generated_rubric(
+        {**row, "alternative_rules": overrides}, RubricDefinition(part_rubric=candidate.plan.part_rubric)
+    )
+    assert _factorization_score(regenerated.plan.part_rubric) == 5
+
+
+def test_existing_full_credit_draft_is_rebound_without_rewriting_historical_plan():
+    from backend.services.math_rubric_plan import _content_hash
+    from backend.services.rubric_drafts import RubricDraft, bind_draft
+
+    row, draft = _method_rule("其他正确解法给满分")
+    stored = draft.model_dump(mode="json")
+    stored.pop("alternative_policy_version")
+    old_body = stored["plan"]
+    old_body["part_rubric"]["parts"][0]["alternative"]["maximum"] = {"points": 0.0}
+    old_body["plan_id"] = _content_hash({k: v for k, v in old_body.items() if k != "plan_id"})
+    old = RubricDraft.model_validate(stored)
+    problem = {**row, "rubric_draft": stored}
+    adopted = saved_draft(problem)
+    assert _factorization_score(adopted.plan.part_rubric) == 10
+    assert bind_draft(old, problem).part_rubric == adopted.plan.part_rubric
+    assert adopted.plan.plan_id != old.plan.plan_id
+    assert _factorization_score(old.plan.part_rubric) == 0
+
+
+def test_ordinary_deduction_rate_and_money_cap_are_bound_to_the_same_rule():
+    row, _ = _method_rule()
+    row["criterion"] = "每错扣1分，最多扣2.5分。"
+    definition = RubricDefinition(
+        part_rubric=dict(
+            id="q1",
+            label="1",
+            stem=row["stem"],
+            total_pts=10,
+            parts=[
+                dict(id="p", total_pts=10, deductions=[dict(id="e", criterion="独立错误", deduct_pts=1)])
+            ],
+        )
+    )
+    _, draft = generated_rubric(row, definition)
+    rule = draft.plan.part_rubric
+    assert rule.parts[0].deductions[0].max_deduction == 2.5
+    lines = ["第一处符号错", "第二处计算错", "第三处结论错"]
+    events = [
+        dict(id=f"e{i}", rule_id="e", evidence=line, origin_quote=line, reason=line)
+        for i, line in enumerate(lines)
+    ]
+    assert (
+        _factorization_score(
+            rule, student_quote="\n".join(lines), relevance="partial", method="reference", errors=events
+        )
+        == 7.5
+    )
+
+
+def test_same_total_reallocation_uses_new_part_budgets_and_rejects_replaced_parts():
+    from backend.db import assignment_repository
+    from backend.domain.errors import ValidationError as ApiValidationError
+    from backend.services import task_facade
+    from backend.tests.test_major_question_structure import _seed_task_with_two_part_question
+
+    owner, task = "reallocate-owner", "reallocate-task"
+    _seed_task_with_two_part_question(owner, task)
+    (old,) = assignment_repository.list_questions(task, teacher_id=owner)
+    structure = old.source["presentation"]["question_structure"]
+    parts = [
+        dict(
+            id=key,
+            label=part["label"],
+            stem=part["stem"],
+            total_pts=points,
+            steps=[dict(id="answer", total_pts=points, criterion="答对")],
+        )
+        for key, points, part in zip(["pa", "pb"], [4, 6], structure["subparts"])
+    ]
+    row = dict(
+        q_id="q1",
+        number=old.number,
+        type=old.type,
+        stem=old.stem,
+        reference_answer=old.reference_answer,
+        criterion=old.criterion,
+        max_score=10,
+        question_structure=structure,
+    )
+    _, draft = generated_rubric(
+        row,
+        RubricDefinition(
+            part_rubric=dict(id="q1", label=old.number, stem=old.stem, total_pts=10, parts=parts)
+        ),
+    )
+    assignment_repository.update_question(
+        task,
+        teacher_id=owner,
+        q_id="q1",
+        expected_version=old.version,
+        source={
+            "presentation": {**old.source["presentation"], "rubric_draft": draft.model_dump(mode="json")}
+        },
+    )
+    args = dict(owner_id=owner, task_id=task, q_id="q1")
+    criterion = "(a) 2 分\n(b) 8 分"
+    with pytest.raises(ApiValidationError):
+        task_facade.update_problem(
+            **args, patch={"criterion": criterion, "alternative_rule_edits": {"pa": "最多给3分"}}
+        )
+    result = task_facade.update_problem(
+        **args, patch={"criterion": criterion, "alternative_rule_edits": {"pb": "最多给7分"}}
+    )
+    assert result["problem"]["alternative_rules"] == [dict(id="pb", label="(b)", text="最多给7分")]
+    with pytest.raises(ApiValidationError, match="changed scoring part"):
+        task_facade.update_problem(
+            **args,
+            patch={
+                "stem": "(a) 完成计算。\n(b) 全新的问题。",
+                "alternative_rule_edits": {"pb": "最多给5分"},
+            },
+        )
+    with pytest.raises(ApiValidationError):
+        task_facade.update_problem(
+            **args,
+            expected_revision=result["workflow_revision"],
+            patch={"alternative_rule_edits": {"unknown": "给满分"}},
+        )
+
+
+@pytest.mark.parametrize("separator", ["，", "；", "。", "\n"])
+def test_alternative_deduction_continuations_bind_even_across_punctuation(separator):
+    text = separator.join(["其他解法最高5分", "每个独立错误扣.5分", "累计最多扣2分"])
+    _, draft = _method_rule(text)
+    policy = draft.plan.part_rubric.parts[0].alternative
+    assert (policy.maximum.points, policy.deduct_per_error, policy.max_deduction) == (5, 0.5, 2)
+    assert policy.source_quote == text
+
+
+def test_fraction_of_full_marks_does_not_add_a_second_award():
+    assert read_alternative("另解最高给1/3的满分", maximum=6).maximum.resolve(6) == 2
+    with pytest.raises(ValueError):
+        read_alternative("另解不能得满分", maximum=6)

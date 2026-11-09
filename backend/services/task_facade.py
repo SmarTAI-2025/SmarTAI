@@ -1026,6 +1026,10 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         alternatives = [{"id": part.id, "label": part.label,
                          "text": alternative_text(part, zh=feedback_language == "zh")}
                         for part in math_plan.part_rubric.parts]
+    elif presentation.get("alternative_rules"):
+        from backend.services.rubric_drafts import pending_alternatives
+        alternatives = [{"id": key, "label": rule["label"], "text": rule["text"]}
+                        for key, rule in pending_alternatives(presentation["alternative_rules"], structure).items()]
     # Give the editor valid old function-only rows in its existing text fields.
     # Invalid legacy data must remain visible so the teacher can correct it.
     cases = question.test_cases
@@ -5568,13 +5572,14 @@ def update_problem(
             )}
         elif patch.get("review_status") == "confirmed" and question.test_cases:
             _validated_test_cases(question.stem, question.type, question.test_cases)
-        if "alternative_rule_edits" in patch:
+        check_alternatives = "alternative_rule_edits" in patch or (
+            presentation.get("alternative_rules") and ({"stem", "number", "max_score", "criterion"}.intersection(patch)
+                                                       or patch.get("review_status") == "confirmed")
+        )
+        if check_alternatives:
             from backend.services.math_grading_context import problem_from_question
             from backend.services.rubric_drafts import edit_alternatives
-            try:
-                edit_alternatives(problem_from_question(question), presentation, patch["alternative_rule_edits"])
-            except (TypeError, ValueError) as exc:
-                raise ValidationError(str(exc), code="invalid_alternative_rule") from exc
+            previous_problem = problem_from_question(question)
         if "criterion" in patch and patch["criterion"] != question.criterion:
             presentation["rubric_schema_version"] = 2
             provenance = dict(presentation.get("ai_completion_provenance") or {})
@@ -5700,6 +5705,12 @@ def update_problem(
             if key in patch:
                 setattr(question, key, patch[key])
         question.source = source
+        if check_alternatives:
+            try:
+                edit_alternatives(problem_from_question(question), presentation, patch.get("alternative_rule_edits"),
+                                  previous=previous_problem)
+            except (ValueError, TypeError) as exc:
+                raise ValidationError(str(exc), code="invalid_alternative_rule") from exc
         question.version += 1
         question.updated_at = now
         if substantive:

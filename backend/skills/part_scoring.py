@@ -279,7 +279,6 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                 raise ValueError(
                     f"{part.id}: incomplete work cannot silently earn full credit; identify the missing obligation."
                 )
-            losses = Fraction(0)
             seen = set()
             targets = set()
             counts = {}
@@ -329,10 +328,16 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                     targets.add(target)
                 seen.add(identity)
                 counts[event.rule_id] = counts.get(event.rule_id, 0) + 1
-                if use_alt_rate:
-                    losses += _amount(part.alternative.deduct_per_error)
-                elif rule.limit is None or counts[event.rule_id] <= rule.limit:
-                    losses += _amount(rule.deduct_pts)
+            if use_alt_rate:
+                losses = _amount(part.alternative.deduct_per_error) * len(d.errors)
+                if part.alternative.max_deduction is not None:
+                    losses = min(losses, _amount(part.alternative.max_deduction))
+            else:
+                losses = Fraction(0)
+                for rule_id, count in counts.items():
+                    rule = penalty_rules[rule_id]
+                    loss = _amount(rule.deduct_pts) * min(count, rule.limit or count)
+                    losses += min(loss, _amount(rule.max_deduction)) if rule.max_deduction is not None else loss
             amounts = [(None, max(floor, cap - losses), d.progress)]
         subtotal = sum(x[1] for x in amounts)
         if d.relevance == "complete" and (subtotal != cap or d.errors):

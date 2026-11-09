@@ -45,7 +45,14 @@ class Alternative(Frozen):
     maximum: Amount = Field(default_factory=lambda: Amount(fraction="1/1"))
     minimum: Amount = Field(default_factory=lambda: Amount(points=0))
     deduct_per_error: Points | None = Field(default=None, gt=0)
+    max_deduction: Points | None = Field(default=None, exclude_if=lambda v: v is None)
     source_quote: str = Field(default="", max_length=4000)
+
+    @model_validator(mode="after")
+    def check_deduction_cap(self):
+        if self.max_deduction is not None and self.deduct_per_error is None:
+            raise ValueError("Specify the per-error deduction for this cumulative deduction cap.")
+        return self
 
 
 class Criterion(Frozen):
@@ -64,6 +71,7 @@ class PointStep(Criterion):
 
 class Penalty(Criterion):
     deduct_pts: Points = Field(gt=0)
+    max_deduction: Points | None = Field(default=None, exclude_if=lambda v: v is None)
     count_by: Literal["independent_error", "wrong_step", "target_item"] = (
         "independent_error"
     )
@@ -215,7 +223,7 @@ _ALT = re.compile(
     re.I,
 )
 _AMOUNT = re.compile(
-    r"(\d+(?:\.\d+)?\s*/\s*[1-9]\d*\s*(?:分(?!之)|points?)?|\d+(?:\.\d+)?\s*%|一半|半分|[二三四五六七八九十]分之[一二三四五六七八九]|\d+(?:\.\d+)?\s*(?:分(?!之)|points?)|零分)",
+    r"(\d+(?:\.\d+)?\s*/\s*[1-9]\d*\s*(?:分(?!之)|points?)?|\d+(?:\.\d+)?\s*%|一半|半分|[二三四五六七八九十]分之[一二三四五六七八九]|(?:\d+(?:\.\d+)?|\.\d+)\s*(?:分(?!之)|points?)|零分)",
     re.I,
 )
 _SHORT_RESPONSE = re.compile(
@@ -282,31 +290,55 @@ def parse_amount(token: str) -> Amount:
     return Amount(points=float(number))
 
 
+_ZERO_AWARD = r"不得分|不给分|不予(?:给)?分|不计分|不记分|no (?:credit|marks?|points?)"
+_FULL_AWARD = r"满分(?!\s*(?:的|[数值]|[0-9]+\s*分))|full (?:credit|marks)"
+_POLICY_TOKEN = re.compile(rf"(?P<amount>{_AMOUNT.pattern})|(?P<zero>{_ZERO_AWARD})|(?P<full>{_FULL_AWARD})", re.I)
+_LOSS_CAP = re.compile(r"(?:(?:累计|合计|一共|总共)?(?:最多|至多|最高)|上限(?:为)?|累计|合计)\s*(?:可)?扣(?:除)?\s*$|"
+                       r"(?:累计|总)扣分(?:上限)?(?:为|是)?\s*$|(?:maximum|total|cumulative) deduction(?: of)?\s*$", re.I)
+
+
 def read_alternative(
     text: str, *, maximum: float, fallback: Alternative | None = None
 ) -> Alternative:
     """Only score-bearing clauses enter arithmetic. Quote originals, including typos."""
     policy = fallback or Alternative()
     values = {}
-    for match in _AMOUNT.finditer(unicodedata.normalize("NFKC", text)):
-        prefix = unicodedata.normalize("NFKC", text)[: match.start()]
-        clause = re.split(r"[，,；;。\n]", prefix)[-1].casefold()
-        amount = parse_amount(match.group())
-        if re.search(r"(?:扣(?:除)?|deduct)\s*$", clause):
+    normalized = unicodedata.normalize("NFKC", text)
+    for match in _POLICY_TOKEN.finditer(normalized):
+        prefix = normalized[:match.start()]
+        clause = re.split(r"[，,；;。\n]|\.(?=\s|$)", prefix)[-1].casefold()
+        token = match.group()
+        if match["full"]:
+            if re.search(r"(?:[/％%]\d*的?|分之[一二三四五六七八九]的?|of(?: the)?)\s*$", clause):
+                continue
+            if re.search(r"(?:不(?:能|可|允许|应)?(?:得|给|予|计|获得)?|not(?: given)?|no)\s*$", clause):
+                raise ValueError("Specify the maximum for this restricted alternative.")
+            field, value = "maximum", Amount(fraction="1/1")
+        elif match["zero"]:
+            field, value = "maximum", Amount(points=0)
+        elif re.search(r"[-−负]\s*$", clause):
+            raise ValueError("Scoring amounts cannot be negative.")
+        elif _LOSS_CAP.search(clause):
+            amount = parse_amount(token)
+            if amount.points is None:
+                raise ValueError("Specify the cumulative deduction cap in points.")
+            field, value = "max_deduction", amount.points
+        elif re.search(r"(?:扣(?:除)?|deduct)\s*$", clause):
+            amount = parse_amount(token)
             if amount.points is None or amount.points <= 0:
                 raise ValueError("Give a positive absolute deduction per error.")
             field, value = "deduct_per_error", amount.points
         elif re.search(r"最低|保底|至少|minimum|floor", clause):
-            field, value = "minimum", amount
+            field, value = "minimum", parse_amount(token)
         elif (
             re.search(
                 r"满分|最多|最高|最贵|给|至多|上限|封顶|maximum|up to|capped|worth|得|计|为|0分$|按",
                 clause,
             )
-            or amount.points == 0
+            or parse_amount(token).points == 0
             or _ALT.search(clause)
         ):
-            field, value = "maximum", amount
+            field, value = "maximum", parse_amount(token)
         else:
             raise ValueError(
                 "Cannot determine whether this amount is a cap, floor or deduction."
@@ -314,9 +346,7 @@ def read_alternative(
         if field in values and values[field] != value:
             raise ValueError(f"Conflicting alternative {field}.")
         values[field] = value
-    if not values and not re.search(
-        r"满分|full (?:credit|marks)|同等|等价", text, re.I
-    ):
+    if not values and not re.search(r"同等|等价", text, re.I):
         raise ValueError("Unclear alternative method policy.")
     policy = Alternative.model_validate(
         {**policy.model_dump(), **values, "source_quote": text}
@@ -332,7 +362,24 @@ def read_alternative(
 
 
 def alternative_clauses(text):
-    return [s.strip() for s in re.split(r"[。；;\n]", text or "") if _ALT.search(s)]
+    # Keep a policy's monetary continuations together across punctuation.
+    # A new named part or an ordinary-rule heading ends the previous scope.
+    text = text or ""
+    spans = []
+    active = False
+    for item in re.finditer(r"[^。；;\n]+", text):
+        clause = item.group().strip()
+        if _ALT.search(clause):
+            spans.append(item.span())
+            active = True
+        elif active and re.match(
+            r"(?:每(?:个?独立)?错|每[一每]?处|累计|合计|至多扣|最多扣|最高扣|最低|保底|"
+            r"deduct\b|maximum deduction\b|minimum\b)", clause, re.I
+        ):
+            spans[-1] = (spans[-1][0], item.end())
+        else:
+            active = False
+    return [text[start:end].strip() for start, end in spans]
 
 
 def canonical_label(label, question_label=None):
@@ -445,7 +492,7 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
                     f"{label}: preserve ordered teacher step budgets {sequence[1]}."
                 )
     check_response_obligation(problem.get("stem", ""), teacher, rubric.parts)
-    verify_teacher_numbers(teacher, rubric, maximum)
+    capped_rules = verify_teacher_numbers(teacher, rubric, maximum)
     gaps = list(rubric.teacher_gaps) if teacher else []
     mentioned = {
         label
@@ -463,9 +510,16 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
             "教师标准未明确涵盖的小问 / Parts without an explicit teacher rule: "
             + ", ".join(label for label in labels if label not in mentioned)
         )
+    overrides = {(item["label"], item["stem"]): item["text"]
+                 for item in (problem.get("alternative_rules") or {}).values()}
     fixed = []
     for index, label in enumerate(labels):
         p = proposed[canonical_label(label)]
+        if p.id in capped_rules:
+            p = p.model_copy(update={"deductions": tuple(
+                rule.model_copy(update={"max_deduction": capped_rules[p.id][rule.id]})
+                if rule.id in capped_rules[p.id] else rule for rule in p.deductions
+            )})
         if label in expected and Decimal(str(expected[label])) != Decimal(
             str(p.total_pts)
         ):
@@ -500,15 +554,13 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
             ]
             if not named or label in named:
                 applicable.append(clause)
-        if applicable:
+        override = overrides.get((label or None, stem if parts else None))
+        if override is not None:
+            policy = read_alternative(override, maximum=p.total_pts)
+        elif applicable:
             policy = read_alternative(
                 "；".join(applicable), maximum=p.total_pts, fallback=policy
             )
-        for override in (problem.get("alternative_rules") or {}).values():
-            if override["label"] == (label or None) and override["stem"] == (
-                stem if parts else None
-            ):
-                policy = read_alternative(override["text"], maximum=p.total_pts)
         if not teacher:
             p = p.model_copy(
                 update={
@@ -570,8 +622,11 @@ def render_parts(rubric, language="zh"):
                 f"{prefix}{'满分' if zh else 'Maximum '}{part.total_pts:g}{unit}"
             )
             for rule in part.deductions:
+                cap = ""
+                if rule.max_deduction is not None:
+                    cap = f"，累计最多扣{rule.max_deduction:g}分" if zh else f", maximum deduction {rule.max_deduction:g} points"
                 lines.append(
-                    f"- {rule.criterion} ({'扣' if zh else 'deduct '}{rule.deduct_pts:g}{unit})"
+                    f"- {rule.criterion} ({'扣' if zh else 'deduct '}{rule.deduct_pts:g}{unit}{cap})"
                 )
     return "\n".join(lines)
 
@@ -594,12 +649,16 @@ def alternative_text(part, zh=True):
             if policy.deduct_per_error
             else "部分完成时按已达到的评分目标给分。"
         )
+        if policy.max_deduction is not None:
+            loss += f"累计最多扣{policy.max_deduction:g}分。"
         return f"其他解法最高得{amount(policy.maximum)}，最低{amount(policy.minimum)}。{loss}"
     loss = (
         f"Deduct {policy.deduct_per_error:g} points per independent error."
         if policy.deduct_per_error
         else "Award partial credit for the goals achieved."
     )
+    if policy.max_deduction is not None:
+        loss += f" Maximum deduction {policy.max_deduction:g} points."
     return f"Alternative methods: maximum {amount(policy.maximum)}, minimum {amount(policy.minimum)}. {loss}"
 
 
@@ -665,6 +724,8 @@ Extract explicit source rules with exact source_quote evidence. Only fill missin
 rules using AI; report which teacher fields were unclear or missing in teacher_gaps.
 Do not report the absence of alternative-method rules or the use of AI as a defect.
 Preserve teacher caps, floors, exemptions, follow-through fractions and counting scopes.
+max_deduction is the cumulative loss in points; deduct_pts or deduct_per_error is the loss per event.
+A count limit is a number of events, not a point amount.
 Ratios of the maximum (一半, 最多给1/3, 50%) are fractions, e.g. {"fraction":"1/3"}.
 Absolute amounts (0.5分, 半分) use {"points":0.5}. Never turn a proportion into a point.
 """
@@ -691,8 +752,9 @@ def verify_teacher_numbers(teacher, rubric, maximum):
         and not re.search(r"保底|最低|至少|floor|minimum", ordinary, re.I)
     ):
         raise ValueError("No teacher minimum was provided; use a zero nonblank floor.")
+    capped_rules = {}
     for m in re.finditer(
-        r"(?:扣(?:除)?|deduct)\s*(\d+(?:\.\d+)?)\s*(?:分|points?)", ordinary, re.I
+        r"(?:扣(?:除)?|(?:maximum|total|cumulative) deduction(?: of)?|deduct)\s*(\d+(?:\.\d+)?|\.\d+)\s*(?:分|points?)", ordinary, re.I
     ):
         clause = re.split(r"[。；;\n]", ordinary[: m.end()])[-1]
         eligible = [
@@ -700,6 +762,21 @@ def verify_teacher_numbers(teacher, rubric, maximum):
             for p in rubric.parts
             if p.label and re.search(_allocation_marker_pattern(p.label), clause, re.I)
         ] or list(rubric.parts)
+        if _LOSS_CAP.search(ordinary[:m.start(1)].casefold()):
+            cap = Decimal(m[1])
+            candidates = [(p, d) for p in eligible for d in p.deductions]
+            if len(candidates) != 1:
+                candidates = [(p, d) for p, d in candidates if d.source_quote and m.group() in d.source_quote
+                              and d.source_quote in clause]
+            if len(candidates) != 1:
+                raise ValueError(f"Identify the deduction rule subject to the cumulative {cap}-point cap.")
+            part, rule = candidates[0]
+            previous = capped_rules.setdefault(part.id, {}).get(rule.id, rule.max_deduction)
+            if ((previous is not None and Decimal(str(previous)) != cap)
+                    or (rule.limit is not None and Decimal(str(rule.deduct_pts)) * rule.limit < cap)):
+                raise ValueError(f"Preserve the cumulative deduction cap of {cap} points for {rule.id}.")
+            capped_rules[part.id][rule.id] = float(cap)
+            continue
         if not any(
             Decimal(str(d.deduct_pts)) == Decimal(m[1])
             for p in eligible
@@ -731,3 +808,4 @@ def verify_teacher_numbers(teacher, rubric, maximum):
             raise ValueError(
                 f"Preserve the teacher's follow-through credit {match[1]} in its designated step."
             )
+    return capped_rules

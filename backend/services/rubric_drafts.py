@@ -42,6 +42,7 @@ class RubricDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal["rubric_draft_v1"] = "rubric_draft_v1"
+    alternative_policy_version: Literal[2] | None = Field(default=None, exclude_if=lambda v: v is None)
     content_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     teacher_notes: str = ""
     # Unbound means no strictness/partial-credit prose has been appended.
@@ -179,7 +180,7 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
         if truth_key:
             body["expected_truth_by_part"] = truth_key
         plan = MathRubricPlan(**body, plan_id=_content_hash(body))
-        return criterion, RubricDraft(content_fingerprint=draft_fingerprint(completed), plan=plan)
+        return criterion, RubricDraft(alternative_policy_version=2, content_fingerprint=draft_fingerprint(completed), plan=plan)
     explicit = subpart_plan(context, candidate=definition)
     if explicit:
         return original, RubricDraft(content_fingerprint=draft_fingerprint(problem), plan=explicit)
@@ -255,6 +256,39 @@ def retarget_draft(draft: RubricDraft, problem) -> RubricDraft:
     return draft.model_copy(update={"content_fingerprint": draft_fingerprint(problem), "plan": plan})
 
 
+def _replace_draft_parts(draft, parts, context):
+    rules = draft.plan.part_rubric
+    body = draft.plan.model_dump(mode="json", exclude={"plan_id"})
+    body["part_rubric"] = rules.model_copy(update={
+        "parts": tuple(parts), "rubric_version": rules.rubric_version + 1,
+    }).model_dump(mode="json")
+    body["input_fingerprint"] = _content_hash(context)
+    plan = MathRubricPlan(plan_id=_content_hash(body), **body)
+    return draft.model_copy(update={"alternative_policy_version": 2, "plan": plan})
+
+
+def _refresh_teacher_alternatives(draft, context):
+    """Reinterpret stored teacher wording before adopting a preparation draft."""
+    from backend.services.part_rubric import alternative_clauses, read_alternative
+
+    rules = draft.plan.part_rubric
+    if not rules or draft.alternative_policy_version == 2:
+        return draft
+    clauses = set(alternative_clauses(rules.teacher_rubric))
+    edits = {item["text"] for item in (context.get("alternative_rules") or {}).values()}
+    updated = []
+    for part in rules.parts:
+        policy = part.alternative
+        quote = policy.source_quote
+        if quote and (quote in edits or quote in clauses or all(clause in clauses for clause in quote.split("；"))):
+            policy = read_alternative(quote, maximum=part.total_pts, fallback=policy)
+        updated.append(part if policy == part.alternative else part.model_copy(update={"alternative": policy}))
+    if tuple(updated) == rules.parts:
+        return draft.model_copy(update={"alternative_policy_version": 2})
+    return _replace_draft_parts(draft, updated, context)
+
+
+
 def saved_draft(problem, *, grading_setup=None) -> RubricDraft | None:
     row = _mapping(problem)
     source = row.get("source") or getattr(problem, "_math_rubric_source", {}) or {}
@@ -274,6 +308,10 @@ def saved_draft(problem, *, grading_setup=None) -> RubricDraft | None:
             or (not draft.plan.part_rubric and draft.teacher_notes != str(setup.get("teacher_notes") or ""))
             or draft.plan.original_criterion != context["criterion"]
             or draft.plan.max_score != context["max_score"]):
+        return None
+    try:
+        draft = _refresh_teacher_alternatives(draft, context)
+    except ValueError:
         return None
     if draft.plan.part_rubric and draft.plan.expected_truth_by_part:
         from backend.services.true_false_answers import DecisionReferenceConflict, adopted_truth_key
@@ -298,40 +336,72 @@ def bind_draft(draft: RubricDraft, problem, *, grading_setup=None) -> MathRubric
     setup = _mapping(grading_setup) if grading_setup is not None else {}
     if not draft.plan.part_rubric and draft.teacher_notes != str(setup.get("teacher_notes") or ""):
         raise ValueError("rubric_draft_teacher_policy_changed")
-    plan = retarget_draft(draft, problem).plan
+    plan = retarget_draft(_refresh_teacher_alternatives(draft, _question_input(problem)), problem).plan
     return _with_preferences(plan, grading_setup)
 
 
-def edit_alternatives(problem, presentation, updates):
-    """Apply edits against the displayed IDs under the question's revision lock."""
+def pending_alternatives(overrides, structure):
+    """Only persisted teacher edits for parts still present in this question."""
+    scopes = {(p["label"], p["stem"]) for p in (structure or {}).get("subparts", [])} or {(None, None)}
+    return {key: value for key, value in overrides.items()
+            if (value["label"], value["stem"]) in scopes}
+
+
+def edit_alternatives(problem, presentation, updates, *, previous=None):
+    """Resolve displayed identities against the complete candidate under its revision lock."""
     from backend.services.part_rubric import read_alternative
 
+    context = _question_input(problem)
+    structure = context["question_structure"] or {}
+    overrides = pending_alternatives(presentation.get("alternative_rules") or {}, structure)
     current = saved_draft(problem)
-    if not current or not current.plan.part_rubric:
-        raise ValueError("This rubric has changed. Reload the question.")
-    rules = current.plan.part_rubric
-    if not updates or updates.keys() - {part.id for part in rules.parts}:
-        raise ValueError("Unknown or missing scoring part.")
-    overrides = dict(presentation.get("alternative_rules") or {})
-    parts = []
-    for part in rules.parts:
-        if part.id in updates:
-            text = updates[part.id].strip()
-            policy = read_alternative(text, maximum=part.total_pts)
-            overrides[part.id] = {"text": text, "label": part.label, "stem": part.stem}
-            part = part.model_copy(update={"alternative": policy})
-        parts.append(part)
+    displayed = saved_draft(previous) if previous is not None else current
+    identities = {key: (v["label"], v["stem"]) for key, v in overrides.items()}
+    if displayed and displayed.plan.part_rubric:
+        identities = {p.id: (p.label, p.stem) for p in displayed.plan.part_rubric.parts}
+        by_scope = {(v["label"], v["stem"]): v for v in overrides.values()}
+        overrides = {key: by_scope[scope] for key, scope in identities.items() if scope in by_scope}
+
+    budgets = {(p["label"], p["stem"]): None for p in structure.get("subparts", [])}
+    if not budgets:
+        budgets[(None, None)] = problem.max_score
+    else:
+        points = {i["label"]: float(i["points"]) for i in
+                  (presentation.get("rubric_point_summary") or {}).get("items", [])}
+        budgets = {scope: points.get(scope[0]) for scope in budgets}
+    rules = current.plan.part_rubric if current else None
+    if rules:
+        budgets = {(p.label, p.stem): p.total_pts for p in rules.parts}
+    if updates is not None:
+        if not updates or any(identities.get(key) not in budgets for key in updates):
+            raise ValueError("Unknown or changed scoring part. Reload the question.")
+        for key, text in updates.items():
+            label, stem = identities[key]
+            # A regenerated plan may assign a new ID to the same source part.
+            overrides = {k: v for k, v in overrides.items() if (v["label"], v["stem"]) != (label, stem)}
+            overrides[key] = {"text": text.strip(), "label": label, "stem": stem}
+
+    policies = {}
+    for item in overrides.values():
+        scope = (item["label"], item["stem"])
+        budget = budgets[scope]
+        policy = read_alternative(item["text"], maximum=budget if budget is not None else problem.max_score)
+        if budget is None and (policy.maximum.points or policy.minimum.points):
+            raise ValueError("请先明确该小问的满分，或使用按比例的上限。 Specify the part budget for an absolute score.")
+        policies[scope] = policy
     presentation["alternative_rules"] = overrides
     problem._math_rubric_source = {**problem._math_rubric_source, "presentation": presentation}
-    body = current.plan.model_dump(mode="json", exclude={"plan_id"})
-    body["part_rubric"] = rules.model_copy(update={
-        "parts": tuple(parts), "rubric_version": rules.rubric_version + 1,
+    if not rules or not updates:
+        # The changed ordinary criterion/budgets are compiled through the usual
+        # preparation path. Never seal the old steps to a new question fingerprint.
+        return
+    parts = [p.model_copy(update={"alternative": policies[(p.label, p.stem)]})
+             if (p.label, p.stem) in policies else p for p in rules.parts]
+    updated = _replace_draft_parts(current, parts, _question_input(problem))
+    presentation["rubric_draft"] = updated.model_copy(update={
+        "content_fingerprint": draft_fingerprint(problem),
     }).model_dump(mode="json")
-    body["input_fingerprint"] = _content_hash(_question_input(problem))
-    plan = MathRubricPlan(plan_id=_content_hash(body), **body)
-    presentation["rubric_draft"] = current.model_copy(update={
-        "plan": plan, "content_fingerprint": draft_fingerprint(problem),
-    }).model_dump(mode="json")
+
 
 
 async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter=None):
