@@ -13,9 +13,55 @@ def _words(text):
     return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", text).casefold())
 
 
+def _allocation_clauses(text):
+    """Keep the source span for each assignment, including shared-unit lists."""
+    from backend.services.math_rubric_plan import _AMOUNT, _NUMBER, _scoring_numeric_text, _source_clauses
+
+    # An amount closes a postfix award ("setup 3 points ... result 7 points").
+    # For prefix awards ("3 points for setup and 7 points for result") the
+    # boundary instead precedes the next amount. Never split inside a number.
+    join = r"(?:以及|并且|然后|而且|而|并|及|与|和|且|另|\band\b|\bwhile\b|\bthen\b)"
+    for sentence in _source_clauses(text):
+        normalized = unicodedata.normalize("NFKC", sentence)
+        parallel = re.fullmatch(r"(.+?)分别(?:占|为|得|计|给)?\s*(.+)", normalized)
+        if parallel:
+            names = re.split(rf"\s*{join}\s*", parallel[1])
+            values = re.split(rf"\s*{join}\s*", parallel[2])
+            unit = re.search(r"(%|分|points?|marks?)$", values[-1], re.I)
+            if len(names) > 1 and len(names) == len(values) and unit:
+                resolved = [re.fullmatch(rf"({_NUMBER})\s*(%|分|points?|marks?)?", value, re.I)
+                            for value in values]
+                if all(resolved):
+                    for name, value in zip(names, resolved):
+                        yield sentence, name + " " + value[1] + (value[2] or unit[1])
+                    continue
+        amounts = list(_AMOUNT.finditer(_scoring_numeric_text(normalized)))
+        if len(amounts) < 2:
+            yield sentence, normalized
+            continue
+        start = 0
+        for left, right in zip(amounts, amounts[1:]):
+            bridge = normalized[left.end():right.start()]
+            # An amount at the beginning or after "award" introduces the
+            # condition that follows it (possibly followed by another award).
+            if re.match(r"\s*(?:for\b|用于|给到)", bridge, re.I):
+                boundary = re.search(rf"\s*{join}\s*(?:(?:award|give|deduct)\s*)?$", bridge, re.I)
+                if boundary is None:
+                    raise ValueError(f"Identify the separate funded conditions in «{sentence}».")
+                stop = left.end() + boundary.start()
+                following = left.end() + boundary.end()
+            else:
+                stop = left.end()
+                connector = re.match(rf"\s*{join}\s*", bridge, re.I)
+                following = stop + (connector.end() if connector else 0)
+            yield normalized[start:stop], normalized[start:stop]
+            start = following
+        yield normalized[start:], normalized[start:]
+
+
 def validate_teacher_point_items(rules, ordinary):
     from backend.services.math_rubric_plan import (
-        _AMOUNT, _DEDUCTION, _amount_value, _score_context_clause, _scoring_numeric_text, _source_clauses,
+        _AMOUNT, _DEDUCTION, _amount_value, _score_context_clause, _scoring_numeric_text,
     )
 
     if not ordinary.strip():
@@ -24,10 +70,7 @@ def validate_teacher_point_items(rules, ordinary):
     scope = parts
     labels = [(p, re.compile(_allocation_marker_pattern(p.label), re.I)) for p in parts if p.label]
     anchors = {}
-    clauses = (segment for sentence in _source_clauses(ordinary)
-               for segment in re.split(r"(?<=分)\s*(?:以及|并且|及|和)\s*|(?<=points)\s+and\s+", sentence, flags=re.I))
-    for source_clause in clauses:
-        clause = unicodedata.normalize("NFKC", source_clause)
+    for source_clause, clause in _allocation_clauses(ordinary):
         clause = re.sub(r"^(?:(?:参考解|标答解法|标答|主)?评分(?:标准|参考|说明)?|主标准|marking scheme|rubric)\s*:\s*",
                         "", clause, flags=re.I)
         # A part heading scopes its subsequent clauses. Internal mathematical
@@ -45,7 +88,7 @@ def validate_teacher_point_items(rules, ordinary):
         amount = money[0]
         # These amounts play other roles and have their own typed checks.
         if re.search(r"满分|总分|起[评分]|最多|至多|上限|最低|保底|至少|折算|沿用|后传|保留|"
-                     r"粒度|单位|每(?:个)?小问|每(?:道)?题|[各每]步|各小问|每空|满打|空白|未作答|"
+                     r"粒度|(?:配分|评分|计分|给分|分值)单位|每(?:个)?小问|每(?:道)?题|[各每]步|各小问|每空|满打|空白|未作答|"
                      r"maximum|minimum|floor|at most|at least|follow.through|each part|per part|"
                      r"allocation unit|partial credit|otherwise|部分分", clause, re.I):
             continue
@@ -56,14 +99,15 @@ def validate_teacher_point_items(rules, ordinary):
         deduction = bool(_DEDUCTION.search(clause))
         prefix = clause[:amount.start()].rstrip(" (（:：=，,")
         suffix = clause[amount.end():].strip(" ()（）[]【】:：=.")
-        if prefix and suffix:
-            # A single award is unambiguous even in "award 3 points for setup".
-            if not re.fullmatch(r"(?:award|give|earn|deduct|扣除?|给|得)", prefix, re.I):
-                continue
-        condition = prefix if not suffix else re.sub(r"^for\s+", "", suffix, flags=re.I)
+        amount_first = not prefix or re.fullmatch(r"(?:award|give|earn|deduct|扣除?|给|得)", prefix, re.I)
+        condition = re.sub(r"^for\s+", "", suffix, flags=re.I) if amount_first else prefix
         condition = re.sub(r"(?:给分为|(?:可|应)?(?:给|得|计|占|扣除?)|\b(?:earns?|worth|receives?))\s*$",
                            "", condition, flags=re.I).strip()
         key = _words(condition)
+        if not amount_first and suffix:
+            # Keep qualifiers in the frozen obligation. Their presence after the
+            # amount does not release the preceding named step from its budget.
+            condition = f"{condition}（{suffix}）"
         if not key or not re.search(r"[^\d\W_]", key):
             continue
         if re.fullmatch(r"(?:给分|计分|分步|按步骤|各|共|按|得分|分值|每(?:一|个)?(?:错误|错|题|项)|正确结果|正确|"
@@ -88,7 +132,8 @@ def validate_teacher_point_items(rules, ordinary):
                 group = items
             if not group:
                 raise ValueError(f"Identify the steps funded by «{clause}».")
-        elif not deduction and len(quoted) > 1 and len({p.id for p, _ in quoted}) == 1:
+        elif (not deduction and len(quoted) > 1 and len({p.id for p, _ in quoted}) == 1
+              and not (named and "分别" in source_clause)):
             # A teacher award can fund several substeps. Each must cite this
             # specific allocation, not an entire sentence containing other awards.
             if all(match_source_quote(source_clause, it.source_quote) for _, it in quoted):

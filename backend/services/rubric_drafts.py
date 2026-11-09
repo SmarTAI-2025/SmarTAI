@@ -11,7 +11,7 @@ from decimal import Decimal
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictBool
 
 from backend.services.part_rubric import Key, PartRubric, Points, bind_alternative, bind_parts, render_parts
 from backend.services.math_rubric_plan import (
@@ -28,6 +28,31 @@ class WrittenRubricDefinition(BaseModel):
     expected_truth_by_part: dict[str, StrictBool] = Field(default_factory=dict, strict=True, exclude_if=lambda v: not v)
 
 
+class _WrittenProposal(RootModel[dict]):
+    """Decode before source binding; show the same typed contract on repair."""
+
+    @classmethod
+    def model_json_schema(cls, *args, **kwargs):
+        schema = WrittenRubricDefinition.model_json_schema(*args, **kwargs)
+        types = schema["$defs"]
+        program_fields = {
+            "PartRubric": ("id", "label", "stem", "teacher_rubric", "rubric_origin", "rubric_version", "base_unit_pts"),
+            "RubricPart": ("origin_overrides", "stem"),
+            "PointStep": ("follow_through_keep",),
+            "Alternative": ("inferred_method_cap",),
+        }
+        for name, fields in program_fields.items():
+            shape = types[name]
+            for key in fields:
+                shape["properties"].pop(key, None)
+            if "required" in shape:
+                shape["required"] = [k for k in shape["required"] if k not in fields]
+        types["PointStep"]["properties"]["follow_through_pts"]["description"] = (
+            "Optional award for correct downstream work on a previously wrong value. "
+            "It must be strictly smaller than this step's total_pts. Omit when unspecified.")
+        return schema
+
+
 class RubricDefinition(WrittenRubricDefinition):
     """Accept historic route definitions when loading prior generations."""
 
@@ -36,6 +61,88 @@ class RubricDefinition(WrittenRubricDefinition):
     follow_through: str = Field(default="Preserve the frozen follow-through rule.", min_length=1, max_length=20000)
     numerical_policy: str = Field(default="Use the stated precision and units.", min_length=1, max_length=20000)
     advisories: tuple[str, ...] = Field(default=(), max_length=20)
+
+
+def source_bound_definition(definition, source, *, check_labels=True, singleton_id="p1"):
+    """Decode an untrusted proposal using the destination question at either input entry."""
+    from backend.tools.structured_llm import StructuredOutputInvalidError
+    from backend.services.math_rubric_plan import _FLOOR_RULE, _amount_value, _source_clauses
+    from backend.services.part_rubric import ordinary_criterion
+
+    proposal = definition.get("part_rubric") if isinstance(definition, dict) else None
+    if isinstance(proposal, dict):
+        proposal = dict(proposal)
+        # These fields belong to the one question, never to the definition
+        # wrapper. Accept misplaced metadata only if no values compete.
+        definition = dict(definition)
+        for key in PartRubric.model_fields.keys() & definition.keys():
+            value = definition.pop(key)
+            if key in proposal and proposal[key] != value:
+                error = StructuredOutputInvalidError("Conflicting question fields.")
+                error.repair_context = f"Supply one authoritative {key} inside part_rubric."
+                raise error
+            proposal[key] = value
+        # A literal zero denotes the same floor in points and in fractions.
+        # Other numbers require an explicit unit.
+        floor = proposal.get("nonblank_floor")
+        if floor is None or (type(floor) in (int, float, str) and floor in (0, "0")):
+            proposal["nonblank_floor"] = {"pts": 0}
+        elif isinstance(floor, dict) and set(floor) == {"points"}:
+            proposal["nonblank_floor"] = {"pts": floor["points"]}
+        if (source.get("criterion_source") or _question_input(source)["criterion_source"]) != "ai":
+            floors = {_amount_value(m[2], m[3] or "分", source.get("max_score", 10))
+                      for clause in _source_clauses(ordinary_criterion(source.get("criterion") or ""))
+                      if (m := _FLOOR_RULE.fullmatch(clause)) and m[1]}
+            if len(floors) > 1:
+                raise RubricAllocationError("The teacher supplied conflicting nonblank question floors.")
+            if floors:
+                # Exact source constraint; it does not depend on the model's proposal.
+                proposal["nonblank_floor"] = {"pts": float(floors.pop())}
+        from backend.services.part_rubric import RubricPart, canonical_label
+        expected_labels = [p["label"] for p in (source.get("question_structure") or {}).get("subparts", [])]
+        children = proposal.get("parts")
+        if (children is None or children == []) and proposal.get("steps") and proposal.get("deductions"):
+            error = StructuredOutputInvalidError("Competing primary scoring rules.")
+            error.repair_context = ("Place exactly one of steps or deductions in each entry of parts. "
+                                    "A per-error rule for other solutions belongs only in alternative.")
+            raise error
+        if (not expected_labels and (children is None or children == [])
+                and bool(proposal.get("steps")) != bool(proposal.get("deductions"))):
+            # With one known destination, part-only fields have exactly
+            # one owner. Preserve every rule and validate the nested result
+            # normally. Competing ledgers or numbered parts require repair.
+            part_fields = RubricPart.model_fields.keys() - PartRubric.model_fields.keys()
+            child = {key: proposal.pop(key) for key in part_fields if key in proposal}
+            children = [{"id": singleton_id, "total_pts": proposal.get("total_pts"), **child}]
+            proposal["parts"] = children
+        if not expected_labels and isinstance(children, list):
+            if len(children) != 1:
+                error = StructuredOutputInvalidError("Wrong number of rubric parts.")
+                error.repair_context = (
+                    f"This unnumbered question has one part; received {len(children)}. Put all "
+                    f"scored goals inside that part's steps (budgets together {source.get('max_score', 10)}), "
+                    "or use its deductions. Use null for its label and stem."
+                )
+                raise error
+            if isinstance(children[0], dict):
+                proposal["parts"] = [{**children[0], "label": None, "stem": None}]
+        if check_labels and expected_labels and isinstance(children, list):
+            seen = {canonical_label(p.get("label"), source.get("number")) for p in children if isinstance(p, dict) and isinstance(p.get("label"), str)}
+            missing = [label for label in expected_labels if canonical_label(label) not in seen]
+            if missing:
+                message = ("Missing subparts: " + ", ".join(missing)
+                           + f". Return each known part once. Budgets must total {source.get('max_score', 10)}.")
+                error = StructuredOutputInvalidError("Missing required rubric parts.")
+                error.repair_context = message
+                raise error
+        # The envelope is identity checked separately. Question text, display
+        # number and ID come from storage and cannot be changed by a model.
+        return {**definition, "part_rubric": {
+            **proposal, "id": source["q_id"],
+            "label": str(source.get("number") or ""),
+            "stem": (source.get("question_structure") or {}).get("shared_stem") or source.get("stem") or "",
+        }}
+    return definition
 
 
 class RubricDraft(BaseModel):
@@ -59,6 +166,17 @@ def draft_fingerprint(problem) -> str:
 
 class RubricAllocationError(ValueError):
     """Model-safe feedback containing only known subpart labels and budgets."""
+
+
+def _adopted_material(context, rules):
+    from backend.services.math_source_evidence import match_source_quote
+
+    reference = context["reference_answer"]
+    for segment in rules.answer_segments:
+        if reference and segment.origin == "teacher" and not match_source_quote(reference, segment.text):
+            raise RubricAllocationError(f"{segment.id}: a teacher answer segment must quote the adopted "
+                                        "reference. Cite its original text or mark an AI supplement as AI.")
+    return {"stem": context["stem"], "reference_answer": reference}
 
 
 def _item_subpart(item, labels):
@@ -128,7 +246,7 @@ _OPEN_PROOF_RULE = {
 }
 
 
-def generated_rubric(problem: dict, definition: RubricDefinition, *, language="zh"):
+def generated_rubric(problem: dict, definition: RubricDefinition, *, language="zh", previous_rules=None):
     """Validate against original teacher rules BEFORE rendering AI additions."""
     original = str(problem.get("criterion") or "")
     prior = saved_draft(problem) if original else None
@@ -139,7 +257,8 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
     context = _question_input(problem)
     if definition.part_rubric is not None:
         try:
-            rules = bind_parts(definition.part_rubric, {**problem, "criterion_source": context["criterion_source"]})
+            rules = bind_parts(definition.part_rubric, {**problem, "criterion_source": context["criterion_source"]},
+                               previous=previous_rules, language=language)
         except ValueError as exc:
             raise RubricAllocationError(str(exc)) from exc
         from backend.services.true_false_answers import is_decision_only, reference_decisions
@@ -177,6 +296,7 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
         base = _build_plan(_question_input(completed), explanation, reason="frozen_part_rubric")
         body = base.model_dump(mode="json", exclude={"plan_id"})
         body["part_rubric"] = rules.model_dump(mode="json")
+        body["adopted_material"] = _adopted_material(context, rules)
         if truth_key:
             body["expected_truth_by_part"] = truth_key
         plan = MathRubricPlan(**body, plan_id=_content_hash(body))
@@ -246,6 +366,7 @@ def retarget_draft(draft: RubricDraft, problem) -> RubricDraft:
         from backend.services.true_false_answers import adopted_truth_key
 
         rules = draft.plan.part_rubric
+        payload["adopted_material"] = _adopted_material(context, rules)
         payload["part_rubric"]["id"] = context["q_id"] or rules.id
         payload["part_rubric"]["label"] = context["number"]
         key = adopted_truth_key(rules, context["stem"], context["reference_answer"])
@@ -310,6 +431,11 @@ def saved_draft(problem, *, grading_setup=None, allow_incomplete_alternative=Fal
     from backend.services.teacher_point_allocations import teacher_awards_match
     if not teacher_awards_match(draft.plan.part_rubric):
         return None
+    if draft.plan.part_rubric:
+        try:
+            _adopted_material(context, draft.plan.part_rubric)
+        except RubricAllocationError:
+            return None
     try:
         draft = _refresh_teacher_alternatives(draft, context)
     except ValueError:
@@ -501,8 +627,9 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
     """Only missing/stale semantic content reaches the bounded compiler."""
     import json
     from backend.domain.errors import ValidationError
-    from backend.services.part_rubric import PART_INSTRUCTION
-    from backend.tools.structured_llm import structured_llm_call, StructuredOutputInvalidError
+    from pydantic import ValidationError as SchemaError
+    from backend.services.part_rubric import PART_INSTRUCTION, alternative_clauses, ordinary_criterion
+    from backend.tools.structured_llm import llm_attempt_budget, structured_llm_call, StructuredOutputInvalidError
 
     context = _question_input(problem)
     language = (_mapping(grading_setup).get("feedback_language") if grading_setup else None) or "zh"
@@ -536,6 +663,9 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
 
     previous_rules = previous.plan.part_rubric if previous else None
     request = dict(context)
+    if context["criterion_source"] != "ai":
+        request["teacher_ordinary_rules"] = ordinary_criterion(context["criterion"]).strip("。；; \n")
+        request["teacher_alternative_rules"] = alternative_clauses(context["criterion"])
     if previous_rules:
         request["previous_scoring_rules"] = previous_rules.model_dump(mode="json")
         request["revision_instruction"] = (
@@ -546,7 +676,10 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
     def validate(candidate):
         nonlocal draft
         try:
-            definition = RubricDefinition.model_validate(candidate.model_dump())
+            singleton_id = previous_rules.parts[0].id if previous_rules and len(previous_rules.parts) == 1 else "p1"
+            proposal = source_bound_definition(candidate.root, context, singleton_id=singleton_id)
+            checked = WrittenRubricDefinition.model_validate(proposal)
+            definition = RubricDefinition.model_validate(checked.model_dump())
             if previous_rules and definition.part_rubric:
                 from backend.services.part_rubric import canonical_label
                 proposed = definition.part_rubric
@@ -564,18 +697,42 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
                     definition = definition.model_copy(update={"expected_truth_by_part": previous.plan.expected_truth_by_part})
                 definition = definition.model_copy(update={"part_rubric": proposed.model_copy(
                     update={"rubric_version": previous_rules.rubric_version + 1})})
-            _, draft = generated_rubric(source, definition, language=language)
+            _, draft = generated_rubric(source, definition, language=language,
+                                       previous_rules=None if alternative_ids else previous_rules)
+        except SchemaError as exc:
+            issues = exc.errors(include_input=False, include_context=False, include_url=False)
+            error = StructuredOutputInvalidError("Invalid written scoring fields.")
+            error.repair_context = "; ".join(f"{'.'.join(map(str, issue['loc']))}: {issue['msg']}"
+                                             for issue in issues[:8])
+            raise error from exc
         except RubricAllocationError as exc:
             error = StructuredOutputInvalidError("Invalid frozen scoring rules.")
             error.repair_context = str(exc)
             raise error from exc
 
+    system = (
+            PART_INSTRUCTION + "\nReturn a single object with part_rubric containing total_pts and parts. "
+            "Keep only the applicable fields. The server supplies the question identity and stem. "
+            "Use teacher_ordinary_rules for the primary method; fill missing primary criteria from the "
+            "question and adopted answer. Bind teacher_alternative_rules only to alternative. An error "
+            "rate restricted to another method is never an additional primary deduction. Write in " + language + ".\n" +
+            json.dumps(_WrittenProposal.model_json_schema(), ensure_ascii=False))
+    async def compile_request():
+        await structured_llm_call(provider, system_prompt=system, user_prompt=json.dumps(request, ensure_ascii=False),
+                                  output_model=_WrittenProposal, validate_output=validate)
+
     try:
-        await structured_llm_call(provider, system_prompt=(
-            PART_INSTRUCTION + "\nReturn the written rubric definition in " + language + ".\n" +
-            json.dumps(WrittenRubricDefinition.model_json_schema(), ensure_ascii=False)),
-            user_prompt=json.dumps(request, ensure_ascii=False), output_model=WrittenRubricDefinition,
-            validate_output=validate)
+        with llm_attempt_budget():
+            try:
+                await compile_request()
+            except StructuredOutputInvalidError as exc:
+                context_error = getattr(exc, "repair_context", "") or ""
+                if '"json_syntax"' not in context_error:
+                    raise
+                # A broken JSON repair does not invalidate the teacher's rule.
+                # Use only the remaining request in the shared three-call budget.
+                request["validation_feedback"] = context_error
+                await compile_request()
     except StructuredOutputInvalidError as exc:
         raise ValidationError("The scoring rules could not be validated. Review this question's rubric.",
                               code="invalid_structured_rubric") from exc

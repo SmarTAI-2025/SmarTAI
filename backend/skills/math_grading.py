@@ -1008,6 +1008,28 @@ def _part_proof_evidence(problem):
     )
 
 
+def _part_rule_projection(rules, part_ids=None):
+    """Only executable rules and their sources belong in an expert's input."""
+    data = rules.model_dump(mode="json", exclude={"teacher_gaps", "low_confidence"})
+    if part_ids is not None:
+        data["parts"] = [part for part in data["parts"] if part["id"] in part_ids]
+    return data
+
+
+def _expert_sources(catalog, plan):
+    # AI-authored rubric prose is a rendering of the same JSON, not another
+    # teacher instruction. Keep the original text and line IDs for supplied policies.
+    generated = plan.part_rubric and plan.part_rubric.rubric_origin == "ai"
+    return {key: entry[0] for key, entry in catalog.items()
+            if not (generated and key.startswith("rubric:"))}
+
+
+def _adopted_problem(problem, plan):
+    if plan.adopted_material is None:
+        return problem
+    return problem.model_copy(update=plan.adopted_material.model_dump())
+
+
 def _generated_proof_guidance(problem):
     from backend.services.math_rubric_plan import _question_input
     if problem.type != "推理题" or _question_input(problem)["criterion_source"] != "ai":
@@ -1047,14 +1069,14 @@ def _point_review_evidence(assessment, trace, disputed):
 
 async def review_math_experts(problem, answer, experts, provider, *, language="en", grading_setup=None):
     """Resolve concrete disagreements once, retaining weights and provenance."""
-    from backend.services.math_grading_context import get_math_plan
-    from backend.services.math_rubric_plan import fallback_math_rubric_plan
+    from backend.services.math_grading_context import scoring_plan
     traces = [read_math_trace(expert) for expert in experts]
     if not all(trace and ("assessment" in trace or "direct" in trace) for trace in traces):
         return experts
-    plan = get_math_plan(problem) or fallback_math_rubric_plan(problem, grading_setup=grading_setup)
+    plan = scoring_plan(problem, grading_setup)
     if any(trace["plan_id"] != plan.plan_id for trace in traces):
         return experts
+    problem = _adopted_problem(problem, plan)
     assessments = [MathAssessment.model_validate(trace["assessment"]) if "assessment" in trace else None for trace in traces]
     route_ids = {assessment.route_id for assessment in assessments if assessment is not None}
     signatures = [_award_signatures(assessment) if assessment is not None else {}
@@ -1228,8 +1250,11 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
             user_prompt=_json({"problem": problem.stem, "reference": problem.reference_answer,
                                **({"source_supplied_correspondence": notation}
                if plan.part_rubric and problem.type == "推理题" and (notation := supplied_notation(problem.stem)) else {}),
-                               "answer": answer.content, "plan": (plan.part_rubric if compact_parts else plan).model_dump(mode="json"),
-                               "source_catalog": {key: value[0] for key, value in catalog.items()},
+                               "answer": answer.content,
+                               "plan": (_part_rule_projection(plan.part_rubric, review_parts if compact_parts else None)
+                                        if plan.part_rubric else plan.model_dump(mode="json")),
+                               **({"allow_partial_credit": plan.allow_partial_credit} if plan.part_rubric else {}),
+                               "source_catalog": _expert_sources(catalog, plan),
                                "disputed_item_ids": sorted(review_parts if compact_parts else disputed), "experts": review_evidence}),
             validate_output=validate_review,
         )
@@ -1371,12 +1396,11 @@ class MathGradingSkill(GradingSkill):
             **({"source_supplied_correspondence": notation}
                if plan.part_rubric and problem.type == "推理题" and (notation := supplied_notation(problem.stem)) else {}),
             **({"allow_partial_credit": plan.allow_partial_credit} if plan.part_rubric else {}),
-            "rubric_plan": plan.part_rubric.model_dump(mode="json") if plan.part_rubric else plan.model_dump(mode="json"),
+            "rubric_plan": _part_rule_projection(plan.part_rubric) if plan.part_rubric else plan.model_dump(mode="json"),
             "binary_rule": None if plan.part_rubric else frozen_binary_rule(plan),
             **({"frozen_targets": {f"part:{part.id}": part.stem or problem.stem
                                     for part in plan.part_rubric.parts}} if plan.part_rubric else {}),
-            "source_catalog": {key: value[0] for key, value in
-                source_catalog(answer.content or "", problem.stem, plan.original_criterion).items()},
+            "source_catalog": _expert_sources(source_catalog(answer.content or "", problem.stem, plan.original_criterion), plan),
             **({"required_decisions": [{
                 "part_id": part.id, "target_quote": f"part:{part.id}",
                 "step_ids": [step.id for step in part.steps], "deduction_ids": [rule.id for rule in part.deductions],
@@ -1425,9 +1449,9 @@ class MathGradingSkill(GradingSkill):
 
     async def grade(self, problem, answer, *, student_id="") -> ExpertResult:
         started = perf_counter()
-        from backend.services.math_grading_context import get_math_plan
-        from backend.services.math_rubric_plan import fallback_math_rubric_plan
-        plan = get_math_plan(problem) or fallback_math_rubric_plan(problem, grading_setup=self.grading_setup)
+        from backend.services.math_grading_context import scoring_plan
+        plan = scoring_plan(problem, self.grading_setup)
+        problem = _adopted_problem(problem, plan)
         unit, cm = None, None
         if self.reporter:
             from backend.services.math_grading_context import report_math_progress

@@ -81,10 +81,25 @@ def get_math_plan(problem: ProblemInfo) -> "MathRubricPlan | None":
     plan = (_current_plans.get() or {}).get(problem.q_id)
     if (plan is None or plan.input_fingerprint != math_rubric_fingerprint(problem)
             or plan.max_score != problem.max_score
+            or (plan.adopted_material and (plan.adopted_material.stem != problem.stem
+                or plan.adopted_material.reference_answer != (problem.reference_answer or "")))
             or (plan.part_rubric and plan.part_rubric.missing_alternative_rates())):
         return None
     # A skill cannot silently change the rules seen by the next expert.
     return plan.model_copy(deep=True)
+
+
+def scoring_plan(problem, grading_setup):
+    """A prepared written question must use the same revision on every vote."""
+    plan = get_math_plan(problem)
+    if plan is not None:
+        return plan
+    prepared = (_current_plans.get() or {}).get(problem.q_id)
+    if prepared and prepared.part_rubric:
+        from backend.domain.errors import ValidationError as RuleValidationError
+        raise RuleValidationError("The frozen question no longer matches the scoring inputs.", code="grading_inputs_changed")
+    from backend.services.math_rubric_plan import fallback_math_rubric_plan
+    return fallback_math_rubric_plan(problem, grading_setup=grading_setup)
 
 
 def frozen_engine_version(manifest: dict, events: list[dict]) -> str | None:

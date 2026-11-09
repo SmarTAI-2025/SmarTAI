@@ -119,11 +119,20 @@ class FrozenBinaryPolicy(BaseModel):
     item_id: str | None = None
 
 
+class AdoptedMathMaterial(BaseModel):
+    """Exact question text and worked answer from the accepted question revision."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    stem: str
+    reference_answer: str
+
+
 class MathRubricPlan(_Explanation):
     """Immutable JSON-safe internal contract; route order is significant."""
 
     expected_truth_by_part: dict[str, bool] = Field(default_factory=dict, exclude_if=lambda v: not v)
     part_rubric: PartRubric | None = Field(default=None, exclude_if=lambda v: v is None)
+    adopted_material: AdoptedMathMaterial | None = Field(default=None, exclude_if=lambda v: v is None)
     schema_version: Literal["math_rubric_v3"] = SCHEMA_VERSION
     plan_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -466,11 +475,14 @@ def subpart_plan(context, *, teacher_notes="", candidate=None) -> MathRubricPlan
 def fallback_math_rubric_plan(problem, *, reason="unavailable_item_allocation", grading_setup=None,
                              bind_preferences=True) -> MathRubricPlan:
     """Use a verified allocation when available, otherwise preserve the complete original rule."""
-    from backend.services.rubric_drafts import saved_draft, bind_draft, retarget_draft
+    from backend.services.rubric_drafts import saved_draft, bind_draft, requires_part_rubric, retarget_draft
     prior = saved_draft(problem, grading_setup=grading_setup)
     if prior is not None:
         return (bind_draft(prior, problem, grading_setup=grading_setup) if bind_preferences
                 else retarget_draft(prior, problem).plan)
+    if requires_part_rubric(problem):
+        from backend.domain.errors import ValidationError as RuleValidationError
+        raise RuleValidationError("The question needs a current frozen part rubric.", code="invalid_structured_rubric")
     context = _question_input(problem)
     setup = _mapping(grading_setup) if grading_setup is not None else {}
     explicit = subpart_plan(context, teacher_notes=str(setup.get("teacher_notes") or ""))

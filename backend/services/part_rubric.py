@@ -25,6 +25,13 @@ class Amount(Frozen):
         default=None, exclude_if=lambda v: v is None, pattern=r"^\d{1,6}/[1-9]\d{0,5}$"
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def zero_has_one_value(cls, value):
+        if type(value) in (int, float, str) and value in (0, "0"):
+            return {"points": 0}
+        return value
+
     @model_validator(mode="after")
     def check_unit(self):
         if (self.points is None) == (self.fraction is None):
@@ -59,7 +66,8 @@ class Alternative(Frozen):
 
     @model_validator(mode="after")
     def check_deduction_cap(self):
-        if self.max_deduction is not None and self.deduct_per_error is None:
+        fixed_zero = self.maximum.points == self.minimum.points == 0
+        if self.max_deduction is not None and self.deduct_per_error is None and not fixed_zero:
             raise ValueError("Specify the per-error deduction for this cumulative deduction cap.")
         return self
 
@@ -570,7 +578,15 @@ def bind_alternative(part, *, label, stem, structure, floor, question_points, te
     return _checked_alternative(defaults, fields, source or restriction or "", part.total_pts)
 
 
-def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
+_RESULT_ONLY = re.compile(
+    r"(?:只需|只须|仅需|只填|只写|仅填写|仅给出)\s*(?:最终|最后)?(?:结果|答案|数值)|"
+    r"(?:求|确定|计算|统计)[^。！？\n]{0,75}(?:语句的?(?:频度|执行次数)|执行了?多少次)|"
+    r"\b(?:final (?:answer|value) only|(?:determine|find|give) the (?:frequency|execution count) "
+    r"of the (?:@[- ]marked|marked) statement)\b", re.I,
+)
+
+
+def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None = None, language="zh") -> PartRubric:
     """Bind the model proposal to known question scope and authoritative teacher text."""
     from backend.services.question_structure import _allocation_marker_pattern
     from backend.services.math_source_evidence import match_source_quote
@@ -604,6 +620,8 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
     )
     ordinary = ordinary_criterion(teacher)
     expected = dict(problem.get("teacher_subpart_points") or {})
+    from backend.services.math_rubric_plan import _FLOOR_RULE, _source_clauses
+    teacher_primary = any(not _FLOOR_RULE.fullmatch(clause) for clause in _source_clauses(ordinary))
     # Source clauses constrain individual fields. A subtotal, a step budget and a
     # conditional award in the same sentence are three different quantities.
     per_part = re.search(r"每(?:个)?小问\s*(\d+(?:\.\d+)?)\s*分", ordinary)
@@ -654,6 +672,11 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
     overrides = {(item["label"], item["stem"]): item["text"]
                  for item in (problem.get("alternative_rules") or {}).values()}
     binary = is_decision_only(problem.get("stem", ""), teacher)
+    shared_stem = structure.get("shared_stem", "") if parts else problem.get("stem", "")
+    prior_parts = {part.id: part for part in previous.parts} if (
+        previous and previous.stem == shared_stem and previous.total_pts == maximum
+        and previous.nonblank_floor.resolve(maximum) == rubric.nonblank_floor.resolve(maximum)
+    ) else {}
     fixed = []
     for index, label in enumerate(labels):
         p = proposed[canonical_label(label)]
@@ -669,9 +692,25 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
                 f"Teacher assigned {label} {expected[label]} points; restore that budget."
             )
         stem = parts[index]["stem"] if parts else problem.get("stem", "")
+        instruction = shared_stem + "\n" + stem if parts else stem
+        result_only = (not teacher_primary and not binary and len(p.steps) == 1 and _RESULT_ONLY.search(instruction)
+                       and not _REQUIRES_REASON.search(instruction) and not _REQUIRED.search(instruction)
+                       and not re.search(r"过程|理由|说明|步骤|并(?:给出|分析|比较|绘|画)|"
+                                         r"\b(?:reasoning|derivation|explain|steps|and (?:show|give|compare))\b|"
+                                         r"(?:不能|不可|不得|不要|禁止|勿)\s*(?:只|仅)|\bnot\s+(?:the\s+)?final",
+                                         instruction, re.I))
         policy = bind_alternative(p, label=label, stem=stem, structure=structure,
             floor=rubric.nonblank_floor.resolve(maximum), question_points=maximum, teacher=teacher,
             override=overrides.get((label or None, stem if parts else None)), binary=binary)
+        prior = prior_parts.get(p.id)
+        if (prior and prior.label == (label or None) and prior.stem == (stem if parts else None)
+                and prior.total_pts == p.total_pts and prior.alternative.source_quote == policy.source_quote
+                and prior.alternative.inferred_method_cap == policy.inferred_method_cap):
+            # A semantic edit of the main rubric is not an edit of the other
+            # route. Rebind its saved values to current teacher constraints.
+            policy = bind_alternative(prior, label=label, stem=stem, structure=structure,
+                floor=rubric.nonblank_floor.resolve(maximum), question_points=maximum, teacher=teacher,
+                override=overrides.get((label or None, stem if parts else None)), binary=binary)
         if policy.needs_rate(p.total_pts):
             raise ValueError(f"{p.id}: supply a positive alternative.deduct_per_error in points "
                              "for this part. Preserve the main rubric and explicit teacher constraints.")
@@ -688,9 +727,10 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
                 "steps": tuple(bind_item(item) for item in p.steps),
                 "deductions": tuple(bind_item(item) for item in p.deductions),
             })
-        if not teacher:
+        if not teacher_primary:
             p = p.model_copy(
                 update={
+                    **({"origin_overrides": {**p.origin_overrides, "criterion": "ai"}} if teacher else {}),
                     "steps": tuple(
                         step.model_copy(update={"source_quote": ""}) for step in p.steps
                     ),
@@ -710,7 +750,14 @@ def bind_parts(rubric: PartRubric, problem: dict) -> PartRubric:
         # work is seen. Immutable historic snapshots can still contain a rate.
         normalized_steps = []
         for step in p.steps:
-            award = step.follow_through_award(ai_default=not teacher)
+            if result_only:
+                # The accepted answer owns the result. A second generated
+                # formula in the only funded leaf can disagree at a boundary.
+                criterion = ("按题设给出与本问标答等价的结果，满足题目规定的范围、形式与精度。"
+                             if language == "zh" else "Give a result equivalent to the adopted answer for this "
+                             "part over the stated domain, in the requested form and precision.")
+                step = step.model_copy(update={"criterion": criterion})
+            award = step.follow_through_award(ai_default=not teacher_primary)
             if Fraction(str(float(award))) == award:
                 step = step.model_copy(update={"follow_through_pts": float(award), "follow_through_keep": None})
             normalized_steps.append(step)
@@ -881,6 +928,11 @@ equivalence cannot consume an independent budget. Separate a genuinely new impli
 or construction; the goal must admit a meaningful difference in demonstrated understanding.
 Do not give multiple budgets to repeats of the same inference. State which hypotheses/cases are
 substantive. A valid direct implication or equivalence chain may meet more than one independent goal.
+For an AI-authored proof step, describe the result a student must establish and the evidence
+that suffices. A cited witness, equation or definition can entail a conclusion by immediate
+substitution on its whole domain. Do not make separately writing that substitution or restating
+its conclusion a condition for any credit unless the source specifically requests it.
+Withhold the award for an unsupported assertion, an invalid inference or an uncovered case.
 Every explicit ordinary award must map to its own source condition, correct part and exact value.
 Quote the corresponding teacher allocation (condition and amount) on that precise scoring item.
 Extract explicit source rules with exact source_quote evidence. When an alternative is described in

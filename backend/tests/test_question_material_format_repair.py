@@ -214,3 +214,27 @@ def test_schema_diagnostics_redact_unknown_dictionary_keys_and_values():
     issues = json.loads(failure.value.repair_context)["invalid_fields"]
     assert {tuple(item["path"]) for item in issues} == {("accepted",), ("<key>",)}
     assert "secret" not in failure.value.repair_context
+
+
+@pytest.mark.asyncio
+async def test_single_bare_ledger_binds_only_to_a_single_known_part():
+    from backend.agents.incremental_question_preparation import _rows
+
+    target = dict(q_id="q1", target="criterion", target_id="q1:criterion")
+    raw = dict(total_pts=10, parts=[], steps=[{"id": "s", "total_pts": 10, "criterion": "证明所求恒等式"}],
+               alternative={"maximum": {"points": 8}, "deduct_per_error": 2})
+    def provider():
+        return Provider([json.dumps({"candidates": [{**target, "rubric_definition": {"part_rubric": raw}}]})])
+    question = dict(number="7", type="推理题", stem="证明恒等式。", reference_answer="逐项展开。", max_score=10)
+    feedback = {}
+    candidate, = await generate_missing_question_materials(_rows([question]), [target], 1, provider(),
+                                                           allow_partial=True, repair_feedback=feedback)
+    part, = candidate.rubric_draft["plan"]["part_rubric"]["parts"]
+    assert part["steps"][0]["total_pts"] == 10
+    assert part["alternative"]["maximum"] == {"points": 8.0}
+    for stem in ["证明下列结论。\n(1) 证明 A。\n(2) 证明 B。", "证明恒等式。"]:
+        if stem == question["stem"]:
+            raw["deductions"] = [{"id": "d", "criterion": "独立错误", "deduct_pts": 2}]
+        assert not await generate_missing_question_materials(_rows([{**question, "stem": stem}]), [target],
+            1, provider(), allow_partial=True, repair_feedback=feedback)
+        assert feedback[target["target_id"]]

@@ -2231,7 +2231,7 @@ AI_COMPLETION_SYSTEM_PROMPT = _MATERIAL_ENVELOPE + _LEGACY_RULE_GUIDANCE + _GENE
 from backend.services.part_rubric import PART_INSTRUCTION, supplied_notation
 from backend.services.rubric_drafts import RubricAllocationError, RubricDefinition, RubricDraft, generated_rubric, retarget_draft, saved_draft
 from backend.domain.question_types import normalize_question_type
-from backend.services.math_rubric_plan import POINT_EVIDENCE_GUIDANCE, _question_input
+from backend.services.math_rubric_plan import _question_input
 
 
 class AICompletionCandidateOutput(BaseModel):
@@ -2412,7 +2412,7 @@ async def generate_missing_question_materials(
                     "budgets; the numbers and number of steps in the example are illustrative. Put step "
                     "objects inside the relevant part, including when the question has no printed subparts. "
                     "The rubric definition schema below applies ONLY inside rubric_definition. "
-                    + PART_INSTRUCTION + "\n" + POINT_EVIDENCE_GUIDANCE
+                    + PART_INSTRUCTION
                     + "\nUse WrittenRubricDefinition for these targets: "
                     + ", ".join(sorted(part_targets | interpret_with_answer)) + ". On a reference-only target with an existing teacher rubric, attach its interpretation to the same candidate. Copy rubric_question identity and source fields; "
                     "fill parts in the same order; supply a stable ID and total_pts per part. "
@@ -2470,47 +2470,10 @@ async def generate_missing_question_materials(
                 error.repair_context = "Return one authoritative definition under rubric_definition."
                 raise error
             item["rubric_definition"] = definition
-        proposal = definition.get("part_rubric") if isinstance(definition, dict) else None
-        if isinstance(proposal, dict):
-            proposal = dict(proposal)
-            # A literal zero denotes the same floor in points and in fractions.
-            # Other numbers require an explicit unit.
-            floor = proposal.get("nonblank_floor")
-            if floor is None or (type(floor) in (int, float, str) and floor in (0, "0")):
-                proposal["nonblank_floor"] = {"pts": 0}
-            elif isinstance(floor, dict) and set(floor) == {"points"}:
-                proposal["nonblank_floor"] = {"pts": floor["points"]}
-            from backend.services.part_rubric import canonical_label
-            source = problems_data[expected_targets[item["target_id"]]["q_id"]]
-            expected_labels = [p["label"] for p in (source.get("question_structure") or {}).get("subparts", [])]
-            children = proposal.get("parts")
-            if not expected_labels and isinstance(children, list):
-                if len(children) != 1:
-                    error = StructuredOutputInvalidError("Wrong number of rubric parts.")
-                    error.repair_context = (
-                        f"This unnumbered question has one part; received {len(children)}. Put all "
-                        f"scored goals inside that part's steps (budgets together {source.get('max_score', 10)}), "
-                        "or use its deductions. Use null for its label and stem."
-                    )
-                    raise error
-                if isinstance(children[0], dict):
-                    proposal["parts"] = [{**children[0], "label": None, "stem": None}]
-            if item["target_id"] in part_targets and expected_labels and isinstance(children, list):
-                seen = {canonical_label(p.get("label"), source.get("number")) for p in children if isinstance(p, dict) and isinstance(p.get("label"), str)}
-                missing = [label for label in expected_labels if canonical_label(label) not in seen]
-                if missing:
-                    message = ("Missing subparts: " + ", ".join(missing)
-                               + f". Return each known part once. Budgets must total {source.get('max_score', 10)}.")
-                    error = StructuredOutputInvalidError("Missing required rubric parts.")
-                    error.repair_context = message
-                    raise error
-            # The envelope is identity checked separately. Question text, display
-            # number and ID come from storage and cannot be changed by a model.
-            item["rubric_definition"] = {**definition, "part_rubric": {
-                **proposal, "id": expected_targets[item["target_id"]]["q_id"],
-                "label": str(source.get("number") or ""),
-                "stem": (source.get("question_structure") or {}).get("shared_stem") or source.get("stem") or "",
-            }}
+        if isinstance(definition, dict):
+            from backend.services.rubric_drafts import source_bound_definition
+            row = {**problems_data[target["q_id"]], "q_id": target["q_id"]}
+            item["rubric_definition"] = source_bound_definition(definition, row, check_labels=item["target_id"] in part_targets)
         return item
 
     from pydantic import model_validator
@@ -2692,7 +2655,7 @@ async def generate_missing_question_materials(
                 candidate.rubric_draft = retarget_draft(
                     RubricDraft.model_validate(candidate.rubric_draft), completed,
                 ).model_dump(mode="json")
-            except DecisionReferenceConflict as exc:
+            except (DecisionReferenceConflict, RubricAllocationError) as exc:
                 if candidate.target == "reference_answer":
                     # Preserve the new reference. Its changed fingerprint invalidates
                     # the incompatible rubric and triggers the normal interpretation step.

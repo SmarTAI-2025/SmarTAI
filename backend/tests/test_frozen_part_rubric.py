@@ -500,6 +500,28 @@ async def test_decision_only_generation_returns_key_reference_and_exact_budgets_
     assert len(provider.calls) == 1
 
 
+@pytest.mark.asyncio
+async def test_decision_generation_repairs_a_verdict_that_contradicts_its_reasoning():
+    from backend.services.true_false_answers import generate_decisions, reference_decisions, DecisionReferenceConflict
+    from backend.tests.test_question_material_format_repair import Provider
+
+    def reply(first):
+        return json.dumps({"judgments": [
+            {"label": "(a)", "correct": first, "explanation": "存在反例，原断言不正确。"},
+            {"label": "(b)", "correct": True, "explanation": "The auxiliary assumption is false; the statement is true."},
+        ]})
+    provider = Provider([reply(True), reply(False)])
+    allocated = [({"label": label}, 5) for label in ("(a)", "(b)")]
+    _, key = await generate_decisions({"stem": "判断正误。"}, allocated, "zh", provider)
+    assert key == {"(a)": False, "(b)": True}
+    assert len(provider.calls) == 2 and "(a)" in provider.calls[-1][-1].content
+    with pytest.raises(DecisionReferenceConflict, match="opening verdict"):
+        reference_decisions("(1) True. By contradiction, the statement is false.\n(2) 正确。", ["(1)", "(2)"])
+    for explanation in ("某个中间命题不成立，但原命题为真。", "不过逆命题不成立。"):
+        assert reference_decisions(f"(1) 正确。{explanation}\n(2) 错误。", ["(1)", "(2)"]) == {
+            "(1)": True, "(2)": False}
+
+
 def test_located_error_observation_on_zero_award_cannot_be_deducted_or_allow_credit():
     rules = PartRubric.model_validate(dict(id="q",label="3",stem="Give the count.",total_pts=2,
         parts=[dict(id="p",total_pts=2,steps=[dict(id="s",criterion="Correct count.",total_pts=2)])]))
