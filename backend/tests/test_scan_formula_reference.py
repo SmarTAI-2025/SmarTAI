@@ -331,3 +331,95 @@ def test_plain_singleton_uses_full_program_and_english_restricted_domain():
     assert reference_error("n", witnesses)
     assert not marked_counts(stem + "\nOnly consider prime n.")
     assert not counterexample(None, {"exact": 3})
+
+
+@pytest.mark.parametrize("base", [".5", "0.5", "(.5)", "(0.5)", "(1/2)", r"\frac{1}{2}"])
+def test_decay_keeps_the_exact_source_expression(base):
+    term = f"{base}^n"
+    assert ordered_growth_classes(f"按增长率由小到大排列：${term}$, $2^n$, $n$.") == [
+        [term],
+        ["n"],
+        ["2^n"],
+    ]
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "n趋于0+",
+        r"n\to0^{+}",
+        "n → 1",
+        "n → −∞",
+        "as n tends to zero from above",
+        "in a neighbourhood of the origin",
+        "n→∞ 或 n→0",
+        "0<n<1",
+    ],
+)
+def test_unproved_limit_never_reuses_infinity_order(scope):
+    assert ordered_growth_classes(f"按增长率由小到大排列（{scope}）：n、n^2、n^3") == []
+
+
+@pytest.mark.parametrize("scope", [r"当 $n\to +\infty$ 时", "as n tends to infinity", "n→∞"])
+def test_explicit_positive_infinity_keeps_ordinary_growth_order(scope):
+    assert ordered_growth_classes(f"按增长率由小到大排列（{scope}）：n^3、n、n^2") == [
+        ["n"],
+        ["n^2"],
+        ["n^3"],
+    ]
+
+
+@pytest.mark.parametrize("term", ["-.5^n", "2(3)^n", "1.2.3^n", "1 2^n", "2^(3)4", "log_(2)3n", "log_2(3)n"])
+def test_unsupported_tokens_cannot_turn_into_different_supported_terms(term):
+    assert ordered_growth_classes(f"按增长率由小到大排列：{term}, n, 2^n") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stem", "expected"),
+    [
+        ("按增长率由小到大排列：.5^n、n、2^n", [[".5^n"], ["n"], ["2^n"]]),
+        ("按增长率由小到大排列（n趋于0+）：n、n^2、n^3", None),
+    ],
+)
+async def test_generator_and_grader_receive_only_supported_growth_evidence(stem, expected):
+    import json
+    from backend.agents.ingest_agent import generate_missing_question_materials
+    from backend.models import ProblemInfo, StudentAnswerInfo
+    from backend.services.math_rubric_plan import fallback_math_rubric_plan
+    from backend.skills.math_grading import MathGradingSkill
+    from backend.tests.test_question_material_format_repair import Provider, valid
+
+    p = ProblemInfo(
+        q_id="q1",
+        number="1",
+        type="计算题",
+        stem=stem,
+        criterion="排序正确给满分",
+        reference_answer="按题意排序",
+    )
+    answer = StudentAnswerInfo(q_id=p.q_id, number=p.number, type=p.type, content="见排序")
+    grading = MathGradingSkill(None)._prompt(p, answer, fallback_math_rubric_plan(p), "")
+    grade_context = json.loads(grading.split("INPUT DATA:\n")[-1])
+    provider = Provider([valid()])
+    await generate_missing_question_materials(
+        {"q1": p.model_dump()},
+        [{"target_id": "q1:reference_answer", "q_id": "q1", "target": "reference_answer"}],
+        6,
+        provider,
+    )
+    text = provider.calls[0][-1].content
+    generator_context = json.JSONDecoder().raw_decode(text[text.index("{") :])[0]
+    for context in (grade_context, generator_context["known_problems"][0]):
+        assert context.get("source_growth_order") == expected
+        assert ("growth_order_instruction" in context) == (expected is not None)
+
+
+def test_textbook_heading_and_tex_orders_keep_supported_equivalences():
+    stem = r"1.10② 按增长率由小至大的顺序排列下列各函数：$2^{100}$, $n^{2/3}$, $n\log_{2}{n}$, $n/\log_{n}{2}$, $n^{n}$"
+    assert ordered_growth_classes(stem) == [
+        ["2^{100}"],
+        ["n^{2/3}"],
+        [r"n\log_{2}{n}", r"n/\log_{n}{2}"],
+        ["n^{n}"],
+    ]

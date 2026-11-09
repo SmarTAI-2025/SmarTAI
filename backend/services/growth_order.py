@@ -4,13 +4,51 @@ from fractions import Fraction
 import re
 
 
+# Accept a conventional ordering instruction, optionally with n -> positive
+# infinity. Residual conditions (including unfamiliar notation) are outside
+# the theorem implemented by _order.
+_INFINITY = re.compile(
+    r"(?:当|as|when)?\s*\bn\s*(?:\\(?:to|rightarrow)\b|→|->|"
+    r"趋(?:于|近于?|向)|tends?\s+to|approaches?)\s*"
+    r"(?:\+\s*)?(?:\\infty\b|∞|(?:正)?无穷(?:大)?|(?:positive\s+)?infinity)\s*(?:时)?",
+    re.I | re.ASCII,
+)
+_INSTRUCTION_WORDS = re.compile(
+    r"增长率|增长速度|从小到大|由小[到至]大|递增|升序|从低到高|排列|排序|顺序|"
+    r"下面|下列|以下|下述|各个|函数|表达式|各式|渐近|增长|按照|依照|次序|大小|非降|依次|分别|进行|"
+    r"[按将把请给出的各个依为和并序]|"
+    r"\b(?:rank|arrange|sort|order|the|following|these|functions?|expressions?|in|by|of|"
+    r"their|asymptotic|growth|rates?|increasing|ascending|please)\b",
+    re.I,
+)
+
+
+def _infinity_ordering(instruction):
+    header = re.sub(r"^\s*(?:第\s*)?\d+(?:\.\d+)*(?:题|[.)、])?\s*(?:[①-⑳]|[(（]\d{1,2}[)）])?\s*", "", instruction)
+    header = _INFINITY.sub(" ", header.replace("$", ""))
+    return re.fullmatch(r"[\s，,。.;；()（）:：]*", _INSTRUCTION_WORDS.sub("", header)) is not None
+
+
 def _normalize(expr):
-    value = re.sub(r"\s+|\$|\\(?:left|right|quad|,|;|!)", "", expr.strip("。.,，；; "))
+    value = re.sub(r"\\(?:left|right|quad|,|;|!)", "", expr)
+    # A space between numeric tokens is not permission to concatenate them.
+    if re.search(r"[\d.]\s+[\d.]", value):
+        return ""
+    value = re.sub(r"\s+", "", value)
     for _ in range(3):
-        value = re.sub(r"\\(?:d?frac)\{([^{}]*)\}\{([^{}]*)\}", r"((\1)/(\2))", value)
+        value = re.sub(r"\\(?:d?frac)\{([^{}]+)\}\{([^{}]+)\}", r"((\1)/(\2))", value)
     value = value.replace(r"\log", "log").replace(r"\sqrt", "sqrt").replace("√", "sqrt")
     value = value.replace("{", "(").replace("}", ")").replace(r"\cdot", "*")
-    value = re.sub(r"\(([0-9]+|n)\)", r"\1", value)
+    value = re.sub(r"\^\((\d+|n)\)(?![\d.])", r"^\1", value)
+    value = re.sub(r"log_\((\d+)\)(?![\d.])", r"log_\1", value)
+    value = value.replace("log_(n)", "log_n")
+    value = re.sub(r"(log_\d+|sqrt)\(n\)", r"\1n", value)
+    value = re.sub(r"log_n\((\d+)\)(?![\w.])", r"log_n\1", value)
+    value = re.sub(r"(?<![\w.)])\((n|\d+)\)(?![\w.(])", r"\1", value)
+    return _ungroup(value)
+
+
+def _ungroup(value):
     while value.startswith("(") and value.endswith(")") and _outer(value):
         value = value[1:-1]
     return value
@@ -26,6 +64,8 @@ def _outer(value):
 
 
 def _order(raw):
+    if len(raw) > 512:
+        return None
     t = _normalize(raw)
     depth = 0
     for char in t:
@@ -34,21 +74,21 @@ def _order(raw):
             return None
     if depth:
         return None
-    rational = r"(\d{1,5}(?:/\d{1,5})?)"
+    rational = r"((?:\d{1,5}(?:/\d{1,5}|\.\d{1,5})?|\.\d{1,5}))"
     if re.fullmatch(r"\d{1,6}(?:\^\d{1,5})?", t) and not t.startswith("0"):
         return (1, 0, 0, 0)
     if t == "n!":
         return (4, 0, 0, 0)
-    if t == "n^n":
+    if t in {"n^n", "n^(n)"}:
         return (5, 0, 0, 0)
     if t == "n":
         return (1, 1, 0, 0)
     if t == "sqrtn":
         return (1, Fraction(1, 2), 0, 0)
-    m = re.fullmatch(r"n\^\(?" + rational + r"\)?", t)
+    m = re.fullmatch(rational, _ungroup(t[2:])) if t.startswith("n^") else None
     if m:
         return (1, Fraction(m[1]), 0, 0)
-    m = re.fullmatch(r"\(?" + rational + r"\)?\^n", t)
+    m = re.fullmatch(rational, _ungroup(t[:-2])) if t.endswith("^n") else None
     if m:
         base = Fraction(m[1])
         if base <= 0:
@@ -81,16 +121,20 @@ def ordered_growth_classes(stem):
         or not re.search(r"增长率|order of growth|asymptotic growth", stem, re.I)
     ):
         return []
-    if not re.search(r"由小[到至]大|递增|increasing|ascending", stem, re.I):
+    if not re.search(r"(?:由|从)小[到至]大|递增|升序|increasing|ascending", stem, re.I):
         return []
     body = re.split(r"[:：]\s*", stem, maxsplit=1)
-    if len(body) != 2:
+    if len(body) != 2 or not _infinity_ordering(body[0]):
         return []
-    terms = [
-        term.strip().strip("$。.")
-        for term in re.split(r"[,，、;；]", body[1])
-        if term.strip()
-    ]
+    listing = body[1].strip().removesuffix("。").removesuffix(".").rstrip()
+    if listing.startswith("$") and listing.endswith("$") and listing.count("$") == 2:
+        listing = listing[1:-1]
+    terms = []
+    for raw in re.split(r"[,，、;；]", listing):
+        term = raw.strip()
+        if term.startswith("$") and term.endswith("$"):
+            term = term[1:-1]
+        terms.append(term)
     if not 3 <= len(terms) <= 60:
         return []
     try:
