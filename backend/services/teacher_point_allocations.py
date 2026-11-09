@@ -79,15 +79,24 @@ def validate_teacher_point_items(rules, ordinary):
             if quote and (match_source_quote(quote, source_clause) or
                           (match_source_quote(source_clause, quote) and match_source_quote(quote, condition))):
                 quoted.append((p, item))
-        if len(scope) > 1 and amount[2] in {"%", "％"} and not deduction:
-            # An unscoped share allocates a group budget across subparts. Its
-            # full amount cannot be charged independently to each leaf.
-            expected = _amount_value(*amount.groups(), rules.total_pts)
+        expected = _amount_value(*amount.groups(), scope[0].total_pts if len(scope) == 1 else rules.total_pts)
+        group = []
+        if not deduction and len(scope) > 1 and amount[2] in {"%", "％"}:
+            # Unscoped percentages fund the named group across the question.
             group = named or quoted
             if not group and expected == Decimal(str(rules.total_pts)) and all(p.steps for p in scope):
                 group = items
-            if sum((Decimal(str(it.total_pts)) for _, it in group), Decimal(0)) != expected or not group:
-                raise ValueError(f"Bind «{clause}» to steps whose combined budget is {expected}.")
+            if not group:
+                raise ValueError(f"Identify the steps funded by «{clause}».")
+        elif not deduction and len(quoted) > 1 and len({p.id for p, _ in quoted}) == 1:
+            # A teacher award can fund several substeps. Each must cite this
+            # specific allocation, not an entire sentence containing other awards.
+            if all(match_source_quote(source_clause, it.source_quote) for _, it in quoted):
+                group = quoted
+        if group:
+            actual = sum((Decimal(str(it.total_pts)) for _, it in group), Decimal(0))
+            if actual != expected:
+                raise ValueError(f"Steps funded by «{clause}» total {actual}; the teacher allocated {expected}.")
             for part, item in group:
                 identity = (part.id, item.id)
                 if identity in anchors:
@@ -102,8 +111,6 @@ def validate_teacher_point_items(rules, ordinary):
             raise ValueError(f"Teacher allocation «{clause}» must identify exactly one {'deduction' if deduction else 'step'} in "
                              f"{[p.label or p.id for p in scope]}. Quote that condition on its scoring item.")
         p, item = matches[0]
-        budget = p.total_pts if len(scope) == 1 else rules.total_pts
-        expected = _amount_value(*amount.groups(), budget)
         actual = Decimal(str(item.deduct_pts if deduction else item.total_pts))
         if actual != expected:
             raise ValueError(f"{p.id}/{item.id}: teacher allocation «{clause}» requires {expected} points, received {actual}.")

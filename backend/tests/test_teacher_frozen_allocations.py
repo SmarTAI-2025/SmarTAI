@@ -134,3 +134,22 @@ def test_equal_named_awards_remain_separate_across_parts():
     parts[1]["steps"][0]["total_pts"], parts[1]["steps"][1]["total_pts"]=3,2
     with pytest.raises(ValueError,match="p1/eq"):
         bind_parts(PartRubric.model_validate(raw),row)
+
+
+def test_one_teacher_award_may_fund_several_distinct_substeps():
+    row = make_row("列式3分、计算结果7分")
+    raw = proposed()
+    items = [
+        dict(id="var", criterion="设未知数", total_pts=1, source_quote="列式3分"),
+        dict(id="eq", criterion="写出等量关系", total_pts=2, source_quote="列式3分"),
+        raw["parts"][0]["steps"][1],
+    ]
+    raw["parts"][0]["steps"] = items
+    _, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    rules = draft.plan.part_rubric
+    assert [(s.criterion, s.total_pts) for s in rules.parts[0].steps[:2]] == [
+        ("列式 · 设未知数", 1), ("列式 · 写出等量关系", 2)]
+    assert saved_draft({**row,"rubric_draft":draft.model_dump(mode="json")}) is not None
+    items[1]["total_pts"], items[2]["total_pts"] = 4, 5
+    with pytest.raises(RubricAllocationError, match="allocated 3"):
+        generated_rubric(row, RubricDefinition(part_rubric=raw))
