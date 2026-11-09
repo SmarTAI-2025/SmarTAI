@@ -307,13 +307,13 @@ class RecognitionRunService:
                     counts[call.kind] += 1
         return counts
 
-    async def native_page_window(self, request, source_bytes, *, engine, authorized_owner_id, binding=None):
+    async def inspect_page_window(self, request, source_bytes, *, engine, authorized_owner_id, binding=None):
         """Keep the native-text fast path batched; inspection itself never invokes a model."""
         from backend.recognition.planner import RecognitionPlanRequestV1, plan_recognition
         from backend.tools.pdf_evidence import PdfIndexRequest
 
         if request.purpose == "submissions":
-            return False
+            return False, set()
         binding = binding or RecognitionArtifactBindingV1(link="assignment", business_id=request.source.business_id)
         reader = RecognitionLocalEvidenceReader(store=self.store, cache=self.cache, source=request.source,
             binding=binding, authorized_owner_id=authorized_owner_id, progress=self.progress)
@@ -324,7 +324,8 @@ class RecognitionRunService:
             total_pages=index.total_pages, requested_pages=request.pages,
             observations=[page.observation for page in index.pages]),
             engine=engine.capabilities, policy=request.policy)
-        return all(page.action in {"native", "blank"} for page in plan.decisions)
+        panels = {page.page_number for page in index.pages if page.observation.formula_panels}
+        return all(page.action in {"native", "blank"} for page in plan.decisions), panels
 
     async def _restored(self, row, request, identity, *, status):
         try:
@@ -503,6 +504,17 @@ class RecognitionRunService:
                          *(assembly.raw.read_batch.stop_codes if assembly.raw.read_batch else [])]
                 error = "provider_submit_uncertain" if pending else assembly.safe_error_code or (codes[0] if codes else None)
                 complete = assembly.document is not None and assembly.document.coverage.complete
+                if (complete and not pending and not assembly.safe_error_code and codes
+                        and "optional_formula_read_unavailable" in assembly.document.warning_codes):
+                    batch = assembly.raw.read_batch
+                    panel_pages = {d.page_number for d in batch.plan.decisions if "scan_formula_crosscheck" in d.reason_codes}
+                    optional_failures = {unit.candidate.safe_error_code or ("provider_content_blocked"
+                        if unit.candidate.finish_reason == "refused" else "recognition_response_invalid")
+                        for unit in batch.units if set(unit.page_numbers) <= panel_pages
+                        and unit.region.as_tuple() != (0,0,1,1) and not unit.submission_may_exist
+                        and (unit.candidate.status == "error" or unit.candidate.finish_reason == "refused")}
+                    if set(codes) <= optional_failures:
+                        error = None
                 status = "needs_review" if error or not complete else "completed"
                 await context.write(checkpoint, status=status, error=error)
                 return RecognitionRunResultV1(status, row.id, assembly, receipt.current_usage,

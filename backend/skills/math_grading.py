@@ -664,6 +664,8 @@ def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=No
     Matching excerpts are fixed before feedback and must survive a repair. A
     bad excerpt is never simply dropped (which could erase a valid deduction).
     """
+    from backend.services.count_witnesses import marked_counts, submitted_count_checks, require_consistent_count_grades
+    count_checks = submitted_count_checks(answer.content or "", marked_counts(problem.stem))
     preserved = {}
     catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
 
@@ -696,6 +698,7 @@ def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=No
                 _validate_claim_identity(original, draft, answer=answer.content or "", plan=plan,
                                          problem_text=problem.stem)
             score_assessment(draft, plan, answer.content or "", problem_text=problem.stem)
+            require_consistent_count_grades(count_checks, plan, draft, answer.content or "", problem.stem)
             if evidence is not None:
                 required = {item["evidence_id"] for item in evidence if item.get("status") in {"supported", "refuted"}}
                 ids = [item.evidence_id for item in draft.evidence_judgments]
@@ -1119,6 +1122,10 @@ class MathGradingSkill(GradingSkill):
     def _prompt(self, problem, answer, plan, context):
         # There is one maintained prompt per specialization, no embedded old
         # prompt or legacy scoring branch to become a silent fallback.
+        from backend.services.count_witnesses import marked_counts, submitted_count_checks
+        from backend.services.growth_order import ordered_growth_classes
+        checks = marked_counts(problem.stem)
+        growth = ordered_growth_classes(problem.stem)
         template = (Path(__file__).resolve().parents[1] / "prompts" /
                     f"{self.template_name}.txt").read_text(encoding="utf-8")
         return template + "\n" + LEDGER_INSTRUCTION + _generated_proof_guidance(problem) + "\nINPUT DATA:\n" + _json({
@@ -1128,6 +1135,9 @@ class MathGradingSkill(GradingSkill):
             "source_catalog": {key: value[0] for key, value in
                 source_catalog(answer.content or "", problem.stem, plan.original_criterion).items()},
             "retrieved_material": context,
+            **({"source_growth_order": growth, "growth_order_instruction": "Compare the submitted order to these ordered classes of the original expressions. Terms within the same group have equal asymptotic growth."} if growth else {}),
+            **({"source_execution_checks": checks, "submitted_count_checks": submitted_count_checks(answer.content, checks),
+                "execution_check_instruction": "Grade each marked statement against its own source trace. A counterexample refutes a general answer for that part; matching finite samples alone is not a proof. The exact field is a proven count of an input-independent program."} if checks else {}),
         })
 
     async def _verify(self, draft, problem, answer, plan):
