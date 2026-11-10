@@ -1088,9 +1088,10 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                      len({expert.score for expert in experts}) > 1 or
                      len({_deduction_signature(a) for a in assessments if a is not None}) > 1)
     relevance_review = any(trace.get("relevance_review_pending") for trace in traces)
-    requested_review = any(a.needs_review for a in assessments if a is not None) or any(
+    evidence_review = any(
         (trace.get("review_pending") and not trace.get("relevance_review_pending"))
         or trace.get("proof_audit", {}).get("review_concerns") for trace in traces)
+    requested_review = evidence_review or any(a.needs_review for a in assessments if a is not None)
     if not (disputed or other_dispute or requested_review or relevance_review) or not take_review_budget():
         return experts
 
@@ -1110,11 +1111,14 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
     part_outcomes = [dict(_part_signature(a)) if a is not None else {} for a in assessments]
     disputed_parts = {part.id for part in plan.part_rubric.parts
                       if len({outcomes.get(part.id) for outcomes in part_outcomes}) > 1} if plan.part_rubric else set()
-    # A deferred relevance check covers all parts, even a unanimous but off-topic vote.
+    # A proof expert's own doubt concerns the judgment, not the identity of its
+    # immutable source claims. Only actual pending evidence needs the full format.
+    proof_judgment_review = (problem.type == "推理题" and requested_review and not evidence_review
+                             and not any(t.get("evidence") for t in traces))
     review_parts = ({part.id for part in plan.part_rubric.parts}
-                    if plan.part_rubric and relevance_review else disputed_parts)
+                    if plan.part_rubric and (relevance_review or proof_judgment_review) else disputed_parts)
     compact_parts = bool(review_parts and all(a and a.part_decisions for a in assessments)
-                         and not requested_review and not any(t.get("evidence") for t in traces))
+                         and (not requested_review or proof_judgment_review) and not any(t.get("evidence") for t in traces))
     accepted = {}
     validation_issues = []
     last_review = None
@@ -1224,7 +1228,9 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
         review_evidence = ([_point_review_evidence(a, t, disputed) for a, t in zip(assessments, traces)]
                            if compact else traces)
         if compact_parts:
-            review_evidence = [{"expert_index": index, "decisions": [d.model_dump(mode="json",exclude_defaults=True)
+            review_evidence = [{"expert_index": index,
+                                **({"concern": a.rationale or a.comment} if proof_judgment_review and a.needs_review else {}),
+                                "decisions": [d.model_dump(mode="json",exclude_defaults=True)
                                 for d in a.part_decisions if d.part_id in review_parts]}
                                for index, a in enumerate(assessments)]
         review, response = await structured_llm_call(

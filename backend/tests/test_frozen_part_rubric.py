@@ -1543,3 +1543,44 @@ def test_fraction_of_full_marks_does_not_add_a_second_award():
     assert read_alternative("另解最高给1/3的满分", maximum=6).maximum.resolve(6) == 2
     with pytest.raises(ValueError):
         read_alternative("另解不能得满分", maximum=6)
+
+
+@pytest.mark.asyncio
+async def test_three_proof_votes_keep_their_source_claims_when_one_asks_for_a_judgment_check():
+    from backend.models import ProblemInfo, StudentAnswerInfo
+    from backend.services.math_grading_context import math_plans_context
+    from backend.skills import math_grading as grading
+    from backend.tests.test_math_evidence_reliability import raw_provider
+    from backend.tests.test_math_grading import expert_for
+
+    raw = proposed_rates(fixture()["questions"][2])
+    row = {**question_row(raw), "type": "推理题"}
+    row["criterion"], draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    row["ai_completion_provenance"] = {"criterion": {"source_kind": "ai_generated"}}
+    p = ProblemInfo(**row)
+    p._math_rubric_source = {"presentation": {key: row[key] for key in ("question_structure", "ai_completion_provenance")}}
+    plan = retarget_draft(draft, row).plan
+    a = StudentAnswerInfo(q_id=p.q_id, number=p.number, type=p.type, content="The identity follows by substitution.")
+    decisions = [PartDecision(part_id=part.id, target_quote="part:"+part.id, student_quote="student:1",
+                              method="reference", relevance="complete", progress="The identity follows.")
+                 for part in plan.part_rubric.parts]
+    def make_vote(index):
+        entries = list(decisions)
+        if index == 2:
+            entries[0] = entries[0].model_copy(update={"relevance":"incorrect"})
+        assessment = grading.FrozenPartAssessment(
+            part_decisions=entries, needs_review=(index==2), comment="Check the inference.",
+            claims=[grading.Claim(id=f"claim-{index}", kind="statement", source_id="student:1",
+                                  quote=a.content, verdict="supported", reason="Written on the first line.")]).assessment()
+        return expert_for(assessment, plan, a.content)
+    votes = [make_vote(i) for i in range(3)]
+    provider, calls = raw_provider(json.dumps({"revisions":[{"expert_index":2, "reason":"Substitution proves the identity.",
+                            "comment":"Complete.", "decisions":[decisions[0].model_dump(mode="json")]}]}))
+    with math_plans_context({p.q_id:plan}), grading.math_review_scope():
+        result = await grading.review_math_experts(p,a,votes,provider)
+    assert len(calls)==1 and [v.score for v in result] == [p.max_score]*3
+    payload = json.loads(calls[0][-1].content)
+    assert payload["experts"][2]["concern"]=="Check the inference."
+    assert "PartRevision" in calls[0][0].content and "claim-2" not in calls[0][-1].content
+    before = grading.read_math_trace(votes[2])["assessment"]["claims"]
+    assert grading.read_math_trace(result[2])["assessment"]["claims"][0]["id"]==before[0]["id"]
