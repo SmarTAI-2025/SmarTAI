@@ -2228,7 +2228,7 @@ _GENERATED_MATERIAL_GUIDANCE = r"""- reference_answer: a correct model answer or
 
 AI_COMPLETION_SYSTEM_PROMPT = _MATERIAL_ENVELOPE + _LEGACY_RULE_GUIDANCE + _GENERATED_MATERIAL_GUIDANCE
 
-from backend.services.part_rubric import PART_INSTRUCTION, supplied_notation
+from backend.services.part_rubric import PART_INSTRUCTION, parallel_part_budgets, supplied_notation
 from backend.services.rubric_drafts import RubricAllocationError, RubricDefinition, RubricDraft, generated_rubric, retarget_draft, saved_draft
 from backend.domain.question_types import normalize_question_type
 from backend.services.math_rubric_plan import _question_input
@@ -2333,6 +2333,7 @@ async def generate_missing_question_materials(
                 problem.get("question_structure")
             ),
             "teacher_subpart_points": dict(problem.get("teacher_subpart_points") or {}),
+            **({"parallel_part_budgets": budgets} if (budgets := parallel_part_budgets(problem)) else {}),
             "existing_criterion": str(problem.get("criterion") or ""),
             "existing_criterion_source": _question_input(problem)["criterion_source"],
             "existing_reference_answer": str(
@@ -2418,6 +2419,9 @@ async def generate_missing_question_materials(
                     "fill parts in the same order; supply a stable ID and total_pts per part. "
                     "Return one separate candidate per requested target. Never attach a rubric to a reference "
                     "when a criterion candidate was also requested." + "\n" + _GENERATED_MATERIAL_GUIDANCE)
+        if any(len(entry["rubric_question"]["parts"]) > 1 for entry in problem_context if entry.get("rubric_question")):
+            guidance += (" Give unweighted parallel instances of the same task and response form equal budgets. "
+                         "Use parallel_part_budgets verbatim when present; distinct deliverables may differ.")
         schema = WrittenRubricDefinition.model_json_schema()
         # These three fields are bound to the source in source_bound_candidate.
         # Asking for them in output made long questions spend tokens copying input.
@@ -2427,7 +2431,7 @@ async def generate_missing_question_materials(
             count = len(problem_context[0]["rubric_question"]["parts"])
             schema["$defs"]["PartRubric"]["properties"]["parts"].update(minItems=count, maxItems=count)
             guidance += (f" The source has exactly {count} part(s). Keep this array length even when "
-                         "one part asks for several conclusions; represent those goals by steps inside that part.")
+                         "one part asks for several conclusions; keep the scoring items inside that part.")
     else:
         schema = RubricDefinition.model_json_schema()
     messages = [
@@ -2631,7 +2635,29 @@ async def generate_missing_question_materials(
                 invoke=repair_invoke, validate_output=validate_targets,
             )
 
+    from backend.services.proof_goals import use_source_goals, prepare_source_goals
     from backend.services.true_false_answers import DecisionReferenceConflict
+
+    for candidate in parsed.candidates:
+        original = problems_data[candidate.q_id]
+        if (candidate.target != "criterion" or not candidate.rubric_draft
+                or not candidate.rubric_definition or not candidate.rubric_definition.part_rubric
+                or not use_source_goals(original)):
+            continue
+        current = RubricDraft.model_validate(candidate.rubric_draft)
+        refined = await prepare_source_goals(provider, original["stem"], current.plan.part_rubric,
+                                             language=generation_language or "zh")
+        if refined is not None:
+            proposal = candidate.rubric_definition.model_copy(update={"part_rubric": refined})
+            material = {**original, "q_id": candidate.q_id}
+            reference = next((s.text_value for s in parsed.candidates
+                              if s.q_id == candidate.q_id and s.target == "reference_answer"), None)
+            if reference:
+                material["reference_answer"] = reference
+            rendered, draft = generated_rubric(material, proposal, language=generation_language or "zh")
+            candidate.text_value = rendered
+            candidate.rubric_definition = proposal
+            candidate.rubric_draft = draft.model_dump(mode="json")
 
     # Seal against all accepted sibling fields, including a reference answer
     # returned in the same response. Model-supplied draft metadata is never used.

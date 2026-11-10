@@ -3,12 +3,13 @@
 from decimal import Decimal, ROUND_HALF_UP
 from fractions import Fraction
 import re
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import BeforeValidator, Field
+from pydantic.json_schema import SkipJsonSchema
 
 from backend.models import StepScore
-from backend.services.math_source_evidence import match_source_quote
+from backend.services.math_source_evidence import SourceMatch, match_source_quote, source_catalog
 from backend.services.part_rubric import Frozen, Key, Text
 
 
@@ -30,7 +31,7 @@ class ErrorEvent(Frozen):
     target_id: Key | None = None
 
 
-class PartDecision(Frozen):
+class _PartReading(Frozen):
     part_id: Key
     relevance: Literal[
         "complete", "partial", "incorrect", "unrelated", "unanswered", "uncertain"
@@ -41,8 +42,91 @@ class PartDecision(Frozen):
     method: Literal["reference", "minor_variant", "alternative", "undetermined"]
     reference_method: str = Field(default="", max_length=2000)
     student_method: str = Field(default="", max_length=2000)
-    steps: tuple[StepDecision, ...] = Field(default=(), max_length=100)
     errors: tuple[ErrorEvent, ...] = Field(default=(), max_length=100)
+
+
+class GoalFinding(Frozen):
+    group: Key = Field(description="The frozen exclusive_group for this mathematical result.")
+    evidence: Text = Field(description="Student line IDs used in the attempted proof, or the omitted source obligation.")
+    implication: Text = Field(description="Carry out the missing implication using the cited premises, earlier proven results and the source hypotheses. State the conclusion actually obtained.")
+    repair: Literal["none", "local", "partial", "absent"] = Field(description="Smallest mathematical change needed: none (including ordinary unstated deductions), local correction, a substantive additional argument, or a wholly new argument.")
+    remaining: str = Field(default="", max_length=4000, description="For a loss name a concrete false operation, missing premise, or independent obligation after the implication test.")
+    origin_quote: str = Field(default="", max_length=4000, description="For a loss cite a single original student line ID or a verbatim omitted target.")
+
+    def error_event(self):
+        if self.repair == "none":
+            return None
+        if not self.origin_quote.strip() or not self.remaining.strip():
+            raise ValueError("Identify the surviving mathematical gap and its original source.")
+        return ErrorEvent(id=self.group, rule_id=f"{self.group}.{self.repair}", evidence=self.evidence,
+                          origin_quote=self.origin_quote, reason=self.remaining)
+
+
+class PartDecision(_PartReading):
+    steps: tuple[StepDecision, ...] = Field(default=(), max_length=100)
+    goal_findings: SkipJsonSchema[tuple[GoalFinding, ...]] = Field(default=(), max_length=100, exclude_if=lambda v: not v)
+
+
+class ProofInference(Frozen):
+    evidence: str = Field(max_length=4000, description="Student line IDs for the actual premises and subsequent conclusion, if present.")
+    reasoning: Text = Field(description="Derive the conclusion from those premises, or identify the actual wrong operation or additional argument needed.")
+    result: Literal["written", "entailed", "wrong", "gap", "follow_through"]
+    step_ids: tuple[Key, ...] = Field(min_length=1, max_length=100, description="All frozen goals decided by this inference.")
+    error_source: str = Field(default="", max_length=4000)
+
+
+class ProofReading(_PartReading):
+    inferences: tuple[ProofInference, ...] = Field(default=(), max_length=100)
+    goal_findings: tuple[GoalFinding, ...] = Field(default=(), max_length=100)
+
+
+def _proof_decision(value):
+    # Previous assessments and repair responses already use the canonical step ledger.
+    if not isinstance(value, dict) or not ("inferences" in value or value.get("goal_findings")):
+        return value
+    reading = ProofReading.model_validate(value)
+    outcomes = {"written": "earned", "entailed": "earned", "wrong": "missed",
+                "gap": "missed", "follow_through": "follow_through"}
+    steps = [StepDecision(id=step_id, outcome=outcomes[link.result], evidence=link.evidence,
+                          reason=link.reasoning, error_source=link.error_source)
+             for link in reading.inferences for step_id in link.step_ids]
+    if reading.goal_findings:
+        if steps or reading.method not in {"reference", "minor_variant"}:
+            raise ValueError("For grouped proof judgments use only goal_findings on the main route.")
+        errors = [event for finding in reading.goal_findings if (event := finding.error_event())]
+        if reading.errors and reading.errors != tuple(errors):
+            raise ValueError("Return only goal_findings; the server calculates their deductions.")
+        return PartDecision(**reading.model_dump(exclude={"inferences", "errors"}), errors=errors)
+    return PartDecision(**reading.model_dump(exclude={"inferences"}), steps=steps)
+
+
+ReasonedDecision = Annotated[PartDecision, BeforeValidator(_proof_decision, json_schema_input_type=ProofReading)]
+
+
+PROOF_INSTRUCTION = """
+Use inferences instead of steps in this response. Read the student's proof in its own order.
+Identify the acting hypothesis, mathematical operation or theorem used, and the conclusion the student draws.
+Compare that chain against the reference strategy before matching any individual scoring goals.
+On the main points route, group ALL step IDs settled by the same mathematical inference in one record.
+For a missing intermediate line, inspect the NEXT written statement. Try the deduction from the
+earlier work using the actual definitions and domain. Record the calculation or implication in reasoning:
+written or entailed earns the associated goals; wrong records an actual false step; gap requires
+a missing substantive premise, independent case, or a specifically required written deliverable.
+Do not supply an alternate operation to rescue an explicitly false step, or add an existence proof
+that the student never made. A necessary impossible consequence under a stated assumption can
+finish a reductio. A reversible chain can establish both directions. Distinguish a formatting/OCR
+ambiguity from a mathematical error. Use each frozen step ID exactly once where a ledger is required.
+For a materially different strategy use only the frozen alternative policy and its errors.
+On a main route with goal1.absent/partial/local type grouped proof deductions, return goal_findings,
+one per group, and leave errors and inferences empty. Test each result against the whole argument
+before selecting the smallest necessary repair. Apply an earlier general result to specific objects
+actually used later, including consequences of the source assumptions. Write the actual substitution
+or short derivation in implication. If it closes the goal with no mathematical change, repair=none.
+If it does not, state exactly what would have to change. A new witness or an independent direction
+cannot be filled in from the desired answer. A written false equality must be checked as written.
+The examples in a rule do not exhaust the valid implications. For ordinary deductions return errors.
+Classify by mathematical strategy independently of correctness.
+"""
 
 
 INSTRUCTION = """
@@ -81,7 +165,15 @@ Use step IDs with earned/missed/follow_through for points; do not report numeric
 Follow-through needs the same source as a diagnosed missed step or independent error, and correct downstream work.
 For a target_item deduction, use target_id from part.answer_refs to identify the affected target.
 For deductions report actual distinct errors with rule_id, evidence, and origin_quote;
-a repeated consequence has the same origin. For an alternative error
+a repeated consequence has the same origin. If rules have an exclusive_group, select at most one
+loss for the entire goal. For a mathematically complete goal select none. On the main deduction route, determine
+which requested results the work establishes before choosing a rule. For the same
+goal a partial argument and an entirely absent argument cannot incur both losses.
+Check an explicitly written calculation as written. For an omitted transition,
+carry out the routine inference from the cited lines under the original domain;
+when it establishes the goal, give its reasoning in progress and omit the error event.
+An omitted independent direction, existence argument or admissible case is a real gap.
+For an alternative error
 use rule_id='alternative'. Do not mix the normal and alternative deductions.
 For an attempted but incorrect single judgment, use incorrect; for an omitted part use unanswered.
 For complete work on a single-step part the part's located evidence is sufficient; leave steps empty
@@ -97,8 +189,6 @@ route_reason, score, awards and deductions. The program settles the parts and th
 
 def _student_span(answer, fragment):
     """Resolve an explicit line address or a unique verbatim excerpt."""
-    from backend.services.math_source_evidence import SourceMatch
-
     match = re.fullmatch(r"student:([1-9]\d*)", fragment)
     if not match:
         if fragment.startswith("student:"):
@@ -115,8 +205,6 @@ def _student_span(answer, fragment):
 
 def _supporting_spans(answer, fragment, catalog):
     """Resolve each cited line independently. Never fill in text between listed lines."""
-    from backend.services.math_source_evidence import SourceMatch
-
     fragment = fragment.strip()
     if not fragment.startswith("student:"):
         match = match_source_quote(answer, fragment)
@@ -143,9 +231,25 @@ def _amount(value):
     return Fraction(str(value))
 
 
+def _obligation_span(question, scope, fragment, question_lines):
+    """Resolve omissions to offsets in this part, including original question line IDs."""
+    if not fragment.startswith("question:"):
+        return match_source_quote(scope, fragment)
+    entry = question_lines.get(fragment)
+    if entry is None:
+        return None
+    text, start, end = entry
+    if scope == question:
+        return SourceMatch(text, start, end, "exact")
+    part_span = match_source_quote(question, scope)
+    if part_span and part_span.start <= start and end <= part_span.end:
+        return match_source_quote(scope, text)
+    return None
+
+
 def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
-    from backend.services.math_source_evidence import source_catalog
     catalog = source_catalog(answer, "", "")
+    question_lines = source_catalog("", question, "")
 
     def support(fragment):
         return _supporting_spans(answer, fragment, catalog)
@@ -173,6 +277,15 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
     for part in rules.parts:
         d = by_id[part.id]
         scope = part.stem or question
+        if d.goal_findings:
+            groups = {r.exclusive_group for r in part.deductions}
+            observed = [f.group for f in d.goal_findings]
+            if d.method not in {"reference", "minor_variant"} or set(observed) != groups or len(observed) != len(groups):
+                raise ValueError(f"{part.id}: cover each frozen proof group once on the main deduction route.")
+            if any(f.repair == "none" and not support(f.evidence) for f in d.goal_findings):
+                raise ValueError(f"{part.id}: completed proof goals require original student evidence.")
+            if d.errors != tuple(event for f in d.goal_findings if (event := f.error_event())):
+                raise ValueError(f"{part.id}: charged deductions must correspond to the proof findings.")
         if d.target_quote != f"part:{part.id}" and not match_source_quote(
             scope, d.target_quote
         ):
@@ -213,7 +326,7 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
             # A points-only rule has no deduction ledger. Located observations
             # on an incorrect response explain zero and cannot charge it twice.
             observed_errors = (d.relevance == "incorrect" and part.steps and not alternative
-                               and all(support(event.evidence) or match_source_quote(scope, event.evidence)
+                               and all(support(event.evidence) or _obligation_span(question, scope, event.evidence, question_lines)
                                        for event in d.errors))
             if ((d.errors and not observed_errors) or len(seen_steps) != len(d.steps)
                     or seen_steps - {step.id for step in part.steps}
@@ -282,6 +395,7 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                     f"{part.id}: incomplete work cannot silently earn full credit; identify the missing obligation."
                 )
             seen = set()
+            exclusive_groups = set()
             targets = set()
             counts = {}
             penalty_rules = {} if alternative else {p.id: p for p in part.deductions}
@@ -290,15 +404,14 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
             for event in d.errors:
                 if not (
                     support(event.evidence)
-                    or match_source_quote(scope, event.evidence)
+                    or _obligation_span(question, scope, event.evidence, question_lines)
                 ):
                     raise ValueError(
                         "A deduction must cite the student's error or the omitted source obligation."
                     )
-                if not (
-                    _student_span(answer, event.origin_quote)
-                    or match_source_quote(scope, event.origin_quote)
-                ):
+                location = _student_span(answer, event.origin_quote)
+                target = None if location else _obligation_span(question, scope, event.origin_quote, question_lines)
+                if not (location or target):
                     raise ValueError(
                         "An error origin must be grounded in the work or required target."
                     )
@@ -307,16 +420,19 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                     not alternative and rule is None
                 ):
                     raise ValueError("Use only the selected deduction rule.")
-                location = _student_span(answer, event.origin_quote)
                 identity = (
                     ("student", location.start, location.end)
                     if location
-                    else ("target", event.origin_quote.strip())
+                    else ("target", target.start, target.end)
                 )
                 if identity in seen:
                     raise ValueError(
                         "Duplicate error origin; do not penalize a consequence twice."
                     )
+                if rule and rule.exclusive_group:
+                    if rule.exclusive_group in exclusive_groups:
+                        raise ValueError(f"{part.id}: select at most one level of loss for {rule.exclusive_group}.")
+                    exclusive_groups.add(rule.exclusive_group)
                 if rule and rule.count_by == "target_item":
                     if not event.target_id or event.target_id not in part.answer_refs:
                         raise ValueError(

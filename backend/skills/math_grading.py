@@ -17,7 +17,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError, field_validator, model_validator
 
 from backend.services.part_rubric import supplied_notation
-from backend.skills.part_scoring import INSTRUCTION as PART_SCORING_INSTRUCTION, PartDecision, settle_parts
+from backend.skills.part_scoring import INSTRUCTION as PART_SCORING_INSTRUCTION, PROOF_INSTRUCTION, PartDecision, ReasonedDecision, settle_parts
 from backend.models import ExpertResult, GradingConfidence, StepScore
 from backend.skills.base import (
     GradingSkill, authoritative_score_instruction, build_system_prompt,
@@ -159,6 +159,10 @@ class FrozenPartAssessment(EvidenceAssessment):
 
     def assessment(self):
         return MathAssessment(route_id="parts", route_reason="Frozen part rules", **self.model_dump())
+
+
+class ProofPartAssessment(FrozenPartAssessment):
+    part_decisions: list[ReasonedDecision] = Field(min_length=1, max_length=100)
 
 
 class AddressedPartAssessment(FrozenPartAssessment):
@@ -320,6 +324,14 @@ class PartRevision(BaseModel):
     reason: str = Field(min_length=1)
     comment: str = Field(min_length=1)
     decisions: list[PartDecision] = Field(min_length=1, max_length=100)
+
+
+class ProofPartRevision(PartRevision):
+    decisions: list[ReasonedDecision] = Field(min_length=1, max_length=100)
+
+
+class ProofPartReview(BaseModel):
+    revisions: list[SkipValidation[ProofPartRevision]] = Field(max_length=10)
 
 
 class PartReview(BaseModel):
@@ -967,7 +979,7 @@ def _review_index(entry):
         return None
 
 
-def _part_proof_evidence(problem):
+def _part_proof_evidence(problem, rules=None):
     if problem.type != "推理题":
         return ""
     correspondence = ""
@@ -984,10 +996,31 @@ def _part_proof_evidence(problem):
             "mathematical condition still missing after substitution or quote the explicit source demand "
             "for a separately written map. A one-way implication alone does not establish equivalence. "
         )
+    # One proof can supply a premise to another independently scored goal.
+    # Single-goal parts already use the ordinary source/implication checks below.
+    cross_goal = ""
+    if rules and any(
+        len({rule.exclusive_group for rule in part.deductions if rule.exclusive_group}) > 1
+        for part in rules.parts
+    ):
+        cross_goal = (
+            "When a student explicitly states AND uses an intermediate fact, first check that fact on its own. "
+            "Distinguish an auxiliary fact from the actual result the problem asks them to prove. "
+            "Starting with the GIVEN laws, try to justify the stated fact: for a claimed form of an expression, "
+            "apply those laws to an arbitrary expression, showing what is eliminated at each rewrite and why "
+            "it terminates. For a standard theorem check its hypotheses, permitted method and actual use. "
+            "If this verifies a routine auxiliary fact, accept it as a premise everywhere it is used. "
+            "Apply the student's resulting general conclusion to the objects they use in the next goal. "
+            "In the judgment record the short mathematical justification and what still needs new work AFTER it. "
+            "Do not require a separate proof of an admissible intermediate fact merely because its justification "
+            "was omitted. A claimed target, a circular citation, an impermissible method or a missing independent "
+            "argument is still assessed under the frozen policy. Never invent a premise the student did not use. "
+        )
     return "On the alternative route, use these proof checks to support the decision and independent errors only. " + correspondence + (
         "\nFor each scored proof obligation, check what follows from the cited student statements under "
         "the problem's hypotheses and definitions. A direct consequence of a definition, a substitution "
         "or a reversible algebraic equality may establish the goal without an extra sentence. "
+    ) + cross_goal + (
         "For an existence or uniqueness goal where the student supplies a witness or construction, "
         "substitute that specific candidate into the defining conditions yourself over the ENTIRE "
         "stated domain. Record the resulting short calculation in the decision's progress or step "
@@ -1119,6 +1152,7 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                     if plan.part_rubric and (relevance_review or proof_judgment_review) else disputed_parts)
     compact_parts = bool(review_parts and all(a and a.part_decisions for a in assessments)
                          and (not requested_review or proof_judgment_review) and not any(t.get("evidence") for t in traces))
+    part_revision = ProofPartRevision if problem.type == "推理题" else PartRevision
     accepted = {}
     validation_issues = []
     last_review = None
@@ -1137,7 +1171,7 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
         for raw, index in zip(review.revisions, indices):
             revision = None
             try:
-                revision = (PartRevision.model_validate(raw) if compact_parts else _REVIEW_ENTRY.validate_python(raw))
+                revision = (part_revision.model_validate(raw) if compact_parts else _REVIEW_ENTRY.validate_python(raw))
                 if index is None or not 0 <= index < len(experts):
                     raise ValueError("review_source_or_expert_not_found")
                 if counts[index] != 1:
@@ -1215,7 +1249,7 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
         "For explicit zero/full rules, include binary_correct judging the entire final answer."
     )
     if compact_parts:
-        review_format = PartReview
+        review_format = ProofPartReview if problem.type == "推理题" else PartReview
         instructions = (
             "In each revision give expert_index, reason, comment and the corrected decisions for disputed "
             "part IDs in disputed_item_ids only. On a relevance review, independently verify every supplied "
@@ -1243,8 +1277,8 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                 "Return an explicit empty revisions list if neither vote has a source-grounded error. "
                 "Submit at most one revision per expert. Unknown tools are not evidence of error. "
                 "Keep teacher review suggestions optional. "
-                + proof_guidance + (_part_proof_evidence(problem) if plan.part_rubric else "")
-                + instructions
+                + proof_guidance + (_part_proof_evidence(problem, plan.part_rubric) if plan.part_rubric else "")
+                + instructions + (PROOF_INSTRUCTION if review_format is ProofPartReview else "")
                 + ("\n" + REVIEW_INSTRUCTION + " After the complete review JSON, append PROOF_AUDIT "
                    "followed by a separate JSON object mapping each revised proof expert's index "
                    "(string) to an audit object with the same steps/context_source_ids shape as its trace. "
@@ -1525,15 +1559,17 @@ class MathGradingSkill(GradingSkill):
                 + authoritative_score_instruction(problem.max_score)
                 + "\nJSON Schema:\n" + _json(MathAssessment.model_json_schema()), self.language, self.grading_setup,
                 **({"output_instruction": OUTPUT_INSTRUCTION} if self.template_name == "proof" else {}))
+            part_output = ProofPartAssessment if problem.type == "推理题" else FrozenPartAssessment
             if plan.part_rubric:
-                system = build_system_prompt(PART_SCORING_INSTRUCTION + _part_proof_evidence(problem) + "\nUse the supplied part and student line IDs "
+                system = build_system_prompt(PART_SCORING_INSTRUCTION + _part_proof_evidence(problem, plan.part_rubric) + "\nUse the supplied part and student line IDs "
                     "for target_quote, student_quote and step evidence. Only include conventional claims when "
                     "requesting mathematical verification. All arithmetic is performed by the server. Schema:\n"
-                    + _json(FrozenPartAssessment.model_json_schema()), self.language, self.grading_setup)
+                    + (PROOF_INSTRUCTION if part_output is ProofPartAssessment else "")
+                    + _json(part_output.model_json_schema()), self.language, self.grading_setup)
             try:
                 await self._substep(unit, "llm_grade")
                 draft, response = await self._assess(
-                    plan, system_prompt=system, user_prompt=prompt,
+                    plan, system_prompt=system, user_prompt=prompt, part_output=part_output,
                     validator=_assessment_validator(plan, answer, problem, diagnostic=diagnostic))
                 duration += response.duration_ms or 0
                 score, steps = score_assessment(draft, plan, answer.content or "", problem_text=problem.stem)
@@ -1585,7 +1621,7 @@ class MathGradingSkill(GradingSkill):
                 await self._substep(unit, "llm_grade")
                 try:
                     reviewed, response = await self._assess(
-                        plan, system_prompt=system,
+                        plan, system_prompt=system, part_output=part_output,
                         user_prompt=prompt + "\nAPPLY SCOPED EVIDENCE (one pass):\n" + _json({
                             "draft": _assessment_for_model(draft, plan), "evidence": evidence,
                             **({"proof_concerns": proof_concerns, "proof_instruction": REVIEW_INSTRUCTION}
@@ -1676,7 +1712,7 @@ class MathGradingSkill(GradingSkill):
             prompt += "\nRepair the rejected decision from the original sources:\n" + _json(recovery)
             result, response = await self._assess(plan,
                 system_prompt=build_system_prompt(
-                    PART_SCORING_INSTRUCTION + _part_proof_evidence(problem) + "\nRepair format: student_quote and step.evidence are arrays of original line numbers.\n" + _json(output_model.model_json_schema()),
+                    PART_SCORING_INSTRUCTION + _part_proof_evidence(problem, plan.part_rubric) + "\nRepair format: student_quote and step.evidence are arrays of original line numbers.\n" + _json(output_model.model_json_schema()),
                     self.language, self.grading_setup),
                 user_prompt=prompt, validator=_assessment_validator(plan,answer,problem),part_output=output_model)
             score,steps=score_assessment(result,plan,answer.content,problem_text=problem.stem)

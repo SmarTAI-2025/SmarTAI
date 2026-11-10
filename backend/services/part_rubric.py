@@ -105,6 +105,7 @@ class PointStep(Criterion):
 
 
 class Penalty(Criterion):
+    exclusive_group: Key | None = Field(default=None, exclude_if=lambda value: value is None)
     deduct_pts: Points = Field(gt=0)
     max_deduction: Points | None = Field(default=None, exclude_if=lambda v: v is None)
     count_by: Literal["independent_error", "wrong_step", "target_item"] = (
@@ -157,7 +158,7 @@ class RubricPart(Frozen):
             not 0
             <= self.alternative.minimum.resolve(self.total_pts)
             <= self.alternative.maximum.resolve(self.total_pts)
-            <= self.total_pts
+            <= Fraction(str(self.total_pts))
         ):
             raise ValueError(
                 f"{self.id}: alternative method bounds must fit the part budget."
@@ -407,7 +408,7 @@ def _checked_alternative(policy, values, text, maximum):
         not 0
         <= policy.minimum.resolve(maximum)
         <= policy.maximum.resolve(maximum)
-        <= maximum
+        <= Fraction(str(maximum))
     ):
         raise ValueError("Alternative minimum, maximum and part budget conflict.")
     return policy
@@ -586,6 +587,42 @@ _RESULT_ONLY = re.compile(
 )
 
 
+# A shared instruction followed by a list of inputs is source evidence of a
+# repeated task. Local instructions can introduce different demands or weights.
+_PARALLEL_LIST = re.compile(r"下列|以下|各(?:个|项|式|题|句|程序|函数)|分别|逐[一项个]|\b(?:each|following)\b", re.I)
+_TASK_VERB = re.compile(
+    r"计算|求出|求解|求值|判断|确定|判定|证明|简化|化简|写出|指出|列出|翻译|分类|画出|解释|说明|推导|设计|分析|比较|"
+    r"(?:^|[，。；：\s])求|\b(?:calculate|compute|solve|evaluate|determine|decide|classify|prove|"
+    r"simplify|identify|translate|find|state|derive|explain|compare|sketch|design|justify|show)\b", re.I)
+_WEIGHT_IN_SOURCE = re.compile(
+    r"(?:\d|[零一二三四五六七八九十两半])\s*(?:分(?![钟子母解析布配式])|points?\b|marks?\b|pts?\b|[%％])|"
+    r"权重|加权|占比|分值|配分|加倍|权数|\b(?:weights?|weighted|double credit|extra credit)\b", re.I)
+
+
+def parallel_part_budgets(problem):
+    """Allocate unweighted parallel inputs in source order, using displayable hundredths."""
+    structure = problem.get("question_structure") or {}
+    parts = structure.get("subparts") or []
+    if len(parts) < 2 or problem.get("teacher_subpart_points"):
+        return {}
+    shared = structure.get("shared_stem", "")
+    # A whole-question maximum does not prescribe relative part weights.
+    header = re.sub(r"(?:本题|整题|全题)?(?:满分|共计|总分)\s*[:：]?\s*[\d.]+\s*分|"
+                    r"\b(?:total(?: of)?|out of)\s*[\d.]+\s*(?:points?|marks?)\b", "", shared, flags=re.I)
+    source = " ".join([header, problem.get("criterion") or "", *(part["stem"] for part in parts)])
+    if _WEIGHT_IN_SOURCE.search(source):
+        return {}
+    if not (_PARALLEL_LIST.search(shared) and _TASK_VERB.search(shared)):
+        return {}
+    if any(_TASK_VERB.search(part["stem"]) for part in parts):
+        return {}
+    hundredths = Decimal(str(problem.get("max_score") or 10)) * 100
+    if hundredths != hundredths.to_integral_value() or hundredths < len(parts):
+        return {}
+    base, remainder = divmod(int(hundredths), len(parts))
+    return {part["label"]: (base + (index < remainder)) / 100 for index, part in enumerate(parts)}
+
+
 def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None = None, language="zh") -> PartRubric:
     """Bind the model proposal to known question scope and authoritative teacher text."""
     from backend.services.question_structure import _allocation_marker_pattern
@@ -609,7 +646,7 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
     total = sum(Decimal(str(p.total_pts)) for p in rubric.parts)
     if total != Decimal(str(maximum)) or rubric.total_pts != maximum:
         raise ValueError(f"Part budgets total {total}, required {maximum:g}.")
-    if rubric.nonblank_floor.resolve(maximum) > maximum:
+    if rubric.nonblank_floor.resolve(maximum) > Fraction(str(maximum)):
         raise ValueError("Nonblank floor exceeds question maximum.")
     text = problem.get("criterion") or ""
     teacher = (
@@ -620,6 +657,7 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
     )
     ordinary = ordinary_criterion(teacher)
     expected = dict(problem.get("teacher_subpart_points") or {})
+    parallel = parallel_part_budgets(problem)
     from backend.services.math_rubric_plan import _FLOOR_RULE, _source_clauses
     teacher_primary = any(not _FLOOR_RULE.fullmatch(clause) for clause in _source_clauses(ordinary))
     # Source clauses constrain individual fields. A subtotal, a step budget and a
@@ -685,6 +723,9 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
                 rule.model_copy(update={"max_deduction": capped_rules[p.id][rule.id]})
                 if rule.id in capped_rules[p.id] else rule for rule in p.deductions
             )})
+        if label in parallel and Decimal(str(parallel[label])) != Decimal(str(p.total_pts)):
+            raise ValueError(f"Shared task with unweighted parallel parts: use budgets {parallel}. "
+                             "Adjust the steps and policies under each part to its budget.")
         if label in expected and Decimal(str(expected[label])) != Decimal(
             str(p.total_pts)
         ):
@@ -827,6 +868,8 @@ def render_parts(rubric, language="zh", *, full_policy=False):
                     counting = {"target_item": ("按作答目标", "per target"), "wrong_step": ("按错误步骤", "per wrong step"),
                                 "independent_error": ("按独立错误", "per independent error")}
                     cap += ("，" if zh else ", ") + counting[rule.count_by][0 if zh else 1]
+                if rule.exclusive_group:
+                    cap += "，同一目标只取一档" if zh else ", choose one loss for this goal"
                 lines.append(
                     f"- {rule.criterion} ({'扣' if zh else 'deduct '}{rule.deduct_pts:g}{unit}{cap})"
                 )

@@ -1,5 +1,6 @@
 import json
 from copy import deepcopy
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -1584,3 +1585,193 @@ async def test_three_proof_votes_keep_their_source_claims_when_one_asks_for_a_ju
     assert "PartRevision" in calls[0][0].content and "claim-2" not in calls[0][-1].content
     before = grading.read_math_trace(votes[2])["assessment"]["claims"]
     assert grading.read_math_trace(result[2])["assessment"]["claims"][0]["id"]==before[0]["id"]
+
+
+def test_parallel_inputs_get_a_stable_budget_before_freezing_and_reject_shifted_points():
+    from backend.services.part_rubric import parallel_part_budgets
+
+    row = _rows([dict(number="4", type="计算题", max_score=10,
+                      stem="本题满分10分。计算下列各式的值。\n" + "\n".join(
+                          f"({i}) {i}+1" for i in range(1, 9)))])["q1"]
+    budget = parallel_part_budgets(row)
+    assert list(budget.values()) == [1.25] * 8
+    raw = dict(id="q", label="4", stem=row['stem'], total_pts=10, parts=[dict(
+        id=f"p{i}", label=label, total_pts=value, steps=[dict(id="s", criterion="Result", total_pts=value)],
+        alternative=dict(deduct_per_error=0.25)) for i, (label, value) in enumerate(budget.items())])
+    _, adopted = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    assert [p.total_pts for p in adopted.plan.part_rubric.parts] == [1.25] * 8
+    for part, new in zip(raw["parts"], [1.5, 1.0]):
+        part['total_pts'] = part['steps'][0]['total_pts'] = new
+    with pytest.raises(ValueError, match="parallel parts"):
+        generated_rubric(row, RubricDefinition(part_rubric=raw))
+    assert not parallel_part_budgets({**row, 'teacher_subpart_points': {'(2)': 1}})
+    assert not parallel_part_budgets({**row, 'criterion': '第2小问满分1分'})
+
+
+def test_parallel_inputs_with_remainder_and_distinct_local_obligations():
+    from backend.services.part_rubric import parallel_part_budgets
+
+    def budgets(stem):
+        return list(parallel_part_budgets(_rows([dict(number="2", type="计算题", max_score=10,
+                                                      stem=stem)])["q1"]).values())
+
+    assert budgets('Translate each word.\n(a) pine\n(b) elm\n(c) fir') == [3.34, 3.33, 3.33]
+    assert budgets('Calculate the following.\n(a) 3+4 [2 points]\n(b) 2+1') == []
+    assert budgets('Calculate the following.\n(a) 3+4\n(b) Explain why the formula works.') == []
+
+
+@pytest.mark.parametrize('amount', [0.3, 0.6, 3.34])
+def test_fractional_full_credit_and_nonblank_floor_match_the_exact_declared_budget(amount):
+    from backend.services.part_rubric import read_alternative
+
+    row = _rows([dict(number='1', type='计算题', max_score=amount, stem='Compute the sum.',
+                      criterion=f'非空作答最低{amount:g}分')])['q1']
+    raw = dict(id='q1', label='1', stem=row['stem'], total_pts=amount, nonblank_floor={'pts':amount},
+               parts=[dict(id='p1', total_pts=amount, alternative={'deduct_per_error':0.1},
+                           steps=[dict(id='s1', criterion='Correct sum', total_pts=amount)])])
+    _, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    assert draft.plan.part_rubric.parts[0].total_pts == amount
+    assert read_alternative('另解给满分', maximum=amount).maximum.resolve(amount) == Fraction(str(amount))
+    with pytest.raises(ValueError):
+        read_alternative(f'另解最高给 {amount + 0.01:g} 分', maximum=amount)
+
+
+def test_proof_inferences_support_multiple_goals_from_the_same_source():
+    from backend.skills.math_grading import ProofPartAssessment, ProofPartRevision
+
+    question = "By completing the square, solve the equation."
+    rules = PartRubric.model_validate(dict(id="q", label="1", stem=question, total_pts=10,
+        parts=[dict(id="p", total_pts=10, alternative={"maximum":{"points":5}, "deduct_per_error":1},
+                    steps=[dict(id="square", criterion="Complete the square", total_pts=6),
+                           dict(id="roots", criterion="Find both roots", total_pts=4)])]))
+    answer = "(x-2)^2=1, so x=1 or 3."
+    decision = dict(part_id="p", target_quote="part:p", student_quote="student:1", method="minor_variant",
+                    relevance="complete", progress="The square and its two roots follow on one line.",
+                    inferences=[dict(evidence="student:1", reasoning="Taking either sign of the square root establishes both solutions.",
+                                     result="entailed", step_ids=["square","roots"])])
+    assessment = ProofPartAssessment.model_validate(dict(comment="Complete",part_decisions=[decision])).assessment()
+    revision = ProofPartRevision.model_validate(dict(expert_index=0, reason="Both signs covered.", comment="Complete", decisions=[decision]))
+    assert assessment.part_decisions == revision.decisions
+    score, rows = settle_parts(rules, assessment.part_decisions, answer, question)
+    assert score == 10 and [row.score for row in rows] == [6,4]
+    partial = {**decision, "relevance":"partial", "inferences":[
+        dict(evidence="student:1",reasoning="The square is obtained.",result="written",step_ids=["square"]),
+        dict(evidence="student:1",reasoning="Only one sign was taken.",result="gap",step_ids=["roots"])]}
+    graded = ProofPartAssessment.model_validate(dict(comment="Missing one branch",part_decisions=[partial])).assessment()
+    assert settle_parts(rules,graded.part_decisions,"(x-2)^2=1, so x=3.",question)[0] == 6
+    duplicated = {**decision,"inferences":decision["inferences"]*2}
+    invalid = ProofPartAssessment.model_validate(dict(comment="Duplicate",part_decisions=[duplicated])).assessment()
+    with pytest.raises(ValueError, match="required step IDs"):
+        settle_parts(rules,invalid.part_decisions,answer,question)
+
+
+def test_source_proof_goals_preserve_budgets_and_select_one_loss_per_goal():
+    from backend.services.proof_goals import PartGoals, ProofGoal, ProofOutline, compile_proof_goals, use_source_goals
+    from backend.skills.part_scoring import ErrorEvent
+
+    stem = "Prove existence and decide uniqueness."
+    original = PartRubric.model_validate(dict(id="q",label="1",stem=stem,total_pts=10,parts=[
+        dict(id="p",total_pts=10,steps=[dict(id="s",criterion="Original proof",total_pts=10)],
+             alternative=dict(maximum={"points":5},deduct_per_error=1))]))
+    goals=[ProofGoal(target=t,source_id="question:1",points=n,partial_progress="Derives a necessary condition",
+                     sufficient_argument="Checks all conditions")
+           for t,n in (("Existence",6),("Uniqueness",4))]
+    outline=ProofOutline(parts=[PartGoals(part_id="p",goals=goals)])
+    rub=compile_proof_goals(original,outline,{"p":{"question:1":stem}},language="en")
+    part=rub.parts[0]
+    assert [r.deduct_pts for r in part.deductions]==[6,3,1,4,2,1]
+    from backend.skills.math_grading import _part_proof_evidence
+    from backend.models import ProblemInfo
+
+    problem = ProblemInfo(q_id="q", number="1", type="推理题", stem=stem, criterion="", max_score=10)
+    assert "intermediate fact" in _part_proof_evidence(problem, rub)
+    single = part.model_copy(update={"deductions": part.deductions[:3]})
+    assert _part_proof_evidence(problem, rub.model_copy(update={"parts": (single,)})) == _part_proof_evidence(problem)
+    assert part.alternative==original.parts[0].alternative and original.parts[0].steps
+    answer="I derive a necessary condition.\nI claim this proves existence."
+    def event(rule,line):
+        return ErrorEvent(id=rule,rule_id=rule,evidence=line,origin_quote=line,reason="Necessary condition is insufficient.")
+    partial=PartDecision(part_id="p",method="reference",relevance="partial",target_quote="part:p",
+                         student_quote="student:1",progress="A distinct proof is still needed.",
+                         errors=[event("goal1.partial","student:1")])
+    assert settle_parts(rub,[partial],answer,stem)[0]==7
+    with pytest.raises(ValueError,match="one level of loss"):
+        settle_parts(rub,[partial.model_copy(update={"errors":(*partial.errors,event("goal1.local","student:2"))})],answer,stem)
+    with pytest.raises(ValueError,match="source|line ID"):
+        compile_proof_goals(original,outline,{"p":{"question:2":stem}},language="en")
+    row=dict(stem=stem,type="推理题")
+    assert use_source_goals(row)
+    for changed in (dict(criterion="Use the given point scheme"),dict(stem=stem+" [3 marks for the witness]"),
+                    dict(rubric_draft={"teacher":"adopted"}),dict(type="计算题")):
+        assert not use_source_goals({**row,**changed})
+
+    from backend.skills.math_grading import ProofPartAssessment
+
+    # A consequence can be paid in full although the writer never expands the substitution.
+    # A different goal that needs a new argument must retain its frozen partial deduction.
+    submitted = "The pair (1, 2) solves x+y=3.\nI have found precisely one pair."
+    checks = [
+        dict(group="goal1", evidence="student:1", implication="Direct substitution gives 1+2=3.",
+             repair="none"),
+        dict(group="goal2", evidence="student:2", implication="One example does not rule out another solution.",
+             remaining="An independent uniqueness argument is required.", origin_quote="student:2", repair="partial"),
+    ]
+    decision = dict(part_id="p", method="reference", relevance="partial", target_quote="part:p",
+                    student_quote="student:1", progress="Existence is established.", goal_findings=checks)
+    assessed = ProofPartAssessment.model_validate(dict(comment="Uniqueness remains open.", part_decisions=[decision]))
+    assert settle_parts(rub, assessed.assessment().part_decisions, submitted, stem)[0] == 8
+    shortened = dict(decision, goal_findings=checks[1:])
+    missing = ProofPartAssessment.model_validate(dict(comment="Incomplete ledger", part_decisions=[shortened]))
+    with pytest.raises(ValueError, match="each frozen proof group"):
+        settle_parts(rub, missing.assessment().part_decisions, submitted, stem)
+
+
+def test_omitted_target_address_matches_its_quote_and_stays_in_part_scope():
+    question = "An unrelated task.\nConstruct a witness.\nVerify uniqueness."
+    scope = "Construct a witness.\nVerify uniqueness."
+    answer = "Here is a specific witness."
+    rub = PartRubric.model_validate(dict(id="q", label="1", stem=question, total_pts=10,
+        parts=[dict(id="p", label="(2)", stem=scope, total_pts=10,
+                    deductions=[dict(id="loss", criterion="An original obligation remains open", deduct_pts=2)])]))
+
+    def read(*locations):
+        errors = [dict(id=f"e{i}", rule_id="loss", evidence=source, origin_quote=source,
+                       reason="The requested argument is missing.") for i, source in enumerate(locations)]
+        data = dict(part_id="p", target_quote="part:p", student_quote="student:1", method="reference",
+                    relevance="partial", progress="The witness was supplied.", errors=errors)
+        return settle_parts(rub, [PartDecision.model_validate(data)], answer, question)[0]
+
+    assert read("question:3") == read("Verify uniqueness.") == 8
+    with pytest.raises(ValueError, match="Duplicate error origin"):
+        read("question:3", "Verify uniqueness.")
+    with pytest.raises(ValueError, match="must cite"):
+        read("question:1")
+
+
+@pytest.mark.asyncio
+async def test_generated_proof_targets_cannot_quote_a_sibling_part(monkeypatch):
+    from backend.services import proof_goals as goals
+
+    task = "Prove each claim.\n(a) Show closure.\n(b) Show uniqueness."
+    parts = [dict(id=pid, label=label, stem=stem, total_pts=5,
+                  steps=[dict(id="s", criterion=stem, total_pts=5)])
+             for pid, label, stem in (("pa", "(a)", "Show closure."), ("pb", "(b)", "Show uniqueness."))]
+    rubric = PartRubric.model_validate(dict(id="q", label="1", stem="Prove each claim.", total_pts=10, parts=parts))
+
+    async def reply(provider, *, user_prompt, validate_output, **kwargs):
+        source = json.loads(user_prompt)["parts"]
+        assert source[0]["allowed_goal_lines"] == {"part1:1": "Show closure."}
+        assert source[1]["allowed_goal_lines"] == {"part2:1": "Show uniqueness."}
+        outline = {"parts": [dict(part_id=p["id"], goals=[dict(target=p["stem"], points=5,
+            source_id=f"part{i}:1", partial_progress="A necessary condition.", sufficient_argument="A complete proof.")])
+            for i, p in enumerate(parts, 1)]}
+        correct = goals.ProofOutline.model_validate(outline)
+        outline["parts"][0]["goals"][0]["source_id"] = "part2:1"
+        with pytest.raises(goals.StructuredOutputInvalidError, match="pa:"):
+            validate_output(goals.ProofOutline.model_validate(outline))
+        validate_output(correct)
+        return correct, None
+
+    monkeypatch.setattr(goals, "structured_llm_call", reply)
+    result = await goals.prepare_source_goals(None, task, rubric, language="en")
+    assert [(part.id, part.total_pts) for part in result.parts] == [("pa", 5), ("pb", 5)]
