@@ -84,6 +84,9 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
     : "Some source content is unmatched. Check whether this question is complete.";
   if (!["recognition_partial", "recognition_needs_review", "low_confidence"].includes(issue.code) && !questionHasLowConfidence(issue)) return null;
   const zh = locale === "zh-CN";
+  if (issue.details?.reason === "conflicting_printed_formula") return zh
+    ? "整页与局部图像读出的公式不同，请对照原件核对本题的底数、上下标和运算符。"
+    : "The page and its detail give different formulas. Check this question’s bases, scripts and operators against the source.";
   const coverage = issue.details?.coverage as Record<string, unknown[]> | undefined;
   const reasons = [
     ["failed_pages", "识别失败的页码", "Pages that failed recognition"],

@@ -348,6 +348,10 @@ async def _extract_problems_call(
     multiple small calls (workaround for relays that hang on bigger bodies)
     while sharing the exact prompt and parsing contract.
     """
+    # OCR commonly inserts spaces around the dots in textbook headings.
+    # Give the extractor grounded label hints while preserving the literal source text.
+    dotted_headers = [{"printed": match[1], "number": re.sub(r"\s+", "", match[1])}
+                      for match in re.finditer(r"(?m)^\s*(\d+(?:[.．][ \t]+\d+)+)(?=[①-⑳\s])", text)]
     confirmed_candidates = confirmed_candidates or []
     if structure_mode == "extract_from_source":
         candidate_context = [
@@ -417,6 +421,10 @@ async def _extract_problems_call(
         "and source=teacher. Never combine values from different examples. "
         "Do not create new test cases. Never claim a created case was supplied by the teacher."
         if partial_source else "")
+    if dotted_headers:
+        user_content += ("\n[Source heading typography] Ignore scan spaces inside a dotted question number. "
+                     "A following circled marker belongs to the printed heading. Preserve the full number.\n"
+                     + json.dumps(dotted_headers[:200], ensure_ascii=False))
     messages = [
         SystemMessage(content=PROB_SYSTEM_PROMPT + recovery_guidance),
         HumanMessage(content=user_content),
@@ -2206,6 +2214,12 @@ _GENERATED_MATERIAL_GUIDANCE = r"""- reference_answer: a correct model answer or
   stated definition rather than importing a convention from memory. If a referenced definition
   is absent and necessary, omit the affected candidates rather than inventing it. Never make a
   scoring criterion demand an unsupported conclusion or one particular valid proof method.
+- For a proof, first derive the minimal argument under exactly the stated hypotheses. Independently
+  substitute the proposed witnesses into the ORIGINAL target and simplify both sides in their written
+  order, including the last displayed equality. For an equivalence check both implications; for a
+  universal statement check whether the same derivation covers excluded or exceptional cases. Keep only
+  the checked proof. A correct conclusion does not repair a false intermediate equality. Omit optional
+  generalizations beyond the question. Never treat an example of a proof as a prescribed method.
 - solution_code: only for programming questions; return reference implementation text, never run it.
 - test_cases: only for programming questions; return structured cases, at most the requested count.
 - Match the question's required interface. For a function implementation, use io_mode="function",
@@ -2254,6 +2268,21 @@ class _IndependentCompletionOutput(BaseModel):
     # Decode the complete JSON once, then validate fields independently.
     # A malformed rubric must not discard a valid answer from the same response.
     candidates: List[Any] = Field(default_factory=list, max_length=200)
+
+
+def _withdrawn_derivation(answer, problem):
+    """Flag an author's explicit retraction, not an ordinary proof by contradiction."""
+    if normalize_question_type(problem.get("type")) not in {"推理题", "计算题", "概念题"}:
+        return None
+    if re.search(r"纠错|改错|纠正.*错误|分析.*错|identify the (?:error|mistake)|correct the following|critique",
+                 (problem.get("stem") or "") + "\n" + (problem.get("criterion") or ""), re.I):
+        return None
+    return re.search(
+        r"(?:^|[。！？.!?;；\n])\s*(?:等等|等一下|不对|这不对)[，,。.!！ ]+\s*"
+        r"(?:让(?:我们|我)|我们|我)(?:再|重新|仔细)(?:看|算|推导|检查|思考)|"
+        r"(?:^|[.!?;\n])\s*(?:wait|hold on|that(?:'s| is) (?:wrong|incorrect))[,—.! ]+\s*"
+        r"(?:let me|let['’]s|we (?:must|need to)|I (?:must|need to))\s+"
+        r"(?:reconsider|recheck|recalculate|re-?derive|start (?:over|again)|try again)", answer or "", re.I)
 
 
 async def generate_missing_question_materials(
@@ -2344,6 +2373,23 @@ async def generate_missing_question_materials(
             ),
         })
 
+    from backend.services.count_witnesses import marked_counts, reference_error
+    from backend.services.growth_order import ordered_growth_classes
+    count_checks = {}
+    for problem in problem_context:
+        growth = ordered_growth_classes(problem["stem"])
+        if growth:
+            problem["source_growth_order"] = growth
+            problem["growth_order_instruction"] = "List all source functions in this derived increasing order. The inner lists have equal asymptotic growth."
+        checks = marked_counts(problem["stem"])
+        if checks:
+            count_checks[problem["q_id"]] = checks
+            problem["source_execution_checks"] = checks
+            problem["execution_check_instruction"] = (
+                "Use these traces of the source code to check your derivation, including boundary inputs. "
+                "exact means the count is independent of the input; samples can disprove but cannot prove a formula. "
+                "For each marked part give its reasoning and finish with the total count. For a result-only task let each rubric item refer to the verified answer for its part. Do not restate a second, potentially contradictory formula in the criterion. Preserve any teacher answer literally."
+            )
     # Give the generator the same explicit entry that will validate its output.
     test_questions = {target["q_id"] for target in target_rows if target["target"] == "test_cases"}
     for row in problem_context:
@@ -2564,6 +2610,19 @@ async def generate_missing_question_materials(
                     or candidate.q_id != expected["q_id"]
                     or candidate.target != expected["target"]):
                 raise StructuredOutputInvalidError("Generated material targets were missing, duplicated or invalid.")
+            if (candidate.target == "reference_answer" and not problems_data[candidate.q_id].get("reference_answer")
+                    and (retraction := _withdrawn_derivation(candidate.text_value, problems_data[candidate.q_id]))):
+                error = StructuredOutputInvalidError("The generated reference contains a withdrawn derivation.")
+                error.repair_context = (f"The answer retracts its own working at «{retraction[0].strip()}». "
+                                        "Recompute from the question, check the disputed step, and return one "
+                                        "coherent worked answer with only the verified derivation.")
+                raise error
+            if candidate.target == "reference_answer" and candidate.q_id in count_checks:
+                issue = reference_error(candidate.text_value, count_checks[candidate.q_id])
+                if issue:
+                    error = StructuredOutputInvalidError("Reference count contradicts the source program.")
+                    error.repair_context = issue
+                    raise error
             seen.add(candidate.target_id)
             if candidate.target == "test_cases":
                 if len(candidate.test_cases) > request_context["test_case_count"]:
