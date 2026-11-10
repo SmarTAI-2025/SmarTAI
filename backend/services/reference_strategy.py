@@ -17,6 +17,16 @@ _MULTIPLE_REQUIRED = re.compile(
 )
 
 
+# A second solution can be introduced inside prose. Require a new strategy
+# and a fresh solution, not merely a theorem or a check of the preceding work.
+_INLINE_PARALLEL = re.compile(
+    r"(?:[。；;，,\n]\s*)(?:(?:也可以|还可以|也可|还可|或者可以|另一种解法是)\s*"
+    r"(?:改用|用|采用|利用)[^。；;\n]{1,32}?(?:求解|解此方程|求根|解得|得根)|"
+    r"(?:用|采用|利用)[^。；;\n]{1,24}?(?:法|公式)(?:同样|也)(?:可)?(?:解得|得到|得出|求得))|"
+    r"[.;]\s*alternatively,?\s+(?:solve|we can solve)\b", re.I,
+)
+
+
 def validate_generated_reference(stem, structure, answer, teacher=""):
     if hasattr(structure, "model_dump"):
         structure = structure.model_dump()
@@ -46,6 +56,9 @@ def validate_generated_reference(stem, structure, answer, teacher=""):
             continue
         methods = set()
         for chunk in chunks:
+            parallel = _INLINE_PARALLEL.search(chunk)
+            if parallel and chunk[:parallel.start()].strip():
+                methods.update(("first", "another"))
             for heading in _METHOD_HEADING.finditer(chunk):
                 if heading["other"] and (methods or chunk[:heading.start()].strip()):
                     methods.add("another")

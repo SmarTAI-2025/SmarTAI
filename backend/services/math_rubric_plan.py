@@ -719,9 +719,9 @@ _POLICY_LIMITATION = re.compile(
 _NO_COMPARISON_PENALTY = re.compile(r"不按(?:参考|标准)(?:答案|解法|步骤)(?:逐步)?对照扣分")
 _NO_CAUSAL_PENALTY = re.compile(r"(?:不能因为|不因为|不因)(?P<ground>[^，,；;。\n]+?)(?:而|就)?扣分")
 _FLOOR_RULE = re.compile(
-    r"^(?:(非空(?:白)?(?:作答|答案)?|有作答|non[- ]?(?:blank|empty)(?: answers?)?)"
+    r"^(?:(?:本题|整题|全题)\s*)?(?:(?:只要)?(非空(?:白)?(?:作答|答案)?|有作答|有书写|non[- ]?(?:blank|empty)(?: answers?)?)"
     r"\s*[:：]?\s*)?"
-    r"(?:最低(?:得分)?|保底(?:分)?|至少得|至少保留|minimum(?: score)?|floor(?: score)?)"
+    r"(?:最低(?:得分)?|保底(?:分)?|至少(?:得|给|保留)?|minimum(?: score)?|floor(?: score)?)(?:为|是)?"
     rf"\s*[:：=]?\s*({_NUMBER})\s*(分|points?|marks?|%|％)?$", re.I,
 )
 

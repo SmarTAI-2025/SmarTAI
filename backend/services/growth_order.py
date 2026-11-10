@@ -74,7 +74,22 @@ def _order(raw):
             return None
     if depth:
         return None
-    rational = r"((?:\d{1,5}(?:/\d{1,5}|\.\d{1,5})?|\.\d{1,5}))"
+    number = r"(?:\d{1,5}(?:\.\d{1,5})?|\.\d{1,5})"
+
+    # A slash belongs to a power operand only inside a grouped fraction.
+    # Outside the power a positive constant factor does not change its order.
+    quotient = re.fullmatch(rf"(n\^{number})/({number})", t)
+    if quotient and Fraction(quotient[2]) > 0:
+        t = quotient[1]
+    reciprocal = re.fullmatch(rf"({number})/({number})\^n", t)
+    if reciprocal and min(Fraction(value) for value in reciprocal.groups()) > 0:
+        t = f"({1 / Fraction(reciprocal[2])})^n"
+
+    def power_operand(token):
+        value = _ungroup(token)
+        pattern = rf"{number}(?:/{number})?" if token != value else number
+        return Fraction(value) if re.fullmatch(pattern, value) else None
+
     if re.fullmatch(r"\d{1,6}(?:\^\d{1,5})?", t) and not t.startswith("0"):
         return (1, 0, 0, 0)
     if t == "n!":
@@ -85,12 +100,11 @@ def _order(raw):
         return (1, 1, 0, 0)
     if t == "sqrtn":
         return (1, Fraction(1, 2), 0, 0)
-    m = re.fullmatch(rational, _ungroup(t[2:])) if t.startswith("n^") else None
-    if m:
-        return (1, Fraction(m[1]), 0, 0)
-    m = re.fullmatch(rational, _ungroup(t[:-2])) if t.endswith("^n") else None
-    if m:
-        base = Fraction(m[1])
+    exponent = power_operand(t[2:]) if t.startswith("n^") else None
+    if exponent is not None:
+        return (1, exponent, 0, 0)
+    base = power_operand(t[:-2]) if t.endswith("^n") else None
+    if base is not None:
         if base <= 0:
             return None
         return (3 if base > 1 else 0, base, 0, 0) if base != 1 else (1, 0, 0, 0)

@@ -143,7 +143,8 @@ def adopted_truth_key(rules, stem, reference):
     """A key can grade autonomously only when the adopted reference establishes every verdict."""
     if not reference or not is_decision_only(stem, rules.teacher_rubric or ""):
         return {}
-    if not all(part.label and len(part.steps) == 1 for part in rules.parts):
+    if not all(part.label and len(part.steps) == 1 and not part.deductions
+               and not part.steps[0].required_conditions for part in rules.parts):
         return {}
     flags = reference_decisions(reference, [part.label for part in rules.parts])
     if flags is None:

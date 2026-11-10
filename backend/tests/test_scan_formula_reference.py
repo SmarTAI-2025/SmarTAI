@@ -392,6 +392,8 @@ def test_unsupported_tokens_cannot_turn_into_different_supported_terms(term):
     [
         ("按增长率由小到大排列：.5^n、n、2^n", [[".5^n"], ["n"], ["2^n"]]),
         ("按增长率由小到大排列（n趋于0+）：n、n^2、n^3", None),
+        ("按增长率由小到大排列：n^2/3、n^(2/3)、n", [["n^(2/3)"], ["n"], ["n^2/3"]]),
+        ("按增长率由小到大排列：3/2^n、(3/2)^n、n", [["3/2^n"], ["n"], ["(3/2)^n"]]),
     ],
 )
 async def test_generator_and_grader_receive_only_supported_growth_evidence(stem, expected):

@@ -460,6 +460,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
 }) {
   const originalScore = String(problem.max_score ?? 10);
   const originalCriterion = problem.criterion ?? "";
+  const scoringRules = problem.effective_criterion?.trim() || originalCriterion;
   const legacyRubricNotes = (problem.preparation_issues ?? [])
     .filter(issue => issue.code === "math_rubric_advisory" && issue.status === "open"
       && issue.details?.reason !== "teacher_rule_interpretation")
@@ -564,7 +565,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
         <div className="mt-3 space-y-3">
           <strong className="block text-lg text-foreground">{formatScore(problem.max_score ?? 10)} {tx(locale, "分", "pts")}</strong>
           <div className="min-h-[92px] rounded-[8px] bg-slate-50 px-4 py-3 text-sm leading-6 dark:bg-slate-950/20">
-            {originalCriterion.trim() ? <MarkdownMath>{originalCriterion}</MarkdownMath> : <p className="text-sm text-muted-foreground">{tx(locale, "尚未提供评分标准。", "No rubric has been provided.")}</p>}
+            {scoringRules.trim() ? <MarkdownMath>{scoringRules}</MarkdownMath> : <p className="text-sm text-muted-foreground">{tx(locale, "尚未提供评分标准。", "No rubric has been provided.")}</p>}
           </div>
           <RubricPointStatus summary={savedSummary} locale={locale} />
         </div>

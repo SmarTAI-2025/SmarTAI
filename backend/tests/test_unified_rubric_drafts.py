@@ -302,7 +302,7 @@ async def test_content_changes_invalidate_but_renumbering_and_display_settings_d
     for key, value in (("stem", "Choose 3+3."), ("reference_answer", "C"), ("criterion", "每错扣1分"),
                        ("max_score", 8), ("type", "概念题")):
         assert saved_draft(problem({**row, key: value})) is None
-    assert saved_draft(original, grading_setup={"teacher_notes": "漏选得2分"}).plan.plan_id == saved_draft(original).plan.plan_id
+    assert saved_draft(original, grading_setup={"teacher_notes": "漏选得2分"}) is None
 
 
 def test_complete_teacher_rubric_is_adopted_and_source_rules_are_not_rewritten():

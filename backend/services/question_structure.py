@@ -570,6 +570,11 @@ def _parse_allocations(
     return values
 
 
+def scoring_stem(stem):
+    """Ignore a terminal sentence stop when matching an otherwise identical scoring part."""
+    return re.sub(r"(?<!\.)[。.?？](?=[ \t]*(?:\n|$|[(（][0-9a-zA-Z一二三四五六七八九十]+[)）]))", "", stem).strip() if stem else stem
+
+
 def summarize_rubric_points(
     criterion: str,
     max_score: Any,
@@ -601,9 +606,9 @@ def summarize_rubric_points(
         from backend.services.rubric_drafts import RubricDraft
         plan = RubricDraft.model_validate(rubric_draft).plan
         rules = plan.part_rubric
-        scope = [(part.label, part.stem) for part in structure.subparts] or [(None, None)]
+        scope = [(part.label, scoring_stem(part.stem)) for part in structure.subparts] or [(None, None)]
         if (plan.original_criterion == criterion and Decimal(str(rules.total_pts)) == maximum
-                and [(part.label, part.stem) for part in rules.parts] == scope):
+                and [(part.label, scoring_stem(part.stem)) for part in rules.parts] == scope):
             items = [RubricPointItemV1(subpart_id=source.subpart_id, label=source.label,
                                        points=_decimal_text(Decimal(str(part.total_pts))))
                      for source, part in zip(structure.subparts, rules.parts)]

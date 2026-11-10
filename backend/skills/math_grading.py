@@ -693,7 +693,7 @@ def _part_outcome(part):
     # Explicit earned steps and the shorthand for a single earned step are identical.
     steps = () if part.relevance == "complete" else tuple(sorted((s.id, s.outcome) for s in part.steps))
     errors = tuple(sorted((e.rule_id, e.origin_quote) for e in part.errors))
-    return part.relevance, method, steps, errors
+    return part.relevance, method, steps, errors, tuple(sorted(part.condition_results.items()))
 
 
 def _part_signature(assessment):
@@ -1703,7 +1703,7 @@ class MathGradingSkill(GradingSkill):
             # This fallback still uses the frozen decision schema. Carry forward
             # the failed validation and supply the exact addresses it can accept.
             output_model = (StepsOnlyRepair if all(
-                p.steps and p.alternative.deduct_per_error is None for p in plan.part_rubric.parts
+                p.steps and not p.deductions and p.alternative.deduct_per_error is None for p in plan.part_rubric.parts
             ) else AddressedPartAssessment)
             recovery = {
                 "validation_feedback": repair_context,
@@ -1715,7 +1715,7 @@ class MathGradingSkill(GradingSkill):
                 "instruction": "For student_quote and each step.evidence return an array of source line numbers, "
                                "e.g. [1,3] references student:1 and student:3. Use [] for an absent step. Keep any "
                                "paraphrase in progress/reason. On the points route put lost credit in "
-                               "the corresponding missed step; do not add deduction events. For actual "
+                               "the corresponding missed step. Charge only explicitly listed deduction rules. For actual "
                                "deductions keep each independent error grounded at its source. For method=alternative, "
                                "leave steps empty and use only rule_id=alternative for any errors.",
             }

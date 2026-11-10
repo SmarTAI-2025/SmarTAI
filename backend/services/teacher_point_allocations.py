@@ -13,7 +13,31 @@ def _words(text):
     return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", text).casefold())
 
 
-def _allocation_clauses(text):
+def _expand_subtotals(text, labels):
+    """Check an explicit '其中' subtotal, then bind its children as ordinary leaves."""
+    from backend.services.math_rubric_plan import _AMOUNT, _amount_value, _source_clauses
+
+    if "其中" not in text:
+        return text
+
+    def expand(match):
+        subtotal = _AMOUNT.fullmatch(match["total"])
+        children = _source_clauses(match["children"])
+        amounts = [list(_AMOUNT.finditer(child)) for child in children]
+        if (not children or any(len(values) != 1 for values in amounts)
+                or any(values[0][2] != subtotal[2] for values in amounts)):
+            raise ValueError(f"Identify the substep allocations in «{match[0]}».")
+        if sum(_amount_value(*values[0].groups(), 100) for values in amounts) != _amount_value(*subtotal.groups(), 100):
+            raise ValueError(f"The substeps in «{match[0]}» must add up to their stated subtotal.")
+        name = match["parent"].strip()
+        heading = next((m[0] for _, marker in labels if (m := marker.match(name))), "")
+        return heading + match["children"]
+
+    return re.sub(r"(?P<parent>[^()（）,，、；;。\n]{1,160}?)(?P<total>" + _AMOUNT.pattern +
+                  r")\s*[(（]\s*其中\s*[:：]?\s*(?P<children>[^()（）]+)[)）]", expand, text)
+
+
+def _allocation_clauses(text, labels):
     """Keep the source span for each assignment, including shared-unit lists."""
     from backend.services.math_rubric_plan import _AMOUNT, _NUMBER, _scoring_numeric_text, _source_clauses
 
@@ -21,7 +45,7 @@ def _allocation_clauses(text):
     # For prefix awards ("3 points for setup and 7 points for result") the
     # boundary instead precedes the next amount. Never split inside a number.
     join = r"(?:以及|并且|然后|而且|而|并|及|与|和|且|另|\band\b|\bwhile\b|\bthen\b)"
-    for sentence in _source_clauses(text):
+    for sentence in _source_clauses(_expand_subtotals(text, labels)):
         normalized = unicodedata.normalize("NFKC", sentence)
         parallel = re.fullmatch(r"(.+?)分别(?:占|为|得|计|给)?\s*(.+)", normalized)
         if parallel:
@@ -70,7 +94,7 @@ def validate_teacher_point_items(rules, ordinary):
     scope = parts
     labels = [(p, re.compile(_allocation_marker_pattern(p.label), re.I)) for p in parts if p.label]
     anchors = {}
-    for source_clause, clause in _allocation_clauses(ordinary):
+    for source_clause, clause in _allocation_clauses(ordinary, labels):
         clause = re.sub(r"^(?:(?:参考解|标答解法|标答|主)?评分(?:标准|参考|说明)?|主标准|marking scheme|rubric)\s*:\s*",
                         "", clause, flags=re.I)
         # A part heading scopes its subsequent clauses. Internal mathematical
@@ -86,18 +110,26 @@ def validate_teacher_point_items(rules, ordinary):
         if len(money) != 1:
             continue
         amount = money[0]
+        # Remove the allocation operator only when it follows a named subject.
+        # Keep the original clause for evidence, monetary roles and scope.
+        prefix = clause[:amount.start()]
+        operator = re.search(r"(?:占(?:本[问题]|整题)?(?:总分|满分)|最多|至多|最高|至少)(?:可?[给得]|为)?\s*$", prefix)
+        subject = prefix[:operator.start()].strip() if operator else ""
+        named_bound = bool(subject and not re.search(r"满分|总分|保底|累计|扣|后续|每错|非空|作答|本题|整题", subject))
+        conditional_minimum = named_bound and "至少" in operator[0]
+        budget_context = subject + clause[amount.start():] if named_bound else clause
         # These amounts play other roles and have their own typed checks.
         if re.search(r"满分|总分|起[评分]|最多|至多|上限|最低|保底|至少|折算|沿用|后传|保留|"
                      r"粒度|(?:配分|评分|计分|给分|分值)单位|每(?:个)?小问|每(?:道)?题|[各每]步|各小问|每空|满打|空白|未作答|"
                      r"maximum|minimum|floor|at most|at least|follow.through|each part|per part|"
-                     r"allocation unit|partial credit|otherwise|部分分", clause, re.I):
+                     r"allocation unit|partial credit|otherwise|部分分", budget_context, re.I):
             continue
         if re.search(r"\d\s*/\s*$", clause[:amount.start()]) or clause[amount.end():].startswith(("之","钟")):
             continue
         if _score_context_clause(clause, ordinary, scope[0].total_pts if len(scope) == 1 else rules.total_pts):
             continue
         deduction = bool(_DEDUCTION.search(clause))
-        prefix = clause[:amount.start()].rstrip(" (（:：=，,")
+        prefix = (subject if named_bound else prefix).rstrip(" (（:：=，,")
         suffix = clause[amount.end():].strip(" ()（）[]【】:：=.")
         amount_first = not prefix or re.fullmatch(r"(?:award|give|earn|deduct|扣除?|给|得)", prefix, re.I)
         condition = re.sub(r"^for\s+", "", suffix, flags=re.I) if amount_first else prefix
@@ -123,7 +155,10 @@ def validate_teacher_point_items(rules, ordinary):
             if quote and (match_source_quote(quote, source_clause) or
                           (match_source_quote(source_clause, quote) and match_source_quote(quote, condition))):
                 quoted.append((p, item))
-        expected = _amount_value(*amount.groups(), scope[0].total_pts if len(scope) == 1 else rules.total_pts)
+        budget = scope[0].total_pts if len(scope) == 1 else rules.total_pts
+        if named_bound and re.search(r"整题|总分", operator[0]) and "本问" not in operator[0]:
+            budget = rules.total_pts
+        expected = _amount_value(*amount.groups(), budget)
         group = []
         if not deduction and len(scope) > 1 and amount[2] in {"%", "％"}:
             # Unscoped percentages fund the named group across the question.
@@ -157,7 +192,7 @@ def validate_teacher_point_items(rules, ordinary):
                              f"{[p.label or p.id for p in scope]}. Quote that condition on its scoring item.")
         p, item = matches[0]
         actual = Decimal(str(item.deduct_pts if deduction else item.total_pts))
-        if actual != expected:
+        if actual < expected or (not conditional_minimum and actual != expected):
             raise ValueError(f"{p.id}/{item.id}: teacher allocation «{clause}» requires {expected} points, received {actual}.")
         if quoted and (p,item) not in quoted:
             raise ValueError(f"{p.id}/{item.id}: the source quote belongs to a different teacher condition: «{clause}».")
@@ -168,13 +203,102 @@ def validate_teacher_point_items(rules, ordinary):
     return anchors
 
 
-def teacher_awards_match(rules):
-    from backend.services.part_rubric import ordinary_criterion
+def bind_step_conditions(parts, ordinary, anchors):
+    """Resolve explicit no-credit clauses to funded steps, retaining ambiguous sources for review."""
+    from backend.services.math_rubric_plan import _source_clauses
 
-    if not rules or not rules.teacher_rubric:
+    requirements = {}
+    unresolved = []
+    labels = [(p, re.compile(_allocation_marker_pattern(p.label), re.I)) for p in parts if p.label]
+    scope = parts
+    previous = ""
+    for clause in _source_clauses(ordinary):
+        preceding, previous = previous, clause
+        heading = next(((p, m) for p, pattern in labels if (m := pattern.match(clause))), None)
+        if heading:
+            scope = (heading[0],)
+            preceding = ""
+            clause = clause[heading[1].end():].strip(" :：")
+        if not re.search(r"不得分|不给分|不计分|no credit|zero points", clause, re.I):
+            continue
+        condition_word = r"未|缺|漏|没有|若|如|否则|without|unless|if\b"
+        if not re.search(condition_word, clause, re.I):
+            if not re.search(condition_word, preceding, re.I):
+                continue
+            joined = re.search(re.escape(preceding) + r"\s*[，,]\s*" + re.escape(clause), ordinary)
+            if joined is None:
+                continue
+            clause = joined[0]
+        items = [(p, s) for p in scope for s in p.steps]
+        if not items:
+            unresolved.append(clause)
+            continue
+        # Match the named award, not the condition whose absence triggers the loss.
+        target = re.split(r"时|则|[，,]", clause)[-1]
+        named = []
+        for part, step in items:
+            name = anchors.get((part.id, step.id), (step.criterion, ""))[0]
+            if re.search(re.escape(_words(name)) + r"(?:项)?(?:不得分|不给分|不计分)", _words(target)):
+                named.append((part, step))
+        if not named:
+            named = [(part, step) for part, step in items if clause in step.required_conditions]
+        if len(named) == 1:
+            part, step = named[0]
+            requirements.setdefault((part.id, step.id), []).append(clause)
+        else:
+            unresolved.append(clause)
+    # Explicit source-bound conditions expressed in other words can also be
+    # judged separately. Never accept an invented condition as a scoring gate.
+    for part in parts:
+        for step in part.steps:
+            key = (part.id, step.id)
+            for condition in step.required_conditions:
+                if not (match_source_quote(ordinary, condition) and re.search(
+                    r"必须|须|要求|只有|仅当|未|缺|漏|不得分|should|must|required|only if|without|unless",
+                    condition, re.I
+                )):
+                    raise ValueError(f"{part.id}/{step.id}: quote the teacher's required condition.")
+                if condition in unresolved:
+                    continue
+                if any(condition in values for identity, values in requirements.items() if identity != key):
+                    raise ValueError(f"{part.id}/{step.id}: condition belongs to a different scoring step.")
+                values = requirements.setdefault(key, [])
+                if condition not in values:
+                    values.append(condition)
+    gaps = [f"请核对该条件适用的评分项 / Check which scoring item this condition applies to: {clause}"
+            for clause in unresolved]
+    return {key: tuple(values) for key, values in requirements.items()}, gaps
+
+
+def teacher_awards_match(rules):
+    from backend.services.part_rubric import (
+        _NOT_FULL, _REQUIRED, _requires_method, _teacher_alternative_fields, ordinary_criterion, verify_teacher_numbers,
+    )
+
+    if not rules:
         return True
+    for part in rules.parts:
+        policy = part.alternative
+        if policy.max_deduction is not None and policy.source_quote:
+            try:
+                fields = _teacher_alternative_fields(policy.source_quote, policy)
+            except ValueError:
+                fields = {}
+            if "deduct_per_error" in fields and "max_deduction" not in fields:
+                return False
+        if _NOT_FULL.search(policy.source_quote) and policy.maximum.resolve(part.total_pts) == part.total_pts:
+            return False
+        if (policy.source_quote in {rules.stem, part.stem} and _REQUIRED.search(policy.source_quote)
+                and not _requires_method(policy.source_quote)):
+            return False
     try:
-        validate_teacher_point_items(rules, ordinary_criterion(rules.teacher_rubric))
+        ordinary = ordinary_criterion(rules.teacher_rubric or "")
+        anchors = validate_teacher_point_items(rules, ordinary)
+        verify_teacher_numbers(rules.teacher_rubric or "", rules, rules.total_pts)
+        conditions, gaps = bind_step_conditions(rules.parts, ordinary, anchors)
+        if any(step.required_conditions != conditions.get((part.id, step.id), ())
+               for part in rules.parts for step in part.steps) or set(gaps) - set(rules.teacher_gaps):
+            return False
     except ValueError:
         return False
     return True

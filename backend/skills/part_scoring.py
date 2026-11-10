@@ -5,7 +5,7 @@ from fractions import Fraction
 import re
 from typing import Annotated, Literal
 
-from pydantic import BeforeValidator, Field
+from pydantic import BeforeValidator, Field, StrictBool
 from pydantic.json_schema import SkipJsonSchema
 
 from backend.models import StepScore
@@ -42,6 +42,9 @@ class _PartReading(Frozen):
     method: Literal["reference", "minor_variant", "alternative", "undetermined"]
     reference_method: str = Field(default="", max_length=2000)
     student_method: str = Field(default="", max_length=2000)
+    condition_results: dict[Key, Annotated[tuple[StrictBool, ...], Field(max_length=20)]] = Field(
+        default_factory=dict, max_length=100, exclude_if=lambda v: not v
+    )
     errors: tuple[ErrorEvent, ...] = Field(default=(), max_length=100)
 
 
@@ -164,6 +167,10 @@ in notation or order; grade a minor_variant using the main rubric.
 Use step IDs with earned/missed/follow_through for points; do not report numeric awards.
 Follow-through needs the same source as a diagnosed missed step or independent error, and correct downstream work.
 For a target_item deduction, use target_id from part.answer_refs to identify the affected target.
+For funded steps with required_conditions, supply condition_results keyed by step ID: one boolean per
+condition in its frozen order. True means credit is allowed by that clause (e.g. the required unit
+is present); false means its disqualifying condition applies. For a mixed part judge
+all steps first and report only the explicitly frozen additional deductions as errors.
 For deductions report actual distinct errors with rule_id, evidence, and origin_quote;
 a repeated consequence has the same origin. If rules have an exclusive_group, select at most one
 loss for the entire goal. For a mathematically complete goal select none. On the main deduction route, determine
@@ -316,6 +323,8 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
             part.alternative.minimum.resolve(maximum) if alternative else Fraction(0)
         )
         amounts = []
+        if set(d.condition_results) - {step.id for step in part.steps if step.required_conditions and not alternative}:
+            raise ValueError(f"{part.id}: use condition_results only for the selected route's conditional steps.")
         if alternative and d.steps:
             raise ValueError(f"{part.id}: alternative must leave steps empty. Use only the alternative policy and its error IDs.")
         if d.relevance in {"unanswered", "unrelated", "uncertain"} or (
@@ -352,7 +361,7 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                     ),
                 )
             actual = {s.id: s for s in decisions_for_steps}
-            if d.errors:
+            if d.errors and not part.deductions:
                 raise ValueError(
                     f"{part.id}: the points route received {len(d.errors)} deduction events. "
                     "Leave errors empty; explain each lost point in its missed step's reason."
@@ -383,14 +392,22 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                     credit = step.follow_through_award(ai_default=rules.rubric_origin == "ai") if allow_partial else Fraction(0)
                 elif awarded.outcome == "missed":
                     credit = Fraction(0)
+                if step.required_conditions and awarded.outcome != "missed":
+                    checks = d.condition_results.get(step.id, ())
+                    if len(checks) != len(step.required_conditions):
+                        raise ValueError(f"{step.id}: judge every required condition separately in condition_results.")
+                    if not all(checks):
+                        credit = Fraction(0)
                 amounts.append((step.id, credit, awarded.reason))
-        else:
-            if d.steps:
+        score_deductions = (alternative or part.deductions) and d.relevance in {"partial", "complete", "incorrect"}
+        if score_deductions and not (d.relevance == "incorrect" and part.steps and not alternative):
+            mixed = bool(part.steps and not alternative)
+            if d.steps and not mixed:
                 raise ValueError(
                     f"{part.id}: only the chosen deduction policy can apply."
                 )
             if (d.relevance in {"partial", "incorrect"} and not d.errors
-                    and (not alternative or cap > floor)):
+                    and not mixed and (not alternative or cap > floor)):
                 raise ValueError(
                     f"{part.id}: incomplete work cannot silently earn full credit; identify the missing obligation."
                 )
@@ -459,7 +476,12 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                     rule = penalty_rules[rule_id]
                     loss = _amount(rule.deduct_pts) * min(count, rule.limit or count)
                     losses += min(loss, _amount(rule.max_deduction)) if rule.max_deduction is not None else loss
-            amounts = [(None, max(floor, cap - losses), d.progress)]
+            if mixed and losses:
+                earned = sum(value for _, value, _ in amounts)
+                detail = " · ".join([*(reason for _, _, reason in amounts), *(event.reason for event in d.errors)])
+                amounts = [(None, max(Fraction(0), earned - losses), detail)]
+            elif not mixed:
+                amounts = [(None, max(floor, cap - losses), d.progress)]
         subtotal = sum(x[1] for x in amounts)
         if d.relevance == "complete" and (subtotal != cap or d.errors):
             raise ValueError("Complete work must satisfy all applicable goals.")

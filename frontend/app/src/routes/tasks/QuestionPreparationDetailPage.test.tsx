@@ -9,6 +9,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SourceFileDescriptor } from "@/types/sourcePreview";
 import type { PreparationIssue } from "@/types";
+import type { ProblemInfo } from "@/types/task";
 import { QuestionPreparationDetailPage } from "./QuestionPreparationDetailPage";
 
 // These integration cases hydrate 24 real IndexedDB-backed editors and perform
@@ -516,6 +517,19 @@ describe("QuestionPreparationDetailPage navigation", () => {
       criterion: "(a) 5 分\n(b) 6 分",
     });
     await waitFor(() => expect(screen.queryByRole("spinbutton", { name: "第 1 题满分" })).not.toBeInTheDocument());
+  });
+
+  it("shows the frozen allocation and edits the source wording", async () => {
+    const question = taskData.problem_data.Q2 as ProblemInfo;
+    question.effective_criterion = "列式 4 分，结果 6 分。";
+    try {
+      await renderPage();
+      expect(await screen.findByText(question.effective_criterion)).toBeVisible();
+      await userEvent.click(screen.getByRole("button", { name: "修改第 2 题满分与评分标准" }));
+      expect(screen.getByRole("textbox", { name: "第 2 题评分标准" })).toHaveValue(question.criterion);
+    } finally {
+      delete question.effective_criterion;
+    }
   });
 
   it("carries the latest workflow revision across different maximum-score edits and final confirmation", async () => {
