@@ -143,3 +143,40 @@ async def test_initial_material_candidate_also_requires_the_same_policy_audit(al
         [{'target_id': 'q1:criterion', 'q_id': 'q1', 'target': 'criterion'}], 3, provider, allow_partial=allow_partial)
     assert len(provider.calls) == 2 and len(candidates) == 1
     assert saved_draft({**row, 'rubric_draft': candidates[0].rubric_draft}) is not None
+
+
+LIVE = json.loads((Path(__file__).parent / 'fixtures/part_rubrics/'
+                   'gemini-follow-through-audit-20261112.json').read_text())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('case', LIVE['cases'], ids=lambda case: case['case'])
+async def test_real_gemini_audit_replays_through_the_exact_request_and_settlement(case):
+    class AuditReplay(Provider):
+        async def ainvoke(self, messages, **kwargs):
+            if self.calls:
+                assert [{'role': 'system' if type(m).__name__ == 'SystemMessage' else 'user',
+                         'content': m.content} for m in messages] == case['audit_request']
+            return await super().ainvoke(messages, **kwargs)
+
+    provider = AuditReplay([json.dumps({'part_rubric': case['constructed_candidate']}, ensure_ascii=False),
+                            case['audit_response']])
+    row = case['question']
+    if case['case'] == 'omitted_follow_through':
+        with pytest.raises(ValidationError, match='could not be verified'):
+            await compile_parts_draft(row, provider)
+        assert saved_draft(row) is None
+    else:
+        draft = await compile_parts_draft(row, provider)
+        loaded = saved_draft({**row, 'rubric_draft': json.loads(draft.model_dump_json())})
+        assert loaded is not None
+        rules = loaded.plan.part_rubric
+        part = rules.parts[0]
+        decision = PartDecision(part_id=part.id, target_quote=f'part:{part.id}', student_quote='student:1, student:2',
+            method='reference', relevance='partial', progress='列式错，沿错计算正确', steps=[
+                dict(id='eq', outcome='missed', evidence='student:1', reason='列式错误'),
+                dict(id='val', outcome='follow_through', evidence='student:2', error_source='student:1', reason='沿错计算正确'),
+            ])
+        score, rows = settle_parts(rules, [decision], 'x=4\ny=2x=8', row['stem'])
+        assert score == 4 and [r.score for r in rows] == [0, 4]
+    assert len(provider.calls) == 2
