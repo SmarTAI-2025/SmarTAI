@@ -1,0 +1,102 @@
+{
+  "provenance": {
+    "kind": "synthetic real-model replies",
+    "model": "gemini-3.5-flash-lite",
+    "source_commit": "add7c93ad517ed60b28b13902044129cf5f13a88",
+    "phase": "verify",
+    "student_data": false
+  },
+  "cases": [
+    {
+      "case": "error_count",
+      "question": {
+        "q_id": "synthetic",
+        "number": "1",
+        "type": "计算题",
+        "max_score": 10,
+        "stem": "笔记本与笔共花费17元，笔记本10元，求笔的价格并列出方程。",
+        "reference_answer": "设笔价为x元，10+x=17，解得x=7元。",
+        "criterion": "每个独立计算错误扣1分。"
+      },
+      "responses": [
+        "```json\n{\n  \"part_rubric\": {\n    \"total_pts\": 10.0,\n    \"parts\": [\n      {\n        \"id\": \"part_1\",\n        \"label\": null,\n        \"total_pts\": 10.0,\n        \"deductions\": [\n          {\n            \"id\": \"err_calc\",\n            \"criterion\": \"每个独立计算错误扣1分。\",\n            \"source_quote\": \"每个独立计算错误扣1分。\",\n            \"deduct_pts\": 1.0\n          }\n        ],\n        \"alternative\": {\n          \"maximum\": {\n            \"points\": 10.0\n          },\n          \"minimum\": {\n            \"points\": 0.0\n          },\n          \"deduct_per_error\": 1.0\n        }\n      }\n    ]\n  }\n}\n```"
+      ]
+    },
+    {
+      "case": "nonblank_floor",
+      "question": {
+        "q_id": "synthetic",
+        "number": "1",
+        "type": "计算题",
+        "max_score": 10,
+        "stem": "笔记本与笔共花费17元，笔记本10元，求笔的价格并列出方程。",
+        "reference_answer": "设笔价为x元，10+x=17，解得x=7元。",
+        "criterion": "列式3分，计算结果7分。非空作答最低给2分。"
+      },
+      "responses": [
+        "```json\n{\n  \"part_rubric\": {\n    \"total_pts\": 10.0,\n    \"parts\": [\n      {\n        \"id\": \"part1\",\n        \"total_pts\": 10.0,\n        \"steps\": [\n          {\n            \"id\": \"step1\",\n            \"criterion\": \"列式\",\n            \"source_quote\": \"列式3分\",\n            \"total_pts\": 3.0\n          },\n          {\n            \"id\": \"step2\",\n            \"criterion\": \"计算结果\",\n            \"source_quote\": \"计算结果7分\",\n            \"total_pts\": 7.0\n          }\n        ],\n        \"alternative\": {\n          \"maximum\": {\n            \"points\": 10.0\n          },\n          \"minimum\": {\n            \"points\": 0.0\n          },\n          \"deduct_per_error\": 1.0,\n          \"max_deduction\": null\n        }\n      }\n    ],\n    \"nonblank_floor\": {\n      \"pts\": 2.0\n    },\n    \"teacher_gaps\": []\n  }\n}\n```"
+      ]
+    },
+    {
+      "case": "nested_subtotal",
+      "question": {
+        "q_id": "synthetic",
+        "number": "1",
+        "type": "计算题",
+        "max_score": 10,
+        "stem": "笔记本与笔共花费17元，笔记本10元，求笔的价格并列出方程。",
+        "reference_answer": "设笔价为x元，10+x=17，解得x=7元。",
+        "criterion": "列式3分（设未知数1分、建立方程2分），计算结果7分。"
+      },
+      "responses": [
+        "```json\n{\n  \"part_rubric\": {\n    \"total_pts\": 10.0,\n    \"parts\": [\n      {\n        \"id\": \"1\",\n        \"label\": null,\n        \"total_pts\": 10.0,\n        \"steps\": [\n          {\n            \"id\": \"step1\",\n            \"criterion\": \"设未知数\",\n            \"source_quote\": \"设未知数1分\",\n            \"total_pts\": 1.0\n          },\n          {\n            \"id\": \"step2\",\n            \"criterion\": \"建立方程\",\n            \"source_quote\": \"建立方程2分\",\n            \"total_pts\": 2.0\n          },\n          {\n            \"id\": \"step3\",\n            \"criterion\": \"计算结果\",\n            \"source_quote\": \"计算结果7分\",\n            \"total_pts\": 7.0\n          }\n        ],\n        \"deductions\": [],\n        \"alternative\": {\n          \"maximum\": {\n            \"points\": 10.0\n          },\n          \"minimum\": {\n            \"points\": 0.0\n          },\n          \"deduct_per_error\": 1.0,\n          \"max_deduction\": 10.0\n        }\n      }\n    ],\n    \"teacher_gaps\": []\n  }\n}\n```"
+      ]
+    },
+    {
+      "case": "follow_through_target",
+      "question": {
+        "q_id": "synthetic",
+        "number": "1",
+        "type": "计算题",
+        "max_score": 10,
+        "stem": "笔记本与笔共花费17元，笔记本10元，求笔的价格并列出方程。",
+        "reference_answer": "设笔价为x元，10+x=17，解得x=7元。",
+        "criterion": "列式2分，计算结果8分。计算结果沿用错值保留一半分。"
+      },
+      "responses": [
+        "```json\n{\n  \"part_rubric\": {\n    \"total_pts\": 10.0,\n    \"parts\": [\n      {\n        \"id\": \"part_1\",\n        \"label\": null,\n        \"total_pts\": 10.0,\n        \"steps\": [\n          {\n            \"id\": \"step_1\",\n            \"criterion\": \"列出正确的方程：$10 + x = 17$（或设笔价为 $x$ 元，列出相应方程）。\",\n            \"source_quote\": \"列式2分\",\n            \"total_pts\": 2.0\n          },\n          {\n            \"id\": \"step_2\",\n            \"criterion\": \"正确求解方程并得出笔的价格为 $7$ 元。计算结果沿用错值保留一半分。\",\n            \"source_quote\": \"计算结果8分。计算结果沿用错值保留一半分。\",\n            \"total_pts\": 8.0,\n            \"follow_through_pts\": 4.0\n          }\n        ],\n        \"alternative\": {\n          \"maximum\": {\n            \"points\": 10.0\n          },\n          \"minimum\": {\n            \"points\": 0.0\n          },\n          \"deduct_per_error\": 1.0,\n          \"field_sources\": {}\n        }\n      }\n    ]\n  }\n}\n```"
+      ]
+    },
+    {
+      "case": "semantic_floor",
+      "question": {
+        "q_id": "synthetic",
+        "number": "1",
+        "type": "计算题",
+        "max_score": 10,
+        "stem": "笔记本与笔共花费17元，笔记本10元，求笔的价格并列出方程。",
+        "reference_answer": "设笔价为x元，10+x=17，解得x=7元。",
+        "criterion": "列式3分，计算结果7分。非空作答最低分按满分的五分之一计算。"
+      },
+      "responses": [
+        "```json\n{\n  \"part_rubric\": {\n    \"total_pts\": 10.0,\n    \"parts\": [\n      {\n        \"id\": \"1\",\n        \"total_pts\": 10.0,\n        \"steps\": [\n          {\n            \"id\": \"step_1\",\n            \"criterion\": \"列出方程，正确表示笔记本与笔的总价关系，得3分。\",\n            \"source_quote\": \"列式3分\",\n            \"total_pts\": 3.0\n          },\n          {\n            \"id\": \"step_2\",\n            \"criterion\": \"求解方程，得出笔的价格计算结果，得7分。\",\n            \"source_quote\": \"计算结果7分\",\n            \"total_pts\": 7.0\n          }\n        ],\n        \"alternative\": {\n          \"maximum\": {\n            \"points\": 10.0\n          },\n          \"minimum\": {\n            \"points\": 2.0\n          },\n          \"deduct_per_error\": 2.0\n        }\n      }\n    ],\n    \"nonblank_floor\": {\n      \"fraction\": 0.2\n    },\n    \"teacher_gaps\": []\n  }\n}\n```",
+        "```json\n{\"checks\": [{\"policy_id\": \"teacher_policy_v1:83f56675e5e53b84ee9f62f7854d4ec9c34a9ce79c60a6ba2647cd304e81d4fe\", \"source_quote\": \"非空作答最低分按满分的五分之一计算\", \"verdict\": \"consistent\", \"reason\": \"The teacher rule states that a non-empty response has a minimum score calculated as one-fifth of the total score. The total score is 10.0, and one-fifth of 10.0 is 2.0. The candidate correctly implements this nonblank floor as a minimum of 2.0 points (fraction 0.2).\"}]}\n```"
+      ]
+    }
+  ],
+  "initial_case": {
+    "question": {
+      "q_id": "synthetic",
+      "number": "1",
+      "type": "计算题",
+      "max_score": 10,
+      "stem": "笔记本与笔共花费17元，笔记本10元，求笔的价格并列出方程。",
+      "reference_answer": "",
+      "criterion": "列式3分（设未知数1分、建立方程2分），计算结果7分。"
+    },
+    "responses": [
+      "{\"candidates\":[{\"target_id\":\"synthetic:reference_answer\",\"text_value\":\"设笔的价格为 $x$ 元。\\n\\n根据题意，笔记本与笔共花费 17 元，笔记本价格为 10 元，可列出方程：\\n$$10 + x = 17$$\\n\\n解这个方程得：\\n$$x = 17 - 10$$\\n$$x = 7$$\\n\\n答：笔的价格为 7 元。\"}]}",
+      "```json\n{\n  \"part_rubric\": {\n    \"total_pts\": 10.0,\n    \"parts\": [\n      {\n        \"id\": \"part1\",\n        \"total_pts\": 10.0,\n        \"steps\": [\n          {\n            \"id\": \"step1\",\n            \"criterion\": \"设未知数\",\n            \"source_quote\": \"设未知数1分\",\n            \"total_pts\": 1.0\n          },\n          {\n            \"id\": \"step2\",\n            \"criterion\": \"建立方程\",\n            \"source_quote\": \"建立方程2分\",\n            \"total_pts\": 2.0\n          },\n          {\n            \"id\": \"step3\",\n            \"criterion\": \"计算结果\",\n            \"source_quote\": \"计算结果7分。\",\n            \"total_pts\": 7.0\n          }\n        ],\n        \"alternative\": {\n          \"maximum\": {\n            \"points\": 10.0\n          },\n          \"minimum\": {\n            \"points\": 0.0\n          },\n          \"deduct_per_error\": 1.0,\n          \"max_deduction\": 10.0\n        }\n      }\n    ]\n  }\n}\n```"
+    ]
+  }
+}
