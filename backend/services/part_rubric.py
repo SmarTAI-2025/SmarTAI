@@ -1245,32 +1245,54 @@ def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_p
         }])
 
     from backend.services.math_rubric_plan import _source_clauses
+
+    def follow_through_candidates(parts):
+        return [{"part_id": part.id, "step_id": step.id,
+                 "criterion": anchors.get((part.id, step.id), (step.criterion, ""))[0],
+                 "total_pts": float(step.total_pts),
+                 "follow_through_pts": float(step.follow_through_award())}
+                for part in parts for step in part.steps]
+
     scoped = rubric.parts
     for sentence in re.split(r"[。；;\n]", ordinary):
         preceding_condition = ""
-        for clause in _source_clauses(sentence):
+        preceding_index = None
+        unparsed = {}
+        for index, clause in enumerate(_source_clauses(sentence)):
             heading = next(((p, found) for p in rubric.parts if p.label
                             and (found := re.match(_allocation_marker_pattern(p.label), clause, re.I))), None)
             if heading:
                 scoped = (heading[0],)
                 preceding_condition = ""
                 clause = clause[heading[1].end():].strip(" :：")
-            marker = re.search(r"沿用|后续|后传|follow.through|propagat", clause, re.I)
+            # Recognizing an error-carrying policy must not depend on whether
+            # its award verb/amount is supported by the numeric parser. Keep
+            # unparsed source clauses for the existing bounded semantic audit.
+            # Plain "later steps" or "reuse the definition" are not such cues.
+            explicit = re.search(r"沿错|follow.through|error.carried.forward", clause, re.I)
+            carried_error = (re.search(r"沿用|后传|propagat", clause, re.I)
+                             and re.search(r"错|误|error|incorrect|wrong", sentence, re.I))
+            if (explicit or carried_error) and any(part.steps for part in scoped):
+                unparsed[index] = scoped
+            marker = re.search(r"沿用|沿错|后续|后传|follow.through|propagat|error.carried.forward", clause, re.I)
             award = re.search(r"保留|折算为|retains?|keeps?", clause, re.I)
             if not marker and not (preceding_condition and award):
                 preceding_condition = ""
                 continue
             if not award:
                 preceding_condition = clause
+                preceding_index = index
                 continue
             quote = sentence.strip() if preceding_condition else clause
             target = clause[:marker.start() if marker else award.start()]
             match = re.search(r"(?:保留|折算为|retains?|keeps?)\s*(" + _AMOUNT.pattern + ")", clause, re.I)
-            candidates = [{"part_id": part.id, "step_id": step.id,
-                           "criterion": anchors.get((part.id, step.id), (step.criterion, ""))[0],
-                           "total_pts": float(step.total_pts),
-                           "follow_through_pts": float(step.follow_through_award())}
-                          for part in scoped for step in part.steps]
+            candidates = follow_through_candidates(scoped)
+            unparsed.pop(index, None)
+            # A preceding clause with its own award is a separate obligation,
+            # not just the condition for this clause's numeric retention rule.
+            if (preceding_condition and not marker and not _AMOUNT.search(preceding_condition)
+                    and not re.search(r"分|credit|points?|marks?", preceding_condition, re.I)):
+                unparsed.pop(preceding_index, None)
             preceding_condition = ""
             if not match:
                 issue("follow_through", quote, candidates)
@@ -1301,6 +1323,9 @@ def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_p
 
             if not applicable or not all(matches(step) for step in applicable):
                 raise ValueError(f"Preserve the teacher's follow-through credit {match[1]} in its designated step.")
+        if unparsed:
+            parts = {part.id: part for scope in unparsed.values() for part in scope}
+            issue("follow_through", sentence.strip(), follow_through_candidates(parts.values()))
     unknown = [item for item in pending if item["policy_id"] not in verified_policy_ids]
     if unknown:
         raise TeacherPolicyUnresolved(unknown)

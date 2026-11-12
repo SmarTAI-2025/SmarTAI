@@ -1,0 +1,221 @@
+{
+  "head": "c5b691b8ee16d1da13bd5c76b9f1ab5d047e2089",
+  "cases": [
+    {
+      "question": {
+        "q_id": "q1",
+        "number": "1",
+        "type": "计算题",
+        "stem": "求未知数。",
+        "reference_answer": "先列式，再计算。",
+        "max_score": 10,
+        "criterion": "列式2分，计算结果8分。计算结果沿用错值仍得一半分。"
+      },
+      "raw_response": "{\"part_rubric\": {\"id\": \"q1\", \"stem\": \"求未知数。\", \"label\": \"1\", \"total_pts\": 10, \"parts\": [{\"id\": \"p\", \"total_pts\": 10, \"alternative\": {\"deduct_per_error\": 2}, \"steps\": [{\"id\": \"eq\", \"criterion\": \"列式\", \"total_pts\": 2, \"source_quote\": \"\"}, {\"id\": \"val\", \"criterion\": \"计算结果\", \"total_pts\": 8, \"source_quote\": \"\"}]}]}}",
+      "draft": {
+        "schema_version": "rubric_draft_v1",
+        "alternative_policy_version": 3,
+        "content_fingerprint": "488cacba2fd75b7f278c3070f4343b45732b81afc57403d8eda15c38fb108a63",
+        "teacher_notes": "",
+        "plan": {
+          "effective_criterion": "Original criterion (provided; preserved verbatim):\n列式2分，计算结果8分。计算结果沿用错值仍得一半分。\n\nAI interpretation:\n列式2分，计算结果8分。计算结果沿用错值仍得一半分。\n\nExplicit original rules take precedence over AI additions. The question maximum is 10. Select the first applicable route before scoring; routes are mutually exclusive, never added together or compared for the best/worst score. For points, award each item once within [0, item.points]. For deductions, start from the question maximum, deduct independent errors subject to max_occurrences, then apply the stated minimum only when its condition holds. A nonblank minimum never applies to a blank answer. Follow any explicit original blank-answer rule. Respect explicit original non-penalty and follow-through rules even without an executable policy; retain related claims and explain why no deduction is charged. Return a final score within [0, max_score].",
+          "routes": [
+            {
+              "id": "parts",
+              "description": "Apply the frozen per-part rubric.",
+              "applies_when": "always",
+              "mode": "holistic",
+              "items": [],
+              "minimum_score": 0.0,
+              "minimum_condition": "always",
+              "exemptions": [],
+              "error_policy": "rubric",
+              "error_policy_source_quote": ""
+            }
+          ],
+          "follow_through": "Preserve the frozen follow-through rule.",
+          "numerical_policy": "Use the stated precision and units.",
+          "advisories": [],
+          "part_rubric": {
+            "id": "q1",
+            "label": "1",
+            "stem": "求未知数。",
+            "total_pts": 10.0,
+            "base_unit_pts": 1.0,
+            "rubric_version": 1,
+            "rubric_origin": "teacher",
+            "teacher_rubric": "列式2分，计算结果8分。计算结果沿用错值仍得一半分。",
+            "parts": [
+              {
+                "id": "p",
+                "label": null,
+                "stem": null,
+                "total_pts": 10.0,
+                "steps": [
+                  {
+                    "id": "eq",
+                    "criterion": "列式",
+                    "source_quote": "列式2分",
+                    "follow_through_pts": 0.0,
+                    "total_pts": 2.0,
+                    "follow_through_keep": null
+                  },
+                  {
+                    "id": "val",
+                    "criterion": "计算结果",
+                    "source_quote": "计算结果8分",
+                    "follow_through_pts": 0.0,
+                    "total_pts": 8.0,
+                    "follow_through_keep": null
+                  }
+                ],
+                "alternative": {
+                  "maximum": {
+                    "fraction": "1/1"
+                  },
+                  "minimum": {
+                    "points": 0.0
+                  },
+                  "deduct_per_error": 2.0,
+                  "source_quote": ""
+                }
+              }
+            ],
+            "nonblank_floor": {
+              "pts": 0.0
+            },
+            "teacher_gaps": [],
+            "low_confidence": false
+          },
+          "adopted_material": {
+            "stem": "求未知数。",
+            "reference_answer": "先列式，再计算。"
+          },
+          "schema_version": "math_rubric_v3",
+          "plan_id": "eded55926855e45766a36294a194e4229030686681ef0e7da23c45e057ae8908",
+          "input_fingerprint": "c9fac05edbb04b83e22afd20a57d58dd7a76b59795b9eea7750bfedb4fe3b778",
+          "max_score": 10.0,
+          "original_criterion": "列式2分，计算结果8分。计算结果沿用错值仍得一半分。",
+          "compilation_status": "compiled",
+          "compilation_reason": "frozen_part_rubric",
+          "source_locations": [],
+          "binary_policy": null,
+          "strictness": 50,
+          "allow_partial_credit": true
+        }
+      },
+      "calls": 1,
+      "reloaded": true,
+      "score": 0.0,
+      "expected_score": 4
+    },
+    {
+      "question": {
+        "q_id": "q1",
+        "number": "1",
+        "type": "计算题",
+        "stem": "求未知数。",
+        "reference_answer": "先列式，再计算。",
+        "max_score": 10,
+        "criterion": "列式2分，计算结果8分。计算结果沿用错值给一半分。"
+      },
+      "raw_response": "{\"part_rubric\": {\"id\": \"q1\", \"stem\": \"求未知数。\", \"label\": \"1\", \"total_pts\": 10, \"parts\": [{\"id\": \"p\", \"total_pts\": 10, \"alternative\": {\"deduct_per_error\": 2}, \"steps\": [{\"id\": \"eq\", \"criterion\": \"列式\", \"total_pts\": 2, \"source_quote\": \"\"}, {\"id\": \"val\", \"criterion\": \"计算结果\", \"total_pts\": 8, \"source_quote\": \"\"}]}]}}",
+      "draft": {
+        "schema_version": "rubric_draft_v1",
+        "alternative_policy_version": 3,
+        "content_fingerprint": "b18eb5a575aff13b4e05aa6e1ea32b9e6887ad6542262e3590ab321ce55c9441",
+        "teacher_notes": "",
+        "plan": {
+          "effective_criterion": "Original criterion (provided; preserved verbatim):\n列式2分，计算结果8分。计算结果沿用错值给一半分。\n\nAI interpretation:\n列式2分，计算结果8分。计算结果沿用错值给一半分。\n\nExplicit original rules take precedence over AI additions. The question maximum is 10. Select the first applicable route before scoring; routes are mutually exclusive, never added together or compared for the best/worst score. For points, award each item once within [0, item.points]. For deductions, start from the question maximum, deduct independent errors subject to max_occurrences, then apply the stated minimum only when its condition holds. A nonblank minimum never applies to a blank answer. Follow any explicit original blank-answer rule. Respect explicit original non-penalty and follow-through rules even without an executable policy; retain related claims and explain why no deduction is charged. Return a final score within [0, max_score].",
+          "routes": [
+            {
+              "id": "parts",
+              "description": "Apply the frozen per-part rubric.",
+              "applies_when": "always",
+              "mode": "holistic",
+              "items": [],
+              "minimum_score": 0.0,
+              "minimum_condition": "always",
+              "exemptions": [],
+              "error_policy": "rubric",
+              "error_policy_source_quote": ""
+            }
+          ],
+          "follow_through": "Preserve the frozen follow-through rule.",
+          "numerical_policy": "Use the stated precision and units.",
+          "advisories": [],
+          "part_rubric": {
+            "id": "q1",
+            "label": "1",
+            "stem": "求未知数。",
+            "total_pts": 10.0,
+            "base_unit_pts": 1.0,
+            "rubric_version": 1,
+            "rubric_origin": "teacher",
+            "teacher_rubric": "列式2分，计算结果8分。计算结果沿用错值给一半分。",
+            "parts": [
+              {
+                "id": "p",
+                "label": null,
+                "stem": null,
+                "total_pts": 10.0,
+                "steps": [
+                  {
+                    "id": "eq",
+                    "criterion": "列式",
+                    "source_quote": "列式2分",
+                    "follow_through_pts": 0.0,
+                    "total_pts": 2.0,
+                    "follow_through_keep": null
+                  },
+                  {
+                    "id": "val",
+                    "criterion": "计算结果",
+                    "source_quote": "计算结果8分",
+                    "follow_through_pts": 0.0,
+                    "total_pts": 8.0,
+                    "follow_through_keep": null
+                  }
+                ],
+                "alternative": {
+                  "maximum": {
+                    "fraction": "1/1"
+                  },
+                  "minimum": {
+                    "points": 0.0
+                  },
+                  "deduct_per_error": 2.0,
+                  "source_quote": ""
+                }
+              }
+            ],
+            "nonblank_floor": {
+              "pts": 0.0
+            },
+            "teacher_gaps": [],
+            "low_confidence": false
+          },
+          "adopted_material": {
+            "stem": "求未知数。",
+            "reference_answer": "先列式，再计算。"
+          },
+          "schema_version": "math_rubric_v3",
+          "plan_id": "3a98536d89ab5e2eb0d7b7b222a13dc9b6051e6b09d0f53b6f0bd1b012521536",
+          "input_fingerprint": "c84221f0fcf5e725226f04e52a6edb2c6551eb2b43996eea0ebd239372b04b07",
+          "max_score": 10.0,
+          "original_criterion": "列式2分，计算结果8分。计算结果沿用错值给一半分。",
+          "compilation_status": "compiled",
+          "compilation_reason": "frozen_part_rubric",
+          "source_locations": [],
+          "binary_policy": null,
+          "strictness": 50,
+          "allow_partial_credit": true
+        }
+      },
+      "calls": 1,
+      "reloaded": true,
+      "score": 0.0,
+      "expected_score": 4
+    }
+  ]
+}
