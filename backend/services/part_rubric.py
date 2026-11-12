@@ -797,8 +797,6 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
         if policy.needs_rate(p.total_pts):
             raise ValueError(f"{p.id}: supply a positive alternative.deduct_per_error in points "
                              "for this part. Preserve the main rubric and explicit teacher constraints.")
-        if p.steps and any((p.id, rule.id) not in anchors for rule in p.deductions):
-            raise ValueError(f"{p.id}: mixed parts need an explicit teacher allocation for each penalty.")
         if anchors:
             def bind_item(item):
                 anchor = anchors.get((p.id, item.id))
@@ -1074,6 +1072,48 @@ def question_floor_amounts(ordinary, maximum, *, unresolved=None):
     return floors
 
 
+def _mixed_source_has_unparsed_text(ordinary, rubric, anchors):
+    """Only wholly covered numerical policies prove a deduction-only source.
+
+    Extra prose is uncertainty, never permission to invent a second ledger.
+    In particular, a deduction quotation can also contain an unquantified
+    instruction to award steps; its full span is not proof of either mode.
+    """
+    from backend.services.math_rubric_plan import (
+        _AMOUNT, _FLOOR_RULE, _LIMIT_RULE, _score_context_clause, _source_clauses,
+    )
+    from backend.services.question_structure import _allocation_marker_pattern
+
+    def without_heading(clause):
+        return re.sub(r"^(?:评分(?:标准|参考|说明)?|主标准|marking scheme|rubric)\s*[:：]\s*", "", clause, flags=re.I)
+
+    quoted = {without_heading(clause) for part in rubric.parts for rule in part.deductions
+              if (anchor := anchors.get((part.id, rule.id)))
+              for clause in _source_clauses(anchor[1])}
+    for clause in _source_clauses(ordinary):
+        clause = without_heading(clause)
+        if not clause:
+            continue
+        # These words select semantic review only; they never authorize a mode.
+        mode_prose = re.search(r"按.*(?:步骤|过程)|分步|给分|配分|评分|"
+                               r"\b(?:award|credit|score|scoring)\b", clause, re.I)
+        if clause in quoted and not mode_prose:
+            continue
+        for part in rubric.parts:
+            if part.label and (heading := re.match(_allocation_marker_pattern(part.label), clause, re.I)):
+                clause = clause[heading.end():].strip(" :：")
+                break
+        if (not clause or _LIMIT_RULE.fullmatch(clause) or _FLOOR_RULE.fullmatch(clause)
+                or _score_context_clause(clause, ordinary, rubric.total_pts)):
+            continue
+        money = list(_AMOUNT.finditer(clause))
+        if (len(money) == 1 and money[0].end() == len(clause)
+                and _LOSS_CAP.search(clause[:money[0].start()])):
+            continue
+        return True
+    return False
+
+
 def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_policy_ids=()):
     """Verify unambiguous teacher constraints within the part named by the source."""
     from backend.services.question_structure import _allocation_marker_pattern
@@ -1100,6 +1140,10 @@ def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_p
 
     if anchors is None:
         anchors = validate_teacher_point_items(rubric, ordinary)
+    for part in rubric.parts:
+        if part.steps and part.deductions:
+            if any((part.id, rule.id) not in anchors for rule in part.deductions):
+                raise ValueError(f"{part.id}: mixed parts need an explicit teacher allocation for each penalty.")
     teacher_penalty_counts(rubric.parts, ordinary, anchors)
     unresolved_floors = []
     floors = question_floor_amounts(ordinary, maximum, unresolved=unresolved_floors)
@@ -1145,6 +1189,28 @@ def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_p
             if ((part.id, rule.id) in stated_rates and rule.max_deduction is not None
                     and rule.id not in capped_rules.get(part.id, {})):
                 raise ValueError(f"{part.id}/{rule.id}: the teacher specified a rate without a cumulative deduction cap.")
+
+    for part in rubric.parts:
+        if not (part.steps and part.deductions) or any((part.id, step.id) in anchors for step in part.steps):
+            continue
+        if not _mixed_source_has_unparsed_text(ordinary, rubric, anchors):
+            raise ValueError(f"{part.id}: mixed scoring requires teacher-funded steps as well as explicit "
+                             "deductions. Keep a deduction-only teacher rule as deductions, without invented step budgets.")
+        # Bind the authorization to the complete executable allocation, using
+        # canonical source targets and resolved amounts so sealing and reload
+        # have the same identity (a rate and its absolute award are equivalent).
+        issue("mixed_scoring", teacher, [{
+            "part_id": part.id, "label": canonical_label(part.label, rubric.label) or None,
+            "total_pts": float(part.total_pts),
+            "steps": [{"id": step.id, "criterion": anchors.get((part.id, step.id), (step.criterion, ""))[0],
+                       "total_pts": float(step.total_pts), "follow_through_pts": float(step.follow_through_award()),
+                       "answer_refs": list(step.answer_refs)} for step in part.steps],
+            "deductions": [{"id": rule.id, "criterion": anchors[(part.id, rule.id)][0],
+                            "deduct_pts": float(rule.deduct_pts), "limit": rule.limit, "count_by": rule.count_by,
+                            "max_deduction": capped_rules.get(part.id, {}).get(rule.id, rule.max_deduction),
+                            "exclusive_group": rule.exclusive_group} for rule in part.deductions],
+            "answer_refs": list(part.answer_refs),
+        }])
 
     from backend.services.math_rubric_plan import _source_clauses
     scoped = rubric.parts

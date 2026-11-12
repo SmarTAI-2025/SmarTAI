@@ -136,3 +136,24 @@ def test_failed_semantic_audit_keeps_source_structure_and_version_atomic(monkeyp
     new = record(args)
     assert len(provider.calls) == 2
     assert (new.version, new.stem, new.criterion, new.source) == (old.version, old.stem, old.criterion, old.source)
+
+
+def test_adding_binding_ids_does_not_invalidate_safe_preexisting_frozen_rules():
+    from backend.services.math_rubric_plan import _content_hash, _question_input, math_rubric_fingerprint
+    from backend.tests.test_rubric_policy_preservation import parts_question
+    row, draft = parts_question()
+    # Reconstruct the pre-change projection and stored shape independently.
+    old_context = _question_input(row)
+    for part in old_context["question_structure"]["subparts"]:
+        part.pop("subpart_id")
+    legacy = draft.model_dump(mode="json")
+    legacy["content_fingerprint"] = _content_hash({key: value for key, value in old_context.items()
+        if key not in {"q_id", "number", "teacher_subpart_points"}})
+    plan = legacy["plan"]
+    plan["input_fingerprint"] = _content_hash(old_context)
+    for part in plan["part_rubric"]["parts"]:
+        part.pop("subpart_id")
+    plan["plan_id"] = _content_hash({key: value for key, value in plan.items() if key != "plan_id"})
+    assert math_rubric_fingerprint(row) == plan["input_fingerprint"]
+    accepted = saved_draft({**row, "rubric_draft": legacy})
+    assert accepted is not None and accepted.plan.plan_id == plan["plan_id"]

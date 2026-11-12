@@ -98,3 +98,17 @@ async def test_initial_generation_uses_same_audit_before_sealing_candidate(allow
     assert len(provider.calls) == 2 and len(candidates) == 1
     assert candidates[0].rubric_draft["semantic_policy_checks"]
     assert saved_draft({**row, "rubric_draft": candidates[0].rubric_draft}) is not None
+
+
+@pytest.mark.asyncio
+async def test_captured_gemini_policy_response_replays_through_the_compiler():
+    from pathlib import Path
+    from backend.tests.test_question_material_format_repair import Provider
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "part_rubrics" /
+                          "gemini-synthetic-policy-20261112.json").read_text())
+    provider = Provider(fixture["responses"])
+    draft = await compile_parts_draft(fixture["question"], provider)
+    assert len(provider.calls) == 2
+    assert draft.plan.part_rubric.nonblank_floor.resolve(10) == 2
+    assert [s.total_pts for s in draft.plan.part_rubric.parts[0].steps] == [3, 7]
+    assert saved_draft({**fixture["question"], "rubric_draft": draft.model_dump(mode="json")}) is not None

@@ -230,7 +230,21 @@ def _question_input(problem: Any) -> dict[str, Any]:
 
 def math_rubric_fingerprint(problem) -> str:
     """Identity of scoring inputs and interpretation rules, not student order."""
-    return _content_hash(_question_input(problem))
+    return _input_fingerprint(_question_input(problem))
+
+
+def _scoring_input(context):
+    """Binding IDs are editor metadata, not a reason to reinterpret unchanged work."""
+    structure = context.get("question_structure")
+    if not structure:
+        return context
+    return {**context, "question_structure": {**structure, "subparts": [
+        {key: value for key, value in part.items() if key != "subpart_id"}
+        for part in structure.get("subparts", [])]}}
+
+
+def _input_fingerprint(context):
+    return _content_hash(_scoring_input(context))
 
 
 _FOLLOW_THROUGH = (
@@ -286,7 +300,7 @@ def _build_plan(context: dict, explanation: _Explanation, *, status="compiled", 
         **explanation.model_dump(mode="json"),
         "effective_criterion": effective,
         "schema_version": SCHEMA_VERSION,
-        "input_fingerprint": _content_hash(context),
+        "input_fingerprint": _input_fingerprint(context),
         "max_score": context["max_score"],
         "original_criterion": original,
         "compilation_status": status,

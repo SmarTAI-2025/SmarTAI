@@ -7,6 +7,7 @@ for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     await page.addInitScript(() => {
       localStorage.setItem("smartai_token", "synthetic-rubric-token");
       localStorage.setItem("smartai_locale", "zh-CN");
