@@ -1269,12 +1269,11 @@ def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_p
             # its award verb/amount is supported by the numeric parser. Keep
             # unparsed source clauses for the existing bounded semantic audit.
             # Plain "later steps" or "reuse the definition" are not such cues.
+            marker = re.search(r"沿用|沿错|后续|后传|follow.through|propagat|error.carried.forward", clause, re.I)
             explicit = re.search(r"沿错|follow.through|error.carried.forward", clause, re.I)
-            carried_error = (re.search(r"沿用|后传|propagat", clause, re.I)
-                             and re.search(r"错|误|error|incorrect|wrong", sentence, re.I))
+            carried_error = marker and re.search(r"错|误|error|incorrect|wrong", sentence, re.I)
             if (explicit or carried_error) and any(part.steps for part in scoped):
                 unparsed[index] = scoped
-            marker = re.search(r"沿用|沿错|后续|后传|follow.through|propagat|error.carried.forward", clause, re.I)
             award = re.search(r"保留|折算为|retains?|keeps?", clause, re.I)
             if not marker and not (preceding_condition and award):
                 preceding_condition = ""
