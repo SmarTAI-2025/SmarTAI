@@ -129,7 +129,9 @@ def plans_from_snapshots(manifest: dict, events: list[dict], *, for_grading=Fals
         except (ValidationError, TypeError):
             continue
         if for_grading and plan.part_rubric and (
-            plan.part_rubric.missing_alternative_rates() or not teacher_awards_match(plan.part_rubric)
+            plan.part_rubric.missing_alternative_rates() or not teacher_awards_match(plan.part_rubric,
+                verified_policy_ids=[check["policy_id"] for check in plan.semantic_policy_checks
+                                     if check.get("verdict") == "consistent"])
         ):
             continue  # Retain the historical plan for display, never mix its votes into a new ledger.
         if isinstance(qid, str) and plan.schema_version == "math_rubric_v3":

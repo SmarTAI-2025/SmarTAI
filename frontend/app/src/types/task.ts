@@ -76,6 +76,7 @@ export interface ProblemInfo {
   stem: string;
   criterion: string;
   effective_criterion?: string;
+  rubric_version?: number;
   recognition_confidence?: number | null;
   max_score: number;
   max_score_source?: "default_10" | "uniform" | "per_question_text" | "teacher_edited" | "legacy";

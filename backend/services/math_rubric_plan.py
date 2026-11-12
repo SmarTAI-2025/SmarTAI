@@ -21,6 +21,7 @@ from backend.tools.structured_llm import (
 )
 from backend.services.math_source_evidence import match_source_quote
 from backend.services.part_rubric import PartRubric
+from backend.services.teacher_point_allocations import TeacherPolicyCheck
 from backend.services.math_strictness import Adjustment, strictness_policy
 
 
@@ -133,6 +134,7 @@ class MathRubricPlan(_Explanation):
     expected_truth_by_part: dict[str, bool] = Field(default_factory=dict, exclude_if=lambda v: not v)
     part_rubric: PartRubric | None = Field(default=None, exclude_if=lambda v: v is None)
     adopted_material: AdoptedMathMaterial | None = Field(default=None, exclude_if=lambda v: v is None)
+    semantic_policy_checks: tuple[TeacherPolicyCheck, ...] = Field(default=(), max_length=100, exclude_if=lambda v: not v)
     schema_version: Literal["math_rubric_v3"] = SCHEMA_VERSION
     plan_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -202,7 +204,7 @@ def _question_input(problem: Any) -> dict[str, Any]:
         structure_input = {
             "shared_stem": str(structure.get("shared_stem") or ""),
             "subparts": [
-                {key: part.get(key) for key in ("label", "stem", "type_hint")}
+                {key: part.get(key) for key in ("subpart_id", "label", "stem", "type_hint")}
                 for part in structure.get("subparts") or []
                 if isinstance(part, Mapping)
             ],
@@ -683,7 +685,9 @@ _DEDUCTION_AMOUNT_TOKEN = re.compile(
     r"(?:扣(?:除)?|deduct|lose)\s*([^\s，,；;。]+?)\s*(分|points?\b|marks?\b)", re.I,
 )
 _REPEATED = re.compile(r"每|不限次数|each|every|per\b|unlimited", re.I)
-_LIMIT_RULE = re.compile(rf"(?:最多|上限|at most|up to)\s*({_NUMBER})\s*(?:次|times?\b)", re.I)
+_LIMIT_RULE = re.compile(
+    rf"(?:最多|上限|at most|up to)\s*(?:计入|计算|计|扣除|扣)?\s*({_NUMBER})\s*(?:次|times?\b)", re.I,
+)
 # A causal policy needs both a same-error/correct-continuation subject and a
 # no-repeat action. Keep the entire clause anchored so a condition, negation,
 # or independent later error cannot acquire this executable causal policy.
@@ -721,7 +725,8 @@ _NO_CAUSAL_PENALTY = re.compile(r"(?:不能因为|不因为|不因)(?P<ground>[^
 _FLOOR_RULE = re.compile(
     r"^(?:(?:本题|整题|全题)\s*)?(?:(?:只要)?(非空(?:白)?(?:作答|答案)?|有作答|有书写|non[- ]?(?:blank|empty)(?: answers?)?)"
     r"\s*[:：]?\s*)?"
-    r"(?:最低(?:得分)?|保底(?:分)?|至少(?:得|给|保留)?|minimum(?: score)?|floor(?: score)?)(?:为|是)?"
+    r"(?:最低|保底|至少|minimum|floor)(?:\s*(?:得分|分|score))?"
+    r"(?:\s*(?:得|给|保留))?(?:为|是)?"
     rf"\s*[:：=]?\s*({_NUMBER})\s*(分|points?|marks?|%|％)?$", re.I,
 )
 

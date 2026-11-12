@@ -519,6 +519,29 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await waitFor(() => expect(screen.queryByRole("spinbutton", { name: "第 1 题满分" })).not.toBeInTheDocument());
   });
 
+  it("sends structured rubric edits to server validation without a guessed text total", async () => {
+    const original = taskData.problem_data.Q1;
+    const question = { ...original, rubric_version: 2,
+      criterion: "第一问按1、2、1分分步；第二问2分；第三问4分。" };
+    taskData.problem_data.Q1 = question;
+    mutateAsync.mockResolvedValue({ workflow_revision: 8, problem: question });
+    try {
+      const user = userEvent.setup();
+      await renderPage();
+      await user.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
+      const rubric = screen.getByRole("textbox", { name: "第 1 题评分标准" });
+      fireEvent.change(rubric, { target: { value: question.criterion + "。" } });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+        criterion: question.criterion + "。", max_score: 10, expectedWorkflowRevision: 7,
+      })));
+    } finally {
+      taskData.problem_data.Q1 = original;
+    }
+  });
+
   it("shows the frozen allocation and edits the source wording", async () => {
     const question = taskData.problem_data.Q2 as ProblemInfo;
     question.effective_criterion = "列式 4 分，结果 6 分。";

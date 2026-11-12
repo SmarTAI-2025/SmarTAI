@@ -479,8 +479,14 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   const scoreValid = scoreHundredths !== null && scoreHundredths > 0 && scoreHundredths <= 1_000_000;
   const draftSummary = useMemo(
     () => criterionDraft === originalCriterion && scoreDraft === originalScore && problem.rubric_point_summary
-      ? problem.rubric_point_summary : summarizeRubricPoints(criterionDraft, scoreDraft, problem.question_structure),
-    [criterionDraft, originalCriterion, originalScore, problem.question_structure, problem.rubric_point_summary, scoreDraft],
+      ? problem.rubric_point_summary
+      : problem.rubric_version
+        // The saved structured ledger is authoritative. Edited prose is checked
+        // with its new compiled ledger on save, never with a partial text sum.
+        ? { contract_version: 1 as const, has_explicit_subpart_points: false, items: [],
+            major_max_score: scoreDraft, is_valid: true }
+        : summarizeRubricPoints(criterionDraft, scoreDraft, problem.question_structure),
+    [criterionDraft, originalCriterion, originalScore, problem.question_structure, problem.rubric_point_summary, problem.rubric_version, scoreDraft],
   );
   const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:scoring`, value: { scoreDraft, criterionDraft, alternateDrafts }, baseline: { scoreDraft: originalScore, criterionDraft: originalCriterion, alternateDrafts: {} }, version: JSON.stringify([originalScore, originalCriterion, problem.alternative_rules]), enabled: !readOnly, busy: saving, onRestore: (draft) => { setScoreDraft(draft.scoreDraft); setCriterionDraft(draft.criterionDraft); setAlternateDrafts(draft.alternateDrafts ?? {}); setEditing(true); } });
   const leave = useDraftLeave();

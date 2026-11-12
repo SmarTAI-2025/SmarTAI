@@ -2536,8 +2536,16 @@ async def generate_missing_question_materials(
                 return {**raw, "candidates": [source_bound_candidate(item) for item in raw["candidates"]]}
             return raw
 
-    def validate_targets(parsed: AICompletionOutput) -> None:
+    from backend.services.teacher_point_allocations import TeacherPolicyUnresolved
+    from backend.services.rubric_drafts import audit_teacher_policies
+    from backend.domain.errors import ValidationError as DomainValidationError
+
+    pending_policy_checks = {}
+    verified_policy_checks = {}
+
+    def validate_targets(parsed: AICompletionOutput, *, defer_policy_audit=True) -> None:
         seen = set()
+        has_pending_policy = False
         for candidate in parsed.candidates:
             expected = expected_targets.get(candidate.target_id)
             if (not expected or candidate.q_id != expected["q_id"]
@@ -2574,7 +2582,18 @@ async def generate_missing_question_materials(
                     criterion, draft = generated_rubric(
                         {**problems_data[candidate.q_id], "q_id": candidate.q_id},
                         candidate.rubric_definition, language=generation_language or "zh",
+                        verified_policy_ids=[check["policy_id"] for check in
+                                             verified_policy_checks.get(candidate.target_id, ())],
                     )
+                except TeacherPolicyUnresolved as exc:
+                    if not defer_policy_audit:
+                        raise
+                    # Keep the candidate private until its unresolved teacher
+                    # scope is audited below, within the same call budget.
+                    has_pending_policy = True
+                    pending_policy_checks[candidate.target_id] = (candidate, exc)
+                    if candidate.target == "criterion":
+                        candidate.text_value = problems_data[candidate.q_id].get("criterion") or ""
                 except RubricAllocationError as exc:
                     error = StructuredOutputInvalidError("Invalid subpart allocation.")
                     error.repair_context = str(exc)
@@ -2603,7 +2622,8 @@ async def generate_missing_question_materials(
                 else:
                     if candidate.target == "criterion":
                         candidate.text_value = criterion
-                    candidate.rubric_draft = draft.model_dump(mode="json")
+                    candidate.rubric_draft = draft.model_copy(update={"semantic_policy_checks":
+                        verified_policy_checks.get(candidate.target_id, ())}).model_dump(mode="json")
             usable = (bool(candidate.test_cases) if candidate.target == "test_cases"
                       else bool((candidate.text_value or "").strip()))
             if (not expected or candidate.target_id in seen or not usable
@@ -2636,7 +2656,7 @@ async def generate_missing_question_materials(
                     raise StructuredOutputInvalidError(str(exc)) from exc
         if not allow_partial and seen != set(expected_targets):
             raise StructuredOutputInvalidError("The generated materials omitted requested targets.")
-        if validate_candidates is not None:
+        if validate_candidates is not None and not has_pending_policy:
             validate_candidates(parsed.candidates)
 
     async def repair_invoke(provider, messages):
@@ -2694,6 +2714,28 @@ async def generate_missing_question_materials(
                 invoke=repair_invoke, validate_output=validate_targets,
             )
 
+        audited_pending = False
+        for candidate in list(parsed.candidates):
+            pending = pending_policy_checks.get(candidate.target_id)
+            if pending is None or pending[0] is not candidate:
+                continue
+            audited_pending = True
+            try:
+                checks = await audit_teacher_policies(provider,
+                    {**problems_data[candidate.q_id], "q_id": candidate.q_id},
+                    candidate.rubric_definition.model_dump(mode="json"), pending[1])
+                verified_policy_checks[candidate.target_id] = checks
+            except (ValueError, DomainValidationError):
+                if not allow_partial:
+                    raise
+                parsed.candidates.remove(candidate)
+                if repair_feedback is not None:
+                    repair_feedback[candidate.target_id] = "The teacher policy could not be verified; review its scope."
+        if audited_pending:
+            # A callback may check allocations or publish accepted candidates.
+            # It must see only sealed ledgers after the independent audit.
+            validate_targets(parsed, defer_policy_audit=False)
+
     from backend.services.proof_goals import use_source_goals, prepare_source_goals
     from backend.services.true_false_answers import DecisionReferenceConflict
 
@@ -2713,7 +2755,9 @@ async def generate_missing_question_materials(
                               if s.q_id == candidate.q_id and s.target == "reference_answer"), None)
             if reference:
                 material["reference_answer"] = reference
-            rendered, draft = generated_rubric(material, proposal, language=generation_language or "zh")
+            rendered, draft = generated_rubric(material, proposal, language=generation_language or "zh",
+                verified_policy_ids=[check["policy_id"] for check in current.semantic_policy_checks])
+            draft = draft.model_copy(update={"semantic_policy_checks": current.semantic_policy_checks})
             candidate.text_value = rendered
             candidate.rubric_definition = proposal
             candidate.rubric_draft = draft.model_dump(mode="json")

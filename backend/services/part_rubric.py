@@ -117,6 +117,7 @@ class Penalty(Criterion):
 
 class RubricPart(Frozen):
     id: Key
+    subpart_id: str | None = Field(default=None, pattern=r"^sp[1-9][0-9]*$", exclude_if=lambda v: v is None)
     label: str | None = Field(default=None, max_length=64)
     stem: str | None = Field(default=None, max_length=100000)
     origin_overrides: dict[str, Literal["teacher", "ai"]] = Field(
@@ -646,9 +647,10 @@ def parallel_part_budgets(problem):
     return {part["label"]: (base + (index < remainder)) / 100 for index, part in enumerate(parts)}
 
 
-def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None = None, language="zh") -> PartRubric:
+def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None = None, language="zh",
+               verified_policy_ids=()) -> PartRubric:
     """Bind the model proposal to known question scope and authoritative teacher text."""
-    from backend.services.question_structure import _allocation_marker_pattern
+    from backend.services.question_structure import _allocation_marker_pattern, scoring_stem
     from backend.services.math_source_evidence import match_source_quote
 
     from backend.services.true_false_answers import is_decision_only
@@ -713,7 +715,8 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
     check_response_obligation(problem.get("stem", ""), teacher, rubric.parts)
     from backend.services.teacher_point_allocations import validate_teacher_point_items
     anchors = validate_teacher_point_items(rubric, ordinary)
-    capped_rules = verify_teacher_numbers(teacher, rubric, maximum)
+    capped_rules = verify_teacher_numbers(teacher, rubric, maximum, anchors=anchors,
+                                         verified_policy_ids=verified_policy_ids)
     gaps = list(rubric.teacher_gaps) if teacher else []
     from backend.services.teacher_point_allocations import bind_step_conditions
     conditions, unresolved = bind_step_conditions(rubric.parts, ordinary, anchors)
@@ -739,7 +742,7 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
     binary = is_decision_only(problem.get("stem", ""), teacher)
     shared_stem = structure.get("shared_stem", "") if parts else problem.get("stem", "")
     prior_parts = {part.id: part for part in previous.parts} if (
-        previous and previous.stem == shared_stem and previous.total_pts == maximum
+        previous and scoring_stem(previous.stem) == scoring_stem(shared_stem) and previous.total_pts == maximum
         and previous.nonblank_floor.resolve(maximum) == rubric.nonblank_floor.resolve(maximum)
     ) else {}
     fixed = []
@@ -771,7 +774,19 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
             floor=rubric.nonblank_floor.resolve(maximum), question_points=maximum, teacher=teacher,
             override=overrides.get((label or None, stem if parts else None)), binary=binary)
         prior = prior_parts.get(p.id)
-        if (prior and prior.label == (label or None) and prior.stem == (stem if parts else None)
+        identity = parts[index].get("subpart_id") if parts else None
+        same_part = prior and (
+            prior.subpart_id == identity if prior.subpart_id and identity else prior.label == (label or None))
+        # Unchanged words such as "use part (2)" can name a different target
+        # after renumbering. Reuse only when their source identities also agree.
+        same_references = not (prior and parts) or {
+            canonical_label(item.label): item.subpart_id for item in previous.parts
+            if item.label and re.search(_allocation_marker_pattern(item.label), instruction, re.I)
+        } == {
+            canonical_label(item["label"]): item.get("subpart_id") for item in parts
+            if re.search(_allocation_marker_pattern(item["label"]), instruction, re.I)
+        }
+        if (same_part and same_references and scoring_stem(prior.stem) == scoring_stem(stem if parts else None)
                 and prior.total_pts == p.total_pts and prior.alternative.source_quote == policy.source_quote
                 and prior.alternative.inferred_method_cap == policy.inferred_method_cap):
             # A semantic edit of the main rubric is not an edit of the other
@@ -836,6 +851,7 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
             p.model_copy(
                 update={
                     "label": label or None,
+                    "subpart_id": parts[index].get("subpart_id") if parts else None,
                     "stem": stem if parts else None,
                     "alternative": policy,
                     "steps": tuple(normalized_steps),
@@ -1033,7 +1049,7 @@ Absolute amounts (0.5分, 半分) use {"points":0.5}. Never turn a proportion in
 """
 
 
-def question_floor_amounts(ordinary, maximum):
+def question_floor_amounts(ordinary, maximum, *, unresolved=None):
     """Only question-level minima can award points to an unrelated nonblank response."""
     from backend.services.math_rubric_plan import _AMOUNT, _FLOOR_RULE, _amount_value, _source_clauses
 
@@ -1045,18 +1061,53 @@ def question_floor_amounts(ordinary, maximum):
             if match and (match[1] or not previous or _AMOUNT.search(previous)
                           or re.fullmatch(r"(?:本题|整题)?(?:非空(?:作答|答案)?|只要有作答|有书写)", previous)):
                 floors.add(_amount_value(match[2], match[3] or "分", maximum))
+            elif not match and re.match(
+                r"^(?:(?:本题|整题|全题)\s*)?(?:只要)?(?:非空(?:白)?(?:作答|答案)?|有作答|有书写|"
+                r"non[- ]?(?:blank|empty)(?: answers?)?)\s*[:：]?\s*(?:最低|保底|至少|minimum|floor)",
+                clause, re.I,
+            ):
+                # Source-only decoding can bind exact values but cannot verify
+                # an interpretation before the complete candidate exists.
+                if unresolved is not None:
+                    unresolved.append(sentence.strip())
             previous = clause
     return floors
 
 
-def verify_teacher_numbers(teacher, rubric, maximum):
+def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_policy_ids=()):
     """Verify unambiguous teacher constraints within the part named by the source."""
     from backend.services.question_structure import _allocation_marker_pattern
 
     ordinary = unicodedata.normalize("NFKC", ordinary_criterion(teacher))
-    floors = question_floor_amounts(ordinary, maximum)
-    if (floors or {Decimal(0)}) != {rubric.nonblank_floor.resolve(maximum)}:
+    from backend.services.teacher_point_allocations import (
+        _words, TeacherPolicyUnresolved, teacher_penalty_counts, teacher_policy_issue, validate_teacher_point_items,
+    )
+    from backend.services.math_source_evidence import match_source_quote
+
+    pending = []
+
+    def issue(kind, quote, candidates):
+        match = match_source_quote(teacher, quote)
+        if match is None:
+            from backend.services.math_rubric_plan import _source_clauses
+            originals = {raw.strip() for raw in [*re.split(r"[。；;\n]", teacher), *_source_clauses(teacher)]
+                         if unicodedata.normalize("NFKC", raw.strip()) == quote}
+            if len(originals) == 1:
+                match = match_source_quote(teacher, originals.pop())
+        # The full teacher source is always valid evidence if punctuation
+        # normalization prevents resolving a smaller complete source span.
+        pending.append(teacher_policy_issue(kind, match.text if match else teacher, candidates))
+
+    if anchors is None:
+        anchors = validate_teacher_point_items(rubric, ordinary)
+    teacher_penalty_counts(rubric.parts, ordinary, anchors)
+    unresolved_floors = []
+    floors = question_floor_amounts(ordinary, maximum, unresolved=unresolved_floors)
+    if (floors or not unresolved_floors) and (floors or {Decimal(0)}) != {rubric.nonblank_floor.resolve(maximum)}:
         raise ValueError("Preserve the explicit question floor; only a nonblank question minimum applies here.")
+    for quote in unresolved_floors:
+        issue("nonblank_floor", quote, [{"target": "question", "total_pts": float(maximum),
+                                        "nonblank_floor_pts": float(rubric.nonblank_floor.resolve(maximum))}])
     capped_rules = {}
     stated_rates = set()
     for m in re.finditer(
@@ -1095,35 +1146,64 @@ def verify_teacher_numbers(teacher, rubric, maximum):
                     and rule.id not in capped_rules.get(part.id, {})):
                 raise ValueError(f"{part.id}/{rule.id}: the teacher specified a rate without a cumulative deduction cap.")
 
-    for clause in re.split(r"[。；;\n]", ordinary):
-        if not re.search(r"沿用|后续|后传|follow.through|propagat", clause, re.I):
-            continue
-        match = re.search(
-            r"(?:保留|折算为|retain|keep)\s*(" + _AMOUNT.pattern + ")", clause, re.I
-        )
-        if not match:
-            continue
-        amount = parse_amount(match[1])
-        scoped = [
-            p
-            for p in rubric.parts
-            if p.label and re.search(_allocation_marker_pattern(p.label), clause, re.I)
-        ] or rubric.parts
-        all_later = re.search(r"(?:后续|后面|后传)(?:的)?(?:各|每|所有|全部)?(?:个)?(?:步骤|各步|每步)|"
-                              r"(?:all|each|every) (?:later|subsequent|downstream) step", clause, re.I)
-        applicable = [step for part in scoped for step in part.steps]
-        if all_later:
-            if re.search(r"每个?小问|各小问|each part", clause, re.I):
-                applicable = [step for part in scoped for step in part.steps[1:]]
+    from backend.services.math_rubric_plan import _source_clauses
+    scoped = rubric.parts
+    for sentence in re.split(r"[。；;\n]", ordinary):
+        preceding_condition = ""
+        for clause in _source_clauses(sentence):
+            heading = next(((p, found) for p in rubric.parts if p.label
+                            and (found := re.match(_allocation_marker_pattern(p.label), clause, re.I))), None)
+            if heading:
+                scoped = (heading[0],)
+                preceding_condition = ""
+                clause = clause[heading[1].end():].strip(" :：")
+            marker = re.search(r"沿用|后续|后传|follow.through|propagat", clause, re.I)
+            award = re.search(r"保留|折算为|retains?|keeps?", clause, re.I)
+            if not marker and not (preceding_condition and award):
+                preceding_condition = ""
+                continue
+            if not award:
+                preceding_condition = clause
+                continue
+            quote = sentence.strip() if preceding_condition else clause
+            target = clause[:marker.start() if marker else award.start()]
+            match = re.search(r"(?:保留|折算为|retains?|keeps?)\s*(" + _AMOUNT.pattern + ")", clause, re.I)
+            candidates = [{"part_id": part.id, "step_id": step.id,
+                           "criterion": anchors.get((part.id, step.id), (step.criterion, ""))[0],
+                           "total_pts": float(step.total_pts),
+                           "follow_through_pts": float(step.follow_through_award())}
+                          for part in scoped for step in part.steps]
+            preceding_condition = ""
+            if not match:
+                issue("follow_through", quote, candidates)
+                continue
+            amount = parse_amount(match[1])
+            all_later = re.search(r"(?:后续|后面|后传)(?:的)?(?:各|每|所有|全部)?(?:个)?(?:步骤|各步|每步)|"
+                                  r"(?:all|each|every) (?:later|subsequent|downstream) step", quote, re.I)
+            applicable = [step for part in scoped for step in part.steps]
+            if all_later:
+                if re.search(r"每个?小问|各小问|each part", quote, re.I):
+                    applicable = [step for part in scoped for step in part.steps[1:]]
+                else:
+                    applicable = applicable[1:]
             else:
-                applicable = applicable[1:]
+                named = [step for part in scoped for step in part.steps
+                         if _words(anchors.get((part.id, step.id), (step.criterion, ""))[0]) in _words(target)]
+                # A source-bound name can differ from the model's paraphrase.
+                # Otherwise this is a semantic binding, never an arbitrary
+                # choice of whichever step happened to use the same fraction.
+                applicable = named if len(named) == 1 else applicable if len(applicable) == 1 else []
+                if not applicable:
+                    issue("follow_through", quote, candidates)
+                    continue
 
-        def matches(step):
-            return ((step.follow_through_keep is not None or step.follow_through_pts is not None)
-                    and step.follow_through_award() == amount.resolve(step.total_pts))
+            def matches(step):
+                return ((step.follow_through_keep is not None or step.follow_through_pts is not None)
+                        and step.follow_through_award() == amount.resolve(step.total_pts))
 
-        if not applicable or not (all if all_later else any)(matches(step) for step in applicable):
-            raise ValueError(
-                f"Preserve the teacher's follow-through credit {match[1]} in its designated step."
-            )
+            if not applicable or not all(matches(step) for step in applicable):
+                raise ValueError(f"Preserve the teacher's follow-through credit {match[1]} in its designated step.")
+    unknown = [item for item in pending if item["policy_id"] not in verified_policy_ids]
+    if unknown:
+        raise TeacherPolicyUnresolved(unknown)
     return capped_rules

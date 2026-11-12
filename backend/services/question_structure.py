@@ -45,6 +45,8 @@ class MajorQuestionStructureV1(BaseModel):
     major_order: int = Field(ge=0)
     shared_stem: str = ""
     subparts: list[MajorQuestionSubpartV1] = Field(default_factory=list, max_length=100)
+    # High-water mark, so removing a part never gives its identity to a new one.
+    next_subpart_index: int = Field(default=1, ge=1)
     structure_source: Literal[
         "deterministic", "bounded_repair", "legacy_single_question"
     ] = "deterministic"
@@ -54,6 +56,9 @@ class MajorQuestionStructureV1(BaseModel):
     def _unique_order_and_labels(self):
         orders = [part.order for part in self.subparts]
         labels = [_normalize_label(part.label) for part in self.subparts]
+        ids = [part.subpart_id for part in self.subparts]
+        if len(ids) != len(set(ids)):
+            raise ValueError("subpart identities must be unique")
         if orders != list(range(len(self.subparts))):
             raise ValueError("subpart orders must be contiguous from zero")
         if len(labels) != len(set(labels)):
@@ -226,6 +231,7 @@ def build_major_question_structure(
         "deterministic", "bounded_repair", "legacy_single_question"
     ] = "deterministic",
     review_status: Literal["confirmed", "needs_review"] = "confirmed",
+    previous: Mapping[str, Any] | MajorQuestionStructureV1 | None = None,
 ) -> MajorQuestionStructureV1:
     stem = str(problem.get("stem") or "")
     matches = _select_subpart_matches(stem)
@@ -239,11 +245,39 @@ def build_major_question_structure(
             order=index,
             stem=stem[match.end():end].strip(),
         ))
+    prior = (previous if isinstance(previous, MajorQuestionStructureV1)
+             else MajorQuestionStructureV1.model_validate(previous) if previous else None)
+    next_index = max([prior.next_subpart_index, *(int(p.subpart_id[2:]) + 1 for p in prior.subparts)]) if prior else 1
+    if prior:
+        # Unchanged content identifies moves/insertions before labels are used.
+        # Labels are editable presentation, not the persistent rule identity.
+        assigned = {}
+        used = set()
+        for i, part in enumerate(subparts):
+            matches = [p for p in prior.subparts if scoring_stem(p.stem) == scoring_stem(part.stem)]
+            if len(matches) == 1 and sum(scoring_stem(p.stem) == scoring_stem(part.stem) for p in subparts) == 1:
+                assigned[i] = matches[0].subpart_id
+                used.add(matches[0].subpart_id)
+        if len(prior.subparts) == len(subparts):
+            for i, part in enumerate(subparts):
+                matches = [p for p in prior.subparts if p.label == part.label and p.subpart_id not in used]
+                if i not in assigned and len(matches) == 1:
+                    assigned[i] = matches[0].subpart_id
+                    used.add(matches[0].subpart_id)
+        for i, part in enumerate(subparts):
+            identity = assigned.get(i)
+            if identity is None:
+                identity = f"sp{next_index}"
+                next_index += 1
+            subparts[i] = part.model_copy(update={"subpart_id": identity})
+    else:
+        next_index = len(subparts) + 1
     return MajorQuestionStructureV1(
         major_number=str(problem.get("number") or ""),
         major_order=major_order,
         shared_stem=shared_stem,
         subparts=subparts,
+        next_subpart_index=next_index,
         structure_source=structure_source,
         review_status=review_status,
     )
@@ -571,8 +605,16 @@ def _parse_allocations(
 
 
 def scoring_stem(stem):
-    """Ignore a terminal sentence stop when matching an otherwise identical scoring part."""
-    return re.sub(r"(?<!\.)[。.?？](?=[ \t]*(?:\n|$|[(（][0-9a-zA-Z一二三四五六七八九十]+[)）]))", "", stem).strip() if stem else stem
+    """A deliberately narrow display comparison, never a scoring-part identity.
+
+    Sentence stops after Chinese prose can change without altering its tokens.
+    Mathematical punctuation (n!, decimals, operators), code and internal
+    clause boundaries remain significant and go through semantic compilation.
+    """
+    if not stem:
+        return stem
+    return re.sub(r"(?<=[\u3400-\u9fff])[。.!！?？]+(?=[ \t]*(?:\n|$|[(（][0-9a-zA-Z一二三四五六七八九十]+[)）]))",
+                  "", stem.replace("\r\n", "\n")).strip()
 
 
 def summarize_rubric_points(

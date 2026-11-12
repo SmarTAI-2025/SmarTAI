@@ -63,6 +63,25 @@ def question_row(question):
     )["q1"]
 
 
+def approved_fixture_draft(row, raw):
+    """This historical paraphrase needs an explicit semantic audit on first use."""
+    import asyncio
+    from backend.services.rubric_drafts import compile_parts_draft
+    from backend.services.teacher_point_allocations import TeacherPolicyUnresolved
+    from backend.tests.test_teacher_policy_audit import PolicyProvider
+
+    with pytest.raises(TeacherPolicyUnresolved) as unresolved:
+        generated_rubric(row, RubricDefinition(part_rubric=raw))
+    issue, = unresolved.value.issues
+    assert issue["source_quote"] == "第一问若仅沿用前一步算错的结果，求顶点这一步保留一半分"
+    assert [(p["step_id"], p["follow_through_pts"]) for p in issue["candidates"]] == [
+        ("sA", 0), ("sB", 0), ("sC", .5)]
+    provider = PolicyProvider(raw)
+    draft = asyncio.run(compile_parts_draft(row, provider))
+    assert len(provider.calls) == 2
+    return row["criterion"], draft
+
+
 @pytest.mark.parametrize("edition", ["v2", "alternatives"])
 def test_approved_files_round_trip_including_singleton_parts_and_duplicate_question_labels(
     edition,
@@ -77,7 +96,8 @@ def test_approved_files_round_trip_including_singleton_parts_and_duplicate_quest
     for original in source["questions"]:
         raw = proposed_rates(original)
         row = question_row(raw)
-        criterion, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+        criterion, draft = (approved_fixture_draft(row, raw) if original is source["questions"][0]
+                            else generated_rubric(row, RubricDefinition(part_rubric=raw)))
         if raw.get("teacher_rubric"):
             assert criterion == raw["teacher_rubric"]
         else:
@@ -422,7 +442,7 @@ def test_alternative_edit_creates_a_new_frozen_revision_and_retains_teacher_sour
 
     raw = proposed_rates(fixture()["questions"][0])
     row = question_row(raw)
-    criterion, old = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    criterion, old = approved_fixture_draft(row, raw)
     problem = ProblemInfo.model_validate({**row, "criterion": criterion})
     presentation = {"question_structure": row["question_structure"], "rubric_draft": old.model_dump(mode="json")}
     problem._math_rubric_source = {"presentation": presentation}
@@ -649,7 +669,7 @@ def test_partial_credit_switch_is_bound_to_one_frozen_run():
 
     q = proposed_rates(fixture()["questions"][0])
     source = question_row(q)
-    _, draft = generated_rubric(source, RubricDefinition(part_rubric=q))
+    _, draft = approved_fixture_draft(source, q)
     yes = bind_draft(draft, source, grading_setup={"allow_partial_credit": True})
     no = bind_draft(draft, source, grading_setup={"allow_partial_credit": False})
     assert (
@@ -1515,7 +1535,10 @@ def test_same_total_reallocation_uses_new_part_budgets_and_rejects_replaced_part
     displayed = {item["id"]: item for item in result["problem"]["alternative_rules"]}
     assert set(displayed) == {"pa", "pb"} and displayed["pb"]["label"] == "(b)"
     assert read_alternative(displayed["pb"]["text"], maximum=8).maximum.points == 7
-    with pytest.raises(ApiValidationError, match="changed scoring part"):
+    # A semantic wording edit now recompiles instead of losing the part by
+    # text identity. Without an enabled provider it must preserve the old row.
+    before, = assignment_repository.list_questions(task, teacher_id=owner)
+    with pytest.raises(ApiValidationError, match="No enabled recognition provider"):
         task_facade.update_problem(
             **args,
             patch={
@@ -1523,6 +1546,9 @@ def test_same_total_reallocation_uses_new_part_budgets_and_rejects_replaced_part
                 "alternative_rule_edits": {"pb": "最多给5分"},
             },
         )
+    after, = assignment_repository.list_questions(task, teacher_id=owner)
+    assert (after.version, after.stem, after.criterion, after.source) == (
+        before.version, before.stem, before.criterion, before.source)
     with pytest.raises(ApiValidationError):
         task_facade.update_problem(
             **args,

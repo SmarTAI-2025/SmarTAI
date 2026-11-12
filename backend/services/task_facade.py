@@ -113,6 +113,7 @@ from backend.services.result_artifacts import (
 from backend.services.question_structure import (
     MajorQuestionStructureV1,
     QuestionRubricValidationError,
+    RubricPointSummaryV1,
     build_major_question_structure,
     summarize_rubric_points,
     validate_rubric_points,
@@ -5627,11 +5628,9 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         prior_rules = (stored_draft.get("plan") or {}).get("part_rubric")
         # First-time manual recovery can still save incomplete materials offline.
         # Editing an existing structured rubric must publish matching rules.
-        from backend.services.question_structure import scoring_stem
-        cosmetic_stem = ("stem" in patch and patch["stem"] != question.stem
-                         and scoring_stem(patch["stem"]) == scoring_stem(question.stem))
         changed_rule = bool(prior_rules) and (
-            cosmetic_stem
+            ("stem" in patch and patch["stem"] != question.stem)
+            or ("type" in patch and patch["type"] != question.type)
             or ("reference_answer" in patch and patch["reference_answer"] != question.reference_answer)
             or ("criterion" in patch and patch["criterion"] != question.criterion)
             or ("max_score" in patch and patch["max_score"] != question.max_score)
@@ -5751,6 +5750,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                 major_order=question.order_index,
                 structure_source="deterministic",
                 review_status="needs_review",
+                previous=presentation.get("question_structure"),
             )
         else:
             structure = MajorQuestionStructureV1.model_validate(
@@ -5763,11 +5763,14 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                 ).model_dump()
             )
         try:
-            rubric_summary = validate_rubric_points(
+            # An edited structured rubric is validated from its compiled JSON
+            # below. A partial text scanner must not veto it before compilation.
+            rubric_summary = (RubricPointSummaryV1(major_max_score=str(patch.get("max_score", question.max_score)))
+                              if changed_rule and uses_math_grading(patch.get("type", question.type)) else validate_rubric_points(
                 str(patch.get("criterion", question.criterion) or ""),
                 patch.get("max_score", question.max_score),
                 structure, rubric_draft=presentation.get("rubric_draft"),
-            )
+            ))
         except QuestionRubricValidationError as exc:
             raise ValidationError(
                 "Explicit subpart rubric points must add up to the major-question maximum.",

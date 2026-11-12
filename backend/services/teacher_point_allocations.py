@@ -3,10 +3,41 @@ from __future__ import annotations
 
 import re
 import unicodedata
+import hashlib
+import json
 from decimal import Decimal
+from typing import Annotated, Literal
+from typing_extensions import TypedDict
+
+from pydantic import ConfigDict, Field
 
 from backend.services.math_source_evidence import match_source_quote
 from backend.services.question_structure import _allocation_marker_pattern
+
+
+class TeacherPolicyCheck(TypedDict):
+    """Persist the complete server-verified evidence at both cache boundaries."""
+
+    __pydantic_config__ = ConfigDict(extra="forbid")
+    policy_id: Annotated[str, Field(pattern=r"^teacher_policy_v1:[0-9a-f]{64}$")]
+    source_quote: Annotated[str, Field(min_length=1, max_length=100000)]
+    verdict: Literal["consistent", "inconsistent", "uncertain"]
+    reason: Annotated[str, Field(min_length=1, max_length=4000)]
+
+
+class TeacherPolicyUnresolved(ValueError):
+    """A source policy needs semantic verification, not another numeric guess."""
+
+    def __init__(self, issues):
+        self.issues = list(issues)
+        super().__init__("Unresolved teacher policies: " + ", ".join(issue["type"] for issue in self.issues))
+
+
+def teacher_policy_issue(kind, source_quote, candidates):
+    """Bind approval to the complete source and exact proposed scope/values."""
+    issue = {"type": kind, "source_quote": source_quote, "candidates": candidates}
+    encoded = json.dumps(issue, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return {"policy_id": "teacher_policy_v1:" + hashlib.sha256(encoded.encode()).hexdigest(), **issue}
 
 
 def _words(text):
@@ -14,16 +45,21 @@ def _words(text):
 
 
 def _expand_subtotals(text, labels):
-    """Check an explicit '其中' subtotal, then bind its children as ordinary leaves."""
+    """Verify a parenthesized budget tree, then bind its funded leaves once."""
     from backend.services.math_rubric_plan import _AMOUNT, _amount_value, _source_clauses
-
-    if "其中" not in text:
-        return text
 
     def expand(match):
         subtotal = _AMOUNT.fullmatch(match["total"])
         children = _source_clauses(match["children"])
         amounts = [list(_AMOUNT.finditer(child)) for child in children]
+        # Parentheses also contain ordinary mathematical/format instructions.
+        # Only a list of funded children is a budget decomposition; never erase
+        # conditional caps or penalties as if they were separately funded leaves.
+        if not match["intro"] and (not any(amounts) or any(
+            re.search(r"扣|最多|最低|保底|沿用|保留|若|如|否则|deduct|if\b|unless|minimum|maximum", child, re.I)
+            for child in children
+        )):
+            return match[0]
         if (not children or any(len(values) != 1 for values in amounts)
                 or any(values[0][2] != subtotal[2] for values in amounts)):
             raise ValueError(f"Identify the substep allocations in «{match[0]}».")
@@ -34,7 +70,70 @@ def _expand_subtotals(text, labels):
         return heading + match["children"]
 
     return re.sub(r"(?P<parent>[^()（）,，、；;。\n]{1,160}?)(?P<total>" + _AMOUNT.pattern +
-                  r")\s*[(（]\s*其中\s*[:：]?\s*(?P<children>[^()（）]+)[)）]", expand, text)
+                  r")\s*[(（]\s*(?P<intro>其中\s*[:：]?\s*)?(?P<children>[^()（）]+)[)）]", expand, text)
+
+
+def teacher_penalty_counts(parts, ordinary, anchors):
+    """Bind count limits to a teacher penalty, independently of money caps.
+
+    A numeric limit is executable only when its source and penalty are unique.
+    Adjacent count clauses inherit the immediately preceding penalty, never a
+    distant rule or a rule in another part.
+    """
+    from backend.services.math_rubric_plan import (
+        _AMOUNT, _DEDUCTION, _LIMIT_RULE, _REPEATED, _amount_value, _occurrences, _source_clauses,
+    )
+
+    labels = [(p, re.compile(_allocation_marker_pattern(p.label), re.I)) for p in parts if p.label]
+    scope = parts
+    previous = []
+    repeated = set()
+    limits = {}
+    for clause in _source_clauses(ordinary):
+        heading = next(((p, m) for p, pattern in labels if (m := pattern.match(clause))), None)
+        if heading:
+            scope = (heading[0],)
+            previous = []
+            clause = clause[heading[1].end():].strip(" :：")
+        count = _LIMIT_RULE.search(clause)
+        amounts = list(_AMOUNT.finditer(clause))
+        candidates = [(p, d) for p in scope for d in p.deductions]
+        current = []
+        if _DEDUCTION.search(clause) and len(amounts) == 1:
+            value = _amount_value(*amounts[0].groups(), scope[0].total_pts)
+            candidates = [(p, d) for p, d in candidates if Decimal(str(d.deduct_pts)) == value]
+            named = [(p, d) for p, d in candidates if (p.id, d.id) in anchors
+                     and match_source_quote(clause, anchors[(p.id, d.id)][1])]
+            quoted = [(p, d) for p, d in candidates if d.source_quote
+                      and match_source_quote(clause, d.source_quote)]
+            current = named or quoted or candidates
+            if _REPEATED.search(clause):
+                repeated.update((p.id, d.id) for p, d in current)
+        if count:
+            targets = current or previous
+            if len(targets) != 1:
+                raise ValueError(f"Identify the deduction rule subject to the count limit in «{clause}».")
+            key = targets[0][0].id, targets[0][1].id
+            number = _occurrences(count[0])
+            if _REPEATED.search(clause[:count.start()]):
+                # "Each target at most once" is an address-level uniqueness
+                # rule, not a cap of one event across the entire part.
+                rule = targets[0][1]
+                if number != 1 or rule.count_by != "target_item" or rule.limit is not None:
+                    raise ValueError(f"{key[0]}/{key[1]}: preserve the per-target count scope, not a global count limit.")
+                previous = current
+                continue
+            if key in limits and limits[key] != number:
+                raise ValueError(f"Conflicting count limits for {key[0]}/{key[1]}.")
+            limits[key] = number
+        previous = current
+    for part in parts:
+        for rule in part.deductions:
+            key = part.id, rule.id
+            if key in limits and rule.limit != limits[key]:
+                raise ValueError(f"{part.id}/{rule.id}: preserve the teacher's count limit of {limits[key]}.")
+            if key in repeated and key not in limits and rule.limit is not None:
+                raise ValueError(f"{part.id}/{rule.id}: the teacher specified each error without a count limit.")
 
 
 def _allocation_clauses(text, labels):
@@ -270,7 +369,7 @@ def bind_step_conditions(parts, ordinary, anchors):
     return {key: tuple(values) for key, values in requirements.items()}, gaps
 
 
-def teacher_awards_match(rules):
+def teacher_awards_match(rules, *, verified_policy_ids=()):
     from backend.services.part_rubric import (
         _NOT_FULL, _REQUIRED, _requires_method, _teacher_alternative_fields, ordinary_criterion, verify_teacher_numbers,
     )
@@ -294,7 +393,8 @@ def teacher_awards_match(rules):
     try:
         ordinary = ordinary_criterion(rules.teacher_rubric or "")
         anchors = validate_teacher_point_items(rules, ordinary)
-        verify_teacher_numbers(rules.teacher_rubric or "", rules, rules.total_pts)
+        verify_teacher_numbers(rules.teacher_rubric or "", rules, rules.total_pts,
+                               anchors=anchors, verified_policy_ids=verified_policy_ids)
         conditions, gaps = bind_step_conditions(rules.parts, ordinary, anchors)
         if any(step.required_conditions != conditions.get((part.id, step.id), ())
                for part in rules.parts for step in part.steps) or set(gaps) - set(rules.teacher_gaps):
