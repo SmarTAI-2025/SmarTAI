@@ -15,6 +15,7 @@ import json
 import logging
 import re
 from collections import defaultdict
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import PurePath
 from typing import Any, Callable, Dict, List, Literal, Optional, TYPE_CHECKING
@@ -2242,7 +2243,7 @@ _GENERATED_MATERIAL_GUIDANCE = r"""- reference_answer: a correct model answer or
 
 AI_COMPLETION_SYSTEM_PROMPT = _MATERIAL_ENVELOPE + _LEGACY_RULE_GUIDANCE + _GENERATED_MATERIAL_GUIDANCE
 
-from backend.services.part_rubric import PART_INSTRUCTION, parallel_part_budgets, supplied_notation
+from backend.services.part_rubric import PART_INSTRUCTION, TEACHER_RULE_INSTRUCTION, parallel_part_budgets, supplied_notation
 from backend.services.rubric_drafts import RubricAllocationError, RubricDefinition, RubricDraft, generated_rubric, retarget_draft, saved_draft
 from backend.domain.question_types import normalize_question_type
 from backend.services.math_rubric_plan import _question_input
@@ -2465,6 +2466,11 @@ async def generate_missing_question_materials(
                     "fill parts in the same order; supply a stable ID and total_pts per part. "
                     "Return one separate candidate per requested target. Never attach a rubric to a reference "
                     "when a criterion candidate was also requested." + "\n" + _GENERATED_MATERIAL_GUIDANCE)
+        if any(target["target_id"] in part_targets | interpret_with_answer
+               and str(problems_data[target["q_id"]].get("criterion") or "").strip()
+               and _question_input(problems_data[target["q_id"]])["criterion_source"] != "ai"
+               for target in target_rows):
+            guidance += "\n" + TEACHER_RULE_INSTRUCTION
         if any(len(entry["rubric_question"]["parts"]) > 1 for entry in problem_context if entry.get("rubric_question")):
             guidance += (" Give unweighted parallel instances of the same task and response form equal budgets. "
                          "Use parallel_part_budgets verbatim when present; distinct deliverables may differ.")
@@ -2529,12 +2535,51 @@ async def generate_missing_question_materials(
     from pydantic import model_validator
 
     class BoundCompletionOutput(AICompletionOutput):
+        @classmethod
+        def model_json_schema(cls, *args, **kwargs):
+            output = super().model_json_schema(*args, **kwargs)
+            if part_targets or interpret_with_answer:
+                # Repair uses the first request's exact definition, including
+                # source-owned identity fields and this question's part count.
+                # The envelope remains optional for non-scoring siblings.
+                definitions = output.setdefault("$defs", {})
+                definitions.update(deepcopy(schema.get("$defs", {})))
+                definitions["RubricDefinition"] = deepcopy({key: value for key, value in schema.items() if key != "$defs"})
+                # Drop now-unreachable legacy route definitions as well: they
+                # are valid schema extras but misleading instructions to an LLM.
+                referenced = set()
+                def visit(value):
+                    if isinstance(value, dict):
+                        ref = value.get("$ref", "")
+                        if ref.startswith("#/$defs/"):
+                            name = ref.removeprefix("#/$defs/")
+                            if name not in referenced:
+                                referenced.add(name)
+                                visit(definitions[name])
+                        for child in value.values():
+                            visit(child)
+                    elif isinstance(value, list):
+                        for child in value:
+                            visit(child)
+                visit({key: value for key, value in output.items() if key != "$defs"})
+                output["$defs"] = {key: value for key, value in definitions.items() if key in referenced}
+            return output
+
         @model_validator(mode="before")
         @classmethod
         def bind_candidates(cls, raw):
             if isinstance(raw, dict) and isinstance(raw.get("candidates"), list):
                 return {**raw, "candidates": [source_bound_candidate(item) for item in raw["candidates"]]}
             return raw
+
+    class BoundIndependentCompletionOutput(_IndependentCompletionOutput):
+        @classmethod
+        def model_json_schema(cls, *args, **kwargs):
+            # Keep independent parsing, but do not tell a repair call that the
+            # requested written candidate can be arbitrary JSON.
+            if part_targets or interpret_with_answer:
+                return BoundCompletionOutput.model_json_schema(*args, **kwargs)
+            return super().model_json_schema(*args, **kwargs)
 
     from backend.services.teacher_point_allocations import TeacherPolicyUnresolved
     from backend.services.rubric_drafts import audit_teacher_policies
@@ -2668,7 +2713,7 @@ async def generate_missing_question_materials(
         response = await ainvoke_with_retry(provider, messages)
         if allow_partial:
             raw, _ = await parse_with_format_repair(
-                provider, messages, response, _IndependentCompletionOutput, invoke=repair_invoke,
+                provider, messages, response, BoundIndependentCompletionOutput, invoke=repair_invoke,
             )
             accepted = {}
             duplicates = set()

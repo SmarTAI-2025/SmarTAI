@@ -53,11 +53,15 @@ class Alternative(Frozen):
     minimum: Amount = Field(default_factory=lambda: Amount(points=0))
     deduct_per_error: Points | None = Field(default=None, gt=0)
     max_deduction: Points | None = Field(default=None, exclude_if=lambda v: v is None)
-    source_quote: str = Field(default="", max_length=4000)
+    source_quote: str = Field(default="", max_length=4000, description=(
+        "Exact teacher text specifically governing alternative methods. Omit when the teacher "
+        "gave no alternative-method policy; ordinary step awards are not alternative rules."))
 
     # Needed only for teacher clauses that cannot be resolved by the deterministic reader.
     field_sources: dict[Literal["maximum", "minimum", "deduct_per_error", "max_deduction"], Text] = Field(
-        default_factory=dict, exclude_if=lambda v: not v
+        default_factory=dict, exclude_if=lambda v: not v, description=(
+            "Only explicitly stated alternative-method fields, each citing its exact teacher clause. "
+            "Leave empty for AI defaults; do not cite ordinary step budgets or a question floor."),
     )
     inferred_method_cap: bool = Field(default=False, exclude_if=lambda v: not v)
 
@@ -75,11 +79,16 @@ class Alternative(Frozen):
 class Criterion(Frozen):
     id: Key
     criterion: Text
-    source_quote: str = Field(default="", max_length=4000, exclude_if=lambda v: not v)
+    source_quote: str = Field(default="", max_length=4000, exclude_if=lambda v: not v, description=(
+        "Copy the smallest complete teacher allocation for THIS item, including its condition and "
+        "amount. Do not include neighboring allocations or quote the reference answer. "
+        "Omit for an AI-supplied item with no teacher allocation; never invent or paraphrase a quote."))
 
 
 class PointStep(Criterion):
-    required_conditions: tuple[Text, ...] = Field(default=(), max_length=20, exclude_if=lambda v: not v)
+    required_conditions: tuple[Text, ...] = Field(default=(), max_length=20, exclude_if=lambda v: not v, description=(
+        "Exact teacher clauses explicitly withholding this step's award under a condition. "
+        "Omit if none: ordinary correctness belongs in criterion, not invented or paraphrased conditions."))
     follow_through_pts: Points | None = Field(default=None, exclude_if=lambda v: v is None)
     total_pts: Points = Field(gt=0)
     answer_refs: tuple[Key, ...] = Field(default=(), exclude_if=lambda v: not v)
@@ -108,11 +117,15 @@ class PointStep(Criterion):
 class Penalty(Criterion):
     exclusive_group: Key | None = Field(default=None, exclude_if=lambda value: value is None)
     deduct_pts: Points = Field(gt=0)
-    max_deduction: Points | None = Field(default=None, exclude_if=lambda v: v is None)
+    max_deduction: Points | None = Field(default=None, exclude_if=lambda v: v is None, description=(
+        "Cumulative cap explicitly imposed on this error rule by the teacher. "
+        "Omit when unspecified; the part's zero-score boundary is already enforced by the server."))
     count_by: Literal["independent_error", "wrong_step", "target_item"] = (
         "independent_error"
     )
-    limit: int | None = Field(default=None, gt=0, le=100)
+    limit: int | None = Field(default=None, gt=0, le=100, description=(
+        "Teacher-specified maximum number of error occurrences. Omit when unspecified; "
+        "a per-error rate does not imply a count limit."))
 
 
 class RubricPart(Frozen):
@@ -167,9 +180,11 @@ class RubricPart(Frozen):
 
 
 class Floor(Frozen):
-    pts: Points | None = Field(default=None, exclude_if=lambda v: v is None)
+    pts: Points | None = Field(default=None, exclude_if=lambda v: v is None,
+                               description="Absolute question-wide nonblank floor in points; use pts or fraction, not both.")
     fraction: float | None = Field(
-        default=None, ge=0, le=1, allow_inf_nan=False, exclude_if=lambda v: v is None
+        default=None, ge=0, le=1, allow_inf_nan=False, exclude_if=lambda v: v is None,
+        description="Question-wide floor as a JSON number between 0 and 1, not a fraction string.",
     )
 
     @model_validator(mode="after")
@@ -1042,8 +1057,25 @@ absolute award on a sound step using an earlier wrong result. Convert a stated f
 that step's own budget. The earned award replaces the full step award. Use only one representation.
 max_deduction is the cumulative loss in points; deduct_pts or deduct_per_error is the loss per event.
 A count limit is a number of events, not a point amount.
-Ratios of the maximum (一半, 最多给1/3, 50%) are fractions, e.g. {"fraction":"1/3"}.
-Absolute amounts (0.5分, 半分) use {"points":0.5}. Never turn a proportion into a point.
+For alternative.maximum/minimum, ratios of the maximum (一半, 最多给1/3, 50%)
+use fraction strings, e.g. {"fraction":"1/3"}; absolute amounts (0.5分, 半分)
+use {"points":0.5}. For nonblank_floor instead use {"pts":0.5} for points or
+{"fraction":0.5} for a proportion of the question maximum. Never turn a proportion into a point.
+"""
+
+
+TEACHER_RULE_INSTRUCTION = """
+Interpret the supplied teacher rules before choosing the ledger. If they specify only error
+deductions, use deductions only: detailed reference calculations do not authorize additional
+funded steps. Include both steps and deductions only when the teacher authorizes both modes.
+For teacher-funded steps keep the teacher's target words in criterion; put the smallest complete
+allocation clause (target and amount) in source_quote, copied literally. Different allocations
+need their own quotes, not one paragraph shared by all steps. A nested subtotal funds its listed
+children; do not add the subtotal as another scored step. Follow-through belongs to its named
+step and uses that step's budget. Do not turn an ordinary correctness requirement into
+required_conditions: that field is only for exact teacher clauses explicitly withholding credit.
+Do not add origin to steps. Unstated alternative-method fields use AI defaults without teacher
+source attribution. Check all these constraints before returning, including when repairing a reply.
 """
 
 

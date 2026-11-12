@@ -839,7 +839,7 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
     import json
     from backend.domain.errors import ValidationError
     from pydantic import ValidationError as SchemaError
-    from backend.services.part_rubric import PART_INSTRUCTION, alternative_clauses, ordinary_criterion
+    from backend.services.part_rubric import PART_INSTRUCTION, TEACHER_RULE_INSTRUCTION, alternative_clauses, ordinary_criterion
     from backend.tools.structured_llm import llm_attempt_budget, structured_llm_call, StructuredOutputInvalidError
 
     context = _question_input(problem)
@@ -966,6 +966,8 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
             "question and adopted answer. Bind teacher_alternative_rules only to alternative. An error "
             "rate restricted to another method is never an additional primary deduction. Write in " + language + ".\n" +
             json.dumps(_WrittenProposal.model_json_schema(), ensure_ascii=False))
+    if binding_source["criterion_source"] != "ai" and binding_source["criterion"].strip():
+        system += "\n" + TEACHER_RULE_INSTRUCTION
     async def compile_request():
         await structured_llm_call(provider, system_prompt=system, user_prompt=json.dumps(request, ensure_ascii=False),
                                   output_model=_WrittenProposal, validate_output=validate)
