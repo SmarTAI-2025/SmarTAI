@@ -20,6 +20,8 @@ def plan(strictness, *, mode="points", eligible=True, partial=True, cap=None):
     data = rubric.fallback_math_rubric_plan(question(), grading_setup={
         "strictness": strictness, "allow_partial_credit": partial,
     }).model_dump(mode="json", exclude={"plan_id"})
+    # Exercise replay of an already frozen historical plan at its original value.
+    data["strictness"] = strictness
     defaults = ["follow_through"] if eligible else []
     items = ([dict(id="first", description="First computation", points=4, source="ai"),
               dict(id="next", description="Correct dependent computation", points=3, source="ai", default_adjustments=defaults),
@@ -233,7 +235,7 @@ def test_ambiguous_error_origin_cannot_be_inferred():
 
 
 @pytest.mark.asyncio
-async def test_compile_classification_once_and_keep_exact_authenticated_value():
+async def test_compile_classification_with_the_disabled_slider_fixed_at_neutral():
     response = explanation(routes=[route(items=[
         item("method", "方法4分", 4, default_adjustments=["follow_through"]),
         item("result", "结论6分", 6),
@@ -244,12 +246,12 @@ async def test_compile_classification_once_and_keep_exact_authenticated_value():
         p = await rubric.prepare_math_rubric_plan(question(), provider, grading_setup={"strictness": value})
         plans.append(p)
         assert len(provider.messages) == 1  # no new compiler/review loop
-        assert p.strictness == value
+        assert p.strictness == 50
         assert p.routes[0].items[0].default_adjustments == ("follow_through",)
         assert p.routes[0].items[1].default_adjustments == ()
-        assert f"strictness {value}/100" in p.effective_criterion
+        assert "strictness 50/100" in p.effective_criterion
     assert len({p.input_fingerprint for p in plans}) == 1
-    assert len({p.plan_id for p in plans}) == 5
+    assert len({p.plan_id for p in plans}) == 1
 
 
 @pytest.mark.asyncio
@@ -257,8 +259,8 @@ async def test_holistic_fallback_keeps_numeric_defaults_and_teacher_notes():
     setup = {"strictness": 25, "teacher_notes": "本题后续计算正常给满分"}
     p = await rubric.prepare_math_rubric_plan(question(), ReplayProvider("{}"), grading_setup=setup)
     assert p.compilation_status == "holistic"
-    assert p.strictness == 25
-    assert "× 25/100" in p.effective_criterion
+    assert p.strictness == 50
+    assert "× 50/100" in p.effective_criterion
     assert setup["teacher_notes"] in p.effective_criterion
     assert p.original_criterion == question()["criterion"]
 

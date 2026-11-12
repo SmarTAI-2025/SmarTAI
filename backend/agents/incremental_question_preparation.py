@@ -154,10 +154,12 @@ class IncrementalQuestionPreparation:
             operation_id=operation.operation_id, attempt=operation.attempt,
             input_hash=operation.input_hash, provider_record_id=provider_id)
         self.lock = asyncio.Lock()
-        self.gate = asyncio.Semaphore(_major_question_generation_concurrency(provider) if provider else 4)
+        self.concurrency = _major_question_generation_concurrency(provider) if provider else 4
+        self.gate = asyncio.Semaphore(self.concurrency)
         self.units = {}
         self.refs = dict(operation.checkpoint_data.get("incremental_unit_artifacts") or {})
         self.incomplete_units = set(operation.checkpoint_data.get("incremental_incomplete_units") or [])
+        self.repair_feedback = deepcopy(operation.checkpoint_data.get("material_repair_feedback") or {})
         # Historical snapshots stay immutable in storage, but are not active
         # dependencies. Keep the manifest bounded by current units + one view.
         self.source_refs = [ref for ref in operation.artifact_refs
@@ -169,7 +171,9 @@ class IncrementalQuestionPreparation:
         self.latest = {}
         self._base_cache_key = None
         self._base_cache = {}
+        self._bound_rubrics = {}
         self._view_digest = None
+        self._units_since_view = 0
         self.outline = explicit_teacher_scores(score_policy.per_question_text or "") if score_policy.mode == "per_question" else {}
         self.wanted = list(dict.fromkeys(number for draft, _, payload in sources if draft.role == "problem"
             for number in question_recognition_options(payload.get("recognition_options"), extraction_hint=draft.extraction_hint).targets))
@@ -241,7 +245,8 @@ class IncrementalQuestionPreparation:
         # complete question or combine obsolete source partitions.
         incomplete = set(checkpoint.get("incremental_incomplete_units") or [])
         self.incomplete_units.update(incomplete)
-        await self._checkpoint(
+        self.repair_feedback.update(deepcopy(checkpoint.get("material_repair_feedback") or {}))
+        await self._checkpoint(material_repair_feedback=deepcopy(self.repair_feedback),
             incremental_source_invalidations=deepcopy(checkpoint.get("incremental_source_invalidations") or {}),
             incremental_source_plans=deepcopy(checkpoint.get("incremental_source_plans") or {}),
             incremental_incomplete_units=sorted(self.incomplete_units))
@@ -275,23 +280,52 @@ class IncrementalQuestionPreparation:
         for q_id, row in result.items():
             if generated:
                 identity = _base_identity(row)
-                drafts = [row.get("rubric_draft")]
+                drafts = [self._base_cache[q_id].get("rubric_draft")]
                 for target in ("reference_answer", "criterion", "solution_code", "test_cases"):
                     saved = self.units.get(f"generated:{identity}:{target}")
                     if saved:
                         row[target] = deepcopy(saved["q1"][target])
-                        row.setdefault("ai_completion_provenance", {})[target] = deepcopy(saved["q1"]["ai_completion_provenance"][target])
+                        provenance = (saved["q1"].get("ai_completion_provenance") or {}).get(target)
+                        if provenance:
+                            row.setdefault("ai_completion_provenance", {})[target] = deepcopy(provenance)
                         if saved["q1"].get("rubric_draft"):
                             drafts.append(saved["q1"]["rubric_draft"])
+                interpretation = self.units.get("rubric:" + _base_identity(row))
+                if interpretation:
+                    drafts.append(next(iter(interpretation.values())).get("rubric_draft"))
                 # Field order is not semantic freshness. Validate only after
                 # all fields and their provenance have reached the final row;
                 # never re-seal a stale draft to make it appear current.
                 row.pop("rubric_draft", None)
-                for draft in reversed(drafts):
-                    if draft and saved_draft({**row, "rubric_draft": draft}) is not None:
-                        row["rubric_draft"] = deepcopy(draft)
-                        break
+                available = tuple(draft for draft in drafts if draft)
+                if available:
+                    from backend.services.rubric_drafts import draft_fingerprint, retarget_draft
+                    fingerprint = draft_fingerprint(row)
+                    previous = self._bound_rubrics.get(q_id)
+                    # These are the immutable objects in the durable unit cache.
+                    # Keep references so neither ID reuse nor a stale content hash
+                    # can turn a changed payload into a cache hit.
+                    if (previous and previous[0] == (fingerprint, row.get("number")) and
+                            len(previous[1]) == len(available) and
+                            all(old is current for old, current in zip(previous[1], available))):
+                        bound = previous[2]
+                    else:
+                        bound = None
+                        for draft in reversed(available):
+                            verified = saved_draft({**row, "rubric_draft": draft})
+                            if verified:
+                                bound = retarget_draft(verified, row).model_dump(mode="json")
+                                break
+                        self._bound_rubrics[q_id] = ((fingerprint, row.get("number")), available, bound)
+                    if bound:
+                        row["rubric_draft"] = deepcopy(bound)
             row.setdefault("preparation_issues", [])
+            if generated and row.get("criterion") and not row.get("rubric_draft"):
+                feedback = self.repair_feedback.get("generation:" + identity, {}).get("q1:criterion") or self.repair_feedback.get("rubric:" + _base_identity(row), {}).get("criterion")
+                if feedback:
+                    problem_issue = _issue(q_id, "rubric", "generation_failed", "blocking", [])
+                    problem_issue["details"] = {"target": "criterion", "reason": "invalid_structured_rubric"}
+                    row["preparation_issues"].append(problem_issue)
             for issue in row["preparation_issues"]:
                 issue["q_id"] = q_id
             for field in ("stem", "criterion", "reference_answer"):
@@ -544,22 +578,19 @@ class IncrementalQuestionPreparation:
                     (self.operation.checkpoint_data.get("incremental_saving_units") or {}).items() if name != key},
                 incremental_empty_units=[key for key, value in self.units.items() if not value],
                 incremental_unit_artifacts=dict(self.refs), artifact_attempts=attempts,
+                material_repair_feedback=deepcopy(self.repair_feedback),
                 incremental_errors={name: classify_background_error(exc, "question_preparation_failed") for name, exc in self.failures.items()})
-            view_digest = _digest(self.latest)
-            if self.latest and view_digest != self._view_digest:
-                try:
-                    snapshot = await run_in_threadpool(save_base_preparation_artifact, **self.context,
-                        stage=QUESTIONS_EXTRACTED_STAGE, problem_data=self.latest, snapshot=True,
-                        operation_lease_token=self.operation.lease_token)
-                except ValidationError as exc:
-                    if exc.code != "question_preparation_artifact_too_large":
-                        raise
-                    # The aggregate is only a read optimization. Valid durable
-                    # units must remain usable when their combined view is large.
-                    changes.update(questions_extracted_artifact_id=None, incremental_view_from_units=True)
-                else:
-                    attempts[snapshot.id] = self.operation.attempt
-                    changes.update(questions_extracted_artifact_id=snapshot.id, incremental_view_from_units=False)
+            # Unit artifacts already contain every accepted field. For large
+            # batches, periodically compact that manifest instead of validating
+            # and uploading the entire class on each individual field write.
+            self._units_since_view += int(bool(rows))
+            compact = len(self.latest) <= 32 or self._units_since_view >= 32 or error is not None
+            view_digest = _digest(self.latest) if compact else None
+            if self.latest:
+                if not compact:
+                    changes.update(incremental_view_from_units=True, questions_extracted_artifact_id=None)
+                elif view_digest != self._view_digest:
+                    await self._write_combined_view(changes)
                 changes["question_ids"] = list(self.latest)
             counts = dict(questions=len(self.latest),
                 stems=sum(bool(str(row.get("stem") or "").strip()) for row in self.latest.values()),
@@ -1040,18 +1071,23 @@ class IncrementalQuestionPreparation:
                 allocation = self.outline.get(normalize_question_number(row.get("number")))
                 data["q1"]["teacher_subpart_points"] = {label: str(points) for label, points in allocation.subparts.items()} if allocation else {}
                 pending = list(targets)
+                feedback = self.repair_feedback.setdefault(key, {})
                 with llm_attempt_budget():
                     for _ in range(3):
                         candidates = await generate_missing_question_materials(data, pending, 6, self.provider,
                             reporter=self.reporter, manage_progress_lifecycle=False, generation_language=self.language,
-                            allow_partial=True)
+                            allow_partial=True, repair_feedback=feedback)
                         for candidate in candidates:
                             target = next((target for target in pending if target["target_id"] == candidate.target_id), None)
                             if target is None:
                                 continue
                             try:
                                 _validate_major_question_candidates("q1", [target], [candidate], data["q1"])
-                            except (ValueError, ValidationError):
+                            except ValidationError as exc:
+                                feedback[target["target_id"]] = exc.message
+                                continue
+                            except ValueError:
+                                feedback[target["target_id"]] = "Invalid material structure for this target."
                                 continue
                             value = [case.model_dump() for case in candidate.test_cases] if candidate.target == "test_cases" else candidate.text_value
                             saved = _rows([{name: value for name, value in data["q1"].items()
@@ -1059,10 +1095,12 @@ class IncrementalQuestionPreparation:
                             saved["q1"][candidate.target] = value
                             if candidate.rubric_draft:
                                 saved["q1"]["rubric_draft"] = candidate.rubric_draft
-                            saved["q1"].setdefault("ai_completion_provenance", {})[candidate.target] = dict(
-                                job_id=self.operation.operation_id, candidate_id=candidate.target_id,
-                                source_kind="ai_generated", provider_id=self.provider_id, review_status="pending",
-                                generated_at=time.time(), updated_at=time.time())
+                            if not data["q1"].get(candidate.target):
+                                saved["q1"].setdefault("ai_completion_provenance", {})[candidate.target] = dict(
+                                    job_id=self.operation.operation_id, candidate_id=candidate.target_id,
+                                    source_kind="ai_generated", provider_id=self.provider_id, review_status="pending",
+                                    generated_at=time.time(), updated_at=time.time())
+                            feedback.pop(target["target_id"], None)
                             await self.finish(f"generated:{identity}:{candidate.target}", saved)
                             # A later missing-field request must see the same
                             # accepted content AND source classification we saved.
@@ -1072,6 +1110,7 @@ class IncrementalQuestionPreparation:
                             break
                     if pending:
                         raise ValidationError("Some materials could not be completed.", code="provider_response_invalid")
+                self.repair_feedback.pop(key, None)
                 await self.reporter.mark_question_generation_finished(progress_id, succeeded=True, revision=identity)
                 await self.finish(key)
         except (asyncio.CancelledError, LeaseLost):
@@ -1087,6 +1126,81 @@ class IncrementalQuestionPreparation:
         # generation artifacts remain bound to the full content identity.
         return ("target:" + normalize_question_number(row.get("number"))
                 if self.wanted else _base_identity(row))
+
+    async def _write_combined_view(self, changes):
+        try:
+            snapshot = await run_in_threadpool(save_base_preparation_artifact, **self.context,
+                stage=QUESTIONS_EXTRACTED_STAGE, problem_data=self.latest, snapshot=True,
+                operation_lease_token=self.operation.lease_token)
+        except ValidationError as exc:
+            if exc.code != "question_preparation_artifact_too_large":
+                raise
+            # The aggregate is only a read optimization. Valid durable
+            # units must remain usable when their combined view is large.
+            changes.update(questions_extracted_artifact_id=None, incremental_view_from_units=True)
+        else:
+            changes.setdefault("artifact_attempts", dict(self.operation.checkpoint_data.get("artifact_attempts") or {}))[snapshot.id] = self.operation.attempt
+            changes.update(questions_extracted_artifact_id=snapshot.id, incremental_view_from_units=False)
+        self._units_since_view = 0
+
+    async def _finalize_view(self):
+        if self.latest and self.operation.checkpoint_data.get("incremental_view_from_units"):
+            changes = {}
+            await self._write_combined_view(changes)
+            await self._checkpoint(**changes)
+
+    async def freeze_supplied_rules(self, packages):
+        """Interpret adopted teacher material separately; never write a teacher text field."""
+        from backend.services.math_grading_context import uses_math_grading
+        from backend.services.rubric_drafts import compile_parts_draft
+
+        if self.ocr_only:
+            return packages
+        pending = []
+        for q_id, row in packages.items():
+            if uses_math_grading(row.get("type") or "") and row.get("criterion"):
+                draft = saved_draft(row)
+                if not draft or not draft.plan.part_rubric:
+                    pending.append((q_id, row))
+        if not pending:
+            return packages
+
+        work = iter(pending)
+        failures = []
+
+        async def compile_next():
+            # A confirmed failure stops further admissions. Allow the other
+            # already-admitted units to save their completed interpretations.
+            while not failures:
+                entry = next(work, None)
+                if entry is None:
+                    return
+                _, row = entry
+                key = "rubric:" + _base_identity(row)
+                await self.begin(key)
+                try:
+                    draft = await compile_parts_draft(row, self.provider, grading_setup={"feedback_language": self.language})
+                    self.repair_feedback.pop(key, None)
+                    await self.finish(key, _rows([{**row, "rubric_draft": draft.model_dump(mode="json")}]))
+                except (asyncio.CancelledError, LeaseLost):
+                    raise
+                except Exception as exc:
+                    failures.append(exc)
+                    self.repair_feedback[key] = {"criterion": "The supplied rubric could not be fully interpreted."}
+                    await self.finish(key, error=exc)
+
+        workers = [asyncio.create_task(compile_next()) for _ in range(min(self.concurrency, len(pending)))]
+        try:
+            await asyncio.gather(*workers)
+        finally:
+            for worker in workers:
+                if not worker.done():
+                    worker.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+        if failures:
+            raise failures[0]
+        await self._finalize_view()
+        return self.project()
 
     async def run(self):
         await self.restore()
@@ -1138,6 +1252,7 @@ class IncrementalQuestionPreparation:
             ):
                 raise ValidationError("Some question text is incomplete.", code="question_targets_incomplete")
             await self.reporter.set_stage_progress("committing_question_packages", total_steps=8, completed_steps=7)
+            await self._finalize_view()
             return self.latest
         finally:
             for task in [*tasks, *self.jobs.values()]:

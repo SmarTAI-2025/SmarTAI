@@ -43,9 +43,26 @@ def test_rubric_display_omits_internal_unconditional_marker_only(language, condi
     assert "4" in rendered
 
 
+def written_choice_definition(maximum=4):
+    return {"part_rubric": {"id": "q1", "label": "1", "stem": choice_question()["stem"], "total_pts": maximum,
+             "parts": [{"id":"p1", "label":None, "stem":None, "total_pts": maximum, "alternative":{"deduct_per_error":maximum},
+                "steps":[{"id":"option","criterion":f"选择B（4）得{maximum}分，否则0分","total_pts":maximum}]}]}}
+
+
+def archived_choice(kind="计算题", definition=None, language="zh"):
+    """Load a pre-parts question through the historical draft serializer and binder."""
+    from backend.services.rubric_drafts import retarget_draft
+    row = {**choice_question(), "type": kind}
+    criterion, draft = generated_rubric(row, RubricDefinition.model_validate(definition or choice_definition()), language=language)
+    row.update(criterion=criterion, reference_answer="B，结果为4。", ai_completion_provenance={
+        key: {"source_kind":"ai_generated"} for key in ("criterion","reference_answer")})
+    row["rubric_draft"] = retarget_draft(draft, row).model_dump(mode="json")
+    return row
+
+
 async def generate_choice(kind="计算题", definition=None, language="zh"):
     provider = ReplayProvider({"candidates": [
-        dict(target_id="q1:criterion", q_id="q1", target="criterion", rubric_definition=definition or choice_definition()),
+        dict(target_id="q1:criterion", q_id="q1", target="criterion", rubric_definition=definition or written_choice_definition()),
         dict(target_id="q1:reference_answer", q_id="q1", target="reference_answer", text_value="B，结果为4。"),
     ]})
     raw = {**choice_question(), "type": kind}
@@ -67,7 +84,7 @@ async def generate_choice(kind="计算题", definition=None, language="zh"):
 async def test_hiding_unconditional_marker_preserves_reusable_scoring_draft():
     definition = choice_definition()
     definition["routes"][0]["applies_when"] = "always"
-    row = await generate_choice(definition=definition)
+    row = archived_choice(definition=definition)
     assert "always" not in row["criterion"]
     draft = saved_draft(row)
     assert draft is not None
@@ -85,7 +102,7 @@ async def test_incremental_completion_keeps_draft_matching_final_materials(monke
     owner, _, operation, pipeline = await setup(monkeypatch)
     raw = inc._rows([choice_question()])["q1"]
     monkeypatch.setattr(pipeline, "_project_base", lambda: {"q1": deepcopy(raw)})
-    definition = choice_definition()
+    definition = written_choice_definition()
     candidates = [dict(
         target_id=f"q1:{target}", q_id="q1", target=target,
         text_value="B，结果为4。" if target == "reference_answer" else "",
@@ -181,9 +198,9 @@ async def test_generated_response_round_trip_binds_without_any_grading_preparati
     for strictness in (0, 50, 100):
         plans = await prepare_math_plans({"q1": row}, registry,
             grading_setup={"strictness": strictness, "allow_partial_credit": True})
-        assert plans["q1"].strictness == strictness
-        assert plans["q1"].routes[0].items[0].points == 4
-        assert plans["q1"].effective_criterion.count("Authenticated teacher grading preferences:") == 1
+        assert plans["q1"].strictness == 50
+        assert plans["q1"].part_rubric.parts[0].steps[0].total_pts == 4
+        assert plans["q1"].original_criterion == row["criterion"]
         from backend.services.math_grading_context import get_math_plan, math_plans_context, problem_from_question
         persisted = SimpleNamespace(**{k: row.get(k) for k in (
             "q_id", "number", "type", "stem", "criterion", "reference_answer", "test_cases", "max_score",
@@ -215,8 +232,7 @@ async def test_retry_recovers_saved_generation_context_and_provenance(monkeypatc
     raw = {**choice_question(), "max_score": 10}
     extract = AsyncMock(return_value=inc._rows([raw]))
     monkeypatch.setattr(inc, "_extract_problems_call", extract)
-    definition = choice_definition()
-    definition["routes"][0]["items"][0].update(points=10, description="选择B得10分，否则0分")
+    definition = written_choice_definition(10)
 
     def candidate(target):
         return dict(target_id=f"q1:{target}", q_id="q1", target=target,
@@ -286,7 +302,7 @@ async def test_content_changes_invalidate_but_renumbering_and_display_settings_d
     for key, value in (("stem", "Choose 3+3."), ("reference_answer", "C"), ("criterion", "每错扣1分"),
                        ("max_score", 8), ("type", "概念题")):
         assert saved_draft(problem({**row, key: value})) is None
-    assert saved_draft(original, grading_setup={"teacher_notes": "漏选得2分"}) is None
+    assert saved_draft(original, grading_setup={"teacher_notes": "漏选得2分"}).plan.plan_id == saved_draft(original).plan.plan_id
 
 
 def test_complete_teacher_rubric_is_adopted_and_source_rules_are_not_rewritten():
@@ -310,8 +326,8 @@ async def test_manual_question_compiles_once_then_rebinds_changed_strictness():
     first = (await prepare_math_plans({"q1": raw}, registry, grading_setup={"strictness": 0}))["q1"]
     second = (await prepare_math_plans({"q1": raw}, registry, grading_setup={"strictness": 100}))["q1"]
     assert len(provider.messages) == 1
-    assert first.strictness == 0 and second.strictness == 100
-    assert first.plan_id != second.plan_id and first.routes == second.routes
+    assert first.strictness == second.strictness == 50
+    assert first.plan_id == second.plan_id and first.routes == second.routes
     assert '"strictness"' not in provider.messages[0][1].content
 
 
@@ -355,7 +371,7 @@ async def test_concurrent_preparation_persists_once_and_reuses_after_configurati
     rebound = await other.run(prepare_math_plans(
         grading_adapter.build_problem_store(questions), registry, grading_setup={"strictness": 100}))
     assert calls == ["q1", "q2"]
-    assert all(plan.strictness == 100 for plan in rebound.values())
+    assert all(plan.strictness == 50 for plan in rebound.values())
 
 
 @pytest.mark.asyncio
@@ -468,7 +484,7 @@ async def test_generated_binary_rubric_enforces_zero_or_full(monkeypatch, kind, 
     definition = choice_definition()
     if bare_rule:
         definition["routes"][0]["items"][0]["description"] = "选B得4分，否则0分"
-    row = await generate_choice(kind, definition)
+    row = archived_choice(kind, definition)
     registry = SimpleNamespace(pick_default=AsyncMock(side_effect=AssertionError("No second compiler")))
     plans = await prepare_math_plans({"q1": row}, registry)
     problem = ProblemInfo.model_validate(row)

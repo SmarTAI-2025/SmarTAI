@@ -458,12 +458,23 @@ def _decimal_text(value: Decimal) -> str:
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
+def _ordinal_token(token: str) -> str:
+    if not token.isascii() or not token.isdigit() or not 1 <= int(token) <= 99:
+        return token
+    n = int(token)
+    digits = "零一二三四五六七八九"
+    tens, ones = divmod(n, 10)
+    chinese = (("" if tens == 1 else digits[tens]) + "十" if tens else "") + (digits[ones] if ones else "")
+    return rf"(?:{token}|{chinese})"
+
+
 def _allocation_marker_pattern(label: str) -> str:
     token = re.escape(_normalize_label(label))
     parenthesized = rf"[（(]\s*{token}\s*[)）]"
+    ordinal = _ordinal_token(token)
     return (
-        rf"(?:第\s*{parenthesized}\s*问|"
-        rf"(?:part|小问)\s*{parenthesized}|"
+        rf"(?:第\s*(?:{parenthesized}|{ordinal})\s*(?:小[问题]|问)|"
+        rf"(?:小[问题]|\b(?:subpart|part)\s+)\s*(?:{parenthesized}|{ordinal}(?![a-z0-9]))|"
         rf"{parenthesized})"
     )
 
@@ -480,6 +491,29 @@ def _parse_allocations(
     double-counted by overlapping regular expressions.
     """
 
+    text = unicodedata.normalize("NFKC", text)
+    # A generated item has a dedicated budget column. Its description can quote
+    # conditional awards, other parts and deductions; none is an additional budget.
+    # One subpart may contain several independently budgeted steps.
+    item_budgets: dict[str, list[Decimal]] = {}
+    ordinary_lines = []
+    for line in text.splitlines():
+        if line.startswith("- ") and " [" in line:
+            for part in subparts:
+                match = re.match(rf"^-\s+{_allocation_marker_pattern(part.label)}\s+\[{_POINT_TOKEN}\]", line, re.I)
+                if match:
+                    item_budgets.setdefault(part.subpart_id, []).append(Decimal(match["points"]))
+                    break
+            else:
+                ordinary_lines.append(line)
+        else:
+            ordinary_lines.append(line)
+    if item_budgets:
+        # In itemized rubrics only explicitly labelled teacher additions may also
+        # allocate points. Narrative before/after the list is scoring guidance.
+        markers = "|".join(_allocation_marker_pattern(part.label) for part in subparts)
+        text = "\n".join(line for line in ordinary_lines if re.match(rf"^\s*(?:-\s+)?(?:{markers})", line, re.I))
+
     occurrences: list[tuple[int, int, str]] = []
     for part in subparts:
         pattern = _allocation_marker_pattern(part.label)
@@ -488,7 +522,8 @@ def _parse_allocations(
             for match in re.finditer(pattern, text or "", flags=re.IGNORECASE)
         )
     occurrences.sort(key=lambda item: (item[0], item[1]))
-    values: dict[str, list[Decimal]] = {part.subpart_id: [] for part in subparts}
+    values = {part.subpart_id: ([sum(item_budgets[part.subpart_id], Decimal(0))]
+                               if part.subpart_id in item_budgets else []) for part in subparts}
     seen_spans: set[tuple[int, int, str]] = set()
     for index, (start, end, subpart_id) in enumerate(occurrences):
         span_key = (start, end, subpart_id)
@@ -508,7 +543,10 @@ def _parse_allocations(
             r"including\b|comprising\b|consisting\s+of\b|of\s+which\b)",
             segment[point_matches[0].end():], flags=re.IGNORECASE,
         ))
-        if included_breakdown:
+        declared_max = bool(point_matches and re.fullmatch(
+            r"\s*[:：,，]?\s*(?:满分|配分|本问满分|worth|maximum(?:\s+of)?)\s*[:：]?\s*",
+            segment[:point_matches[0].start()], re.I))
+        if included_breakdown or declared_max:
             point_matches = point_matches[:1]
         component_scores: list[Decimal] = []
         for match in point_matches:
@@ -536,6 +574,7 @@ def summarize_rubric_points(
     criterion: str,
     max_score: Any,
     question_structure: Mapping[str, Any] | MajorQuestionStructureV1 | None,
+    *, rubric_draft: dict | None = None,
 ) -> RubricPointSummaryV1:
     """Parse explicit subpart points and report exact-sum validity.
 
@@ -558,6 +597,19 @@ def summarize_rubric_points(
             review_status="needs_review",
         )
     )
+    if rubric_draft and (rubric_draft.get("plan") or {}).get("part_rubric"):
+        from backend.services.rubric_drafts import RubricDraft
+        plan = RubricDraft.model_validate(rubric_draft).plan
+        rules = plan.part_rubric
+        scope = [(part.label, part.stem) for part in structure.subparts] or [(None, None)]
+        if (plan.original_criterion == criterion and Decimal(str(rules.total_pts)) == maximum
+                and [(part.label, part.stem) for part in rules.parts] == scope):
+            items = [RubricPointItemV1(subpart_id=source.subpart_id, label=source.label,
+                                       points=_decimal_text(Decimal(str(part.total_pts))))
+                     for source, part in zip(structure.subparts, rules.parts)]
+            return RubricPointSummaryV1(items=items, has_explicit_subpart_points=bool(items),
+                                        total_points=_decimal_text(maximum) if items else None,
+                                        major_max_score=_decimal_text(maximum))
     allocations = _parse_allocations(criterion or "", structure.subparts)
     parsed: list[tuple[MajorQuestionSubpartV1, list[Decimal]]] = [
         (part, allocations[part.subpart_id]) for part in structure.subparts
@@ -601,8 +653,9 @@ def validate_rubric_points(
     criterion: str,
     max_score: Any,
     question_structure: Mapping[str, Any] | MajorQuestionStructureV1 | None,
+    *, rubric_draft: dict | None = None,
 ) -> RubricPointSummaryV1:
-    summary = summarize_rubric_points(criterion, max_score, question_structure)
+    summary = summarize_rubric_points(criterion, max_score, question_structure, rubric_draft=rubric_draft)
     if not summary.is_valid:
         raise QuestionRubricValidationError(summary)
     return summary

@@ -16,7 +16,7 @@ from backend.models import ProblemInfo
 if TYPE_CHECKING:
     from backend.services.math_rubric_plan import MathRubricPlan
 
-MATH_GRADING_ENGINE_VERSION = "math_evidence_v2"
+MATH_GRADING_ENGINE_VERSION = "math_evidence_v3"
 ENGINE_EVENT = "grading_math_engine"
 PLAN_EVENT = "grading_math_rubric_plan"
 _current_plans: ContextVar[dict[str, "MathRubricPlan"] | None] = ContextVar(
@@ -80,10 +80,26 @@ def get_math_plan(problem: ProblemInfo) -> "MathRubricPlan | None":
 
     plan = (_current_plans.get() or {}).get(problem.q_id)
     if (plan is None or plan.input_fingerprint != math_rubric_fingerprint(problem)
-            or plan.max_score != problem.max_score):
+            or plan.max_score != problem.max_score
+            or (plan.adopted_material and (plan.adopted_material.stem != problem.stem
+                or plan.adopted_material.reference_answer != (problem.reference_answer or "")))
+            or (plan.part_rubric and plan.part_rubric.missing_alternative_rates())):
         return None
     # A skill cannot silently change the rules seen by the next expert.
     return plan.model_copy(deep=True)
+
+
+def scoring_plan(problem, grading_setup):
+    """A prepared written question must use the same revision on every vote."""
+    plan = get_math_plan(problem)
+    if plan is not None:
+        return plan
+    prepared = (_current_plans.get() or {}).get(problem.q_id)
+    if prepared and prepared.part_rubric:
+        from backend.domain.errors import ValidationError as RuleValidationError
+        raise RuleValidationError("The frozen question no longer matches the scoring inputs.", code="grading_inputs_changed")
+    from backend.services.math_rubric_plan import fallback_math_rubric_plan
+    return fallback_math_rubric_plan(problem, grading_setup=grading_setup)
 
 
 def frozen_engine_version(manifest: dict, events: list[dict]) -> str | None:
@@ -94,9 +110,10 @@ def frozen_engine_version(manifest: dict, events: list[dict]) -> str | None:
     return version
 
 
-def plans_from_snapshots(manifest: dict, events: list[dict]) -> dict[str, "MathRubricPlan"]:
+def plans_from_snapshots(manifest: dict, events: list[dict], *, for_grading=False) -> dict[str, "MathRubricPlan"]:
     """Restore actual plans; an old engine never supplies a new engine's rules."""
     from backend.services.math_rubric_plan import MathRubricPlan
+    from backend.services.teacher_point_allocations import teacher_awards_match
 
     if frozen_engine_version(manifest, events) != MATH_GRADING_ENGINE_VERSION:
         return {}
@@ -111,6 +128,10 @@ def plans_from_snapshots(manifest: dict, events: list[dict]) -> dict[str, "MathR
             plan = MathRubricPlan.model_validate(raw)
         except (ValidationError, TypeError):
             continue
+        if for_grading and plan.part_rubric and (
+            plan.part_rubric.missing_alternative_rates() or not teacher_awards_match(plan.part_rubric)
+        ):
+            continue  # Retain the historical plan for display, never mix its votes into a new ledger.
         if isinstance(qid, str) and plan.schema_version == "math_rubric_v3":
             plans[qid] = plan
     return plans
@@ -171,7 +192,7 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
         fallback_math_rubric_plan, math_rubric_fingerprint,
     )
     from backend.progress.grading_activity import observe_auxiliary_request
-    from backend.services.rubric_drafts import saved_draft, bind_draft, compile_draft, remember_draft
+    from backend.services.rubric_drafts import saved_draft, bind_draft, compile_draft, remember_draft, requires_part_rubric
 
     checkpoints = current_checkpoints()
     plans = {}
@@ -222,6 +243,9 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
                         "prepare_grading_criteria",
                     )
                 if provider is None or not callable(getattr(provider, "ainvoke", None)):
+                    if requires_part_rubric(problem):
+                        from backend.domain.errors import ValidationError as RuleValidationError
+                        raise RuleValidationError("A validated scoring rubric is required.", code="invalid_structured_rubric")
                     plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
                 else:
                     try:
@@ -243,7 +267,7 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
                         raise
                     except Exception as exc:
                         # Cancellation derives from BaseException and is not caught.
-                        if _has_critical_plan_failure(
+                        if requires_part_rubric(problem) or _has_critical_plan_failure(
                             exc, (CheckpointWriteError, DomainError, SQLAlchemyError),
                         ):
                             raise
@@ -251,6 +275,9 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
                         plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
                 if (plan.input_fingerprint != math_rubric_fingerprint(problem)
                         or plan.max_score != problem.max_score):
+                    if requires_part_rubric(problem):
+                        from backend.domain.errors import ValidationError as RuleValidationError
+                        raise RuleValidationError("Scoring rules changed during preparation.", code="invalid_structured_rubric")
                     plan = fallback_math_rubric_plan(problem, grading_setup=grading_setup)
                 if checkpoints is not None:
                     checkpoints.save_math_plan(problem, plan)
@@ -274,7 +301,7 @@ def ensure_run_math_version(*, run_id, worker_id, questions, frozen_setup):
     manifest = (frozen_setup.input_manifest if frozen_setup else {}) or {}
     events = repository.list_events(run_id)
     version = frozen_engine_version(manifest, events)
-    plans = matching_math_plans(questions, plans_from_snapshots(manifest, events))
+    plans = matching_math_plans(questions, plans_from_snapshots(manifest, events, for_grading=True))
     completed = [
         row for row in repository.list_results_for_run(run_id) if row.q_id in math_qids
     ]

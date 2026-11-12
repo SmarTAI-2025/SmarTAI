@@ -151,8 +151,8 @@ describe("AddProblemsPage source limits", () => {
     renderPage();
     expect(screen.queryByRole("button", { name: /再添加一份题目|添加题目/ })).not.toBeInTheDocument();
     for (const [tab, add, upload] of [
-      [/2\. 标答/, "添加标答", "标答来源文件上传"],
-      [/3\. 评分标准/, "添加评分标准", "评分标准来源文件上传"],
+      [/3\. 标答/, "添加标答", "标答来源文件上传"],
+      [/2\. 评分标准/, "添加评分标准", "评分标准来源文件上传"],
       [/4\. 测试样例/, "添加测试资料", "测试资料来源文件上传"],
     ] as const) {
       await user.click(screen.getByRole("button", { name: tab }));
@@ -188,13 +188,13 @@ describe("AddProblemsPage source limits", () => {
     })) };
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     expect(screen.getByRole("alert")).toHaveTextContent("题目最多保留一份来源");
     expect(screen.getAllByLabelText("题目来源文件上传")).toHaveLength(2);
     expect(preflightMutateAsync).not.toHaveBeenCalled();
     expect(startMutateAsync).not.toHaveBeenCalled();
     await user.click(screen.getAllByRole("button", { name: "删除这份资料" })[1]);
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     await waitFor(() => expect(startMutateAsync).toHaveBeenCalledTimes(1));
   });
 });
@@ -207,7 +207,7 @@ describe("AddProblemsPage score configuration", () => {
     expect(screen.getByLabelText("生成语言")).toHaveValue("en");
     await uploadProblemFile(user);
     await user.selectOptions(screen.getByLabelText("生成语言"), "zh");
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     await waitFor(() => expect(startMutateAsync).toHaveBeenCalledWith(expect.objectContaining({ generationLanguage: "zh" })));
   });
 
@@ -224,7 +224,7 @@ describe("AddProblemsPage score configuration", () => {
     fireEvent.change(screen.getByLabelText("页码（选填）"), { target: { value: pages } });
     fireEvent.change(screen.getByLabelText("目标题号（选填）"), { target: { value: targets } });
     fireEvent.change(screen.getByLabelText("补充说明（选填）"), { target: { value: hint } });
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     await waitFor(() => expect(startMutateAsync).toHaveBeenCalledTimes(1));
     expect(preflightMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
       recognitionOptions: { pages: pages ? [3, 4, 5] : [], targets: targets ? targets.split(", ") : [] },
@@ -237,7 +237,7 @@ describe("AddProblemsPage score configuration", () => {
     await uploadProblemFile(user);
     await user.click(screen.getByRole("button", { name: "从原文提取" }));
     fireEvent.change(screen.getByLabelText("页码（选填）"), { target: { value: "5-2" } });
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     expect(screen.getByText(/页码请填写 PDF 文件页序号/)).toBeInTheDocument();
     expect(preflightMutateAsync).not.toHaveBeenCalled();
     expect(startMutateAsync).not.toHaveBeenCalled();
@@ -248,7 +248,7 @@ describe("AddProblemsPage score configuration", () => {
     renderPage();
     await uploadProblemFile(user);
 
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
 
     await waitFor(() => expect(startMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
       scorePolicy: { mode: "default_10" },
@@ -264,12 +264,12 @@ describe("AddProblemsPage score configuration", () => {
     renderPage();
     await uploadProblemFile(user);
 
-    await user.click(screen.getByRole("button", { name: /3\. 评分标准/ }));
+    await user.click(screen.getByRole("button", { name: /2\. 评分标准/ }));
     const scoreInput = screen.getByRole("spinbutton", { name: "每题满分" });
     expect(scoreInput).toHaveValue(10);
     await user.clear(scoreInput);
     await user.type(scoreInput, "5");
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
 
     await waitFor(() => expect(startMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
       scorePolicy: { mode: "uniform", uniformMaxScore: 5 },
@@ -282,13 +282,13 @@ describe("AddProblemsPage score configuration", () => {
     renderPage();
     await uploadProblemFile(user);
 
-    await user.click(screen.getByRole("button", { name: /3\. 评分标准/ }));
+    await user.click(screen.getByRole("button", { name: /2\. 评分标准/ }));
     await user.click(screen.getByRole("checkbox", { name: "每题满分不同" }));
     await user.type(
       screen.getByRole("textbox", { name: "每题满分说明" }),
       "第 1 题 5 分，第 2 题 15 分",
     );
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
 
     await waitFor(() => expect(startMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
       scorePolicy: {
@@ -394,7 +394,7 @@ describe("AddProblemsPage workflow recovery", () => {
     renderPage();
     await uploadProblemFile(user);
 
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     await user.click(await screen.findByRole("button", { name: "刷新任务状态" }, { timeout: 3000 }));
 
     await waitFor(() => expect(taskRefetch).toHaveBeenCalledOnce());
@@ -420,7 +420,7 @@ describe("page draft navigation", () => {
     await uploadProblemFile(user);
     await user.click(screen.getByRole("button", { name: "从原文提取" }));
     fireEvent.change(screen.getByLabelText("页码（选填）"), { target: { value: "3-5" } });
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     await user.click(screen.getByRole("link", { name: "前往 BYOK" }));
     await user.click(await screen.findByRole("button", { name: "暂存并离开" }));
     expect(await screen.findByText("BYOK configuration")).toBeInTheDocument();
@@ -436,7 +436,7 @@ describe("page draft navigation", () => {
     await saveDraft();
     await act(async () => { await router.navigate("/settings/byok"); await router.navigate(-1); });
     await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     await waitFor(() => expect(preflightMutateAsync).toHaveBeenCalledTimes(1));
     expect(preflightMutateAsync.mock.calls[0][0].file).toBeInstanceOf(File);
   });
@@ -448,12 +448,12 @@ describe("page draft navigation", () => {
     preflightMutateAsync.mockResolvedValue({ source_token: "prepared-1", source: { stored_file_id: "file-1" } });
     startMutateAsync.mockRejectedValueOnce(new APIError(503, "try later"));
     await uploadProblemFile(user);
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     await waitFor(() => expect(startMutateAsync).toHaveBeenCalledTimes(1));
     await act(async () => { await router.navigate("/settings/byok"); await router.navigate(-1); });
-    await waitFor(() => expect(screen.getByRole("button", { name: "识别并准备题目资料" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ })).toBeEnabled());
     expect(preflightMutateAsync).toHaveBeenCalledTimes(1); expect(startMutateAsync).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     expect(await screen.findByText("Preparation started")).toBeInTheDocument();
     expect(preflightMutateAsync).toHaveBeenCalledTimes(1); expect(startMutateAsync).toHaveBeenCalledTimes(2);
     await act(async () => { await router.navigate(-1); });
@@ -488,7 +488,7 @@ describe("image failure recovery uses explicit drafts", () => {
     fireEvent.change(screen.getByLabelText("页码（选填）"), { target: { value: "3-5" } });
     fireEvent.change(screen.getByLabelText("补充说明（选填）"), { target: { value: "保留这段说明" } });
     preflightMutateAsync.mockRejectedValueOnce(new APIError(422, "image_recognition_unconfirmed", { detail: { code: "image_recognition_unconfirmed" } }));
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     await user.click(await screen.findByRole("button", { name: "暂存并去验证" }));
     await screen.findByText("BYOK configuration");
     expect(router.state.location.search).toContain("providerId=mock%3Atest");
@@ -501,7 +501,7 @@ describe("image failure recovery uses explicit drafts", () => {
     expect(screen.getByLabelText("补充说明（选填）")).toHaveValue("保留这段说明");
     expect(preflightMutateAsync).toHaveBeenCalledTimes(1);
     preflightMutateAsync.mockResolvedValueOnce({ source_token: "new-source" });
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     await waitFor(() => expect(preflightMutateAsync).toHaveBeenCalledTimes(2));
     const request = preflightMutateAsync.mock.calls[1][0];
     expect(request.recognitionProviderId).toBe("new:model");
@@ -510,7 +510,7 @@ describe("image failure recovery uses explicit drafts", () => {
   it("stays with input when saving fails", async () => {
     const user = userEvent.setup(); renderPage(); await uploadProblemFile(user);
     preflightMutateAsync.mockRejectedValueOnce(new APIError(422, "provider_vision_not_supported", { detail: { code: "provider_vision_not_supported" } }));
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     await screen.findByRole("button", { name: "暂存并更换模型" });
     const spy = vi.spyOn(draftStore, "writePageDrafts").mockRejectedValueOnce(new Error("quota save failure"));
     await user.click(screen.getByRole("button", { name: "暂存并更换模型" }));
@@ -523,7 +523,7 @@ describe("image failure recovery uses explicit drafts", () => {
     providerState.imageState = "passed";
     const user = userEvent.setup(); renderPage(); await uploadProblemFile(user);
     preflightMutateAsync.mockRejectedValueOnce(new APIError(422, "image_recognition_unconfirmed", { detail: { code: "image_recognition_unconfirmed" } }));
-    await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+    await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
     expect(await screen.findByText(/所选模型已通过图片能力验证/)).toHaveTextContent("请换清晰文件或换模型");
     expect(screen.queryByRole("button", { name: "暂存并去验证" })).not.toBeInTheDocument();
     expect(screen.queryByText(/当前配置不支持图片输入/)).not.toBeInTheDocument();
@@ -535,7 +535,7 @@ it("browser back keeps the latest explicit choice over old history state and sav
   const user = userEvent.setup(); const router = renderPage("draft-teacher", "mock:test");
   await uploadProblemFile(user);
   preflightMutateAsync.mockRejectedValueOnce(new APIError(422, "image_recognition_unconfirmed", { detail: { code: "image_recognition_unconfirmed" } }));
-  await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+  await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
   await user.click(await screen.findByRole("button", { name: "暂存并更换模型" }));
   await screen.findByText("BYOK configuration");
   rememberImageReturn("draft-teacher", "/tasks/task-1/upload/problems", "new:model");
@@ -559,7 +559,7 @@ it("restores formally submitted files, scope, hints and policy without an explic
   expect(screen.getByLabelText("补充说明（选填）")).toHaveValue("保留图表");
   expect(preflightMutateAsync).not.toHaveBeenCalled();
   expect(startMutateAsync).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+  fireEvent.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
   await screen.findByText("Preparation started");
   expect(preflightMutateAsync.mock.calls.map(([input]) => input.role)).toEqual(["problem", "reference_answer"]);
   expect(preflightMutateAsync.mock.calls[0][0]).toMatchObject({ storedFileId: "stored-1", file: null, recognitionOptions: { pages: [3, 4, 5], targets: ["1.1.5"] } });
@@ -579,10 +579,8 @@ it("explains a filename-only source after switching from the library and accepts
   renderPage();
   await waitFor(() => expect(screen.getByLabelText("题目识别模型")).toHaveValue("mock:test"));
   await user.click(screen.getByRole("button", { name: "上传新文件" }));
-  const start = screen.getByRole("button", { name: "识别并准备题目资料" });
-  expect(start).toBeEnabled();
-  await user.click(start);
-  expect(window.alert).toHaveBeenCalledWith(expect.stringMatching(/saved\.pdf.*重新选择/));
+  const start = screen.getByRole("button", { name: /^(直接)?识别题目资料$/ });
+  expect(start).toBeDisabled();
   expect(screen.getByText("待重新选择：saved.pdf")).toBeInTheDocument();
   expect(preflightMutateAsync).not.toHaveBeenCalled();
   expect(startMutateAsync).not.toHaveBeenCalled();
@@ -600,8 +598,9 @@ it.each([[404, "重新选择"], [503, "重试检查"]])("explains reference fail
   const user = userEvent.setup();
   renderPage();
   await screen.findByText(status === 404 ? /原文件已过期/ : /暂时无法核对文件/);
-  await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
-  expect(window.alert).toHaveBeenCalledWith(expect.stringContaining(guidance));
+  await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
+  expect(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ })).toBeDisabled();
+  expect(screen.getAllByText(new RegExp(guidance)).length).toBeGreaterThan(0);
   expect(preflightMutateAsync).not.toHaveBeenCalled();
   expect(startMutateAsync).not.toHaveBeenCalled();
 });
@@ -613,7 +612,7 @@ it("background prepared-reference invalidation cannot dismiss a fresh start fail
   renderPage();
   await uploadProblemFile(user);
   preflightMutateAsync.mockResolvedValue({ source_token: "prepared", source: { stored_file_id: "stored" } });
-  await user.click(screen.getByRole("button", { name: "识别并准备题目资料" }));
+  await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
   await waitFor(() => expect(startMutateAsync).toHaveBeenCalledTimes(1));
   await waitFor(() => expect(screen.getByRole("button", { name: "重新识别全部资料" })).toBeInTheDocument());
   expect(screen.getByRole("link", { name: "返回修改配置" })).toHaveAttribute("href", "/tasks/task-1/upload/problems");

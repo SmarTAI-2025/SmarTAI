@@ -55,16 +55,6 @@ ANTI_JAILBREAK_PREFIX = (
 def _grading_policy_prompt(setup: Optional[TaskGradingSetup]) -> str:
     if setup is None:
         return ""
-    if setup.strictness <= 20:
-        strictness_label = "very lenient"
-    elif setup.strictness <= 40:
-        strictness_label = "lenient"
-    elif setup.strictness <= 60:
-        strictness_label = "balanced"
-    elif setup.strictness <= 80:
-        strictness_label = "strict"
-    else:
-        strictness_label = "very strict"
     tone = {
         "encouraging": "supportive and encouraging",
         "neutral": "neutral and professional",
@@ -90,8 +80,7 @@ def _grading_policy_prompt(setup: Optional[TaskGradingSetup]) -> str:
     notes = setup.teacher_notes or "(none)"
     return (
         "\n\n[TASK GRADING POLICY — authenticated teacher configuration]\n"
-        f"Strictness: {setup.strictness}/100 ({strictness_label}). Apply the "
-        "provided rubric consistently at that strictness; never invent new point values.\n"
+        "Apply the frozen teacher rubric consistently; never invent new point values.\n"
         f"Partial credit: {partial}\n"
         f"Feedback tone: {tone}. Feedback length: {length}.\n"
         f"Correction suggestions: {corrections}\n"
@@ -384,6 +373,7 @@ def classify_skill_error(e: Exception) -> tuple[str, str]:
     ("provider_rate_limited", "provider_upstream_unavailable", …) that carry
     no status digits, so they need their own keywords.
     """
+    from backend.tools.structured_llm import StructuredOutputInvalidError
     s = str(e).lower()
     from backend.llm.provider_limits import exhausted_quota_code
     quota_code = exhausted_quota_code(e)
@@ -430,7 +420,8 @@ def classify_skill_error(e: Exception) -> tuple[str, str]:
             "🌐 该题暂未批改完成 — AI 服务出现网络/超时错误。请稍后重试。",
         )
     if (
-        "no json found" in s
+        isinstance(e, StructuredOutputInvalidError)
+        or "no json found" in s
         or "could not parse" in s
         or "validation" in s
         or "response_invalid" in s  # provider_response_invalid (unparseable 200 body)

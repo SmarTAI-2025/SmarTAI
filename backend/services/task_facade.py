@@ -19,9 +19,9 @@ import time
 import uuid
 from collections import Counter, defaultdict
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import delete, func, select, update
@@ -80,7 +80,7 @@ from backend.domain.source_storage import (
     DELAYED_SOURCE_OPERATION_TYPES,
     TASK_DELETE_OPERATION,
 )
-from backend.models import TaskGradingSetup, is_programming_question_type
+from backend.models import ProblemInfo, TaskGradingSetup, is_programming_question_type
 from backend.models import User
 from backend.llm.registry import (
     resolve_owner_default_provider,
@@ -937,7 +937,7 @@ def _math_rubric_advisory(question, plan, language: str) -> list[dict]:
         "issue_id": f"math-rubric:{question.q_id}:{plan.input_fingerprint}",
         "q_id": question.q_id, "field": "rubric", "code": "math_rubric_advisory",
         "severity": "warning", "status": "open",
-        "details": {"message": "\n".join(advice)},
+        "details": {"message": "\n".join(advice), **({"reason": "teacher_rule_interpretation"} if plan.part_rubric else {})},
     }]
 
 
@@ -1013,8 +1013,24 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
             review_status="needs_review",
         ).model_dump()
     rubric_summary = summarize_rubric_points(
-        question.criterion or "", max_score, structure
+        question.criterion or "", max_score, structure, rubric_draft=presentation.get("rubric_draft")
     ).model_dump()
+    from backend.services.part_rubric import alternative_text, render_parts
+    from backend.services.math_grading_context import problem_from_question
+    from backend.services.rubric_drafts import saved_draft
+    if math_plan is None and presentation.get("rubric_draft"):
+        verified = saved_draft(problem_from_question(question), allow_incomplete_alternative=True)
+        math_plan = verified.plan if verified else None
+    alternatives = []
+    if math_plan and math_plan.part_rubric:
+        alternatives = [{"id": part.id, "label": part.label,
+                         "text": alternative_text(part, zh=feedback_language == "zh"),
+                         **({"cap_from_required_method": True} if part.alternative.inferred_method_cap else {})}
+                        for part in math_plan.part_rubric.parts]
+    elif presentation.get("alternative_rules"):
+        from backend.services.rubric_drafts import pending_alternatives
+        alternatives = [{"id": key, "label": rule["label"], "text": rule["text"]}
+                        for key, rule in pending_alternatives(presentation["alternative_rules"], structure).items()]
     # Give the editor valid old function-only rows in its existing text fields.
     # Invalid legacy data must remain visible so the teacher can correct it.
     cases = question.test_cases
@@ -1037,6 +1053,10 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
             "max_score_review_status", "needs_review"
         ),
         "question_structure": structure,
+        "alternative_rules": alternatives,
+        **({"effective_criterion": render_parts(math_plan.part_rubric, feedback_language, full_policy=True),
+            "rubric_version": math_plan.part_rubric.rubric_version}
+           if math_plan and math_plan.part_rubric else {}),
         "rubric_point_summary": rubric_summary,
         "review_status": presentation.get("review_status", "needs_review"),
         "reference_answer": question.reference_answer,
@@ -1694,6 +1714,7 @@ def _question_preparation_retry_checkpoint(
         updates.update(incremental_version=1, incremental_unit_artifacts=dict(incremental_refs),
                        incremental_empty_units=list(empty_units), incremental_inflight_units=[],
                        incremental_incomplete_units=list(checkpoint.get("incremental_incomplete_units") or []),
+                       material_repair_feedback=dict(checkpoint.get("material_repair_feedback") or {}),
                        incremental_saving_units=dict(checkpoint.get("incremental_saving_units") or {}),
                        incremental_source_invalidations=dict(checkpoint.get("incremental_source_invalidations") or {}),
                        incremental_completed_sources=list(checkpoint.get("incremental_completed_sources") or []),
@@ -2518,7 +2539,7 @@ def _replace_draft_questions(
                 rubric_summary = validate_rubric_points(
                     str(raw.get("criterion") or ""),
                     float(raw.get("max_score") or 10),
-                    structure,
+                    structure, rubric_draft=raw.get("rubric_draft"),
                 )
             except QuestionRubricValidationError as exc:
                 if manual_recovery:
@@ -2550,6 +2571,7 @@ def _replace_draft_questions(
                     "material_provenance": raw.get("material_provenance", {}),
                     "ai_completion_provenance": raw.get("ai_completion_provenance", {}),
                     "rubric_draft": raw.get("rubric_draft"),
+                    "rubric_schema_version": 2,
                     "preparation_issues": raw.get("preparation_issues", []),
                 },
             }
@@ -4116,7 +4138,7 @@ def apply_question_patches_atomic(
                 rubric_summary = validate_rubric_points(
                     str(fields.get("criterion", question.criterion) or ""),
                     fields.get("max_score", question.max_score),
-                    structure,
+                    structure, rubric_draft=presentation_updates.get("rubric_draft", current_presentation.get("rubric_draft")),
                 )
             except QuestionRubricValidationError as exc:
                 raise ValidationError(
@@ -5510,10 +5532,62 @@ def _serialize_correction(result) -> dict:
     }
 
 
+if TYPE_CHECKING:
+    from backend.services.rubric_drafts import RubricDraft
+
+
+@dataclass(frozen=True)
+class _PendingRubricEdit:
+    problem: ProblemInfo
+    prior: RubricDraft | None
+    revision: int
+    question_version: int
+    provider_id: str | None
+    language: str
+    alternative_ids: frozenset[str] | None
+
+
+def _compile_review_edit(owner_id, edit, run_async):
+    from functools import partial
+    from backend.services.rubric_drafts import compile_parts_draft
+
+    registry = _registry_for_owner(owner_id)
+    provider = resolve_stage_provider_route(
+        owner_id=owner_id, registry=registry, requested_route_id=edit.provider_id,
+    ).provider
+    if provider is None:
+        raise ValidationError("A language model is required to interpret the edited rubric.",
+                              code="no_provider_configured")
+    compile_edit = partial(compile_parts_draft, edit.problem, provider,
+                           grading_setup={"feedback_language": edit.language}, previous=edit.prior,
+                           alternative_ids=edit.alternative_ids)
+    try:
+        return run_async(compile_edit) if run_async else asyncio.run(compile_edit())
+    except DomainError:
+        raise
+    except Exception as exc:
+        code = classify_background_error(exc, "provider_request_failed")
+        raise ValidationError("The edited scoring rules could not be prepared. Your previous version is intact.",
+                              code=code) from exc
+
+
 def update_problem(
     *, task_id: str, owner_id: str, q_id: str, patch: dict,
-    expected_revision: int | None = None,
+    expected_revision: int | None = None, run_async=None,
 ) -> dict:
+    args = dict(task_id=task_id, owner_id=owner_id, q_id=q_id, patch=patch)
+    result = _save_problem_edit(**args, expected_revision=expected_revision)
+    if not isinstance(result, _PendingRubricEdit):
+        return result
+    # The first transaction has released its locks. Only a validated, still-current
+    # interpretation can publish the new text, scoring JSON and workflow revision.
+    draft = _compile_review_edit(owner_id, result, run_async)
+    return _save_problem_edit(**args, expected_revision=result.revision,
+                              compiled=draft, question_version=result.question_version)
+
+
+def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
+                       compiled=None, question_version=None):
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
     )
@@ -5525,7 +5599,7 @@ def update_problem(
     now = time.time()
     substantive = bool({
         "number", "type", "stem", "criterion", "max_score", "reference_answer",
-        "solution_code", "test_cases",
+        "solution_code", "test_cases", "alternative_rule_edits",
     }.intersection(patch))
     with session_scope() as session:
         workflow_row = workflow_repository.lock_workflow_revision(
@@ -5543,6 +5617,22 @@ def update_problem(
         ))
         if question is None:
             raise NotFound("question")
+        if question_version is not None and question.version != question_version:
+            _raise_stale_revision()
+        from backend.services.math_grading_context import problem_from_question, uses_math_grading
+        from backend.services.rubric_drafts import (
+            draft_fingerprint, rebind_review_edit, saved_draft,
+        )
+        stored_draft = ((question.source or {}).get("presentation") or {}).get("rubric_draft") or {}
+        prior_rules = (stored_draft.get("plan") or {}).get("part_rubric")
+        # First-time manual recovery can still save incomplete materials offline.
+        # Editing an existing structured rubric must publish matching rules.
+        changed_rule = bool(prior_rules) and (
+            ("criterion" in patch and patch["criterion"] != question.criterion)
+            or ("max_score" in patch and patch["max_score"] != question.max_score)
+            or bool(patch.get("alternative_rule_edits"))
+        )
+        prior_problem = problem_from_question(question) if changed_rule else None
         source = dict(question.source or {})
         presentation = dict(source.get("presentation") or {})
         presentation["preparation_issues"] = _effective_question_issues(presentation)
@@ -5554,6 +5644,19 @@ def update_problem(
             )}
         elif patch.get("review_status") == "confirmed" and question.test_cases:
             _validated_test_cases(question.stem, question.type, question.test_cases)
+        check_alternatives = "alternative_rule_edits" in patch or (
+            presentation.get("alternative_rules") and ({"stem", "number", "max_score", "criterion"}.intersection(patch)
+                                                       or patch.get("review_status") == "confirmed")
+        )
+        if check_alternatives:
+            from backend.services.math_grading_context import problem_from_question
+            from backend.services.rubric_drafts import edit_alternatives
+            previous_problem = problem_from_question(question)
+        if "criterion" in patch and patch["criterion"] != question.criterion:
+            presentation["rubric_schema_version"] = 2
+            provenance = dict(presentation.get("ai_completion_provenance") or {})
+            provenance.pop("criterion", None)
+            presentation["ai_completion_provenance"] = provenance
         original_problem = _serialize_problem(question)
         if test_cases_edited and is_programming_question_type(patch.get("type", question.type)):
             patch["test_cases"] = _attribute_edited_test_cases(
@@ -5658,7 +5761,7 @@ def update_problem(
             rubric_summary = validate_rubric_points(
                 str(patch.get("criterion", question.criterion) or ""),
                 patch.get("max_score", question.max_score),
-                structure,
+                structure, rubric_draft=presentation.get("rubric_draft"),
             )
         except QuestionRubricValidationError as exc:
             raise ValidationError(
@@ -5674,6 +5777,49 @@ def update_problem(
             if key in patch:
                 setattr(question, key, patch[key])
         question.source = source
+        if check_alternatives:
+            try:
+                edit_alternatives(problem_from_question(question), presentation, patch.get("alternative_rule_edits"),
+                                  previous=previous_problem, allow_pending=changed_rule)
+            except (ValueError, TypeError) as exc:
+                raise ValidationError(str(exc), code="invalid_alternative_rule") from exc
+        if changed_rule and question.stem.strip() and question.criterion.strip() and uses_math_grading(question.type):
+            candidate = problem_from_question(question)
+            prior = saved_draft(prior_problem, allow_incomplete_alternative=True)
+            if prior is None and compiled is None:
+                # Historical rows could store new text next to an old plan. Only
+                # reuse that plan if its complete original input still verifies.
+                old_plan = (prior_problem._math_rubric_source["presentation"]["rubric_draft"]).get("plan") or {}
+                original = prior_problem.model_copy(update={
+                    "criterion": old_plan.get("original_criterion"), "max_score": old_plan.get("max_score"),
+                })
+                if original.max_score and original.criterion is not None:
+                    prior = saved_draft(original, allow_incomplete_alternative=True)
+                    if prior:
+                        prior_problem = original
+            draft = compiled or saved_draft(candidate) or rebind_review_edit(prior, prior_problem, candidate)
+            if draft is None:
+                # Free-text edits to just an alternative cannot change the main
+                # steps or any other part, even if the model proposes changes.
+                only_alternatives = (prior and patch.get("alternative_rule_edits")
+                    and candidate.criterion == prior_problem.criterion and candidate.max_score == prior_problem.max_score
+                    and candidate.stem == prior_problem.stem and candidate.reference_answer == prior_problem.reference_answer)
+                pending = _PendingRubricEdit(
+                    problem=candidate, prior=prior, revision=workflow_row.workflow_revision,
+                    question_version=question.version, provider_id=workflow.question_recognition_provider_id,
+                    language=workflow_row.initial_content_language or "zh",
+                    alternative_ids=frozenset(patch["alternative_rule_edits"]) if only_alternatives else None,
+                )
+                session.rollback()
+                return pending
+            if draft.content_fingerprint != draft_fingerprint(candidate):
+                _raise_stale_revision()
+            presentation["rubric_draft"] = draft.model_dump(mode="json")
+            presentation["rubric_point_summary"] = validate_rubric_points(
+                question.criterion, question.max_score, structure,
+                rubric_draft=presentation["rubric_draft"],
+            ).model_dump()
+            question.source = {**source, "presentation": presentation}
         question.version += 1
         question.updated_at = now
         if substantive:

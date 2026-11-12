@@ -348,6 +348,7 @@ export function useUpdateProblem() {
       type?: string;
       stem?: string;
       criterion?: string;
+      alternative_rule_edits?: Record<string, string>;
       max_score?: number;
       review_status?: "needs_review" | "edited" | "confirmed";
       review_fields?: import("@/types").PreparationIssue["field"][];

@@ -133,6 +133,7 @@ class UpdateProblemRequest(BaseModel):
     type: str | None = Field(default=None, min_length=1, max_length=64)
     stem: str | None = None
     criterion: str | None = None
+    alternative_rule_edits: dict[str, str] = Field(default_factory=dict, max_length=100)
     max_score: float | None = Field(
         default=None,
         gt=0,
@@ -768,10 +769,11 @@ def delete_review_student(task_id: str, student_id: str, request: ReviewRowMutat
 @router.put("/{task_id}/problems/{q_id}")
 def update_problem(task_id: str, q_id: str, request: UpdateProblemRequest,
                    current: User = Depends(require_teacher)):
+    from anyio.from_thread import run
     return _domain(lambda: task_facade.update_problem(
         task_id=task_id, owner_id=current.id, q_id=q_id,
         patch=request.model_dump(exclude_unset=True, exclude={"expected_workflow_revision"}),
-        expected_revision=request.expected_workflow_revision,
+        expected_revision=request.expected_workflow_revision, run_async=run,
     ))
 
 

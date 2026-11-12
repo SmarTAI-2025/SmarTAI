@@ -88,6 +88,8 @@ async def test_missing_subpart_is_repaired_within_the_same_question():
     from backend.tests.test_question_preparation_recovery import _questions, _candidates
     problems = _questions(1)
     correct = [item.model_dump(mode="json") for item in _candidates("q1")]
+    from backend.tests.part_rubric_fixtures import definition_for
+    next(item for item in correct if item["target"]=="criterion")["rubric_definition"] = definition_for(problems["q1"],budgets=[4,6])
     incomplete = [dict(item) for item in correct]
     next(item for item in incomplete if item["target"] == "reference_answer")["text_value"] = "(a) Only the first subpart."
     provider = Provider([json.dumps({"candidates": incomplete}), json.dumps({"candidates": correct})])
@@ -181,3 +183,58 @@ async def test_stdin_program_keeps_stdin_cases_without_extra_generation():
     assert len(provider.calls) == 1
     assert result[0].test_cases[0].input == "2\n3"
     assert result[0].test_cases[0].function_name is None
+
+
+@pytest.mark.asyncio
+async def test_schema_repair_names_invalid_fields_and_omits_source_values():
+    provider = Provider([
+        json.dumps({"candidates": [{"target_id": "q1:reference_answer", "q_id": "q1",
+                                   "target": "private free-form sentence"}]}),
+        json.dumps({"candidates": [{"target_id": "q1:reference_answer", "q_id": "q1",
+                                   "target": "reference_answer", "text_value": "42"}]}),
+    ])
+    result = await generate(provider)
+    assert result[0].text_value == "42" and len(provider.calls) == 2
+    repair = provider.calls[1][-1].content
+    assert '"path": ["candidates", 0, "target"]' in repair and "literal_error" in repair
+    assert "private free-form sentence" not in repair
+
+
+def test_schema_diagnostics_redact_unknown_dictionary_keys_and_values():
+    from pydantic import BaseModel, ConfigDict
+
+    from backend.tools.structured_llm import StructuredOutputInvalidError, extract_and_parse_json
+
+    class Decision(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        accepted: bool
+
+    with pytest.raises(StructuredOutputInvalidError) as failure:
+        extract_and_parse_json(json.dumps({"accepted": "secret_value", "secret_key": True}), Decision)
+    issues = json.loads(failure.value.repair_context)["invalid_fields"]
+    assert {tuple(item["path"]) for item in issues} == {("accepted",), ("<key>",)}
+    assert "secret" not in failure.value.repair_context
+
+
+@pytest.mark.asyncio
+async def test_single_bare_ledger_binds_only_to_a_single_known_part():
+    from backend.agents.incremental_question_preparation import _rows
+
+    target = dict(q_id="q1", target="criterion", target_id="q1:criterion")
+    raw = dict(total_pts=10, parts=[], steps=[{"id": "s", "total_pts": 10, "criterion": "证明所求恒等式"}],
+               alternative={"maximum": {"points": 8}, "deduct_per_error": 2})
+    def provider():
+        return Provider([json.dumps({"candidates": [{**target, "rubric_definition": {"part_rubric": raw}}]})])
+    question = dict(number="7", type="推理题", stem="证明恒等式。", reference_answer="逐项展开。", max_score=10)
+    feedback = {}
+    candidate, = await generate_missing_question_materials(_rows([question]), [target], 1, provider(),
+                                                           allow_partial=True, repair_feedback=feedback)
+    part, = candidate.rubric_draft["plan"]["part_rubric"]["parts"]
+    assert part["steps"][0]["total_pts"] == 10
+    assert part["alternative"]["maximum"] == {"points": 8.0}
+    for stem in ["证明下列结论。\n(1) 证明 A。\n(2) 证明 B。", "证明恒等式。"]:
+        if stem == question["stem"]:
+            raw["deductions"] = [{"id": "d", "criterion": "独立错误", "deduct_pts": 2}]
+        assert not await generate_missing_question_materials(_rows([{**question, "stem": stem}]), [target],
+            1, provider(), allow_partial=True, repair_feedback=feedback)
+        assert feedback[target["target_id"]]

@@ -357,14 +357,8 @@ export function GradingPreflightPage() {
               <span className="text-[11px] text-muted-foreground">{copy(locale, "exactTaskSetup")}</span>
             </div>
             {setup ? (
-              <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(260px,1fr)_auto_auto_auto] lg:items-center lg:gap-6">
-                <div className="flex items-center gap-4">
-                  <span className="shrink-0 text-[13px] font-semibold text-foreground">{copy(locale, "strictness")}</span>
-                  <span className="h-2 min-w-[150px] flex-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700" aria-label={`${copy(locale, "strictness")} ${setup.strictness}`}>
-                    <span className="block h-full rounded-full bg-primary" style={{ width: `${setup.strictness}%` }} />
-                  </span>
-                  <span className="text-[12px] font-semibold text-primary">{setup.strictness}</span>
-                </div>
+              <div className="mt-5 grid gap-4 lg:grid-cols-3 lg:items-center lg:gap-6">
+
                 <StrategyChip tone={setup.allow_partial_credit ? "success" : "neutral"}>
                   {copy(locale, setup.allow_partial_credit ? "partialAllowed" : "partialDisabled")}
                 </StrategyChip>
