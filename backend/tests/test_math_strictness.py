@@ -257,13 +257,10 @@ async def test_compile_classification_with_the_disabled_slider_fixed_at_neutral(
 
 @pytest.mark.asyncio
 async def test_holistic_fallback_keeps_numeric_defaults_and_teacher_notes():
-    setup = {"strictness": 25, "teacher_notes": "本题后续计算正常给满分"}
-    p = await rubric.prepare_math_rubric_plan(question(), ReplayProvider("{}"), grading_setup=setup)
-    assert p.compilation_status == "holistic"
-    assert p.strictness == 50
-    assert "× 50/100" in p.effective_criterion
-    assert setup["teacher_notes"] in p.effective_criterion
-    assert p.original_criterion == question()["criterion"]
+    from backend.services.rubric_drafts import RetiredGradingNotesError
+    with pytest.raises(RetiredGradingNotesError):
+        await rubric.prepare_math_rubric_plan(question(), ReplayProvider("{}"),
+            grading_setup={"teacher_notes": "本题后续计算正常给满分"})
 
 
 @pytest.mark.asyncio

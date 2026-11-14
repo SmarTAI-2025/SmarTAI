@@ -9,7 +9,7 @@ from backend.tests.test_teacher_policy_audit import PolicyProvider, unknown_floo
 
 
 @pytest.mark.asyncio
-async def test_known_floor_note_keeps_existing_semantic_approval_without_model_call():
+async def test_floor_edit_preserves_teacher_follow_through_award():
     row, raw = unknown_floor()
     row["criterion"] = "沿用前面的错误，求浓度这一步保留一半分"
     raw.pop("nonblank_floor")
@@ -17,12 +17,12 @@ async def test_known_floor_note_keeps_existing_semantic_approval_without_model_c
     provider = PolicyProvider(raw)
     prior = await compile_parts_draft(row, provider)
     row["rubric_draft"] = prior.model_dump(mode="json")
-    setup = {"teacher_notes": "非空作答最低2分"}
-    revised = await compile_parts_draft(row, provider, grading_setup=setup)
-    assert len(provider.calls) == 2
-    assert revised.semantic_policy_checks == prior.semantic_policy_checks
+    row["criterion"] += "；非空作答最低2分"
+    revised = await compile_parts_draft(row, provider, previous=prior)
+    assert len(provider.calls) == 4  # Recompile and audit the edited teacher text.
+    assert revised.plan.part_rubric.parts[0].steps[1].follow_through_pts == prior.plan.part_rubric.parts[0].steps[1].follow_through_pts
     assert revised.plan.part_rubric.nonblank_floor.resolve(10) == 2
-    assert saved_draft({**row, "rubric_draft": revised.model_dump(mode="json")}, grading_setup=setup) is not None
+    assert saved_draft({**row, "rubric_draft": revised.model_dump(mode="json")}) is not None
 
 
 def parts_question(first="求面积。", shared="完成两问。"):

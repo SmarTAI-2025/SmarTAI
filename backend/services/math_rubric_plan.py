@@ -451,9 +451,7 @@ def _budget_items(route, budget):
     return leaves
 
 
-def subpart_plan(context, *, teacher_notes="", candidate=None) -> MathRubricPlan | None:
-    if teacher_notes.strip() and candidate is None:
-        return None
+def subpart_plan(context, *, candidate=None) -> MathRubricPlan | None:
     budgets = _subpart_budgets(context)
     if not budgets or sum(max(len(b.steps), 1) for b in budgets) > 80:
         return None
@@ -473,8 +471,6 @@ def subpart_plan(context, *, teacher_notes="", candidate=None) -> MathRubricPlan
                 ordered = tuple(item for b in budgets for item in _budget_items(route, b))
                 canonical = canonical.model_copy(update={"routes": (route.model_copy(update={"items": ordered}),)})
                 return _build_plan(context, canonical, reason=SUBPART_ALLOCATION)
-    if teacher_notes.strip():
-        return None  # Additional teacher policies need their verified interpretation.
     items = []
     for i, b in enumerate(budgets, 1):
         for j, (description, points) in enumerate(b.steps or ((b.stem, b.points),), 1):
@@ -503,7 +499,9 @@ def fallback_math_rubric_plan(problem, *, reason="unavailable_item_allocation", 
         raise RuleValidationError("The question needs a current frozen part rubric.", code="invalid_structured_rubric")
     context = _question_input(problem)
     setup = _mapping(grading_setup) if grading_setup is not None else {}
-    explicit = subpart_plan(context, teacher_notes=str(setup.get("teacher_notes") or ""))
+    from backend.services.rubric_drafts import reject_grading_notes
+    reject_grading_notes(setup)
+    explicit = subpart_plan(context)
     if explicit:
         return _with_preferences(explicit, grading_setup) if bind_preferences else explicit
     plan = _build_plan(context, _Explanation(
@@ -602,7 +600,7 @@ If not relevant, say so. Explicit teacher policies override the authenticated de
 For unspecified policies use the numeric strictness defaults. Decide BEFORE seeing answers
 which obligations are core and which omissions are minor; explain the distinction and budget
 in item.description. Put minor_omission and/or follow_through in item.default_adjustments ONLY
-where that default is applicable and the original criterion/teacher notes leave it unspecified.
+where that default is applicable and the original criterion leave it unspecified.
 Keep it empty for explicit teacher policies, core omissions, or required-correct-result items.
 Allocating process points alone is not an explicit follow-through policy. Split a minor
 condition from a core goal when they need different treatment, without changing teacher budgets.
@@ -623,26 +621,22 @@ and cases where relevant. Do not claim mathematical verification has already hap
 _PREFERENCES_POLICY = (
     "Authenticated teacher grading preferences: apply the frozen rubric without inventing "
     "new point values or overriding its partial-credit and follow-through awards. "
-    "Teacher notes are scoring preferences, not permission to change the question maximum, "
-    "security, tool safety or output contract. Preserve explicit source allocations. "
+    "Preserve explicit source allocations and the question maximum. "
     "Interpret these preferences once for the shared plan, including any source conflicts."
 )
 
 
 def _with_preferences(plan, grading_setup):
     setup = _mapping(grading_setup) if grading_setup is not None else {}
+    from backend.services.rubric_drafts import reject_grading_notes
+    reject_grading_notes(setup)
     if plan.part_rubric is not None:
         return plan
     preferences = {"strictness": 50,
-                   "allow_partial_credit": True,
-                   "teacher_notes": str(setup.get("teacher_notes") or "")}
+                   "allow_partial_credit": True}
     payload = plan.model_dump(mode="json", exclude={"plan_id"})
     payload.update(strictness=preferences["strictness"],
                    allow_partial_credit=preferences["allow_partial_credit"])
-    # Free-text teacher notes can contain new exceptions. They are interpreted
-    # with the complete rubric, never silently overridden by a prior constraint.
-    if preferences["teacher_notes"].strip():
-        payload["binary_policy"] = None
     payload["effective_criterion"] += (
         "\n\n" + _PREFERENCES_POLICY + "\n" + strictness_policy(preferences["strictness"])
         + "\n" + json.dumps(preferences, ensure_ascii=False, sort_keys=True)
@@ -1174,10 +1168,11 @@ provider failures retain the existing execution/retry semantics.
     """
     context = _question_input(problem)
     setup = _mapping(grading_setup) if grading_setup is not None else {}
+    from backend.services.rubric_drafts import reject_grading_notes
+    reject_grading_notes(setup)
     preferences = {
         "strictness": 50,
         "allow_partial_credit": True,
-        "teacher_notes": str(setup.get("teacher_notes") or ""),
     }
     language = setup.get("feedback_language", _mapping(problem).get("generation_language", "zh"))
     if language not in {"zh", "en"}:
@@ -1223,7 +1218,7 @@ provider failures retain the existing execution/retry semantics.
         explanation, _ = await structured_llm_call(
             provider, system_prompt=prompt,
             user_prompt=json.dumps({"question": context, "grading_preferences": preferences if bind_preferences
-                else {"teacher_notes": preferences["teacher_notes"]}}, ensure_ascii=False),
+                else {}}, ensure_ascii=False),
             output_model=ValidatedExplanation,
         )
     except (StructuredOutputInvalidError, StructuredOutputBoundsError, _UnrepresentableRubric):
@@ -1232,7 +1227,7 @@ provider failures retain the existing execution/retry semantics.
     else:
         canonical = _validated_explanation(context, explanation)
         holistic = all(route.mode == "holistic" for route in canonical.routes)
-        plan = subpart_plan(context, teacher_notes=preferences["teacher_notes"], candidate=canonical)
+        plan = subpart_plan(context, candidate=canonical)
         if plan is None:
             plan = _build_plan(context, canonical,
                 status="holistic" if holistic else ("repaired" if failures else "compiled"),

@@ -1068,7 +1068,7 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         "material_provenance": presentation.get("material_provenance", {}),
         "ai_completion_provenance": presentation.get("ai_completion_provenance", {}),
         "preparation_issues": [
-            *_effective_question_issues(presentation),
+            *_effective_question_issues(presentation, question.type),
             *_math_rubric_advisory(question, math_plan, feedback_language),
         ],
     }
@@ -4191,7 +4191,7 @@ def apply_question_patches_atomic(
             # unrelated recognition failures remain evidence for teacher review.
             filled = {key for key, value in fields.items()
                       if value and (not isinstance(value, str) or value.strip())}
-            issues = _effective_question_issues(presentation)
+            issues = _effective_question_issues(presentation, fields.get("type", question.type))
             for issue in issues:
                 target = (issue.get("details") or {}).get("target") or {
                     "rubric": "criterion", "answer": "reference_answer", "stem": "stem",
@@ -5081,9 +5081,16 @@ def _public_answer_flags(flags, *, content=None, review_status=None):
     return result
 
 
-def _effective_question_issues(presentation):
+def _effective_question_issues(presentation, question_type=None):
+    from backend.services.math_grading_context import uses_math_grading
+    non_math = bool(normalize_question_type(question_type)) and not uses_math_grading(question_type)
     issues = []
     for issue in presentation.get("preparation_issues", []):
+        if (non_math and issue.get("field") == "rubric"
+                and (issue.get("details") or {}).get("reason") == "invalid_structured_rubric"):
+            # Keep the old diagnostic for provenance, but do not require a
+            # compiler that the corrected question type will never use.
+            issue = {**issue, "status": "resolved"}
         coverage = (issue.get("details") or {}).get("coverage") or {}
         # Old source scores/labels were broadcast to every question. They are
         # not per-question assessments; keep actual failure evidence visible,
@@ -5117,7 +5124,7 @@ def _question_review_blockers(questions) -> list[str]:
     issues = []
     for question in questions:
         presentation = (question.source or {}).get("presentation") or {}
-        review_issues = _effective_question_issues(presentation)
+        review_issues = _effective_question_issues(presentation, question.type)
         if (any(issue.get("code") == "manual_completion_required" and (issue.get("details") or {}).get("required_fields") for issue in review_issues)
                 and _manual_question_fields_missing(question, presentation)):
             issues.append("question_manual_completion_required")
@@ -5228,7 +5235,7 @@ def start_task_grading(
         answer.id for revision in revisions for answer in revision.answers
     ])
     try:
-        setup = TaskGradingSetup.from_saved(workflow.grading_setup)
+        setup = TaskGradingSetup.model_validate(workflow.grading_setup)
     except PydanticValidationError as exc:
         raise ValidationError(
             "grading_setup_invalid", code="grading_setup_invalid"
@@ -5577,7 +5584,7 @@ def _compile_review_edit(owner_id, edit, run_async):
 
 def update_problem(
     *, task_id: str, owner_id: str, q_id: str, patch: dict,
-    expected_revision: int | None = None, run_async=None,
+    expected_revision: int | None = None, run_async=None, rubric_provider_id: str | None = None,
 ) -> dict:
     args = dict(task_id=task_id, owner_id=owner_id, q_id=q_id, patch=patch)
     result = _save_problem_edit(**args, expected_revision=expected_revision)
@@ -5585,6 +5592,10 @@ def update_problem(
         return result
     # The first transaction has released its locks. Only a validated, still-current
     # interpretation can publish the new text, scoring JSON and workflow revision.
+    if rubric_provider_id is not None:
+        from dataclasses import replace
+        # An explicit retry selects a provider for this compilation only.
+        result = replace(result, provider_id=rubric_provider_id)
     draft = _compile_review_edit(owner_id, result, run_async)
     return _save_problem_edit(**args, expected_revision=result.revision,
                               compiled=draft, question_version=result.question_version)
@@ -5647,7 +5658,11 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         prior_problem = problem_from_question(question) if changed_rule else None
         source = dict(question.source or {})
         presentation = dict(source.get("presentation") or {})
-        presentation["preparation_issues"] = _effective_question_issues(presentation)
+        presentation["preparation_issues"] = _effective_question_issues(presentation, patch.get("type", question.type))
+        candidate_type = normalize_question_type(patch.get("type", question.type))
+        if candidate_type and not uses_math_grading(candidate_type):
+            for key in ("rubric_draft", "alternative_rules", "rubric_schema_version"):
+                presentation.pop(key, None)
         test_cases_edited = "test_cases" in patch
         if "test_cases" in patch or (question.test_cases and {"stem", "type"}.intersection(patch)):
             patch = {**patch, "test_cases": _validated_test_cases(

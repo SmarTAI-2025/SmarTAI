@@ -105,7 +105,7 @@ describe("GradingPreflightPage regrade mode", () => {
           feedback_language: "en",
           suggest_corrections: true,
           low_confidence_threshold: 0.6,
-          teacher_notes: "",
+
         },
         suggested_setup: null,
         grading_setup_fingerprint: "setup-2",
@@ -216,7 +216,7 @@ describe("GradingPreflightPage regrade mode", () => {
           feedback_language: "en",
           suggest_corrections: true,
           low_confidence_threshold: 0.6,
-          teacher_notes: "",
+
         },
         suggested_setup: null,
         grading_setup_fingerprint: "setup-2",

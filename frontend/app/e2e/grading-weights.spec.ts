@@ -7,7 +7,7 @@ for (const locale of ["zh-CN", "en-US"]) {
     let weights: Record<string, number> = {}, revision = 1, saved = 0;
     const setup = () => ({ schema_version: 1, selected_provider_ids: ["saved-a", "saved-b"], primary_provider_id: "saved-a", aggregation_method: "weighted_average",
       expert_weights: weights, multi_sample_n: 1, knowledge_scope: "none", feedback_tone: "neutral", feedback_length: "medium",
-      feedback_language: "zh", suggest_corrections: true, low_confidence_threshold: .6, teacher_notes: "" });
+      feedback_language: "zh", suggest_corrections: true, low_confidence_threshold: .6 });
     const payload = () => ({ task_id: "weight-task", task_status: "submissions_ready", workflow_revision: revision, configured: true, grading_setup: setup(),
       suggested_setup: setup(), grading_setup_fingerprint: `weights-${revision}`, available_experts: ["a", "b"].map(id => ({ provider_id: `saved-${id}`, provider_type: "openai", model: "example-model",
         display_name: `Model ${id.toUpperCase()}`, enabled: true, scope: "owner", is_shared: false, editable: true, max_concurrent: 1, rpm: 10 })),

@@ -578,7 +578,7 @@ for (const locale of ["zh-CN", "en-US"]) {
       q_id: problem.q_id, number: problem.number, type: problem.type, content: index === 1 ? "" : "A recognized answer", flag: ["recognition_low_confidence"],
     })) } };
     const setup = { schema_version: 1, selected_provider_ids: ["demo:vision"], primary_provider_id: "demo:vision", aggregation_method: "single", multi_sample_n: 1,
-      knowledge_scope: "none", feedback_tone: "neutral", feedback_length: "medium", feedback_language: "en", suggest_corrections: true, low_confidence_threshold: .6, teacher_notes: "" };
+      knowledge_scope: "none", feedback_tone: "neutral", feedback_length: "medium", feedback_language: "en", suggest_corrections: true, low_confidence_threshold: .6 };
     const current = () => ({ ...task, status, problem_data: problems, student_data: status === "problems_ready" ? {} : students, student_count: status === "problems_ready" ? 0 : 1 });
     await page.route(`${backend}/**`, async route => {
       const path = new URL(route.request().url()).pathname, json = (value: unknown) => route.fulfill({ json: value });

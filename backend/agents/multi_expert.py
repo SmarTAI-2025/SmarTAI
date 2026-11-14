@@ -147,6 +147,8 @@ class AllExpertsFailed(Exception):
 # ─── Multi-expert fan-out ─────────────────────────────────────────────────────
 
 async def run_multi_expert(**kwargs) -> Correction:
+    if kwargs.get("grading_setup") is not None:
+        kwargs["language"] = kwargs["grading_setup"].feedback_language
     from backend.skills.math_grading import math_review_scope
     from backend.models import is_programming_question_type
     if is_programming_question_type(kwargs["problem"].type):

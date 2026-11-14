@@ -17,7 +17,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1280, 390]) {
     }, locale);
     const criterion = zh ? "列式3分，计算结果8分。" : "Equation: 3 points. Result: 8 points.";
     const question = { q_id: "q1", number: "1", type: "计算题", max_score: 10,
-      stem: zh ? "笔和本共17元，本10元，求笔价。" : "A pen and notebook cost $17. The notebook costs $10. Find the pen's price.",
+      stem: zh ? "笔和本共17元，本10元，求笔价。" : "A pen and notebook cost 17 dollars. The notebook costs 10 dollars. Find the pen's price.",
       criterion, reference_answer: "10+x=17, x=7.", review_status: "needs_review",
       preparation_issues: [{ issue_id: "review", field: "rubric", code: "generation_failed", severity: "blocking", status: "open",
         details: { reason: "invalid_structured_rubric", rubric_review_draft: { status: "needs_review", fields: [
@@ -37,8 +37,15 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1280, 390]) {
       if (path === "/auth/activity") return json({ token: "synthetic-review-token" });
       if (path.endsWith("/problems/q1") && request.method() === "PUT") {
         saves++;
+        if (request.postDataJSON().rubric_provider_id === "retry-model") {
+          question.criterion = request.postDataJSON().criterion;
+          question.preparation_issues = [];
+          task.workflow_revision++;
+          return json({ problem: question, workflow_revision: task.workflow_revision });
+        }
         return route.fulfill({ status: 422, json: { error: { code, message: "private diagnostic" } } });
       }
+      if (path.startsWith("/experts")) return json([{ provider_id: "retry-model", provider_type: "openai", model: "New model", enabled: true, max_concurrent: 1, rpm: 10 }]);
       if (path === "/tasks/review-recovery") return json(task);
       if (path.endsWith("/source-files")) return json({ task_id: task.task_id, workflow_revision: 1, problem_source: null, submission_sources: {} });
       return json([]);
@@ -76,6 +83,13 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1280, 390]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: testInfo.outputPath("rubric-save-guidance-after.png"), fullPage: true });
+    const picker = card.getByRole("combobox", { name: zh ? "换模型重试" : "Retry with another model" });
+    await expect(picker).toHaveValue("");
+    await picker.selectOption("retry-model");
+    await save.click();
+    await expect(input).toHaveCount(0);
+    expect(saves).toBe(3);
+    expect(question.criterion).toBe(corrected);
     expect(errors).toEqual([]);
   });
 }

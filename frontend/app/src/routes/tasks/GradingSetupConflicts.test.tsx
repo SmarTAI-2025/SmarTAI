@@ -22,7 +22,7 @@ vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: "zh-CN", t: (k
 const defaults: GradingSetup = {
   schema_version: 1, selected_provider_ids: ["provider-1"], primary_provider_id: "provider-1",
   aggregation_method: "single", expert_weights: {}, multi_sample_n: 1, knowledge_scope: "none", feedback_tone: "neutral", feedback_length: "medium",
-  feedback_language: "zh", suggest_corrections: true, low_confidence_threshold: 0.6, teacher_notes: "",
+  feedback_language: "zh", suggest_corrections: true, low_confidence_threshold: 0.6,
 };
 const document = { doc_id: "doc-1", filename: "Calculus notes.pdf", library_material_id: "material-1", chunk_count: 4, uploaded_at: 1 };
 let docs: typeof document[];
@@ -72,11 +72,11 @@ function TaskObserver() {
   useQuery({ queryKey: taskKeys.detail("task-1"), queryFn: () => getJSON("/tasks/task-1") });
   return null;
 }
-async function editableNotes() {
+async function editableTone() {
   const toggle = screen.queryByRole("button", { name: "展开高级设置" });
   if (toggle) fireEvent.click(toggle);
-  else if (!screen.queryByPlaceholderText(/重点检查推导步骤/)) fireEvent.click(await screen.findByRole("button", { name: "展开高级设置" }));
-  return screen.findByPlaceholderText(/重点检查推导步骤/);
+  else if (!screen.queryByRole("combobox", { name: "评语语气" })) fireEvent.click(await screen.findByRole("button", { name: "展开高级设置" }));
+  return screen.findByRole("combobox", { name: "评语语气" });
 }
 
 function openEditor() {
@@ -95,9 +95,9 @@ it.each([
   if (action === "remove") docs = [document];
   if (configured) saved = { ...defaults, knowledge_scope: docs.length ? "all_task_docs" : "none" };
   const { user } = openEditor();
-  const notes = await editableNotes();
+  const notes = await editableTone();
   await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
-  fireEvent.change(notes, { target: { value: "70" } });
+  fireEvent.change(notes, { target: { value: "encouraging" } });
   if (action === "attach") {
     await user.click(screen.getByRole("searchbox", { name: "搜索课程资料库" }));
     await user.click(screen.getByRole("button", { name: "选择" }));
@@ -107,30 +107,30 @@ it.each([
     await screen.findByText("已选择 0/20 份");
   }
   expect(screen.queryAllByText(/任务或模型配置已更新|任务内容已更新/)).toHaveLength(0);
-  expect(notes).toHaveValue("70");
+  expect(notes).toHaveValue("encouraging");
   await user.click(screen.getByRole("button", { name: "暂存" }));
   await screen.findByText(/已暂存 ·/);
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
 
 
   await screen.findByText("Grading summary");
-  expect(saved).toMatchObject({ teacher_notes: "70", knowledge_scope: action === "attach" ? "all_task_docs" : "none" });
+  expect(saved).toMatchObject({ feedback_tone: "encouraging", knowledge_scope: action === "attach" ? "all_task_docs" : "none" });
   expect(putJSON).toHaveBeenCalledTimes(1);
 });
 
 it.each([false, true])("does not report its own save as a conflict (configured=%s), including a return after answer review", async (configured) => {
   if (configured) saved = { ...defaults };
   const { user, router, client } = openEditor();
-  const notes = await editableNotes();
+  const notes = await editableTone();
   await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
   fireEvent.change(notes, { target: { value: "60" } });
   await user.click(screen.getByRole("button", { name: "暂存" }));
   await screen.findByText(/已暂存 ·/);
-  fireEvent.change(notes, { target: { value: "70" } });
+  fireEvent.change(notes, { target: { value: "encouraging" } });
   let release!: () => void;
   refreshGate = new Promise(resolve => { release = resolve; });
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
-  await waitFor(() => expect(client.getQueryData<GradingSetupResponse>(gradingSetupKeys.detail("task-1"))?.grading_setup?.teacher_notes).toBe("70"));
+  await waitFor(() => expect(client.getQueryData<GradingSetupResponse>(gradingSetupKeys.detail("task-1"))?.grading_setup?.feedback_tone).toBe("encouraging"));
   try {
     expect(screen.queryAllByText(/任务或模型配置已更新|任务内容已更新/)).toHaveLength(0);
   } finally { await act(async () => { release(); }); }
@@ -141,7 +141,7 @@ it.each([false, true])("does not report its own save as a conflict (configured=%
     await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") });
     await router.navigate(setupUrl);
   });
-  expect(await editableNotes()).toHaveValue("70");
+  expect(await editableTone()).toHaveValue("encouraging");
   expect(screen.queryAllByText(/任务或模型配置已更新|任务内容已更新/)).toHaveLength(0);
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   await screen.findByText("Grading summary");
@@ -151,14 +151,14 @@ it.each([false, true])("does not report its own save as a conflict (configured=%
 it("still protects a concurrent task setting change until the teacher resolves it", async () => {
   saved = { ...defaults };
   const { user, client } = openEditor();
-  const notes = await editableNotes();
+  const notes = await editableTone();
   await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
-  fireEvent.change(notes, { target: { value: "70" } });
-  saved = { ...defaults, teacher_notes: "20" };
+  fireEvent.change(notes, { target: { value: "encouraging" } });
+  saved = { ...defaults, feedback_tone: "strict" };
   revision++;
   await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
   await screen.findByText(/任务内容已更新，请核对当前输入/);
-  expect(notes).toHaveValue("70");
+  expect(notes).toHaveValue("encouraging");
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   expect(putJSON).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "暂存" }));
@@ -166,20 +166,20 @@ it("still protects a concurrent task setting change until the teacher resolves i
   await user.click(screen.getByRole("button", { name: "保留当前输入" }));
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   await screen.findByText("Grading summary");
-  expect(saved?.teacher_notes).toBe("70");
+  expect(saved?.feedback_tone).toBe("encouraging");
 });
 
 it.each(["add", "change", "remove"])("ignores an unselected model %s while preserving drafts and submission", async action => {
   saved = { ...defaults };
   if (action !== "add") otherModel = "unused";
   const { user, client } = openEditor();
-  const notes = await editableNotes();
+  const notes = await editableTone();
   await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
-  fireEvent.change(notes, { target: { value: "70" } });
+  fireEvent.change(notes, { target: { value: "encouraging" } });
   otherModel = action === "remove" ? null : "unused-changed";
   await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
   expect(screen.queryAllByText(/任务或模型配置已更新|任务内容已更新/)).toHaveLength(0);
-  expect(notes).toHaveValue("70");
+  expect(notes).toHaveValue("encouraging");
   await user.click(screen.getByRole("button", { name: "暂存" }));
   await screen.findByText(/已暂存 ·/);
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
@@ -190,9 +190,9 @@ it.each(["add", "change", "remove"])("ignores an unselected model %s while prese
 it("blocks an unavailable selected model with validation, without a false draft conflict", async () => {
   saved = { ...defaults };
   const { user, client } = openEditor();
-  const notes = await editableNotes();
+  const notes = await editableTone();
   await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
-  fireEvent.change(notes, { target: { value: "70" } });
+  fireEvent.change(notes, { target: { value: "encouraging" } });
   enabled = false;
   await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
   expect(screen.queryAllByText(/任务内容已更新，请核对当前输入/)).toHaveLength(0);
@@ -200,15 +200,15 @@ it("blocks an unavailable selected model with validation, without a false draft 
   await screen.findByText(/已暂存 ·/);
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   expect(putJSON).not.toHaveBeenCalled();
-  expect(notes).toHaveValue("70");
+  expect(notes).toHaveValue("encouraging");
   expect(screen.queryByText("Grading summary")).not.toBeInTheDocument();
 });
 
 it("preserves the first unsaved configuration when another model becomes the default", async () => {
   const { user, client } = openEditor();
-  const notes = await editableNotes();
+  const notes = await editableTone();
   await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
-  fireEvent.change(notes, { target: { value: "70" } });
+  fireEvent.change(notes, { target: { value: "encouraging" } });
   otherModel = "new-default"; defaultProvider = "provider-2";
   await act(async () => { await client.invalidateQueries({ queryKey: gradingSetupKeys.detail("task-1") }); });
   expect(screen.queryAllByText(/任务或模型配置已更新|任务内容已更新/)).toHaveLength(0);
@@ -216,28 +216,28 @@ it("preserves the first unsaved configuration when another model becomes the def
   await screen.findByText(/已暂存 ·/);
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   await screen.findByText("Grading summary");
-  expect(saved).toMatchObject({ teacher_notes: "70", selected_provider_ids: ["provider-1"] });
+  expect(saved).toMatchObject({ feedback_tone: "encouraging", selected_provider_ids: ["provider-1"] });
 });
 
 it("releases the save guard after a rejected stale write and still requires conflict resolution", async () => {
   saved = { ...defaults };
   const { user } = openEditor();
-  const notes = await editableNotes();
+  const notes = await editableTone();
   await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
-  fireEvent.change(notes, { target: { value: "70" } });
+  fireEvent.change(notes, { target: { value: "encouraging" } });
   vi.mocked(putJSON).mockImplementationOnce(async () => {
-    saved = { ...defaults, teacher_notes: "20" }; revision++;
+    saved = { ...defaults, feedback_tone: "strict" }; revision++;
     throw new APIError(409, "workflow_revision_conflict", { detail: { code: "workflow_revision_conflict" } });
   });
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   await screen.findByText(/任务内容已更新，请核对当前输入/);
-  expect(notes).toHaveValue("70");
+  expect(notes).toHaveValue("encouraging");
   expect(notes).toBeEnabled();
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   expect(putJSON).toHaveBeenCalledTimes(1);
   await user.click(screen.getByRole("button", { name: "保留当前输入" }));
   await user.click(screen.getByRole("button", { name: "保存并查看批改摘要" }));
   await screen.findByText("Grading summary");
-  expect(saved?.teacher_notes).toBe("70");
+  expect(saved?.feedback_tone).toBe("encouraging");
   expect(putJSON).toHaveBeenCalledTimes(2);
 });

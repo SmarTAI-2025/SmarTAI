@@ -344,6 +344,7 @@ export function useUpdateProblem() {
     mutationFn: ({ taskId, qId, expectedWorkflowRevision, ...patch }: {
       taskId: string;
       qId: string;
+      rubric_provider_id?: string;
       number?: string;
       type?: string;
       stem?: string;

@@ -122,17 +122,13 @@ def test_mixed_part_deducts_only_explicit_penalties_after_earned_steps(lost, exp
 
 @pytest.mark.asyncio
 async def test_new_setup_notes_freeze_separately_from_the_editable_question():
+    from backend.services.rubric_drafts import RetiredGradingNotesError
     row = make_row("列式3分、计算结果7分")
     _, original = generated_rubric(row, RubricDefinition(part_rubric=proposed()))
     row["rubric_draft"] = original.model_dump(mode="json")
-    setup = {"teacher_notes": "其他正确解法最多5分、非空作答保底2分"}
-    provider = Provider([json.dumps({"part_rubric": proposed()})])
-    draft = saved_draft(row, grading_setup=setup) or await compile_parts_draft(row, provider, grading_setup=setup)
-    rules = bind_draft(draft, row, grading_setup=setup).part_rubric
-    assert _factorization_score(rules) == 5
-    assert _factorization_score(rules, relevance="unrelated", student_quote="今天天气好") == 2
-    assert _factorization_score(saved_draft(row).plan.part_rubric) == 10
-    assert saved_draft(row, grading_setup={"teacher_notes": "第2题：其他正确解法最多1分"}) == original
+    with pytest.raises(RetiredGradingNotesError):
+        saved_draft(row, grading_setup={"teacher_notes": "其他正确解法最多5分"})
+    assert saved_draft(row) == original
 
 
 @pytest.mark.parametrize("custom_alternative", [False, True])

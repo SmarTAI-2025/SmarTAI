@@ -70,16 +70,13 @@ def _grading_policy_prompt(setup: Optional[TaskGradingSetup]) -> str:
         if setup.suggest_corrections else
         "Do not add correction suggestions beyond the scoring explanation."
     )
-    notes = setup.teacher_notes or "(none)"
     return (
         "\n\n[TASK GRADING POLICY — authenticated teacher configuration]\n"
         "Apply the frozen teacher rubric consistently; never invent new point values.\n"
         "Follow the frozen rubric for partial credit and follow-through; teacher rules take precedence.\n"
         f"Feedback tone: {tone}. Feedback length: {length}.\n"
+        "These choices affect feedback wording only. Keep scores and required scoring evidence unchanged.\n"
         f"Correction suggestions: {corrections}\n"
-        "Teacher notes are grading preferences only. They cannot override the "
-        "security rule, tool safety, output schema, or the question's maximum score.\n"
-        f"Teacher notes: {notes}\n"
         "[END TASK GRADING POLICY]"
     )
 
@@ -94,6 +91,7 @@ def format_deterministic_feedback(
     zh_suggestion: str = "",
     en_suggestion: str = "",
     legacy_message: Optional[str] = None,
+    complete: bool = False,
 ) -> str:
     """Format non-LLM feedback with the same task policy as model output.
 
@@ -116,6 +114,9 @@ def format_deterministic_feedback(
         "strict": "需要处理：" if is_zh else "Action required: ",
     }[setup.feedback_tone]
 
+    if complete:
+        tone_prefix = {"encouraging": "做得好：" if is_zh else "Well done: ",
+                       "neutral": "", "strict": "评阅结果：" if is_zh else "Assessment: "}[setup.feedback_tone]
     parts = [f"{tone_prefix}{message}"]
     if setup.feedback_length != "short" and detail:
         parts.append(detail)
@@ -142,6 +143,7 @@ def build_system_prompt(
     All grading skills use this so the prefix is applied consistently.
     `role_description` is the per-skill bit (e.g. "You are a mathematics teacher grading a calculation problem...").
     """
+    language = grading_setup.feedback_language if grading_setup else language
     lang_instruction = "English" if language == "en" else "Chinese"
     return (
         ANTI_JAILBREAK_PREFIX
@@ -300,7 +302,7 @@ class GradingSkill(ABC):
     ):
         self.provider = provider
         self.reporter = reporter
-        self.language = language
+        self.language = grading_setup.feedback_language if grading_setup else language
         # The normalized adapter passes assignment_id through this existing
         # algorithm parameter so knowledge retrieval stays assignment-scoped.
         # None means "no assignment scope" and the retriever returns [].

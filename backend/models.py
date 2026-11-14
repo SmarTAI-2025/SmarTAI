@@ -596,12 +596,6 @@ class TaskGradingSetup(BaseModel):
     feedback_language: GradingFeedbackLanguage = "zh"
     suggest_corrections: bool = True
     low_confidence_threshold: float = Field(default=0.60, ge=0.30, le=0.80)
-    teacher_notes: str = Field(default="", max_length=500)
-
-    @classmethod
-    def from_saved(cls, value):
-        # Read historical configuration without reviving the retired runtime switch.
-        return cls.model_validate({key: item for key, item in value.items() if key not in {"allow_partial_credit", "strictness"}})
 
     @field_validator("low_confidence_threshold")
     @classmethod
@@ -622,7 +616,7 @@ class TaskGradingSetup(BaseModel):
             return value
         return [item.strip() if isinstance(item, str) else item for item in value]
 
-    @field_validator("primary_provider_id", "teacher_notes", mode="before")
+    @field_validator("primary_provider_id", mode="before")
     @classmethod
     def _strip_text(cls, value):
         return value.strip() if isinstance(value, str) else value

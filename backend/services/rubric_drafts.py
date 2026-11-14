@@ -143,7 +143,6 @@ class RubricDraft(BaseModel):
     schema_version: Literal["rubric_draft_v1"] = "rubric_draft_v1"
     alternative_policy_version: Literal[2, 3] | None = Field(default=None, exclude_if=lambda v: v is None)
     content_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
-    teacher_notes: str = ""
     # Server-created evidence for policies beyond the deterministic grammar.
     # IDs bind the exact source and proposed targets/values, not just a verdict.
     semantic_policy_checks: tuple[TeacherPolicyCheck, ...] = Field(default=(), max_length=100, exclude_if=lambda v: not v)
@@ -166,8 +165,8 @@ class RubricAllocationError(ValueError):
 from backend.domain.errors import ValidationError as RuleValidationError
 
 
-class QuestionNoteScopeError(RuleValidationError, RubricAllocationError):
-    code = "invalid_teacher_note_scope"
+class RetiredGradingNotesError(RuleValidationError, RubricAllocationError):
+    code = "grading_notes_require_review"
 
 
 def _adopted_material(context, rules):
@@ -249,10 +248,10 @@ _OPEN_PROOF_RULE = {
 
 
 def generated_rubric(problem: dict, definition: RubricDefinition, *, language="zh", previous_rules=None,
-                     teacher_notes="", verified_policy_ids=(), verified_policy_checks=(), follow_through_strictness=None):
+                     verified_policy_ids=(), verified_policy_checks=(), follow_through_strictness=None):
     """Validate against original teacher rules BEFORE rendering AI additions."""
     original = str(problem.get("criterion") or "")
-    prior = saved_draft(problem, grading_setup={"teacher_notes": teacher_notes}) if original else None
+    prior = saved_draft(problem) if original else None
     if prior is not None:
         # Completing a sibling field does not reinterpret an unchanged rubric.
         # The caller seals this verified plan against the completed response.
@@ -265,8 +264,7 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
         definition = definition.model_copy(update={"part_rubric": definition.part_rubric.model_copy(
             update={"follow_through_strictness": follow_through_strictness})})
         try:
-            rules = bind_parts(definition.part_rubric, {**problem, "criterion_source": context["criterion_source"],
-                                                        "teacher_notes": teacher_notes},
+            rules = bind_parts(definition.part_rubric, {**problem, "criterion_source": context["criterion_source"]},
                                previous=previous_rules, language=language, verified_policy_ids=verified_policy_ids,
                                verified_policy_checks=verified_policy_checks)
         except TeacherPolicyUnresolved:
@@ -313,7 +311,7 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
             body["expected_truth_by_part"] = truth_key
         plan = MathRubricPlan(**body, plan_id=_content_hash(body))
         return criterion, RubricDraft(alternative_policy_version=3, content_fingerprint=draft_fingerprint(completed),
-                                     teacher_notes=teacher_notes, plan=plan)
+                                     plan=plan)
     explicit = subpart_plan(context, candidate=definition)
     if explicit:
         return original, RubricDraft(content_fingerprint=draft_fingerprint(problem), plan=explicit)
@@ -423,31 +421,10 @@ def _refresh_teacher_alternatives(draft, context):
 
 
 
-def _question_notes(setup, number):
-    """Apply shared notes and the matching explicitly numbered section to this question."""
-    notes = str(setup.get("teacher_notes") or "")
-    heading = re.compile(r"(?:^|(?<=[。；;\n]))\s*(?:第\s*(\d+(?:\.\d+)*)\s*题|"
-                         r"(?:question|q)\s*(\d+(?:\.\d+)*)|#\s*(\d+(?:\.\d+)*))\s*[:：,，、]?\s*", re.I)
-    sections = list(heading.finditer(notes))
-    # An unresolved question selector must never become a global instruction.
-    number_token = r"(?:#\s*)?\d+(?:\.\d+)*"
-    number_list = number_token + r"(?:\s*(?:and|to|through|[&,，、/–—~－-])\s*" + number_token + r")*"
-    selectors = re.finditer(r"第[^。；;\n]{1,64}?题|\b(?:questions?\s+|q(?=\s*\d))" + number_list
-                           + r"|(?<!\w)#\s*" + number_list
-                           + r"|\bquestions?\s+(?:one|two|three|four|five|six|seven|eight|nine|ten)\b"
-                           + r"|(?:^|(?<=[。；;\n]))\s*(?:questions?\s+|#\s*)[^:：。；;\n]{1,64}(?=[:：])", notes, re.I)
-    if any(not any(section.start() <= selector.start() and selector.end() <= section.end() for section in sections)
-           for selector in selectors):
-        raise QuestionNoteScopeError("Use a separate numbered question heading for each scoped grading note.")
-    if not sections:
-        return notes
-    label = re.fullmatch(r"(?:第|[Qq])?\s*(\d+(?:\.\d+)*)\s*题?", number or "")
-    selected = [notes[:sections[0].start()]]
-    for index, section in enumerate(sections):
-        if label and label[1] == (section[1] or section[2] or section[3]):
-            end = sections[index + 1].start() if index + 1 < len(sections) else len(notes)
-            selected.append(notes[section.end():end])
-    return "\n".join(value.strip() for value in selected if value.strip())
+def reject_grading_notes(setup):
+    """Reject retired overrides, including direct internal callers with old payloads."""
+    if str(setup.get("teacher_notes") or "").strip():
+        raise RetiredGradingNotesError("Move grading requirements into each question's rubric before grading.")
 
 
 def saved_draft(problem, *, grading_setup=None, allow_incomplete_alternative=False) -> RubricDraft | None:
@@ -465,9 +442,8 @@ def saved_draft(problem, *, grading_setup=None, allow_incomplete_alternative=Fal
         return None
     setup = _mapping(grading_setup) if grading_setup is not None else {}
     context = _question_input(problem)
-    notes = _question_notes(setup, context["number"]) if draft.plan.part_rubric else str(setup.get("teacher_notes") or "")
+    reject_grading_notes(setup)
     if (draft.content_fingerprint != draft_fingerprint(problem)
-            or draft.teacher_notes != notes
             or draft.plan.original_criterion != context["criterion"]
             or draft.plan.max_score != context["max_score"]):
         return None
@@ -498,7 +474,7 @@ def saved_draft(problem, *, grading_setup=None, allow_incomplete_alternative=Fal
     # An older cached interpretation may have discarded an unambiguous allocation.
     # Only preparation reads this cache; a running run uses its own frozen plan.
     if draft.plan.part_rubric is None and draft.plan.compilation_reason != SUBPART_ALLOCATION:
-        explicit = subpart_plan(context, teacher_notes=draft.teacher_notes, candidate=draft.plan)
+        explicit = subpart_plan(context, candidate=draft.plan)
         if explicit:
             return draft.model_copy(update={"plan": explicit})
     return draft
@@ -513,9 +489,7 @@ def bind_draft(draft: RubricDraft, problem, *, grading_setup=None) -> MathRubric
     if draft.content_fingerprint != draft_fingerprint(problem):
         raise ValueError("rubric_draft_content_changed")
     setup = _mapping(grading_setup) if grading_setup is not None else {}
-    notes = _question_notes(setup, _question_input(problem)["number"]) if draft.plan.part_rubric else str(setup.get("teacher_notes") or "")
-    if draft.teacher_notes != notes:
-        raise ValueError("rubric_draft_teacher_policy_changed")
+    reject_grading_notes(setup)
     plan = retarget_draft(_refresh_teacher_alternatives(draft, _question_input(problem)), problem).plan
     if plan.part_rubric and (missing := plan.part_rubric.missing_alternative_rates()):
         raise ValueError(f"Complete alternative.deduct_per_error for parts {missing} before grading.")
@@ -896,10 +870,8 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
     context = _question_input(problem)
     setup = _mapping(grading_setup) if grading_setup else {}
     language = setup.get("feedback_language") or "zh"
-    notes = _question_notes(setup, context["number"])
+    reject_grading_notes(setup)
     prior = saved_draft(problem, grading_setup=setup, allow_incomplete_alternative=True)
-    if notes and previous is None:
-        previous = saved_draft(problem)
     if prior and prior.plan.part_rubric and (missing := prior.plan.part_rubric.missing_alternative_rates()):
         # Older matching drafts may already have teacher-approved ordinary steps.
         # Complete only the missing fields, once per question before expert fan-out.
@@ -932,29 +904,6 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
     previous_rules = previous.plan.part_rubric if previous else None
     request = dict(context)
     binding_source = context
-    if notes:
-        teacher_text = context["criterion"] if context["criterion_source"] != "ai" else ""
-        binding_source = {**context, "criterion": "\n".join(filter(None, [teacher_text, notes])),
-                          "criterion_source": "provided"}
-        request["teacher_notes"] = notes
-        from backend.services.math_rubric_plan import _FLOOR_RULE, _source_clauses
-        ordinary_notes = _source_clauses(ordinary_criterion(notes))
-        if previous_rules and all(_FLOOR_RULE.fullmatch(clause) for clause in ordinary_notes):
-            # Only a floor or an alternative changed. Keep the existing funded
-            # steps, error rates and reference key; let the same binder apply the note.
-            raw = previous_rules.model_dump(mode="json")
-            raw["rubric_version"] += 1
-            try:
-                bound = source_bound_definition({"part_rubric": raw}, binding_source)
-                definition = RubricDefinition(**bound, expected_truth_by_part=previous.plan.expected_truth_by_part)
-                _, updated = generated_rubric(source, definition, language=language, teacher_notes=notes,
-                    follow_through_strictness=previous_rules.follow_through_strictness,
-                    verified_policy_ids=[check["policy_id"] for check in previous.semantic_policy_checks
-                                         if check["verdict"] == "consistent"], verified_policy_checks=previous.semantic_policy_checks)
-                updated = updated.model_copy(update={"semantic_policy_checks": previous.semantic_policy_checks})
-                return retarget_draft(updated, problem)
-            except (RubricAllocationError, TeacherPolicyUnresolved):
-                pass  # A semantic-only note may still need the usual bounded compilation.
     if binding_source["criterion_source"] != "ai":
         request["teacher_ordinary_rules"] = ordinary_criterion(binding_source["criterion"]).strip("。；; \n")
         request["teacher_alternative_rules"] = alternative_clauses(binding_source["criterion"])
@@ -1002,7 +951,7 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
                 definition = definition.model_copy(update={"part_rubric": proposed.model_copy(
                     update={"rubric_version": previous_rules.rubric_version + 1})})
             _, draft = generated_rubric(source, definition, language=language,
-                                       previous_rules=None if alternative_ids else previous_rules, teacher_notes=notes,
+                                       previous_rules=None if alternative_ids else previous_rules,
                                        follow_through_strictness=follow_through_strictness,
                                        verified_policy_ids=[check["policy_id"] for check in semantic_checks], verified_policy_checks=semantic_checks)
         except SchemaError as exc:
@@ -1085,7 +1034,7 @@ async def compile_draft(problem, provider, *, grading_setup=None, reporter=None)
     plan = await prepare_math_rubric_plan(problem, provider, grading_setup=semantic_setup,
                                          reporter=reporter, bind_preferences=False)
     return RubricDraft(content_fingerprint=draft_fingerprint(problem),
-                       teacher_notes=str(setup.get("teacher_notes") or ""), plan=plan)
+                       plan=plan)
 
 
 def remember_draft(problem, draft: RubricDraft, *, question_id=None, expected_version=None, checkpoints=None):
@@ -1098,9 +1047,6 @@ def remember_draft(problem, draft: RubricDraft, *, question_id=None, expected_ve
 
     from backend.services.math_rubric_plan import _UNREPRESENTABLE_RULES
 
-    if draft.plan.part_rubric and draft.teacher_notes:
-        # A task-level override is frozen in the run, not in the editable question.
-        return
     if (draft.plan.compilation_status == "holistic"
             and draft.plan.compilation_reason not in {*_UNREPRESENTABLE_RULES, "model_selected_holistic"}):
         # Freeze a safe fallback for this run, but a transient malformed answer

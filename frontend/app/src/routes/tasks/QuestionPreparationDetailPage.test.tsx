@@ -17,6 +17,11 @@ import { QuestionPreparationDetailPage } from "./QuestionPreparationDetailPage";
 // waitFor assertion deadlines or changing any production timeout.
 vi.setConfig({ testTimeout: 20_000 });
 
+vi.mock("@/api/hooks/experts", () => ({ useStageProviders: () => ({
+  data: [{ provider_id: "retry-model", provider_type: "openai", model: "Retry model", enabled: true, max_concurrent: 1, rpm: 10 }],
+  isPending: false, isError: false,
+}) }));
+
 const testState = vi.hoisted(() => ({ locale: "zh-CN" }));
 const mutateAsync = vi.hoisted(() => vi.fn());
 const taskRefetch = vi.hoisted(() => vi.fn());
@@ -827,4 +832,21 @@ it.each([
   await userEvent.click(within(rubric.closest("section")!).getByRole("button", { name: "Save" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(message);
   expect(rubric).toHaveValue("(a) 4 points\n(b) 6 points. Explain the result.");
+});
+
+it("retries the preserved rubric with an explicitly selected model", async () => {
+  await renderPage();
+  await userEvent.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
+  const rubric = screen.getByRole("textbox", { name: "第 1 题评分标准" });
+  const text = "(a) 4 分\n(b) 6 分。请说明理由。";
+  fireEvent.change(rubric, { target: { value: text } });
+  mutateAsync.mockRejectedValueOnce(new APIError(422, "quota", { error: { code: "provider_quota_exceeded" } }));
+  const save = within(rubric.closest("section")!).getByRole("button", { name: "保存" });
+  await userEvent.click(save);
+  const model = await screen.findByRole("combobox", { name: "换模型重试" });
+  expect(model).toHaveValue("");
+  expect(rubric).toHaveValue(text);
+  await userEvent.selectOptions(model, "retry-model");
+  await userEvent.click(save);
+  expect(mutateAsync).toHaveBeenLastCalledWith(expect.objectContaining({ criterion: text, rubric_provider_id: "retry-model" }));
 });

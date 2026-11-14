@@ -696,7 +696,6 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
         and "criterion" not in (problem.get("ai_completion_provenance") or {})
         else ""
     )
-    teacher = "\n".join(filter(None, [teacher, problem.get("teacher_notes")]))
     ordinary = ordinary_criterion(teacher)
     expected = dict(problem.get("teacher_subpart_points") or {})
     parallel = parallel_part_budgets(problem)

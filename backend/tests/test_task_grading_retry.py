@@ -194,7 +194,7 @@ def test_cancelled_run_can_restart_with_same_or_changed_setup(case, change_setup
     stop_task_run(task_id=case[0], owner_id=case[1], job_id=first["job_id"], expected_revision=workflow.workflow_revision)
     if change_setup:
         workflow = workflows.get_live_workflow(case[0], owner_id=case[1])
-        workflows.update_workflow(case[0], owner_id=case[1], grading_setup={**workflow.grading_setup, "strictness": 70})
+        workflows.update_workflow(case[0], owner_id=case[1], grading_setup={**workflow.grading_setup, "feedback_tone": "strict"})
         with pytest.raises(VersionConflict, match="Grading inputs changed"):
             task_facade.start_task_grading(task_id=case[0], owner_id=case[1], request_id="continue-old",
                 expected_workflow_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision, retry_scope="failed_only")

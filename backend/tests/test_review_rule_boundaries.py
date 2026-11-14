@@ -11,18 +11,12 @@ from backend.tests.test_question_material_format_repair import Provider
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix", ["第2题：", "第2题，", "第2题", "Question 2, ", "Q2: ", "#2：", "# 2, "])
 async def test_question_notes_never_cap_other_questions(prefix):
-    from backend.tests.test_alternative_route import material, alternate, ANSWER, STEM
-    row, original = material(alternative={"deduct_per_error": 1})
-    setup = {"teacher_notes": prefix + "其他正确解法最多1分"}
-    scores = []
-    for number in ("1", "2", "3", "4"):
-        current = {**row, "q_id": "q" + number, "number": number}
-        provider = Provider([])
-        draft = saved_draft(current, grading_setup=setup) or await compile_parts_draft(current, provider, grading_setup=setup)
-        assert saved_draft({**current, "rubric_draft": draft.model_dump(mode="json")}, grading_setup=setup)
-        scores.append(settle_parts(draft.plan.part_rubric, [alternate("complete")], ANSWER, STEM)[0])
-        assert not provider.calls
-    assert scores == [10, 1, 10, 10]
+    from backend.services.rubric_drafts import RetiredGradingNotesError
+    row = make_row("列式3分、计算结果7分")
+    provider = Provider([])
+    with pytest.raises(RetiredGradingNotesError):
+        await compile_parts_draft(row, provider, grading_setup={"teacher_notes": prefix + "其他正确解法最多1分"})
+    assert not provider.calls
 
 
 @pytest.mark.asyncio
@@ -118,9 +112,9 @@ def test_significant_math_and_code_punctuation_still_changes_scoring_input(befor
     "#2 and #3: 其他正确解法最多1分", "Questions 2–3: 其他正确解法最多1分",
     "Questions eleven and twelve: 其他正确解法最多1分", "#II: 其他正确解法最多1分"])
 def test_unresolved_question_scope_cannot_fall_back_to_all_questions(notes):
-    from backend.services.rubric_drafts import _question_notes, RubricAllocationError
-    with pytest.raises(RubricAllocationError, match="question heading"):
-        _question_notes({"teacher_notes": notes}, "1")
+    from backend.services.rubric_drafts import reject_grading_notes, RubricAllocationError
+    with pytest.raises(RubricAllocationError, match="each question"):
+        reject_grading_notes({"teacher_notes": notes})
 
 
 @pytest.mark.parametrize("targets", [

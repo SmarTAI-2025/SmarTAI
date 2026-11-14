@@ -43,8 +43,9 @@ async def test_conflicting_budgets_retain_extracted_values_after_bounded_repairs
     assert len(provider.calls) <= 3 and saved_draft(row) is None
 
 
+@pytest.mark.parametrize("repair_kind", ["math", "programming"])
 @pytest.mark.asyncio
-async def test_conflict_does_not_stop_later_questions_and_survives_manual_handoff(monkeypatch):
+async def test_conflict_does_not_stop_later_questions_and_survives_manual_handoff(monkeypatch, repair_kind):
     from backend.tests.test_incremental_question_preparation import setup, inc, api, persisted
     from backend.db import workflow_repository, assignment_repository
     from backend.services.task_execution import stop_task_run
@@ -82,6 +83,17 @@ async def test_conflict_does_not_stop_later_questions_and_survives_manual_handof
     args = dict(task_id=task, owner_id=owner, q_id="q1")
     with pytest.raises(ValidationError, match="before confirming"):
         task_facade.update_problem(**args, patch={"review_status": "confirmed", "preparation_issues": []})
+    if repair_kind == "programming":
+        task_facade.update_problem(**args, patch={"type": "编程题"})
+        task_facade.update_problem(**args, patch={"stem": "输入一个整数，输出它的平方。"})
+        task_facade.update_problem(**args, patch={"reference_answer": "读取输入并输出其平方。"})
+        task_facade.update_problem(**args, patch={"criterion": "输出正确得满分。"})
+        result = task_facade.update_problem(**args, patch={"review_status": "confirmed"})
+        assert result["problem"]["review_status"] == "confirmed"
+        from backend.services.math_grading_context import problem_from_question
+        sibling = assignment_repository.list_questions(task, teacher_id=owner)[1]
+        assert saved_draft(problem_from_question(sibling)) == saved_draft(stored["q2"])
+        return
     pending = task_facade._save_problem_edit(**args, patch={"criterion": rows[1]["criterion"]}, expected_revision=None)
     assert isinstance(pending, task_facade._PendingRubricEdit)
     # Editing the text alone cannot clear the conflict. A verified ledger is required.
@@ -137,3 +149,45 @@ def test_clearing_a_required_field_cannot_resolve_pending_rules(field):
     result = task_facade.update_problem(**args, patch={field: ""})
     assert any(issue["status"] == "open" and issue.get("details", {}).get("reason") == "invalid_structured_rubric"
                for issue in result["problem"]["preparation_issues"])
+
+
+@pytest.mark.parametrize("kind", ["编程题", "programming"])
+def test_changing_grading_engine_retires_only_math_review(monkeypatch, kind):
+    from backend.tests.test_frozen_part_rubric import _persist_method_question
+    from backend.db import assignment_repository
+    from backend.services import task_facade
+    from backend.services.rubric_review import review_issue
+    args = _persist_method_question()
+    before = assignment_repository.list_questions(args["task_id"], teacher_id=args["owner_id"])[0]
+    presentation = dict(before.source["presentation"])
+    presentation.pop("rubric_draft")
+    presentation["preparation_issues"] = [review_issue("q1", review_extraction({"part_rubric": proposed()}, make_row("待核对标准")))]
+    assignment_repository.update_question(args["task_id"], teacher_id=args["owner_id"], q_id="q1",
+        expected_version=before.version, source={"presentation": presentation})
+    monkeypatch.setattr(task_facade, "_compile_review_edit", lambda *_: pytest.fail("A programming edit must not compile a math rubric"))
+    updated = task_facade.update_problem(**args, patch={"type": kind, "stem": "输入一个整数，输出其平方。",
+        "reference_answer": "读取整数并输出平方。", "criterion": "程序输出正确得满分。"})
+    assert not any(i["status"] == "open" and i["severity"] == "blocking" for i in updated["problem"]["preparation_issues"])
+    confirmed = task_facade.update_problem(**args, patch={"review_status": "confirmed"})
+    assert confirmed["problem"]["review_status"] == "confirmed"
+
+
+def test_new_programming_checks_survive_retiring_a_math_error():
+    from backend.tests.test_frozen_part_rubric import _persist_method_question
+    from backend.db import assignment_repository
+    from backend.services import task_facade
+    from backend.services.rubric_review import review_issue
+    args = _persist_method_question()
+    before = assignment_repository.list_questions(args["task_id"], teacher_id=args["owner_id"])[0]
+    presentation = dict(before.source["presentation"])
+    presentation.pop("rubric_draft")
+    presentation["preparation_issues"] = [review_issue("q1", review_extraction({"part_rubric": proposed()}, make_row("待核对标准")))]
+    assignment_repository.update_question(args["task_id"], teacher_id=args["owner_id"], q_id="q1",
+        expected_version=before.version, source={"presentation": presentation})
+    with pytest.raises(ValidationError) as failure:
+        task_facade.update_problem(**args, patch={"type": "编程题", "stem": "输入一个整数，输出其平方。",
+            "criterion": "程序输出正确得满分。", "test_cases": [
+                {"input": "2", "expected_output": "4"}, {"input": "2", "expected_output": "5"}]})
+    assert failure.value.code == "invalid_programming_test_cases"
+    after = assignment_repository.list_questions(args["task_id"], teacher_id=args["owner_id"])[0]
+    assert after.type == before.type

@@ -299,6 +299,7 @@ const FILE_CODES = new Set([
 ]);
 
 const GRADING_CONFIGURATION_CODES = new Set([
+  "grading_notes_require_review",
   "invalid_teacher_note_scope",
   "grading_provider_configuration_changed",
   "grading_provider_selection_invalid",

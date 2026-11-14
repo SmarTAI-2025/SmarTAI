@@ -215,7 +215,7 @@ def test_rubric_advisory_never_leaks_from_obsolete_inputs_or_engine(case, change
     elif change == "setup":
         flow = workflows.get_live_workflow(case[0], owner_id=case[1])
         workflows.update_workflow(case[0], owner_id=case[1], grading_setup={
-            **flow.grading_setup, "teacher_notes": "Different grading preference.",
+            **flow.grading_setup, "feedback_tone": "strict",
         })
     elif change == "run":
         workflows.update_workflow(case[0], owner_id=case[1], grading_job_id=None, presentation_status="grading_setup")

@@ -12,7 +12,7 @@ for (const width of [1440, 390]) {
     const defaults: GradingSetup = {
       schema_version: 1, selected_provider_ids: ["provider-1"], primary_provider_id: "provider-1",
       aggregation_method: "single", expert_weights: {}, multi_sample_n: 1, knowledge_scope: "none", feedback_tone: "neutral", feedback_length: "medium",
-      feedback_language: "zh", suggest_corrections: true, low_confidence_threshold: .6, teacher_notes: "",
+      feedback_language: "zh", suggest_corrections: true, low_confidence_threshold: .6,
     };
     const payload = () => ({
       task_id: "config-task", task_status: saved ? "grading_setup" : "submissions_ready", workflow_revision: revision, configured: saved !== null,
@@ -72,7 +72,7 @@ for (const width of [1440, 390]) {
     };
     await page.goto("/tasks/config-task/grading-setup");
     await expect(draft).toBeEnabled();
-    const notes = page.getByRole("textbox", { name: /批改注意事项/ });
+    const notes = page.getByRole("combobox", { name: "评语语气" });
     const openNotes = async () => {
       const advanced = page.getByRole("button", { name: /展开高级/ });
       await expect(notes.or(advanced).first()).toBeVisible();
@@ -80,7 +80,7 @@ for (const width of [1440, 390]) {
       await expect(notes).toBeVisible();
     };
     await openNotes();
-    await notes.fill("核对推导依据");
+    await notes.selectOption("encouraging");
     await attach();
     await expect(conflicts).toHaveCount(0);
     await draft.click();
@@ -90,7 +90,7 @@ for (const width of [1440, 390]) {
     await draft.click();
     await expect(conflicts).toHaveCount(0);
     await openNotes();
-    await expect(notes).toHaveValue("核对推导依据");
+    await expect(notes).toHaveValue("encouraging");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("materials-removed-drafted.png"), fullPage: true });
     await page.goto("/history?view=drafts");
@@ -101,8 +101,10 @@ for (const width of [1440, 390]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("readable-draft-list.png"), fullPage: true });
     await openDraft.click();
+    // Wait for the restored draft before toggling the advanced section.
+    await expect(page.getByText(/鼓励评语 ·/)).toBeVisible();
     await openNotes();
-    await expect(notes).toHaveValue("核对推导依据");
+    await expect(notes).toHaveValue("encouraging");
     await expect(conflicts).toHaveCount(0);
     let release!: () => void;
     taskRefresh = new Promise(resolve => { release = resolve; });
@@ -113,19 +115,19 @@ for (const width of [1440, 390]) {
       await expect(conflicts).toHaveCount(0);
     } finally { release(); taskRefresh = undefined; }
     await expect(page).toHaveURL(/grading\/preflight/);
-    expect(saved).toMatchObject({ teacher_notes: "核对推导依据", knowledge_scope: "none" });
+    expect(saved).toMatchObject({ feedback_tone: "encouraging", knowledge_scope: "none" });
     // Simulate an answer-review revision before returning to the saved config.
     revision++;
     await page.goto("/tasks/config-task/grading-setup");
     await openNotes();
-    await expect(notes).toHaveValue("核对推导依据");
+    await expect(notes).toHaveValue("encouraging");
     await expect(draft).toBeEnabled();
     await attach();
     await draft.click();
     await expect(conflicts).toHaveCount(0);
     await submit.click();
     await expect(page).toHaveURL(/grading\/preflight/);
-    expect(saved).toMatchObject({ teacher_notes: "核对推导依据", knowledge_scope: "all_task_docs" });
+    expect(saved).toMatchObject({ feedback_tone: "encouraging", knowledge_scope: "all_task_docs" });
     expect(saves).toBe(2);
     await expect(page.locator("vite-error-overlay")).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("grading-summary.png"), fullPage: true });

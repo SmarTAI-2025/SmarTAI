@@ -21,7 +21,7 @@ from backend.skills.part_scoring import INSTRUCTION as PART_SCORING_INSTRUCTION,
 from backend.models import ExpertResult, GradingConfidence, StepScore
 from backend.skills.base import (
     GradingSkill, authoritative_score_instruction, build_system_prompt,
-    classify_skill_error,
+    classify_skill_error, format_deterministic_feedback,
 )
 from backend.tools import knowledge as kb_tool
 from backend.tools.structured_llm import PermanentLLMError, TransientLLMError, structured_llm_call
@@ -1566,7 +1566,10 @@ class MathGradingSkill(GradingSkill):
                        for flag in (answer.flag or [])):
                     raise ValueError("Unresolved recognition cannot be graded as blank.")
                 return ExpertResult(provider=self.provider.provider_id, score=0, max_score=problem.max_score,
-                    confidence=1, comment="空白作答 / Blank answer", steps=[],
+                    confidence=1, comment=format_deterministic_feedback(self.grading_setup,
+                        zh_message="本题尚未作答，得0分。", en_message="No answer was submitted; this question receives 0 points.",
+                        zh_suggestion="请补充作答。", en_suggestion="Add your answer to this question.",
+                        legacy_message="空白作答 / Blank answer"), steps=[],
                     raw_output=_json({"version":TRACE_VERSION,"plan_id":plan.plan_id,"blank":True}))
             if plan.part_rubric and plan.expected_truth_by_part:
                 from backend.services.true_false_answers import adopted_truth_key, submitted_truth_values
@@ -1586,7 +1589,10 @@ class MathGradingSkill(GradingSkill):
                         else "Compared each labelled judgment with the frozen answer key.")
                     score, steps = score_assessment(assessment, plan, answer.content, problem_text=problem.stem)
                     return ExpertResult(provider=self.provider.provider_id, score=score, max_score=problem.max_score,
-                        confidence=1, steps=steps, comment=assessment.comment,
+                        confidence=1, steps=steps, comment=format_deterministic_feedback(self.grading_setup,
+                            zh_message="已逐项核对判断答案。", en_message="Each answer has been checked against the answer key.",
+                            zh_detail=f"本题得分：{score:g}/{problem.max_score:g}。", en_detail=f"Score: {score:g}/{problem.max_score:g}.",
+                            legacy_message=assessment.comment, complete=score == problem.max_score),
                         raw_output=_json({"version": TRACE_VERSION, "plan_id": plan.plan_id,
                                           "assessment": assessment.model_dump(mode="json"), "exact_truth_match": True}))
             await self._substep(unit, "retrieve_knowledge")

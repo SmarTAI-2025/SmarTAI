@@ -689,7 +689,7 @@ describe("FrontierLiveDemoPage", () => {
 
   it.each([false, true])("grades inline despite optional expert disagreement (configured: %s)", async (configured) => {
     const task = { ...taskWithQuestions(configured ? "grading_setup" : "submissions_ready"), student_data: recognizedStudents() };
-    const setup = { ...gradingSetup(), configured, grading_setup: configured ? { ...gradingSetup().suggested_setup!, teacher_notes: "Keep my saved settings" } : null };
+    const setup = { ...gradingSetup(), configured, grading_setup: configured ? { ...gradingSetup().suggested_setup!, feedback_tone: "encouraging" as const } : null };
     const grading = deferred<TaskStateSnapshot>();
     vi.mocked(getTaskState).mockResolvedValueOnce(taskState(configured ? "grading_setup" : "submissions_ready"))
       .mockResolvedValueOnce(taskState(configured ? "grading_setup" : "submissions_ready"))
@@ -1429,7 +1429,7 @@ function gradingSetup(): GradingSetupResponse {
       feedback_language: "en",
       suggest_corrections: true,
       low_confidence_threshold: 0.6,
-      teacher_notes: "",
+
     },
     grading_setup_fingerprint: null,
     grading_setup_updated_at: null,

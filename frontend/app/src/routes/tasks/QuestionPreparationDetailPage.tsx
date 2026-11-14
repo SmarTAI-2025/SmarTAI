@@ -1,3 +1,4 @@
+import { RubricSaveModelRetry } from "@/components/tasks/RubricSaveModelRetry";
 import { getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
 import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
@@ -193,12 +194,13 @@ function QuestionPreparationDetailPageForm() {
 
   const overviewHref = `/tasks/${encodeURIComponent(taskId)}/questions${searchParams.size ? `?${searchParams.toString()}` : ""}`;
 
-  async function saveText(problem: ProblemInfo, field: TextFieldKey, value: string) {
+  async function saveText(problem: ProblemInfo, field: TextFieldKey, value: string, providerId?: string) {
     const response = await updateProblem.mutateAsync({
       taskId: stableTaskId,
       qId: problem.q_id,
       expectedWorkflowRevision: latestWorkflowRevisionRef.current,
       [field]: value,
+      ...(providerId ? { rubric_provider_id: providerId } : {}),
     });
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
@@ -213,10 +215,11 @@ function QuestionPreparationDetailPageForm() {
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
-  async function saveScoring(problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>) {
+  async function saveScoring(problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>, providerId?: string) {
     const response = await updateProblem.mutateAsync({
       taskId: stableTaskId,
       qId: problem.q_id,
+      ...(providerId ? { rubric_provider_id: providerId } : {}),
       expectedWorkflowRevision: latestWorkflowRevisionRef.current,
       ...(maxScore === problem.max_score && alternatives ? {} : { max_score: maxScore }),
       ...(criterion === problem.criterion && alternatives ? {} : { criterion }),
@@ -386,8 +389,8 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   saving: boolean;
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
-  onSaveScoring: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>) => Promise<void>;
-  onSaveText: (problem: ProblemInfo, field: TextFieldKey, value: string) => Promise<void>;
+  onSaveScoring: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>, providerId?: string) => Promise<void>;
+  onSaveText: (problem: ProblemInfo, field: TextFieldKey, value: string, providerId?: string) => Promise<void>;
   onSaveTests: (problem: ProblemInfo, cases: TestCase[]) => Promise<void>;
   onNavigate: (qId: string) => void;
   onConfirm: (problem: ProblemInfo) => void;
@@ -456,7 +459,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   saving: boolean;
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
-  onSave: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>) => Promise<void>;
+  onSave: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>, providerId?: string) => Promise<void>;
 }) {
   const originalScore = String(problem.max_score ?? 10);
   const originalCriterion = problem.criterion ?? "";
@@ -472,6 +475,9 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   const [criterionDraft, setCriterionDraft] = useState(originalCriterion);
   const [alternateDrafts, setAlternateDrafts] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [modelFailure, setModelFailure] = useState<unknown>();
+  const [saveProviderId, setSaveProviderId] = useState("");
+  useEffect(() => { setModelFailure(undefined); setSaveProviderId(""); }, [fieldKey, editing]);
   const dirty = editing && (
     scoreDraft !== originalScore || criterionDraft !== originalCriterion || Object.keys(alternateDrafts).length > 0
   );
@@ -514,17 +520,19 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
     }
     setError(null);
     try {
-      if (!await localDraft.runFormal(() => onSave(problem, Number(scoreDraft), criterionDraft, Object.keys(alternateDrafts).length ? alternateDrafts : undefined), { scoreDraft, criterionDraft, alternateDrafts })) return;
+      if (!await localDraft.runFormal(() => onSave(problem, Number(scoreDraft), criterionDraft, Object.keys(alternateDrafts).length ? alternateDrafts : undefined, saveProviderId || undefined), { scoreDraft, criterionDraft, alternateDrafts })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch (error) {
       setError(questionSaveError(error, locale));
+      setModelFailure(error);
     }
   }
 
   const sourceLabel = maxScoreSourceLabel(problem.max_score_source, locale);
   return (
     <section className="min-w-0 px-5 py-5 sm:px-6">
+      {editing && <RubricSaveModelRetry id={`${fieldKey}:model`} error={modelFailure} locale={locale} value={saveProviderId} onChange={setSaveProviderId} disabled={saving} />}
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -632,7 +640,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   locale: string;
   compact?: boolean;
   onDirtyChange: (key: string, dirty: boolean) => void;
-  onSave: (problem: ProblemInfo, field: TextFieldKey, value: string) => Promise<void>;
+  onSave: (problem: ProblemInfo, field: TextFieldKey, value: string, providerId?: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const manualEditing = useManualEditor(problem, [field]);
@@ -641,6 +649,9 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   const savedType = useRef<string | null>(null);
   if (field === "type" && savedType.current === value) savedType.current = null;
   const [error, setError] = useState<string | null>(null);
+  const [modelFailure, setModelFailure] = useState<unknown>();
+  const [saveProviderId, setSaveProviderId] = useState("");
+  useEffect(() => { setModelFailure(undefined); setSaveProviderId(""); }, [fieldKey, editing]);
   const dirty = editing && draft !== value;
   const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:${field}`, value: { draft }, baseline: { draft: value }, version: value, enabled: !readOnly, busy: saving, onRestore: (restored) => { setDraft(restored.draft); if (field !== "type" || restored.draft !== value) setEditing(true); } });
   const leave = useDraftLeave();
@@ -658,12 +669,13 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
     if (localDraft.conflict) return;
     setError(null);
     try {
-      if (!await localDraft.runFormal(() => onSave(problem, field, draft), { draft })) return;
+      if (!await localDraft.runFormal(() => onSave(problem, field, draft, saveProviderId || undefined), { draft })) return;
       if (field === "type") savedType.current = draft;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch (error) {
       setError(questionSaveError(error, locale));
+      setModelFailure(error);
     }
   }
 
@@ -682,6 +694,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
             <option value="" disabled>{tx(locale, "请选择", "Please select")}</option>
             {QUESTION_TYPES.map(type => <option key={type} value={type}>{questionTypeLabel(type, locale)}</option>)}
           </select> : <textarea value={draft} onChange={(event) => setDraft(event.target.value)} aria-label={label} rows={field === "number" ? 1 : field === "stem" ? 7 : compact ? 6 : 8} className={cn("w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15", field === "solution_code" && "font-mono text-xs")} />}
+          <RubricSaveModelRetry id={`${fieldKey}:model`} error={modelFailure} locale={locale} value={saveProviderId} onChange={setSaveProviderId} disabled={saving} />
           <div className="mt-3 flex items-center justify-between gap-3">
             <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error
               ? error

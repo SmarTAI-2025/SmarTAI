@@ -35,7 +35,7 @@ async function fixture(page: Page, stage: Stage) {
   const setup = { schema_version: 1, selected_provider_ids: [provider.provider_id], primary_provider_id: provider.provider_id,
     aggregation_method: "single", multi_sample_n: 1, knowledge_scope: "none", strictness: 75,
     feedback_tone: "neutral", feedback_length: "medium", feedback_language: "zh", suggest_corrections: true,
-    low_confidence_threshold: 0.6, teacher_notes: "" };
+    low_confidence_threshold: 0.6 };
   await page.addInitScript(() => { localStorage.setItem("smartai_token", "synthetic-navigation-token"); localStorage.setItem("smartai_locale", "zh-CN"); });
   await page.addInitScript(() => {
     const paths: string[] = [];

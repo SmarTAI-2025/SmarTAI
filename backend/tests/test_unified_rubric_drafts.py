@@ -302,7 +302,9 @@ async def test_content_changes_invalidate_but_renumbering_and_display_settings_d
     for key, value in (("stem", "Choose 3+3."), ("reference_answer", "C"), ("criterion", "每错扣1分"),
                        ("max_score", 8), ("type", "概念题")):
         assert saved_draft(problem({**row, key: value})) is None
-    assert saved_draft(original, grading_setup={"teacher_notes": "漏选得2分"}) is None
+    from backend.services.rubric_drafts import RetiredGradingNotesError
+    with pytest.raises(RetiredGradingNotesError):
+        saved_draft(original, grading_setup={"teacher_notes": "漏选得2分"})
 
 
 def test_complete_teacher_rubric_is_adopted_and_source_rules_are_not_rewritten():
@@ -364,9 +366,9 @@ async def test_concurrent_preparation_persists_once_and_reuses_after_configurati
     stop(case, run_id)
     flow = workflow_repository.get_live_workflow(case[0], owner_id=case[1])
     workflow_repository.update_workflow(case[0], owner_id=case[1], grading_setup={
-        **flow.grading_setup, "strictness": 100,
+        **flow.grading_setup, "feedback_tone": "strict",
     })
-    next_id = start(case, "changed-strictness")["job_id"]
+    next_id = start(case, "changed-feedback")["job_id"]
     other, questions, _, _ = prepare(case, next_id)
     rebound = await other.run(prepare_math_plans(
         grading_adapter.build_problem_store(questions), registry, grading_setup={"strictness": 100}))

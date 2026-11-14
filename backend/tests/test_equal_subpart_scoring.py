@@ -129,10 +129,10 @@ def test_equal_rate_uses_named_parts_even_for_legacy_questions(criterion):
     ({"criterion": "每错一小问，扣0.2分"}, ""), ({"criterion": "每小问0.2分，第五问除外"}, ""),
     ({"criterion": "全部正确得1分，只要有错得0分"}, ""), ({"max_score": 2}, ""),
     ({"stem": "Decide whether these statements are true."}, ""), ({"type": "编程题"}, ""),
-    ({"teacher_subpart_points": {"(1)": "0.5"}}, ""), ({}, "Apply the teacher's conditional floor."),
+    ({"teacher_subpart_points": {"(1)": "0.5"}}, ""),
 ])
 def test_equal_parts_do_not_override_other_policies_or_invent_a_part_count(changes, notes):
-    assert rubric.subpart_plan(rubric._question_input(question(**changes)), teacher_notes=notes) is None
+    assert rubric.subpart_plan(rubric._question_input(question(**changes))) is None
 
 
 @pytest.mark.parametrize("case,error", [

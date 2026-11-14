@@ -59,7 +59,6 @@ import type {
 } from "@/types";
 
 const SAMPLE_OPTIONS = [1, 2, 3, 4, 5] as const;
-const MAX_NOTES_LENGTH = 500;
 
 export function GradingSetupPage() { const { taskId, jobId } = useParams(); return <GradingSetupPageForm key={`${taskId}:${jobId ?? ""}`} />; }
 function GradingSetupPageForm() {
@@ -925,10 +924,6 @@ function StrategySection({
               <input type="checkbox" checked={setup.suggest_corrections} onChange={(event) => onChange((current) => ({ ...current, suggest_corrections: event.target.checked }))} className="h-4 w-4 shrink-0 rounded border-border accent-primary" />
               {gradingSetupText(locale, "suggestCorrections")}
             </label>
-            <label className="sm:col-span-2">
-              <span className="flex items-center justify-between gap-4 text-[13px] font-semibold leading-5 text-foreground"><span>{gradingSetupText(locale, "teacherNotes")}</span><span className="shrink-0 text-[12px] font-normal tabular-nums text-muted-foreground">{setup.teacher_notes.length}/{MAX_NOTES_LENGTH}{gradingSetupText(locale, "charactersSuffix")}</span></span>
-              <textarea maxLength={MAX_NOTES_LENGTH} value={setup.teacher_notes} onChange={(event) => onChange((current) => ({ ...current, teacher_notes: event.target.value }))} placeholder={gradingSetupText(locale, "teacherNotesPlaceholder")} className="grading-advanced-control mt-1.5 min-h-[72px] w-full resize-y rounded-[8px] border bg-card px-3 py-2.5 text-[12px] font-normal leading-[18px] text-foreground shadow-sm outline-none placeholder:text-muted-foreground/90 focus:border-primary focus:ring-2 focus:ring-primary/15" />
-            </label>
           </div>
         ) : null}
       </div>
@@ -1012,9 +1007,7 @@ function CenteredState({ title, description, action }: { title: string; descript
 }
 
 function cloneSetup(setup: GradingSetup): GradingSetup {
-  const current = { ...setup } as GradingSetup & { strictness?: number; allow_partial_credit?: boolean };
-  delete current.strictness;
-  delete current.allow_partial_credit;
+  const current = { ...setup };
   return { ...current, low_confidence_threshold: LOW_CONFIDENCE_THRESHOLD, selected_provider_ids: [...setup.selected_provider_ids], ...(setup.expert_weights ? { expert_weights: { ...setup.expert_weights } } : {}) };
 }
 
@@ -1070,7 +1063,6 @@ function validateSetup(
   if (selected.length > 1 && setup.multi_sample_n !== 1) return gradingSetupText(locale, "invalidForm");
   if (!scopeOptions.includes(setup.knowledge_scope)) return gradingSetupText(locale, "invalidForm");
   if (setup.multi_sample_n < 1 || setup.multi_sample_n > 5) return gradingSetupText(locale, "invalidForm");
-  if (setup.teacher_notes.length > MAX_NOTES_LENGTH) return gradingSetupText(locale, "invalidForm");
   return null;
 }
 
@@ -1088,7 +1080,7 @@ function readinessMessage(code: string, locale: Locale): string {
 function localizeSaveError(error: unknown, locale: Locale): string {
   const normalized = normalizeAPIError(error);
   const code = getAPIErrorCode(normalized) ?? "";
-  if (code === "invalid_teacher_note_scope") return locale === "zh-CN" ? "请按题号分别填写注意事项，例如“第2题：……”和“第3题：……”。" : "Write a separate note for each question, for example “Question 2: …” and “Question 3: …”.";
+  if (code === "grading_notes_require_review" || code === "invalid_teacher_note_scope") return locale === "zh-CN" ? "请先将原批改注意事项中的评分要求移入对应题目的评分标准。" : "Move the scoring requirements from your previous notes into each relevant question’s rubric.";
   if (code === "knowledge_content_not_ready") return locale === "zh-CN" ? "所选资料还没有可检索内容，请等待入库或暂时移除该资料。" : "Selected material is not searchable yet. Wait for ingestion or remove it from this task.";
   if (code === "knowledge_content_version_unavailable") return locale === "zh-CN" ? "资料版本已变化，请刷新后重新开始。" : "Material version unavailable. Refresh before starting again.";
   if (["workflow_busy"].includes(code)) return gradingSetupText(locale, "workflowBusy");

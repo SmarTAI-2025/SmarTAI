@@ -147,10 +147,9 @@ async def test_generated_partial_policies_remain_partial_across_renderings(kind,
 async def test_new_teacher_exception_cannot_be_overridden_by_frozen_constraint():
     from backend.services.math_rubric_plan import _with_preferences
     _, _, plans = await saved_choice("选择题评分", "en")
-    bound = _with_preferences(plans["q1"], {"teacher_notes": "例外：少选且无错选得两分。"})
-    assert bound.binary_policy is None
-    score, _ = grading.score_assessment(grading.MathAssessment(**proposed_grade(False)), bound, "A")
-    assert score == 2
+    from backend.services.rubric_drafts import RetiredGradingNotesError
+    with pytest.raises(RetiredGradingNotesError):
+        _with_preferences(plans["q1"], {"teacher_notes": "例外：少选且无错选得两分。"})
 
 
 @pytest.mark.asyncio

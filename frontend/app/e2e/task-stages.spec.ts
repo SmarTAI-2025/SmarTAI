@@ -30,7 +30,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) {
       schema_version: 1, selected_provider_ids: ["p1"], primary_provider_id: "p1", aggregation_method: "single",
       expert_weights: {}, multi_sample_n: 1, knowledge_scope: "none",
       feedback_tone: "neutral", feedback_length: "medium", feedback_language: "zh", suggest_corrections: true,
-      low_confidence_threshold: .6, teacher_notes: "",
+      low_confidence_threshold: .6,
     };
     const expert = { provider_id: "p1", provider_type: "openai", model: "test", display_name: "Test grader", enabled: true, scope: "owner", editable: true };
     await page.route(`${backend}/**`, async route => {

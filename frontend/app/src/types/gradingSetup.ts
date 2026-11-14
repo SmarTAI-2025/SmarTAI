@@ -19,7 +19,6 @@ export interface GradingSetup {
   feedback_language: GradingFeedbackLanguage;
   suggest_corrections: boolean;
   low_confidence_threshold: number;
-  teacher_notes: string;
 }
 
 export interface GradingSetupExpert {

@@ -157,7 +157,8 @@ async def test_mixed_sources_late_failures_and_bounded_distinct_reasons():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["weighted_average", "judge_agent"])
-async def test_selected_experts_share_one_execution_and_weighted_real_zero(monkeypatch, method):
+@pytest.mark.parametrize("language", ["zh", "en"])
+async def test_selected_experts_share_one_execution_and_weighted_real_zero(monkeypatch, method, language):
     from backend.tools.code_interpreter import run_sandbox
     execute = AsyncMock(wraps=run_sandbox)
     monkeypatch.setattr(programming, "run_sandbox", execute)
@@ -165,16 +166,17 @@ async def test_selected_experts_share_one_execution_and_weighted_real_zero(monke
     b = fixed_provider(response(award(8)), name="b")
     registry = SimpleNamespace(list_available=lambda: [a,b], get={"a":a, "b":b}.get, pick_default=lambda:a)
     setup = TaskGradingSetup(selected_provider_ids=["a","b"], primary_provider_id="a", aggregation_method=method,
-                             expert_weights={"a":1,"b":3})
+                             expert_weights={"a":1,"b":3}, feedback_language=language)
     cases = [TestCase(input="", expected_output="1", source="llm_generated")]
     corr = await run_multi_expert(problem=_make_problem(stem="Read stdin and print 1.", test_cases=cases), answer=_make_answer("print(0)"),
-                                  registry=registry, student_id="s1", grading_setup=setup, aggregation_method=method)
+                                  registry=registry, student_id="s1", grading_setup=setup, aggregation_method=method,
+                                  language="en" if language == "zh" else "zh")
     assert corr.score == 6 and corr.synthesis_method == method
     assert sum(s.score for s in corr.steps) == corr.score
     assert sorted(e.score for e in corr.expert_results) == [0, 8]
     assert len({e.programming_evidence.evidence_id for e in corr.expert_results}) == 1
     assert corr.requires_human_review and "programming_ai_only" in corr.review_reasons
-    assert "AI-generated tests: passed 0/1" in corr.comment
+    assert ("AI 生成用例通过 0/1" if language == "zh" else "AI-generated tests: passed 0/1") in corr.comment
     execute.assert_awaited_once()
 
 

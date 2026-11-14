@@ -83,7 +83,9 @@ def test_scan_complexity_keywords_clean():
 # ─── grade() — teacher cases ─────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_prog_with_teacher_test_cases(monkeypatch):
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("tone,length", [("encouraging", "short"), ("neutral", "medium"), ("strict", "long")])
+async def test_prog_with_teacher_test_cases(monkeypatch, language, tone, length):
     problem = _make_problem(test_cases=[
         TestCase(input="1\n2", expected_output="3", description="1+2", source="teacher"),
         TestCase(input="5\n7", expected_output="12", description="5+7", source="teacher"),
@@ -111,15 +113,20 @@ async def test_prog_with_teacher_test_cases(monkeypatch):
     fake_raw = MagicMock(content="{}", duration_ms=50)
 
     async def fake_call(*a, **kw):
+        from backend.tests.test_feedback_preferences import TONES, LENGTHS
+        prompt = kw["system_prompt"]
+        assert TONES[tone] in prompt and LENGTHS[length] in prompt
+        assert ("in Chinese" if language == "zh" else "in English") in prompt
         return fake_output, fake_raw
 
     monkeypatch.setattr("backend.skills.programming.structured_llm_call", fake_call)
 
-    skill = ProgrammingSkill(provider=_fake_provider())
+    from backend.tests.test_feedback_preferences import setup_for
+    skill = ProgrammingSkill(provider=_fake_provider(), grading_setup=setup_for(tone, length, language))
     result = await skill.grade(problem, answer, student_id="s1")
     assert isinstance(result, ExpertResult)
-    assert "teacher-provided tests" in result.comment
-    assert "passed 2/2" in result.comment
+    assert result.score == 10
+    assert ("教师用例通过 2/2" if language == "zh" else "teacher-provided tests: passed 2/2") in result.comment
 
 
 # ─── grade() — LLM-generated cases ───────────────────────────────────────────

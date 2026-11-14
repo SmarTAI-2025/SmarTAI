@@ -128,6 +128,8 @@ class InitializeContentLanguageRequest(BaseModel):
 
 
 class UpdateProblemRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    rubric_provider_id: str | None = Field(default=None, min_length=1, max_length=240)
     expected_workflow_revision: int | None = Field(default=None, ge=0)
     number: str | None = Field(default=None, min_length=1, max_length=64)
     type: str | None = Field(default=None, min_length=1, max_length=64)
@@ -772,8 +774,8 @@ def update_problem(task_id: str, q_id: str, request: UpdateProblemRequest,
     from anyio.from_thread import run
     return _domain(lambda: task_facade.update_problem(
         task_id=task_id, owner_id=current.id, q_id=q_id,
-        patch=request.model_dump(exclude_unset=True, exclude={"expected_workflow_revision"}),
-        expected_revision=request.expected_workflow_revision, run_async=run,
+        patch=request.model_dump(exclude_unset=True, exclude={"expected_workflow_revision", "rubric_provider_id"}),
+        expected_revision=request.expected_workflow_revision, rubric_provider_id=request.rubric_provider_id, run_async=run,
     ))
 
 
@@ -904,9 +906,6 @@ def _validate_grading_setup(
     registry: ExpertRegistry,
     owner_id: str,
 ) -> None:
-    from backend.services.rubric_drafts import _question_notes
-    # Reject unresolved scope before saving a setup or starting any model work.
-    _question_notes({"teacher_notes": setup.teacher_notes}, "")
     configs = {
         str(item["provider_id"]): item
         for item in list_stage_provider_options(owner_id, registry)
@@ -970,23 +969,26 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
     )
     blocking.extend(source_readiness["blocking_issues"])
     warnings.extend(source_readiness["warnings"])
+    saved_setup = None
     if workflow.grading_setup:
         try:
-            saved_setup = TaskGradingSetup.from_saved(workflow.grading_setup)
+            saved_setup = TaskGradingSetup.model_validate(workflow.grading_setup)
             _validate_grading_setup(saved_setup, registry, owner_id)
             if any(
                 baidu_ocr_credential_id(provider_id) is not None
                 for provider_id in saved_setup.selected_provider_ids
             ):
                 blocking.append("ocr_provider_grading_not_supported")
-        except (HTTPException, PydanticValidationError):
+        except PydanticValidationError:
+            saved_setup = None
+            blocking.append("invalid_grading_setup")
+        except HTTPException:
             blocking.append("invalid_grading_setup")
     return {
         "task_id": task_id, "task_status": task["status"],
         "workflow_revision": workflow.workflow_revision,
         "configured": workflow.grading_setup is not None,
-        "grading_setup": ({key: value for key, value in workflow.grading_setup.items()
-                           if key not in {"allow_partial_credit", "strictness"}} if workflow.grading_setup else None),
+        "grading_setup": saved_setup.model_dump(mode="json") if saved_setup else None,
         "suggested_setup": suggested,
         "grading_setup_fingerprint": workflow.grading_setup_fingerprint,
         "grading_setup_updated_at": workflow.grading_setup_updated_at,

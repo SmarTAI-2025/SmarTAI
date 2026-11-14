@@ -12,7 +12,7 @@ async function fixture(page: Page, stage: "problems" | "submissions" | "grading"
     error: code, problem_count: stage === "problems" ? 0 : 1, student_count: stage === "grading" ? 1 : 0,
     problem_file_name: "saved.pdf", pending_submission_file_name: stage !== "problems" ? "saved.zip" : null,
     question_recognition_provider_id: "old", submission_recognition_provider_id: "old", grading_setup_configured: stage === "grading", problem_data: {}, submission_source_summary: null, submission_sources: [] };
-  const setup = { schema_version: 1, selected_provider_ids: ["old"], primary_provider_id: "old", aggregation_method: "single", multi_sample_n: 1, knowledge_scope: "none", strictness: 75, feedback_tone: "neutral", feedback_length: "medium", feedback_language: "zh", suggest_corrections: true, low_confidence_threshold: 0.6, teacher_notes: "原批改说明" };
+  const setup = { schema_version: 1, selected_provider_ids: ["old"], primary_provider_id: "old", aggregation_method: "single", multi_sample_n: 1, knowledge_scope: "none", feedback_tone: "neutral", feedback_length: "medium", feedback_language: "zh", suggest_corrections: true, low_confidence_threshold: 0.6,  };
   const setupResponse = { task_id: task.task_id, task_status: task.status, workflow_revision: 7, configured: true, grading_setup: setup, suggested_setup: null, grading_setup_fingerprint: "synthetic", grading_setup_updated_at: 1,
     available_experts: providers, knowledge: { scope_options: ["none", "all_task_docs"], task_doc_count: 0, task_docs: [] }, readiness: { ready: true, blocking_issues: [], warnings: [] } };
   await page.addInitScript((language) => { localStorage.setItem("smartai_token", "synthetic-recovery-token"); localStorage.setItem("smartai_locale", language); }, locale);
@@ -273,7 +273,8 @@ test("grading error keeps retry and configuration recovery with saved model and 
   await expect(page.getByText("synthetic-old", { exact: false }).first()).toBeVisible();
   await expect(page.getByRole("slider")).toHaveCount(0);
   await page.getByRole("button", { name: /展开高级/ }).click();
-  await expect(page.getByRole("textbox", { name: /批改注意事项/ })).toHaveValue("原批改说明");
+  await expect(page.getByRole("combobox", { name: "评语语气" })).toHaveValue("neutral");
+  await expect(page.getByRole("textbox", { name: /批改注意事项/ })).toHaveCount(0);
   await page.screenshot({ path: "output/playwright/workflow-grading-restored.png", fullPage: true });
   expect(calls).toHaveLength(0);
   expect(errors).toEqual([]);

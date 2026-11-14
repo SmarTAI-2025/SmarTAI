@@ -96,7 +96,7 @@ describe("GradingSetupPage regrade mode", () => {
           feedback_language: "en",
           suggest_corrections: true,
           low_confidence_threshold: 0.6,
-          teacher_notes: "",
+
         },
         suggested_setup: null,
         grading_setup_fingerprint: "setup-1",
@@ -163,19 +163,19 @@ describe("GradingSetupPage regrade mode", () => {
     }], { initialEntries: ["/tasks/task-1/grading-setup"] });
     render(<RouterProvider router={router} />);
     fireEvent.click(await screen.findByRole("button", { name: /展开高级设置|Show advanced settings/ }));
-    const notes = await screen.findByPlaceholderText(/重点检查推导步骤|focus on derivation steps/);
+    const notes = await screen.findByRole("combobox", { name: /评语语气|Feedback tone/ });
     await waitFor(() => expect(screen.getByRole("button", { name: "暂存" })).toBeEnabled());
-    fireEvent.change(notes, { target: { value: "60" } });
+    fireEvent.change(notes, { target: { value: "encouraging" } });
     current.data = { ...current.data, workflow_revision: 8, knowledge: { ...current.data.knowledge, task_doc_count: 1 } };
-    fireEvent.change(notes, { target: { value: "70" } });
+    fireEvent.change(notes, { target: { value: "strict" } });
     expect(screen.queryByText(/任务内容已更新/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "暂存" }));
     await screen.findByText(/已暂存 ·/);
-    expect(notes).toHaveValue("70"); expect(saveSetupMutate).not.toHaveBeenCalled();
-    current.data = { ...current.data, workflow_revision: 9, grading_setup_fingerprint: "setup-2", grading_setup: { ...current.data.grading_setup, strictness: 20 } };
-    fireEvent.change(notes, { target: { value: "80" } });
+    expect(notes).toHaveValue("strict"); expect(saveSetupMutate).not.toHaveBeenCalled();
+    current.data = { ...current.data, workflow_revision: 9, grading_setup_fingerprint: "setup-2", grading_setup: { ...current.data.grading_setup, feedback_tone: "strict" } };
+    fireEvent.change(notes, { target: { value: "encouraging" } });
     await screen.findByText(/任务内容已更新/);
-    expect(notes).toHaveValue("80");
+    expect(notes).toHaveValue("encouraging");
   });
 
   it("defaults to confidence weights and saves custom ratios for the selected models", async () => {
