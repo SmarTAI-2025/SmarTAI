@@ -19,6 +19,8 @@ from backend.services.growth_order import ordered_growth_classes
 
 @pytest.mark.parametrize("text,stem,withdrawn", [
     ("得 a=b。等等，让我们仔细推导这一关系。", "求 a。", True),
+    ("得 a=b。我们刚才算错了。重新算，得到 a=c。", "求 a。", True),
+    ("有同学写 a=b。不对。我们重新算，得到 a=c。", "求 a。", False),
     ("This gives 7. Wait, let me recalculate the derivative.", "Find the slope.", True),
     ("乘积不对易，故该群非交换。", "证明结论。", False),
     ("Assume the claim is false. This gives a contradiction.", "Prove the claim.", False),

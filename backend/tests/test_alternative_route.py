@@ -13,6 +13,10 @@ ANSWER = "因式分解为 (x−1)(x−2)=0。\n第二个根误写为负二。"
 
 
 def material(*, ordinary="steps", teacher="", alternative=None, stem=STEM):
+    # Non-proof AI primary rubrics now use steps. Exercise a teacher-supplied
+    # deduction primary while keeping the alternative rate independently AI-set.
+    if ordinary == "deductions":
+        teacher = "普通错误每次扣4分。" + teacher
     main = ({"steps": [{"id": "complete_square", "criterion": "配平方", "total_pts": 10}]}
             if ordinary == "steps" else
             {"deductions": [{"id": "ordinary_error", "criterion": "普通错误", "deduct_pts": 4}]})

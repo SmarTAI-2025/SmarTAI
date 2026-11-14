@@ -9,20 +9,20 @@ from backend.tests.test_question_material_format_repair import Provider
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("prefix", ["第2题：", "第2题，", "第2题", "Question 2, ", "Q2: "])
+@pytest.mark.parametrize("prefix", ["第2题：", "第2题，", "第2题", "Question 2, ", "Q2: ", "#2：", "# 2, "])
 async def test_question_notes_never_cap_other_questions(prefix):
     from backend.tests.test_alternative_route import material, alternate, ANSWER, STEM
     row, original = material(alternative={"deduct_per_error": 1})
     setup = {"teacher_notes": prefix + "其他正确解法最多1分"}
     scores = []
-    for number in ("1", "2", "3"):
+    for number in ("1", "2", "3", "4"):
         current = {**row, "q_id": "q" + number, "number": number}
         provider = Provider([])
         draft = saved_draft(current, grading_setup=setup) or await compile_parts_draft(current, provider, grading_setup=setup)
         assert saved_draft({**current, "rubric_draft": draft.model_dump(mode="json")}, grading_setup=setup)
         scores.append(settle_parts(draft.plan.part_rubric, [alternate("complete")], ANSWER, STEM)[0])
         assert not provider.calls
-    assert scores == [10, 1, 10]
+    assert scores == [10, 1, 10, 10]
 
 
 @pytest.mark.asyncio
@@ -81,6 +81,7 @@ async def test_ambiguous_ocr_heading_is_not_asserted_as_a_question_number(mode):
 @pytest.mark.parametrize("answer", [
     "解得 x=2。也可以用代入法验证，解得 x=2 成立。",
     "Some students write a=b. That is wrong. We need to recalculate with the corrected definition.",
+    "有同学写 a=b。不对。我们重新算，得到 a=c。",
 ])
 async def test_verification_and_explaining_others_errors_need_no_generation_retry(answer):
     target = dict(q_id="q1", target="reference_answer", target_id="q1:reference_answer")
@@ -112,7 +113,10 @@ def test_significant_math_and_code_punctuation_still_changes_scoring_input(befor
     assert scoring_stem(before) != scoring_stem(after)
 
 
-@pytest.mark.parametrize("notes", ["第2、3题其他正确解法最多1分", "对于第2题，其他正确解法最多1分", "第十二题：最多1分"])
+@pytest.mark.parametrize("notes", ["第2、3题其他正确解法最多1分", "对于第2题，其他正确解法最多1分", "第十二题：最多1分",
+    "Questions 2 and 3: 其他正确解法最多1分", "Question 2 and 3: 其他正确解法最多1分",
+    "#2 and #3: 其他正确解法最多1分", "Questions 2–3: 其他正确解法最多1分",
+    "Questions eleven and twelve: 其他正确解法最多1分", "#II: 其他正确解法最多1分"])
 def test_unresolved_question_scope_cannot_fall_back_to_all_questions(notes):
     from backend.services.rubric_drafts import _question_notes, RubricAllocationError
     with pytest.raises(RubricAllocationError, match="question heading"):

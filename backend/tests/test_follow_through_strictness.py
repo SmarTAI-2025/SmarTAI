@@ -78,6 +78,40 @@ async def test_semantic_scope_preserves_teacher_field_and_computes_other_default
     assert saved_draft({**row,"rubric_draft":bad}) is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strictness", [0, 25, 50, 100])
+async def test_one_assignment_combines_teacher_awards_defaults_and_deductions(strictness):
+    from backend.services.math_grading_context import prepare_math_plans, plans_from_snapshots, MATH_GRADING_ENGINE_VERSION
+    from backend.tests.test_teacher_mixed_ledger import mixed_candidate, arithmetic_decision
+    from backend.skills.part_scoring import settle_parts
+    rows = {}
+    for i, award in enumerate((0, 4, None), 1):
+        text = "列式2分，计算结果8分。"
+        if award is not None:
+            text += f"计算结果沿用错值但本步正确保留{award}分。"
+        row = row_with_policy(text, strictness)
+        row.update(q_id=f"q{i}", number=str(i))
+        raw = proposed(points=(2, 8))
+        if award is not None:
+            raw["parts"][0]["steps"][1]["follow_through_pts"] = award
+        _, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+        rows[row["q_id"]] = {**row, "rubric_draft": json.loads(draft.model_dump_json())}
+    row, raw = mixed_candidate()
+    row.update(q_id="q4", number="4", rubric_generation_preferences={"follow_through_strictness": strictness})
+    raw["parts"][0].pop("steps")
+    _, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    rows["q4"] = {**row, "rubric_draft": json.loads(draft.model_dump_json())}
+    plans = await prepare_math_plans(rows, object())  # No model available on reload.
+    for key, award in (("q1", 0), ("q2", 4), ("q3", 8 * (100-strictness)/100)):
+        assert [step.follow_through_pts for step in plans[key].part_rubric.parts[0].steps] == [2 * (100-strictness)/100, award]
+    assert not plans["q4"].part_rubric.parts[0].steps
+    assert settle_parts(plans["q4"].part_rubric, [arithmetic_decision()], "10+x=17\nx=6", row["stem"])[0] == 9
+    manifest = {"math_grading_engine_version": MATH_GRADING_ENGINE_VERSION,
+                "math_rubric_plans": {key: plan.model_dump(mode="json") for key, plan in plans.items()}}
+    restored = plans_from_snapshots(manifest, [], for_grading=True)
+    assert {key: plan.part_rubric for key, plan in restored.items()} == {key: plan.part_rubric for key, plan in plans.items()}
+
+
 @pytest.mark.parametrize("value", [-1, 101, 1.5, True, "50"])
 def test_upload_policy_rejects_invalid_or_coerced_slider_values(value):
     with pytest.raises(ValidationError): QuestionScorePolicy(follow_through_strictness=value)

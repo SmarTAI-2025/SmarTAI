@@ -42,6 +42,32 @@ def test_teacher_error_rate_does_not_authorize_additional_ai_step_losses():
         generated_rubric(row, RubricDefinition(part_rubric=raw))
 
 
+@pytest.mark.parametrize("kind", ["计算题", "概念题"])
+def test_pure_ai_primary_rules_use_steps(kind):
+    row, raw = mixed_candidate()
+    row.update(type=kind, ai_completion_provenance={"criterion": {}})
+    raw["parts"][0].pop("steps")
+    with pytest.raises(RubricAllocationError, match="AI-generated primary rubrics use funded steps"):
+        generated_rubric(row, RubricDefinition(part_rubric=raw))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("teacher,steps", [("按错误点扣分，具体分值请补齐。", True), ("按步骤给分，具体配分请补齐。", False)])
+async def test_incomplete_mode_cannot_be_silently_replaced(teacher, steps):
+    row, raw = mixed_candidate()
+    row["criterion"] = teacher
+    if steps:
+        raw["parts"][0].pop("deductions")
+    else:
+        raw["parts"][0].pop("steps")
+        raw["parts"][0]["deductions"][0]["source_quote"] = teacher
+    provider = PolicyProvider(raw, verdict="inconsistent")
+    with pytest.raises(ValidationError, match="could not be verified"):
+        await compile_parts_draft(row, provider)
+    assert len(provider.calls) == 2
+    assert json.loads(provider.calls[1][1].content)["policies_to_verify"][0]["type"] == "scoring_mode"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid_reference_quotes", [False, True])
 async def test_raw_mixed_json_repairs_to_teacher_deductions_and_settles_once(invalid_reference_quotes):
@@ -110,10 +136,14 @@ async def test_fully_covered_pure_deduction_policies_repair_without_audit(suffix
     "过程和结果都应给分，具体配分可合理补充。",
     "Award steps as well as deducting the stated errors; choose appropriate step budgets.",
 ])
+@pytest.mark.parametrize("strictness", [None, 0, 25, 50, 100])
 @pytest.mark.asyncio
-async def test_unquantified_mixed_authorization_is_audited_once_then_reused(grant):
+async def test_unquantified_mixed_authorization_is_audited_once_then_reused(grant, strictness):
+    from backend.services.math_grading_context import prepare_math_plans
     row, raw = mixed_candidate()
     row["criterion"] = grant + row["criterion"]
+    if strictness is not None:
+        row["rubric_generation_preferences"] = {"follow_through_strictness": strictness}
     provider = PolicyProvider(raw)
     draft = await compile_parts_draft(row, provider)
     assert len(provider.calls) == 2 and len(draft.semantic_policy_checks) == 1
@@ -122,6 +152,16 @@ async def test_unquantified_mixed_authorization_is_audited_once_then_reused(gran
     assert audit["policies_to_verify"][0]["source_quote"] == row["criterion"]
     frozen = saved_draft({**row, "rubric_draft": draft.model_dump(mode="json")})
     assert frozen is not None
+    if strictness is not None:
+        assert [step.follow_through_pts for step in frozen.plan.part_rubric.parts[0].steps] == [5 * (100 - strictness) / 100] * 2
+    # A saved rubric must prepare with no provider and resume from its run snapshot.
+    stored = {**row, "rubric_draft": json.loads(draft.model_dump_json())}
+    prepared = await prepare_math_plans({"q1": stored}, object())
+    assert prepared["q1"].part_rubric == frozen.plan.part_rubric
+    manifest = {"math_grading_engine_version": MATH_GRADING_ENGINE_VERSION,
+                "math_rubric_plans": {"q1": prepared["q1"].model_dump(mode="json")}}
+    restored = plans_from_snapshots(manifest, [], for_grading=True)
+    assert restored["q1"].part_rubric == frozen.plan.part_rubric
     assert settle_parts(frozen.plan.part_rubric, [arithmetic_decision(steps=True)], "10+x=17\nx=6", row["stem"])[0] == 4
     assert len(provider.calls) == 2
 
@@ -146,6 +186,41 @@ async def test_mixed_authorization_does_not_reset_three_request_budget():
     with pytest.raises(ValidationError, match="could not be validated"):
         await compile_parts_draft(row, provider)
     assert len(provider.calls) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strictness", [0, 25, 50, 100])
+@pytest.mark.parametrize("award", [0, 4])
+async def test_mixed_policy_approval_keeps_teacher_follow_through_independent(strictness, award):
+    row, raw = mixed_candidate()
+    row["criterion"] = "按步骤评分，再额外扣除下列错误。" + row["criterion"] + f"计算结果沿用错值但本步正确保留{award}分。"
+    row["rubric_generation_preferences"] = {"follow_through_strictness": strictness}
+    raw["parts"][0]["steps"][1]["follow_through_pts"] = award
+    draft = await compile_parts_draft(row, PolicyProvider(raw))
+    stored = json.loads(draft.model_dump_json())
+    assert saved_draft({**row, "rubric_draft": stored}) is not None
+    assert [s.follow_through_pts for s in draft.plan.part_rubric.parts[0].steps] == [5*(100-strictness)/100, award]
+    stored["plan"]["part_rubric"]["parts"][0]["steps"][1]["follow_through_pts"] = 2
+    assert saved_draft({**row, "rubric_draft": stored}) is None
+
+
+@pytest.mark.asyncio
+async def test_valid_old_mixed_approval_remains_reusable():
+    from backend.services.teacher_point_allocations import teacher_policy_issue
+    row, raw = mixed_candidate()
+    row["criterion"] = "按步骤评分，再额外扣除下列错误。" + row["criterion"]
+    provider = PolicyProvider(raw)
+    draft = await compile_parts_draft(row, provider)
+    policy = json.loads(provider.calls[1][1].content)["policies_to_verify"][0]
+    targets = deepcopy(policy["candidates"])
+    for step in targets[0]["steps"]:
+        step["follow_through_pts"] = 0.0
+    old_id = teacher_policy_issue("mixed_scoring", row["criterion"], targets)["policy_id"]
+    stored = json.loads(draft.model_dump_json())
+    for container in (stored, stored["plan"]):
+        container["semantic_policy_checks"][0]["policy_id"] = old_id
+    stored["plan"]["plan_id"] = _content_hash({key: value for key, value in stored["plan"].items() if key != "plan_id"})
+    assert saved_draft({**row, "rubric_draft": stored}) is not None
 
 
 @pytest.mark.parametrize("change", ["step_budget", "step_target", "deduction_group"])

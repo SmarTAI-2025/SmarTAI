@@ -702,6 +702,11 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
     parallel = parallel_part_budgets(problem)
     from backend.services.math_rubric_plan import _FLOOR_RULE, _source_clauses
     teacher_primary = any(not _FLOOR_RULE.fullmatch(clause) for clause in _source_clauses(ordinary))
+    from backend.domain.question_types import normalize_question_type
+    if (not teacher_primary and normalize_question_type(problem.get("type") or "") != "推理题"
+            and any(part.deductions for part in rubric.parts)):
+        raise ValueError("For AI-generated primary rubrics use funded steps, not deductions. "
+                         "Only proof questions retain goal-based deductions; preserve teacher-specified modes.")
     # Source clauses constrain individual fields. A subtotal, a step budget and a
     # conditional award in the same sentence are three different quantities.
     per_part = re.search(r"每(?:个)?小问\s*(\d+(?:\.\d+)?)\s*分", ordinary)
@@ -1024,6 +1029,9 @@ Preserve the original question and all explicit teacher policies. For each known
 total_pts and exactly one of steps (budgets sum to total_pts) or deductions (positive amounts
 per supported error; they do not sum to total_pts), unless the teacher explicitly combines funded
 steps with named deductions. For a mixed part include both lists and quote each additional penalty.
+When the teacher provides no primary scoring mode, use steps for AI-generated non-proof rubrics.
+Proof questions retain goal-based deductions. Complete an incomplete teacher rubric in its existing
+mode; do not turn missing details into permission to mix points and deductions.
 For explicit conditions that withhold a step's award, include the exact source clauses in that
 step's required_conditions. Record ambiguous targets in teacher_gaps. Reference solutions can contain detailed
 unscored steps for either kind. Distinguish method-independent requested conclusions from a required technique. Scope main steps to the reference strategy and its minor variants. In a generated proof rubric, each
@@ -1193,6 +1201,25 @@ def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_p
 
     if anchors is None:
         anchors = validate_teacher_point_items(rubric, ordinary)
+    # Incomplete mode instructions may contain no numeric allocation to bind.
+    # Detect a possible mismatch for semantic review, never infer authorization
+    # from keywords (negations and per-part scope belong to the verifier).
+    mentions_deductions = re.search(r"扣(?:分|除|罚)|按[^。；;\n]{0,24}(?:错误|错点)|\b(?:deduct(?:ion|ions|ing)?|penalt(?:y|ies))\b", ordinary, re.I)
+    mentions_steps = re.search(r"步骤|分步|过程[^。；;\n]{0,12}(?:给分|评分)|\bstep(?:s|[- ]by[- ]step)?\b", ordinary, re.I)
+    for part in rubric.parts:
+        mode_mismatch = (
+            part.steps and not part.deductions and mentions_deductions
+            and not any((part.id, step.id) in anchors for step in part.steps)
+        ) or (
+            part.deductions and not part.steps and mentions_steps
+            and not any((part.id, rule.id) in anchors for rule in part.deductions)
+        )
+        if mode_mismatch:
+            issue("scoring_mode", teacher, [{"part_id": part.id, "label": canonical_label(part.label, rubric.label) or None,
+                "total_pts": float(part.total_pts),
+                "steps": [{"id": step.id, "criterion": step.criterion, "total_pts": float(step.total_pts)} for step in part.steps],
+                "deductions": [{"id": rule.id, "criterion": rule.criterion, "deduct_pts": float(rule.deduct_pts),
+                                "limit": rule.limit, "max_deduction": rule.max_deduction} for rule in part.deductions]}])
     for part in rubric.parts:
         if part.steps and part.deductions:
             if any((part.id, rule.id) not in anchors for rule in part.deductions):
@@ -1249,21 +1276,30 @@ def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_p
         if not _mixed_source_has_unparsed_text(ordinary, rubric, anchors):
             raise ValueError(f"{part.id}: mixed scoring requires teacher-funded steps as well as explicit "
                              "deductions. Keep a deduction-only teacher rule as deductions, without invented step budgets.")
-        # Bind the authorization to the complete executable allocation, using
-        # canonical source targets and resolved amounts so sealing and reload
-        # have the same identity (a rate and its absolute award are equivalent).
-        issue("mixed_scoring", teacher, [{
+        # This approval owns the funded targets/budgets and additional penalties.
+        # Follow-through is checked independently below: its teacher-owned fields
+        # stay fixed, while server-owned defaults may be materialized after audit.
+        # Including an unspecified default here made a valid final ledger reject
+        # its own approval on reload whenever the upload slider changed that value.
+        mixed_target = {
             "part_id": part.id, "label": canonical_label(part.label, rubric.label) or None,
             "total_pts": float(part.total_pts),
             "steps": [{"id": step.id, "criterion": anchors.get((part.id, step.id), (step.criterion, ""))[0],
-                       "total_pts": float(step.total_pts), "follow_through_pts": float(step.follow_through_award()),
+                       "total_pts": float(step.total_pts),
                        "answer_refs": list(step.answer_refs)} for step in part.steps],
             "deductions": [{"id": rule.id, "criterion": anchors[(part.id, rule.id)][0],
                             "deduct_pts": float(rule.deduct_pts), "limit": rule.limit, "count_by": rule.count_by,
                             "max_deduction": capped_rules.get(part.id, {}).get(rule.id, rule.max_deduction),
                             "exclusive_group": rule.exclusive_group} for rule in part.deductions],
             "answer_refs": list(part.answer_refs),
-        }])
+        }
+        issue("mixed_scoring", teacher, [mixed_target])
+        # Reuse old approvals only when their complete old identity still matches.
+        legacy_target = {**mixed_target, "steps": [
+            {**target, "follow_through_pts": float(step.follow_through_award())}
+            for target, step in zip(mixed_target["steps"], part.steps)]}
+        if teacher_policy_issue("mixed_scoring", teacher, [legacy_target])["policy_id"] in verified_policy_ids:
+            approved_scopes.add(pending[-1]["policy_id"])
 
     from backend.services.math_rubric_plan import _source_clauses
 

@@ -1088,6 +1088,7 @@ function readinessMessage(code: string, locale: Locale): string {
 function localizeSaveError(error: unknown, locale: Locale): string {
   const normalized = normalizeAPIError(error);
   const code = getAPIErrorCode(normalized) ?? "";
+  if (code === "invalid_teacher_note_scope") return locale === "zh-CN" ? "请按题号分别填写注意事项，例如“第2题：……”和“第3题：……”。" : "Write a separate note for each question, for example “Question 2: …” and “Question 3: …”.";
   if (code === "knowledge_content_not_ready") return locale === "zh-CN" ? "所选资料还没有可检索内容，请等待入库或暂时移除该资料。" : "Selected material is not searchable yet. Wait for ingestion or remove it from this task.";
   if (code === "knowledge_content_version_unavailable") return locale === "zh-CN" ? "资料版本已变化，请刷新后重新开始。" : "Material version unavailable. Refresh before starting again.";
   if (["workflow_busy"].includes(code)) return gradingSetupText(locale, "workflowBusy");

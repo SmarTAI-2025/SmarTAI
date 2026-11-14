@@ -477,16 +477,19 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   );
   const scoreHundredths = parseScoreHundredths(scoreDraft);
   const scoreValid = scoreHundredths !== null && scoreHundredths > 0 && scoreHundredths <= 1_000_000;
+  const needsStructuredReview = Boolean(problem.rubric_version || problem.preparation_issues?.some(
+    issue => issue.status === "open" && issue.field === "rubric" && issue.details?.reason === "invalid_structured_rubric",
+  ));
   const draftSummary = useMemo(
     () => criterionDraft === originalCriterion && scoreDraft === originalScore && problem.rubric_point_summary
       ? problem.rubric_point_summary
-      : problem.rubric_version
+      : needsStructuredReview
         // The saved structured ledger is authoritative. Edited prose is checked
         // with its new compiled ledger on save, never with a partial text sum.
         ? { contract_version: 1 as const, has_explicit_subpart_points: false, items: [],
             major_max_score: scoreDraft, is_valid: true }
         : summarizeRubricPoints(criterionDraft, scoreDraft, problem.question_structure),
-    [criterionDraft, originalCriterion, originalScore, problem.question_structure, problem.rubric_point_summary, problem.rubric_version, scoreDraft],
+    [criterionDraft, originalCriterion, originalScore, problem.question_structure, problem.rubric_point_summary, needsStructuredReview, scoreDraft],
   );
   const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:scoring`, value: { scoreDraft, criterionDraft, alternateDrafts }, baseline: { scoreDraft: originalScore, criterionDraft: originalCriterion, alternateDrafts: {} }, version: JSON.stringify([originalScore, originalCriterion, problem.alternative_rules]), enabled: !readOnly, busy: saving, onRestore: (draft) => { setScoreDraft(draft.scoreDraft); setCriterionDraft(draft.criterionDraft); setAlternateDrafts(draft.alternateDrafts ?? {}); setEditing(true); } });
   const leave = useDraftLeave();
@@ -704,6 +707,19 @@ function questionSaveError(error: unknown, locale: string) {
     case "no_provider_configured":
     case "recognition_provider_not_enabled":
       return tx(locale, "请先在 API 设置中启用模型，解析新评分标准后再保存。", "Enable a model in API settings to interpret the updated scoring rules, then save again.");
+    case "provider_auth_failed":
+    case "provider_permission_denied":
+    case "provider_credentials_unavailable":
+    case "provider_credentials_required":
+      return tx(locale, "请在 API 设置中更新模型密钥或权限，再保存。", "Update the model's API key or permissions in API settings, then save again.");
+    case "provider_quota_exceeded":
+    case "provider_zero_quota":
+    case "provider_daily_quota_exceeded":
+    case "shared_pool_daily_limit_reached":
+      return tx(locale, "请更换可用模型，或等模型额度恢复后再保存。", "Choose another available model, or save again once the model's quota is restored.");
+    case "provider_model_not_found":
+    case "provider_model_or_endpoint_not_found":
+      return tx(locale, "请在 API 设置中核对模型名称和地址，再保存。", "Check the model name and endpoint in API settings, then save again.");
     case "invalid_alternative_rule":
       return tx(locale, "请核对其他解法的上下限与扣分规则；分数须在 0 与该小问满分之间。", "Check the alternative-method limits and deductions. Scores must be between 0 and this part's maximum.");
     case "invalid_structured_rubric":

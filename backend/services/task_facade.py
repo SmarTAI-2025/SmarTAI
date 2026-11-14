@@ -5629,9 +5629,14 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         )
         stored_draft = ((question.source or {}).get("presentation") or {}).get("rubric_draft") or {}
         prior_rules = (stored_draft.get("plan") or {}).get("part_rubric")
+        pending_rule_review = any(
+            issue.get("status") == "open" and issue.get("field") == "rubric"
+            and (issue.get("details") or {}).get("reason") == "invalid_structured_rubric"
+            for issue in ((question.source or {}).get("presentation") or {}).get("preparation_issues", [])
+        )
         # First-time manual recovery can still save incomplete materials offline.
         # Editing an existing structured rubric must publish matching rules.
-        changed_rule = bool(prior_rules) and (
+        changed_rule = bool(prior_rules or pending_rule_review) and (
             ("stem" in patch and patch["stem"] != question.stem)
             or ("type" in patch and patch["type"] != question.type)
             or ("reference_answer" in patch and patch["reference_answer"] != question.reference_answer)
@@ -5701,7 +5706,20 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                 and issue.get("field") in fixed_fields
                 and (not (issue.get("details") or {}).get("target")
                      or patch.get(issue["details"]["target"]))
+                and (issue.get("details") or {}).get("reason") != "invalid_structured_rubric"
                 and issue.get("code") in {"parse_anomaly", "generation_failed", "recognition_partial", "recognition_needs_review", "low_confidence", "source_conflict", "ambiguous_question_match"}
+                else issue for issue in presentation.get("preparation_issues", [])
+            ]
+        if (pending_rule_review and changed_rule
+                and str(patch.get("stem", question.stem) or "").strip()
+                and str(patch.get("criterion", question.criterion) or "").strip()
+                and uses_math_grading(patch.get("type", question.type))):
+            # Resolution is provisional inside this transaction. The compiler
+            # below must accept the corrected full ledger before it can commit.
+            presentation["preparation_issues"] = [
+                {**issue, "status": "resolved"}
+                if issue.get("field") == "rubric"
+                and (issue.get("details") or {}).get("reason") == "invalid_structured_rubric"
                 else issue for issue in presentation.get("preparation_issues", [])
             ]
         if patch.get("review_status") == "confirmed":
@@ -5797,7 +5815,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         if changed_rule and question.stem.strip() and question.criterion.strip() and uses_math_grading(question.type):
             candidate = problem_from_question(question)
             prior = saved_draft(prior_problem, allow_incomplete_alternative=True)
-            if prior is None and compiled is None:
+            if prior is None and compiled is None and prior_rules:
                 # Historical rows could store new text next to an old plan. Only
                 # reuse that plan if its complete original input still verifies.
                 old_plan = (prior_problem._math_rubric_source["presentation"]["rubric_draft"]).get("plan") or {}

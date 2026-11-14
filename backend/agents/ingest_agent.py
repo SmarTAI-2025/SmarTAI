@@ -2282,8 +2282,8 @@ def _withdrawn_derivation(answer, problem):
                  (problem.get("stem") or "") + "\n" + (problem.get("criterion") or ""), re.I):
         return None
     return re.search(
-        r"(?:^|[。！？.!?;；\n])\s*(?:等等|等一下|不对|这不对)[，,。.!！ ]+\s*"
-        r"(?:让(?:我们|我)|我们|我)(?:再|重新|仔细)(?:看|算|推导|检查|思考)|"
+        r"(?:^|[。！？.!?;；\n])\s*(?:等等|等一下|我(?:们)?(?:刚才|之前|前面)?(?:算|推导|写)错了)[，,。.!！ ]+\s*"
+        r"(?:让(?:我们|我)|我们|我)?(?:再|重新|仔细)(?:看|算|推导|检查|思考)|"
         r"(?:^|[.!?;\n])\s*(?:wait|hold on|I was (?:wrong|incorrect)|our (?:previous )?(?:calculation|derivation) was (?:wrong|incorrect))[,—.! ]+\s*"
         r"(?:let me|let['’]s|we (?:must|need to)|I (?:must|need to))\s+"
         r"(?:reconsider|recheck|recalculate|re-?derive|start (?:over|again)|try again)", answer or "", re.I)

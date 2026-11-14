@@ -293,7 +293,13 @@ class IncrementalQuestionPreparation:
                             drafts.append(saved["q1"]["rubric_draft"])
                 interpretation = self.units.get("rubric:" + _base_identity(row))
                 if interpretation:
-                    drafts.append(next(iter(interpretation.values())).get("rubric_draft"))
+                    from backend.services.rubric_drafts import draft_fingerprint
+                    interpreted = next(iter(interpretation.values()))
+                    drafts.append(interpreted.get("rubric_draft"))
+                    row.setdefault("preparation_issues", []).extend(deepcopy([
+                        issue for issue in interpreted.get("preparation_issues", [])
+                        if ((issue.get("details") or {}).get("rubric_review_draft") or {}).get("input_fingerprint")
+                        == draft_fingerprint(row)]))
                 # Field order is not semantic freshness. Validate only after
                 # all fields and their provenance have reached the final row;
                 # never re-seal a stale draft to make it appear current.
@@ -323,7 +329,8 @@ class IncrementalQuestionPreparation:
             row.setdefault("preparation_issues", [])
             if generated and row.get("criterion") and not row.get("rubric_draft"):
                 feedback = self.repair_feedback.get("generation:" + identity, {}).get("q1:criterion") or self.repair_feedback.get("rubric:" + _base_identity(row), {}).get("criterion")
-                if feedback:
+                if feedback and not any((issue.get("details") or {}).get("rubric_review_draft")
+                                        for issue in row["preparation_issues"]):
                     problem_issue = _issue(q_id, "rubric", "generation_failed", "blocking", [])
                     problem_issue["details"] = {"target": "criterion", "reason": "invalid_structured_rubric"}
                     row["preparation_issues"].append(problem_issue)
@@ -1183,11 +1190,12 @@ class IncrementalQuestionPreparation:
 
         work = iter(pending)
         failures = []
+        fatal_failures = []
 
         async def compile_next():
-            # A confirmed failure stops further admissions. Allow the other
-            # already-admitted units to save their completed interpretations.
-            while not failures:
+            # A teacher-rule conflict is local to its question. Continue the
+            # other questions; provider/infrastructure failures still stop work.
+            while not fatal_failures:
                 entry = next(work, None)
                 if entry is None:
                     return
@@ -1203,7 +1211,18 @@ class IncrementalQuestionPreparation:
                 except Exception as exc:
                     failures.append(exc)
                     self.repair_feedback[key] = {"criterion": "The supplied rubric could not be fully interpreted."}
-                    await self.finish(key, error=exc)
+                    extraction = (getattr(exc, "details", None) or {}).get("rubric_review_draft")
+                    reviewable = isinstance(exc, ValidationError) and exc.code == "invalid_structured_rubric"
+                    if not reviewable:
+                        fatal_failures.append(exc)
+                    rows = None
+                    if reviewable and extraction:
+                        from backend.services.rubric_review import review_issue
+                        rows = _rows([{**row, "preparation_issues": [
+                            *[issue for issue in row.get("preparation_issues", [])
+                              if not (issue.get("details") or {}).get("rubric_review_draft")],
+                            review_issue(row["q_id"], extraction)]}])
+                    await self.finish(key, rows, error=exc)
 
         workers = [asyncio.create_task(compile_next()) for _ in range(min(self.concurrency, len(pending)))]
         try:

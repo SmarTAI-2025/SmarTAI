@@ -904,6 +904,9 @@ def _validate_grading_setup(
     registry: ExpertRegistry,
     owner_id: str,
 ) -> None:
+    from backend.services.rubric_drafts import _question_notes
+    # Reject unresolved scope before saving a setup or starting any model work.
+    _question_notes({"teacher_notes": setup.teacher_notes}, "")
     configs = {
         str(item["provider_id"]): item
         for item in list_stage_provider_options(owner_id, registry)

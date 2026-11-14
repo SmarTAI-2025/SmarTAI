@@ -73,7 +73,7 @@ const taskData = vi.hoisted(() => ({
         issue_code: null,
       },
       reference_answer: "Answer one",
-      preparation_issues: [],
+      preparation_issues: [] as PreparationIssue[],
     },
     Q2: {
       q_id: "Q2",
@@ -519,9 +519,11 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await waitFor(() => expect(screen.queryByRole("spinbutton", { name: "第 1 题满分" })).not.toBeInTheDocument());
   });
 
-  it("sends structured rubric edits to server validation without a guessed text total", async () => {
+  it.each([false, true])("sends structured rubric edits to server validation without a guessed text total (pending=%s)", async pending => {
     const original = taskData.problem_data.Q1;
-    const question = { ...original, rubric_version: 2,
+    const question = { ...original, rubric_version: pending ? undefined : 2,
+      preparation_issues: pending ? [{ issue_id: "pending-rule", field: "rubric", code: "generation_failed",
+        severity: "blocking", status: "open", details: { reason: "invalid_structured_rubric" } }] as PreparationIssue[] : [],
       criterion: "第一问按1、2、1分分步；第二问2分；第三问4分。" };
     taskData.problem_data.Q1 = question;
     mutateAsync.mockResolvedValue({ workflow_revision: 8, problem: question });
@@ -794,6 +796,12 @@ it.each([
   ["no_provider_configured", "请先在 API 设置中启用模型"],
   ["invalid_alternative_rule", "请核对其他解法的上下限与扣分规则"],
   ["invalid_structured_rubric", "请核对评分标准中的分值、条件和对应小问"],
+  ["provider_auth_failed", "请在 API 设置中更新模型密钥或权限"],
+  ["provider_permission_denied", "请在 API 设置中更新模型密钥或权限"],
+  ["provider_credentials_unavailable", "请在 API 设置中更新模型密钥或权限"],
+  ["provider_quota_exceeded", "请更换可用模型，或等模型额度恢复"],
+  ["provider_zero_quota", "请更换可用模型，或等模型额度恢复"],
+  ["provider_daily_quota_exceeded", "请更换可用模型，或等模型额度恢复"],
 ])("retains the rubric draft and explains a failed save (%s)", async (code, message) => {
   await renderPage();
   await userEvent.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
@@ -804,4 +812,19 @@ it.each([
   expect(await screen.findByRole("alert")).toHaveTextContent(message);
   expect(rubric).toHaveValue("(a) 4 分\n(b) 6 分。请说明理由。");
   expect(screen.queryByText(/internal diagnostic/)).toBeNull();
+});
+
+it.each([
+  ["provider_auth_failed", "Update the model's API key or permissions in API settings, then save again."],
+  ["provider_quota_exceeded", "Choose another available model, or save again once the model's quota is restored."],
+])("explains model save failures in English (%s)", async (code, message) => {
+  testState.locale = "en-US";
+  await renderPage();
+  await userEvent.click(await screen.findByRole("button", { name: "Edit score and rubric for question 1" }));
+  const rubric = screen.getByRole("textbox", { name: "Rubric for question 1" });
+  fireEvent.change(rubric, { target: { value: "(a) 4 points\n(b) 6 points. Explain the result." } });
+  mutateAsync.mockRejectedValueOnce(new APIError(422, "internal diagnostic", { error: { code } }));
+  await userEvent.click(within(rubric.closest("section")!).getByRole("button", { name: "Save" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(message);
+  expect(rubric).toHaveValue("(a) 4 points\n(b) 6 points. Explain the result.");
 });
