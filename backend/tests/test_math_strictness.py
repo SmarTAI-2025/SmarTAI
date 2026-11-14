@@ -22,6 +22,7 @@ def plan(strictness, *, mode="points", eligible=True, partial=True, cap=None):
     }).model_dump(mode="json", exclude={"plan_id"})
     # Exercise replay of an already frozen historical plan at its original value.
     data["strictness"] = strictness
+    data["allow_partial_credit"] = partial
     defaults = ["follow_through"] if eligible else []
     items = ([dict(id="first", description="First computation", points=4, source="ai"),
               dict(id="next", description="Correct dependent computation", points=3, source="ai", default_adjustments=defaults),
@@ -279,7 +280,7 @@ async def test_explicit_deduction_amount_cannot_be_scaled_by_an_ai_default():
     assert p.routes[0].items[0].points == 1
 
 
-def test_real_api_save_reload_and_run_freeze_preserve_slider_values():
+def test_real_api_run_freeze_does_not_reenable_retired_slider():
     from backend.api import tasks
     from backend.auth import create_token
     from backend.db import workflow_repository
@@ -293,18 +294,16 @@ def test_real_api_save_reload_and_run_freeze_preserve_slider_values():
     client = TestClient(app)
     headers = {"Authorization": f"Bearer {create_token(owner, 'teacher')}"}
     url = f"/tasks/{task_id}/grading-setup"
-    fingerprints = set()
     for strictness in [0, 25, 50, 75, 100]:
         workflow = workflow_repository.get_workflow(task_id, owner_id=owner)
         setup = {**workflow.grading_setup, "strictness": strictness}
         saved = client.put(url, headers=headers, json={"grading_setup": setup,
             "expected_workflow_revision": workflow.workflow_revision})
-        assert saved.status_code == 200, saved.text
-        fingerprints.add(saved.json()["grading_setup_fingerprint"])
-        assert client.get(url, headers=headers).json()["grading_setup"]["strictness"] == strictness
-    assert len(fingerprints) == 5
+        assert saved.status_code == 422, saved.text
+        assert "strictness" not in client.get(url, headers=headers).json()["grading_setup"]
+        assert workflow_repository.get_workflow(task_id, owner_id=owner).workflow_revision == workflow.workflow_revision
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner)
     started = task_facade.start_task_grading(task_id=task_id, owner_id=owner,
         expected_workflow_revision=workflow.workflow_revision)
     frozen = workflow_repository.get_run_setup(started["job_id"])
-    assert frozen.setup["strictness"] == 100
+    assert not {"strictness", "allow_partial_credit"}.intersection(frozen.setup)

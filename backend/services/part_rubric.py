@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from fractions import Fraction
 from typing import Annotated, Literal
 
@@ -93,16 +93,16 @@ class PointStep(Criterion):
     total_pts: Points = Field(gt=0)
     answer_refs: tuple[Key, ...] = Field(default=(), exclude_if=lambda v: not v)
     follow_through_keep: float | None = Field(
-        default=None, ge=0, lt=1, allow_inf_nan=False
+        default=None, ge=0, le=1, allow_inf_nan=False
     )
 
 
     @model_validator(mode="after")
     def check_follow_through(self):
         if self.follow_through_pts is not None and (
-            self.follow_through_keep is not None or self.follow_through_pts >= self.total_pts
+            self.follow_through_keep is not None or self.follow_through_pts > self.total_pts
         ):
-            raise ValueError("Supply only one follow-through award, smaller than the step budget.")
+            raise ValueError("Supply only one follow-through award, no greater than the step budget.")
         return self
 
     def follow_through_award(self, *, ai_default=False):
@@ -214,6 +214,7 @@ class PartRubric(Frozen):
     total_pts: Points = Field(gt=0)
     base_unit_pts: Points = Field(default=1, gt=0)
     rubric_version: int = Field(default=1, ge=1)
+    follow_through_strictness: int | None = Field(default=None, ge=0, le=100, strict=True, exclude_if=lambda v: v is None)
     rubric_origin: Literal["teacher", "ai"] = "ai"
     teacher_rubric: str | None = Field(
         default=None, max_length=100000, exclude_if=lambda v: v is None
@@ -663,7 +664,7 @@ def parallel_part_budgets(problem):
 
 
 def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None = None, language="zh",
-               verified_policy_ids=()) -> PartRubric:
+               verified_policy_ids=(), verified_policy_checks=()) -> PartRubric:
     """Bind the model proposal to known question scope and authoritative teacher text."""
     from backend.services.question_structure import _allocation_marker_pattern, scoring_stem
     from backend.services.math_source_evidence import match_source_quote
@@ -730,8 +731,10 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
     check_response_obligation(problem.get("stem", ""), teacher, rubric.parts)
     from backend.services.teacher_point_allocations import validate_teacher_point_items
     anchors = validate_teacher_point_items(rubric, ordinary)
+    teacher_follow_through = set()
     capped_rules = verify_teacher_numbers(teacher, rubric, maximum, anchors=anchors,
-                                         verified_policy_ids=verified_policy_ids)
+                                         verified_policy_ids=verified_policy_ids,
+                                         follow_through_targets=teacher_follow_through, verified_policy_checks=verified_policy_checks)
     gaps = list(rubric.teacher_gaps) if teacher else []
     from backend.services.teacher_point_allocations import bind_step_conditions
     conditions, unresolved = bind_step_conditions(rubric.parts, ordinary, anchors)
@@ -857,6 +860,9 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
                              "part over the stated domain, in the requested form and precision.")
                 step = step.model_copy(update={"criterion": criterion})
             award = step.follow_through_award(ai_default=not teacher_primary)
+            if rubric.follow_through_strictness is not None and (p.id, step.id) not in teacher_follow_through:
+                award = Fraction((Decimal(str(step.total_pts)) * (100 - rubric.follow_through_strictness) / 100)
+                                 .quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
             if Fraction(str(float(award))) == award:
                 step = step.model_copy(update={"follow_through_pts": float(award), "follow_through_keep": None})
             normalized_steps.append(step)
@@ -1091,10 +1097,9 @@ def question_floor_amounts(ordinary, maximum, *, unresolved=None):
             if match and (match[1] or not previous or _AMOUNT.search(previous)
                           or re.fullmatch(r"(?:本题|整题)?(?:非空(?:作答|答案)?|只要有作答|有书写)", previous)):
                 floors.add(_amount_value(match[2], match[3] or "分", maximum))
-            elif not match and re.match(
-                r"^(?:(?:本题|整题|全题)\s*)?(?:只要)?(?:非空(?:白)?(?:作答|答案)?|有作答|有书写|"
-                r"non[- ]?(?:blank|empty)(?: answers?)?)\s*[:：]?\s*(?:最低|保底|至少|minimum|floor)",
-                clause, re.I,
+            elif not match and (
+                re.search(r"非空|有作答|有书写|写了|non[- ]?(?:blank|empty)", clause, re.I)
+                and re.search(r"最低|保底|至少|不少于|不低于|就给|minimum|floor|at least|no less than", clause, re.I)
             ):
                 # Source-only decoding can bind exact values but cannot verify
                 # an interpretation before the complete candidate exists.
@@ -1146,7 +1151,7 @@ def _mixed_source_has_unparsed_text(ordinary, rubric, anchors):
     return False
 
 
-def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_policy_ids=()):
+def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_policy_ids=(), follow_through_targets=None, verified_policy_checks=()):
     """Verify unambiguous teacher constraints within the part named by the source."""
     from backend.services.question_structure import _allocation_marker_pattern
 
@@ -1157,6 +1162,7 @@ def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_p
     from backend.services.math_source_evidence import match_source_quote
 
     pending = []
+    approved_scopes = set()
 
     def issue(kind, quote, candidates):
         match = match_source_quote(teacher, quote)
@@ -1168,7 +1174,22 @@ def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_p
                 match = match_source_quote(teacher, originals.pop())
         # The full teacher source is always valid evidence if punctuation
         # normalization prevents resolving a smaller complete source span.
-        pending.append(teacher_policy_issue(kind, match.text if match else teacher, candidates))
+        check = teacher_policy_issue(kind, match.text if match else teacher, candidates)
+        pending.append(check)
+        if kind == "follow_through":
+            scoped_check = next((saved for saved in verified_policy_checks
+                if saved.get("verdict") == "consistent" and saved["source_quote"] == check["source_quote"]
+                and saved.get("follow_through_targets")
+                and all(target in candidates for target in saved["follow_through_targets"])), None)
+            if scoped_check:
+                approved_scopes.add(check["policy_id"])
+                if follow_through_targets is not None:
+                    follow_through_targets.update((item["part_id"], item["step_id"])
+                                                  for item in scoped_check["follow_through_targets"])
+            elif check["policy_id"] in verified_policy_ids and follow_through_targets is not None:
+                # Older audited snapshots did not record field-level scope. Preserve them conservatively.
+                follow_through_targets.update((item["part_id"], item["step_id"]) for item in candidates)
+
 
     if anchors is None:
         anchors = validate_teacher_point_items(rubric, ordinary)
@@ -1322,10 +1343,13 @@ def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_p
 
             if not applicable or not all(matches(step) for step in applicable):
                 raise ValueError(f"Preserve the teacher's follow-through credit {match[1]} in its designated step.")
+            if follow_through_targets is not None:
+                follow_through_targets.update((part.id, step.id) for part in scoped for step in part.steps
+                                              if any(step is target for target in applicable))
         if unparsed:
             parts = {part.id: part for scope in unparsed.values() for part in scope}
             issue("follow_through", sentence.strip(), follow_through_candidates(parts.values()))
-    unknown = [item for item in pending if item["policy_id"] not in verified_policy_ids]
+    unknown = [item for item in pending if item["policy_id"] not in verified_policy_ids and item["policy_id"] not in approved_scopes]
     if unknown:
         raise TeacherPolicyUnresolved(unknown)
     return capped_rules

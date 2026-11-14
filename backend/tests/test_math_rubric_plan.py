@@ -301,7 +301,7 @@ async def test_teacher_preferences_affect_content_identity_and_survive_fallback(
     setup = {"strictness": 90, "allow_partial_credit": False, "teacher_notes": "过程须说明单位。"}
     plan = await rubric.prepare_math_rubric_plan(problem, provider, grading_setup=setup)
     sent = json.loads(provider.messages[0][1].content)
-    assert sent["grading_preferences"] == {**setup, "strictness": 50}
+    assert sent["grading_preferences"] == {**setup, "strictness": 50, "allow_partial_credit": True}
     assert "过程须说明单位。" in plan.effective_criterion
     baseline = await rubric.prepare_math_rubric_plan(problem, ReplayProvider(explanation()))
     assert plan.plan_id != baseline.plan_id
@@ -311,7 +311,7 @@ async def test_teacher_preferences_affect_content_identity_and_survive_fallback(
     )
     assert fallback.routes[0].mode == "holistic"
     assert "过程须说明单位。" in fallback.effective_criterion
-    assert '"allow_partial_credit": false' in fallback.effective_criterion
+    assert '"allow_partial_credit": true' in fallback.effective_criterion
 
 
 def test_stable_fallback_pydantic_input_frozen_nested_model_and_tamper_detection():

@@ -278,6 +278,7 @@ class IncrementalQuestionPreparation:
             self._base_cache_key = cache_key
         result = deepcopy(self._base_cache)
         for q_id, row in result.items():
+            row["rubric_generation_preferences"] = {"follow_through_strictness": self.policy.follow_through_strictness}
             if generated:
                 identity = _base_identity(row)
                 drafts = [self._base_cache[q_id].get("rubric_draft")]
@@ -1082,6 +1083,7 @@ class IncrementalQuestionPreparation:
                 await self.reporter.mark_question_generation_started(progress_id, revision=identity)
                 await self.reporter.set_current_step("generating_solutions", message=f"Preparing missing materials for question {row.get('number') or ''}")
                 data = _rows([row])
+                data["q1"]["rubric_generation_preferences"] = {"follow_through_strictness": self.policy.follow_through_strictness}
                 allocation = self.outline.get(normalize_question_number(row.get("number")))
                 data["q1"]["teacher_subpart_points"] = {label: str(points) for label, points in allocation.subparts.items()} if allocation else {}
                 pending = list(targets)
@@ -1090,7 +1092,7 @@ class IncrementalQuestionPreparation:
                     for _ in range(3):
                         candidates = await generate_missing_question_materials(data, pending, 6, self.provider,
                             reporter=self.reporter, manage_progress_lifecycle=False, generation_language=self.language,
-                            allow_partial=True, repair_feedback=feedback)
+                            allow_partial=True, repair_feedback=feedback, follow_through_strictness=self.policy.follow_through_strictness)
                         for candidate in candidates:
                             target = next((target for target in pending if target["target_id"] == candidate.target_id), None)
                             if target is None:
@@ -1193,7 +1195,7 @@ class IncrementalQuestionPreparation:
                 key = "rubric:" + _base_identity(row)
                 await self.begin(key)
                 try:
-                    draft = await compile_parts_draft(row, self.provider, grading_setup={"feedback_language": self.language})
+                    draft = await compile_parts_draft(row, self.provider, grading_setup={"feedback_language": self.language, "follow_through_strictness": self.policy.follow_through_strictness})
                     self.repair_feedback.pop(key, None)
                     await self.finish(key, _rows([{**row, "rubric_draft": draft.model_dump(mode="json")}]))
                 except (asyncio.CancelledError, LeaseLost):

@@ -359,9 +359,6 @@ export function GradingPreflightPage() {
             {setup ? (
               <div className="mt-5 grid gap-4 lg:grid-cols-3 lg:items-center lg:gap-6">
 
-                <StrategyChip tone={setup.allow_partial_credit ? "success" : "neutral"}>
-                  {copy(locale, setup.allow_partial_credit ? "partialAllowed" : "partialDisabled")}
-                </StrategyChip>
                 <StrategyChip tone="warning">
                   {locale === "zh-CN" ? "任一专家置信度 < 0.60 时建议处理" : "Any expert confidence < 0.60: suggested review"}
                 </StrategyChip>

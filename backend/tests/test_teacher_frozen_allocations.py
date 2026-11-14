@@ -244,7 +244,7 @@ def test_one_result_uses_adopted_answer_without_changing_other_parts_or_teacher_
 
 @pytest.mark.parametrize("teacher,partial_allowed,relevance,flag", [
     (False, True, "partial", True), (True, True, "partial", False),
-    (False, False, "partial", False), (False, True, "incorrect", False),
+    (False, False, "partial", True), (False, True, "incorrect", False),
 ])
 def test_zero_with_unfunded_progress_requires_review_only_for_ai_step_rules(teacher, partial_allowed, relevance, flag):
     from backend.agents.multi_expert import _apply_math_review_advisory

@@ -181,6 +181,7 @@ async def _queue_question_preparation(
     source_text: str = "1. (a) Explain A. (b) Explain B.",
     registry: _RecoveryRegistry | None = None,
     generation_language: str | None = None,
+    follow_through_strictness: int = 50,
 ):
     registry = registry or _RecoveryRegistry()
     source = await task_preparation.preflight_problem_source(
@@ -207,6 +208,7 @@ async def _queue_question_preparation(
             score_policy=QuestionScorePolicy(
                 mode="uniform",
                 uniform_max_score=10,
+                follow_through_strictness=follow_through_strictness,
             ),
             recognition_provider_id="test-provider",
         ),

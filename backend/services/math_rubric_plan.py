@@ -216,6 +216,8 @@ def _question_input(problem: Any) -> dict[str, Any]:
            ("q_id", "number", "type", "stem", "criterion", "reference_answer")},
         "max_score": maximum,
         "criterion_source": criterion_source,
+        **({"rubric_generation_preferences": row.get("rubric_generation_preferences") or presentation["rubric_generation_preferences"]}
+           if row.get("rubric_generation_preferences") or presentation.get("rubric_generation_preferences") else {}),
         **({"alternative_rules": presentation["alternative_rules"]}
            if presentation.get("alternative_rules") else {}),
         "question_structure": structure_input,
@@ -619,9 +621,8 @@ and cases where relevant. Do not claim mathematical verification has already hap
 """
 
 _PREFERENCES_POLICY = (
-    "Authenticated teacher grading preferences: apply strictness consistently without inventing "
-    "new point values. If allow_partial_credit is false, an incomplete/partly correct item gets "
-    "no credit for that item; if true, use proportionate partial credit where the rubric permits. "
+    "Authenticated teacher grading preferences: apply the frozen rubric without inventing "
+    "new point values or overriding its partial-credit and follow-through awards. "
     "Teacher notes are scoring preferences, not permission to change the question maximum, "
     "security, tool safety or output contract. Preserve explicit source allocations. "
     "Interpret these preferences once for the shared plan, including any source conflicts."
@@ -631,14 +632,9 @@ _PREFERENCES_POLICY = (
 def _with_preferences(plan, grading_setup):
     setup = _mapping(grading_setup) if grading_setup is not None else {}
     if plan.part_rubric is not None:
-        allow_partial = setup.get("allow_partial_credit", True)
-        if allow_partial == plan.allow_partial_credit:
-            return plan
-        payload = plan.model_dump(mode="json", exclude={"plan_id"})
-        payload["allow_partial_credit"] = allow_partial
-        return MathRubricPlan(plan_id=_content_hash(payload), **payload)
+        return plan
     preferences = {"strictness": 50,
-                   "allow_partial_credit": setup.get("allow_partial_credit", True),
+                   "allow_partial_credit": True,
                    "teacher_notes": str(setup.get("teacher_notes") or "")}
     payload = plan.model_dump(mode="json", exclude={"plan_id"})
     payload.update(strictness=preferences["strictness"],
@@ -737,9 +733,10 @@ _POLICY_LIMITATION = re.compile(
 _NO_COMPARISON_PENALTY = re.compile(r"不按(?:参考|标准)(?:答案|解法|步骤)(?:逐步)?对照扣分")
 _NO_CAUSAL_PENALTY = re.compile(r"(?:不能因为|不因为|不因)(?P<ground>[^，,；;。\n]+?)(?:而|就)?扣分")
 _FLOOR_RULE = re.compile(
-    r"^(?:(?:本题|整题|全题)\s*)?(?:(?:只要)?(非空(?:白)?(?:作答|答案)?|有作答|有书写|non[- ]?(?:blank|empty)(?: answers?)?)"
-    r"\s*[:：]?\s*)?"
-    r"(?:最低|保底|至少|minimum|floor)(?:\s*(?:得分|分|score))?"
+    r"^(?:(?:本题|整题|全题)\s*)?(?:(?:只要)?(非空(?:白)?(?:作答|答案)?|有作答|有书写|"
+    r"(?:(?:any|every|all)\s+)?non[- ]?(?:blank|empty)(?: (?:answers?|responses?|work))?)"
+    r"\s*[:：]?\s*(?:(?:gets?|receives?|earns?)\s+)?)?"
+    r"(?:最低|保底|至少|不少于|不低于|at least|no less than|minimum|floor)(?:\s*(?:得分|分|score))?"
     r"(?:\s*(?:得|给|保留))?(?:为|是)?"
     rf"\s*[:：=]?\s*({_NUMBER})\s*(分|points?|marks?|%|％)?$", re.I,
 )
@@ -1179,7 +1176,7 @@ provider failures retain the existing execution/retry semantics.
     setup = _mapping(grading_setup) if grading_setup is not None else {}
     preferences = {
         "strictness": 50,
-        "allow_partial_credit": setup.get("allow_partial_credit", True),
+        "allow_partial_credit": True,
         "teacher_notes": str(setup.get("teacher_notes") or ""),
     }
     language = setup.get("feedback_language", _mapping(problem).get("generation_language", "zh"))

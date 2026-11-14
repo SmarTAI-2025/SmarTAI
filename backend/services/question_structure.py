@@ -613,6 +613,11 @@ def scoring_stem(stem):
     """
     if not stem:
         return stem
+    if "```" in stem or "~~~" in stem:
+        return stem.strip()
+    # The ideographic full stop is sentence punctuation even after a formula.
+    # Keep ASCII dots, factorials and code punctuation significant.
+    stem = re.sub(r"。+(?=[ \t]*(?:\n|$|[(（][0-9a-zA-Z一二三四五六七八九十]+[)）]))", "", stem)
     return re.sub(r"(?<=[\u3400-\u9fff])[。.!！?？]+(?=[ \t]*(?:\n|$|[(（][0-9a-zA-Z一二三四五六七八九十]+[)）]))",
                   "", stem.replace("\r\n", "\n")).strip()
 

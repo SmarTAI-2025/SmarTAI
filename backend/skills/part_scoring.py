@@ -194,7 +194,7 @@ For complete work on a single-step part the part's located evidence is sufficien
 or supply the one named earned step. For unrelated, unanswered or uncertain parts omit steps and errors.
 For incorrect work on a points route omit steps or list missed steps. For partial or incorrect work on
 a deduction route (including an applicable alternative deduction), supply the located independent errors.
-When allow_partial_credit is false, a follow_through outcome earns zero; independently earned steps still count. An unresolved judgment
+Use each frozen follow_through_pts exactly; no run-level preference overrides it. Independently earned steps still count. An unresolved judgment
 needs teacher review. For complete work return no errors and satisfy all applicable steps.
 Include optional sourced claims/checks only for a mathematical verification. Omit route_id,
 route_reason, score, awards and deductions. The program settles the parts and the question.
@@ -272,7 +272,7 @@ def _obligation_evidence(question, scope, fragment, question_lines):
     )
 
 
-def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
+def settle_parts(rules, decisions, answer, question):
     catalog = source_catalog(answer, "", "")
     question_lines = source_catalog("", question, "")
 
@@ -407,7 +407,7 @@ def settle_parts(rules, decisions, answer, question, *, allow_partial=True):
                         raise ValueError(
                             f"{step.id}: cite a distinct earlier error and the sound dependent work."
                         )
-                    credit = step.follow_through_award(ai_default=rules.rubric_origin == "ai") if allow_partial else Fraction(0)
+                    credit = step.follow_through_award(ai_default=rules.rubric_origin == "ai")
                 elif awarded.outcome == "missed":
                     credit = Fraction(0)
                 if step.required_conditions and awarded.outcome != "missed":

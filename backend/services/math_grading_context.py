@@ -131,7 +131,7 @@ def plans_from_snapshots(manifest: dict, events: list[dict], *, for_grading=Fals
         if for_grading and plan.part_rubric and (
             plan.part_rubric.missing_alternative_rates() or not teacher_awards_match(plan.part_rubric,
                 verified_policy_ids=[check["policy_id"] for check in plan.semantic_policy_checks
-                                     if check.get("verdict") == "consistent"])
+                                     if check.get("verdict") == "consistent"], verified_policy_checks=plan.semantic_policy_checks)
         ):
             continue  # Retain the historical plan for display, never mix its votes into a new ledger.
         if isinstance(qid, str) and plan.schema_version == "math_rubric_v3":
@@ -212,6 +212,11 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
                             "rubric_draft": raw["rubric_draft"],
                             "ai_completion_provenance": raw.get("ai_completion_provenance") or {},
                         }}
+                if isinstance(raw, dict) and raw.get("rubric_generation_preferences"):
+                    problem._math_rubric_source = {**problem._math_rubric_source, "presentation": {
+                        **(problem._math_rubric_source.get("presentation") or {}),
+                        "rubric_generation_preferences": raw["rubric_generation_preferences"],
+                    }}
             except ValidationError:
                 # Invalid question rows keep the existing grading input failure path.
                 continue

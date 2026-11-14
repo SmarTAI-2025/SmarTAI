@@ -1424,8 +1424,6 @@ function gradingSetup(): GradingSetupResponse {
       aggregation_method: "single",
       multi_sample_n: 1,
       knowledge_scope: "none",
-      strictness: 50,
-      allow_partial_credit: true,
       feedback_tone: "neutral",
       feedback_length: "medium",
       feedback_language: "en",

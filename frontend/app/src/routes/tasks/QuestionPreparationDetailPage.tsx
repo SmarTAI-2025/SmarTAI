@@ -514,8 +514,8 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
       if (!await localDraft.runFormal(() => onSave(problem, Number(scoreDraft), criterionDraft, Object.keys(alternateDrafts).length ? alternateDrafts : undefined), { scoreDraft, criterionDraft, alternateDrafts })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
-    } catch {
-      setError(tx(locale, "保存失败，请重试。", "Save failed. Try again."));
+    } catch (error) {
+      setError(questionSaveError(error, locale));
     }
   }
 
@@ -637,7 +637,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   const [draft, setDraft] = useState(value);
   const savedType = useRef<string | null>(null);
   if (field === "type" && savedType.current === value) savedType.current = null;
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const dirty = editing && draft !== value;
   const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:${field}`, value: { draft }, baseline: { draft: value }, version: value, enabled: !readOnly, busy: saving, onRestore: (restored) => { setDraft(restored.draft); if (field !== "type" || restored.draft !== value) setEditing(true); } });
   const leave = useDraftLeave();
@@ -653,14 +653,14 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
 
   async function save() {
     if (localDraft.conflict) return;
-    setError(false);
+    setError(null);
     try {
       if (!await localDraft.runFormal(() => onSave(problem, field, draft), { draft })) return;
       if (field === "type") savedType.current = draft;
       onDirtyChange(fieldKey, false);
       setEditing(false);
-    } catch {
-      setError(true);
+    } catch (error) {
+      setError(questionSaveError(error, locale));
     }
   }
 
@@ -668,7 +668,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
     <section className={cn("min-w-0 px-5 py-5 sm:px-6", compact && "px-4 py-4 sm:px-5")}>
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-bold text-foreground">{label}</h3>
-        {!readOnly ? <button type="button" aria-label={`${label} · ${editing ? tx(locale, "取消修改", "Cancel edit") : tx(locale, "修改", "Edit")}`} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(false); }); else setEditing(true); }} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
+        {!readOnly ? <button type="button" aria-label={`${label} · ${editing ? tx(locale, "取消修改", "Cancel edit") : tx(locale, "修改", "Edit")}`} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(null); }); else setEditing(true); }} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
           {editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}
           {editing ? tx(locale, "取消", "Cancel") : tx(locale, "修改", "Edit")}
         </button> : null}
@@ -681,7 +681,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
           </select> : <textarea value={draft} onChange={(event) => setDraft(event.target.value)} aria-label={label} rows={field === "number" ? 1 : field === "stem" ? 7 : compact ? 6 : 8} className={cn("w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15", field === "solution_code" && "font-mono text-xs")} />}
           <div className="mt-3 flex items-center justify-between gap-3">
             <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error
-              ? tx(locale, "保存失败，请重试。", "Save failed. Try again.")
+              ? error
               : field === "solution_code"
                 ? tx(locale, "可直接编辑源码；保存后恢复语法高亮。", "Edit the source code directly; syntax highlighting returns after saving.")
                 : field === "type" ? "" : tx(locale, "支持 Markdown 和 LaTeX。", "Markdown and LaTeX are supported.")}</p>
@@ -697,6 +697,25 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
       )}
     </section>
   );
+}
+
+function questionSaveError(error: unknown, locale: string) {
+  switch (getAPIErrorCode(error)) {
+    case "no_provider_configured":
+    case "recognition_provider_not_enabled":
+      return tx(locale, "请先在 API 设置中启用模型，解析新评分标准后再保存。", "Enable a model in API settings to interpret the updated scoring rules, then save again.");
+    case "invalid_alternative_rule":
+      return tx(locale, "请核对其他解法的上下限与扣分规则；分数须在 0 与该小问满分之间。", "Check the alternative-method limits and deductions. Scores must be between 0 and this part's maximum.");
+    case "invalid_structured_rubric":
+      return tx(locale, "请核对评分标准中的分值、条件和对应小问，再保存。", "Check the points, conditions and matching question parts, then save again.");
+    case "rubric_subpart_points_mismatch":
+    case "rubric_subpart_points_missing":
+      return tx(locale, "请补全各小问配分，并使合计等于本题满分。", "Complete the points for each part and make their sum equal this question's maximum.");
+    case "version_conflict":
+      return tx(locale, "题目已有新版本。请先复制当前修改，刷新核对后再保存。", "A newer version is available. Copy your edits, refresh to review it, then save again.");
+    default:
+      return tx(locale, "请稍后重试保存。", "Please try saving again shortly.");
+  }
 }
 
 function testCaseSaveError(error: unknown, locale: string) {

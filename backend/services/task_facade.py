@@ -1046,6 +1046,8 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         "stem": question.stem,
         "criterion": question.criterion,
         "recognition_confidence": confidence_value(presentation.get("recognition_confidence")),
+        **({"rubric_generation_preferences": presentation["rubric_generation_preferences"]}
+           if presentation.get("rubric_generation_preferences") else {}),
         "max_score": max_score,
         "max_score_source": presentation.get("max_score_source") or (
             "default_10" if max_score == 10 else "legacy"
@@ -2572,6 +2574,7 @@ def _replace_draft_questions(
                     "material_provenance": raw.get("material_provenance", {}),
                     "ai_completion_provenance": raw.get("ai_completion_provenance", {}),
                     "rubric_draft": raw.get("rubric_draft"),
+                    "rubric_generation_preferences": raw.get("rubric_generation_preferences", {}),
                     "rubric_schema_version": 2,
                     "preparation_issues": raw.get("preparation_issues", []),
                 },
@@ -4048,7 +4051,7 @@ def apply_question_patches_atomic(
     }
     allowed_presentation = {
         "review_status", "solution_code", "material_provenance", "recognition_confidence",
-        "ai_completion_provenance", "preparation_issues", "rubric_draft",
+        "ai_completion_provenance", "preparation_issues", "rubric_draft", "rubric_generation_preferences",
         "max_score_source", "max_score_review_status",
     }
     with session_scope() as session:
@@ -5225,7 +5228,7 @@ def start_task_grading(
         answer.id for revision in revisions for answer in revision.answers
     ])
     try:
-        setup = TaskGradingSetup.model_validate(workflow.grading_setup)
+        setup = TaskGradingSetup.from_saved(workflow.grading_setup)
     except PydanticValidationError as exc:
         raise ValidationError(
             "grading_setup_invalid", code="grading_setup_invalid"

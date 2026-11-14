@@ -19,7 +19,7 @@ import {
   Trash2,
   UploadCloud,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
@@ -41,6 +41,7 @@ import { useProblemDraftReferences } from "@/hooks/useProblemDraftReferences";
 import { createSourceDraft, problemDraftFromInput, problemDraftCodec, sourceSignature, type SourceDraft, type ScorePolicyDraft } from "@/lib/taskPageDrafts";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
+import { gradingSetupText } from "@/lib/gradingSetupCopy";
 import { cn } from "@/lib/cn";
 import { parseQuestionRecognitionScope } from "@/lib/questionRecognitionScope";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
@@ -103,6 +104,7 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
   const [activeRole, setActiveRole] = draft.field("activeRole");
   const [sources, setSources] = draft.field("sources");
   const [scorePolicy, setScorePolicy] = draft.field("scorePolicy");
+  const [followThroughStrictness, setFollowThroughStrictness] = draft.field("followThroughStrictness");
   const [recognitionProviderId, setRecognitionProviderId] = draft.field("recognitionProviderId");
   useImageRecoveryReturn(draft.protection.loaded, setRecognitionProviderId);
   const references = useProblemDraftReferences(taskId, sources, (id, patch) => updateSource(id, patch, false));
@@ -285,7 +287,7 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
         sourceTokens: tokens,
         expectedWorkflowRevision: taskQuery.data.workflow_revision,
         replaceConfirmed,
-        scorePolicy: resolvedScorePolicy.value,
+        scorePolicy: { ...resolvedScorePolicy.value, followThroughStrictness: followThroughStrictness ?? 50 },
         generationLanguage: generationLanguage || initialLanguage,
         recognitionProviderId,
       });
@@ -419,6 +421,26 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
 
           <div className="space-y-3 bg-slate-50/60 p-3 dark:bg-slate-950/20 sm:p-4">
             {activeRole === "rubric" ? (
+              <>
+                <label className="mt-3 block">
+                  <span className="flex items-center justify-between gap-4 text-[14px] font-semibold leading-5 text-foreground">
+                    <span>{gradingSetupText(locale, "strictness")}</span>
+                    <span className="shrink-0 text-primary">{followThroughStrictness ?? 50}</span>
+                  </span>
+                  <input type="range" min={0} max={100} step={5} value={followThroughStrictness ?? 50}
+                    aria-label={gradingSetupText(locale, "strictness")} disabled={isBusy}
+                    onChange={(event) => setFollowThroughStrictness(Number(event.target.value))}
+                    className="grading-range mt-3 w-full"
+                    style={{ "--range-progress": `${followThroughStrictness ?? 50}%` } as CSSProperties} />
+                  <span className="mt-1.5 flex justify-between text-[13px] leading-5 text-muted-foreground">
+                    <span>{gradingSetupText(locale, "lenient")}</span><span>{gradingSetupText(locale, "standard")}</span><span>{gradingSetupText(locale, "strict")}</span>
+                  </span>
+                  <span className="mt-2 block text-[13px] leading-5 text-muted-foreground">
+                    {tx(locale, `本步方法正确但沿用前一步错值时，扣除本步 ${followThroughStrictness ?? 50}%，保留 ${100 - (followThroughStrictness ?? 50)}%。教师已有规定时，按教师标准给分。`,
+                      `For a correct method using an earlier wrong result, deduct ${followThroughStrictness ?? 50}% of the step's points and award ${100 - (followThroughStrictness ?? 50)}%. Any teacher-specified credit takes priority.`)}
+                  </span>
+                </label>
+
               <ScorePolicyEditor
                 value={scorePolicy}
                 disabled={isBusy}
@@ -431,6 +453,7 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
                   setPreparationFailure(null);
                 }}
               />
+              </>
             ) : null}
             {activeSources.length ? activeSources.map((source, index) => (
               <SourceEditor

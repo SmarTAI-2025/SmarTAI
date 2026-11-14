@@ -894,6 +894,8 @@ async def prepare_question_packages(
         completed_steps=3,
         message="Generating complete answers for material not supplied by the teacher",
     )
+    for problem in problem_data.values():
+        problem["rubric_generation_preferences"] = {"follow_through_strictness": score_policy.follow_through_strictness}
     requested_targets = requested_major_question_materials(problem_data)
 
     teacher_points = teacher_score_requirements(problem_data, score_policy)
@@ -1100,6 +1102,7 @@ async def prepare_ocr_question_packages(
                 [],
             ))
         problem["preparation_issues"] = issues
+        problem["rubric_generation_preferences"] = {"follow_through_strictness": score_policy.follow_through_strictness}
 
         try:
             structure = MajorQuestionStructureV1.model_validate(

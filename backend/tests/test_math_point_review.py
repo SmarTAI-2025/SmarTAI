@@ -281,16 +281,21 @@ async def test_normal_grading_fanout_shares_standard_and_merges_only_corrected_p
 async def test_shared_evidence_guidance_scoped_to_requested_written_rubric(kind, expected):
     from backend.agents.ingest_agent import generate_missing_question_materials
     from backend.services.part_rubric import PART_INSTRUCTION
-    from backend.tests.test_math_rubric_plan import ReplayProvider
+    from backend.tests.test_question_material_format_repair import Provider
     from backend.tests.test_unified_rubric_drafts import choice_definition, choice_question, written_choice_definition
 
     question = {**choice_question(), "type": kind}
-    provider = ReplayProvider({"candidates": [{"q_id": "q1", "target_id": "q1:criterion",
-        "target": "criterion", "rubric_definition": written_choice_definition() if expected else choice_definition()}]})
+    payload = {"candidates": [{"q_id": "q1", "target_id": "q1:criterion",
+        "target": "criterion", "rubric_definition": written_choice_definition() if expected else choice_definition()}]}
+    replies = [json.dumps(payload)]
+    if expected:
+        replies += [json.dumps({"parts":[{"part_id":"p1", "goals":[{"target":question["stem"], "source_id":"question:1", "points":4}]}]}),
+                    json.dumps({"parts":[{"part_id":"p1", "verdict":"consistent", "reason":"One requested result."}]})]
+    provider = Provider(replies)
     await generate_missing_question_materials({"q1": question}, [
         {"q_id": "q1", "target_id": "q1:criterion", "target": "criterion"}
     ], 1, provider)
-    prompt = provider.messages[0][0].content
+    prompt = provider.calls[0][0].content
     assert (PART_INSTRUCTION in prompt) is expected
     assert POINT_EVIDENCE_GUIDANCE not in prompt
 

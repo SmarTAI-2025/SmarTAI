@@ -21,8 +21,7 @@ vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: "zh-CN", t: (k
 
 const defaults: GradingSetup = {
   schema_version: 1, selected_provider_ids: ["provider-1"], primary_provider_id: "provider-1",
-  aggregation_method: "single", expert_weights: {}, multi_sample_n: 1, knowledge_scope: "none",
-  strictness: 50, allow_partial_credit: true, feedback_tone: "neutral", feedback_length: "medium",
+  aggregation_method: "single", expert_weights: {}, multi_sample_n: 1, knowledge_scope: "none", feedback_tone: "neutral", feedback_length: "medium",
   feedback_language: "zh", suggest_corrections: true, low_confidence_threshold: 0.6, teacher_notes: "",
 };
 const document = { doc_id: "doc-1", filename: "Calculus notes.pdf", library_material_id: "material-1", chunk_count: 4, uploaded_at: 1 };

@@ -83,6 +83,7 @@ export async function startQuestionPreparation(
         generation_language: input.generationLanguage,
         score_policy: {
           mode: input.scorePolicy.mode,
+          follow_through_strictness: input.scorePolicy.followThroughStrictness ?? 50,
           ...(input.scorePolicy.mode === "uniform"
             ? { uniform_max_score: input.scorePolicy.uniformMaxScore }
             : {}),

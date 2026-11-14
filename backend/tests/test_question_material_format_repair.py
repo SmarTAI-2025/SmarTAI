@@ -217,7 +217,11 @@ def test_schema_diagnostics_redact_unknown_dictionary_keys_and_values():
 
 
 @pytest.mark.asyncio
-async def test_single_bare_ledger_binds_only_to_a_single_known_part():
+async def test_single_bare_ledger_binds_only_to_a_single_known_part(monkeypatch):
+    # Exercise bare-ledger identity binding before the independently tested proof refinement.
+    from unittest.mock import AsyncMock
+    from backend.services import proof_goals
+    monkeypatch.setattr(proof_goals, "prepare_source_goals", AsyncMock(return_value=None))
     from backend.agents.incremental_question_preparation import _rows
 
     target = dict(q_id="q1", target="criterion", target_id="q1:criterion")

@@ -327,7 +327,7 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
         # would violate the teacher-approved cost and privacy boundary.
         if frozen_setup is not None:
             try:
-                grading_setup = TaskGradingSetup.model_validate(frozen_setup.setup)
+                grading_setup = TaskGradingSetup.from_saved(frozen_setup.setup)
             except PydanticValidationError as exc:
                 raise ValidationError(
                     "grading_setup_invalid", code="grading_setup_invalid"

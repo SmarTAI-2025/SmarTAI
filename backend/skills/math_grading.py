@@ -506,8 +506,7 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
     if plan.part_rubric is not None:
         if assessment.route_id != "parts" or assessment.awards or assessment.deductions:
             raise ValueError("Use the frozen parts only, without a second question-level ledger.")
-        return settle_parts(plan.part_rubric, assessment.part_decisions, answer, problem_text,
-                            allow_partial=plan.allow_partial_credit)
+        return settle_parts(plan.part_rubric, assessment.part_decisions, answer, problem_text)
     claims = _claim_map(assessment, answer, plan, problem_text=problem_text)
     if answer.strip() and not claims:
         raise ValueError("detailed_assessment_requires_claims")
@@ -1349,7 +1348,6 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                                "answer": answer.content,
                                "plan": (_part_rule_projection(plan.part_rubric, review_parts if compact_parts else None)
                                         if plan.part_rubric else plan.model_dump(mode="json")),
-                               **({"allow_partial_credit": plan.allow_partial_credit} if plan.part_rubric else {}),
                                "source_catalog": _expert_sources(catalog, plan),
                                "disputed_item_ids": sorted(review_parts if compact_parts else disputed), "experts": review_evidence}),
             validate_output=validate_review,
@@ -1495,7 +1493,6 @@ class MathGradingSkill(GradingSkill):
             "student_answer": answer.content,
             **({"source_supplied_correspondence": notation}
                if plan.part_rubric and problem.type == "推理题" and (notation := supplied_notation(problem.stem)) else {}),
-            **({"allow_partial_credit": plan.allow_partial_credit} if plan.part_rubric else {}),
             "rubric_plan": _part_rule_projection(plan.part_rubric) if plan.part_rubric else plan.model_dump(mode="json"),
             "binary_rule": None if plan.part_rubric else frozen_binary_rule(plan),
             **({"frozen_targets": {f"part:{part.id}": part.stem or problem.stem

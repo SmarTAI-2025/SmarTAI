@@ -58,7 +58,7 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
     ? "测试用例中，同一输入对应了不同预期输出，请核对。"
     : "Test cases have different expected outputs for the same input. Please review.";
   if (issue.details?.reason === "invalid_structured_rubric") return locale === "zh-CN"
-    ? "评分标准尚未完整识别，请对照教师原文修正。" : "The scoring rules are incomplete. Check the original rubric.";
+    ? "请对照教师原文补全评分标准。" : "Complete the scoring rules using the original teacher rubric.";
   if (issue.code === "math_rubric_advisory" && issue.details?.reason === "teacher_rule_interpretation" && typeof issue.details?.message === "string") return issue.details.message;
   if (issue.code === "math_rubric_advisory") return locale === "zh-CN"
     ? "本题评分标准有待核对的内容。" : "Some rubric details need review.";
@@ -85,8 +85,8 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
   if (!["recognition_partial", "recognition_needs_review", "low_confidence"].includes(issue.code) && !questionHasLowConfidence(issue)) return null;
   const zh = locale === "zh-CN";
   if (issue.details?.reason === "conflicting_printed_formula") return zh
-    ? "整页与局部图像读出的公式不同，请对照原件核对本题的底数、上下标和运算符。"
-    : "The page and its detail give different formulas. Check this question’s bases, scripts and operators against the source.";
+    ? "本题公式待核对。请对照原图检查底数、上下标和运算符。"
+    : "Review this question’s formulas against the original image, including bases, subscripts, superscripts and operators.";
   const coverage = issue.details?.coverage as Record<string, unknown[]> | undefined;
   const reasons = [
     ["failed_pages", "识别失败的页码", "Pages that failed recognition"],

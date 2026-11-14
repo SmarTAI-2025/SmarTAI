@@ -45,8 +45,6 @@ const COPY = {
   lenient: ["较宽松", "Lenient"],
   standard: ["标准", "Standard"],
   strict: ["较严格", "Strict"],
-  allowPartialCredit: ["允许部分分", "Allow partial credit"],
-  allowPartialCreditDescription: ["根据有效步骤和评分标准给予过程分。", "Award credit for valid steps according to the rubric."],
   feedbackTone: ["评语语气", "Feedback tone"],
   toneEncouraging: ["鼓励", "Encouraging"],
   toneNeutral: ["中性", "Neutral"],

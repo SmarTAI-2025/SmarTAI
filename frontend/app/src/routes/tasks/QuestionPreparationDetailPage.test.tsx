@@ -765,7 +765,7 @@ it("formal field save clears only its explicit snapshot; failure preserves the o
   await waitFor(() => expect(card.querySelectorAll("textarea")).toHaveLength(1));
   mutateAsync.mockRejectedValueOnce(new Error("QA failed save"));
   await user.click(question.getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(question.getByText(/保存失败/)).toBeInTheDocument());
+  await waitFor(() => expect(question.getByText(/请稍后重试保存/)).toBeInTheDocument());
   expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:reference_answer"]);
 });
 
@@ -787,4 +787,21 @@ it.each([
   expect(await section.findByText(message)).toBeVisible();
   expect(input).toHaveValue("1");
   expect(section.queryByText(/invalid_programming_test_cases|internal diagnostic/)).toBeNull();
+});
+
+
+it.each([
+  ["no_provider_configured", "请先在 API 设置中启用模型"],
+  ["invalid_alternative_rule", "请核对其他解法的上下限与扣分规则"],
+  ["invalid_structured_rubric", "请核对评分标准中的分值、条件和对应小问"],
+])("retains the rubric draft and explains a failed save (%s)", async (code, message) => {
+  await renderPage();
+  await userEvent.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
+  const rubric = screen.getByRole("textbox", { name: "第 1 题评分标准" });
+  fireEvent.change(rubric, { target: { value: "(a) 4 分\n(b) 6 分。请说明理由。" } });
+  mutateAsync.mockRejectedValueOnce(new APIError(422, "internal diagnostic", { error: { code } }));
+  await userEvent.click(within(rubric.closest("section")!).getByRole("button", { name: "保存" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(message);
+  expect(rubric).toHaveValue("(a) 4 分\n(b) 6 分。请说明理由。");
+  expect(screen.queryByText(/internal diagnostic/)).toBeNull();
 });

@@ -408,8 +408,9 @@ def test_mixed_scoring_correct_and_incorrect_alternatives_and_propagated_error()
     )
     score, steps = settle_parts(rubric, [standard, axis, values], answer, row["stem"])
     assert [s.score for s in steps] == [1, 0, 0.5, 2, 2] and score == 5.5
-    strict_score, strict_steps = settle_parts(rubric, [standard, axis, values], answer, row["stem"], allow_partial=False)
-    assert [step.score for step in strict_steps] == [1, 0, 0, 2, 2] and strict_score == 5
+    with pytest.raises(TypeError, match="allow_partial"):
+        settle_parts(rubric, [standard, axis, values], answer, row["stem"], allow_partial=False)
+
 
 
 def test_circled_latex_judgments_match_without_inventing_a_derivation():
@@ -664,7 +665,7 @@ async def test_later_generated_reference_rebinds_key_and_exact_grade_uses_final_
         assert result.score == 10 and not result.error_kind
 
 
-def test_partial_credit_switch_is_bound_to_one_frozen_run():
+def test_retired_partial_credit_switch_cannot_override_a_frozen_rubric():
     from backend.services.rubric_drafts import bind_draft
 
     q = proposed_rates(fixture()["questions"][0])
@@ -672,12 +673,8 @@ def test_partial_credit_switch_is_bound_to_one_frozen_run():
     _, draft = approved_fixture_draft(source, q)
     yes = bind_draft(draft, source, grading_setup={"allow_partial_credit": True})
     no = bind_draft(draft, source, grading_setup={"allow_partial_credit": False})
-    assert (
-        not no.allow_partial_credit
-        and yes.allow_partial_credit
-        and yes.plan_id != no.plan_id
-    )
-    assert yes.part_rubric == no.part_rubric and draft.plan.allow_partial_credit
+    assert yes == no == draft.plan
+
 
 
 def test_unreadable_reference_removes_exact_key_and_conflicting_explicit_policy_blocks():
@@ -1231,13 +1228,13 @@ async def test_multiline_missed_step_supplies_one_earlier_origin_at_the_grading_
     assert result.score == 1 and [step.score for step in result.steps] == [0, 1]
     assert all("residual concern" in call[-1].content for call in provider.calls[1:])
 
-    def settle(earlier, origin, *, allow=True):
+    def settle(earlier, origin):
         data = deepcopy(vote)
         data["steps"][0]["evidence"] = earlier
         data["steps"][1]["error_source"] = origin
-        return settle_parts(plan.part_rubric, [PartDecision(**data)], answer.content, p.stem, allow_partial=allow)[0]
+        return settle_parts(plan.part_rubric, [PartDecision(**data)], answer.content, p.stem)[0]
 
-    assert settle("student:1, student:2", "student:2", allow=False) == 0
+    assert settle("student:1, student:2", "student:2") == 1
     for support, origin in [("student:1, student:3", "student:2"), ("student:1, student:2", "student:1, student:2"),
                              ("student:1, student:3", "student:3"), ("student:1, student:9", "student:1")]:
         with pytest.raises(ValueError, match="distinct earlier error"):
@@ -1785,6 +1782,12 @@ async def test_generated_proof_targets_cannot_quote_a_sibling_part(monkeypatch):
     rubric = PartRubric.model_validate(dict(id="q", label="1", stem="Prove each claim.", total_pts=10, parts=parts))
 
     async def reply(provider, *, user_prompt, validate_output, **kwargs):
+        if kwargs.get("output_model") is goals.ProofGoalAudit:
+            outline = json.loads(user_prompt)["proposal"]
+            audit = goals.ProofGoalAudit(parts=[dict(part_id=p["part_id"], verdict="consistent",
+                                                  reason="Each part requests the quoted result.") for p in outline["parts"]])
+            validate_output(audit)
+            return audit, None
         source = json.loads(user_prompt)["parts"]
         assert source[0]["allowed_goal_sources"] == {"part1:1": "Show closure."}
         assert source[1]["allowed_goal_sources"] == {"part2:1": "Show uniqueness."}

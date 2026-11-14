@@ -152,12 +152,17 @@ LIVE = json.loads((Path(__file__).parent / 'fixtures/part_rubrics/'
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('case', LIVE['cases'], ids=lambda case: case['case'])
-async def test_real_gemini_audit_replays_through_the_exact_request_and_settlement(case):
+async def test_historical_gemini_audit_response_still_reloads_and_settles(case):
     class AuditReplay(Provider):
         async def ainvoke(self, messages, **kwargs):
             if self.calls:
-                assert [{'role': 'system' if type(m).__name__ == 'SystemMessage' else 'user',
-                         'content': m.content} for m in messages] == case['audit_request']
+                # The new schema additionally requests exact teacher field scope.
+                # This historical response still validates its original source/values;
+                # it is not evidence of a fresh model call on the new prompt.
+                current = json.loads(messages[1].content)
+                historical = json.loads(case['audit_request'][1]['content'])
+                assert current['policies_to_verify'] == historical['policies_to_verify']
+
             return await super().ainvoke(messages, **kwargs)
 
     provider = AuditReplay([json.dumps({'part_rubric': case['constructed_candidate']}, ensure_ascii=False),

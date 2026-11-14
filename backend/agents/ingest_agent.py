@@ -351,7 +351,8 @@ async def _extract_problems_call(
     """
     # OCR commonly inserts spaces around the dots in textbook headings.
     # Give the extractor grounded label hints while preserving the literal source text.
-    dotted_headers = [{"printed": match[1], "number": re.sub(r"\s+", "", match[1])}
+    dotted_headers = [{"printed": match[1], "possible_numbers": [
+                          re.sub(r"\s+", "", match[1]), re.split(r"[.．]", match[1])[0]]}
                       for match in re.finditer(r"(?m)^\s*(\d+(?:[.．][ \t]+\d+)+)(?=[①-⑳\s])", text)]
     confirmed_candidates = confirmed_candidates or []
     if structure_mode == "extract_from_source":
@@ -423,8 +424,10 @@ async def _extract_problems_call(
         "Do not create new test cases. Never claim a created case was supplied by the teacher."
         if partial_source else "")
     if dotted_headers:
-        user_content += ("\n[Source heading typography] Ignore scan spaces inside a dotted question number. "
-                     "A following circled marker belongs to the printed heading. Preserve the full number.\n"
+        user_content += ("\n[Source heading typography] These spaced headings are ambiguous, not confirmed numbers. "
+                     "Use the surrounding source and requested question numbers to distinguish a hierarchical "
+                     "heading (e.g. 1. 10 \u2460 means 1.10) from a list item (1. 2 numbers means question 1, "
+                     "whose stem starts with 2). Do not move a stem's leading number into its question number.\n"
                      + json.dumps(dotted_headers[:200], ensure_ascii=False))
     messages = [
         SystemMessage(content=PROB_SYSTEM_PROMPT + recovery_guidance),
@@ -2281,7 +2284,7 @@ def _withdrawn_derivation(answer, problem):
     return re.search(
         r"(?:^|[。！？.!?;；\n])\s*(?:等等|等一下|不对|这不对)[，,。.!！ ]+\s*"
         r"(?:让(?:我们|我)|我们|我)(?:再|重新|仔细)(?:看|算|推导|检查|思考)|"
-        r"(?:^|[.!?;\n])\s*(?:wait|hold on|that(?:'s| is) (?:wrong|incorrect))[,—.! ]+\s*"
+        r"(?:^|[.!?;\n])\s*(?:wait|hold on|I was (?:wrong|incorrect)|our (?:previous )?(?:calculation|derivation) was (?:wrong|incorrect))[,—.! ]+\s*"
         r"(?:let me|let['’]s|we (?:must|need to)|I (?:must|need to))\s+"
         r"(?:reconsider|recheck|recalculate|re-?derive|start (?:over|again)|try again)", answer or "", re.I)
 
@@ -2297,10 +2300,15 @@ async def generate_missing_question_materials(
     generation_language: str | None = None,
     validate_candidates: Callable[[List[AICompletionCandidateOutput]], None] | None = None,
     allow_partial: bool = False,
+    follow_through_strictness: int | None = None,
     repair_feedback: dict[str, str] | None = None,
 ) -> List[AICompletionCandidateOutput]:
     """Generate Q-09 values in one structured call; this function never stores them."""
 
+    # Preserve each question's submitted generation preference during retries and supplementation.
+    from functools import partial
+    from backend.services.rubric_drafts import generated_rubric as build_rubric
+    generated_rubric = partial(build_rubric, follow_through_strictness=follow_through_strictness)
     if not problems_data:
         raise ValueError("No problems extracted yet.")
     if not requested_targets:
@@ -2362,6 +2370,7 @@ async def generate_missing_question_materials(
             "question_structure": _generation_question_structure(
                 problem.get("question_structure")
             ),
+            "follow_through_strictness": follow_through_strictness if follow_through_strictness is not None else _question_input(problem).get("rubric_generation_preferences", {}).get("follow_through_strictness", 50),
             "teacher_subpart_points": dict(problem.get("teacher_subpart_points") or {}),
             **({"parallel_part_budgets": budgets} if (budgets := parallel_part_budgets(problem)) else {}),
             "existing_criterion": str(problem.get("criterion") or ""),
@@ -2400,6 +2409,8 @@ async def generate_missing_question_materials(
         "requested_targets": target_rows,
         "test_case_count": max(1, min(12, int(test_case_count))),
         "known_problems": problem_context,
+        "follow_through_strictness": follow_through_strictness,
+        "follow_through_instruction": "Teacher rules take precedence. follow_through_strictness controls ONLY correct downstream work using an earlier wrong value. The server computes unspecified follow_through_pts as total_pts * (100 - strictness) / 100, rounded to two decimal places. Preserve teacher-specified awards, including zero. Do not change step budgets, proof deductions, alternative policies or other partial credit.",
     }
     if repair_feedback:
         request_context["validation_feedback"] = {
@@ -2629,6 +2640,7 @@ async def generate_missing_question_materials(
                         candidate.rubric_definition, language=generation_language or "zh",
                         verified_policy_ids=[check["policy_id"] for check in
                                              verified_policy_checks.get(candidate.target_id, ())],
+                        verified_policy_checks=verified_policy_checks.get(candidate.target_id, ()),
                     )
                 except TeacherPolicyUnresolved as exc:
                     if not defer_policy_audit:
@@ -2781,18 +2793,26 @@ async def generate_missing_question_materials(
             # It must see only sealed ledgers after the independent audit.
             validate_targets(parsed, defer_policy_audit=False)
 
-    from backend.services.proof_goals import use_source_goals, prepare_source_goals
+    from backend.services.proof_goals import use_source_goals, prepare_source_goals, ProofGoalsUnverified
     from backend.services.true_false_answers import DecisionReferenceConflict
 
-    for candidate in parsed.candidates:
+    for candidate in list(parsed.candidates):
         original = problems_data[candidate.q_id]
         if (candidate.target != "criterion" or not candidate.rubric_draft
                 or not candidate.rubric_definition or not candidate.rubric_definition.part_rubric
                 or not use_source_goals(original)):
             continue
         current = RubricDraft.model_validate(candidate.rubric_draft)
-        refined = await prepare_source_goals(provider, original["stem"], current.plan.part_rubric,
-                                             language=generation_language or "zh")
+        try:
+            refined = await prepare_source_goals(provider, original["stem"], current.plan.part_rubric,
+                                                 language=generation_language or "zh")
+        except ProofGoalsUnverified as exc:
+            if not allow_partial:
+                raise
+            parsed.candidates.remove(candidate)
+            if repair_feedback is not None:
+                repair_feedback[candidate.target_id] = str(exc)
+            continue
         if refined is not None:
             proposal = candidate.rubric_definition.model_copy(update={"part_rubric": refined})
             material = {**original, "q_id": candidate.q_id}
@@ -2801,7 +2821,8 @@ async def generate_missing_question_materials(
             if reference:
                 material["reference_answer"] = reference
             rendered, draft = generated_rubric(material, proposal, language=generation_language or "zh",
-                verified_policy_ids=[check["policy_id"] for check in current.semantic_policy_checks])
+                verified_policy_ids=[check["policy_id"] for check in current.semantic_policy_checks],
+                verified_policy_checks=current.semantic_policy_checks)
             draft = draft.model_copy(update={"semantic_policy_checks": current.semantic_policy_checks})
             candidate.text_value = rendered
             candidate.rubric_definition = proposal

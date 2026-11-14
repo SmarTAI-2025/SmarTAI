@@ -969,7 +969,7 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
     warnings.extend(source_readiness["warnings"])
     if workflow.grading_setup:
         try:
-            saved_setup = TaskGradingSetup.model_validate(workflow.grading_setup)
+            saved_setup = TaskGradingSetup.from_saved(workflow.grading_setup)
             _validate_grading_setup(saved_setup, registry, owner_id)
             if any(
                 baidu_ocr_credential_id(provider_id) is not None
@@ -982,7 +982,8 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
         "task_id": task_id, "task_status": task["status"],
         "workflow_revision": workflow.workflow_revision,
         "configured": workflow.grading_setup is not None,
-        "grading_setup": workflow.grading_setup,
+        "grading_setup": ({key: value for key, value in workflow.grading_setup.items()
+                           if key not in {"allow_partial_credit", "strictness"}} if workflow.grading_setup else None),
         "suggested_setup": suggested,
         "grading_setup_fingerprint": workflow.grading_setup_fingerprint,
         "grading_setup_updated_at": workflow.grading_setup_updated_at,

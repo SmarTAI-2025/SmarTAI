@@ -7,12 +7,21 @@ import hashlib
 import json
 from decimal import Decimal
 from typing import Annotated, Literal
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, NotRequired
 
 from pydantic import ConfigDict, Field
 
 from backend.services.math_source_evidence import match_source_quote
 from backend.services.question_structure import _allocation_marker_pattern
+
+
+class FollowThroughTarget(TypedDict):
+    __pydantic_config__ = ConfigDict(extra="forbid")
+    part_id: str
+    step_id: str
+    criterion: str
+    total_pts: float
+    follow_through_pts: float
 
 
 class TeacherPolicyCheck(TypedDict):
@@ -23,6 +32,7 @@ class TeacherPolicyCheck(TypedDict):
     source_quote: Annotated[str, Field(min_length=1, max_length=100000)]
     verdict: Literal["consistent", "inconsistent", "uncertain"]
     reason: Annotated[str, Field(min_length=1, max_length=4000)]
+    follow_through_targets: NotRequired[list[FollowThroughTarget]]
 
 
 class TeacherPolicyUnresolved(ValueError):
@@ -184,7 +194,7 @@ def _allocation_clauses(text, labels):
 
 def validate_teacher_point_items(rules, ordinary):
     from backend.services.math_rubric_plan import (
-        _AMOUNT, _DEDUCTION, _amount_value, _score_context_clause, _scoring_numeric_text,
+        _AMOUNT, _DEDUCTION, _FLOOR_RULE, _amount_value, _score_context_clause, _scoring_numeric_text,
     )
 
     if not ordinary.strip():
@@ -203,7 +213,7 @@ def validate_teacher_point_items(rules, ordinary):
             part, marker = heading
             scope = (part,)
             clause = clause[marker.end():].strip(" ：:")
-        if not clause:
+        if not clause or _FLOOR_RULE.fullmatch(clause):
             continue
         money = list(_AMOUNT.finditer(_scoring_numeric_text(clause)))
         if len(money) != 1:
@@ -369,7 +379,7 @@ def bind_step_conditions(parts, ordinary, anchors):
     return {key: tuple(values) for key, values in requirements.items()}, gaps
 
 
-def teacher_awards_match(rules, *, verified_policy_ids=()):
+def teacher_awards_match(rules, *, verified_policy_ids=(), verified_policy_checks=()):
     from backend.services.part_rubric import (
         _NOT_FULL, _REQUIRED, _requires_method, _teacher_alternative_fields, ordinary_criterion, verify_teacher_numbers,
     )
@@ -394,7 +404,7 @@ def teacher_awards_match(rules, *, verified_policy_ids=()):
         ordinary = ordinary_criterion(rules.teacher_rubric or "")
         anchors = validate_teacher_point_items(rules, ordinary)
         verify_teacher_numbers(rules.teacher_rubric or "", rules, rules.total_pts,
-                               anchors=anchors, verified_policy_ids=verified_policy_ids)
+                               anchors=anchors, verified_policy_ids=verified_policy_ids, verified_policy_checks=verified_policy_checks)
         conditions, gaps = bind_step_conditions(rules.parts, ordinary, anchors)
         if any(step.required_conditions != conditions.get((part.id, step.id), ())
                for part in rules.parts for step in part.steps) or set(gaps) - set(rules.teacher_gaps):

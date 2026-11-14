@@ -869,21 +869,6 @@ function StrategySection({
 
 
 
-      <div className="mt-3 border-t">
-        <label className="flex min-h-[64px] cursor-pointer items-center gap-3 py-3">
-          <input
-            type="checkbox"
-            checked={setup.allow_partial_credit}
-            onChange={(event) => onChange((current) => ({ ...current, allow_partial_credit: event.target.checked }))}
-            className="peer sr-only"
-          />
-          <span aria-hidden="true" className="relative h-6 w-11 shrink-0 rounded-full bg-slate-300 transition-colors after:absolute after:left-[3px] after:top-[3px] after:h-[18px] after:w-[18px] after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-primary peer-checked:after:translate-x-5 peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2 peer-disabled:opacity-50" />
-          <span className="min-w-0">
-            <span className="block text-[14px] font-semibold leading-5 text-foreground">{gradingSetupText(locale, "allowPartialCredit")}</span>
-            <span className="mt-0.5 block text-[13px] leading-5 text-muted-foreground">{gradingSetupText(locale, "allowPartialCreditDescription")}</span>
-          </span>
-        </label>
-      </div>
 
       <div className="mt-2 overflow-hidden rounded-[8px] border bg-card sm:-mx-4">
         <button
@@ -1027,7 +1012,10 @@ function CenteredState({ title, description, action }: { title: string; descript
 }
 
 function cloneSetup(setup: GradingSetup): GradingSetup {
-  return { ...setup, strictness: 50, low_confidence_threshold: LOW_CONFIDENCE_THRESHOLD, selected_provider_ids: [...setup.selected_provider_ids], ...(setup.expert_weights ? { expert_weights: { ...setup.expert_weights } } : {}) };
+  const current = { ...setup } as GradingSetup & { strictness?: number; allow_partial_credit?: boolean };
+  delete current.strictness;
+  delete current.allow_partial_credit;
+  return { ...current, low_confidence_threshold: LOW_CONFIDENCE_THRESHOLD, selected_provider_ids: [...setup.selected_provider_ids], ...(setup.expert_weights ? { expert_weights: { ...setup.expert_weights } } : {}) };
 }
 
 function serializeSetup(setup: GradingSetup): string {
@@ -1081,7 +1069,6 @@ function validateSetup(
   if (selected.length > 1 && setup.aggregation_method === "single") return gradingSetupText(locale, "invalidForm");
   if (selected.length > 1 && setup.multi_sample_n !== 1) return gradingSetupText(locale, "invalidForm");
   if (!scopeOptions.includes(setup.knowledge_scope)) return gradingSetupText(locale, "invalidForm");
-  if (setup.strictness < 0 || setup.strictness > 100) return gradingSetupText(locale, "invalidForm");
   if (setup.multi_sample_n < 1 || setup.multi_sample_n > 5) return gradingSetupText(locale, "invalidForm");
   if (setup.teacher_notes.length > MAX_NOTES_LENGTH) return gradingSetupText(locale, "invalidForm");
   return null;

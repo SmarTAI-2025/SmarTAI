@@ -294,6 +294,7 @@ class QuestionScorePolicy(BaseModel):
         allow_inf_nan=False,
     )
     per_question_text: Optional[str] = Field(default=None, max_length=12_000)
+    follow_through_strictness: int = Field(default=50, ge=0, le=100, strict=True)
 
     @model_validator(mode="after")
     def _validate_mode_fields(self):
@@ -590,14 +591,17 @@ class TaskGradingSetup(BaseModel):
     expert_weights: Dict[str, Annotated[float, Field(gt=0, allow_inf_nan=False)]] = Field(default_factory=dict)
     multi_sample_n: int = Field(default=1, ge=1, le=5)
     knowledge_scope: GradingKnowledgeScope = "all_task_docs"
-    strictness: int = Field(default=50, ge=0, le=100)
-    allow_partial_credit: bool = True
     feedback_tone: GradingFeedbackTone = "neutral"
     feedback_length: GradingFeedbackLength = "medium"
     feedback_language: GradingFeedbackLanguage = "zh"
     suggest_corrections: bool = True
     low_confidence_threshold: float = Field(default=0.60, ge=0.30, le=0.80)
     teacher_notes: str = Field(default="", max_length=500)
+
+    @classmethod
+    def from_saved(cls, value):
+        # Read historical configuration without reviving the retired runtime switch.
+        return cls.model_validate({key: item for key, item in value.items() if key not in {"allow_partial_credit", "strictness"}})
 
     @field_validator("low_confidence_threshold")
     @classmethod

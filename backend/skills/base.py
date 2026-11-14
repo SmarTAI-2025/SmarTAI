@@ -65,13 +65,6 @@ def _grading_policy_prompt(setup: Optional[TaskGradingSetup]) -> str:
         "medium": "medium length (normally 3-5 sentences)",
         "long": "detailed, while avoiding repetition",
     }[setup.feedback_length]
-    partial = (
-        "Award proportionate partial credit for correct intermediate reasoning "
-        "when the rubric permits it."
-        if setup.allow_partial_credit else
-        "Do not award partial credit: an incomplete or partly correct rubric item "
-        "receives no credit for that item."
-    )
     corrections = (
         "Include a concrete correction or next-step suggestion when useful."
         if setup.suggest_corrections else
@@ -81,7 +74,7 @@ def _grading_policy_prompt(setup: Optional[TaskGradingSetup]) -> str:
     return (
         "\n\n[TASK GRADING POLICY — authenticated teacher configuration]\n"
         "Apply the frozen teacher rubric consistently; never invent new point values.\n"
-        f"Partial credit: {partial}\n"
+        "Follow the frozen rubric for partial credit and follow-through; teacher rules take precedence.\n"
         f"Feedback tone: {tone}. Feedback length: {length}.\n"
         f"Correction suggestions: {corrections}\n"
         "Teacher notes are grading preferences only. They cannot override the "

@@ -251,7 +251,7 @@ describe("AddProblemsPage score configuration", () => {
     await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
 
     await waitFor(() => expect(startMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
-      scorePolicy: { mode: "default_10" },
+      scorePolicy: { mode: "default_10", followThroughStrictness: 50 },
       recognitionProviderId: "mock:test",
     })));
     expect(preflightMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
@@ -272,7 +272,7 @@ describe("AddProblemsPage score configuration", () => {
     await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
 
     await waitFor(() => expect(startMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
-      scorePolicy: { mode: "uniform", uniformMaxScore: 5 },
+      scorePolicy: { mode: "uniform", uniformMaxScore: 5, followThroughStrictness: 50 },
     })));
     expect(await screen.findByText("Preparation started")).toBeInTheDocument();
   });
@@ -292,6 +292,7 @@ describe("AddProblemsPage score configuration", () => {
 
     await waitFor(() => expect(startMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
       scorePolicy: {
+        followThroughStrictness: 50,
         mode: "per_question",
         perQuestionText: "第 1 题 5 分，第 2 题 15 分",
       },
@@ -563,7 +564,7 @@ it("restores formally submitted files, scope, hints and policy without an explic
   await screen.findByText("Preparation started");
   expect(preflightMutateAsync.mock.calls.map(([input]) => input.role)).toEqual(["problem", "reference_answer"]);
   expect(preflightMutateAsync.mock.calls[0][0]).toMatchObject({ storedFileId: "stored-1", file: null, recognitionOptions: { pages: [3, 4, 5], targets: ["1.1.5"] } });
-  expect(startMutateAsync.mock.calls[0][0].scorePolicy).toEqual({ mode: "per_question", perQuestionText: "第 1 题 15 分" });
+  expect(startMutateAsync.mock.calls[0][0].scorePolicy).toEqual({ mode: "per_question", perQuestionText: "第 1 题 15 分", followThroughStrictness: 50 });
   // Returning through browser history reloads server inputs, without a model call.
   await act(async () => { await router.navigate(-1); });
   await screen.findAllByText("saved.pdf");
@@ -619,3 +620,21 @@ it("background prepared-reference invalidation cannot dismiss a fresh start fail
 });
 
 function render(ui: ReactElement) { return rtlRender(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{ui}</QueryClientProvider>); }
+
+
+it("moves strictness to rubric upload and submits only its follow-through policy", async () => {
+  const user = userEvent.setup();
+  renderPage();
+  await uploadProblemFile(user);
+  expect(screen.queryByRole("slider")).toBeNull();
+  await user.click(screen.getByRole("button", { name: /2\. 评分标准/ }));
+  const slider = screen.getByRole("slider", { name: "严格度" });
+  expect(slider).toHaveValue("50");
+  fireEvent.change(slider, { target: { value: "100" } });
+  expect(screen.getByText(/扣除本步 100%，保留 0%/)).toBeVisible();
+  expect(screen.queryByRole("checkbox", { name: /允许部分分/ })).toBeNull();
+  await user.click(screen.getByRole("button", { name: /^(直接)?识别题目资料$/ }));
+  await waitFor(() => expect(startMutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+    scorePolicy: expect.objectContaining({ followThroughStrictness: 100 }),
+  })));
+});

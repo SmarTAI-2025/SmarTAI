@@ -14,8 +14,6 @@ export interface GradingSetup {
   expert_weights?: Record<string, number>;
   multi_sample_n: number;
   knowledge_scope: GradingKnowledgeScope;
-  strictness: number;
-  allow_partial_credit: boolean;
   feedback_tone: GradingFeedbackTone;
   feedback_length: GradingFeedbackLength;
   feedback_language: GradingFeedbackLanguage;

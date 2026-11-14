@@ -291,7 +291,7 @@ def persist_paused_results(session, run):
     if setup is None:
         return
     manifest = setup.input_manifest or {}
-    config = TaskGradingSetup.model_validate(setup.setup)
+    config = TaskGradingSetup.from_saved(setup.setup)
     saved = {checkpoint_key(item): item for item in manifest.get("reused_experts", [])}
     events = list(session.scalars(select(GradingRunEventRecord).where(
         GradingRunEventRecord.grading_run_id == run.id,

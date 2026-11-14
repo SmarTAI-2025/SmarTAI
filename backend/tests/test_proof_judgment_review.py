@@ -203,6 +203,12 @@ async def test_wrapped_source_is_supplied_as_one_task_not_fragment_goals(monkeyp
     _, plan = material()
     source = "Let f(x)=x*x\nShow that for every real x\nf(x)=x^2"
     async def reply(provider, *, user_prompt, validate_output, **kwargs):
+        if kwargs.get("output_model") is module.ProofGoalAudit:
+            outline = json.loads(user_prompt)["proposal"]
+            audit = module.ProofGoalAudit(parts=[dict(part_id=p["part_id"], verdict="consistent",
+                                                  reason="Each part requests the quoted result.") for p in outline["parts"]])
+            validate_output(audit)
+            return audit, None
         assert json.loads(user_prompt)["question_sources"] == {"question:1": source}
         outline = ProofOutline(parts=[PartGoals(part_id="p", goals=[ProofGoal(
             target=source, source_id="question:1", points=10)])])

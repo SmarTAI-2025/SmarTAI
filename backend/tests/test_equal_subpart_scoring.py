@@ -108,7 +108,11 @@ async def test_recovery_requires_one_valid_award_per_part(monkeypatch, invalid):
     monkeypatch.setattr(grading.kb_tool, "retrieve_for_grading", AsyncMock(return_value=[]))
     with math_plans_context({p.q_id: plan}):
         failed = await ProofSkill(provider).grade(p, a)
-    assert failed.error_kind and failed.steps == []
+    if invalid == "disabled_partial":
+        # The retired runtime toggle cannot alter otherwise permitted item credit.
+        assert failed.error_kind is None and failed.score == 0.7
+    else:
+        assert failed.error_kind and failed.steps == []
 
 
 @pytest.mark.parametrize("criterion", ["每小问0.2分", "每个小题占 ０．２ 分。", "Each part is worth 0.2 points.",
