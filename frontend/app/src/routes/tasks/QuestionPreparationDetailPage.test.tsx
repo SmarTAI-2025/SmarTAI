@@ -24,6 +24,7 @@ vi.mock("@/api/hooks/experts", () => ({ useStageProviders: () => ({
 
 const testState = vi.hoisted(() => ({ locale: "zh-CN" }));
 const mutateAsync = vi.hoisted(() => vi.fn());
+const changeModel = vi.hoisted(() => vi.fn());
 const taskRefetch = vi.hoisted(() => vi.fn());
 const sourcePreviewApi = vi.hoisted(() => ({
   getTaskSourceFiles: vi.fn(),
@@ -139,6 +140,7 @@ vi.mock("@/api/hooks/tasks", () => ({
     refetch: taskRefetch,
   }),
   useUpdateProblem: () => ({ isPending: false, mutateAsync }),
+  useUpdateQuestionProvider: () => ({ isPending: false, mutateAsync: changeModel }),
 }));
 
 vi.mock("@/components/new-task/NewTaskStepper", () => ({
@@ -270,8 +272,10 @@ afterEach(async () => {
 
 beforeEach(() => {
   testState.locale = "zh-CN";
+  HTMLElement.prototype.scrollIntoView = vi.fn();
   taskData.problem_data.Q1.type = "reasoning";
   mutateAsync.mockReset();
+  changeModel.mockReset().mockResolvedValue({ question_recognition_provider_id: "retry-model", workflow_revision: 8 });
   taskData.workflow_revision = 7;
   taskData.status = "problems_ready";
   taskData.problem_data.Q2.reference_answer = "Answer two";
@@ -814,7 +818,7 @@ it.each([
   fireEvent.change(rubric, { target: { value: "(a) 4 分\n(b) 6 分。请说明理由。" } });
   mutateAsync.mockRejectedValueOnce(new APIError(422, "internal diagnostic", { error: { code } }));
   await userEvent.click(within(rubric.closest("section")!).getByRole("button", { name: "保存" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent(message);
+  expect(await screen.findByRole(code.startsWith("invalid_") ? "alert" : "alertdialog")).toHaveTextContent(message);
   expect(rubric).toHaveValue("(a) 4 分\n(b) 6 分。请说明理由。");
   expect(screen.queryByText(/internal diagnostic/)).toBeNull();
 });
@@ -830,7 +834,7 @@ it.each([
   fireEvent.change(rubric, { target: { value: "(a) 4 points\n(b) 6 points. Explain the result." } });
   mutateAsync.mockRejectedValueOnce(new APIError(422, "internal diagnostic", { error: { code } }));
   await userEvent.click(within(rubric.closest("section")!).getByRole("button", { name: "Save" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent(message);
+  expect(await screen.findByRole(code.startsWith("invalid_") ? "alert" : "alertdialog")).toHaveTextContent(message);
   expect(rubric).toHaveValue("(a) 4 points\n(b) 6 points. Explain the result.");
 });
 
@@ -843,10 +847,13 @@ it("retries the preserved rubric with an explicitly selected model", async () =>
   mutateAsync.mockRejectedValueOnce(new APIError(422, "quota", { error: { code: "provider_quota_exceeded" } }));
   const save = within(rubric.closest("section")!).getByRole("button", { name: "保存" });
   await userEvent.click(save);
-  const model = await screen.findByRole("combobox", { name: "换模型重试" });
+  await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "更换模型" }));
+  const model = screen.getByRole("combobox", { name: "题目处理模型" });
   expect(model).toHaveValue("");
   expect(rubric).toHaveValue(text);
   await userEvent.selectOptions(model, "retry-model");
   await userEvent.click(save);
-  expect(mutateAsync).toHaveBeenLastCalledWith(expect.objectContaining({ criterion: text, rubric_provider_id: "retry-model" }));
+  expect(changeModel).toHaveBeenCalledWith({ taskId: "task-1", providerId: "retry-model", expectedWorkflowRevision: 7 });
+  expect(mutateAsync).toHaveBeenLastCalledWith(expect.objectContaining({ criterion: text, expectedWorkflowRevision: 8 }));
+  expect(mutateAsync.mock.lastCall?.[0]).not.toHaveProperty("rubric_provider_id");
 });

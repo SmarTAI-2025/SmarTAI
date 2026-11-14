@@ -304,10 +304,16 @@ export function deleteTaskQuestion(input: { taskId: string; qId: string; expecte
     { data: { expected_workflow_revision: input.expectedWorkflowRevision } });
 }
 
+export function updateQuestionProvider(input: { taskId: string; providerId: string; expectedWorkflowRevision: number }) {
+  return putJSON<{ question_recognition_provider_id: string; workflow_revision: number }>(
+    `/tasks/${encodeURIComponent(input.taskId)}/question-preparation/provider`,
+    { provider_id: input.providerId, expected_workflow_revision: input.expectedWorkflowRevision });
+}
+
 export function updateProblem(
   taskId: string,
   qId: string,
-  patch: Pick<Partial<ProblemInfo>, "number" | "type" | "stem" | "criterion" | "max_score" | "review_status" | "reference_answer" | "solution_code" | "test_cases"> & { rubric_provider_id?: string; alternative_rule_edits?: Record<string, string>; expected_workflow_revision?: number; review_fields?: import("@/types").PreparationIssue["field"][] },
+  patch: Pick<Partial<ProblemInfo>, "number" | "type" | "stem" | "criterion" | "max_score" | "review_status" | "reference_answer" | "solution_code" | "test_cases"> & { alternative_rule_edits?: Record<string, string>; expected_workflow_revision?: number; review_fields?: import("@/types").PreparationIssue["field"][] },
 ): Promise<{ status: "ok"; q_id: string; problem: ProblemInfo; workflow_revision: number }> {
   return putJSON(`/tasks/${taskId}/problems/${qId}`, patch);
 }

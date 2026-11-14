@@ -125,6 +125,7 @@ from backend.services.submission_source_pipeline import (
     prepare_submission_sources,
 )
 from backend.services.stage_provider_routing import (
+    baidu_ocr_credential_id,
     assert_grading_routes_supported,
     build_owner_baidu_ocr_skill,
     resolve_stage_provider_route,
@@ -5564,7 +5565,7 @@ def _compile_review_edit(owner_id, edit, run_async):
 
     registry = _registry_for_owner(owner_id)
     provider = resolve_stage_provider_route(
-        owner_id=owner_id, registry=registry, requested_route_id=edit.provider_id,
+        owner_id=owner_id, registry=registry, requested_route_id=None if baidu_ocr_credential_id(edit.provider_id) else edit.provider_id,
     ).provider
     if provider is None:
         raise ValidationError("A language model is required to interpret the edited rubric.",
@@ -5582,9 +5583,34 @@ def _compile_review_edit(owner_id, edit, run_async):
                               code=code) from exc
 
 
+def update_question_provider(*, task_id: str, owner_id: str, provider_id: str, expected_revision: int) -> dict:
+    """Choose the model for this task's future question edits and AI completion."""
+    task = get_task(task_id=task_id, owner_id=owner_id)
+    route = resolve_stage_provider_route(owner_id=owner_id, registry=_registry_for_owner(owner_id),
+                                         requested_route_id=provider_id)
+    if route.is_baidu_ocr:
+        raise ValidationError("Select a language model for rubric interpretation.", code="recognition_provider_not_enabled")
+    with session_scope() as session:
+        workflow = workflow_repository.lock_workflow_revision(
+            session, assignment_id=task_id, owner_id=owner_id, expected_revision=expected_revision)
+        workflow_repository._lock_live_assignment(session, assignment_id=task_id, owner_id=owner_id)
+        if workflow.active_job_id:
+            raise InvalidTransition("The task is busy.", code="workflow_busy")
+        if workflow.workflow_revision != task["workflow_revision"]:
+            _raise_stale_revision()
+        if task["status"] != "problems_ready":
+            raise InvalidTransition("Question materials are not editable.", code="task_stage_conflict")
+        if workflow.question_recognition_provider_id != route.route_id:
+            workflow.question_recognition_provider_id = route.route_id
+            workflow.workflow_revision += 1
+            workflow.updated_at = time.time()
+        return {"question_recognition_provider_id": route.route_id,
+                "workflow_revision": workflow.workflow_revision}
+
+
 def update_problem(
     *, task_id: str, owner_id: str, q_id: str, patch: dict,
-    expected_revision: int | None = None, run_async=None, rubric_provider_id: str | None = None,
+    expected_revision: int | None = None, run_async=None,
 ) -> dict:
     args = dict(task_id=task_id, owner_id=owner_id, q_id=q_id, patch=patch)
     result = _save_problem_edit(**args, expected_revision=expected_revision)
@@ -5592,10 +5618,6 @@ def update_problem(
         return result
     # The first transaction has released its locks. Only a validated, still-current
     # interpretation can publish the new text, scoring JSON and workflow revision.
-    if rubric_provider_id is not None:
-        from dataclasses import replace
-        # An explicit retry selects a provider for this compilation only.
-        result = replace(result, provider_id=rubric_provider_id)
     draft = _compile_review_edit(owner_id, result, run_async)
     return _save_problem_edit(**args, expected_revision=result.revision,
                               compiled=draft, question_version=result.question_version)

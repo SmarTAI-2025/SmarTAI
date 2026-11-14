@@ -337,6 +337,17 @@ export function useDeleteTaskQuestion() {
   return useMutation({ mutationFn: tasksApi.deleteTaskQuestion, onSuccess: (_data, input) => invalidateTask(client, input.taskId) });
 }
 
+export function useUpdateQuestionProvider() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: tasksApi.updateQuestionProvider,
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData<Task>(taskKeys.detail(variables.taskId), current =>
+        !current || current.workflow_revision > data.workflow_revision ? current : { ...current, ...data });
+    },
+  });
+}
+
 export function useUpdateProblem() {
   const queryClient = useQueryClient();
 
@@ -344,7 +355,6 @@ export function useUpdateProblem() {
     mutationFn: ({ taskId, qId, expectedWorkflowRevision, ...patch }: {
       taskId: string;
       qId: string;
-      rubric_provider_id?: string;
       number?: string;
       type?: string;
       stem?: string;

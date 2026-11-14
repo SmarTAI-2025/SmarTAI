@@ -106,9 +106,12 @@ async def test_prog_with_teacher_test_cases(monkeypatch, language, tone, length)
 
     monkeypatch.setattr("backend.skills.programming.run_sandbox", fake_sandbox)
 
-    fake_output = MagicMock(
+    from backend.skills.programming import ProgrammingGradingOutput
+    detail = "正确读取输入并计算结果。" if language == "zh" else "Reads the input and computes the result correctly."
+    fake_output = ProgrammingGradingOutput(
         score=10.0, max_score=10.0, confidence=0.95,
-        comment="Clean code.", steps=[], logs="",
+        comment="Clean code.", steps=[{"step_no": 1, "desc": detail,
+            "is_correct": True, "score": 10, "max_points": 10}],
     )
     fake_raw = MagicMock(content="{}", duration_ms=50)
 
@@ -127,6 +130,12 @@ async def test_prog_with_teacher_test_cases(monkeypatch, language, tone, length)
     assert isinstance(result, ExpertResult)
     assert result.score == 10
     assert ("教师用例通过 2/2" if language == "zh" else "teacher-provided tests: passed 2/2") in result.comment
+    if tone == "encouraging":
+        assert ("做得好" if language == "zh" else "Well done") in result.comment
+    elif tone == "strict":
+        assert ("评阅结果" if language == "zh" else "Assessment") in result.comment
+    assert (detail in result.comment) == (length != "short")
+    assert result.steps[0].score == 10
 
 
 # ─── grade() — LLM-generated cases ───────────────────────────────────────────

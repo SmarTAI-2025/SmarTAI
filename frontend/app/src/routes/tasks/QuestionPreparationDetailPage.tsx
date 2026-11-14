@@ -1,4 +1,5 @@
-import { RubricSaveModelRetry } from "@/components/tasks/RubricSaveModelRetry";
+import { QuestionPreparationModelSelect, isQuestionModelError } from "@/components/tasks/QuestionPreparationModelSelect";
+import { RubricReviewDetails } from "@/components/tasks/RubricReviewDetails";
 import { getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
 import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
@@ -25,7 +26,7 @@ import {
 } from "lucide-react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { useTask } from "@/api/hooks/tasks";
+import { useTask, useUpdateQuestionProvider } from "@/api/hooks/tasks";
 import { useQuestionReview } from "@/hooks/useQuestionReview";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
@@ -67,6 +68,11 @@ function QuestionPreparationDetailPageForm() {
   const navigate = useNavigate();
   const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
+  const updateModel = useUpdateQuestionProvider();
+  const [modelFailure, setModelFailure] = useState<unknown>();
+  const changingModel = useRef(false);
+  const mounted = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const { updateProblem, latestRevision: latestWorkflowRevisionRef, confirming, confirm, failure, blocked, clearBlocked } = useQuestionReview(stableTaskId, taskQuery.data?.workflow_revision, locale);
   const sourcePreview = useSourcePreview({
     taskId,
@@ -194,13 +200,31 @@ function QuestionPreparationDetailPageForm() {
 
   const overviewHref = `/tasks/${encodeURIComponent(taskId)}/questions${searchParams.size ? `?${searchParams.toString()}` : ""}`;
 
-  async function saveText(problem: ProblemInfo, field: TextFieldKey, value: string, providerId?: string) {
-    const response = await updateProblem.mutateAsync({
+  async function chooseModel(providerId: string) {
+    if (changingModel.current || latestWorkflowRevisionRef.current === undefined) return;
+    changingModel.current = true;
+    try {
+      const saved = await updateModel.mutateAsync({ taskId: stableTaskId, providerId,
+        expectedWorkflowRevision: latestWorkflowRevisionRef.current });
+      if (!mounted.current) return;
+      latestWorkflowRevisionRef.current = Math.max(latestWorkflowRevisionRef.current, saved.workflow_revision);
+      setModelFailure(undefined);
+    } catch (error) {
+      if (mounted.current) setModelFailure(error);
+    } finally { changingModel.current = false; }
+  }
+
+  async function saveProblem(input: Parameters<typeof updateProblem.mutateAsync>[0]) {
+    try { return await updateProblem.mutateAsync(input); }
+    catch (error) { if (mounted.current && isQuestionModelError(error)) setModelFailure(error); throw error; }
+  }
+
+  async function saveText(problem: ProblemInfo, field: TextFieldKey, value: string) {
+    const response = await saveProblem({
       taskId: stableTaskId,
       qId: problem.q_id,
       expectedWorkflowRevision: latestWorkflowRevisionRef.current,
       [field]: value,
-      ...(providerId ? { rubric_provider_id: providerId } : {}),
     });
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
@@ -215,11 +239,10 @@ function QuestionPreparationDetailPageForm() {
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
-  async function saveScoring(problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>, providerId?: string) {
-    const response = await updateProblem.mutateAsync({
+  async function saveScoring(problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>) {
+    const response = await saveProblem({
       taskId: stableTaskId,
       qId: problem.q_id,
-      ...(providerId ? { rubric_provider_id: providerId } : {}),
       expectedWorkflowRevision: latestWorkflowRevisionRef.current,
       ...(maxScore === problem.max_score && alternatives ? {} : { max_score: maxScore }),
       ...(criterion === problem.criterion && alternatives ? {} : { criterion }),
@@ -258,6 +281,26 @@ function QuestionPreparationDetailPageForm() {
           />
         </div>
       </div>
+      {taskQuery.data && !readOnly ? <div className="mt-4">
+        <QuestionPreparationModelSelect locale={locale} value={taskQuery.data.question_recognition_provider_id}
+          onChange={value => void chooseModel(value)} disabled={updateModel.isPending || updateProblem.isPending || confirming} />
+      </div> : null}
+      {modelFailure ? <UnsavedChangesDialog
+        title={tx(locale, "请检查题目处理模型", "Check the question model")}
+        description={questionSaveError(modelFailure, locale)}
+        stayLabel={tx(locale, "返回编辑", "Back to editing")}
+        leaveLabel={tx(locale, "更换模型", "Change model")}
+        onStay={() => setModelFailure(undefined)}
+        onLeave={() => {
+          setModelFailure(undefined);
+          window.requestAnimationFrame(() => {
+            if (!mounted.current) return;
+            document.getElementById("question-model-control")?.scrollIntoView({ behavior: "smooth", block: "center" });
+            document.getElementById("question-preparation-model")?.focus({ preventScroll: true });
+          });
+        }}>
+        <p className="mt-3 text-sm text-red-700">{tx(locale, "当前修改已保留。选择模型后，再次保存。", "Your edits are kept. Select a model, then save again.")}</p>
+      </UnsavedChangesDialog> : null}
       <ReviewBlockDialog locale={locale} issues={nextBlockers.length ? nextBlockers : blocked} onClose={() => { clearBlocked(); setNextBlockers([]); }} />
       <NewTaskStepper currentStep={2} blockedFromStep={questionReviewBlockers(problems, taskId ?? "", locale).length ? 3 : undefined} lockedStepReason={tx(locale, "请先处理关键问题", "Resolve required items first")} onLockedStepActivate={() => setNextBlockers(questionReviewBlockers(problems, taskId ?? "", locale))} />
 
@@ -333,7 +376,7 @@ function QuestionPreparationDetailPageForm() {
                 previous={filtered[index - 1] ?? null}
                 next={filtered[index + 1] ?? null}
                 readOnly={readOnly}
-                saving={updateProblem.isPending || confirming}
+                saving={updateProblem.isPending || confirming || updateModel.isPending}
                 locale={locale}
                 onDirtyChange={setFieldDirty}
                 onSaveScoring={saveScoring}
@@ -346,9 +389,9 @@ function QuestionPreparationDetailPageForm() {
 
             <ReviewStageActions
               note={tx(locale, `共 ${problems.length} 道题`, `${problems.length} questions`)}
-              confirmation={<ReviewConfirmButton locale={locale} all confirmed={problems.every(questionReviewConfirmed)} busy={confirming || updateProblem.isPending} onClick={() => void confirmReview(problems)} />}
+              confirmation={<ReviewConfirmButton locale={locale} all confirmed={problems.every(questionReviewConfirmed)} busy={confirming || updateProblem.isPending || updateModel.isPending} onClick={() => void confirmReview(problems)} />}
               back={{ href: overviewHref, label: tx(locale, "返回题目资料总览", "Back to Question Material Overview") }}
-              next={{ label: tx(locale, "进入上传作答", "Continue to Upload Submissions"), disabled: confirming || updateProblem.isPending, onClick: () => {
+              next={{ label: tx(locale, "进入上传作答", "Continue to Upload Submissions"), disabled: confirming || updateProblem.isPending || updateModel.isPending, onClick: () => {
                 if (hasDirty) { setShowUnsavedReview(true); return; }
                 const issues = questionReviewBlockers(problems, taskId, locale);
                 if (issues.length) setNextBlockers(issues);
@@ -389,8 +432,8 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   saving: boolean;
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
-  onSaveScoring: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>, providerId?: string) => Promise<void>;
-  onSaveText: (problem: ProblemInfo, field: TextFieldKey, value: string, providerId?: string) => Promise<void>;
+  onSaveScoring: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>) => Promise<void>;
+  onSaveText: (problem: ProblemInfo, field: TextFieldKey, value: string) => Promise<void>;
   onSaveTests: (problem: ProblemInfo, cases: TestCase[]) => Promise<void>;
   onNavigate: (qId: string) => void;
   onConfirm: (problem: ProblemInfo) => void;
@@ -459,7 +502,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   saving: boolean;
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
-  onSave: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>, providerId?: string) => Promise<void>;
+  onSave: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>) => Promise<void>;
 }) {
   const originalScore = String(problem.max_score ?? 10);
   const originalCriterion = problem.criterion ?? "";
@@ -475,9 +518,6 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   const [criterionDraft, setCriterionDraft] = useState(originalCriterion);
   const [alternateDrafts, setAlternateDrafts] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
-  const [modelFailure, setModelFailure] = useState<unknown>();
-  const [saveProviderId, setSaveProviderId] = useState("");
-  useEffect(() => { setModelFailure(undefined); setSaveProviderId(""); }, [fieldKey, editing]);
   const dirty = editing && (
     scoreDraft !== originalScore || criterionDraft !== originalCriterion || Object.keys(alternateDrafts).length > 0
   );
@@ -520,19 +560,17 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
     }
     setError(null);
     try {
-      if (!await localDraft.runFormal(() => onSave(problem, Number(scoreDraft), criterionDraft, Object.keys(alternateDrafts).length ? alternateDrafts : undefined, saveProviderId || undefined), { scoreDraft, criterionDraft, alternateDrafts })) return;
+      if (!await localDraft.runFormal(() => onSave(problem, Number(scoreDraft), criterionDraft, Object.keys(alternateDrafts).length ? alternateDrafts : undefined), { scoreDraft, criterionDraft, alternateDrafts })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch (error) {
-      setError(questionSaveError(error, locale));
-      setModelFailure(error);
+      setError(isQuestionModelError(error) ? null : questionSaveError(error, locale));
     }
   }
 
   const sourceLabel = maxScoreSourceLabel(problem.max_score_source, locale);
   return (
     <section className="min-w-0 px-5 py-5 sm:px-6">
-      {editing && <RubricSaveModelRetry id={`${fieldKey}:model`} error={modelFailure} locale={locale} value={saveProviderId} onChange={setSaveProviderId} disabled={saving} />}
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -587,6 +625,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           <RubricPointStatus summary={savedSummary} locale={locale} />
         </div>
       )}
+      <RubricReviewDetails issues={problem.preparation_issues} locale={locale} />
       {legacyRubricNotes.length > 0 && <aside role="note" className="mt-4 rounded-md bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
         <h4 className="font-semibold">{tx(locale, "评分标准待核对", "Rubric details to review")}</h4>
         {[...new Set(legacyRubricNotes)].map(note => <p key={note} className="mt-1 whitespace-pre-line">{note}</p>)}
@@ -640,7 +679,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   locale: string;
   compact?: boolean;
   onDirtyChange: (key: string, dirty: boolean) => void;
-  onSave: (problem: ProblemInfo, field: TextFieldKey, value: string, providerId?: string) => Promise<void>;
+  onSave: (problem: ProblemInfo, field: TextFieldKey, value: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const manualEditing = useManualEditor(problem, [field]);
@@ -649,9 +688,6 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   const savedType = useRef<string | null>(null);
   if (field === "type" && savedType.current === value) savedType.current = null;
   const [error, setError] = useState<string | null>(null);
-  const [modelFailure, setModelFailure] = useState<unknown>();
-  const [saveProviderId, setSaveProviderId] = useState("");
-  useEffect(() => { setModelFailure(undefined); setSaveProviderId(""); }, [fieldKey, editing]);
   const dirty = editing && draft !== value;
   const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:${field}`, value: { draft }, baseline: { draft: value }, version: value, enabled: !readOnly, busy: saving, onRestore: (restored) => { setDraft(restored.draft); if (field !== "type" || restored.draft !== value) setEditing(true); } });
   const leave = useDraftLeave();
@@ -669,13 +705,12 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
     if (localDraft.conflict) return;
     setError(null);
     try {
-      if (!await localDraft.runFormal(() => onSave(problem, field, draft, saveProviderId || undefined), { draft })) return;
+      if (!await localDraft.runFormal(() => onSave(problem, field, draft), { draft })) return;
       if (field === "type") savedType.current = draft;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch (error) {
-      setError(questionSaveError(error, locale));
-      setModelFailure(error);
+      setError(isQuestionModelError(error) ? null : questionSaveError(error, locale));
     }
   }
 
@@ -694,7 +729,6 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
             <option value="" disabled>{tx(locale, "请选择", "Please select")}</option>
             {QUESTION_TYPES.map(type => <option key={type} value={type}>{questionTypeLabel(type, locale)}</option>)}
           </select> : <textarea value={draft} onChange={(event) => setDraft(event.target.value)} aria-label={label} rows={field === "number" ? 1 : field === "stem" ? 7 : compact ? 6 : 8} className={cn("w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15", field === "solution_code" && "font-mono text-xs")} />}
-          <RubricSaveModelRetry id={`${fieldKey}:model`} error={modelFailure} locale={locale} value={saveProviderId} onChange={setSaveProviderId} disabled={saving} />
           <div className="mt-3 flex items-center justify-between gap-3">
             <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error
               ? error
@@ -741,6 +775,7 @@ function questionSaveError(error: unknown, locale: string) {
     case "rubric_subpart_points_missing":
       return tx(locale, "请补全各小问配分，并使合计等于本题满分。", "Complete the points for each part and make their sum equal this question's maximum.");
     case "version_conflict":
+    case "stale_revision":
       return tx(locale, "题目已有新版本。请先复制当前修改，刷新核对后再保存。", "A newer version is available. Copy your edits, refresh to review it, then save again.");
     default:
       return tx(locale, "请稍后重试保存。", "Please try saving again shortly.");

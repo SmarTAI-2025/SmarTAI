@@ -81,6 +81,7 @@ from backend.services.recognition_timeouts import SOURCE_TIMEOUT_PROFILE
 from backend.services.teacher_score_constraints import teacher_score_requirements
 from backend.services.stage_provider_routing import (
     StageProviderRoute,
+    baidu_ocr_credential_id,
     list_stage_provider_options,
     resolve_stage_provider_route,
     stage_provider_configuration_fingerprint,
@@ -3582,7 +3583,10 @@ async def confirm_ai_completion(
         provider_id, route = _resolve_recognition_provider(
             owner_id=current.id,
             registry=registry,
-            requested_provider_id=None,
+            # An OCR-only route has never been a rubric language model. Keep
+            # the default LLM until the teacher selects a question model.
+            requested_provider_id=(None if baidu_ocr_credential_id(task.get("question_recognition_provider_id"))
+                                   else task.get("question_recognition_provider_id")),
         )
         input_hash = hashlib.sha256(json.dumps({
             "target_ids": sorted(requested_ids),

@@ -129,7 +129,6 @@ class InitializeContentLanguageRequest(BaseModel):
 
 class UpdateProblemRequest(BaseModel):
     model_config = {"extra": "forbid"}
-    rubric_provider_id: str | None = Field(default=None, min_length=1, max_length=240)
     expected_workflow_revision: int | None = Field(default=None, ge=0)
     number: str | None = Field(default=None, min_length=1, max_length=64)
     type: str | None = Field(default=None, min_length=1, max_length=64)
@@ -768,14 +767,29 @@ def delete_review_student(task_id: str, student_id: str, request: ReviewRowMutat
         expected_revision=request.expected_workflow_revision))
 
 
+class UpdateQuestionProviderRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    provider_id: str = Field(min_length=1, max_length=240)
+    expected_workflow_revision: int = Field(ge=0)
+
+
+@router.put("/{task_id}/question-preparation/provider")
+def update_question_provider(task_id: str, request: UpdateQuestionProviderRequest,
+                             current: User = Depends(require_teacher)):
+    return _domain(lambda: task_facade.update_question_provider(
+        task_id=task_id, owner_id=current.id, provider_id=request.provider_id,
+        expected_revision=request.expected_workflow_revision,
+    ))
+
+
 @router.put("/{task_id}/problems/{q_id}")
 def update_problem(task_id: str, q_id: str, request: UpdateProblemRequest,
                    current: User = Depends(require_teacher)):
     from anyio.from_thread import run
     return _domain(lambda: task_facade.update_problem(
         task_id=task_id, owner_id=current.id, q_id=q_id,
-        patch=request.model_dump(exclude_unset=True, exclude={"expected_workflow_revision", "rubric_provider_id"}),
-        expected_revision=request.expected_workflow_revision, rubric_provider_id=request.rubric_provider_id, run_async=run,
+        patch=request.model_dump(exclude_unset=True, exclude={"expected_workflow_revision"}),
+        expected_revision=request.expected_workflow_revision, run_async=run,
     ))
 
 
