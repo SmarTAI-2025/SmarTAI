@@ -205,7 +205,7 @@ def test_changed_inputs_cannot_reuse_failed_only_checkpoint(scenario, change):
     else:
         flow = workflows.get_live_workflow(scenario.task_id, owner_id=scenario.owner)
         workflows.update_workflow(scenario.task_id, owner_id=scenario.owner,
-                                  grading_setup={**flow.grading_setup, "teacher_notes": "Different synthetic policy"})
+                                  grading_setup={**flow.grading_setup, "feedback_tone": "strict"})
     with pytest.raises(VersionConflict):
         scenario.start("unsafe-retry", "failed_only")
     fresh = scenario.start("new-whole-batch")

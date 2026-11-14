@@ -10,7 +10,7 @@ describe("editor conflict boundaries", () => {
   it("accepts legacy grading drafts only when their actual setup baseline still matches", () => {
     const legacy = JSON.stringify({ setup: { strictness: 50 }, experts: [{ id: "unselected", model: "old" }] });
     expect(gradingDraftVersionsMatch(legacy, JSON.stringify({ setup: { strictness: 50 } }))).toBe(true);
-    expect(gradingDraftVersionsMatch(legacy, JSON.stringify({ setup: { strictness: 70 } }))).toBe(false);
+    expect(gradingDraftVersionsMatch(legacy, JSON.stringify({ setup: { feedback_tone: "strict" } }))).toBe(false);
     expect(gradingDraftVersionsMatch(legacy, JSON.stringify({ setup: null }))).toBe(true);
     expect(gradingDraftVersionsMatch("invalid", JSON.stringify({ setup: { strictness: 50 } }))).toBe(false);
   });
@@ -22,21 +22,21 @@ describe("editor conflict boundaries", () => {
     expect(taskInputVersion(changed, stage)).not.toBe(taskInputVersion(task, stage));
   });
   it("keeps grading configuration independent of knowledge attachment and readiness polling", () => {
-    const setup = { strictness: 50, selected_provider_ids: ["p"] };
+    const setup = { selected_provider_ids: ["p"] };
     const response = { grading_setup: setup, available_experts: [{ provider_id: "p", enabled: true, model: "m", is_shared: false }] } as unknown as GradingSetupResponse;
     expect(gradingEditorVersion({ ...response, workflow_revision: 10, knowledge: { task_doc_count: 3 } } as GradingSetupResponse)).toBe(gradingEditorVersion(response));
-    expect(gradingEditorVersion({ ...response, grading_setup: { ...response.grading_setup!, strictness: 70 } })).not.toBe(gradingEditorVersion(response));
+    expect(gradingEditorVersion({ ...response, grading_setup: { ...response.grading_setup!, feedback_tone: "strict" } })).not.toBe(gradingEditorVersion(response));
     expect(gradingEditorVersion({ ...response, available_experts: [{ ...response.available_experts[0], enabled: false }] })).toBe(gradingEditorVersion(response));
   });
   it("ignores suggestions before grading settings are saved", () => {
     const response = {
-      grading_setup: null, suggested_setup: { strictness: 50, knowledge_scope: "none" },
+      grading_setup: null, suggested_setup: { knowledge_scope: "none" },
       available_experts: [{ provider_id: "p", enabled: true, model: "m", is_shared: false }],
     } as unknown as GradingSetupResponse;
     const attached = { ...response, workflow_revision: 10,
       suggested_setup: { ...response.suggested_setup!, knowledge_scope: "all_task_docs" as const } };
     expect(gradingEditorVersion(attached)).toBe(gradingEditorVersion(response));
-    expect(gradingEditorVersion({ ...attached, suggested_setup: { ...attached.suggested_setup, strictness: 70, selected_provider_ids: ["new-default"] } })).toBe(gradingEditorVersion(response));
+    expect(gradingEditorVersion({ ...attached, suggested_setup: { ...attached.suggested_setup, feedback_tone: "strict", selected_provider_ids: ["new-default"] } })).toBe(gradingEditorVersion(response));
     expect(gradingEditorVersion({ ...attached, suggested_setup: null })).toBe(gradingEditorVersion(response));
     expect(gradingEditorVersion({ ...attached, available_experts: [{ ...attached.available_experts[0], model: "new-model" }] })).toBe(gradingEditorVersion(response));
     // A change to the persisted scope remains a genuine business change.

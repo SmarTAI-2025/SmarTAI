@@ -63,17 +63,22 @@ def test_existing_teacher_text_is_not_overwritten_or_newly_blocked(criterion):
 
 @pytest.mark.asyncio
 async def test_generated_invalid_percentages_get_existing_bounded_format_repair():
-    first = {"candidates": [c.model_dump() for c in candidates("方法60%，结果60%")]}
-    corrected = {"candidates": [c.model_dump() for c in candidates("方法40%，结果60%")]}
+    from backend.tests.part_rubric_fixtures import definition_for
+    def reply(method, result):
+        wire = definition_for(problem())
+        wire["part_rubric"]["parts"][0]["steps"] = [dict(id="method",criterion="Method",total_pts=method),
+                                                   dict(id="result",criterion="Result",total_pts=result)]
+        return {"candidates":[{**TARGETS[0], "rubric_definition":wire}]}
+    first, corrected = reply(6,6), reply(4,6)
     provider = ReplayProvider(first, corrected)
     p = problem()
     result = await generate_major_question_materials(
         problems_data={"q1": p}, requested_targets=TARGETS, test_case_count=1,
         provider=provider, reporter=AsyncMock(), generation_language="en",
     )
-    assert result[0].text_value == "方法40%，结果60%"
+    assert [s["total_pts"] for s in result[0].rubric_draft["plan"]["part_rubric"]["parts"][0]["steps"]] == [4,6]
     assert len(provider.messages) == 2
     prompt = provider.messages[0][0].content
-    assert "valid alternative methods" in prompt
-    assert "first error" in prompt
+    assert "method-independent" in prompt
+    assert "follow-through" in prompt
     assert "in English" in prompt

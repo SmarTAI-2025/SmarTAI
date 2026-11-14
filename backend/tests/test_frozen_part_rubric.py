@@ -1,0 +1,1806 @@
+import json
+from copy import deepcopy
+from fractions import Fraction
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from backend.agents.incremental_question_preparation import _rows
+from backend.services.part_rubric import AssignmentRubric, PartRubric, read_alternative
+from backend.services.rubric_drafts import (
+    RubricDefinition,
+    generated_rubric,
+    retarget_draft,
+    saved_draft,
+)
+from backend.services.question_structure import validate_rubric_points
+from backend.skills.part_scoring import PartDecision, settle_parts
+
+
+def fixture(name="alternatives"):
+    return json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures"
+            / "part_rubrics"
+            / f"four-question-parts-{name}.json"
+        ).read_text()
+    )
+
+
+def proposed_rates(raw):
+    """Add the model's rate to these pre-deduction-policy example documents."""
+    from backend.services.part_rubric import Alternative
+    result = deepcopy(raw)
+    for part in result["parts"]:
+        alternative = part.setdefault("alternative", {})
+        if Alternative.model_validate(alternative).needs_rate(part["total_pts"]):
+            alternative["deduct_per_error"] = 1
+    return result
+
+
+def question_row(question):
+    return _rows(
+        [
+            dict(
+                number=question["label"],
+                type="计算题",
+                max_score=question["total_pts"],
+                criterion=question.get("teacher_rubric", ""),
+                stem="\n".join(
+                    [
+                        question["stem"],
+                        *[
+                            f"{p['label']} {p['stem']}"
+                            for p in question["parts"]
+                            if p["label"]
+                        ],
+                    ]
+                ),
+            )
+        ]
+    )["q1"]
+
+
+def approved_fixture_draft(row, raw):
+    """This historical paraphrase needs an explicit semantic audit on first use."""
+    import asyncio
+    from backend.services.rubric_drafts import compile_parts_draft
+    from backend.services.teacher_point_allocations import TeacherPolicyUnresolved
+    from backend.tests.test_teacher_policy_audit import PolicyProvider
+
+    with pytest.raises(TeacherPolicyUnresolved) as unresolved:
+        generated_rubric(row, RubricDefinition(part_rubric=raw))
+    issue, = unresolved.value.issues
+    assert issue["source_quote"] == "第一问若仅沿用前一步算错的结果，求顶点这一步保留一半分"
+    assert [(p["step_id"], p["follow_through_pts"]) for p in issue["candidates"]] == [
+        ("sA", 0), ("sB", 0), ("sC", .5)]
+    provider = PolicyProvider(raw)
+    draft = asyncio.run(compile_parts_draft(row, provider))
+    assert len(provider.calls) == 2
+    return row["criterion"], draft
+
+
+@pytest.mark.parametrize("edition", ["v2", "alternatives"])
+def test_approved_files_round_trip_including_singleton_parts_and_duplicate_question_labels(
+    edition,
+):
+    source = fixture(edition)
+    assert (
+        AssignmentRubric.model_validate(source).model_dump(
+            mode="json", exclude_unset=True
+        )
+        == source
+    )
+    for original in source["questions"]:
+        raw = proposed_rates(original)
+        row = question_row(raw)
+        criterion, draft = (approved_fixture_draft(row, raw) if original is source["questions"][0]
+                            else generated_rubric(row, RubricDefinition(part_rubric=raw)))
+        if raw.get("teacher_rubric"):
+            assert criterion == raw["teacher_rubric"]
+        else:
+            row["ai_completion_provenance"] = {
+                "criterion": {"source_kind": "ai_generated"}
+            }
+        row["criterion"] = criterion
+        draft = retarget_draft(draft, {**row, "q_id": "q7"})
+        row["rubric_draft"] = draft.model_dump(mode="json")
+        assert saved_draft(row).plan.plan_id == draft.plan.plan_id
+        assert draft.plan.part_rubric.id == "q7"
+        assert [p.id for p in draft.plan.part_rubric.parts] == [
+            p["id"] for p in raw["parts"]
+        ]
+        summary = validate_rubric_points(
+            criterion,
+            raw["total_pts"],
+            row["question_structure"],
+            rubric_draft=row["rubric_draft"],
+        )
+        assert summary.is_valid
+        if edition == "alternatives":
+            assert [
+                p.alternative.model_dump() for p in draft.plan.part_rubric.parts
+            ] == [p["alternative"] for p in raw["parts"]]
+
+
+@pytest.mark.parametrize(
+    "words,expected",
+    [
+        ("最多给一半分", 3),
+        ("最贵给1/3的分", 2),
+        ("最多给三分之一", 2),
+        ("最多给50%", 3),
+        ("最多给0.5分", 0.5),
+        ("最多给半分", 0.5),
+        ("最高得1/3分", 1 / 3),
+    ],
+)
+def test_teacher_fraction_or_absolute_amount(words, expected):
+    assert float(
+        read_alternative(words, maximum=6).maximum.resolve(6)
+    ) == pytest.approx(expected)
+
+
+def test_reject_uncovered_part_wrong_step_total_and_broken_refs():
+    raw = fixture()["questions"][0]
+    for mutate in [
+        lambda q: q["parts"].pop(),
+        lambda q: q["parts"][0]["steps"][1].update(total_pts=3),
+        lambda q: q["parts"][1].update(answer_refs=["ghost"]),
+    ]:
+        bad = deepcopy(raw)
+        mutate(bad)
+        with pytest.raises(ValidationError):
+            PartRubric.model_validate(bad)
+
+
+def decision(part, answer, **kwargs):
+    return PartDecision.model_validate(
+        dict(
+            part_id=part.id,
+            target_quote=part.stem or "说明检验过程",
+            student_quote=answer,
+            progress="核对作答对所求量的贡献",
+            method="reference",
+            **kwargs,
+        )
+    )
+
+
+def test_nonblank_floor_is_applied_after_unrelated_or_many_real_deductions():
+    question = PartRubric.model_validate(fixture()["questions"][3])
+    (part,) = question.parts
+
+    def grade(answer, status, errors=()):
+        return settle_parts(
+            question,
+            [decision(part, answer, relevance=status, errors=errors)],
+            answer,
+            question.stem,
+        )[0]
+
+    assert grade("与本题无关的等式", "unrelated") == 6
+    assert grade("", "unanswered") == 0
+    answer = "独立验算并订正，" + "，".join(f"错算第{i}项" for i in range(7))
+    errors = [
+        dict(
+            id=f"e{i}",
+            rule_id="dA",
+            evidence=f"错算第{i}项",
+            origin_quote=f"错算第{i}项",
+            reason="独立错误",
+        )
+        for i in range(7)
+    ]
+    assert grade(answer, "partial", errors) == 6
+    with pytest.raises(ValueError, match="Duplicate"):
+        grade(answer, "partial", [errors[0], errors[0]])
+
+
+@pytest.mark.asyncio
+async def test_real_generation_envelope_and_five_part_retry():
+    from backend.agents.ingest_agent import generate_missing_question_materials
+    from backend.agents.question_preparation_agent import (
+        _validate_major_question_candidates,
+    )
+    from backend.tests.test_question_material_format_repair import Provider
+
+    row = _rows(
+        [
+            dict(
+                number="1.12",
+                stem="判断真假。\n"
+                + "\n".join(f"({i}) 陈述{i}。" for i in range(1, 6)),
+                type="计算题",
+                reference_answer="",
+                max_score=10,
+            )
+        ]
+    )["q1"]
+    rules = dict(
+        id="q1",
+        label="1.12",
+        stem="判断真假。",
+        total_pts=10,
+        parts=[
+            dict(
+                id=f"p{i}",
+                label=f"第{i}小问",
+                stem=f"陈述{i}。",
+                total_pts=2,
+                steps=[
+                    dict(id=f"s{i}", criterion="正确得2分，错误得0分。", total_pts=2)
+                ],
+            )
+            for i in range(1, 6)
+        ],
+    )
+    target = dict(target="criterion", q_id="q1", target_id="q1:criterion")
+    bad = deepcopy(rules)
+    bad["parts"].pop(2)
+    bad["parts"][0]["total_pts"] = bad["parts"][0]["steps"][0]["total_pts"] = 4
+    provider = Provider(
+        [
+            json.dumps(
+                {
+                    "candidates": [
+                        {
+                            **target,
+                            "rubric_definition": {
+                                "part_rubric": value,
+                                "expected_truth_by_part": {
+                                    p["id"]: True for p in value["parts"]
+                                },
+                            },
+                        }
+                    ]
+                }
+            )
+            for value in (bad, rules)
+        ]
+    )
+    feedback = {}
+    for i in range(2):
+        result = await generate_missing_question_materials(
+            {"q1": row},
+            [target],
+            1,
+            provider,
+            allow_partial=True,
+            repair_feedback=feedback,
+        )
+        if i == 0:
+            assert not result and "Missing subparts" in feedback["q1:criterion"]
+        else:
+            _validate_major_question_candidates("q1", [target], result, row)
+    sent = provider.calls[-1]
+    schema = json.loads(sent[0].content.split("Rubric definition schema:\n")[1])
+    assert schema["required"] == ["part_rubric"]
+    assert "Missing subparts" in sent[1].content
+    assert [
+        p["total_pts"] for p in result[0].rubric_draft["plan"]["part_rubric"]["parts"]
+    ] == [2] * 5
+
+
+def test_same_target_and_same_student_symbol_at_different_positions_have_distinct_addresses():
+    raw = fixture()["questions"][2]
+    rubric = PartRubric.model_validate(raw)
+    answer = "真\n假\n真\n假"
+    judgments = [
+        PartDecision(
+            part_id=p.id,
+            relevance="complete",
+            target_quote=f"part:{p.id}",
+            student_quote=f"student:{i}",
+            progress="判断本项",
+            method="reference",
+            steps=[
+                dict(
+                    id=p.steps[0].id,
+                    outcome="earned",
+                    evidence=f"student:{i}",
+                    reason="判断正确",
+                )
+            ],
+        )
+        for i, p in enumerate(rubric.parts, 1)
+    ]
+    score, steps = settle_parts(rubric, judgments, answer, raw["stem"])
+    assert score == 2 and [step.score for step in steps] == [0.5] * 4
+    with pytest.raises(ValueError):
+        settle_parts(
+            rubric,
+            [
+                judgments[0].model_copy(update={"target_quote": "part:unknown"}),
+                *judgments[1:],
+            ],
+            answer,
+            raw["stem"],
+        )
+
+
+def test_mixed_scoring_correct_and_incorrect_alternatives_and_propagated_error():
+    row = fixture()["questions"][0]
+    row["parts"][0]["alternative"] = dict(
+        maximum={"fraction": "1/2"},
+        minimum={"points": 0},
+        deduct_per_error=0.5,
+        source_quote="另解最多一半分，错一点扣0.5分",
+    )
+    rubric = PartRubric.model_validate(row)
+    first, second, third = rubric.parts
+    answer = "另一种推导，顶点算错\n对称轴正确\n计算 f(0) 正确，漏求 f(3)"
+
+    def alternate(errors):
+        return PartDecision(
+            part_id=first.id,
+            relevance="partial" if errors else "complete",
+            target_quote=f"part:{first.id}",
+            student_quote="student:1",
+            progress="独立建立顶点的求解方法",
+            method="alternative",
+            reference_method="配方",
+            student_method="求导",
+            errors=errors,
+        )
+
+    axis = decision(
+        second,
+        "student:2",
+        relevance="complete",
+        steps=[
+            dict(
+                id=second.steps[0].id,
+                evidence="student:2",
+                outcome="earned",
+                reason="建立对称轴",
+            )
+        ],
+    )
+    values = decision(
+        third,
+        "student:3",
+        relevance="partial",
+        errors=[
+            dict(
+                id="miss",
+                rule_id=third.deductions[0].id,
+                target_id="a19",
+                evidence="student:3",
+                origin_quote="f(3)",
+                reason="漏求第二个函数值",
+            )
+        ],
+    )
+    error = dict(
+        id="error",
+        rule_id="alternative",
+        evidence="student:1",
+        origin_quote="顶点算错",
+        reason="独立算术错误",
+    )
+    for errors, expected in [([], 6), ([error], 5.5)]:
+        score, steps = settle_parts(
+            rubric, [values, axis, alternate(errors)], answer, row["stem"]
+        )
+        assert score == expected
+        assert [s.part_id for s in steps] == [first.id, second.id, third.id]
+        assert sum(s.score for s in steps) == score
+    standard = PartDecision(
+        part_id=first.id,
+        relevance="partial",
+        target_quote=f"part:{first.id}",
+        student_quote="student:1",
+        progress="沿用上一步的数值",
+        method="minor_variant",
+        steps=[
+            dict(
+                id=step.id,
+                evidence=f"student:{i}",
+                reason="核对原解",
+                outcome=("earned", "missed", "follow_through")[i - 1],
+                error_source="student:2" if i == 3 else "",
+            )
+            for i, step in enumerate(first.steps, 1)
+        ],
+    )
+    score, steps = settle_parts(rubric, [standard, axis, values], answer, row["stem"])
+    assert [s.score for s in steps] == [1, 0, 0.5, 2, 2] and score == 5.5
+    with pytest.raises(TypeError, match="allow_partial"):
+        settle_parts(rubric, [standard, axis, values], answer, row["stem"], allow_partial=False)
+
+
+
+def test_circled_latex_judgments_match_without_inventing_a_derivation():
+    from backend.services.true_false_answers import submitted_truth_values
+
+    parts = PartRubric.model_validate(fixture()["questions"][2]).parts
+    assert list(
+        submitted_truth_values(
+            r"① $\sqrt{\quad}$ ② $\times$ ③ $\times$ ④ $\sqrt{}$", parts
+        ).values()
+    ) == [True, False, False, True]
+    assert (
+        submitted_truth_values(r"① $\sqrt{9}$ ② $\times$ ③ $\times$ ④ $\sqrt{}$", parts)
+        is None
+    )
+    assert submitted_truth_values("①真②假②假④真", parts) is None
+
+
+def test_exact_question_header_and_math_markup_do_not_change_truth_values():
+    from backend.services.true_false_answers import submitted_truth_values
+    parts = PartRubric.model_validate(fixture()["questions"][2]).parts
+    text = r"$T_{1.12}$ (1) $\checkmark$ (2) $\times$ (3) $\times$ (4) $\checkmark$"
+    assert list(submitted_truth_values(text, parts, question_label="1.12").values()) == [True, False, False, True]
+    assert submitted_truth_values(text, parts, question_label="1.2") is None
+
+
+def test_alternative_edit_creates_a_new_frozen_revision_and_retains_teacher_source():
+    from backend.models import ProblemInfo
+    from backend.services.rubric_drafts import bind_draft, edit_alternatives
+
+    raw = proposed_rates(fixture()["questions"][0])
+    row = question_row(raw)
+    criterion, old = approved_fixture_draft(row, raw)
+    problem = ProblemInfo.model_validate({**row, "criterion": criterion})
+    presentation = {"question_structure": row["question_structure"], "rubric_draft": old.model_dump(mode="json")}
+    problem._math_rubric_source = {"presentation": presentation}
+    immutable_snapshot = old.plan.model_dump_json()
+    edit_alternatives(problem, presentation, {"pB": "另解最高给一半分，每个独立错误扣0.5分。"})
+    new = saved_draft(problem)
+    assert new and new.plan.plan_id != old.plan.plan_id
+    assert old.plan.model_dump_json() == immutable_snapshot
+    assert new.plan.original_criterion == raw["teacher_rubric"]
+    assert new.plan.part_rubric.rubric_version == old.plan.part_rubric.rubric_version + 1
+    second = new.plan.part_rubric.parts[1]
+    assert second.alternative.maximum.resolve(second.total_pts) == 1
+    assert second.alternative.deduct_per_error == .5
+    assert new.plan.part_rubric.parts[0].steps == old.plan.part_rubric.parts[0].steps
+    assert bind_draft(new, problem, grading_setup={"strictness": 100}) == bind_draft(new, problem, grading_setup={"strictness": 0})
+    with pytest.raises(ValueError, match="Unknown"):
+        edit_alternatives(problem, presentation, {"qGhost": "半分"})
+
+
+def test_teacher_interpretation_preserves_explicit_numbers_and_marks_only_ordinary_gaps():
+    q = proposed_rates(fixture()["questions"][0])
+    row = question_row(q)
+    row["criterion"] = "第一问4分。第一问其他方法最高给本问的1/3，每错一处扣0.5分。"
+    _, draft = generated_rubric(row, RubricDefinition(part_rubric=q))
+    rule = draft.plan.part_rubric
+    assert rule.parts[0].alternative.maximum.fraction == "1/3"
+    assert rule.parts[0].alternative.deduct_per_error == .5
+    assert rule.teacher_gaps and "(2)" in rule.teacher_gaps[0] and "(3)" in rule.teacher_gaps[0]
+    assert rule.teacher_rubric == row["criterion"]
+    q["parts"][0]["total_pts"] = 3
+    q["parts"][0]["steps"][1]["total_pts"] = 1
+    q["parts"][1]["total_pts"] = q["parts"][1]["steps"][0]["total_pts"] = 3
+    with pytest.raises(ValueError, match="Teacher assigned"):
+        generated_rubric(row, RubricDefinition(part_rubric=q))
+
+
+def test_method_and_relevance_are_scoped_per_student_and_question_in_the_review_queue():
+    from backend.agents.multi_expert import _apply_math_review_advisory
+    from backend.models import Correction, ExpertResult
+    from backend.skills.math_grading import TRACE_VERSION
+
+    for method, relevance, expected in [
+        ("alternative","complete",["math_alternative_method"]),
+        ("minor_variant","complete",[]),
+        ("undetermined","uncertain",["math_verification_conflict"]),
+    ]:
+        decision = dict(part_id="p1", target_quote="part:p1", student_quote="student:1",
+                        progress="Reasoned answer", relevance=relevance, method=method)
+        expert = ExpertResult(provider="fixture", score=2, max_score=2, confidence=1, comment="Checked",
+            raw_output=json.dumps({"version": TRACE_VERSION, "plan_id": "frozen", "assessment":{
+                "route_id":"parts","route_reason":"frozen","comment":"Checked","part_decisions":[decision]}}))
+        correction = Correction(q_id="q1", number="1", type="计算题", max_score=2, score=2,
+                                confidence=1, comment="Checked", steps=[], expert_results=[expert])
+        assert _apply_math_review_advisory(correction).review_reasons == expected
+
+
+@pytest.mark.asyncio
+async def test_decision_only_generation_returns_key_reference_and_exact_budgets_in_one_call():
+    from backend.agents.ingest_agent import generate_missing_question_materials
+    from backend.tests.test_question_material_format_repair import Provider
+
+    row = _rows([dict(number="1.12", type="概念题", max_score=10,
+        stem="判断下列陈述正确与否。\n" + "\n".join(f"({i}) 命题{i}。" for i in range(1,6)))])["q1"]
+    targets = [dict(target=name, q_id="q1", target_id=f"q1:{name}")
+               for name in ("reference_answer","criterion")]
+    flags = [True,True,False,True,False]
+    provider = Provider([json.dumps({"judgments": [dict(label=f"({i})", correct=v, explanation=f"推导 {i}。")
+                                                    for i,v in reversed(list(enumerate(flags,1)))]})])
+    ref, rubric = await generate_missing_question_materials({"q1":row}, targets, 1, provider)
+    assert [p["total_pts"] for p in rubric.rubric_draft["plan"]["part_rubric"]["parts"]] == [2]*5
+    assert list(rubric.rubric_draft["plan"]["expected_truth_by_part"].values()) == flags
+    assert ref.text_value.startswith("(1) 正确")
+    existing = {**row, "reference_answer": ref.text_value}
+    repeat, = await generate_missing_question_materials({"q1":existing}, [targets[1]], 1, provider)
+    assert repeat.rubric_draft["plan"]["expected_truth_by_part"] == rubric.rubric_draft["plan"]["expected_truth_by_part"]
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_decision_generation_repairs_a_verdict_that_contradicts_its_reasoning():
+    from backend.services.true_false_answers import generate_decisions, reference_decisions, DecisionReferenceConflict
+    from backend.tests.test_question_material_format_repair import Provider
+
+    def reply(first):
+        return json.dumps({"judgments": [
+            {"label": "(a)", "correct": first, "explanation": "存在反例，原断言不正确。"},
+            {"label": "(b)", "correct": True, "explanation": "The auxiliary assumption is false; the statement is true."},
+        ]})
+    provider = Provider([reply(True), reply(False)])
+    allocated = [({"label": label}, 5) for label in ("(a)", "(b)")]
+    _, key = await generate_decisions({"stem": "判断正误。"}, allocated, "zh", provider)
+    assert key == {"(a)": False, "(b)": True}
+    assert len(provider.calls) == 2 and "(a)" in provider.calls[-1][-1].content
+    with pytest.raises(DecisionReferenceConflict, match="opening verdict"):
+        reference_decisions("(1) True. By contradiction, the statement is false.\n(2) 正确。", ["(1)", "(2)"])
+    for explanation in ("某个中间命题不成立，但原命题为真。", "不过逆命题不成立。"):
+        assert reference_decisions(f"(1) 正确。{explanation}\n(2) 错误。", ["(1)", "(2)"]) == {
+            "(1)": True, "(2)": False}
+
+
+def test_located_error_observation_on_zero_award_cannot_be_deducted_or_allow_credit():
+    rules = PartRubric.model_validate(dict(id="q",label="3",stem="Give the count.",total_pts=2,
+        parts=[dict(id="p",total_pts=2,steps=[dict(id="s",criterion="Correct count.",total_pts=2)])]))
+    decision = PartDecision(part_id="p",target_quote="part:p",student_quote="student:1",progress="Incorrect count",
+        method="reference",relevance="incorrect",
+        errors=[dict(id="reason",rule_id="incorrect",evidence="student:1",origin_quote="student:1",reason="Boundary omitted")])
+    score, lines = settle_parts(rules,[decision],"n-1","Give the count.")
+    assert score == 0 and sum(row.score for row in lines) == 0
+    earned = {**decision.model_dump(), "steps":[dict(id="s",outcome="earned",evidence="student:1",reason="Inconsistent")]}
+    with pytest.raises(ValueError,match="zero credit"):
+        settle_parts(rules,[PartDecision(**earned)],"n-1","Give the count.")
+
+
+def test_base_unit_uses_primary_budgets_and_respects_literal_teacher_increment():
+    from backend.services.part_rubric import _base_unit
+    parts = PartRubric.model_validate(fixture()["questions"][0]).parts
+    assert _base_unit(parts, "") == 1
+    half_parts = PartRubric.model_validate(fixture()["questions"][2]).parts
+    assert _base_unit(half_parts, "") == .5
+    for amount, unit in [(2, 1), (1.25, .25)]:
+        single = half_parts[0]
+        step = single.steps[0].model_copy(update={"total_pts": amount})
+        face = single.model_copy(update={"total_pts": amount, "steps": (step,)})
+        assert _base_unit([face], "") == unit
+        assert _base_unit([face], f"最小给分单位为{amount}分。") == amount
+    assert _base_unit(half_parts, "最小给分单位为0.25分。") == .25
+    with pytest.raises(ValueError, match="increment"):
+        _base_unit(half_parts, "以1分为计分单位。")
+
+
+@pytest.mark.asyncio
+async def test_later_generated_reference_rebinds_key_and_exact_grade_uses_final_reference():
+    from backend.agents.ingest_agent import generate_missing_question_materials
+    from backend.models import ProblemInfo, StudentAnswerInfo
+    from backend.services.math_grading_context import math_plans_context
+    from backend.services.rubric_drafts import bind_draft
+    from backend.skills.base import get_skill_for_type
+    from backend.tests.test_question_material_format_repair import Provider
+
+    row = _rows(
+        [
+            dict(
+                number="QX",
+                type="概念题",
+                stem="判断正误。\n(1) A。\n(2) B。",
+                max_score=10,
+            )
+        ]
+    )["q1"]
+    rules = dict(
+        id="q1",
+        label="QX",
+        stem=row["stem"],
+        total_pts=10,
+        parts=[
+            dict(
+                id=f"p{i}",
+                label=f"({i})",
+                total_pts=5,
+                steps=[dict(id="s", criterion="按判断给分。", total_pts=5)],
+            )
+            for i in (1, 2)
+        ],
+    )
+    criterion, prior = generated_rubric(
+        row,
+        RubricDefinition(
+            part_rubric=rules, expected_truth_by_part={"p1": False, "p2": False}
+        ),
+    )
+    row.update(
+        criterion=criterion,
+        rubric_draft=prior.model_dump(mode="json"),
+        ai_completion_provenance={"criterion": {"source_kind": "ai_generated"}},
+    )
+    target = dict(target_id="q1:reference_answer", q_id="q1", target="reference_answer")
+    provider = Provider(
+        [
+            json.dumps(
+                {"candidates": [{**target, "text_value": "(1) 正确。\n(2) 正确。"}]}
+            )
+        ]
+    )
+    (new,) = await generate_missing_question_materials(
+        {"q1": row}, [target], 1, provider
+    )
+    row.update(reference_answer=new.text_value, rubric_draft=new.rubric_draft)
+    row["ai_completion_provenance"]["reference_answer"] = {
+        "source_kind": "ai_generated"
+    }
+    frozen = bind_draft(saved_draft(row), row)
+    assert frozen.expected_truth_by_part == {"p1": True, "p2": True}
+    problem = ProblemInfo(**row)
+    problem._math_rubric_source = {
+        "presentation": {
+            "ai_completion_provenance": row["ai_completion_provenance"],
+            "question_structure": row["question_structure"],
+        }
+    }
+    from backend.services.math_rubric_plan import MathRubricPlan, _content_hash
+
+    stale = {
+        **frozen.model_dump(exclude={"plan_id"}, mode="json"),
+        "expected_truth_by_part": {"p1": False, "p2": False},
+    }
+    for plan in (frozen, MathRubricPlan(plan_id=_content_hash(stale), **stale)):
+        with math_plans_context({"q1": plan}):
+            result = await get_skill_for_type(problem.type)(
+                provider, language="zh"
+            ).grade(
+                problem,
+                StudentAnswerInfo(
+                    q_id="q1",
+                    number=problem.number,
+                    type=problem.type,
+                    content="(1) 真。(2) 真。",
+                ),
+            )
+        assert result.score == 10 and not result.error_kind
+
+
+def test_retired_partial_credit_switch_cannot_override_a_frozen_rubric():
+    from backend.services.rubric_drafts import bind_draft
+
+    q = proposed_rates(fixture()["questions"][0])
+    source = question_row(q)
+    _, draft = approved_fixture_draft(source, q)
+    yes = bind_draft(draft, source, grading_setup={"allow_partial_credit": True})
+    no = bind_draft(draft, source, grading_setup={"allow_partial_credit": False})
+    assert yes == no == draft.plan
+
+
+
+def test_unreadable_reference_removes_exact_key_and_conflicting_explicit_policy_blocks():
+    from backend.services.true_false_answers import adopted_truth_key
+
+    row = _rows(
+        [
+            dict(
+                number="7",
+                type="概念题",
+                stem="判断正误。\n(1) A。\n(2) B。",
+                max_score=4,
+            )
+        ]
+    )["q1"]
+    structure = dict(
+        id="q1",
+        label="7",
+        stem=row["stem"],
+        total_pts=4,
+        parts=[
+            dict(
+                id=f"p{i}",
+                label=f"({i})",
+                total_pts=2,
+                steps=[dict(id="decision", criterion="判定成立与否", total_pts=2)],
+            )
+            for i in (1, 2)
+        ],
+    )
+    criterion, draft = generated_rubric(
+        row,
+        RubricDefinition(
+            part_rubric=structure, expected_truth_by_part={"p1": False, "p2": True}
+        ),
+    )
+    assert not retarget_draft(
+        draft, {**row, "criterion": criterion, "reference_answer": "见图，第二处不清晰"}
+    ).plan.expected_truth_by_part
+    structure["parts"][0]["steps"][0]["criterion"] = "Answer false"
+    with pytest.raises(ValueError, match="opposite verdicts"):
+        adopted_truth_key(
+            PartRubric.model_validate(structure), row["stem"], "(1) 正确。\n(2) 正确。"
+        )
+
+
+def test_incorrect_deduction_route_requires_and_accepts_located_errors():
+    rules = PartRubric.model_validate(fixture()["questions"][3])
+    part = rules.parts[0]
+    rule = part.deductions[0]
+    d = dict(
+        part_id=part.id,
+        relevance="incorrect",
+        method="reference",
+        target_quote="part:" + part.id,
+        student_quote="student:1",
+        progress="An independent arithmetic error.",
+    )
+    with pytest.raises(ValueError, match="identify the missing obligation"):
+        settle_parts(rules, [PartDecision(**d)], "2+2=5", rules.stem)
+    evidence = dict(
+        id="error",
+        rule_id=rule.id,
+        evidence="student:1",
+        origin_quote="2+2=5",
+        reason="addition error",
+    )
+    score, _ = settle_parts(
+        rules, [PartDecision(**d, errors=[evidence])], "2+2=5", rules.stem
+    )
+    assert score == rules.total_pts - rule.deduct_pts
+
+
+@pytest.mark.asyncio
+async def test_part_review_only_changes_grounded_disputed_items():
+    from backend.models import ProblemInfo, StudentAnswerInfo
+    from backend.services.math_grading_context import math_plans_context
+    from backend.services.rubric_drafts import bind_draft
+    from backend.skills import math_grading as grading
+    from backend.tests.test_math_evidence_reliability import raw_provider
+    from backend.tests.test_math_grading import expert_for
+
+    raw = proposed_rates(fixture()["questions"][2])
+    row = question_row(raw)
+    _, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    p = ProblemInfo(**row)
+    p._math_rubric_source = {
+        "presentation": {"question_structure": row["question_structure"]}
+    }
+    plan = bind_draft(draft, p)
+    a = StudentAnswerInfo(
+        q_id=p.q_id, number=p.number, type=p.type, content="step A\nstep B"
+    )
+    parts = plan.part_rubric.parts
+    decisions = [
+        PartDecision(
+            part_id=part.id,
+            target_quote="part:" + part.id,
+            student_quote="student:1",
+            relevance="complete",
+            method="reference",
+            progress="The cited statement establishes the goal.",
+        )
+        for part in parts
+    ]
+
+    def vote(entries):
+        return grading.FrozenPartAssessment(
+            part_decisions=entries, comment="Checked"
+        ).assessment()
+
+    different = list(decisions)
+    different[0] = decisions[0].model_copy(update={"relevance": "incorrect"})
+    # Distinct wire encodings for a full, single-step answer have the same scoring effect.
+    different[1] = PartDecision.model_validate(
+        {
+            **decisions[1].model_dump(),
+            "method": "minor_variant",
+            "steps": [
+                {
+                    "id": parts[1].steps[0].id,
+                    "outcome": "earned",
+                    "evidence": "student:1",
+                    "reason": "Equivalent notation.",
+                }
+            ],
+        }
+    )
+    experts = [
+        expert_for(vote(items), plan, a.content) for items in (different, decisions)
+    ]
+
+    def edit(index, entries):
+        return {
+            "expert_index": index,
+            "comment": "Rechecked.",
+            "reason": "Source establishes the goal.",
+            "decisions": [entry.model_dump(mode="json") for entry in entries],
+        }
+
+    provider, calls = raw_provider(
+        json.dumps({"revisions": [edit(0, decisions[:1]), edit(1, decisions[1:2])]})
+    )
+    with math_plans_context({p.q_id: plan}), grading.math_review_scope():
+        result = await grading.review_math_experts(p, a, experts, provider)
+    assert len(calls) == 1
+    assert json.loads(calls[0][-1].content)["disputed_item_ids"] == [parts[0].id]
+    assert result[0].score == p.max_score
+    assert (
+        grading.read_math_trace(result[0])["assessment"]["part_decisions"][1:]
+        == grading.read_math_trace(experts[0])["assessment"]["part_decisions"][1:]
+    )
+    assert (
+        grading.read_math_trace(result[1])["review_diagnostic"]["validation_issues"][0][
+            0
+        ]["code"]
+        == "review_changed_undisputed_award"
+    )
+    with pytest.raises(ValueError, match="undisputed"):
+        grading._apply_part_revision(
+            vote(different),
+            grading.PartRevision(**edit(0, [decisions[0]] * 2)),
+            {parts[0].id},
+        )
+
+
+    invalid = decisions[0].model_copy(update={"target_quote": "absent target"})
+    with pytest.raises(ValueError) as rejected:
+        grading._assessment_validator(plan, a, p)(vote([invalid, *decisions[1:]]))
+    repair = json.loads(rejected.value.repair_context)
+    assert "score" not in repair["draft"] and "route_id" not in repair["draft"]
+    assert grading.FrozenPartAssessment.model_validate(repair["draft"]).part_decisions[0] == invalid
+
+    # A unanimous pair also receives the independent relevance check. An empty
+    # valid revision list settles that check without inventing a CAS conflict.
+    trace = grading.read_math_trace(experts[1])
+    trace.update(review_pending=True, relevance_review_pending=True, review_advisory=True)
+    pending = experts[1].model_copy(update={"raw_output": json.dumps(trace)})
+    provider, calls = raw_provider(json.dumps({"revisions": []}))
+    with math_plans_context({p.q_id: plan}), grading.math_review_scope():
+        checked = await grading.review_math_experts(p, a, [pending, pending], provider)
+    assert len(calls) == 1
+    assert json.loads(calls[0][-1].content)["disputed_item_ids"] == sorted(part.id for part in parts)
+    for expert in checked:
+        verdict = grading.read_math_trace(expert)
+        assert expert.score == p.max_score
+        assert not verdict["review_pending"]
+        assert not verdict.get("review_advisory")
+        assert not verdict.get("relevance_review_pending")
+
+
+@pytest.mark.asyncio
+async def test_unsplit_proof_cannot_turn_its_steps_into_extra_parts_on_retry():
+    from backend.agents.ingest_agent import generate_missing_question_materials
+    from backend.tests.test_question_material_format_repair import Provider
+
+    row = _rows(
+        [dict(number="9", stem="Prove the equivalence.", type="推理题", max_score=6)]
+    )["q1"]
+    target = dict(target_id="q1:criterion", q_id="q1", target="criterion")
+    step = dict(id="s", criterion="Establish the implication.", total_pts=3)
+    rule = dict(
+        id="q1",
+        label="9",
+        stem=row["stem"],
+        total_pts=6,
+        parts=[dict(id=key, total_pts=3, steps=[step]) for key in ("a", "b")],
+    )
+    provider = Provider(
+        [
+            json.dumps(
+                {"candidates": [{**target, "rubric_definition": {"part_rubric": rule}}]}
+            )
+        ]
+    )
+    feedback = {}
+    assert not await generate_missing_question_materials(
+        {"q1": row}, [target], 1, provider, allow_partial=True, repair_feedback=feedback
+    )
+    assert "received 2" in feedback[target["target_id"]]
+    schema = json.loads(
+        provider.calls[0][0].content.split("Rubric definition schema:\n")[1]
+    )
+    shape = schema["$defs"]["PartRubric"]["properties"]["parts"]
+    assert shape["minItems"] == shape["maxItems"] == 1
+
+
+@pytest.mark.asyncio
+async def test_lifted_definition_preserves_structure_and_never_overrides_conflicting_wrapper():
+    from backend.agents.ingest_agent import generate_missing_question_materials
+    from backend.tests.test_question_material_format_repair import Provider
+
+    raw = fixture()["questions"][1]
+    row = question_row(raw)
+    raw = proposed_rates(raw)
+    target = {"target_id": "q1:criterion", "q_id": "q1", "target": "criterion"}
+    for wrapper, ok in [
+        ({}, True),
+        ({"rubric_definition": {"part_rubric": {**raw, "total_pts": 99}}}, False),
+    ]:
+        provider = Provider(
+            [json.dumps({"candidates": [{**target, "part_rubric": raw, **wrapper}]})]
+        )
+        feedback = {}
+        result = await generate_missing_question_materials(
+            {"q1": row},
+            [target],
+            1,
+            provider,
+            allow_partial=True,
+            repair_feedback=feedback,
+        )
+        assert bool(result) == ok
+        assert len(provider.calls) == 1
+        if ok:
+            rules = result[0].rubric_draft["plan"]["part_rubric"]
+            assert (
+                sum(step["total_pts"] for step in rules["parts"][0]["steps"])
+                == raw["total_pts"]
+            )
+        else:
+            assert "one authoritative definition" in feedback["q1:criterion"]
+
+
+def test_multiline_support_keeps_each_real_span_and_cannot_merge_error_origins():
+    from backend.services.math_source_evidence import source_catalog
+    from backend.skills.part_scoring import _student_span, _supporting_spans
+
+    text = "first implication\n\nunrelated remark\nlast implication"
+    catalog = source_catalog(text, "", "")
+    assert [s.text for s in _supporting_spans(text, "student:1, student:4", catalog)] == [
+        "first implication", "last implication"
+    ]
+    for bad in ("student:1, student:2", "student:1, student:99", "student:1, invented"):
+        assert not _supporting_spans(text, bad, catalog)
+    assert not _student_span(text, "student:1, student:4")
+    assert not _student_span("student:1, student:4", "student:1, student:4")
+    rules = PartRubric.model_validate(dict(id="q", label="1", stem="Prove the claim.", total_pts=2,
+        parts=[dict(id="p", total_pts=2, steps=[dict(id="s", total_pts=2, criterion="Establish the claim.")])]))
+    data = dict(part_id="p", method="reference", relevance="complete", target_quote="part:p",
+                student_quote="student:1, student:4", progress="The two implications establish the claim.",
+                steps=[{"id":"s","outcome":"earned","evidence":"student:1, student:4","reason":"Both implications."}])
+    assert settle_parts(rules, [PartDecision(**data)], text, rules.stem)[0] == 2
+    data["steps"][0]["evidence"] = "student:1, student:99"
+    with pytest.raises(ValueError, match="located student evidence"):
+        settle_parts(rules, [PartDecision(**data)], text, rules.stem)
+
+
+def test_source_correspondence_guidance_applies_to_supplied_names_across_domains():
+    from types import SimpleNamespace
+
+    from backend.services.part_rubric import supplied_notation
+    from backend.skills.math_grading import _part_proof_evidence
+
+    examples = (
+        "The two names x, y denote the same real input. Prove that the predicates are equivalent.",
+        "Show the presentations agree (where u may be replaced by the letter v).",
+        "在给定对应下证明两个条件等价。",
+    )
+    for stem in examples:
+        quote = supplied_notation(stem)
+        assert quote and quote in stem
+        assert "one-way implication" in _part_proof_evidence(
+            SimpleNamespace(type="推理题", stem=stem)
+        )
+    stem = "Construct a bijection. Prove it is injective and surjective."
+    assert not supplied_notation(stem)
+    for obligation in (
+        "Show that this term can be replaced by zero.",
+        "Decide whether f can be replaced by g.",
+        "证明该量可以用零代替。",
+        "Can u be replaced by v?",
+    ):
+        assert not supplied_notation(obligation)
+    assert "one-way implication" not in _part_proof_evidence(
+        SimpleNamespace(type="推理题", stem=stem)
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_points_decisions_reach_fallback_with_the_rejected_field_and_addresses():
+    from backend.models import ProblemInfo, StudentAnswerInfo
+    from backend.services.math_grading_context import math_plans_context
+    from backend.services.rubric_drafts import bind_draft
+    from backend.skills.base import get_skill_for_type
+    from backend.tests.test_question_material_format_repair import Provider
+
+    row = _rows(
+        [dict(number="8", type="推理题", stem="Prove the identity.", max_score=4)]
+    )["q1"]
+    raw = dict(
+        id="q1",
+        label="8",
+        stem=row["stem"],
+        total_pts=4,
+        parts=[
+            dict(
+                id="p",
+                total_pts=4,
+                alternative={"deduct_per_error": 1},
+                steps=[dict(id="s", total_pts=4, criterion="Establish the identity.")],
+            )
+        ],
+    )
+    criterion, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    row.update(
+        criterion=criterion,
+        ai_completion_provenance={"criterion": {"source_kind": "ai_generated"}},
+    )
+    p = ProblemInfo(**row)
+    p._math_rubric_source = {
+        "presentation": {
+            k: row[k] for k in ("question_structure", "ai_completion_provenance")
+        }
+    }
+    frozen = bind_draft(retarget_draft(draft, row), p)
+    a = StudentAnswerInfo(
+        q_id="q1", number="8", type=p.type, content="u=u by reflexivity."
+    )
+
+    def decision_with(quote):
+        return json.dumps(
+            {
+                "comment": "Checked",
+                "part_decisions": [
+                    dict(
+                        part_id="p",
+                        target_quote="part:p",
+                        student_quote=quote,
+                        progress="The written identity is reflexive.",
+                        method="reference",
+                        relevance="complete",
+                    )
+                ],
+            }
+        )
+
+    provider = Provider(
+        [
+            decision_with("unlocated rewrite"),
+            decision_with("unlocated rewrite"),
+            decision_with([1]),
+        ]
+    )
+    with math_plans_context({"q1": frozen}):
+        vote = await get_skill_for_type(p.type)(provider, language="zh").grade(p, a)
+    assert vote.score == 4 and not vote.error_kind and len(provider.calls) == 3
+    repair = json.loads(
+        provider.calls[-1][-1].content.split(
+            "Repair the rejected decision from the original sources:\n"
+        )[1]
+    )
+    assert "student_quote did not locate" in repair["validation_feedback"]
+    assert repair["student_line_ids"] == ["student:1"]
+    assert repair["parts"] == [
+        {
+            "part_id": "p",
+            "target_quote": "part:p",
+            "step_ids": ["s"],
+            "deduction_rule_ids": [],
+            "alternative_error_id": "alternative",
+        }
+    ]
+
+
+def test_addressed_repair_never_fabricates_lines_or_accepts_boolean_positions():
+    from backend.skills.math_grading import AddressedPartAssessment
+    from backend.skills.part_scoring import _supporting_spans
+    from backend.services.math_source_evidence import source_catalog
+
+    args = dict(
+        part_id="p",
+        target_quote="part:p",
+        student_quote=[1, 3],
+        progress="Both cited facts are needed.",
+        method="reference",
+        relevance="complete",
+        steps=[
+            dict(
+                id="s",
+                outcome="earned",
+                evidence=[1, 3],
+                reason="Apply the two identities.",
+            )
+        ],
+    )
+
+    def parsed():
+        return (
+            AddressedPartAssessment.model_validate(
+                {"comment": "Checked.", "part_decisions": [args]}
+            )
+            .assessment()
+            .part_decisions[0]
+        )
+
+    actual = parsed()
+    assert actual.student_quote == actual.steps[0].evidence == "student:1, student:3"
+    src = "x=0\nother\ny=0"
+    assert [
+        s.text
+        for s in _supporting_spans(
+            src, actual.student_quote, source_catalog(src, "", "")
+        )
+    ] == ["x=0", "y=0"]
+    args["student_quote"] = [1, 4]
+    assert not _supporting_spans(
+        src, parsed().student_quote, source_catalog(src, "", "")
+    )
+    args["student_quote"] = [True]
+    with pytest.raises(ValueError, match="positive integers"):
+        parsed()
+
+
+def test_deduction_evidence_remains_available_only_on_the_applicable_repair_contract():
+    from backend.skills.math_grading import AddressedPartAssessment, StepsOnlyRepair
+
+    event = dict(
+        id="err",
+        rule_id="penalty",
+        evidence="student:1",
+        origin_quote="x=0",
+        reason="Wrong value.",
+    )
+    raw = dict(
+        comment="Checked",
+        part_decisions=[
+            dict(
+                part_id="p",
+                relevance="partial",
+                method="reference",
+                student_quote=[1],
+                target_quote="part:p",
+                progress="The expression has a local error.",
+                errors=[event],
+            )
+        ],
+    )
+    assert AddressedPartAssessment.model_validate(raw).part_decisions[0].errors
+    with pytest.raises(ValueError, match="errors empty"):
+        StepsOnlyRepair.model_validate(raw)
+    schema = StepsOnlyRepair.model_json_schema()
+    assert schema["$defs"]["PartDecision"]["properties"]["errors"]["maxItems"] == 0
+    assert "#/$defs/ErrorEvent" not in json.dumps(schema)
+
+
+@pytest.mark.parametrize("cap,expected", [({"fraction": "1/1"}, 6), ({"fraction": "1/3"}, 2), ({"points": 0}, 0)])
+def test_complete_independent_method_settles_at_its_own_frozen_cap(cap, expected):
+    # The determinant proof does not contain either step of the elimination proof.
+    question = "Prove that the matrix is invertible."
+    rules = PartRubric.model_validate(dict(
+        id="q", label="1", stem=question, total_pts=6, parts=[dict(
+            id="p", total_pts=6, alternative=dict(maximum=cap, source_quote="Alternative method policy"),
+            steps=[dict(id="row", criterion="Reduce by row operations", total_pts=3),
+                   dict(id="pivots", criterion="Identify both pivots", total_pts=3)],
+        )],
+    ))
+    answer = "Its determinant is 1*3 - 2*1 = 1. Hence it is invertible."
+    complete = PartDecision(
+        part_id="p", target_quote="part:p", student_quote="student:1", relevance="complete",
+        method="alternative", reference_method="Gaussian elimination", student_method="determinant",
+        progress="The calculated nonzero determinant implies invertibility.",
+    )
+    score, rows = settle_parts(rules, [complete], answer, question)
+    assert score == expected
+    assert [(r.part_id, r.item_id, r.score) for r in rows] == [("p", None, expected)]
+    if expected == 6:
+        # Even a teacher-authored main route cannot impose steps on a classified alternative.
+        teacher_part = rules.parts[0].model_copy(update={"alternative": type(rules.parts[0].alternative)()})
+        teacher_rules = rules.model_copy(update={"rubric_origin": "teacher", "parts": (teacher_part,)})
+        assert settle_parts(teacher_rules, [complete], answer, question)[0] == 6
+    if expected:
+        with pytest.raises(ValueError):
+            settle_parts(rules, [complete.model_copy(update={"relevance": "partial"})], answer, question)
+    for changes in ({"method": "minor_variant"},
+                    {"student_quote": "student:9"},
+                    {"steps": [dict(id="row", outcome="missed", evidence="", reason="No row operations")]}):
+        invalid = PartDecision.model_validate({**complete.model_dump(), **changes})
+        with pytest.raises(ValueError):
+            settle_parts(rules, [invalid], answer, question)
+
+
+@pytest.mark.asyncio
+async def test_multiline_missed_step_supplies_one_earlier_origin_at_the_grading_entry():
+    from backend.models import ProblemInfo, StudentAnswerInfo
+    from backend.services.math_grading_context import math_plans_context
+    from backend.services.rubric_drafts import bind_draft
+    from backend.skills.base import get_skill_for_type
+    from backend.tests.test_question_material_format_repair import Provider
+
+    row = _rows([dict(number="2", type="计算题", stem="Find the sum, then double it.", max_score=4)])["q1"]
+    raw = dict(id="q1", label="2", stem=row["stem"], total_pts=4, parts=[dict(
+        id="p", total_pts=4, alternative={"deduct_per_error": 1}, steps=[dict(id="sum", criterion="Sum both entries", total_pts=2),
+                                      dict(id="double", criterion="Double the sum", total_pts=2, follow_through_keep=.5)])])
+    criterion, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    row.update(criterion=criterion, ai_completion_provenance={"criterion": {"source_kind": "ai_generated"}})
+    p = ProblemInfo(**row)
+    p._math_rubric_source = {"presentation": {k: row[k] for k in ("question_structure", "ai_completion_provenance")}}
+    answer = StudentAnswerInfo(q_id=p.q_id, number=p.number, type=p.type, content="Entries: 1 and 2.\nSum = 4.\nDouble = 8.")
+    plan = bind_draft(retarget_draft(draft, row), p)
+    vote = dict(part_id="p", target_quote="part:p", student_quote="student:1, student:2, student:3",
+                progress="The sum is wrong, but the doubling is consistent.", relevance="partial", method="reference",
+                steps=[dict(id="sum", outcome="missed", evidence="student:1, student:2", reason="Bad addition."),
+                       dict(id="double", outcome="follow_through", evidence="student:3", error_source="student:2",
+                            reason="Doubled the stated sum.")])
+    response = json.dumps(dict(comment="Checked", confidence=.9, part_decisions=[vote]))
+    provider = Provider([response] * 4)
+    with math_plans_context({p.q_id: plan}):
+        result = await get_skill_for_type(p.type)(provider, language="en").grade(p, answer)
+    assert result.error_kind is None
+    assert result.score == 1 and [step.score for step in result.steps] == [0, 1]
+    assert all("residual concern" in call[-1].content for call in provider.calls[1:])
+
+    def settle(earlier, origin):
+        data = deepcopy(vote)
+        data["steps"][0]["evidence"] = earlier
+        data["steps"][1]["error_source"] = origin
+        return settle_parts(plan.part_rubric, [PartDecision(**data)], answer.content, p.stem)[0]
+
+    assert settle("student:1, student:2", "student:2") == 1
+    for support, origin in [("student:1, student:3", "student:2"), ("student:1, student:2", "student:1, student:2"),
+                             ("student:1, student:3", "student:3"), ("student:1, student:9", "student:1")]:
+        with pytest.raises(ValueError, match="distinct earlier error"):
+            settle(support, origin)
+
+
+def _method_rule(words="", maximum=10, *, part_id="p1"):
+    stem = "必须用配方法解方程 x²−3x+2=0。"
+    row = _rows(
+        [
+            dict(
+                number="1",
+                type="计算题",
+                stem=stem,
+                max_score=maximum,
+                criterion=f"正确结果给{maximum}分。{words}",
+                reference_answer="配方后两根为1和2。",
+            )
+        ]
+    )["q1"]
+    rules = PartRubric(
+        id="q1",
+        label="1",
+        stem=stem,
+        total_pts=maximum,
+        parts=[
+            dict(
+                id=part_id,
+                alternative={"deduct_per_error": 1},
+                total_pts=maximum,
+                steps=[dict(id="s1", total_pts=maximum, criterion="解出方程")],
+            )
+        ],
+    )
+    _, draft = generated_rubric(row, RubricDefinition(part_rubric=rules))
+    return row, draft
+
+
+def _factorization_score(rules, **overrides):
+    answer = "(x−1)(x−2)=0，所以 x 为1或2。"
+    fields = dict(
+        part_id=rules.parts[0].id,
+        target_quote=rules.stem,
+        student_quote=answer,
+        progress="因式分解得两根",
+        method="alternative",
+        student_method="因式分解",
+        reference_method="配方",
+        relevance="complete",
+    )
+    return settle_parts(
+        rules,
+        [PartDecision(**{**fields, **overrides})],
+        overrides.get("student_quote", answer),
+        rules.stem,
+    )[0]
+
+
+@pytest.mark.parametrize(
+    ("words", "score"),
+    [
+        ("其他正确解法给满分", 10),
+        ("其他正确解法给10分", 10),
+        ("Alternative methods get full credit", 10),
+        ("Alternative methods receive full marks", 10),
+        ("其他解法不得分", 0),
+        ("其他解法不给分", 0),
+        ("其他解法给0分", 0),
+        ("", 0),
+    ],
+)
+def test_explicit_method_exception_from_teacher_through_frozen_settlement(words, score):
+    row, draft = _method_rule(words)
+    frozen = saved_draft({**row, "rubric_draft": draft.model_dump(mode="json")})
+    assert _factorization_score(frozen.plan.part_rubric) == score
+
+
+def test_alternative_loss_rate_and_cumulative_cap_are_independent_and_round_trip():
+    from backend.services.part_rubric import alternative_text
+
+    row, draft = _method_rule("其他解法最高5分，每错一处扣1分，最多扣2.5分。")
+    rule = draft.plan.part_rubric
+    part = rule.parts[0]
+    for zh in (True, False):
+        reread = read_alternative(alternative_text(part, zh=zh), maximum=10)
+        assert (
+            reread.maximum.resolve(10) == 5
+            and reread.max_deduction == 2.5
+            and reread.deduct_per_error == 1
+        )
+    lines = ["代入符号错误", "独立算错系数", "遗漏解", "验算错误"]
+    for count, expected in [(1, 4), (2, 3), (3, 2.5), (4, 2.5)]:
+        answer = "\n".join(lines[:count])
+        events = [
+            dict(id=f"e{i}", rule_id="alternative", evidence=line, origin_quote=line, reason=line)
+            for i, line in enumerate(lines[:count])
+        ]
+        assert (
+            _factorization_score(rule, student_quote=answer, relevance="partial", errors=events)
+            == expected
+        )
+    with pytest.raises(ValueError, match="Conflicting"):
+        read_alternative("其他解法给满分，但最高5分", maximum=10)
+    with pytest.raises(ValueError, match="Conflicting"):
+        read_alternative("每错扣1分，每错扣2分", maximum=10)
+
+
+def _persist_method_question():
+    from backend.db import assignment_repository
+    from backend.tests.test_major_question_structure import _seed_task_with_two_part_question
+
+    owner, task = "alternative-owner", "alternative-task"
+    _seed_task_with_two_part_question(owner, task)
+    (old,) = assignment_repository.list_questions(task, teacher_id=owner)
+    row, draft = _method_rule()
+    pres = {
+        "rubric_draft": draft.model_dump(mode="json"),
+        "question_structure": row["question_structure"],
+        "rubric_schema_version": 2,
+    }
+    assignment_repository.update_question(
+        task,
+        teacher_id=owner,
+        q_id="q1",
+        expected_version=old.version,
+        stem=row["stem"],
+        criterion=row["criterion"],
+        reference_answer=row["reference_answer"],
+        source={"presentation": pres},
+    )
+    return dict(task_id=task, owner_id=owner, q_id="q1")
+
+
+def test_atomic_rule_edit_validates_new_budget_and_can_fix_a_stale_override():
+    from backend.db import assignment_repository
+    from backend.domain.errors import ValidationError as ApiValidationError
+    from backend.services import task_facade
+    from backend.services.math_grading_context import problem_from_question
+
+    args = _persist_method_question()
+
+    def record():
+        return assignment_repository.list_questions(args["task_id"], teacher_id=args["owner_id"])[0]
+
+    before = record()
+    with pytest.raises(ApiValidationError, match="budget"):
+        task_facade.update_problem(
+            **args,
+            patch=dict(
+                max_score=5,
+                criterion="正确结果给5分。",
+                alternative_rule_edits={"p1": "其他解法最高8分"},
+            ),
+        )
+    assert (record().version, record().source) == (before.version, before.source)
+    result = task_facade.update_problem(
+        **args,
+        patch=dict(
+            max_score=20, criterion="正确结果给20分。", alternative_rule_edits={"p1": "其他解法最高15分"}
+        ),
+    )
+    assert result["problem"]["max_score"] == 20
+    displayed, = result["problem"]["alternative_rules"]
+    assert displayed["id"] == "p1" and read_alternative(displayed["text"], maximum=20).maximum.points == 15
+    stored = saved_draft(problem_from_question(record())).plan.part_rubric
+    assert stored.parts[0].steps[0].total_pts == 20 and stored.parts[0].alternative.maximum.points == 15
+    with pytest.raises(ApiValidationError):
+        task_facade.update_problem(**args, patch=dict(max_score=5, criterion="正确结果给5分。"))
+    # Recreate a row saved with the formerly accepted over-budget override.
+    old = record()
+    assignment_repository.update_question(
+        args["task_id"],
+        teacher_id=args["owner_id"],
+        q_id="q1",
+        expected_version=old.version,
+        max_score=5,
+        criterion="正确结果给5分。",
+    )
+    assert saved_draft(problem_from_question(record())) is None
+    task_facade.update_problem(**args, patch=dict(alternative_rule_edits={"p1": "其他解法最高5分"}))
+    saved = record()
+    overrides = saved.source["presentation"]["alternative_rules"]
+    assert overrides["p1"]["text"] == "其他解法最高5分"
+    row, candidate = _method_rule(maximum=5, part_id="regenerated")
+    _, regenerated = generated_rubric(
+        {**row, "alternative_rules": overrides}, RubricDefinition(part_rubric=candidate.plan.part_rubric)
+    )
+    assert _factorization_score(regenerated.plan.part_rubric) == 5
+
+
+def test_existing_full_credit_draft_is_rebound_without_rewriting_historical_plan():
+    from backend.services.math_rubric_plan import _content_hash
+    from backend.services.rubric_drafts import RubricDraft, bind_draft
+
+    row, draft = _method_rule("其他正确解法给满分")
+    stored = draft.model_dump(mode="json")
+    stored.pop("alternative_policy_version")
+    old_body = stored["plan"]
+    old_body["part_rubric"]["parts"][0]["alternative"]["maximum"] = {"points": 0.0}
+    old_body["plan_id"] = _content_hash({k: v for k, v in old_body.items() if k != "plan_id"})
+    old = RubricDraft.model_validate(stored)
+    problem = {**row, "rubric_draft": stored}
+    adopted = saved_draft(problem)
+    assert _factorization_score(adopted.plan.part_rubric) == 10
+    assert bind_draft(old, problem).part_rubric == adopted.plan.part_rubric
+    assert adopted.plan.plan_id != old.plan.plan_id
+    assert _factorization_score(old.plan.part_rubric) == 0
+
+
+def test_ordinary_deduction_rate_and_money_cap_are_bound_to_the_same_rule():
+    row, _ = _method_rule()
+    row["criterion"] = "每错扣1分，最多扣2.5分。"
+    definition = RubricDefinition(
+        part_rubric=dict(
+            id="q1",
+            label="1",
+            stem=row["stem"],
+            total_pts=10,
+            parts=[
+                dict(id="p", total_pts=10, deductions=[dict(id="e", criterion="独立错误", deduct_pts=1)])
+            ],
+        )
+    )
+    _, draft = generated_rubric(row, definition)
+    rule = draft.plan.part_rubric
+    assert rule.parts[0].deductions[0].max_deduction == 2.5
+    lines = ["第一处符号错", "第二处计算错", "第三处结论错"]
+    events = [
+        dict(id=f"e{i}", rule_id="e", evidence=line, origin_quote=line, reason=line)
+        for i, line in enumerate(lines)
+    ]
+    assert (
+        _factorization_score(
+            rule, student_quote="\n".join(lines), relevance="partial", method="reference", errors=events
+        )
+        == 7.5
+    )
+
+
+def test_same_total_reallocation_uses_new_part_budgets_and_rejects_replaced_parts():
+    from backend.db import assignment_repository
+    from backend.domain.errors import ValidationError as ApiValidationError
+    from backend.services import task_facade
+    from backend.tests.test_major_question_structure import _seed_task_with_two_part_question
+
+    owner, task = "reallocate-owner", "reallocate-task"
+    _seed_task_with_two_part_question(owner, task)
+    (old,) = assignment_repository.list_questions(task, teacher_id=owner)
+    structure = old.source["presentation"]["question_structure"]
+    parts = [
+        dict(
+            id=key,
+            label=part["label"],
+            stem=part["stem"],
+            total_pts=points,
+            alternative={"deduct_per_error": 1},
+            steps=[dict(id="answer", total_pts=points, criterion="答对")],
+        )
+        for key, points, part in zip(["pa", "pb"], [4, 6], structure["subparts"])
+    ]
+    row = dict(
+        q_id="q1",
+        number=old.number,
+        type=old.type,
+        stem=old.stem,
+        reference_answer=old.reference_answer,
+        criterion=old.criterion,
+        max_score=10,
+        question_structure=structure,
+    )
+    _, draft = generated_rubric(
+        row,
+        RubricDefinition(
+            part_rubric=dict(id="q1", label=old.number, stem=old.stem, total_pts=10, parts=parts)
+        ),
+    )
+    assignment_repository.update_question(
+        task,
+        teacher_id=owner,
+        q_id="q1",
+        expected_version=old.version,
+        source={
+            "presentation": {**old.source["presentation"], "rubric_draft": draft.model_dump(mode="json")}
+        },
+    )
+    args = dict(owner_id=owner, task_id=task, q_id="q1")
+    criterion = "(a) 2 分\n(b) 8 分"
+    with pytest.raises(ApiValidationError):
+        task_facade.update_problem(
+            **args, patch={"criterion": criterion, "alternative_rule_edits": {"pa": "最多给3分"}}
+        )
+    result = task_facade.update_problem(
+        **args, patch={"criterion": criterion, "alternative_rule_edits": {"pb": "最多给7分"}}
+    )
+    displayed = {item["id"]: item for item in result["problem"]["alternative_rules"]}
+    assert set(displayed) == {"pa", "pb"} and displayed["pb"]["label"] == "(b)"
+    assert read_alternative(displayed["pb"]["text"], maximum=8).maximum.points == 7
+    # A semantic wording edit now recompiles instead of losing the part by
+    # text identity. Without an enabled provider it must preserve the old row.
+    before, = assignment_repository.list_questions(task, teacher_id=owner)
+    with pytest.raises(ApiValidationError, match="No enabled recognition provider"):
+        task_facade.update_problem(
+            **args,
+            patch={
+                "stem": "(a) 完成计算。\n(b) 全新的问题。",
+                "alternative_rule_edits": {"pb": "最多给5分"},
+            },
+        )
+    after, = assignment_repository.list_questions(task, teacher_id=owner)
+    assert (after.version, after.stem, after.criterion, after.source) == (
+        before.version, before.stem, before.criterion, before.source)
+    with pytest.raises(ApiValidationError):
+        task_facade.update_problem(
+            **args,
+            expected_revision=result["workflow_revision"],
+            patch={"alternative_rule_edits": {"unknown": "给满分"}},
+        )
+
+
+@pytest.mark.parametrize("separator", ["，", "；", "。", "\n"])
+def test_alternative_deduction_continuations_bind_even_across_punctuation(separator):
+    text = separator.join(["其他解法最高5分", "每个独立错误扣.5分", "累计最多扣2分"])
+    _, draft = _method_rule(text)
+    policy = draft.plan.part_rubric.parts[0].alternative
+    assert (policy.maximum.points, policy.deduct_per_error, policy.max_deduction) == (5, 0.5, 2)
+    assert policy.source_quote == text
+
+
+def test_fraction_of_full_marks_does_not_add_a_second_award():
+    assert read_alternative("另解最高给1/3的满分", maximum=6).maximum.resolve(6) == 2
+    with pytest.raises(ValueError):
+        read_alternative("另解不能得满分", maximum=6)
+
+
+@pytest.mark.asyncio
+async def test_three_proof_votes_keep_their_source_claims_when_one_asks_for_a_judgment_check():
+    from backend.models import ProblemInfo, StudentAnswerInfo
+    from backend.services.math_grading_context import math_plans_context
+    from backend.skills import math_grading as grading
+    from backend.tests.test_math_evidence_reliability import raw_provider
+    from backend.tests.test_math_grading import expert_for
+
+    raw = proposed_rates(fixture()["questions"][2])
+    row = {**question_row(raw), "type": "推理题"}
+    row["criterion"], draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    row["ai_completion_provenance"] = {"criterion": {"source_kind": "ai_generated"}}
+    p = ProblemInfo(**row)
+    p._math_rubric_source = {"presentation": {key: row[key] for key in ("question_structure", "ai_completion_provenance")}}
+    plan = retarget_draft(draft, row).plan
+    a = StudentAnswerInfo(q_id=p.q_id, number=p.number, type=p.type, content="The identity follows by substitution.")
+    decisions = [PartDecision(part_id=part.id, target_quote="part:"+part.id, student_quote="student:1",
+                              method="reference", relevance="complete", progress="The identity follows.")
+                 for part in plan.part_rubric.parts]
+    def make_vote(index):
+        entries = list(decisions)
+        if index == 2:
+            entries[0] = entries[0].model_copy(update={"relevance":"incorrect"})
+        assessment = grading.FrozenPartAssessment(
+            part_decisions=entries, needs_review=(index==2), comment="Check the inference.",
+            claims=[grading.Claim(id=f"claim-{index}", kind="statement", source_id="student:1",
+                                  quote=a.content, verdict="supported", reason="Written on the first line.")]).assessment()
+        return expert_for(assessment, plan, a.content)
+    votes = [make_vote(i) for i in range(3)]
+    provider, calls = raw_provider(json.dumps({"revisions":[{"expert_index":2, "reason":"Substitution proves the identity.",
+                            "comment":"Complete.", "decisions":[decisions[0].model_dump(mode="json")]}]}))
+    with math_plans_context({p.q_id:plan}), grading.math_review_scope():
+        result = await grading.review_math_experts(p,a,votes,provider)
+    assert len(calls)==1 and [v.score for v in result] == [p.max_score]*3
+    payload = json.loads(calls[0][-1].content)
+    assert payload["experts"][2]["concern"]=="Check the inference."
+    assert "PartRevision" in calls[0][0].content and "claim-2" not in calls[0][-1].content
+    before = grading.read_math_trace(votes[2])["assessment"]["claims"]
+    assert grading.read_math_trace(result[2])["assessment"]["claims"][0]["id"]==before[0]["id"]
+
+
+def test_parallel_inputs_get_a_stable_budget_before_freezing_and_reject_shifted_points():
+    from backend.services.part_rubric import parallel_part_budgets
+
+    row = _rows([dict(number="4", type="计算题", max_score=10,
+                      stem="本题满分10分。计算下列各式的值。\n" + "\n".join(
+                          f"({i}) {i}+1" for i in range(1, 9)))])["q1"]
+    budget = parallel_part_budgets(row)
+    assert list(budget.values()) == [1.25] * 8
+    raw = dict(id="q", label="4", stem=row['stem'], total_pts=10, parts=[dict(
+        id=f"p{i}", label=label, total_pts=value, steps=[dict(id="s", criterion="Result", total_pts=value)],
+        alternative=dict(deduct_per_error=0.25)) for i, (label, value) in enumerate(budget.items())])
+    _, adopted = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    assert [p.total_pts for p in adopted.plan.part_rubric.parts] == [1.25] * 8
+    for part, new in zip(raw["parts"], [1.5, 1.0]):
+        part['total_pts'] = part['steps'][0]['total_pts'] = new
+    with pytest.raises(ValueError, match="parallel parts"):
+        generated_rubric(row, RubricDefinition(part_rubric=raw))
+    assert not parallel_part_budgets({**row, 'teacher_subpart_points': {'(2)': 1}})
+    assert not parallel_part_budgets({**row, 'criterion': '第2小问满分1分'})
+
+
+def test_parallel_inputs_with_remainder_and_distinct_local_obligations():
+    from backend.services.part_rubric import parallel_part_budgets
+
+    def budgets(stem):
+        return list(parallel_part_budgets(_rows([dict(number="2", type="计算题", max_score=10,
+                                                      stem=stem)])["q1"]).values())
+
+    assert budgets('Translate each word.\n(a) pine\n(b) elm\n(c) fir') == [3.34, 3.33, 3.33]
+    assert budgets('Calculate the following.\n(a) 3+4 [2 points]\n(b) 2+1') == []
+    assert budgets('Calculate the following.\n(a) 3+4\n(b) Explain why the formula works.') == []
+
+
+@pytest.mark.parametrize('amount', [0.3, 0.6, 3.34])
+def test_fractional_full_credit_and_nonblank_floor_match_the_exact_declared_budget(amount):
+    from backend.services.part_rubric import read_alternative
+
+    row = _rows([dict(number='1', type='计算题', max_score=amount, stem='Compute the sum.',
+                      criterion=f'非空作答最低{amount:g}分')])['q1']
+    raw = dict(id='q1', label='1', stem=row['stem'], total_pts=amount, nonblank_floor={'pts':amount},
+               parts=[dict(id='p1', total_pts=amount, alternative={'deduct_per_error':0.1},
+                           steps=[dict(id='s1', criterion='Correct sum', total_pts=amount)])])
+    _, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    assert draft.plan.part_rubric.parts[0].total_pts == amount
+    assert read_alternative('另解给满分', maximum=amount).maximum.resolve(amount) == Fraction(str(amount))
+    with pytest.raises(ValueError):
+        read_alternative(f'另解最高给 {amount + 0.01:g} 分', maximum=amount)
+
+
+def test_proof_inferences_support_multiple_goals_from_the_same_source():
+    from backend.skills.math_grading import ProofPartAssessment, ProofPartRevision
+
+    question = "By completing the square, solve the equation."
+    rules = PartRubric.model_validate(dict(id="q", label="1", stem=question, total_pts=10,
+        parts=[dict(id="p", total_pts=10, alternative={"maximum":{"points":5}, "deduct_per_error":1},
+                    steps=[dict(id="square", criterion="Complete the square", total_pts=6),
+                           dict(id="roots", criterion="Find both roots", total_pts=4)])]))
+    answer = "(x-2)^2=1, so x=1 or 3."
+    decision = dict(part_id="p", target_quote="part:p", student_quote="student:1", method="minor_variant",
+                    relevance="complete", progress="The square and its two roots follow on one line.",
+                    inferences=[dict(evidence="student:1", reasoning="Taking either sign of the square root establishes both solutions.",
+                                     result="entailed", step_ids=["square","roots"])])
+    assessment = ProofPartAssessment.model_validate(dict(comment="Complete",part_decisions=[decision])).assessment()
+    revision = ProofPartRevision.model_validate(dict(expert_index=0, reason="Both signs covered.", comment="Complete", decisions=[decision]))
+    assert assessment.part_decisions == revision.decisions
+    score, rows = settle_parts(rules, assessment.part_decisions, answer, question)
+    assert score == 10 and [row.score for row in rows] == [6,4]
+    partial = {**decision, "relevance":"partial", "inferences":[
+        dict(evidence="student:1",reasoning="The square is obtained.",result="written",step_ids=["square"]),
+        dict(evidence="student:1",reasoning="Only one sign was taken.",result="gap",step_ids=["roots"])]}
+    graded = ProofPartAssessment.model_validate(dict(comment="Missing one branch",part_decisions=[partial])).assessment()
+    assert settle_parts(rules,graded.part_decisions,"(x-2)^2=1, so x=3.",question)[0] == 6
+    duplicated = {**decision,"inferences":decision["inferences"]*2}
+    invalid = ProofPartAssessment.model_validate(dict(comment="Duplicate",part_decisions=[duplicated])).assessment()
+    with pytest.raises(ValueError, match="required step IDs"):
+        settle_parts(rules,invalid.part_decisions,answer,question)
+
+
+def test_source_proof_goals_preserve_budgets_and_select_one_loss_per_goal():
+    from backend.services.proof_goals import PartGoals, ProofGoal, ProofOutline, compile_proof_goals, use_source_goals
+    from backend.skills.part_scoring import ErrorEvent
+
+    stem = "Prove existence. Decide uniqueness."
+    original = PartRubric.model_validate(dict(id="q",label="1",stem=stem,total_pts=10,parts=[
+        dict(id="p",total_pts=10,steps=[dict(id="s",criterion="Original proof",total_pts=10)],
+             alternative=dict(maximum={"points":5},deduct_per_error=1))]))
+    goals=[ProofGoal(target=t,source_id="question:1",points=n,partial_progress="Derives a necessary condition",
+                     sufficient_argument="Checks all conditions")
+           for t,n in (("Prove existence.",6),("Decide uniqueness.",4))]
+    outline=ProofOutline(parts=[PartGoals(part_id="p",goals=goals)])
+    rub=compile_proof_goals(original,outline,{"p":{"question:1":stem}},language="en")
+    part=rub.parts[0]
+    assert [r.deduct_pts for r in part.deductions]==[6,3,1,4,2,1]
+    from backend.skills.math_grading import _part_proof_evidence
+    from backend.models import ProblemInfo
+
+    problem = ProblemInfo(q_id="q", number="1", type="推理题", stem=stem, criterion="", max_score=10)
+    assert "intermediate fact" in _part_proof_evidence(problem, rub)
+    single = part.model_copy(update={"deductions": part.deductions[:3]})
+    assert _part_proof_evidence(problem, rub.model_copy(update={"parts": (single,)})) == _part_proof_evidence(problem)
+    assert part.alternative==original.parts[0].alternative and original.parts[0].steps
+    answer="I derive a necessary condition.\nI claim this proves existence."
+    def event(rule,line):
+        return ErrorEvent(id=rule,rule_id=rule,evidence=line,origin_quote=line,reason="Necessary condition is insufficient.")
+    partial=PartDecision(part_id="p",method="reference",relevance="partial",target_quote="part:p",
+                         student_quote="student:1",progress="A distinct proof is still needed.",
+                         errors=[event("goal1.partial","student:1")])
+    assert settle_parts(rub,[partial],answer,stem)[0]==7
+    with pytest.raises(ValueError,match="one level of loss"):
+        settle_parts(rub,[partial.model_copy(update={"errors":(*partial.errors,event("goal1.local","student:2"))})],answer,stem)
+    with pytest.raises(ValueError,match="source|line ID"):
+        compile_proof_goals(original,outline,{"p":{"question:2":stem}},language="en")
+    row=dict(stem=stem,type="推理题")
+    assert use_source_goals(row)
+    for changed in (dict(criterion="Use the given point scheme"),dict(stem=stem+" [3 marks for the witness]"),
+                    dict(rubric_draft={"teacher":"adopted"}),dict(type="计算题")):
+        assert not use_source_goals({**row,**changed})
+
+    from backend.skills.math_grading import ProofPartAssessment
+
+    # A consequence can be paid in full although the writer never expands the substitution.
+    # A different goal that needs a new argument must retain its frozen partial deduction.
+    submitted = "The pair (1, 2) solves x+y=3.\nI have found precisely one pair."
+    checks = [
+        dict(group="goal1", evidence="student:1", implication="Direct substitution gives 1+2=3.",
+             repair="none"),
+        dict(group="goal2", evidence="student:2", implication="One example does not rule out another solution.",
+             remaining="An independent uniqueness argument is required.", origin_quote="student:2", repair="partial"),
+    ]
+    decision = dict(part_id="p", method="reference", relevance="partial", target_quote="part:p",
+                    student_quote="student:1", progress="Existence is established.", goal_findings=checks)
+    assessed = ProofPartAssessment.model_validate(dict(comment="Uniqueness remains open.", part_decisions=[decision]))
+    assert settle_parts(rub, assessed.assessment().part_decisions, submitted, stem)[0] == 8
+    shortened = dict(decision, goal_findings=checks[1:])
+    missing = ProofPartAssessment.model_validate(dict(comment="Incomplete ledger", part_decisions=[shortened]))
+    with pytest.raises(ValueError, match="each frozen proof group"):
+        settle_parts(rub, missing.assessment().part_decisions, submitted, stem)
+
+
+def test_omitted_target_address_matches_its_quote_and_stays_in_part_scope():
+    question = "An unrelated task.\nConstruct a witness.\nVerify uniqueness."
+    scope = "Construct a witness.\nVerify uniqueness."
+    answer = "Here is a specific witness."
+    rub = PartRubric.model_validate(dict(id="q", label="1", stem=question, total_pts=10,
+        parts=[dict(id="p", label="(2)", stem=scope, total_pts=10,
+                    deductions=[dict(id="loss", criterion="An original obligation remains open", deduct_pts=2)])]))
+
+    def read(*locations):
+        errors = [dict(id=f"e{i}", rule_id="loss", evidence=source, origin_quote=source,
+                       reason="The requested argument is missing.") for i, source in enumerate(locations)]
+        data = dict(part_id="p", target_quote="part:p", student_quote="student:1", method="reference",
+                    relevance="partial", progress="The witness was supplied.", errors=errors)
+        return settle_parts(rub, [PartDecision.model_validate(data)], answer, question)[0]
+
+    assert read("question:3") == read("Verify uniqueness.") == 8
+    with pytest.raises(ValueError, match="Duplicate error origin"):
+        read("question:3", "Verify uniqueness.")
+    with pytest.raises(ValueError, match="must cite"):
+        read("question:1")
+
+
+@pytest.mark.asyncio
+async def test_generated_proof_targets_cannot_quote_a_sibling_part(monkeypatch):
+    from backend.services import proof_goals as goals
+
+    task = "Prove each claim.\n(a) Show closure.\n(b) Show uniqueness."
+    parts = [dict(id=pid, label=label, stem=stem, total_pts=5,
+                  steps=[dict(id="s", criterion=stem, total_pts=5)])
+             for pid, label, stem in (("pa", "(a)", "Show closure."), ("pb", "(b)", "Show uniqueness."))]
+    rubric = PartRubric.model_validate(dict(id="q", label="1", stem="Prove each claim.", total_pts=10, parts=parts))
+
+    async def reply(provider, *, user_prompt, validate_output, **kwargs):
+        if kwargs.get("output_model") is goals.ProofGoalAudit:
+            outline = json.loads(user_prompt)["proposal"]
+            audit = goals.ProofGoalAudit(parts=[dict(part_id=p["part_id"], verdict="consistent",
+                                                  reason="Each part requests the quoted result.") for p in outline["parts"]])
+            validate_output(audit)
+            return audit, None
+        source = json.loads(user_prompt)["parts"]
+        assert source[0]["allowed_goal_sources"] == {"part1:1": "Show closure."}
+        assert source[1]["allowed_goal_sources"] == {"part2:1": "Show uniqueness."}
+        outline = {"parts": [dict(part_id=p["id"], goals=[dict(target=p["stem"], points=5,
+            source_id=f"part{i}:1", partial_progress="A necessary condition.", sufficient_argument="A complete proof.")])
+            for i, p in enumerate(parts, 1)]}
+        correct = goals.ProofOutline.model_validate(outline)
+        outline["parts"][0]["goals"][0]["source_id"] = "part2:1"
+        with pytest.raises(goals.StructuredOutputInvalidError, match="pa:"):
+            validate_output(goals.ProofOutline.model_validate(outline))
+        validate_output(correct)
+        return correct, None
+
+    monkeypatch.setattr(goals, "structured_llm_call", reply)
+    result = await goals.prepare_source_goals(None, task, rubric, language="en")
+    assert [(part.id, part.total_pts) for part in result.parts] == [("pa", 5), ("pb", 5)]

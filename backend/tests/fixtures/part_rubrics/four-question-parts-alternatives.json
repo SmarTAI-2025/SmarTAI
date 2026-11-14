@@ -1,0 +1,372 @@
+{
+  "schema_version": 2,
+  "assignment_id": "hw_demo",
+  "questions": [
+    {
+      "id": "qA",
+      "label": "1.2.3",
+      "stem": "已知 f(x)=x²−4x+3。",
+      "total_pts": 10,
+      "base_unit_pts": 1,
+      "rubric_version": 2,
+      "rubric_origin": "teacher",
+      "teacher_rubric": "第一问按1、2、1分分步；第二问2分。第三问满分4分，每个错误的函数值扣2分，每个函数值最多扣一次。第一问若仅沿用前一步算错的结果，求顶点这一步保留一半分。",
+      "answer_segments": [
+        {
+          "id": "a17",
+          "text": "f(x)=(x−2)²−1，顶点为(2,−1)。",
+          "origin": "teacher"
+        },
+        {
+          "id": "a18",
+          "text": "代入 x=0，得到 f(0)=3。",
+          "origin": "ai"
+        },
+        {
+          "id": "a19",
+          "text": "代入 x=3，得到 f(3)=9−12+3=0。",
+          "origin": "ai"
+        }
+      ],
+      "parts": [
+        {
+          "id": "pA",
+          "label": "(1)",
+          "stem": "用配方法求顶点。",
+          "total_pts": 4,
+          "steps": [
+            {
+              "id": "sA",
+              "criterion": "正确写出配方需要补入的常数4。",
+              "total_pts": 1,
+              "follow_through_keep": null
+            },
+            {
+              "id": "sB",
+              "criterion": "完成配方，得到 (x−2)²−1。",
+              "total_pts": 2,
+              "follow_through_keep": null,
+              "answer_refs": [
+                "a17"
+              ]
+            },
+            {
+              "id": "sC",
+              "criterion": "从配方形式正确读出顶点。",
+              "total_pts": 1,
+              "follow_through_keep": 0.5,
+              "answer_refs": [
+                "a17"
+              ]
+            }
+          ],
+          "origin_overrides": {
+            "criterion": "ai"
+          },
+          "alternative": {
+            "maximum": {
+              "points": 0
+            },
+            "minimum": {
+              "points": 0
+            },
+            "deduct_per_error": null,
+            "source_quote": "用配方法求顶点。"
+          }
+        },
+        {
+          "id": "pB",
+          "label": "(2)",
+          "stem": "写出对称轴。",
+          "total_pts": 2,
+          "steps": [
+            {
+              "id": "sD",
+              "criterion": "对称轴为 x=2。",
+              "total_pts": 2,
+              "follow_through_keep": null
+            }
+          ],
+          "origin_overrides": {
+            "criterion": "ai"
+          },
+          "alternative": {
+            "maximum": {
+              "fraction": "1/1"
+            },
+            "minimum": {
+              "points": 0
+            },
+            "deduct_per_error": null,
+            "source_quote": ""
+          }
+        },
+        {
+          "id": "pC",
+          "label": "(3)",
+          "stem": "分别求 f(0) 和 f(3)。",
+          "total_pts": 4,
+          "deductions": [
+            {
+              "id": "dB",
+              "criterion": "应求的函数值经核对不正确或遗漏；按 f(0)、f(3) 各计至多一次。",
+              "count_by": "target_item",
+              "deduct_pts": 2
+            }
+          ],
+          "answer_refs": [
+            "a18",
+            "a19"
+          ],
+          "alternative": {
+            "maximum": {
+              "fraction": "1/1"
+            },
+            "minimum": {
+              "points": 0
+            },
+            "deduct_per_error": null,
+            "source_quote": ""
+          }
+        }
+      ],
+      "nonblank_floor": {
+        "pts": 0
+      }
+    },
+    {
+      "id": "qB",
+      "label": "1.2.3",
+      "stem": "一块长3米、宽2米的地面，铺设费每平方米7元。付50元，应找回多少？写出计算过程。",
+      "total_pts": 6,
+      "base_unit_pts": 1,
+      "rubric_version": 1,
+      "rubric_origin": "ai",
+      "parts": [
+        {
+          "id": "pD",
+          "label": null,
+          "stem": null,
+          "total_pts": 6,
+          "steps": [
+            {
+              "id": "sG",
+              "criterion": "正确求出面积6平方米。",
+              "total_pts": 2,
+              "follow_through_keep": null
+            },
+            {
+              "id": "sH",
+              "criterion": "用面积乘单价，求出铺设费42元。",
+              "total_pts": 2,
+              "follow_through_keep": null
+            },
+            {
+              "id": "sI",
+              "criterion": "用实付减铺设费，求出找零8元。",
+              "total_pts": 2,
+              "follow_through_keep": null
+            }
+          ],
+          "alternative": {
+            "maximum": {
+              "fraction": "1/1"
+            },
+            "minimum": {
+              "points": 0
+            },
+            "deduct_per_error": null,
+            "source_quote": ""
+          }
+        }
+      ],
+      "nonblank_floor": {
+        "pts": 0
+      }
+    },
+    {
+      "id": "qC",
+      "label": "3",
+      "stem": "判断下列命题的真假。",
+      "total_pts": 2,
+      "base_unit_pts": 0.5,
+      "rubric_version": 1,
+      "rubric_origin": "teacher",
+      "teacher_rubric": "每小问0.5分，判断正确得全分，否则0分。",
+      "parts": [
+        {
+          "id": "pE",
+          "label": "(1)",
+          "stem": "2 是偶数。",
+          "total_pts": 0.5,
+          "steps": [
+            {
+              "id": "sJ",
+              "criterion": "判真。",
+              "total_pts": 0.5,
+              "follow_through_keep": 0
+            }
+          ],
+          "origin_overrides": {
+            "criterion": "ai"
+          },
+          "alternative": {
+            "maximum": {
+              "fraction": "1/1"
+            },
+            "minimum": {
+              "points": 0
+            },
+            "deduct_per_error": null,
+            "source_quote": ""
+          }
+        },
+        {
+          "id": "pF",
+          "label": "(2)",
+          "stem": "1 是素数。",
+          "total_pts": 0.5,
+          "steps": [
+            {
+              "id": "sK",
+              "criterion": "判假。",
+              "total_pts": 0.5,
+              "follow_through_keep": 0
+            }
+          ],
+          "origin_overrides": {
+            "criterion": "ai"
+          },
+          "alternative": {
+            "maximum": {
+              "fraction": "1/1"
+            },
+            "minimum": {
+              "points": 0
+            },
+            "deduct_per_error": null,
+            "source_quote": ""
+          }
+        },
+        {
+          "id": "pG",
+          "label": "(3)",
+          "stem": "0 是偶数。",
+          "total_pts": 0.5,
+          "steps": [
+            {
+              "id": "sL",
+              "criterion": "判真。",
+              "total_pts": 0.5,
+              "follow_through_keep": 0
+            }
+          ],
+          "origin_overrides": {
+            "criterion": "ai"
+          },
+          "alternative": {
+            "maximum": {
+              "fraction": "1/1"
+            },
+            "minimum": {
+              "points": 0
+            },
+            "deduct_per_error": null,
+            "source_quote": ""
+          }
+        },
+        {
+          "id": "pH",
+          "label": "(4)",
+          "stem": "9 是素数。",
+          "total_pts": 0.5,
+          "steps": [
+            {
+              "id": "sM",
+              "criterion": "判假。",
+              "total_pts": 0.5,
+              "follow_through_keep": 0
+            }
+          ],
+          "origin_overrides": {
+            "criterion": "ai"
+          },
+          "alternative": {
+            "maximum": {
+              "fraction": "1/1"
+            },
+            "minimum": {
+              "points": 0
+            },
+            "deduct_per_error": null,
+            "source_quote": ""
+          }
+        }
+      ],
+      "nonblank_floor": {
+        "pts": 0
+      }
+    },
+    {
+      "id": "qD",
+      "label": "4",
+      "stem": "给出一种方法检验一组计算结果，并说明检验过程。",
+      "total_pts": 10,
+      "base_unit_pts": 1,
+      "rubric_version": 1,
+      "rubric_origin": "teacher",
+      "teacher_rubric": "每个独立错误扣1分，同一错误后传不重复扣；只要有作答至少6分。",
+      "parts": [
+        {
+          "id": "pI",
+          "label": null,
+          "stem": null,
+          "total_pts": 10,
+          "deductions": [
+            {
+              "id": "dA",
+              "criterion": "出现一个有作答证据支持的独立错误。",
+              "count_by": "independent_error",
+              "deduct_pts": 1
+            }
+          ],
+          "answer_refs": [
+            "a41",
+            "a42",
+            "a43"
+          ],
+          "alternative": {
+            "maximum": {
+              "fraction": "1/1"
+            },
+            "minimum": {
+              "points": 0
+            },
+            "deduct_per_error": null,
+            "source_quote": ""
+          }
+        }
+      ],
+      "nonblank_floor": {
+        "pts": 6
+      },
+      "answer_segments": [
+        {
+          "id": "a41",
+          "text": "逐项列出待检验的计算式及其条件，分别选取逆运算或独立重算作检验。",
+          "origin": "ai"
+        },
+        {
+          "id": "a42",
+          "text": "例如检验 27+38=65，可由 65−38=27 核对加数；若遇到 9×7=62，独立重算得到 63，故应纠正。",
+          "origin": "ai"
+        },
+        {
+          "id": "a43",
+          "text": "列出检验通过的项目、需改正的项目和改正依据，回到原问题核对单位或其他限定。",
+          "origin": "ai"
+        }
+      ]
+    }
+  ]
+}

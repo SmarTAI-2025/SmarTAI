@@ -194,7 +194,7 @@ def correction_to_result(
     return education.GradeResultDTO(
         id="", grading_run_id=run_id, submission_revision_id=revision_id,
         question_id=question.id, student_id=student_id, q_id=q_id,
-        ai_score=None if hard_failure else round_ai_score(normalized_score, question.max_score),
+        ai_score=None if hard_failure else round_ai_score(normalized_score, question.max_score, normalized_steps),
         ai_max_score=question.max_score,
         ai_comment=correction.comment or "",
         ai_steps=[s.model_dump() for s in normalized_steps],

@@ -1452,7 +1452,7 @@ def _result_to_dto(record: GradeResultRecord,
                    review: TeacherReviewRecord | None = None) -> education.GradeResultDTO:
     from backend.services.grading_scores import round_ai_score
 
-    ai_score = round_ai_score(record.ai_score, record.ai_max_score)
+    ai_score = round_ai_score(record.ai_score, record.ai_max_score, record.ai_steps)
     review_dto = _review_to_dto(review) if review is not None else None
     return education.GradeResultDTO(
         id=record.id,

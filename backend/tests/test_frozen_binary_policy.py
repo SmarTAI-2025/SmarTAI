@@ -10,7 +10,7 @@ from backend.services.question_preparation_artifacts import ArtifactProblemV1
 from backend.skills.calculation import CalculationSkill
 from backend.skills import math_grading as grading
 from backend.tests.test_math_rubric_plan import ReplayProvider
-from backend.tests.test_unified_rubric_drafts import choice_definition, generate_choice
+from backend.tests.test_unified_rubric_drafts import choice_definition, archived_choice
 
 
 @pytest.fixture(autouse=True)
@@ -22,7 +22,7 @@ def isolated_checks(monkeypatch):
 async def saved_choice(title, language, *, definition=None):
     definition = definition or choice_definition()
     definition["routes"][0]["description"] = title
-    row = await generate_choice(definition=definition, language=language)
+    row = archived_choice(definition=definition, language=language)
     row = ArtifactProblemV1.model_validate_json(ArtifactProblemV1(**row).model_dump_json()).model_dump(mode="json")
     registry = SimpleNamespace(pick_default=AsyncMock(side_effect=AssertionError("No second compiler")))
     plans = await prepare_math_plans({"q1": row}, registry)
@@ -147,10 +147,9 @@ async def test_generated_partial_policies_remain_partial_across_renderings(kind,
 async def test_new_teacher_exception_cannot_be_overridden_by_frozen_constraint():
     from backend.services.math_rubric_plan import _with_preferences
     _, _, plans = await saved_choice("选择题评分", "en")
-    bound = _with_preferences(plans["q1"], {"teacher_notes": "例外：少选且无错选得两分。"})
-    assert bound.binary_policy is None
-    score, _ = grading.score_assessment(grading.MathAssessment(**proposed_grade(False)), bound, "A")
-    assert score == 2
+    from backend.services.rubric_drafts import RetiredGradingNotesError
+    with pytest.raises(RetiredGradingNotesError):
+        _with_preferences(plans["q1"], {"teacher_notes": "例外：少选且无错选得两分。"})
 
 
 @pytest.mark.asyncio
@@ -162,11 +161,9 @@ async def test_completing_reference_keeps_verified_policy_when_new_metadata_chan
     raw = choice_question()
     definition = choice_definition()
     definition["routes"][0]["description"] = "原评分标题"
-    first = ReplayProvider({"candidates": [dict(target_id="q1:criterion", q_id="q1", target="criterion",
-        rubric_definition=definition)]})
-    candidates = await generate_missing_question_materials({"q1": raw}, [dict(target_id="q1:criterion",
-        q_id="q1", target="criterion")], 6, first, generation_language="zh", allow_partial=True)
-    raw.update(criterion=candidates[0].text_value, rubric_draft=candidates[0].rubric_draft,
+    from backend.services.rubric_drafts import RubricDefinition, generated_rubric
+    criterion, frozen = generated_rubric(raw, RubricDefinition.model_validate(definition), language="zh")
+    raw.update(criterion=criterion, rubric_draft=frozen.model_dump(mode="json"),
                ai_completion_provenance={"criterion": {"source_kind": "ai_generated"}})
     prior = saved_draft(raw)
     assert prior and prior.plan.binary_policy
@@ -181,7 +178,7 @@ async def test_completing_reference_keeps_verified_policy_when_new_metadata_chan
     current = saved_draft(raw)
     assert current and current.plan.binary_policy == prior.plan.binary_policy
     assert current.plan.routes == prior.plan.routes
-    assert len(first.messages) == len(second.messages) == 1
+    assert len(second.messages) == 1
     registry = SimpleNamespace(pick_default=AsyncMock(side_effect=AssertionError("No recompile")))
     plans = await prepare_math_plans({"q1": raw}, registry)
     assert grading.score_assessment(grading.MathAssessment(**proposed_grade(False)), plans["q1"], "A")[0] == 0

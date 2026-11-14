@@ -45,6 +45,8 @@ class MajorQuestionStructureV1(BaseModel):
     major_order: int = Field(ge=0)
     shared_stem: str = ""
     subparts: list[MajorQuestionSubpartV1] = Field(default_factory=list, max_length=100)
+    # High-water mark, so removing a part never gives its identity to a new one.
+    next_subpart_index: int = Field(default=1, ge=1)
     structure_source: Literal[
         "deterministic", "bounded_repair", "legacy_single_question"
     ] = "deterministic"
@@ -54,6 +56,9 @@ class MajorQuestionStructureV1(BaseModel):
     def _unique_order_and_labels(self):
         orders = [part.order for part in self.subparts]
         labels = [_normalize_label(part.label) for part in self.subparts]
+        ids = [part.subpart_id for part in self.subparts]
+        if len(ids) != len(set(ids)):
+            raise ValueError("subpart identities must be unique")
         if orders != list(range(len(self.subparts))):
             raise ValueError("subpart orders must be contiguous from zero")
         if len(labels) != len(set(labels)):
@@ -226,6 +231,7 @@ def build_major_question_structure(
         "deterministic", "bounded_repair", "legacy_single_question"
     ] = "deterministic",
     review_status: Literal["confirmed", "needs_review"] = "confirmed",
+    previous: Mapping[str, Any] | MajorQuestionStructureV1 | None = None,
 ) -> MajorQuestionStructureV1:
     stem = str(problem.get("stem") or "")
     matches = _select_subpart_matches(stem)
@@ -239,11 +245,39 @@ def build_major_question_structure(
             order=index,
             stem=stem[match.end():end].strip(),
         ))
+    prior = (previous if isinstance(previous, MajorQuestionStructureV1)
+             else MajorQuestionStructureV1.model_validate(previous) if previous else None)
+    next_index = max([prior.next_subpart_index, *(int(p.subpart_id[2:]) + 1 for p in prior.subparts)]) if prior else 1
+    if prior:
+        # Unchanged content identifies moves/insertions before labels are used.
+        # Labels are editable presentation, not the persistent rule identity.
+        assigned = {}
+        used = set()
+        for i, part in enumerate(subparts):
+            matches = [p for p in prior.subparts if scoring_stem(p.stem) == scoring_stem(part.stem)]
+            if len(matches) == 1 and sum(scoring_stem(p.stem) == scoring_stem(part.stem) for p in subparts) == 1:
+                assigned[i] = matches[0].subpart_id
+                used.add(matches[0].subpart_id)
+        if len(prior.subparts) == len(subparts):
+            for i, part in enumerate(subparts):
+                matches = [p for p in prior.subparts if p.label == part.label and p.subpart_id not in used]
+                if i not in assigned and len(matches) == 1:
+                    assigned[i] = matches[0].subpart_id
+                    used.add(matches[0].subpart_id)
+        for i, part in enumerate(subparts):
+            identity = assigned.get(i)
+            if identity is None:
+                identity = f"sp{next_index}"
+                next_index += 1
+            subparts[i] = part.model_copy(update={"subpart_id": identity})
+    else:
+        next_index = len(subparts) + 1
     return MajorQuestionStructureV1(
         major_number=str(problem.get("number") or ""),
         major_order=major_order,
         shared_stem=shared_stem,
         subparts=subparts,
+        next_subpart_index=next_index,
         structure_source=structure_source,
         review_status=review_status,
     )
@@ -458,12 +492,23 @@ def _decimal_text(value: Decimal) -> str:
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
+def _ordinal_token(token: str) -> str:
+    if not token.isascii() or not token.isdigit() or not 1 <= int(token) <= 99:
+        return token
+    n = int(token)
+    digits = "零一二三四五六七八九"
+    tens, ones = divmod(n, 10)
+    chinese = (("" if tens == 1 else digits[tens]) + "十" if tens else "") + (digits[ones] if ones else "")
+    return rf"(?:{token}|{chinese})"
+
+
 def _allocation_marker_pattern(label: str) -> str:
     token = re.escape(_normalize_label(label))
     parenthesized = rf"[（(]\s*{token}\s*[)）]"
+    ordinal = _ordinal_token(token)
     return (
-        rf"(?:第\s*{parenthesized}\s*问|"
-        rf"(?:part|小问)\s*{parenthesized}|"
+        rf"(?:第\s*(?:{parenthesized}|{ordinal})\s*(?:小[问题]|问)|"
+        rf"(?:小[问题]|\b(?:subpart|part)\s+)\s*(?:{parenthesized}|{ordinal}(?![a-z0-9]))|"
         rf"{parenthesized})"
     )
 
@@ -480,6 +525,29 @@ def _parse_allocations(
     double-counted by overlapping regular expressions.
     """
 
+    text = unicodedata.normalize("NFKC", text)
+    # A generated item has a dedicated budget column. Its description can quote
+    # conditional awards, other parts and deductions; none is an additional budget.
+    # One subpart may contain several independently budgeted steps.
+    item_budgets: dict[str, list[Decimal]] = {}
+    ordinary_lines = []
+    for line in text.splitlines():
+        if line.startswith("- ") and " [" in line:
+            for part in subparts:
+                match = re.match(rf"^-\s+{_allocation_marker_pattern(part.label)}\s+\[{_POINT_TOKEN}\]", line, re.I)
+                if match:
+                    item_budgets.setdefault(part.subpart_id, []).append(Decimal(match["points"]))
+                    break
+            else:
+                ordinary_lines.append(line)
+        else:
+            ordinary_lines.append(line)
+    if item_budgets:
+        # In itemized rubrics only explicitly labelled teacher additions may also
+        # allocate points. Narrative before/after the list is scoring guidance.
+        markers = "|".join(_allocation_marker_pattern(part.label) for part in subparts)
+        text = "\n".join(line for line in ordinary_lines if re.match(rf"^\s*(?:-\s+)?(?:{markers})", line, re.I))
+
     occurrences: list[tuple[int, int, str]] = []
     for part in subparts:
         pattern = _allocation_marker_pattern(part.label)
@@ -488,7 +556,8 @@ def _parse_allocations(
             for match in re.finditer(pattern, text or "", flags=re.IGNORECASE)
         )
     occurrences.sort(key=lambda item: (item[0], item[1]))
-    values: dict[str, list[Decimal]] = {part.subpart_id: [] for part in subparts}
+    values = {part.subpart_id: ([sum(item_budgets[part.subpart_id], Decimal(0))]
+                               if part.subpart_id in item_budgets else []) for part in subparts}
     seen_spans: set[tuple[int, int, str]] = set()
     for index, (start, end, subpart_id) in enumerate(occurrences):
         span_key = (start, end, subpart_id)
@@ -508,7 +577,10 @@ def _parse_allocations(
             r"including\b|comprising\b|consisting\s+of\b|of\s+which\b)",
             segment[point_matches[0].end():], flags=re.IGNORECASE,
         ))
-        if included_breakdown:
+        declared_max = bool(point_matches and re.fullmatch(
+            r"\s*[:：,，]?\s*(?:满分|配分|本问满分|worth|maximum(?:\s+of)?)\s*[:：]?\s*",
+            segment[:point_matches[0].start()], re.I))
+        if included_breakdown or declared_max:
             point_matches = point_matches[:1]
         component_scores: list[Decimal] = []
         for match in point_matches:
@@ -532,10 +604,29 @@ def _parse_allocations(
     return values
 
 
+def scoring_stem(stem):
+    """A deliberately narrow display comparison, never a scoring-part identity.
+
+    Sentence stops after Chinese prose can change without altering its tokens.
+    Mathematical punctuation (n!, decimals, operators), code and internal
+    clause boundaries remain significant and go through semantic compilation.
+    """
+    if not stem:
+        return stem
+    if "```" in stem or "~~~" in stem:
+        return stem.strip()
+    # The ideographic full stop is sentence punctuation even after a formula.
+    # Keep ASCII dots, factorials and code punctuation significant.
+    stem = re.sub(r"。+(?=[ \t]*(?:\n|$|[(（][0-9a-zA-Z一二三四五六七八九十]+[)）]))", "", stem)
+    return re.sub(r"(?<=[\u3400-\u9fff])[。.!！?？]+(?=[ \t]*(?:\n|$|[(（][0-9a-zA-Z一二三四五六七八九十]+[)）]))",
+                  "", stem.replace("\r\n", "\n")).strip()
+
+
 def summarize_rubric_points(
     criterion: str,
     max_score: Any,
     question_structure: Mapping[str, Any] | MajorQuestionStructureV1 | None,
+    *, rubric_draft: dict | None = None,
 ) -> RubricPointSummaryV1:
     """Parse explicit subpart points and report exact-sum validity.
 
@@ -558,6 +649,19 @@ def summarize_rubric_points(
             review_status="needs_review",
         )
     )
+    if rubric_draft and (rubric_draft.get("plan") or {}).get("part_rubric"):
+        from backend.services.rubric_drafts import RubricDraft
+        plan = RubricDraft.model_validate(rubric_draft).plan
+        rules = plan.part_rubric
+        scope = [(part.label, scoring_stem(part.stem)) for part in structure.subparts] or [(None, None)]
+        if (plan.original_criterion == criterion and Decimal(str(rules.total_pts)) == maximum
+                and [(part.label, scoring_stem(part.stem)) for part in rules.parts] == scope):
+            items = [RubricPointItemV1(subpart_id=source.subpart_id, label=source.label,
+                                       points=_decimal_text(Decimal(str(part.total_pts))))
+                     for source, part in zip(structure.subparts, rules.parts)]
+            return RubricPointSummaryV1(items=items, has_explicit_subpart_points=bool(items),
+                                        total_points=_decimal_text(maximum) if items else None,
+                                        major_max_score=_decimal_text(maximum))
     allocations = _parse_allocations(criterion or "", structure.subparts)
     parsed: list[tuple[MajorQuestionSubpartV1, list[Decimal]]] = [
         (part, allocations[part.subpart_id]) for part in structure.subparts
@@ -601,8 +705,9 @@ def validate_rubric_points(
     criterion: str,
     max_score: Any,
     question_structure: Mapping[str, Any] | MajorQuestionStructureV1 | None,
+    *, rubric_draft: dict | None = None,
 ) -> RubricPointSummaryV1:
-    summary = summarize_rubric_points(criterion, max_score, question_structure)
+    summary = summarize_rubric_points(criterion, max_score, question_structure, rubric_draft=rubric_draft)
     if not summary.is_valid:
         raise QuestionRubricValidationError(summary)
     return summary

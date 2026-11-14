@@ -150,14 +150,14 @@ export function problemLabel(problem?: Pick<ProblemInfo, "q_id" | "number"> | nu
   return String(problem?.q_id ?? fallbackId ?? "题目");
 }
 
-function roundAIScore(value: number, maxScore: number): number {
+function roundAIScore(value: number, maxScore: number, decimals = 1): number {
   const [coefficient, exponent = "0"] = String(value).split("e");
-  const shifted = Number(`${coefficient}e${Number(exponent) + 1}`);
-  const rounded = Number.isFinite(shifted) ? Math.round(shifted) / 10 : value;
+  const shifted = Number(`${coefficient}e${Number(exponent) + decimals}`);
+  const rounded = Number.isFinite(shifted) ? Math.round(shifted) / (10 ** decimals) : value;
   return value <= maxScore ? Math.min(rounded, maxScore) : rounded;
 }
 
-export function formatScore(value: number | null | undefined, maxScore?: number) {
+export function formatScore(value: number | null | undefined, maxScore?: number, decimals?: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "--";
   }
@@ -165,20 +165,29 @@ export function formatScore(value: number | null | undefined, maxScore?: number)
     return String(value);
   }
   if (value === maxScore) return String(value);
-  return roundAIScore(value, Number.POSITIVE_INFINITY).toFixed(1);
+  // Effective scores were already rounded under the correction's own policy.
+  // Preserve a stored hundredth when the caller formats that score or its sum.
+  const precision = decimals ?? (Math.abs(value * 10 - Math.round(value * 10)) > 1e-8 &&
+    Math.abs(value * 100 - Math.round(value * 100)) < 1e-8 ? 2 : 1);
+  const rounded = roundAIScore(value, Number.POSITIVE_INFINITY, precision);
+  return precision === 1 ? rounded.toFixed(1) : String(rounded);
+}
+
+export function correctionScoreDecimals(correction: Pick<Correction, "steps">) {
+  return correction.steps?.some(step => step.part_id) ? 2 : 1;
 }
 
 export function aiCorrectionScore(correction: Correction): number | null {
   if (hasHardFailureSignal(correction)) return null;
-  if (isFiniteScore(correction.provisional_score)) return roundAIScore(correction.provisional_score, correction.max_score);
-  if (!isFiniteScore(correction.teacher_score) && isFiniteScore(correction.score)) return roundAIScore(correction.score, correction.max_score);
+  if (isFiniteScore(correction.provisional_score)) return roundAIScore(correction.provisional_score, correction.max_score, correctionScoreDecimals(correction));
+  if (!isFiniteScore(correction.teacher_score) && isFiniteScore(correction.score)) return roundAIScore(correction.score, correction.max_score, correctionScoreDecimals(correction));
   return null;
 }
 
 export function effectiveCorrectionScore(correction: Correction): number | null {
   if (isFiniteScore(correction.teacher_score)) return correction.teacher_score;
   if (hasHardFailureSignal(correction)) return null;
-  if (isFiniteScore(correction.score)) return roundAIScore(correction.score, correction.max_score);
+  if (isFiniteScore(correction.score)) return roundAIScore(correction.score, correction.max_score, correctionScoreDecimals(correction));
   return aiCorrectionScore(correction);
 }
 
@@ -344,14 +353,14 @@ export function hasExpertDisagreement(correction: Correction): boolean {
 }
 
 export const MATH_REVIEW_REASONS = [
-  "math_expert_disagreement", "math_verification_conflict", "math_proof_concern",
+  "math_expert_disagreement", "math_verification_conflict", "math_proof_concern", "math_alternative_method",
   "math_model_review", "math_scoring_uncertainty",
 ];
 
 /** Display categories only: keep numeric disagreement filters/priority unchanged. */
 export function mathReviewLabels(correction: Correction, locale: Locale): string[] {
   const reasons = correctionReviewReasonIds(correction);
-  const specific = MATH_REVIEW_REASONS.slice(0, 3).filter(reason => reasons.includes(reason)
+  const specific = MATH_REVIEW_REASONS.slice(0, 4).filter(reason => reasons.includes(reason)
     || (reason === "math_expert_disagreement" && hasExpertDisagreement(correction)));
   const visible = specific.length ? specific : reasons.includes("math_model_review")
     ? ["math_model_review"] : reasons.includes("math_scoring_uncertainty") ? ["math_scoring_uncertainty"] : [];
@@ -373,6 +382,7 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     math_expert_disagreement: "Expert disagreement; review suggested.",
     math_verification_conflict: "Verification evidence still needs checking.",
     math_proof_concern: "Key reasoning evidence needs checking.",
+    math_alternative_method: "The student used a materially different solution method.",
     math_model_review: "The model suggests human review.",
     minority_veto: "Outlying expert score", parse_failed: "Could not parse result", degraded_to_single: "Some experts completed",
     transient_llm: "Model network error or timeout", llm_failed: "Model could not grade", quota_exhausted: "Quota exhausted", general: "Teacher review required",
@@ -395,6 +405,7 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     math_expert_disagreement: "专家分歧，建议复核。",
     math_verification_conflict: "核验结果与评分依据待核对。",
     math_proof_concern: "关键推理依据待核对。",
+    math_alternative_method: "该生采用了与标答不同的解题思路。",
     math_model_review: "模型建议人工复核。",
     score_spread_high: "评分差异较大",
     parse_failed: "解析失败",

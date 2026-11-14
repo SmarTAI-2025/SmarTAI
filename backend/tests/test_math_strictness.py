@@ -20,6 +20,9 @@ def plan(strictness, *, mode="points", eligible=True, partial=True, cap=None):
     data = rubric.fallback_math_rubric_plan(question(), grading_setup={
         "strictness": strictness, "allow_partial_credit": partial,
     }).model_dump(mode="json", exclude={"plan_id"})
+    # Exercise replay of an already frozen historical plan at its original value.
+    data["strictness"] = strictness
+    data["allow_partial_credit"] = partial
     defaults = ["follow_through"] if eligible else []
     items = ([dict(id="first", description="First computation", points=4, source="ai"),
               dict(id="next", description="Correct dependent computation", points=3, source="ai", default_adjustments=defaults),
@@ -233,7 +236,7 @@ def test_ambiguous_error_origin_cannot_be_inferred():
 
 
 @pytest.mark.asyncio
-async def test_compile_classification_once_and_keep_exact_authenticated_value():
+async def test_compile_classification_with_the_disabled_slider_fixed_at_neutral():
     response = explanation(routes=[route(items=[
         item("method", "方法4分", 4, default_adjustments=["follow_through"]),
         item("result", "结论6分", 6),
@@ -244,23 +247,20 @@ async def test_compile_classification_once_and_keep_exact_authenticated_value():
         p = await rubric.prepare_math_rubric_plan(question(), provider, grading_setup={"strictness": value})
         plans.append(p)
         assert len(provider.messages) == 1  # no new compiler/review loop
-        assert p.strictness == value
+        assert p.strictness == 50
         assert p.routes[0].items[0].default_adjustments == ("follow_through",)
         assert p.routes[0].items[1].default_adjustments == ()
-        assert f"strictness {value}/100" in p.effective_criterion
+        assert "strictness 50/100" in p.effective_criterion
     assert len({p.input_fingerprint for p in plans}) == 1
-    assert len({p.plan_id for p in plans}) == 5
+    assert len({p.plan_id for p in plans}) == 1
 
 
 @pytest.mark.asyncio
 async def test_holistic_fallback_keeps_numeric_defaults_and_teacher_notes():
-    setup = {"strictness": 25, "teacher_notes": "本题后续计算正常给满分"}
-    p = await rubric.prepare_math_rubric_plan(question(), ReplayProvider("{}"), grading_setup=setup)
-    assert p.compilation_status == "holistic"
-    assert p.strictness == 25
-    assert "× 25/100" in p.effective_criterion
-    assert setup["teacher_notes"] in p.effective_criterion
-    assert p.original_criterion == question()["criterion"]
+    from backend.services.rubric_drafts import RetiredGradingNotesError
+    with pytest.raises(RetiredGradingNotesError):
+        await rubric.prepare_math_rubric_plan(question(), ReplayProvider("{}"),
+            grading_setup={"teacher_notes": "本题后续计算正常给满分"})
 
 
 @pytest.mark.asyncio
@@ -277,7 +277,7 @@ async def test_explicit_deduction_amount_cannot_be_scaled_by_an_ai_default():
     assert p.routes[0].items[0].points == 1
 
 
-def test_real_api_save_reload_and_run_freeze_preserve_slider_values():
+def test_real_api_run_freeze_does_not_reenable_retired_slider():
     from backend.api import tasks
     from backend.auth import create_token
     from backend.db import workflow_repository
@@ -291,18 +291,16 @@ def test_real_api_save_reload_and_run_freeze_preserve_slider_values():
     client = TestClient(app)
     headers = {"Authorization": f"Bearer {create_token(owner, 'teacher')}"}
     url = f"/tasks/{task_id}/grading-setup"
-    fingerprints = set()
     for strictness in [0, 25, 50, 75, 100]:
         workflow = workflow_repository.get_workflow(task_id, owner_id=owner)
         setup = {**workflow.grading_setup, "strictness": strictness}
         saved = client.put(url, headers=headers, json={"grading_setup": setup,
             "expected_workflow_revision": workflow.workflow_revision})
-        assert saved.status_code == 200, saved.text
-        fingerprints.add(saved.json()["grading_setup_fingerprint"])
-        assert client.get(url, headers=headers).json()["grading_setup"]["strictness"] == strictness
-    assert len(fingerprints) == 5
+        assert saved.status_code == 422, saved.text
+        assert "strictness" not in client.get(url, headers=headers).json()["grading_setup"]
+        assert workflow_repository.get_workflow(task_id, owner_id=owner).workflow_revision == workflow.workflow_revision
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner)
     started = task_facade.start_task_grading(task_id=task_id, owner_id=owner,
         expected_workflow_revision=workflow.workflow_revision)
     frozen = workflow_repository.get_run_setup(started["job_id"])
-    assert frozen.setup["strictness"] == 100
+    assert not {"strictness", "allow_partial_credit"}.intersection(frozen.setup)

@@ -9,6 +9,7 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SourceFileDescriptor } from "@/types/sourcePreview";
 import type { PreparationIssue } from "@/types";
+import type { ProblemInfo } from "@/types/task";
 import { QuestionPreparationDetailPage } from "./QuestionPreparationDetailPage";
 
 // These integration cases hydrate 24 real IndexedDB-backed editors and perform
@@ -16,8 +17,14 @@ import { QuestionPreparationDetailPage } from "./QuestionPreparationDetailPage";
 // waitFor assertion deadlines or changing any production timeout.
 vi.setConfig({ testTimeout: 20_000 });
 
+vi.mock("@/api/hooks/experts", () => ({ useStageProviders: () => ({
+  data: [{ provider_id: "retry-model", provider_type: "openai", model: "Retry model", enabled: true, max_concurrent: 1, rpm: 10 }],
+  isPending: false, isError: false,
+}) }));
+
 const testState = vi.hoisted(() => ({ locale: "zh-CN" }));
 const mutateAsync = vi.hoisted(() => vi.fn());
+const changeModel = vi.hoisted(() => vi.fn());
 const taskRefetch = vi.hoisted(() => vi.fn());
 const sourcePreviewApi = vi.hoisted(() => ({
   getTaskSourceFiles: vi.fn(),
@@ -72,7 +79,7 @@ const taskData = vi.hoisted(() => ({
         issue_code: null,
       },
       reference_answer: "Answer one",
-      preparation_issues: [],
+      preparation_issues: [] as PreparationIssue[],
     },
     Q2: {
       q_id: "Q2",
@@ -133,6 +140,7 @@ vi.mock("@/api/hooks/tasks", () => ({
     refetch: taskRefetch,
   }),
   useUpdateProblem: () => ({ isPending: false, mutateAsync }),
+  useUpdateQuestionProvider: () => ({ isPending: false, mutateAsync: changeModel }),
 }));
 
 vi.mock("@/components/new-task/NewTaskStepper", () => ({
@@ -264,8 +272,10 @@ afterEach(async () => {
 
 beforeEach(() => {
   testState.locale = "zh-CN";
+  HTMLElement.prototype.scrollIntoView = vi.fn();
   taskData.problem_data.Q1.type = "reasoning";
   mutateAsync.mockReset();
+  changeModel.mockReset().mockResolvedValue({ question_recognition_provider_id: "retry-model", workflow_revision: 8 });
   taskData.workflow_revision = 7;
   taskData.status = "problems_ready";
   taskData.problem_data.Q2.reference_answer = "Answer two";
@@ -518,6 +528,44 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await waitFor(() => expect(screen.queryByRole("spinbutton", { name: "第 1 题满分" })).not.toBeInTheDocument());
   });
 
+  it.each([false, true])("sends structured rubric edits to server validation without a guessed text total (pending=%s)", async pending => {
+    const original = taskData.problem_data.Q1;
+    const question = { ...original, rubric_version: pending ? undefined : 2,
+      preparation_issues: pending ? [{ issue_id: "pending-rule", field: "rubric", code: "generation_failed",
+        severity: "blocking", status: "open", details: { reason: "invalid_structured_rubric" } }] as PreparationIssue[] : [],
+      criterion: "第一问按1、2、1分分步；第二问2分；第三问4分。" };
+    taskData.problem_data.Q1 = question;
+    mutateAsync.mockResolvedValue({ workflow_revision: 8, problem: question });
+    try {
+      const user = userEvent.setup();
+      await renderPage();
+      await user.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
+      const rubric = screen.getByRole("textbox", { name: "第 1 题评分标准" });
+      fireEvent.change(rubric, { target: { value: question.criterion + "。" } });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "保存" }));
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+        criterion: question.criterion + "。", max_score: 10, expectedWorkflowRevision: 7,
+      })));
+    } finally {
+      taskData.problem_data.Q1 = original;
+    }
+  });
+
+  it("shows the frozen allocation and edits the source wording", async () => {
+    const question = taskData.problem_data.Q2 as ProblemInfo;
+    question.effective_criterion = "列式 4 分，结果 6 分。";
+    try {
+      await renderPage();
+      expect(await screen.findByText(question.effective_criterion)).toBeVisible();
+      await userEvent.click(screen.getByRole("button", { name: "修改第 2 题满分与评分标准" }));
+      expect(screen.getByRole("textbox", { name: "第 2 题评分标准" })).toHaveValue(question.criterion);
+    } finally {
+      delete question.effective_criterion;
+    }
+  });
+
   it("carries the latest workflow revision across different maximum-score edits and final confirmation", async () => {
     let workflowRevision = taskData.workflow_revision;
     mutateAsync.mockImplementation(async () => ({
@@ -728,7 +776,7 @@ it("formal field save clears only its explicit snapshot; failure preserves the o
   await waitFor(() => expect(card.querySelectorAll("textarea")).toHaveLength(1));
   mutateAsync.mockRejectedValueOnce(new Error("QA failed save"));
   await user.click(question.getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(question.getByText(/保存失败/)).toBeInTheDocument());
+  await waitFor(() => expect(question.getByText(/请稍后重试保存/)).toBeInTheDocument());
   expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:reference_answer"]);
 });
 
@@ -750,4 +798,62 @@ it.each([
   expect(await section.findByText(message)).toBeVisible();
   expect(input).toHaveValue("1");
   expect(section.queryByText(/invalid_programming_test_cases|internal diagnostic/)).toBeNull();
+});
+
+
+it.each([
+  ["no_provider_configured", "请先在 API 设置中启用模型"],
+  ["invalid_alternative_rule", "请核对其他解法的上下限与扣分规则"],
+  ["invalid_structured_rubric", "请核对评分标准中的分值、条件和对应小问"],
+  ["provider_auth_failed", "请在 API 设置中更新模型密钥或权限"],
+  ["provider_permission_denied", "请在 API 设置中更新模型密钥或权限"],
+  ["provider_credentials_unavailable", "请在 API 设置中更新模型密钥或权限"],
+  ["provider_quota_exceeded", "请更换可用模型，或等模型额度恢复"],
+  ["provider_zero_quota", "请更换可用模型，或等模型额度恢复"],
+  ["provider_daily_quota_exceeded", "请更换可用模型，或等模型额度恢复"],
+])("retains the rubric draft and explains a failed save (%s)", async (code, message) => {
+  await renderPage();
+  await userEvent.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
+  const rubric = screen.getByRole("textbox", { name: "第 1 题评分标准" });
+  fireEvent.change(rubric, { target: { value: "(a) 4 分\n(b) 6 分。请说明理由。" } });
+  mutateAsync.mockRejectedValueOnce(new APIError(422, "internal diagnostic", { error: { code } }));
+  await userEvent.click(within(rubric.closest("section")!).getByRole("button", { name: "保存" }));
+  expect(await screen.findByRole(code.startsWith("invalid_") ? "alert" : "alertdialog")).toHaveTextContent(message);
+  expect(rubric).toHaveValue("(a) 4 分\n(b) 6 分。请说明理由。");
+  expect(screen.queryByText(/internal diagnostic/)).toBeNull();
+});
+
+it.each([
+  ["provider_auth_failed", "Update the model's API key or permissions in API settings, then save again."],
+  ["provider_quota_exceeded", "Choose another available model, or save again once the model's quota is restored."],
+])("explains model save failures in English (%s)", async (code, message) => {
+  testState.locale = "en-US";
+  await renderPage();
+  await userEvent.click(await screen.findByRole("button", { name: "Edit score and rubric for question 1" }));
+  const rubric = screen.getByRole("textbox", { name: "Rubric for question 1" });
+  fireEvent.change(rubric, { target: { value: "(a) 4 points\n(b) 6 points. Explain the result." } });
+  mutateAsync.mockRejectedValueOnce(new APIError(422, "internal diagnostic", { error: { code } }));
+  await userEvent.click(within(rubric.closest("section")!).getByRole("button", { name: "Save" }));
+  expect(await screen.findByRole(code.startsWith("invalid_") ? "alert" : "alertdialog")).toHaveTextContent(message);
+  expect(rubric).toHaveValue("(a) 4 points\n(b) 6 points. Explain the result.");
+});
+
+it("retries the preserved rubric with an explicitly selected model", async () => {
+  await renderPage();
+  await userEvent.click(await screen.findByRole("button", { name: "修改第 1 题满分与评分标准" }));
+  const rubric = screen.getByRole("textbox", { name: "第 1 题评分标准" });
+  const text = "(a) 4 分\n(b) 6 分。请说明理由。";
+  fireEvent.change(rubric, { target: { value: text } });
+  mutateAsync.mockRejectedValueOnce(new APIError(422, "quota", { error: { code: "provider_quota_exceeded" } }));
+  const save = within(rubric.closest("section")!).getByRole("button", { name: "保存" });
+  await userEvent.click(save);
+  await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "更换模型" }));
+  const model = screen.getByRole("combobox", { name: "题目处理模型" });
+  expect(model).toHaveValue("");
+  expect(rubric).toHaveValue(text);
+  await userEvent.selectOptions(model, "retry-model");
+  await userEvent.click(save);
+  expect(changeModel).toHaveBeenCalledWith({ taskId: "task-1", providerId: "retry-model", expectedWorkflowRevision: 7 });
+  expect(mutateAsync).toHaveBeenLastCalledWith(expect.objectContaining({ criterion: text, expectedWorkflowRevision: 8 }));
+  expect(mutateAsync.mock.lastCall?.[0]).not.toHaveProperty("rubric_provider_id");
 });

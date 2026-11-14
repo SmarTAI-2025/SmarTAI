@@ -1,3 +1,5 @@
+import { QuestionPreparationModelSelect, isQuestionModelError } from "@/components/tasks/QuestionPreparationModelSelect";
+import { RubricReviewDetails } from "@/components/tasks/RubricReviewDetails";
 import { getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
 import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
@@ -24,7 +26,7 @@ import {
 } from "lucide-react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { useTask } from "@/api/hooks/tasks";
+import { useTask, useUpdateQuestionProvider } from "@/api/hooks/tasks";
 import { useQuestionReview } from "@/hooks/useQuestionReview";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
@@ -66,6 +68,11 @@ function QuestionPreparationDetailPageForm() {
   const navigate = useNavigate();
   const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
+  const updateModel = useUpdateQuestionProvider();
+  const [modelFailure, setModelFailure] = useState<unknown>();
+  const changingModel = useRef(false);
+  const mounted = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const { updateProblem, latestRevision: latestWorkflowRevisionRef, confirming, confirm, failure, blocked, clearBlocked } = useQuestionReview(stableTaskId, taskQuery.data?.workflow_revision, locale);
   const sourcePreview = useSourcePreview({
     taskId,
@@ -193,8 +200,27 @@ function QuestionPreparationDetailPageForm() {
 
   const overviewHref = `/tasks/${encodeURIComponent(taskId)}/questions${searchParams.size ? `?${searchParams.toString()}` : ""}`;
 
+  async function chooseModel(providerId: string) {
+    if (changingModel.current || latestWorkflowRevisionRef.current === undefined) return;
+    changingModel.current = true;
+    try {
+      const saved = await updateModel.mutateAsync({ taskId: stableTaskId, providerId,
+        expectedWorkflowRevision: latestWorkflowRevisionRef.current });
+      if (!mounted.current) return;
+      latestWorkflowRevisionRef.current = Math.max(latestWorkflowRevisionRef.current, saved.workflow_revision);
+      setModelFailure(undefined);
+    } catch (error) {
+      if (mounted.current) setModelFailure(error);
+    } finally { changingModel.current = false; }
+  }
+
+  async function saveProblem(input: Parameters<typeof updateProblem.mutateAsync>[0]) {
+    try { return await updateProblem.mutateAsync(input); }
+    catch (error) { if (mounted.current && isQuestionModelError(error)) setModelFailure(error); throw error; }
+  }
+
   async function saveText(problem: ProblemInfo, field: TextFieldKey, value: string) {
-    const response = await updateProblem.mutateAsync({
+    const response = await saveProblem({
       taskId: stableTaskId,
       qId: problem.q_id,
       expectedWorkflowRevision: latestWorkflowRevisionRef.current,
@@ -213,13 +239,14 @@ function QuestionPreparationDetailPageForm() {
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
-  async function saveScoring(problem: ProblemInfo, maxScore: number, criterion: string) {
-    const response = await updateProblem.mutateAsync({
+  async function saveScoring(problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>) {
+    const response = await saveProblem({
       taskId: stableTaskId,
       qId: problem.q_id,
       expectedWorkflowRevision: latestWorkflowRevisionRef.current,
-      max_score: maxScore,
-      criterion,
+      ...(maxScore === problem.max_score && alternatives ? {} : { max_score: maxScore }),
+      ...(criterion === problem.criterion && alternatives ? {} : { criterion }),
+      ...(alternatives ? { alternative_rule_edits: alternatives } : {}),
     });
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
@@ -254,6 +281,26 @@ function QuestionPreparationDetailPageForm() {
           />
         </div>
       </div>
+      {taskQuery.data && !readOnly ? <div className="mt-4">
+        <QuestionPreparationModelSelect locale={locale} value={taskQuery.data.question_recognition_provider_id}
+          onChange={value => void chooseModel(value)} disabled={updateModel.isPending || updateProblem.isPending || confirming} />
+      </div> : null}
+      {modelFailure ? <UnsavedChangesDialog
+        title={tx(locale, "请检查题目处理模型", "Check the question model")}
+        description={questionSaveError(modelFailure, locale)}
+        stayLabel={tx(locale, "返回编辑", "Back to editing")}
+        leaveLabel={tx(locale, "更换模型", "Change model")}
+        onStay={() => setModelFailure(undefined)}
+        onLeave={() => {
+          setModelFailure(undefined);
+          window.requestAnimationFrame(() => {
+            if (!mounted.current) return;
+            document.getElementById("question-model-control")?.scrollIntoView({ behavior: "smooth", block: "center" });
+            document.getElementById("question-preparation-model")?.focus({ preventScroll: true });
+          });
+        }}>
+        <p className="mt-3 text-sm text-red-700">{tx(locale, "当前修改已保留。选择模型后，再次保存。", "Your edits are kept. Select a model, then save again.")}</p>
+      </UnsavedChangesDialog> : null}
       <ReviewBlockDialog locale={locale} issues={nextBlockers.length ? nextBlockers : blocked} onClose={() => { clearBlocked(); setNextBlockers([]); }} />
       <NewTaskStepper currentStep={2} blockedFromStep={questionReviewBlockers(problems, taskId ?? "", locale).length ? 3 : undefined} lockedStepReason={tx(locale, "请先处理关键问题", "Resolve required items first")} onLockedStepActivate={() => setNextBlockers(questionReviewBlockers(problems, taskId ?? "", locale))} />
 
@@ -329,7 +376,7 @@ function QuestionPreparationDetailPageForm() {
                 previous={filtered[index - 1] ?? null}
                 next={filtered[index + 1] ?? null}
                 readOnly={readOnly}
-                saving={updateProblem.isPending || confirming}
+                saving={updateProblem.isPending || confirming || updateModel.isPending}
                 locale={locale}
                 onDirtyChange={setFieldDirty}
                 onSaveScoring={saveScoring}
@@ -342,9 +389,9 @@ function QuestionPreparationDetailPageForm() {
 
             <ReviewStageActions
               note={tx(locale, `共 ${problems.length} 道题`, `${problems.length} questions`)}
-              confirmation={<ReviewConfirmButton locale={locale} all confirmed={problems.every(questionReviewConfirmed)} busy={confirming || updateProblem.isPending} onClick={() => void confirmReview(problems)} />}
+              confirmation={<ReviewConfirmButton locale={locale} all confirmed={problems.every(questionReviewConfirmed)} busy={confirming || updateProblem.isPending || updateModel.isPending} onClick={() => void confirmReview(problems)} />}
               back={{ href: overviewHref, label: tx(locale, "返回题目资料总览", "Back to Question Material Overview") }}
-              next={{ label: tx(locale, "进入上传作答", "Continue to Upload Submissions"), disabled: confirming || updateProblem.isPending, onClick: () => {
+              next={{ label: tx(locale, "进入上传作答", "Continue to Upload Submissions"), disabled: confirming || updateProblem.isPending || updateModel.isPending, onClick: () => {
                 if (hasDirty) { setShowUnsavedReview(true); return; }
                 const issues = questionReviewBlockers(problems, taskId, locale);
                 if (issues.length) setNextBlockers(issues);
@@ -385,7 +432,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   saving: boolean;
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
-  onSaveScoring: (problem: ProblemInfo, maxScore: number, criterion: string) => Promise<void>;
+  onSaveScoring: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>) => Promise<void>;
   onSaveText: (problem: ProblemInfo, field: TextFieldKey, value: string) => Promise<void>;
   onSaveTests: (problem: ProblemInfo, cases: TestCase[]) => Promise<void>;
   onNavigate: (qId: string) => void;
@@ -455,25 +502,42 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   saving: boolean;
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
-  onSave: (problem: ProblemInfo, maxScore: number, criterion: string) => Promise<void>;
+  onSave: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>) => Promise<void>;
 }) {
   const originalScore = String(problem.max_score ?? 10);
   const originalCriterion = problem.criterion ?? "";
+  const scoringRules = problem.effective_criterion?.trim() || originalCriterion;
+  const legacyRubricNotes = (problem.preparation_issues ?? [])
+    .filter(issue => issue.code === "math_rubric_advisory" && issue.status === "open"
+      && issue.details?.reason !== "teacher_rule_interpretation")
+    .map(issue => issue.details?.message)
+    .filter((message): message is string => typeof message === "string" && Boolean(message.trim()));
   const manualEditing = useManualEditor(problem, ["criterion"]);
   const [editing, setEditing] = useState(manualEditing && !readOnly);
   const [scoreDraft, setScoreDraft] = useState(originalScore);
   const [criterionDraft, setCriterionDraft] = useState(originalCriterion);
+  const [alternateDrafts, setAlternateDrafts] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const dirty = editing && (
-    scoreDraft !== originalScore || criterionDraft !== originalCriterion
+    scoreDraft !== originalScore || criterionDraft !== originalCriterion || Object.keys(alternateDrafts).length > 0
   );
   const scoreHundredths = parseScoreHundredths(scoreDraft);
   const scoreValid = scoreHundredths !== null && scoreHundredths > 0 && scoreHundredths <= 1_000_000;
+  const needsStructuredReview = Boolean(problem.rubric_version || problem.preparation_issues?.some(
+    issue => issue.status === "open" && issue.field === "rubric" && issue.details?.reason === "invalid_structured_rubric",
+  ));
   const draftSummary = useMemo(
-    () => summarizeRubricPoints(criterionDraft, scoreDraft, problem.question_structure),
-    [criterionDraft, problem.question_structure, scoreDraft],
+    () => criterionDraft === originalCriterion && scoreDraft === originalScore && problem.rubric_point_summary
+      ? problem.rubric_point_summary
+      : needsStructuredReview
+        // The saved structured ledger is authoritative. Edited prose is checked
+        // with its new compiled ledger on save, never with a partial text sum.
+        ? { contract_version: 1 as const, has_explicit_subpart_points: false, items: [],
+            major_max_score: scoreDraft, is_valid: true }
+        : summarizeRubricPoints(criterionDraft, scoreDraft, problem.question_structure),
+    [criterionDraft, originalCriterion, originalScore, problem.question_structure, problem.rubric_point_summary, needsStructuredReview, scoreDraft],
   );
-  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:scoring`, value: { scoreDraft, criterionDraft }, baseline: { scoreDraft: originalScore, criterionDraft: originalCriterion }, version: JSON.stringify([originalScore, originalCriterion]), enabled: !readOnly, busy: saving, onRestore: (draft) => { setScoreDraft(draft.scoreDraft); setCriterionDraft(draft.criterionDraft); setEditing(true); } });
+  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:scoring`, value: { scoreDraft, criterionDraft, alternateDrafts }, baseline: { scoreDraft: originalScore, criterionDraft: originalCriterion, alternateDrafts: {} }, version: JSON.stringify([originalScore, originalCriterion, problem.alternative_rules]), enabled: !readOnly, busy: saving, onRestore: (draft) => { setScoreDraft(draft.scoreDraft); setCriterionDraft(draft.criterionDraft); setAlternateDrafts(draft.alternateDrafts ?? {}); setEditing(true); } });
   const leave = useDraftLeave();
   const savedSummary = problem.rubric_point_summary
     ?? summarizeRubricPoints(originalCriterion, originalScore, problem.question_structure);
@@ -482,6 +546,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   useEffect(() => {
     if (!editing && !localDraft.savedAt) {
       setScoreDraft(originalScore);
+      setAlternateDrafts({});
       setCriterionDraft(originalCriterion);
     }
   }, [editing, originalCriterion, originalScore]);
@@ -495,19 +560,15 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
     }
     setError(null);
     try {
-      if (!await localDraft.runFormal(() => onSave(problem, Number(scoreDraft), criterionDraft), { scoreDraft, criterionDraft })) return;
+      if (!await localDraft.runFormal(() => onSave(problem, Number(scoreDraft), criterionDraft, Object.keys(alternateDrafts).length ? alternateDrafts : undefined), { scoreDraft, criterionDraft, alternateDrafts })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
-    } catch {
-      setError(tx(locale, "保存失败，请重试。", "Save failed. Try again."));
+    } catch (error) {
+      setError(isQuestionModelError(error) ? null : questionSaveError(error, locale));
     }
   }
 
   const sourceLabel = maxScoreSourceLabel(problem.max_score_source, locale);
-  const scoringGuidance = questionReviewIssues(problem).flatMap(issue =>
-    issue.code === "math_rubric_advisory" && typeof issue.details?.message === "string" && issue.details.message.trim()
-      ? [{ id: issue.issue_id, message: issue.details.message }] : [],
-  );
   return (
     <section className="min-w-0 px-5 py-5 sm:px-6">
       <div className="flex items-start justify-between gap-3">
@@ -559,17 +620,26 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
         <div className="mt-3 space-y-3">
           <strong className="block text-lg text-foreground">{formatScore(problem.max_score ?? 10)} {tx(locale, "分", "pts")}</strong>
           <div className="min-h-[92px] rounded-[8px] bg-slate-50 px-4 py-3 text-sm leading-6 dark:bg-slate-950/20">
-            {originalCriterion.trim() ? <MarkdownMath>{originalCriterion}</MarkdownMath> : <p className="text-sm text-muted-foreground">{tx(locale, "尚未提供评分标准。", "No rubric has been provided.")}</p>}
+            {scoringRules.trim() ? <MarkdownMath>{scoringRules}</MarkdownMath> : <p className="text-sm text-muted-foreground">{tx(locale, "尚未提供评分标准。", "No rubric has been provided.")}</p>}
           </div>
           <RubricPointStatus summary={savedSummary} locale={locale} />
         </div>
       )}
-      {scoringGuidance.map(({ id, message }) => (
-        <details key={id} className="mt-3 text-sm">
-          <summary className="cursor-pointer font-medium text-primary">{tx(locale, "查看 AI 补充评分说明", "View AI scoring guidance")}</summary>
-          <p className="mt-2 whitespace-pre-wrap break-words leading-6 text-foreground">{message}</p>
-        </details>
-      ))}
+      <RubricReviewDetails issues={problem.preparation_issues} locale={locale} />
+      {legacyRubricNotes.length > 0 && <aside role="note" className="mt-4 rounded-md bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
+        <h4 className="font-semibold">{tx(locale, "评分标准待核对", "Rubric details to review")}</h4>
+        {[...new Set(legacyRubricNotes)].map(note => <p key={note} className="mt-1 whitespace-pre-line">{note}</p>)}
+      </aside>}
+      {Boolean(problem.alternative_rules?.length) && <div className="mt-4 space-y-2 border-t pt-3">
+        <h4 className="text-sm font-semibold">{tx(locale, "其他解法评分标准", "Scoring alternative methods")}</h4>
+        {problem.alternative_rules?.map(part => <div key={part.id} className="text-sm leading-6">
+          {part.label && <span className="mr-2 font-medium">{part.label}</span>}
+          {editing ? <textarea value={alternateDrafts[part.id] ?? part.text}
+            aria-label={tx(locale, `其他解法评分标准 ${part.label ?? ""}`, `Alternative methods ${part.label ?? ""}`)}
+            className="w-full rounded-md border bg-background p-2" maxLength={4000}
+            onChange={event => setAlternateDrafts({ ...alternateDrafts, [part.id]: event.target.value })} /> : part.text}
+        </div>)}
+      </div>}
     </section>
   );
 }
@@ -617,7 +687,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   const [draft, setDraft] = useState(value);
   const savedType = useRef<string | null>(null);
   if (field === "type" && savedType.current === value) savedType.current = null;
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const dirty = editing && draft !== value;
   const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:${field}`, value: { draft }, baseline: { draft: value }, version: value, enabled: !readOnly, busy: saving, onRestore: (restored) => { setDraft(restored.draft); if (field !== "type" || restored.draft !== value) setEditing(true); } });
   const leave = useDraftLeave();
@@ -633,14 +703,14 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
 
   async function save() {
     if (localDraft.conflict) return;
-    setError(false);
+    setError(null);
     try {
       if (!await localDraft.runFormal(() => onSave(problem, field, draft), { draft })) return;
       if (field === "type") savedType.current = draft;
       onDirtyChange(fieldKey, false);
       setEditing(false);
-    } catch {
-      setError(true);
+    } catch (error) {
+      setError(isQuestionModelError(error) ? null : questionSaveError(error, locale));
     }
   }
 
@@ -648,7 +718,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
     <section className={cn("min-w-0 px-5 py-5 sm:px-6", compact && "px-4 py-4 sm:px-5")}>
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-bold text-foreground">{label}</h3>
-        {!readOnly ? <button type="button" aria-label={`${label} · ${editing ? tx(locale, "取消修改", "Cancel edit") : tx(locale, "修改", "Edit")}`} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(false); }); else setEditing(true); }} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
+        {!readOnly ? <button type="button" aria-label={`${label} · ${editing ? tx(locale, "取消修改", "Cancel edit") : tx(locale, "修改", "Edit")}`} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(null); }); else setEditing(true); }} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
           {editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}
           {editing ? tx(locale, "取消", "Cancel") : tx(locale, "修改", "Edit")}
         </button> : null}
@@ -661,7 +731,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
           </select> : <textarea value={draft} onChange={(event) => setDraft(event.target.value)} aria-label={label} rows={field === "number" ? 1 : field === "stem" ? 7 : compact ? 6 : 8} className={cn("w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15", field === "solution_code" && "font-mono text-xs")} />}
           <div className="mt-3 flex items-center justify-between gap-3">
             <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error
-              ? tx(locale, "保存失败，请重试。", "Save failed. Try again.")
+              ? error
               : field === "solution_code"
                 ? tx(locale, "可直接编辑源码；保存后恢复语法高亮。", "Edit the source code directly; syntax highlighting returns after saving.")
                 : field === "type" ? "" : tx(locale, "支持 Markdown 和 LaTeX。", "Markdown and LaTeX are supported.")}</p>
@@ -677,6 +747,39 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
       )}
     </section>
   );
+}
+
+function questionSaveError(error: unknown, locale: string) {
+  switch (getAPIErrorCode(error)) {
+    case "no_provider_configured":
+    case "recognition_provider_not_enabled":
+      return tx(locale, "请先在 API 设置中启用模型，解析新评分标准后再保存。", "Enable a model in API settings to interpret the updated scoring rules, then save again.");
+    case "provider_auth_failed":
+    case "provider_permission_denied":
+    case "provider_credentials_unavailable":
+    case "provider_credentials_required":
+      return tx(locale, "请在 API 设置中更新模型密钥或权限，再保存。", "Update the model's API key or permissions in API settings, then save again.");
+    case "provider_quota_exceeded":
+    case "provider_zero_quota":
+    case "provider_daily_quota_exceeded":
+    case "shared_pool_daily_limit_reached":
+      return tx(locale, "请更换可用模型，或等模型额度恢复后再保存。", "Choose another available model, or save again once the model's quota is restored.");
+    case "provider_model_not_found":
+    case "provider_model_or_endpoint_not_found":
+      return tx(locale, "请在 API 设置中核对模型名称和地址，再保存。", "Check the model name and endpoint in API settings, then save again.");
+    case "invalid_alternative_rule":
+      return tx(locale, "请核对其他解法的上下限与扣分规则；分数须在 0 与该小问满分之间。", "Check the alternative-method limits and deductions. Scores must be between 0 and this part's maximum.");
+    case "invalid_structured_rubric":
+      return tx(locale, "请核对评分标准中的分值、条件和对应小问，再保存。", "Check the points, conditions and matching question parts, then save again.");
+    case "rubric_subpart_points_mismatch":
+    case "rubric_subpart_points_missing":
+      return tx(locale, "请补全各小问配分，并使合计等于本题满分。", "Complete the points for each part and make their sum equal this question's maximum.");
+    case "version_conflict":
+    case "stale_revision":
+      return tx(locale, "题目已有新版本。请先复制当前修改，刷新核对后再保存。", "A newer version is available. Copy your edits, refresh to review it, then save again.");
+    default:
+      return tx(locale, "请稍后重试保存。", "Please try saving again shortly.");
+  }
 }
 
 function testCaseSaveError(error: unknown, locale: string) {

@@ -33,9 +33,9 @@ async function fixture(page: Page, stage: Stage) {
     problem_data: stage === "problems" ? {} : { q1: problem }, student_data: stage === "grading" ? { s1: student } : {},
     submission_sources: [] as SubmissionSourceOutcome[], submission_source_summary: null as SubmissionSourceSummary | null, created_at: 1, updated_at: 1, kb_docs: {}, kb_doc_count: 0 };
   const setup = { schema_version: 1, selected_provider_ids: [provider.provider_id], primary_provider_id: provider.provider_id,
-    aggregation_method: "single", multi_sample_n: 1, knowledge_scope: "none", strictness: 75, allow_partial_credit: true,
+    aggregation_method: "single", multi_sample_n: 1, knowledge_scope: "none", strictness: 75,
     feedback_tone: "neutral", feedback_length: "medium", feedback_language: "zh", suggest_corrections: true,
-    low_confidence_threshold: 0.6, teacher_notes: "" };
+    low_confidence_threshold: 0.6 };
   await page.addInitScript(() => { localStorage.setItem("smartai_token", "synthetic-navigation-token"); localStorage.setItem("smartai_locale", "zh-CN"); });
   await page.addInitScript(() => {
     const paths: string[] = [];
@@ -200,7 +200,7 @@ for (const stage of ["problems", "submissions", "grading"] as const) {
       await page.locator('input[type="file"]').first().setInputFiles({ name: "synthetic.txt", mimeType: "text/plain", buffer: Buffer.from("1. What is 6 × 7?") });
       await expect(page.getByLabel(stage === "problems" ? "题目识别模型" : "作答识别模型", { exact: true })).toHaveValue("test-provider");
     }
-    await page.getByRole("button", { name: stage === "problems" ? "识别并准备题目资料" : stage === "submissions" ? "开始识别作答" : "立即开始批改", exact: true }).click();
+    await page.getByRole("button", { name: stage === "problems" ? "直接识别题目资料" : stage === "submissions" ? "开始识别作答" : "立即开始批改", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/${stage}/progress$`));
     await expect(page.locator("main h1")).toBeVisible();
     await expect(page.getByRole("alertdialog")).toHaveCount(0);

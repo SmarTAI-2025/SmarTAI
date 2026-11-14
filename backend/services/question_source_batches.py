@@ -27,8 +27,11 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
     runs, documents, pages = [], [], {}
     failed_pages, unprocessed_pages, page_errors, failure_codes = set(), set(), [], []
 
+    panel_pages = set()
     def scoped_request(batch):
         scoped = request.model_copy(update={"scope": "pages", "pages": batch})
+        if request.purpose == "problems" and len(batch) == 1 and batch[0] in panel_pages:
+            scoped = scoped.model_copy(update={"policy": scoped.policy.model_copy(update={"version": "printed-formula-panels-v1"})})
         return apply_source_timeout_profile(scoped, engine=engine, timeout_profile=timeout_profile,
                                              total_pages=total_pages)
 
@@ -71,6 +74,7 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
             if page.page_number in document.coverage.processed_pages:
                 pages[page.page_number] = page
                 ready.append(dict(page_number=page.page_number,
+                    **({"formula_conflicts": page.formula_conflicts} if getattr(page, "formula_conflicts", None) else {}),
                     text="\n".join(span.final_text for span in page.spans if span.final_text)))
         if ready and on_pages is not None:
             # service.run has already persisted and verified these page results.
@@ -119,9 +123,10 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
     while batches:
         window = batches.pop(0)
         native = False
-        if incremental and hasattr(service, "native_page_window"):
-            native = await service.native_page_window(scoped_request(window), content, engine=engine,
+        if incremental and hasattr(service, "inspect_page_window"):
+            native, panel_numbers = await service.inspect_page_window(scoped_request(window), content, engine=engine,
                 authorized_owner_id=request.source.owner_id, binding=binding)
+            panel_pages.update(panel_numbers)
         if not incremental or native:
             await process(window)
             continue
@@ -181,6 +186,8 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
         confidence_reasons=unique(item for doc in documents for item in doc.confidence_reasons),
         warning_codes=unique(item for doc in documents for item in doc.warning_codes),
         error_code=error_code, page_diagnostics=diagnostics,
+        **({"formula_conflicts": sorted({label for page in pages.values() for label in getattr(page,"formula_conflicts",[])})}
+           if any(getattr(page,"formula_conflicts",None) for page in pages.values()) else {}),
         usage=_usage(runs, "current_usage"), operation_usage=_usage(runs, "operation_usage"), requires_review=True,
     )
     return text, summary

@@ -941,6 +941,8 @@ def extract_and_parse_json(raw: str, model: Type[T], *, require_complete: bool =
     # turns valid Chinese and TeX into literal escapes and falsely marks the
     # response successful. Leave unrecoverable output to the bounded retry.
     bounds_error: ValidationError | None = None
+    field_errors = None
+    syntax_error = None
     for attempt_desc, transform in [
         ("direct", lambda s: s),
         ("latex_backslashes", _escape_latex_backslashes),
@@ -957,16 +959,23 @@ def extract_and_parse_json(raw: str, model: Type[T], *, require_complete: bool =
             cleaned_dict = _clean_strings(candidate_dict)
             return model.model_validate(cleaned_dict)
         except ValidationError as e:
+            errors = e.errors(include_input=False, include_context=False, include_url=False)
+            if field_errors is None:
+                # Keep diagnostics for the first decodable object, before later
+                # recovery transforms can change the reported field positions.
+                field_errors = errors[:8]
             if any(
                 error.get("type") in {"string_too_long", "too_long"}
                 or "safe total size" in str(error.get("msg") or "").lower()
-                for error in e.errors()
+                for error in errors
             ):
                 bounds_error = e
-            logger.debug(f"JSON parse attempt '{attempt_desc}' failed: {e}")
+            logger.debug("Schema validation failed on %s (%d issues)", attempt_desc, len(errors))
             continue
         except json.JSONDecodeError as e:
-            logger.debug(f"JSON parse attempt '{attempt_desc}' failed: {e}")
+            if syntax_error is None:
+                syntax_error = {"line": e.lineno, "column": e.colno, "reason": e.msg}
+            logger.debug("JSON parsing failed on %s at %s:%s", attempt_desc, e.lineno, e.colno)
             continue
 
     # 4. All attempts failed — raise with full context
@@ -974,7 +983,24 @@ def extract_and_parse_json(raw: str, model: Type[T], *, require_complete: bool =
         raise StructuredOutputBoundsError(
             f"Structured output for {model.__name__} exceeds safe field bounds."
         ) from bounds_error
-    raise StructuredOutputInvalidError(f"The model result does not match {model.__name__}.")
+    exc = StructuredOutputInvalidError(f"The model result does not match {model.__name__}.")
+    if field_errors:
+        schema = model.model_json_schema()
+        fields = {
+            key
+            for node in (schema, *schema.get("$defs", {}).values())
+            if isinstance(node, dict)
+            for key in node.get("properties", {})
+        }
+        diagnostics = {"invalid_fields": [
+            {"path": [key if isinstance(key, int) or key in fields else "<key>"
+                      for key in error["loc"][:12]], "type": error["type"]}
+            for error in field_errors
+        ]}
+    else:
+        diagnostics = {"json_syntax": syntax_error}
+    exc.repair_context = json.dumps(diagnostics, ensure_ascii=False)
+    raise exc
 
 
 # ─── The unified call ────────────────────────────────────────────────────────

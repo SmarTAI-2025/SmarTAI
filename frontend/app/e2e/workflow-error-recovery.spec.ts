@@ -12,7 +12,7 @@ async function fixture(page: Page, stage: "problems" | "submissions" | "grading"
     error: code, problem_count: stage === "problems" ? 0 : 1, student_count: stage === "grading" ? 1 : 0,
     problem_file_name: "saved.pdf", pending_submission_file_name: stage !== "problems" ? "saved.zip" : null,
     question_recognition_provider_id: "old", submission_recognition_provider_id: "old", grading_setup_configured: stage === "grading", problem_data: {}, submission_source_summary: null, submission_sources: [] };
-  const setup = { schema_version: 1, selected_provider_ids: ["old"], primary_provider_id: "old", aggregation_method: "single", multi_sample_n: 1, knowledge_scope: "none", strictness: 75, allow_partial_credit: true, feedback_tone: "neutral", feedback_length: "medium", feedback_language: "zh", suggest_corrections: true, low_confidence_threshold: 0.6, teacher_notes: "原批改说明" };
+  const setup = { schema_version: 1, selected_provider_ids: ["old"], primary_provider_id: "old", aggregation_method: "single", multi_sample_n: 1, knowledge_scope: "none", feedback_tone: "neutral", feedback_length: "medium", feedback_language: "zh", suggest_corrections: true, low_confidence_threshold: 0.6,  };
   const setupResponse = { task_id: task.task_id, task_status: task.status, workflow_revision: 7, configured: true, grading_setup: setup, suggested_setup: null, grading_setup_fingerprint: "synthetic", grading_setup_updated_at: 1,
     available_experts: providers, knowledge: { scope_options: ["none", "all_task_docs"], task_doc_count: 0, task_docs: [] }, readiness: { ready: true, blocking_issues: [], warnings: [] } };
   await page.addInitScript((language) => { localStorage.setItem("smartai_token", "synthetic-recovery-token"); localStorage.setItem("smartai_locale", language); }, locale);
@@ -60,9 +60,9 @@ for (const locale of ["zh-CN", "en-US"]) {
     await page.goto("/tasks/recovery-task/upload/problems");
     await expect(page.getByRole("button", { name: zh ? "添加题目" : "Add Question Source", exact: true })).toHaveCount(0);
     for (const [tab, add] of (zh ? [
-      [/2\. 标答/, "添加标答"], [/3\. 评分标准/, "添加评分标准"], [/4\. 测试样例/, "添加测试资料"],
+      [/3\. 标答/, "添加标答"], [/2\. 评分标准/, "添加评分标准"], [/4\. 测试样例/, "添加测试资料"],
     ] : [
-      [/2\. Reference Answers/, "Add Reference Answer Source"], [/3\. Rubrics/, "Add Rubric Source"], [/4\. Test Cases/, "Add Programming Tests"],
+      [/3\. Reference Answers/, "Add Reference Answer Source"], [/2\. Rubrics/, "Add Rubric Source"], [/4\. Test Cases/, "Add Programming Tests"],
     ]) as Array<[RegExp, string]>) {
       await page.getByRole("button", { name: tab }).click();
       await page.getByRole("button", { name: add, exact: true }).click();
@@ -171,11 +171,7 @@ for (const width of [1280, 390]) {
     await page.getByRole("button", { name: "上传新文件", exact: true }).click();
     await expect(page.getByText("待重新选择：saved.pdf")).toBeVisible();
     const start = page.getByRole("button", { name: "重新识别全部资料", exact: true });
-    await expect(start).toBeEnabled();
-    const dialog = page.waitForEvent("dialog");
-    await start.focus();
-    await page.keyboard.press("Enter");
-    expect((await dialog).message()).toContain("仅保留了文件名");
+    await expect(start).toBeDisabled();
     expect(calls).toHaveLength(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: `output/playwright/upload-guidance-${width}.png`, fullPage: true });
@@ -275,9 +271,10 @@ test("grading error keeps retry and configuration recovery with saved model and 
   await expect(page.getByRole("button", { name: "重试失败项", exact: true })).toBeVisible();
   await page.getByRole("link", { name: "返回修改配置" }).click();
   await expect(page.getByText("synthetic-old", { exact: false }).first()).toBeVisible();
-  await expect(page.getByRole("slider").first()).toHaveValue("75");
+  await expect(page.getByRole("slider")).toHaveCount(0);
   await page.getByRole("button", { name: /展开高级/ }).click();
-  await expect(page.getByRole("textbox", { name: /批改注意事项/ })).toHaveValue("原批改说明");
+  await expect(page.getByRole("combobox", { name: "评语语气" })).toHaveValue("neutral");
+  await expect(page.getByRole("textbox", { name: /批改注意事项/ })).toHaveCount(0);
   await page.screenshot({ path: "output/playwright/workflow-grading-restored.png", fullPage: true });
   expect(calls).toHaveLength(0);
   expect(errors).toEqual([]);
@@ -344,3 +341,33 @@ for (const stage of ["problems", "submissions", "grading"] as const) {
     expect(errors).toEqual([]);
   });
 }
+
+test("uploads a question and navigates all four material steps before starting recognition", async ({ page }) => {
+  const { calls, errors } = await fixture(page, "problems", undefined, true);
+  await page.goto("/tasks/recovery-task/upload/problems");
+  const actions = page.getByRole("navigation", { name: "资料步骤操作" });
+  const next = actions.getByRole("button", { name: /下一步/ });
+  const previous = actions.getByRole("button", { name: "上一步" });
+  await expect(previous).toHaveCount(0);
+  await page.getByRole("button", { name: "删除这份资料" }).click();
+  await expect(next).toBeDisabled();
+  await expect(actions.getByRole("button", { name: /识别/ })).toBeDisabled();
+  await page.getByRole("button", { name: "添加题目", exact: true }).click();
+  await page.locator('input[type="file"]').setInputFiles({ name: "assignment.pdf", mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF") });
+  await expect(next).toHaveText(/评分标准/);
+  await next.click();
+  await expect(next).toHaveText(/标答/);
+  await next.click();
+  await expect(next).toHaveText(/测试样例/);
+  await next.click();
+  await expect(next).toHaveCount(0);
+  await previous.click();
+  await page.getByRole("button", { name: /1\. 题目/ }).click();
+  await expect(page.getByText("assignment.pdf", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: /4\. 测试样例/ }).click();
+  expect(calls).toHaveLength(0);
+  await actions.getByRole("button", { name: /识别/ }).click();
+  await expect.poll(() => calls.some(call => call.path.endsWith("/question-preparation/jobs"))).toBeTruthy();
+  expect(errors).toEqual([]);
+});

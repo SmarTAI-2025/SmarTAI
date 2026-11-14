@@ -75,11 +75,14 @@ export interface ProblemInfo {
   type: string;
   stem: string;
   criterion: string;
+  effective_criterion?: string;
+  rubric_version?: number;
   recognition_confidence?: number | null;
   max_score: number;
   max_score_source?: "default_10" | "uniform" | "per_question_text" | "teacher_edited" | "legacy";
   max_score_review_status?: "needs_review" | "confirmed";
   question_structure?: MajorQuestionStructureV1 | null;
+  alternative_rules?: { id: string; label: string | null; text: string }[];
   rubric_point_summary?: RubricPointSummaryV1 | null;
   review_status?: "needs_review" | "edited" | "confirmed";
   reference_answer?: string | null;
@@ -222,6 +225,8 @@ export interface SubmissionSourceOutcome {
 
 export interface StepScore {
   step_no: number;
+  part_id?: string | null;
+  item_id?: string | null;
   desc: string;
   is_correct: boolean;
   score: number;

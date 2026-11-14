@@ -22,8 +22,6 @@ const copy = {
   expertNote: ["本次批改使用已保存的任务级模型；若模型被停用，开始前会明确阻止并提示调整。", "This run uses the saved task-level models. If one is disabled, grading is blocked with a clear setup action."],
   scoringStrategy: ["评分策略", "Scoring Strategy"],
   strictness: ["严格度", "Strictness"],
-  partialAllowed: ["允许部分分", "Partial credit allowed"],
-  partialDisabled: ["不允许部分分", "No partial credit"],
   confidence: ["低置信阈值", "Low-confidence threshold"],
   feedback: ["评语", "Feedback"],
   short: ["简短", "Short"],

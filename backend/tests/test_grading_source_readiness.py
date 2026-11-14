@@ -733,7 +733,7 @@ def test_changed_grading_setup_stays_revision_locked_during_active_grading():
     assert payload.status_code == 200
     assert "grading_setup_locked" in payload.json()["readiness"]["blocking_issues"]
 
-    changed_setup = {**locked.grading_setup, "teacher_notes": "must not save"}
+    changed_setup = {**locked.grading_setup, "feedback_tone": "strict"}
     response = client.put(
         f"/tasks/{seeded['assignment_id']}/grading-setup",
         headers=headers,
@@ -778,7 +778,7 @@ def test_changed_grading_setup_stays_revision_locked_while_workflow_is_busy():
         active_job_id=operation.id,
     )
 
-    changed_setup = {**busy.grading_setup, "teacher_notes": "must not save"}
+    changed_setup = {**busy.grading_setup, "feedback_tone": "strict"}
     response = TestClient(app).put(
         f"/tasks/{seeded['assignment_id']}/grading-setup",
         headers={

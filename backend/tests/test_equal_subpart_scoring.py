@@ -108,7 +108,11 @@ async def test_recovery_requires_one_valid_award_per_part(monkeypatch, invalid):
     monkeypatch.setattr(grading.kb_tool, "retrieve_for_grading", AsyncMock(return_value=[]))
     with math_plans_context({p.q_id: plan}):
         failed = await ProofSkill(provider).grade(p, a)
-    assert failed.error_kind and failed.steps == []
+    if invalid == "disabled_partial":
+        # The retired runtime toggle cannot alter otherwise permitted item credit.
+        assert failed.error_kind is None and failed.score == 0.7
+    else:
+        assert failed.error_kind and failed.steps == []
 
 
 @pytest.mark.parametrize("criterion", ["每小问0.2分", "每个小题占 ０．２ 分。", "Each part is worth 0.2 points.",
@@ -125,10 +129,10 @@ def test_equal_rate_uses_named_parts_even_for_legacy_questions(criterion):
     ({"criterion": "每错一小问，扣0.2分"}, ""), ({"criterion": "每小问0.2分，第五问除外"}, ""),
     ({"criterion": "全部正确得1分，只要有错得0分"}, ""), ({"max_score": 2}, ""),
     ({"stem": "Decide whether these statements are true."}, ""), ({"type": "编程题"}, ""),
-    ({"teacher_subpart_points": {"(1)": "0.5"}}, ""), ({}, "Apply the teacher's conditional floor."),
+    ({"teacher_subpart_points": {"(1)": "0.5"}}, ""),
 ])
 def test_equal_parts_do_not_override_other_policies_or_invent_a_part_count(changes, notes):
-    assert rubric.subpart_plan(rubric._question_input(question(**changes)), teacher_notes=notes) is None
+    assert rubric.subpart_plan(rubric._question_input(question(**changes))) is None
 
 
 @pytest.mark.parametrize("case,error", [

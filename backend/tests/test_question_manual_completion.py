@@ -311,11 +311,20 @@ async def test_manual_count_cannot_replace_frozen_targets_before_worker_starts(m
 
 @pytest.mark.asyncio
 async def test_regular_recognized_question_number_uses_the_same_editor(monkeypatch):
+    import asyncio
+    import json
+    from backend.tests.test_alternative_route import _edit_provider
     owner, task, job, revision, _ = await failed_preparation(monkeypatch)
     await manual(owner, task, job, revision)
     original = task_facade.get_task(task_id=task, owner_id=owner)
-    changed = task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1",
+    stored = assignment_repository.list_questions(task, teacher_id=owner)[0]
+    rules = stored.source["presentation"]["rubric_draft"]["plan"]["part_rubric"]
+    provider = _edit_provider(monkeypatch, [json.dumps({"part_rubric": rules})])
+    # The synchronous production endpoint runs outside the event loop; a type
+    # change now also validates the existing scoring plan for the new type.
+    changed = await asyncio.to_thread(task_facade.update_problem, task_id=task, owner_id=owner, q_id="q1",
         expected_revision=original["workflow_revision"], patch={"number": "1.1.5", "type": "other"})
+    assert len(provider.calls) == 1
     question = changed["problem"]
     assert question["number"] == "1.1.5" and question["q_id"] == "q1"
     assert question["type"] == "其他"

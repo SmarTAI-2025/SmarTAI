@@ -23,8 +23,16 @@ function normalizeLabel(value: string): string {
 function markerPattern(label: string): RegExp {
   const token = escapeRegExp(normalizeLabel(label));
   const parenthesized = String.raw`[（(]\s*${token}\s*[)）]`;
+  const digits = "零一二三四五六七八九";
+  const n = Number(token);
+  let ordinal = token;
+  if (/^[1-9]\d?$/.test(token)) {
+    const tens = Math.floor(n / 10);
+    const chinese = (tens ? (tens === 1 ? "" : digits[tens]) + "十" : "") + (n % 10 ? digits[n % 10] : "");
+    ordinal = `(?:${token}|${chinese})`;
+  }
   return new RegExp(
-    String.raw`(?:第\s*${parenthesized}\s*问|(?:part|小问)\s*${parenthesized}|${parenthesized})`,
+    String.raw`(?:第\s*(?:${parenthesized}|${ordinal})\s*(?:小[问题]|问)|(?:小[问题]|\b(?:subpart|part)\s+)\s*(?:${parenthesized}|${ordinal}(?![a-z0-9]))|${parenthesized})`,
     "giu",
   );
 }
@@ -62,6 +70,26 @@ export function summarizeRubricPoints(
   const maximum = parseScoreHundredths(maxScore);
   const majorMaxScore = maximum === null ? String(maxScore) : formatHundredths(maximum);
   const subparts = structure?.subparts ?? [];
+  criterion = criterion.normalize("NFKC");
+  const itemBudgets = new Map<string, number>();
+  const ordinaryLines = criterion.split("\n").filter(line => {
+    if (!line.startsWith("- ") || !line.includes(" [")) return true;
+    for (const part of subparts) {
+      const header = new RegExp(String.raw`^-\s+${markerPattern(part.label).source}\s+\[${POINT_PATTERN_SOURCE}\]`, "iu");
+      const match = header.exec(line);
+      if (!match) continue;
+      const points = parseScoreHundredths(match[1]);
+      if (points === null) return true;
+      itemBudgets.set(part.subpart_id, (itemBudgets.get(part.subpart_id) ?? 0) + points);
+      return false;
+    }
+    return true;
+  });
+  if (itemBudgets.size) {
+    const labels = subparts.map(part => markerPattern(part.label).source).join("|");
+    const labelledLine = new RegExp(String.raw`^\s*(?:-\s+)?(?:${labels})`, "iu");
+    criterion = ordinaryLines.filter(line => labelledLine.test(line)).join("\n");
+  }
   const occurrences: MarkerOccurrence[] = [];
   for (const part of subparts) {
     for (const match of criterion.matchAll(markerPattern(part.label))) {
@@ -76,7 +104,10 @@ export function summarizeRubricPoints(
   occurrences.sort((left, right) => left.start - right.start || left.end - right.end);
 
   const allocations = new Map<string, number[]>();
-  for (const part of subparts) allocations.set(part.subpart_id, []);
+  for (const part of subparts) {
+    const budget = itemBudgets.get(part.subpart_id);
+    allocations.set(part.subpart_id, budget === undefined ? [] : [budget]);
+  }
   const seen = new Set<string>();
   for (let index = 0; index < occurrences.length; index += 1) {
     const occurrence = occurrences[index];
@@ -95,7 +126,10 @@ export function summarizeRubricPoints(
     const includedBreakdown = Boolean(firstPoint && /^\s*[,，:：;；(（-]*\s*(?:其中|包括|包含|含|分解为|分配为|including\b|comprising\b|consisting\s+of\b|of\s+which\b)/iu.test(
       segment.slice((firstPoint.index ?? 0) + firstPoint[0].length),
     ));
-    if (includedBreakdown) pointMatches = pointMatches.slice(0, 1);
+    const declaredMax = firstPoint && /^\s*[:：,，]?\s*(?:满分|配分|本问满分|worth|maximum(?:\s+of)?)\s*[:：]?\s*$/iu.test(
+      segment.slice(0, firstPoint.index),
+    );
+    if (includedBreakdown || declaredMax) pointMatches = pointMatches.slice(0, 1);
     for (const pointMatch of pointMatches) {
       const pointStart = pointMatch.index ?? 0;
       const prefix = segment.slice(Math.max(0, pointStart - 20), pointStart);

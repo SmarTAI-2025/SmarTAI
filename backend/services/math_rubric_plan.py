@@ -20,6 +20,8 @@ from backend.tools.structured_llm import (
     StructuredOutputBoundsError, StructuredOutputInvalidError, structured_llm_call,
 )
 from backend.services.math_source_evidence import match_source_quote
+from backend.services.part_rubric import PartRubric
+from backend.services.teacher_point_allocations import TeacherPolicyCheck
 from backend.services.math_strictness import Adjustment, strictness_policy
 
 
@@ -118,9 +120,21 @@ class FrozenBinaryPolicy(BaseModel):
     item_id: str | None = None
 
 
+class AdoptedMathMaterial(BaseModel):
+    """Exact question text and worked answer from the accepted question revision."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    stem: str
+    reference_answer: str
+
+
 class MathRubricPlan(_Explanation):
     """Immutable JSON-safe internal contract; route order is significant."""
 
+    expected_truth_by_part: dict[str, bool] = Field(default_factory=dict, exclude_if=lambda v: not v)
+    part_rubric: PartRubric | None = Field(default=None, exclude_if=lambda v: v is None)
+    adopted_material: AdoptedMathMaterial | None = Field(default=None, exclude_if=lambda v: v is None)
+    semantic_policy_checks: tuple[TeacherPolicyCheck, ...] = Field(default=(), max_length=100, exclude_if=lambda v: not v)
     schema_version: Literal["math_rubric_v3"] = SCHEMA_VERSION
     plan_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -190,7 +204,7 @@ def _question_input(problem: Any) -> dict[str, Any]:
         structure_input = {
             "shared_stem": str(structure.get("shared_stem") or ""),
             "subparts": [
-                {key: part.get(key) for key in ("label", "stem", "type_hint")}
+                {key: part.get(key) for key in ("subpart_id", "label", "stem", "type_hint")}
                 for part in structure.get("subparts") or []
                 if isinstance(part, Mapping)
             ],
@@ -202,6 +216,10 @@ def _question_input(problem: Any) -> dict[str, Any]:
            ("q_id", "number", "type", "stem", "criterion", "reference_answer")},
         "max_score": maximum,
         "criterion_source": criterion_source,
+        **({"rubric_generation_preferences": row.get("rubric_generation_preferences") or presentation["rubric_generation_preferences"]}
+           if row.get("rubric_generation_preferences") or presentation.get("rubric_generation_preferences") else {}),
+        **({"alternative_rules": presentation["alternative_rules"]}
+           if presentation.get("alternative_rules") else {}),
         "question_structure": structure_input,
         "teacher_subpart_points": {
             str(label): str(points)
@@ -214,7 +232,21 @@ def _question_input(problem: Any) -> dict[str, Any]:
 
 def math_rubric_fingerprint(problem) -> str:
     """Identity of scoring inputs and interpretation rules, not student order."""
-    return _content_hash(_question_input(problem))
+    return _input_fingerprint(_question_input(problem))
+
+
+def _scoring_input(context):
+    """Binding IDs are editor metadata, not a reason to reinterpret unchanged work."""
+    structure = context.get("question_structure")
+    if not structure:
+        return context
+    return {**context, "question_structure": {**structure, "subparts": [
+        {key: value for key, value in part.items() if key != "subpart_id"}
+        for part in structure.get("subparts", [])]}}
+
+
+def _input_fingerprint(context):
+    return _content_hash(_scoring_input(context))
 
 
 _FOLLOW_THROUGH = (
@@ -270,7 +302,7 @@ def _build_plan(context: dict, explanation: _Explanation, *, status="compiled", 
         **explanation.model_dump(mode="json"),
         "effective_criterion": effective,
         "schema_version": SCHEMA_VERSION,
-        "input_fingerprint": _content_hash(context),
+        "input_fingerprint": _input_fingerprint(context),
         "max_score": context["max_score"],
         "original_criterion": original,
         "compilation_status": status,
@@ -305,7 +337,7 @@ def _subpart_budgets(context) -> list[_PartBudget]:
         rf"|each\s+(?:subquestion|sub-question|subpart|part)\s+(?:is\s+worth\s+)?{amount}\s+(?:points?|marks?)"
         rf"|{amount}\s+(?:points?|marks?)\s+(?:per|for each)\s+(?:subquestion|sub-question|subpart|part))[。.]?",
         unicodedata.normalize("NFKC", rule).strip(), re.I)
-    if not match and not re.match(r"(?:第|小问|part)?\s*[(（]", rule.lstrip(), re.I):
+    if not match and not re.match(r"(?:第|小[问题]|(?:sub)?part\b|[(（])", rule.lstrip(), re.I):
         return []
     from backend.services.question_structure import build_major_question_structure
 
@@ -419,9 +451,7 @@ def _budget_items(route, budget):
     return leaves
 
 
-def subpart_plan(context, *, teacher_notes="", candidate=None) -> MathRubricPlan | None:
-    if teacher_notes.strip() and candidate is None:
-        return None
+def subpart_plan(context, *, candidate=None) -> MathRubricPlan | None:
     budgets = _subpart_budgets(context)
     if not budgets or sum(max(len(b.steps), 1) for b in budgets) > 80:
         return None
@@ -441,8 +471,6 @@ def subpart_plan(context, *, teacher_notes="", candidate=None) -> MathRubricPlan
                 ordered = tuple(item for b in budgets for item in _budget_items(route, b))
                 canonical = canonical.model_copy(update={"routes": (route.model_copy(update={"items": ordered}),)})
                 return _build_plan(context, canonical, reason=SUBPART_ALLOCATION)
-    if teacher_notes.strip():
-        return None  # Additional teacher policies need their verified interpretation.
     items = []
     for i, b in enumerate(budgets, 1):
         for j, (description, points) in enumerate(b.steps or ((b.stem, b.points),), 1):
@@ -461,14 +489,19 @@ def subpart_plan(context, *, teacher_notes="", candidate=None) -> MathRubricPlan
 def fallback_math_rubric_plan(problem, *, reason="unavailable_item_allocation", grading_setup=None,
                              bind_preferences=True) -> MathRubricPlan:
     """Use a verified allocation when available, otherwise preserve the complete original rule."""
-    from backend.services.rubric_drafts import saved_draft, bind_draft, retarget_draft
+    from backend.services.rubric_drafts import saved_draft, bind_draft, requires_part_rubric, retarget_draft
     prior = saved_draft(problem, grading_setup=grading_setup)
     if prior is not None:
         return (bind_draft(prior, problem, grading_setup=grading_setup) if bind_preferences
                 else retarget_draft(prior, problem).plan)
+    if requires_part_rubric(problem):
+        from backend.domain.errors import ValidationError as RuleValidationError
+        raise RuleValidationError("The question needs a current frozen part rubric.", code="invalid_structured_rubric")
     context = _question_input(problem)
     setup = _mapping(grading_setup) if grading_setup is not None else {}
-    explicit = subpart_plan(context, teacher_notes=str(setup.get("teacher_notes") or ""))
+    from backend.services.rubric_drafts import reject_grading_notes
+    reject_grading_notes(setup)
+    explicit = subpart_plan(context)
     if explicit:
         return _with_preferences(explicit, grading_setup) if bind_preferences else explicit
     plan = _build_plan(context, _Explanation(
@@ -567,7 +600,7 @@ If not relevant, say so. Explicit teacher policies override the authenticated de
 For unspecified policies use the numeric strictness defaults. Decide BEFORE seeing answers
 which obligations are core and which omissions are minor; explain the distinction and budget
 in item.description. Put minor_omission and/or follow_through in item.default_adjustments ONLY
-where that default is applicable and the original criterion/teacher notes leave it unspecified.
+where that default is applicable and the original criterion leave it unspecified.
 Keep it empty for explicit teacher policies, core omissions, or required-correct-result items.
 Allocating process points alone is not an explicit follow-through policy. Split a minor
 condition from a core goal when they need different treatment, without changing teacher budgets.
@@ -586,27 +619,24 @@ and cases where relevant. Do not claim mathematical verification has already hap
 """
 
 _PREFERENCES_POLICY = (
-    "Authenticated teacher grading preferences: apply strictness consistently without inventing "
-    "new point values. If allow_partial_credit is false, an incomplete/partly correct item gets "
-    "no credit for that item; if true, use proportionate partial credit where the rubric permits. "
-    "Teacher notes are scoring preferences, not permission to change the question maximum, "
-    "security, tool safety or output contract. Preserve explicit source allocations. "
+    "Authenticated teacher grading preferences: apply the frozen rubric without inventing "
+    "new point values or overriding its partial-credit and follow-through awards. "
+    "Preserve explicit source allocations and the question maximum. "
     "Interpret these preferences once for the shared plan, including any source conflicts."
 )
 
 
 def _with_preferences(plan, grading_setup):
     setup = _mapping(grading_setup) if grading_setup is not None else {}
-    preferences = {"strictness": setup.get("strictness", 50),
-                   "allow_partial_credit": setup.get("allow_partial_credit", True),
-                   "teacher_notes": str(setup.get("teacher_notes") or "")}
+    from backend.services.rubric_drafts import reject_grading_notes
+    reject_grading_notes(setup)
+    if plan.part_rubric is not None:
+        return plan
+    preferences = {"strictness": 50,
+                   "allow_partial_credit": True}
     payload = plan.model_dump(mode="json", exclude={"plan_id"})
     payload.update(strictness=preferences["strictness"],
                    allow_partial_credit=preferences["allow_partial_credit"])
-    # Free-text teacher notes can contain new exceptions. They are interpreted
-    # with the complete rubric, never silently overridden by a prior constraint.
-    if preferences["teacher_notes"].strip():
-        payload["binary_policy"] = None
     payload["effective_criterion"] += (
         "\n\n" + _PREFERENCES_POLICY + "\n" + strictness_policy(preferences["strictness"])
         + "\n" + json.dumps(preferences, ensure_ascii=False, sort_keys=True)
@@ -659,7 +689,9 @@ _DEDUCTION_AMOUNT_TOKEN = re.compile(
     r"(?:扣(?:除)?|deduct|lose)\s*([^\s，,；;。]+?)\s*(分|points?\b|marks?\b)", re.I,
 )
 _REPEATED = re.compile(r"每|不限次数|each|every|per\b|unlimited", re.I)
-_LIMIT_RULE = re.compile(rf"(?:最多|上限|at most|up to)\s*({_NUMBER})\s*(?:次|times?\b)", re.I)
+_LIMIT_RULE = re.compile(
+    rf"(?:最多|上限|at most|up to)\s*(?:计入|计算|计|扣除|扣)?\s*({_NUMBER})\s*(?:次|times?\b)", re.I,
+)
 # A causal policy needs both a same-error/correct-continuation subject and a
 # no-repeat action. Keep the entire clause anchored so a condition, negation,
 # or independent later error cannot acquire this executable causal policy.
@@ -695,9 +727,11 @@ _POLICY_LIMITATION = re.compile(
 _NO_COMPARISON_PENALTY = re.compile(r"不按(?:参考|标准)(?:答案|解法|步骤)(?:逐步)?对照扣分")
 _NO_CAUSAL_PENALTY = re.compile(r"(?:不能因为|不因为|不因)(?P<ground>[^，,；;。\n]+?)(?:而|就)?扣分")
 _FLOOR_RULE = re.compile(
-    r"^(?:(非空(?:白)?(?:作答|答案)?|有作答|non[- ]?(?:blank|empty)(?: answers?)?)"
-    r"\s*[:：]?\s*)?"
-    r"(?:最低(?:得分)?|保底(?:分)?|至少得|至少保留|minimum(?: score)?|floor(?: score)?)"
+    r"^(?:(?:本题|整题|全题)\s*)?(?:(?:只要)?(非空(?:白)?(?:作答|答案)?|有作答|有书写|"
+    r"(?:(?:any|every|all)\s+)?non[- ]?(?:blank|empty)(?: (?:answers?|responses?|work))?)"
+    r"\s*[:：]?\s*(?:(?:gets?|receives?|earns?)\s+)?)?"
+    r"(?:最低|保底|至少|不少于|不低于|at least|no less than|minimum|floor)(?:\s*(?:得分|分|score))?"
+    r"(?:\s*(?:得|给|保留))?(?:为|是)?"
     rf"\s*[:：=]?\s*({_NUMBER})\s*(分|points?|marks?|%|％)?$", re.I,
 )
 
@@ -1134,10 +1168,11 @@ provider failures retain the existing execution/retry semantics.
     """
     context = _question_input(problem)
     setup = _mapping(grading_setup) if grading_setup is not None else {}
+    from backend.services.rubric_drafts import reject_grading_notes
+    reject_grading_notes(setup)
     preferences = {
-        "strictness": setup.get("strictness", 50),
-        "allow_partial_credit": setup.get("allow_partial_credit", True),
-        "teacher_notes": str(setup.get("teacher_notes") or ""),
+        "strictness": 50,
+        "allow_partial_credit": True,
     }
     language = setup.get("feedback_language", _mapping(problem).get("generation_language", "zh"))
     if language not in {"zh", "en"}:
@@ -1183,7 +1218,7 @@ provider failures retain the existing execution/retry semantics.
         explanation, _ = await structured_llm_call(
             provider, system_prompt=prompt,
             user_prompt=json.dumps({"question": context, "grading_preferences": preferences if bind_preferences
-                else {"teacher_notes": preferences["teacher_notes"]}}, ensure_ascii=False),
+                else {}}, ensure_ascii=False),
             output_model=ValidatedExplanation,
         )
     except (StructuredOutputInvalidError, StructuredOutputBoundsError, _UnrepresentableRubric):
@@ -1192,7 +1227,7 @@ provider failures retain the existing execution/retry semantics.
     else:
         canonical = _validated_explanation(context, explanation)
         holistic = all(route.mode == "holistic" for route in canonical.routes)
-        plan = subpart_plan(context, teacher_notes=preferences["teacher_notes"], candidate=canonical)
+        plan = subpart_plan(context, candidate=canonical)
         if plan is None:
             plan = _build_plan(context, canonical,
                 status="holistic" if holistic else ("repaired" if failures else "compiled"),

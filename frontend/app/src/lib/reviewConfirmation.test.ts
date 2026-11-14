@@ -7,6 +7,16 @@ const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id:
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
+  it.each(["zh-CN", "en-US"])("keeps extracted rubric conflicts blocking until verified (%s)", locale => {
+    const conflict = issue({ field: "rubric", code: "generation_failed", severity: "blocking",
+      details: { reason: "invalid_structured_rubric", rubric_review_draft: { status: "needs_review", fields: [] } } });
+    const row = question({ preparation_issues: [conflict] });
+    expect(questionReviewNextBlocked(row)).toBe(true);
+    expect(questionReviewNotes(row, locale, code => code)).toContainEqual({ severity: "blocking",
+      label: locale === "zh-CN" ? "已保留已识别评分项，请核对分值和适用条件后保存。"
+        : "Extracted scoring details are saved. Review the points and conditions, then save your corrections." });
+    expect(questionReviewNextBlocked({ ...row, preparation_issues: [{ ...conflict, status: "resolved" }] })).toBe(false);
+  });
   it.each(["zh-CN", "en-US"])("lists invalid identity fields individually and omits valid fields (%s)", locale => {
     const student = { stu_id: "[Unknown Student]", stu_name: "[Unknown Student]", stu_ans: [] };
     const task = { task_id: "T1", student_data: { S1: student } } as unknown as Task;

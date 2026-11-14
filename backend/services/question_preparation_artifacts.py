@@ -203,6 +203,10 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class _RubricGenerationPreferences(_StrictModel):
+    follow_through_strictness: int = Field(ge=0, le=100, strict=True)
+
+
 class ArtifactProblemV1(ProblemInfo):
     """Explicit allow-list for one persisted major-question package."""
 
@@ -210,6 +214,7 @@ class ArtifactProblemV1(ProblemInfo):
 
     q_id: str = Field(pattern=r"^q[1-9][0-9]{0,2}$", max_length=4)
     rubric_draft: dict[str, Any] | None = None
+    rubric_generation_preferences: _RubricGenerationPreferences | None = Field(default=None, exclude_if=lambda value: value is None)
     source_display_number: str | None = Field(default=None, max_length=128)
     max_score_source: str | None = Field(default=None, max_length=128)
     max_score_review_status: Literal[
