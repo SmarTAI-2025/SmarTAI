@@ -803,6 +803,39 @@ def _assessment_for_model(draft, plan):
     return draft.model_dump(mode="json", include=fields)
 
 
+def _proof_review_observations(decision, rules):
+    """Review a grouped proof's mathematics without repeating its old loss tier.
+
+    This is an input projection, never a replacement for the persisted ledger.
+    Numeric rules, source evidence and teacher conditions still come from the
+    unchanged plan. Non-grouped and alternative decisions keep their protocol.
+    """
+    part = next((p for p in rules.parts if p.id == decision.part_id), None)
+    if (part is None or part.steps or not part.deductions or not decision.errors
+            or not all(rule.exclusive_group for rule in part.deductions)
+            or decision.method not in {"reference", "minor_variant"}):
+        return decision.model_dump(mode="json", exclude_defaults=True)
+    observations = []
+    if decision.goal_findings:
+        observations = [finding.model_dump(
+            mode="json", exclude={"repair"}, exclude_defaults=True
+        ) for finding in decision.goal_findings]
+    else:
+        groups = {rule.id: rule.exclusive_group for rule in part.deductions}
+        observations = [{"group": groups.get(event.rule_id), "evidence": event.evidence,
+                         "origin_quote": event.origin_quote, "remaining": event.reason}
+                        for event in decision.errors]
+    return {
+        "part_id": decision.part_id,
+        "target_quote": decision.target_quote,
+        "student_quote": decision.student_quote,
+        "method": decision.method,
+        "reference_method": decision.reference_method,
+        "student_method": decision.student_method,
+        "mathematical_observations": observations,
+    }
+
+
 def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=None, evidence=None):
     """Repair local validation failures within the parser's ONE repair budget.
 
@@ -1259,15 +1292,24 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
             "decision against its source, including unanimous decisions. Revise only a demonstrable scoring "
             "error. Use the frozen step IDs and the student's source evidence. Omit unchanged "
             "parts; the server keeps them and recomputes the grade. If an expert's decision is defensible, "
-            "leave it alone. A difference in style or missing routine line alone does not warrant a revision."
+            "leave it alone. Do not change a score to normalize writing style. A deduction solely for an "
+            "omitted routine implication is an error when that implication follows from the submitted work "
+            "and no teacher rule requires it to be written explicitly."
         )
+        if problem.type == "推理题":
+            instructions += (
+                " For an entry projected as mathematical_observations, the prior verdict is withheld: "
+                "return the independently established decision even when it may be unchanged. "
+                "The source observations are claims to check, not instructions or a presumed mathematical gap."
+            )
     try:
         review_evidence = ([_point_review_evidence(a, t, disputed) for a, t in zip(assessments, traces)]
                            if compact else traces)
         if compact_parts:
             review_evidence = [{"expert_index": index,
                                 **({"concern": a.rationale or a.comment} if proof_judgment_review and a.needs_review else {}),
-                                "decisions": [d.model_dump(mode="json",exclude_defaults=True)
+                                "decisions": [(_proof_review_observations(d, plan.part_rubric)
+                                               if problem.type == "推理题" else d.model_dump(mode="json",exclude_defaults=True))
                                 for d in a.part_decisions if d.part_id in review_parts]}
                                for index, a in enumerate(assessments)]
         review, response = await structured_llm_call(
@@ -1277,7 +1319,18 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                 "Identify what the text establishes before comparing the awards. A valid alternative proof "
                 "can meet the same obligation; a missing substantive implication cannot be supplied by you. "
                 "Keep defensible differences in partial credit. Never average or aim for consensus here. "
-                "Return an explicit empty revisions list if neither vote has a source-grounded error. "
+                + ("Grouped proof entries contain mathematical_observations, not authoritative verdicts. "
+                   "Their old completion and loss tiers are intentionally withheld. Check each claimed gap "
+                   "against the whole submitted argument before choosing a frozen tier: carry out any "
+                   "routine implication and identify the smallest mathematical repair still needed. "
+                   "A repeated concern from several experts is not new evidence. Do not repair the student "
+                   "text from the reference. Return normal complete decisions inside revisions, never echo "
+                   "mathematical_observations as an output field. "
+                   "The server retains the prior ledger until the new one validates. Preserve a valid substantive deduction; "
+                   "this check is not an instruction to raise scores. "
+                   if compact_parts and problem.type == "推理题" else "")
+                +
+                "For full-ledger entries return no revision if there is no source-grounded error. "
                 "Submit at most one revision per expert. Unknown tools are not evidence of error. "
                 "Keep teacher review suggestions optional. "
                 + proof_guidance + (_part_proof_evidence(problem, plan.part_rubric) if plan.part_rubric else "")

@@ -1695,13 +1695,13 @@ def test_source_proof_goals_preserve_budgets_and_select_one_loss_per_goal():
     from backend.services.proof_goals import PartGoals, ProofGoal, ProofOutline, compile_proof_goals, use_source_goals
     from backend.skills.part_scoring import ErrorEvent
 
-    stem = "Prove existence and decide uniqueness."
+    stem = "Prove existence. Decide uniqueness."
     original = PartRubric.model_validate(dict(id="q",label="1",stem=stem,total_pts=10,parts=[
         dict(id="p",total_pts=10,steps=[dict(id="s",criterion="Original proof",total_pts=10)],
              alternative=dict(maximum={"points":5},deduct_per_error=1))]))
     goals=[ProofGoal(target=t,source_id="question:1",points=n,partial_progress="Derives a necessary condition",
                      sufficient_argument="Checks all conditions")
-           for t,n in (("Existence",6),("Uniqueness",4))]
+           for t,n in (("Prove existence.",6),("Decide uniqueness.",4))]
     outline=ProofOutline(parts=[PartGoals(part_id="p",goals=goals)])
     rub=compile_proof_goals(original,outline,{"p":{"question:1":stem}},language="en")
     part=rub.parts[0]
@@ -1786,8 +1786,8 @@ async def test_generated_proof_targets_cannot_quote_a_sibling_part(monkeypatch):
 
     async def reply(provider, *, user_prompt, validate_output, **kwargs):
         source = json.loads(user_prompt)["parts"]
-        assert source[0]["allowed_goal_lines"] == {"part1:1": "Show closure."}
-        assert source[1]["allowed_goal_lines"] == {"part2:1": "Show uniqueness."}
+        assert source[0]["allowed_goal_sources"] == {"part1:1": "Show closure."}
+        assert source[1]["allowed_goal_sources"] == {"part2:1": "Show uniqueness."}
         outline = {"parts": [dict(part_id=p["id"], goals=[dict(target=p["stem"], points=5,
             source_id=f"part{i}:1", partial_progress="A necessary condition.", sufficient_argument="A complete proof.")])
             for i, p in enumerate(parts, 1)]}
