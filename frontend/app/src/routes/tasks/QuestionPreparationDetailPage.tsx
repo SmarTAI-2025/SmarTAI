@@ -656,7 +656,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
         <h4 className="text-sm font-semibold">{tx(locale, "其他解法评分标准", "Scoring alternative methods")}</h4>
         {editing ? problem.alternative_rules?.filter(part => part.show_in_review !== false).map(part => <div key={part.id} className="text-sm leading-6">
           {part.label && <span className="mr-2 font-medium">{part.label}</span>}
-          <textarea value={alternateDrafts[part.id] ?? part.display_text ?? part.text}
+          <textarea value={alternateDrafts[part.id] ?? part.text}
             aria-label={tx(locale, `其他解法评分标准 ${part.label ?? ""}`, `Alternative methods ${part.label ?? ""}`)}
             className="w-full rounded-md border bg-background p-2" maxLength={4000}
             onChange={event => setAlternateDrafts({ ...alternateDrafts, [part.id]: event.target.value })} />

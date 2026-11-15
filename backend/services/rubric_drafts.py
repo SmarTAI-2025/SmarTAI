@@ -427,7 +427,7 @@ def _refresh_teacher_alternatives(draft, context):
     rules = draft.plan.part_rubric
     if not rules or draft.alternative_policy_version == 3:
         return draft
-    overrides = {(item["label"], item["stem"]): item["text"] for item in
+    overrides = {(item["label"], item["stem"]): item.get("binding_text", item["text"]) for item in
                  (context.get("alternative_rules") or {}).values()}
     updated = []
     for part in rules.parts:
@@ -559,6 +559,35 @@ def _alternative_display_key(text):
     return scoring_stem(text).rstrip("。.").rstrip()
 
 
+def _alternative_numeric_edit(part, text, *, maximum):
+    """Diff numeric fields against the exact server projection the user edited.
+
+    A displayed value is not the stored value: it can be rounded, resolved from
+    a fraction, or absent altogether. Only changed fields replace the original
+    policy. Changed wording/conditions must take the semantic editing path.
+    """
+    from backend.services.part_rubric import _alternative_fields, _checked_alternative, alternative_text
+    from backend.services.rubric_display import alternative_display
+
+    token = re.compile(r"\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
+    key = _alternative_display_key(text)
+    for language in ("zh", "en"):
+        for original in (alternative_text(part, zh=language == "zh"), alternative_display(part, language)):
+            if token.sub("#", key) != token.sub("#", _alternative_display_key(original)):
+                continue
+            before, after = _alternative_fields(original), _alternative_fields(text)
+            changes = {name: value for name, value in after.items() if before.get(name) != value}
+            if not changes:
+                return {}
+            policy = _checked_alternative(part.alternative, changes, text, maximum)
+            # Freeze the complete merged rule, not its lossy projection, for
+            # later rebinding/compilation as well as this immediate save.
+            # Explicitly render the stored fraction even for inferred caps.
+            policy = policy.model_copy(update={"inferred_method_cap": False})
+            return {"binding_text": alternative_text(part.model_copy(update={"alternative": policy}))}
+    return None
+
+
 def edit_alternatives(problem, presentation, updates, *, previous=None, allow_pending=False):
     """Resolve displayed identities against the complete candidate under its revision lock."""
     from backend.services.part_rubric import UninterpretedAlternative, read_alternative
@@ -595,6 +624,7 @@ def edit_alternatives(problem, presentation, updates, *, previous=None, allow_pe
     rules = current.plan.part_rubric if current else None
     if rules:
         budgets = {(p.label, p.stem): p.total_pts for p in rules.parts}
+    originals = {}
     if updates is not None:
         if not updates or any(identities.get(key) not in budgets for key in updates):
             raise ValueError("Unknown or changed scoring part. Reload the question.")
@@ -608,13 +638,19 @@ def edit_alternatives(problem, presentation, updates, *, previous=None, allow_pe
                 _alternative_display_key(text) not in {_alternative_display_key(rendered) for language in ("zh", "en")
                     for rendered in (alternative_display(originals[key], language),
                                      alternative_text(originals[key], zh=language == "zh"))}}
-        for key, text in updates.items():
+        for key, text in list(updates.items()):
             label, stem = identities[key]
             # A regenerated plan may assign a new ID to the same source part.
+            numeric_edit = _alternative_numeric_edit(originals[key], text,
+                maximum=budgets[(label, stem)] or problem.max_score) if key in originals else None
+            if numeric_edit == {}:
+                del updates[key]
+                continue
             overrides = {k: v for k, v in overrides.items() if (v["label"], v["stem"]) != (label, stem)}
             part_identity = next((p["subpart_id"] for p in structure.get("subparts", [])
                                   if (p["label"], p["stem"]) == (label, stem)), None)
-            overrides[key] = {"text": text.strip(), "label": label, "stem": stem, "subpart_id": part_identity}
+            overrides[key] = {"text": text.strip(), "label": label, "stem": stem, "subpart_id": part_identity,
+                              **(numeric_edit or {})}
 
     frozen = {(p.label, p.stem): p for p in rules.parts} if rules else {}
     policies = {}
@@ -627,10 +663,10 @@ def edit_alternatives(problem, presentation, updates, *, previous=None, allow_pe
                 policy = bind_alternative(
                     prior, label=prior.label, stem=prior.stem or problem.stem, structure=structure,
                     floor=rules.nonblank_floor.resolve(problem.max_score), question_points=problem.max_score,
-                    teacher=rules.teacher_rubric or "", override=item["text"],
+                    teacher=rules.teacher_rubric or "", override=item.get("binding_text", item["text"]),
                 )
             else:
-                policy = read_alternative(item["text"], maximum=budget if budget is not None else problem.max_score)
+                policy = read_alternative(item.get("binding_text", item["text"]), maximum=budget if budget is not None else problem.max_score)
         except UninterpretedAlternative:
             if not allow_pending:
                 raise
@@ -699,7 +735,7 @@ def rebind_review_edit(prior, old_problem, problem):
     old, new = _question_input(old_problem), _question_input(problem)
     from backend.services.question_structure import scoring_stem
 
-    override_texts = lambda context: {k: v["text"] for k, v in context.get("alternative_rules", {}).items()}
+    override_texts = lambda context: {k: v.get("binding_text", v["text"]) for k, v in context.get("alternative_rules", {}).items()}
     if (all(old[k] == new[k] for k in ("type", "max_score"))
             and override_texts(old) == override_texts(new)
             and all(scoring_stem(old[k]) == scoring_stem(new[k])
@@ -777,7 +813,7 @@ def rebind_review_edit(prior, old_problem, problem):
         old_lines, new_lines = old_text.strip().splitlines(), new_text.strip().splitlines()
         if len(old_lines) != len(parts) or len(new_lines) != len(parts):
             return None
-        overrides = {(v["label"], v["stem"]): v["text"] for v in new.get("alternative_rules", {}).values()}
+        overrides = {(v["label"], v["stem"]): v.get("binding_text", v["text"]) for v in new.get("alternative_rules", {}).values()}
         for i, (part, before, after) in enumerate(zip(parts, old_lines, new_lines)):
             target = _allocation_marker_pattern(part.label) if part.label else ""
             statement = target + r"\s*(?:[：:]\s*)?(?:正确结果给|答对(?:给|得)|满分|共)?\s*(\d+(?:\.\d+)?)\s*分[。.]?\s*"

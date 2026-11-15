@@ -1045,7 +1045,7 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
                         for part in math_plan.part_rubric.parts]
     elif presentation.get("alternative_rules"):
         from backend.services.rubric_drafts import pending_alternatives
-        alternatives = [{"id": key, "label": rule["label"], "text": rule["text"]}
+        alternatives = [{"id": key, "label": rule["label"], "text": rule.get("binding_text", rule["text"])}
                         for key, rule in pending_alternatives(presentation["alternative_rules"], structure).items()]
     # Give the editor valid old function-only rows in its existing text fields.
     # Invalid legacy data must remain visible so the teacher can correct it.

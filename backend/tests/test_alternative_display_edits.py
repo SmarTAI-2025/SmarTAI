@@ -111,3 +111,104 @@ def test_numeric_display_reader_keeps_budget_and_positive_deduction_validation(t
     from backend.services.part_rubric import read_alternative
     with pytest.raises(ValueError):
         read_alternative(text, maximum=10)
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("editor", ["complete", "concise"])
+@pytest.mark.parametrize("case", ["hidden_cap", "fraction", "precision"])
+def test_numeric_save_preserves_unedited_rules_through_reload_second_save_and_rebinding(
+        monkeypatch, language, editor, case):
+    from fastapi.testclient import TestClient
+    from backend.auth import create_token
+    from backend.main import create_app
+    from backend.services.math_rubric_plan import _question_input
+    from backend.services.part_rubric import Alternative, bind_parts
+    from backend.skills.part_scoring import settle_parts
+    from backend.tests.test_alternative_route import alternate, error
+
+    policies = {
+        "hidden_cap": {"maximum": {"points": 5}, "deduct_per_error": 1, "max_deduction": 5},
+        "fraction": {"maximum": {"fraction": "1/3"}, "deduct_per_error": .5},
+        "precision": {"maximum": {"points": 7.123456789012345}, "minimum": {"fraction": "1/7"},
+                      "deduct_per_error": .5, "max_deduction": 3.123456789012345},
+    }
+    args = persist(policies[case])
+    _, before = record(args)
+    part = before.plan.part_rubric.parts[0]
+    render = (lambda p: alternative_text(p, zh=language == "zh")) if editor == "complete" else (
+        lambda p: alternative_display(p, language))
+    original = render(part)
+    old, new, field = ("5", "8", "maximum") if case == "hidden_cap" else ("0.5", "0.25", "deduct_per_error")
+    edited = original.replace(old, new, 1)
+    expected = part.alternative.model_dump()
+    expected[field] = {"points": 8} if field == "maximum" else .25
+    # The existing settlement engine must see the retained cumulative cap.
+    def check_policy(actual):
+        for name in ("maximum", "minimum", "deduct_per_error", "max_deduction"):
+            assert actual.model_dump().get(name) == expected.get(name)
+
+    monkeypatch.setattr(task_facade, "_compile_review_edit", lambda *a, **k: pytest.fail("Unexpected model call"))
+    with TestClient(create_app(), headers={"Authorization": "Bearer " + create_token(args["owner_id"], "teacher")}) as client:
+        response = client.put(f"/tasks/{args['task_id']}/problems/q1", json={"alternative_rule_edits": {part.id: edited}})
+        assert response.status_code == 200, response.text
+        row, saved = record(args)
+        check_policy(saved.plan.part_rubric.parts[0].alternative)
+        if case == "hidden_cap":
+            answer = "\n".join(f"第{i}处独立计算错误" for i in range(1, 7))
+            score, _ = settle_parts(saved.plan.part_rubric,
+                [alternate(errors=[error(line=i) for i in range(1, 7)])], answer, row.stem)
+            assert score == 3
+        # Rebuild against a model proposal with different defaults. Persisted
+        # source binding must keep all exact merged fields, not the UI summary.
+        context = _question_input(problem_from_question(row))
+        candidate = saved.plan.part_rubric.model_copy(update={"parts": (
+            saved.plan.part_rubric.parts[0].model_copy(update={"alternative": Alternative(deduct_per_error=2)}),)})
+        rebuilt = bind_parts(candidate, context)
+        check_policy(rebuilt.parts[0].alternative)
+        # A subsequent edit after reloading must not depend on transient state.
+        current = saved.plan.part_rubric.parts[0]
+        second = render(current).replace("8", "9", 1) if case == "hidden_cap" else render(current).replace("0.25", "0.125", 1)
+        expected[field] = {"points": 9} if field == "maximum" else .125
+        response = client.put(f"/tasks/{args['task_id']}/problems/q1", json={"alternative_rule_edits": {part.id: second}})
+        assert response.status_code == 200, response.text
+        check_policy(record(args)[1].plan.part_rubric.parts[0].alternative)
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_complete_editor_preserves_fractions_and_full_decimal_precision(language):
+    from backend.services.part_rubric import _alternative_fields
+
+    args = persist({"maximum": {"fraction": "1/3"}, "minimum": {"fraction": "1/7"},
+                    "deduct_per_error": .123456789012345, "max_deduction": 1.123456789012345})
+    part = record(args)[1].plan.part_rubric.parts[0]
+    fields = _alternative_fields(alternative_text(part, zh=language == "zh"))
+    assert fields == {name: getattr(part.alternative, name)
+                      for name in ("maximum", "minimum", "deduct_per_error", "max_deduction")}
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_explicit_replacement_can_remove_a_previously_preserved_cap(monkeypatch, language):
+    args = persist({"maximum": {"points": 5}, "deduct_per_error": 1, "max_deduction": 5})
+    part = record(args)[1].plan.part_rubric.parts[0]
+    monkeypatch.setattr(task_facade, "_compile_review_edit", lambda *a, **k: pytest.fail("Unexpected model call"))
+    first = alternative_display(part, language).replace("5", "8")
+    task_facade.update_problem(**args, patch={"alternative_rule_edits": {part.id: first}})
+    assert record(args)[1].plan.part_rubric.parts[0].alternative.max_deduction == 5
+    replacement = ("其他解法最高得8分，最低0分。每个独立错误扣2分。" if language == "zh" else
+                   "Alternative methods: maximum 8 points, minimum 0 points. Deduct 2 points per independent error.")
+    task_facade.update_problem(**args, patch={"alternative_rule_edits": {part.id: replacement}})
+    row, saved = record(args)
+    assert saved.plan.part_rubric.parts[0].alternative.max_deduction is None
+    assert saved.plan.part_rubric.parts[0].alternative.deduct_per_error == 2
+    assert "binding_text" not in row.source["presentation"]["alternative_rules"][part.id]
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_numeric_format_only_does_not_change_frozen_policy(monkeypatch, language):
+    args = persist({"maximum": {"fraction": "1/3"}, "deduct_per_error": .5, "max_deduction": 5})
+    _, before = record(args)
+    part = before.plan.part_rubric.parts[0]
+    text = alternative_display(part, language).replace("0.5", "0.50")
+    monkeypatch.setattr(task_facade, "_compile_review_edit", lambda *a, **k: pytest.fail("Unexpected model call"))
+    task_facade.update_problem(**args, patch={"alternative_rule_edits": {part.id: text}})
+    assert record(args)[1].plan == before.plan
