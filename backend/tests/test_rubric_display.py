@@ -59,7 +59,9 @@ def test_unexplained_fractional_alternative_cap_is_reviewed_without_changing_rul
     projected = public_preparation_review(preparation_review({"q1": {"number": "1", "preparation_issues": issues}}))
     assert projected[0]["issues"][0]["details"] == issues[0]["details"]
     assert rules.model_dump_json() == before
-    explicit = part.model_copy(update={"alternative": part.alternative.model_copy(update={"field_sources": {"maximum": "本问其他解法最多四分之一分"}})})
+    explicit = part.model_copy(update={"alternative": part.alternative.model_copy(update={
+        "source_quote": "本问其他解法最多四分之一分",
+        "field_sources": {"maximum": "本问其他解法最多四分之一分"}})})
     assert not alternative_cap_issue("q1", rules.model_copy(update={"parts": (explicit,)}))
 
 
@@ -80,6 +82,33 @@ def test_cap_notice_clears_after_confirmation_or_correcting_the_actual_policy():
     presentation.update(review_status="edited", preparation_issues=[issue])
     plan.part_rubric = rules
     assert _serialize_problem(question, math_plan=plan)["preparation_issues"] == []
+
+
+@pytest.mark.parametrize("teacher, expected_warning", [
+    ("其他解法每错扣0.5分。", True),
+    ("Alternative methods: deduct 0.5 points per independent error.", True),
+    ("其他解法最低0分，每错扣0.5分，累计最多扣1分。", True),
+    ("其他解法最高得1.25分，每错扣0.5分。", False),
+    ("Alternative methods earn up to 1.25 points; deduct 0.5 points per independent error.", False),
+])
+def test_cap_warning_binds_to_the_teacher_maximum_not_other_alternative_fields(teacher, expected_warning):
+    from types import SimpleNamespace
+    from backend.tests.test_teacher_frozen_allocations import make_row, proposed
+    from backend.services.rubric_drafts import generated_rubric, RubricDefinition
+    from backend.services.task_facade import _serialize_problem
+    row, raw = make_row(teacher), proposed()
+    raw["parts"][0]["alternative"]["maximum"] = {"fraction": "1/8"}
+    _, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+    before = draft.plan.model_dump_json()
+    question = SimpleNamespace(**row, order_index=0, test_cases=None,
+        source={"presentation": {"review_status": "needs_review"}})
+    issues = _serialize_problem(question, math_plan=draft.plan)["preparation_issues"]
+    caps = [issue for issue in issues if issue.get("details", {}).get("reason") == "alternative_cap_review"]
+    assert bool(caps) == expected_warning
+    if expected_warning:
+        assert caps[0]["severity"] == "warning"
+        assert caps[0]["details"]["alternative_caps"] == [{"label": "", "maximum": 1.25, "total": 10}]
+    assert draft.plan.model_dump_json() == before
 
 
 def test_optional_model_display_plan_is_separate_from_frozen_scoring_and_invalidates_on_edit():

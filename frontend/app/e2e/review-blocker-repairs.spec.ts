@@ -67,7 +67,7 @@ for (const stage of ["submissions", "grading"] as const) for (const locale of ["
       await expect(dialog.getByRole("listitem")).toHaveCount(count);
       await expect(dialog).not.toContainText(/置信度|confidence|笔迹|authorship|学生实际留白|Genuine blank/);
       for (const row of await dialog.getByRole("listitem").all()) {
-        await expect(row).toContainText(stage === "submissions" ? (zh ? "解析失败" : "parsing failed") : (zh ? /分数|最终分|解析失败/ : /score|parse result/));
+        await expect(row).toContainText(stage === "submissions" ? (zh ? "解析失败" : "parsing failed") : (zh ? /分数|最终分|模型返回的评分格式无法读取/ : /score|parse result/));
       }
       await dialog.getByRole("button", { name: zh ? /前往问题位置|直接前往填写分数/ : /Go to issue|Go to the missing score/ }).click();
       await expect(dialog).toHaveCount(0);

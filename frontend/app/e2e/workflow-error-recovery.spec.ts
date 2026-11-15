@@ -212,7 +212,7 @@ test("restored question inputs can start a new job only after manual continuatio
   await expect(page.getByText("已上传文件可继续使用。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "重新识别全部资料" }).click();
   await expect(page).toHaveURL(/\/problems\/progress$/);
-  await expect(page.getByRole("heading", { name: "题目资料准备进度" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "题目准备进度" })).toBeVisible();
   await expect(page.getByRole("button", { name: "重试失败项", exact: true })).toHaveCount(0);
   expect(calls).toHaveLength(2);
   expect(calls[0].body).toContain("stored-pdf");

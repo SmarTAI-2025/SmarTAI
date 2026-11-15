@@ -47,14 +47,23 @@ def _fingerprint(rules):
 
 def alternative_cap_issue(q_id, rules):
     """Expose an unsupported AI cap for review without altering scoring policy."""
+    from backend.services.part_rubric import _teacher_alternative_fields
+
     caps = []
     for part in rules.parts:
         policy = part.alternative
         maximum = float(policy.maximum.resolve(part.total_pts))
         minimum = float(policy.minimum.resolve(part.total_pts))
-        if (minimum < maximum < part.total_pts and not policy.source_quote
-                and "maximum" not in policy.field_sources and not policy.inferred_method_cap):
-            caps.append({"label": part.label or "", "maximum": maximum, "total": part.total_pts})
+        if minimum < maximum < part.total_pts and not policy.inferred_method_cap:
+            # A teacher's deduction/floor quote does not justify an AI ceiling.
+            # Reuse field-level binding so parsed caps and source-bound semantic
+            # caps retain the same meaning as in the frozen scoring policy.
+            try:
+                fields = _teacher_alternative_fields(policy.source_quote, policy)
+            except ValueError:
+                fields = {}
+            if "maximum" not in fields:
+                caps.append({"label": part.label or "", "maximum": maximum, "total": part.total_pts})
     if not caps:
         return []
     return [{"issue_id": f"alternative-cap:{q_id}:{_fingerprint(rules)[:24]}", "q_id": q_id,

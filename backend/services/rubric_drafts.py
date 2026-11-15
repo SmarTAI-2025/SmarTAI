@@ -550,6 +550,15 @@ def pending_alternatives(overrides, structure, previous_structure=None):
     return result
 
 
+def _alternative_display_key(text):
+    from backend.services.question_structure import scoring_stem
+
+    # Only compare against server-rendered alternative prose. Unlike a stem,
+    # its final ASCII dot is a sentence stop, not mathematical/code syntax.
+    # Internal decimal points, operators, words and conditions stay significant.
+    return scoring_stem(text).rstrip("。.").rstrip()
+
+
 def edit_alternatives(problem, presentation, updates, *, previous=None, allow_pending=False):
     """Resolve displayed identities against the complete candidate under its revision lock."""
     from backend.services.part_rubric import UninterpretedAlternative, read_alternative
@@ -591,13 +600,12 @@ def edit_alternatives(problem, presentation, updates, *, previous=None, allow_pe
             raise ValueError("Unknown or changed scoring part. Reload the question.")
         # The editor shows the human-readable projection. Punctuation/spacing
         # edits of that exact projection must not become new scoring policies.
-        from backend.services.question_structure import scoring_stem
         from backend.services.rubric_display import alternative_display
         from backend.services.part_rubric import alternative_text
         if displayed and displayed.plan.part_rubric:
             originals = {p.id: p for p in displayed.plan.part_rubric.parts}
             updates = {key: text for key, text in updates.items() if key not in originals or
-                scoring_stem(text) not in {scoring_stem(rendered) for language in ("zh", "en")
+                _alternative_display_key(text) not in {_alternative_display_key(rendered) for language in ("zh", "en")
                     for rendered in (alternative_display(originals[key], language),
                                      alternative_text(originals[key], zh=language == "zh"))}}
         for key, text in updates.items():
