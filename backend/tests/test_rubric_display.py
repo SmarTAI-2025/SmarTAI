@@ -111,6 +111,50 @@ def test_cap_warning_binds_to_the_teacher_maximum_not_other_alternative_fields(t
     assert draft.plan.model_dump_json() == before
 
 
+@pytest.mark.parametrize("points, teacher, expected_warning", [
+    (1.25, "", True),
+    (0, "", True),
+    (1.25, "其他解法每错扣0.5分。", True),
+    (1.25, "其他解法最低1.25分。", True),
+    (1.25, "其他解法最高1.25分，最低1.25分。", False),
+    (0, "其他解法不得分。", False),
+    (10, "", False),
+])
+def test_fixed_alternative_caps_are_reviewed_without_changing_the_score(points, teacher, expected_warning):
+    from types import SimpleNamespace
+    from backend.tests.test_alternative_route import material, alternate, ANSWER, STEM
+    from backend.services.task_facade import _serialize_problem
+    from backend.skills.part_scoring import settle_parts
+
+    row, draft = material(teacher=teacher, alternative={
+        "maximum": {"points": points}, "minimum": {"points": points}, "deduct_per_error": .5})
+    before = draft.plan.model_dump_json()
+    question = SimpleNamespace(**{k: row[k] for k in ("q_id", "number", "type", "stem", "criterion", "reference_answer", "max_score")},
+        order_index=0, test_cases=None, source={"presentation": {"review_status": "needs_review"}})
+    issues = _serialize_problem(question, math_plan=draft.plan)["preparation_issues"]
+    caps = [issue for issue in issues if issue.get("details", {}).get("reason") == "alternative_cap_review"]
+    assert bool(caps) == expected_warning
+    if expected_warning:
+        assert caps[0]["severity"] == "warning"
+        assert caps[0]["details"]["alternative_caps"] == [{"label": "", "maximum": points, "total": 10}]
+    assert settle_parts(draft.plan.part_rubric, [alternate("complete")], ANSWER, STEM)[0] == points
+    assert draft.plan.model_dump_json() == before
+
+
+@pytest.mark.parametrize("teacher", ["", "本题非空最低6分。", "本题非空最低6分。其他解法每错扣0.5分。"])
+def test_existing_required_method_fixed_award_has_a_source_not_an_unexplained_ai_cap(teacher):
+    from backend.services.part_rubric import bind_parts
+    from backend.services.rubric_display import alternative_cap_issue
+    stem = "必须用配方法解方程 x²−3x+2=0。"
+    raw = PartRubric(id="q1", label="1", stem=stem, total_pts=10,
+        nonblank_floor={"pts": 6 if teacher else 0}, parts=[dict(id="p", total_pts=10,
+            steps=[dict(id="s", criterion="配方求根", total_pts=10)], alternative={"deduct_per_error": .5})])
+    rules = bind_parts(raw, dict(stem=stem, number="1", max_score=10, criterion=teacher))
+    policy = rules.parts[0].alternative
+    assert policy.maximum.resolve(10) == policy.minimum.resolve(10) < 10
+    assert not alternative_cap_issue("q1", rules)
+
+
 def test_optional_model_display_plan_is_separate_from_frozen_scoring_and_invalidates_on_edit():
     from backend.services.rubric_drafts import RubricDefinition, generated_rubric
     row = dict(q_id="q1", number="1", type="计算题", stem="只写最终答案：计算 1+1。",

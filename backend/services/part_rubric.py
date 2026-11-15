@@ -375,6 +375,25 @@ def _alternative_fields(text):
     """Parse only the fields actually stated by the teacher."""
     values = {}
     normalized = unicodedata.normalize("NFKC", text)
+    # These are the complete sentences emitted by alternative_display. Match
+    # the whole form: editing one displayed amount must not require AI, while
+    # different wording/conditions still follow the ordinary policy reader.
+    number = r"(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?"
+    fixed = re.fullmatch(
+        rf"(?:Alternative methods receive (?P<en>{number}) points|其他解法按\s*(?P<zh>{number})\s*分计)[。.]?",
+        normalized.strip(), re.I)
+    if fixed:
+        amount = Amount(points=float(fixed["en"] or fixed["zh"]))
+        return {"maximum": amount, "minimum": amount}
+    display = re.fullmatch(
+        rf"(?:Other correct methods can earn all|Alternative methods earn up to) (?P<maximum>{number}) points"
+        rf"(?:; deduct (?P<deduct_per_error>{number}) points per independent error)?"
+        rf"(?:; retain at least (?P<minimum>{number}) points)?"
+        rf"(?:; deduct at most (?P<max_deduction>{number}) points in total)?[。.]?",
+        normalized.strip(), re.I)
+    if display:
+        return {name: Amount(points=float(value)) if name in {"maximum", "minimum"} else float(value)
+                for name, value in display.groupdict().items() if value is not None}
     for match in _POLICY_TOKEN.finditer(normalized):
         prefix = normalized[:match.start()]
         clause = re.split(r"[，,；;。\n]|\.(?=\s|$)", prefix)[-1].casefold()

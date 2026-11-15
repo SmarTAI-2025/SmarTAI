@@ -6,6 +6,7 @@ compression; an absent/unsupported interpretation retains the individual rules.
 """
 import hashlib
 import json
+from fractions import Fraction
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from backend.services.math_source_evidence import match_source_quote
@@ -47,14 +48,20 @@ def _fingerprint(rules):
 
 def alternative_cap_issue(q_id, rules):
     """Expose an unsupported AI cap for review without altering scoring policy."""
-    from backend.services.part_rubric import _teacher_alternative_fields
+    from backend.services.part_rubric import _teacher_alternative_fields, _requires_method
 
     caps = []
     for part in rules.parts:
         policy = part.alternative
         maximum = float(policy.maximum.resolve(part.total_pts))
         minimum = float(policy.minimum.resolve(part.total_pts))
-        if minimum < maximum < part.total_pts and not policy.inferred_method_cap:
+        if minimum <= maximum < part.total_pts and not policy.inferred_method_cap:
+            # The existing required-method policy can give a fixed share of the
+            # question floor. Its source requirement justifies that exact cap.
+            method_floor = (rules.nonblank_floor.resolve(rules.total_pts)
+                            * Fraction(str(part.total_pts)) / Fraction(str(rules.total_pts)))
+            if minimum == maximum and policy.maximum.resolve(part.total_pts) == method_floor and _requires_method(policy.source_quote):
+                continue
             # A teacher's deduction/floor quote does not justify an AI ceiling.
             # Reuse field-level binding so parsed caps and source-bound semantic
             # caps retain the same meaning as in the frozen scoring policy.
