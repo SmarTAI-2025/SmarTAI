@@ -492,7 +492,7 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
 
         <StageProviderSelect
           id="question-recognition-provider"
-          label={tx(locale, "题目识别模型", "Question recognition model")}
+          label={tx(locale, "题目准备模型", "Question preparation model")}
           hint={tx(
             locale,
             "可直接开始识别，无需先做图片测试。图片与扫描件需要模型支持图片输入。",
@@ -537,7 +537,7 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
               className={cn(navButtonClass, !nextRole && "border-primary bg-primary text-primary-foreground hover:bg-primary/90")}>
               {isBusy && <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />}
               {busyLabel ?? (hasExistingProblems ? tx(locale, "重新识别全部资料", "Prepare All Materials Again")
-                : nextRole ? tx(locale, "直接识别题目资料", "Prepare Materials Now") : tx(locale, "识别题目资料", "Prepare Question Materials"))}
+                : nextRole ? tx(locale, "直接开始准备题目", "Prepare Questions Now") : tx(locale, "开始准备题目", "Prepare Questions"))}
             </button>
             {nextRole && <button type="button" disabled={isBusy || !questionReady} onClick={() => moveRole(1)}
               className={cn(navButtonClass, "border-primary bg-primary text-primary-foreground hover:bg-primary/90")}>
@@ -942,7 +942,7 @@ function StartRequirementsDialog({
           {needsByok ? (
             <div className="rounded-[8px] border bg-slate-50 px-4 py-3 dark:bg-slate-950/30">
               <p className="text-sm font-semibold text-foreground">{tx(locale, "启用 BYOK 模型", "Enable a BYOK Model")}</p>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">{tx(locale, "题目识别、标答补全过程和评分标准生成需要模型；往返配置时当前草稿会保留。", "Question recognition and material generation require a model. Your draft is preserved while you configure BYOK.")}</p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">{tx(locale, "识别题干、补全标答和生成评分标准需要模型；往返配置时当前草稿会保留。", "Reading question text and generating reference answers and rubrics require a model. Your draft is preserved while you configure BYOK.")}</p>
             </div>
           ) : null}
         </div>

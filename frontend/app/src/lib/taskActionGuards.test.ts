@@ -77,7 +77,7 @@ describe("task contract compatibility", () => {
       detail: { code: "problem_extraction_failed" },
     })]) {
       const info = classifyRecoverableError(error, { locale, taskId: "task" });
-      expect(info.title).toBe(locale === "zh-CN" ? "题目识别未完成" : "Question recognition did not complete");
+      expect(info.title).toBe(locale === "zh-CN" ? "题目准备未完成" : "Question preparation did not complete");
       expect(info.description).toBe(locale === "zh-CN"
         ? "请检查原文件和识别描述后重试，也可以人工继续补充题目。"
         : "Check the source file and recognition instructions, then retry, or continue manually to add questions.");

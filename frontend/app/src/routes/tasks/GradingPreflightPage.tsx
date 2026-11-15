@@ -527,7 +527,7 @@ function gradingBlockerMessage(code: string | null, locale: Locale): string | nu
 
 function gradingRecovery(taskId: string, code: string | undefined, locale: Locale) {
   const root = `/tasks/${taskId}`;
-  if (code === "question_review_blocked") return { href: `${root}/questions`, label: locale === "zh-CN" ? "审核题目" : "Review questions" };
+  if (code === "question_review_blocked") return { href: `${root}/questions`, label: locale === "zh-CN" ? "复核题目资料" : "Review question materials" };
   if (code === "submission_recognition_blocked") return { href: `${root}/submissions`, label: locale === "zh-CN" ? "校对作答" : "Review submissions" };
   if (code === "questions_required") return { href: `${root}/upload/problems`, label: locale === "zh-CN" ? "添加题目" : "Add questions" };
   if (code === "submissions_required" || code === "submission_sources_failed") return { href: `${root}/submissions/upload`, label: locale === "zh-CN" ? "处理作答文件" : "Fix submission files" };

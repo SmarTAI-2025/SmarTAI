@@ -85,7 +85,7 @@ interface RunStep {
 function initialSteps(locale: Locale): RunStep[] {
   return [
     { id: "task", label: tx(locale, "创建专属 Demo 任务", "Create a dedicated demo task"), detail: tx(locale, "准备演示任务", "Prepare the demo task"), state: "waiting" },
-    { id: "questions", label: tx(locale, "准备并审核题目", "Prepare and review questions"), detail: tx(locale, "识别题目并生成标答与评分标准", "Recognize questions and prepare answers and rubrics"), state: "waiting" },
+    { id: "questions", label: tx(locale, "准备并复核题目资料", "Prepare and review question materials"), detail: tx(locale, "识别题干并生成标答与评分标准", "Recognize question text and prepare answers and rubrics"), state: "waiting" },
     { id: "submissions", label: tx(locale, "识别混合作答", "Recognize mixed submissions"), detail: tx(locale, "识别 PDF 和图片作答", "Recognize PDF and image submissions"), state: "waiting" },
     { id: "grading", label: tx(locale, "运行 AI 批改", "Run AI grading"), detail: tx(locale, "按评分设置批改", "Grade using the selected settings"), state: "waiting" },
   ];
@@ -128,7 +128,7 @@ export function FrontierLiveDemoPage() {
   const submissionBlockers = reviewTask && isTaskAwaitingGrading(snapshot?.status) ? submissionReviewBlockers(reviewTask, locale) : [];
   const requiredReview = !error && reviewTask && (questionBlockers.length || submissionBlockers.length) ? {
     href: `/tasks/${reviewTask.task_id}/${questionBlockers.length ? "questions" : "submissions"}`,
-    label: questionBlockers.length ? tx(locale, "审核题目", "Review questions") : tx(locale, "校对作答", "Review submissions"),
+    label: questionBlockers.length ? tx(locale, "复核题目资料", "Review question materials") : tx(locale, "校对作答", "Review submissions"),
     description: questionBlockers.length
       ? (isTaskAwaitingGrading(snapshot?.status)
         ? tx(locale, "请审核并修正题目中的问题，再开始批改。", "Review and correct the questions before grading.")

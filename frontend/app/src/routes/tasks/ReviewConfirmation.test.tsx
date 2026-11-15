@@ -88,8 +88,8 @@ describe("one-click grading review", () => {
     show();
     const queue = screen.getByRole("region", { name: locale === "en-US" ? "Review queue" : "待复核队列" });
     const expected = locale === "en-US"
-      ? ["Some experts completed", "Low confidence", "Expert disagreement; review suggested.", "Verification evidence still needs checking.", "Key reasoning evidence needs checking."]
-      : ["部分专家完成", "置信度较低", "专家分歧，建议复核。", "核验结果与评分依据待核对。", "关键推理依据待核对。"];
+      ? ["Some experts completed", "low confidence (0.4)", "Expert disagreement; review suggested.", "Verification evidence still needs checking.", "Key reasoning evidence needs checking."]
+      : ["部分专家完成", "置信度 0.4 较低", "专家分歧，建议复核。", "核验结果与评分依据待核对。", "关键推理依据待核对。"];
     for (const label of expected) expect(queue).toHaveTextContent(label);
     expect(queue).not.toHaveTextContent(locale === "en-US" ? "The model suggests human review." : "模型建议人工复核。");
     expect(state.update).not.toHaveBeenCalled();
@@ -319,9 +319,9 @@ describe("one-click grading review", () => {
     show();
     const required = screen.getByRole("tabpanel", {name: "需要处理 (1)"});
     expect(within(required).getByText(/教师用例全部通过/)).toHaveClass("text-red-700");
-    await userEvent.click(screen.getByRole("tab", {name: "建议处理 (1)"}));
-    const advisory = screen.getByRole("tabpanel", {name: "建议处理 (1)"});
-    expect(within(advisory).getByText(/额外输入/)).toHaveClass("text-amber-700");
+    await userEvent.click(screen.getByRole("tab", {name: "建议处理 (2)"}));
+    const advisory = screen.getByRole("tabpanel", {name: "建议处理 (2)"});
+    for (const note of within(advisory).getAllByText(/额外输入/)) expect(note).toHaveClass("text-amber-700");
   });
 
   it("puts both teacher-test score conflicts in the existing red required queue", () => {
@@ -338,7 +338,7 @@ describe("one-click grading review", () => {
     for (const explanation of [/教师用例全部通过/, /有教师用例未通过/]) {
       expect(within(panel).getByText(explanation)).toHaveClass("text-red-700");
     }
-    expect(screen.getByRole("tab", {name: "建议处理 (0)"})).toBeInTheDocument();
+    expect(screen.getByRole("tab", {name: "建议处理 (2)"})).toBeInTheDocument();
   });
 
   it.each([
@@ -467,7 +467,7 @@ describe("one-click grading review", () => {
     for (const [index, id] of ["Q1", "Q2"].entries()) {
       const label = locale === "zh-CN" ? `第 ${id} 题` : `Question ${id}`;
       expect(rows[index * 2]).toHaveTextContent(`${label} · ${locale === "zh-CN" ? "缺少有效分数，请填写" : "Enter a valid score"}`);
-      expect(rows[index * 2 + 1]).toHaveTextContent(`${label} · ${locale === "zh-CN" ? "解析失败" : "Could not parse result"}`);
+      expect(rows[index * 2 + 1]).toHaveTextContent(`${label} · ${locale === "zh-CN" ? "模型返回的评分格式无法读取" : "Could not parse result"}`);
     }
     expect(dialog).not.toHaveTextContent(/置信度|confidence|建议|suggested/);
     expect(state.update).not.toHaveBeenCalled();

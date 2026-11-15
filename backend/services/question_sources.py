@@ -217,7 +217,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         page_hints={target: scope.pages for target in scope.targets} if locate_targets and scope.pages else {},
         search_start_page=scope.search_start_page, search_window_pages=scope.search_window_pages,
         policy=RecognitionPolicyV1(allow_native_fallback=allow_vision, execution_scope=execution_scope,
-            **({"version": "printed-formula-panels-v1"} if formula_panel_scan and (locate_targets or total_pages == 1) else {})),
+            **({"version": "printed-formula-panels-v2"} if formula_panel_scan and (locate_targets or total_pages == 1) else {})),
     )
     async with recognition_engine(owner_id=owner_id, route=route if allow_vision else None, registry=registry) as engine:
         if media_type.startswith("image/") and engine is None:
@@ -363,6 +363,8 @@ def attach_recognition_review(packages, sources):
     from backend.domain.confidence_policy import confidence_needs_attention
 
     for q_id, problem in packages.items():
+        from backend.services.question_preparation_diagnostics import normalize_formula_issue
+        problem["preparation_issues"] = [normalize_formula_issue(issue) for issue in problem.get("preparation_issues", [])]
         confidence = problem.get("recognition_confidence")
         if confidence_needs_attention(confidence):
             issue_id = f"recognition_confidence_{q_id}"
@@ -396,9 +398,9 @@ def attach_recognition_review(packages, sources):
                 if any(item.get("details", {}).get("reason") == "conflicting_printed_formula" for item in issues):
                     continue
                 problem["review_status"] = "needs_review"
-                issues.append(dict(issue_id=f"formula_conflict_{q_id}", q_id=q_id, field="stem", severity="blocking",
-                    status="open", code="recognition_partial", source_ids=[summary["operation_id"]],
-                    details={"incomplete": True, "reason": "conflicting_printed_formula"}))
+                issues.append(dict(issue_id=f"formula_conflict_{q_id}", q_id=q_id, field="stem", severity="warning",
+                    status="open", code="recognition_needs_review", source_ids=[summary["operation_id"]],
+                    details={"confidence_scope": "question", "reason": "conflicting_printed_formula"}))
         if not recognition_has_failure(summary):
             continue
         for q_id, problem in packages.items():

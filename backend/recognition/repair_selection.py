@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 _ACTIONABLE = frozenset({
     "transcription_conflict", "source_form_uncertain", "replacement_character", "control_character",
     "packaging_unclosed_fence", "packaging_math_wrapper_uncertain",
+    "conflicting_printed_formula",
 })
 
 
@@ -106,6 +107,12 @@ def _target(unit, initial, pages, details, unaligned, incomplete_pages):
             purpose=initial.raw.request.purpose, span_id=span.span_id, page_number=number,
             region=unit.region, native_text=native, visual_text=candidate.text, before_text=span.final_text,
             issue_codes=list(span.issues),
+            **({"formula_headings": page.formula_conflicts,
+                "formula_comparisons": [other.candidate.text for other in initial.raw.read_batch.units
+                    if other.page_numbers == [number] and other.region != NormalizedRegionV1()
+                    and other.candidate.status == "ok" and not other.candidate.safe_error_code
+                    and len(other.candidate.text) <= 6000][:2]}
+               if "conflicting_printed_formula" in span.issues else {}),
         )
     except (ValidationError, ValueError):
         return None, "repair_context_invalid"

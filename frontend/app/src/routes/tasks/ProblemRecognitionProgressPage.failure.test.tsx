@@ -55,6 +55,29 @@ vi.mock("@/i18n/I18nProvider", () => ({
 }));
 
 describe("ProblemRecognitionProgressPage generation failure", () => {
+  it("shows all saved stems and the exact missing rubric rule before manual review", () => {
+    failureCode = "provider_response_invalid";
+    generationProgress = {
+      preparation_counts: { questions: 3, stems: 3, reference_answers: 2, rubrics: 1 },
+      preparation_review: [
+        { q_id: "q1", number: "1.8", issues: [{ issue_id: "rule", field: "rubric", code: "generation_failed", status: "open", severity: "blocking", details: { invalid_fields: ["part_rubric.parts[0].alternative"] } }] },
+        { q_id: "q2", number: "1.10", issues: [
+          { issue_id: "formula", field: "stem", code: "recognition_needs_review", status: "open", severity: "warning", details: { reason: "conflicting_printed_formula" } },
+          { issue_id: "rubric", field: "rubric", code: "generation_failed", status: "open", severity: "blocking" },
+          { issue_id: "answer", field: "answer", code: "generation_failed", status: "open", severity: "warning" },
+        ] },
+      ],
+    };
+    render(<MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}><Routes>
+      <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
+    </Routes></MemoryRouter>);
+    expect(screen.getByText("需要处理 2 题 · 建议复核 1 题")).toBeVisible();
+    expect(screen.getByText(/已保存 3 个题干、2 份标答、1 份评分标准/)).toBeVisible();
+    expect(screen.getByText("第 1.8 题")).toBeVisible();
+    expect(screen.getByText(/评分标准缺少其他正确解法的扣分规则/)).toBeVisible();
+    expect(screen.getByText(/建议复核：本题公式待核对/)).toBeVisible();
+    expect(screen.queryByText("未找齐指定题目")).toBeNull();
+  });
   it("shows the locator output limit, the saved stem count and available recovery actions", () => {
     failureCode = "scan_response_truncated";
     generationProgress = { preparation_counts: { stems: 3, questions: 7, reference_answers: 0, rubrics: 0 } };

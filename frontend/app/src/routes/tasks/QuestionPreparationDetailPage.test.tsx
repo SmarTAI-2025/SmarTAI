@@ -363,9 +363,10 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await renderPage("/tasks/task-1/questions/Q2/content");
     const element = document.querySelector('[data-question-id="Q2"]') as HTMLElement;
     const card = within(element);
-    expect(card.getAllByText("生成失败")).toHaveLength(1);
-    expect(card.getByText("请补齐缺失的题型、评分标准。")).toBeVisible();
-    expect(element.querySelector('[data-review-issue-notes] .text-amber-700')).toHaveTextContent('缺少标答（可选），可按需补充。');
+    expect(card.queryByText("生成失败")).not.toBeInTheDocument();
+    expect(card.getAllByText("评分标准未生成或不完整，请重试或补齐。")).toHaveLength(1);
+    expect(card.getByText("请补齐缺失的题型。")).toBeVisible();
+    expect(element.querySelector('[data-review-issue-notes] .text-amber-700')).toHaveTextContent('标答未生成，可重试或人工补充（可选）。');
     await userEvent.click(card.getByRole("button", { name: "题型 · 修改" }));
     const select = card.getByRole("combobox", { name: "题型" });
     expect(select).toHaveValue("");
@@ -653,7 +654,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("请更换可用模型");
     await userEvent.click(within(dialog).getByRole("button", { name: "更换模型" }));
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "题目处理模型" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "题目准备模型" })).toHaveFocus());
   });
 
   it("shows the usable and missing scoring values when confirmation cannot seal a rubric", async () => {
@@ -873,7 +874,7 @@ it("retries the preserved rubric with an explicitly selected model", async () =>
   const save = within(rubric.closest("section")!).getByRole("button", { name: "保存" });
   await userEvent.click(save);
   await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "更换模型" }));
-  const model = screen.getByRole("combobox", { name: "题目处理模型" });
+  const model = screen.getByRole("combobox", { name: "题目准备模型" });
   expect(model).toHaveValue("");
   expect(rubric).toHaveValue(text);
   await userEvent.selectOptions(model, "retry-model");

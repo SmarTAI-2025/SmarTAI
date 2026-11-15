@@ -102,7 +102,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1280, 390]) {
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: testInfo.outputPath("rubric-save-guidance-after.png"), fullPage: true });
     await page.getByRole("alertdialog").getByRole("button", { name: zh ? "更换模型" : "Change model" }).click();
-    const picker = page.getByRole("combobox", { name: zh ? "题目处理模型" : "Question model" });
+    const picker = page.getByRole("combobox", { name: zh ? "题目准备模型" : "Question preparation model" });
     await expect(picker).toBeFocused();
     await expect(picker).toHaveValue("old-model");
     await picker.selectOption("retry-model");

@@ -264,8 +264,8 @@ test("real question-review route retains question navigation while the original 
   });
   await page.evaluate(() => localStorage.setItem("smartai_token", "synthetic-local-pdf-only"));
   await page.goto("/tasks/local-pdf/questions/Q1/content");
-  await expect(page.getByRole("heading", { name: "题目资料审核", exact: true })).toBeVisible().catch((error) => { throw new Error(`${error}\n${JSON.stringify({ errors, unexpected })}`); });
-  await expect(page.getByRole("combobox", { name: "题目处理模型" })).toBeDisabled();
+  await expect(page.getByRole("heading", { name: "复核题目资料", exact: true })).toBeVisible().catch((error) => { throw new Error(`${error}\n${JSON.stringify({ errors, unexpected })}`); });
+  await expect(page.getByRole("combobox", { name: "题目准备模型" })).toBeDisabled();
   await page.getByRole("button", { name: "查看题目原文件" }).click();
   await ready(page, 1);
   await scroll(page).hover();

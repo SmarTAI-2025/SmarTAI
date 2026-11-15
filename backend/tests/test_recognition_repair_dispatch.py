@@ -254,3 +254,15 @@ def test_prompt_keeps_hostile_code_and_student_errors_in_json_data_only():
     request.repair_context.native_text = request.repair_context.before_text = literal
     payload = json.loads(faithful_repair_prompt(request).split("EVIDENCE_JSON:\n")[1])
     assert payload["target"]["native_text"] == literal
+
+
+def test_scan_formula_recheck_only_offers_present_candidates_and_preserves_neighbours():
+    request = repair_input()
+    request.repair_context.native_text = ""
+    request.repair_context.formula_headings = ["1.10"]
+    prompt = faithful_repair_prompt(request)
+    allowed = prompt.split("Allowed decisions for THIS input: ")[1].split(". A missing")[0]
+    assert "keep_native" not in allowed
+    assert "keep_visual" in allowed
+    assert "COMPLETE before_text, preserving neighboring questions exactly" in prompt
+    assert "Do not include neighboring questions" not in prompt

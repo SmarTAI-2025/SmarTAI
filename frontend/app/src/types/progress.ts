@@ -1,3 +1,5 @@
+import type { PreparationIssue, Correction } from "./index";
+
 export type ProgressPhase =
   | "paused"
   | "pending"
@@ -45,6 +47,10 @@ export interface ProviderFailure {
 
 export interface JobProgress {
   preparation_counts?: { stems: number; reference_answers: number; rubrics: number; questions: number };
+  preparation_review?: Array<{ q_id: string; number: string; issues: PreparationIssue[] }>;
+  preparation_review_summary?: { questions: number; blocking: number; advisory: number };
+  grading_review?: Array<Correction & { student_id: string }>;
+  grading_review_summary?: { affected: number; missing_scores: number };
   recognition_requests?: RecognitionRequestState[];
   model_progress?: GradingModelProgress[];
   model_eta_seconds?: number | null;

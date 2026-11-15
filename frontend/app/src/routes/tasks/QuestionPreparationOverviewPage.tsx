@@ -3,7 +3,7 @@ import { questionSaveError } from "@/lib/questionSaveError";
 import { questionIssueCodeLabel as issueCodeLabel } from "@/lib/reviewLabels";
 import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewQueue as ReviewQueuePanel } from "@/components/tasks/ReviewQueue";
-import { questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewNotes, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
@@ -75,6 +75,7 @@ export function QuestionPreparationOverviewPage() {
   const sortDirection = headerSort.current?.direction ?? "asc";
   const preserveGroundedOrder = hasGroundedOrder(smartFilter.intent) && !headerSort.current;
   const allRisks = useMemo(() => collectRiskRows(problems), [problems]);
+  const reviewCount = problems.reduce((count, problem) => count + questionReviewNotes(problem, locale, code => issueCodeLabel(code, locale)).length, 0);
   const allRows = useMemo<QuestionMatrixRow[]>(() => problems.map((problem) => ({
     problem,
     issues: questionReviewIssues(problem),
@@ -198,8 +199,8 @@ export function QuestionPreparationOverviewPage() {
           {taskId ? <ReviewStageActions
             leftAction={addButton}
             note={locale === "zh-CN"
-              ? `显示 ${rows.length} / ${problems.length} 道题 · 作业总分 ${formatScore(totalMaxScore)} · ${allRisks.length} 个复核项`
-              : `Showing ${rows.length} of ${problems.length} questions · ${formatScore(totalMaxScore)} total points · ${allRisks.length} review items`}
+              ? `显示 ${rows.length} / ${problems.length} 道题 · 作业总分 ${formatScore(totalMaxScore)} · ${reviewCount} 个复核项`
+              : `Showing ${rows.length} of ${problems.length} questions · ${formatScore(totalMaxScore)} total points · ${reviewCount} review items`}
 
             back={{ disabled: !firstQuestionId, href: firstQuestionId ? `/tasks/${taskId}/questions/${encodeURIComponent(firstQuestionId)}/content` : undefined, label: tx(locale, "查看题目详情", "View Question Details") }}
             next={{ label: tx(locale, "进入上传作答", "Continue to Upload Submissions"), disabled: confirming || updateProblem.isPending, onClick: () => {
@@ -216,15 +217,15 @@ export function QuestionPreparationOverviewPage() {
 function QuestionReviewQueue({ risks, taskId, locale, confirmation }: { confirmation: React.ReactNode; risks: OpenRiskRow[]; taskId: string; locale: string }) {
   const grouped = new Map<string, OpenRiskRow[]>();
   for (const row of risks) grouped.set(row.problem.q_id, [...(grouped.get(row.problem.q_id) ?? []), row]);
-  return <ReviewQueuePanel locale={locale} confirmation={confirmation} items={[...grouped.values()].map(rows => {
+  return <ReviewQueuePanel locale={locale} confirmation={confirmation} items={[...grouped.values()].flatMap(rows => {
     const { problem } = rows[0];
-    const blocking = rows.some(row => row.issue.severity === "blocking");
-    return { key: problem.q_id, title: problem.number || "—",
-      severity: blocking ? "blocking" : "advisory",
-      reason: [...new Set(rows.map(({ issue }) => ["recognition_partial", "recognition_needs_review"].includes(issue.code) && issue.severity === "blocking"
-        ? tx(locale, "题目识别不完整，请补齐", "Question recognition incomplete; complete the missing content")
-        : recognitionIssueLabel(issue, locale) ?? issueCodeLabel(issue.code, locale)))].join("；"),
-      href: `/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}` };
+    const notes = questionReviewNotes(problem, locale, code => issueCodeLabel(code, locale), true);
+    return (["blocking", "advisory"] as const).flatMap(severity => {
+      const matching = notes.filter(note => note.severity === severity);
+      return matching.length ? [{ key: `${problem.q_id}:${severity}`, title: problem.number || "—", severity,
+        reason: matching.map(note => note.label).join("；"),
+        href: `/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}` }] : [];
+    });
   })} />;
 }
 
@@ -268,7 +269,7 @@ function QuestionMatrix({ rows, taskId, locale, sortKey, sortDirection, onSort, 
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="answer" locale={locale} /></td>
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="rubric" locale={locale} /></td>
               <td className="px-3 py-3"><MaterialStatus problem={problem} field="tests" locale={locale} /></td>
-              <td className="px-3 py-3"><AttentionStatus issues={issues} locale={locale} /></td>
+              <td className="px-3 py-3"><AttentionStatus problem={problem} locale={locale} /></td>
               <td className="px-5 py-3 text-right"><div className="flex items-center justify-end gap-1">
                 <MatrixViewLink iconOnly to={`/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`} locale={locale} />
                 {onDelete ? <button type="button" title={tx(locale, "删除", "Delete")} aria-label={tx(locale, "删除", "Delete")} disabled={busy} onClick={() => onDelete(problem)} className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-danger/10 hover:text-danger disabled:opacity-50"><Trash2 aria-hidden="true" className="h-4 w-4" /></button> : null}
@@ -343,18 +344,19 @@ function MaxScoreStatus({ problem, locale }: { problem: ProblemInfo; locale: str
   );
 }
 
-function AttentionStatus({ issues, locale }: { issues: PreparationIssue[]; locale: string }) {
+function AttentionStatus({ problem, locale }: { problem: ProblemInfo; locale: string }) {
+  const issues = questionReviewNotes(problem, locale, code => issueCodeLabel(code, locale));
   if (!issues.length) {
     return <span className="inline-flex min-w-[88px] items-center justify-center gap-1 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"><CheckCircle2 aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "状态正常", "Ready")}</span>;
   }
-  return <span tabIndex={0} title={issues.map((issue) => (recognitionIssueLabel(issue, locale) ?? issueCodeLabel(issue.code, locale))).join("；")} className={cn("inline-flex min-w-[88px] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold", issues.some(issue => issue.severity === "blocking") ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800")}>{tx(locale, `${issues.length} 项待复核`, `${issues.length} to review`)}</span>;
+  return <span tabIndex={0} title={issues.map((issue) => issue.label).join("；")} className={cn("inline-flex min-w-[88px] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold", issues.some(issue => issue.severity === "blocking") ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800")}>{tx(locale, `${issues.length} 项待复核`, `${issues.length} to review`)}</span>;
 }
 
 function MatrixEmpty({ filtered, locale }: { filtered: boolean; locale: string }) {
   return (
     <div className="flex min-h-[220px] flex-col items-center justify-center px-5 text-center">
       <p className="text-sm font-semibold text-foreground">{filtered ? tx(locale, "没有匹配的题目", "No matching questions") : tx(locale, "尚未识别到题目", "No questions recognized yet")}</p>
-      <p className="mt-1 text-xs leading-5 text-muted-foreground">{filtered ? tx(locale, "清空查询后查看全部题目资料。", "Clear the query to see every question.") : tx(locale, "完成题目识别后，这里会显示全题资料矩阵。", "The full material matrix appears after recognition.")}</p>
+      <p className="mt-1 text-xs leading-5 text-muted-foreground">{filtered ? tx(locale, "清空查询后查看全部题目资料。", "Clear the query to see every question.") : tx(locale, "完成题目准备后，这里会显示各题的题干、标答和评分标准。", "Question text, reference answers and rubrics appear here after preparation.")}</p>
     </div>
   );
 }

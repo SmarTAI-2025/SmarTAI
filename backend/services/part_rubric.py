@@ -375,6 +375,25 @@ def _alternative_fields(text):
     """Parse only the fields actually stated by the teacher."""
     values = {}
     normalized = unicodedata.normalize("NFKC", text)
+    # These are the complete sentences emitted by alternative_display. Match
+    # the whole form: editing one displayed amount must not require AI, while
+    # different wording/conditions still follow the ordinary policy reader.
+    number = r"(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?"
+    fixed = re.fullmatch(
+        rf"(?:Alternative methods receive (?P<en>{number}) points|其他解法按\s*(?P<zh>{number})\s*分计)[。.]?",
+        normalized.strip(), re.I)
+    if fixed:
+        amount = Amount(points=float(fixed["en"] or fixed["zh"]))
+        return {"maximum": amount, "minimum": amount}
+    display = re.fullmatch(
+        rf"(?:Other correct methods can earn all|Alternative methods earn up to) (?P<maximum>{number}) points"
+        rf"(?:; deduct (?P<deduct_per_error>{number}) points per independent error)?"
+        rf"(?:; retain at least (?P<minimum>{number}) points)?"
+        rf"(?:; deduct at most (?P<max_deduction>{number}) points in total)?[。.]?",
+        normalized.strip(), re.I)
+    if display:
+        return {name: Amount(points=float(value)) if name in {"maximum", "minimum"} else float(value)
+                for name, value in display.groupdict().items() if value is not None}
     for match in _POLICY_TOKEN.finditer(normalized):
         prefix = normalized[:match.start()]
         clause = re.split(r"[，,；;。\n]|\.(?=\s|$)", prefix)[-1].casefold()
@@ -760,7 +779,7 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
             "教师标准未明确涵盖的小问 / Parts without an explicit teacher rule: "
             + ", ".join(label for label in labels if label not in mentioned)
         )
-    overrides = {(item["label"], item["stem"]): item["text"]
+    overrides = {(item["label"], item["stem"]): item.get("binding_text", item["text"])
                  for item in (problem.get("alternative_rules") or {}).values()}
     binary = is_decision_only(problem.get("stem", ""), teacher)
     shared_stem = structure.get("shared_stem", "") if parts else problem.get("stem", "")
@@ -951,9 +970,14 @@ def render_parts(rubric, language="zh", *, full_policy=False):
 def alternative_text(part, zh=True):
     policy = part.alternative
 
+    def number(value):
+        # Editable/binding text must preserve the stored float exactly. The
+        # concise read-only projection can round; this representation cannot.
+        return format(Decimal(str(value)).normalize(), "f")
+
     def amount(value):
         if value.points is not None:
-            return f"{value.points:g}分" if zh else f"{value.points:g} points"
+            return f"{number(value.points)}分" if zh else f"{number(value.points)} points"
         return (
             f"本问满分的 {value.fraction}"
             if zh
@@ -963,25 +987,25 @@ def alternative_text(part, zh=True):
     if policy.inferred_method_cap:
         ceiling = float(policy.maximum.resolve(part.total_pts))
         # The explicit number makes the editable cap understandable even for a shared floor.
-        maximum_text = f"{ceiling:g}分" if zh else f"{ceiling:g} points"
+        maximum_text = f"{number(ceiling)}分" if zh else f"{number(ceiling)} points"
     else:
         maximum_text = amount(policy.maximum)
     if zh:
         loss = (
-            f"每个独立错误扣{policy.deduct_per_error:g}分。"
+            f"每个独立错误扣{number(policy.deduct_per_error)}分。"
             if policy.deduct_per_error
             else ("本问另解按固定分数结算。" if not policy.needs_rate(part.total_pts) else "每个独立错误的扣分额待补全。")
         )
         if policy.max_deduction is not None:
-            loss += f"累计最多扣{policy.max_deduction:g}分。"
+            loss += f"累计最多扣{number(policy.max_deduction)}分。"
         return f"其他解法最高得{maximum_text}，最低{amount(policy.minimum)}。{loss}"
     loss = (
-        f"Deduct {policy.deduct_per_error:g} points per independent error."
+        f"Deduct {number(policy.deduct_per_error)} points per independent error."
         if policy.deduct_per_error
         else ("Fixed score for this alternative." if not policy.needs_rate(part.total_pts) else "Per-error deduction pending.")
     )
     if policy.max_deduction is not None:
-        loss += f" Maximum deduction {policy.max_deduction:g} points."
+        loss += f" Maximum deduction {number(policy.max_deduction)} points."
     return f"Alternative methods: maximum {maximum_text}, minimum {amount(policy.minimum)}. {loss}"
 
 

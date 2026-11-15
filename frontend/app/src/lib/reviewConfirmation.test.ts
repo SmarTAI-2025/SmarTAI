@@ -7,6 +7,26 @@ const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id:
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
+  it("shows an unexplained alternative cap as a numerical advisory", () => {
+    const warning = issue({ field: "rubric", code: "math_rubric_advisory", details: {
+      reason: "alternative_cap_review", alternative_caps: [{ label: "(1)", maximum: .15625, total: 1.25 }] } });
+    expect(recognitionIssueLabel(warning, "zh-CN")).toContain("最高 0.15625 分（本问满分 1.25 分）");
+    expect(questionReviewBlocked(question({ preparation_issues: [warning] }))).toBe(false);
+  });
+  it("ties the provider failure to the affected material", () => {
+    const failure = issue({ field: "rubric", code: "generation_failed", severity: "blocking",
+      details: { provider_error_code: "provider_upstream_unavailable", provider_http_status: 503 } });
+    expect(recognitionIssueLabel(failure, "zh-CN")).toBe("评分标准未生成或不完整，请重试或补齐。模型服务暂时不可用（HTTP 503）。");
+    expect(recognitionIssueLabel(failure, "en-US")).toContain("Rubric not generated");
+  });
+
+  it("keeps a real missing page blocking even alongside formula uncertainty", () => {
+    const failure = issue({ code: "recognition_partial", details: {
+      reason: "conflicting_printed_formula", coverage: { failed_pages: [2] } } });
+    expect(questionReviewBlocked(question({ preparation_issues: [failure] }))).toBe(true);
+    expect(recognitionIssueLabel(failure, "zh-CN")).toContain("2");
+    expect(recognitionIssueLabel(failure, "zh-CN")).not.toContain("本题公式待核对");
+  });
   it.each(["zh-CN", "en-US"])("keeps extracted rubric conflicts blocking until verified (%s)", locale => {
     const conflict = issue({ field: "rubric", code: "generation_failed", severity: "blocking",
       details: { reason: "invalid_structured_rubric", rubric_review_draft: { status: "needs_review", fields: [] } } });
@@ -114,12 +134,12 @@ describe("review hard failures", () => {
     ] });
     const notes = questionReviewNotes(row, "zh-CN", () => "生成失败");
     expect(notes).toEqual([
-      { label: "生成失败", severity: "blocking" },
-      { label: "请补齐缺失的题型、评分标准。", severity: "blocking" },
-      { label: "缺少标答（可选），可按需补充。", severity: "advisory" },
+      { label: "评分标准未生成或不完整，请重试或补齐。", severity: "blocking" },
+      { label: "请补齐缺失的题型。", severity: "blocking" },
+      { label: "标答未生成，可重试或人工补充（可选）。", severity: "advisory" },
     ]);
-    expect(questionReviewNotes(row, "en-US", () => "Generation failed")[1].label).toBe("Complete the missing question type, rubric.");
-    expect(questionReviewNotes({ ...row, type: "reasoning" }, "zh-CN", () => "生成失败")[1].label).not.toContain("题型");
+    expect(questionReviewNotes(row, "en-US", () => "Generation failed")[0].label).toBe("Rubric not generated or incomplete. Retry or complete it.");
+    expect(questionReviewNotes({ ...row, type: "reasoning" }, "zh-CN", () => "生成失败")[0].label).not.toContain("题型");
   });
 
   it("keeps independent advisory warnings and does not make a reference answer mandatory", () => {

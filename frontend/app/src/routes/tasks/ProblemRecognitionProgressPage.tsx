@@ -16,6 +16,7 @@ import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { TaskExecutionControls } from "@/components/tasks/TaskExecutionControls";
 import { TaskPausedState } from "@/components/tasks/TaskPausedState";
 import { RecognitionActivity, RecognitionRequestStatus } from "@/components/tasks/RecognitionActivity";
+import { QuestionPreparationDiagnostics } from "@/components/tasks/QuestionPreparationDiagnostics";
 import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
@@ -177,8 +178,8 @@ export function ProblemRecognitionProgressPage() {
           {failedJobId && !info.retryUnavailable ? (
             <StageProviderSelect
               id="question-retry-provider"
-              label={locale === "zh-CN" ? "题目识别模型" : "Question recognition model"}
-              hint={paused ? (locale === "zh-CN" ? "继续识别时将使用此模型。" : "This model will be used when recognition continues.") : locale === "zh-CN"
+              label={locale === "zh-CN" ? "题目准备模型" : "Question preparation model"}
+              hint={paused ? (locale === "zh-CN" ? "继续准备题目时将使用此模型。" : "This model will be used when question preparation continues.") : locale === "zh-CN"
                 ? "原资料已保留。可以改选模型后重试，无需重新上传。"
                 : "Your source materials are preserved. Choose a model and retry without uploading again."}
               experts={enabledExperts}
@@ -188,7 +189,6 @@ export function ProblemRecognitionProgressPage() {
               onChange={(id) => { setProviderChoice({ jobId: failedJobId, id }); setRetryFailure(null); }}
             />
           ) : null}
-          <RecognitionActivity progress={progressQuery.progress} locale={locale} incomplete={!paused} />
           {!paused && <QuestionGenerationFailureSummary
             progress={progressQuery.progress}
             locale={locale}
@@ -208,7 +208,6 @@ export function ProblemRecognitionProgressPage() {
             info={info}
             locale={locale}
             usageContext={{ providerIds: [recognitionProviderId], providers: expertsQuery.data ?? [] }}
-            className="min-h-[430px]"
             workflowRecovery={{
               retry: { onClick: () => void retryPreparedSources(),
                 busy: isRefreshing || retryPreparation.isPending,
@@ -226,6 +225,7 @@ export function ProblemRecognitionProgressPage() {
               { label: t("problemProgressRefresh"), onClick: () => void refresh(), busy: isRefreshing || retryPreparation.isPending, disabled: openingManual },
             ]}
           />}
+          <RecognitionActivity progress={progressQuery.progress} locale={locale} incomplete={!paused} />
         </div>
       </ProgressPageFrame>
     );
@@ -430,6 +430,7 @@ function QuestionGenerationFailureSummary({
   progress: JobProgress | null | undefined;
   locale: string;
 }) {
+  if (progress?.preparation_review?.length) return <QuestionPreparationDiagnostics progress={progress} locale={locale} />;
   const completed = new Set(progress?.completed_question_ids ?? []);
   const uncertain = Object.entries(progress?.question_error_codes ?? {})
     .filter(([, code]) => code === "provider_submit_uncertain")

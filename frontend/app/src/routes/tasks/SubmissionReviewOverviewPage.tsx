@@ -1,6 +1,6 @@
 import { ReviewQueue as ReviewQueuePanel } from "@/components/tasks/ReviewQueue";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions, reviewActionClass } from "@/components/tasks/ReviewConfirmation";
-import { submissionReviewBlockers, submissionRecognitionIncomplete, answerReviewBlocked, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { submissionReviewBlockers, submissionRecognitionIncomplete, answerReviewBlocked, answerReviewNotes, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -151,7 +151,7 @@ export function SubmissionReviewOverviewPage() {
   const queueItems = taskId
     ? buildSubmissionQueueItems(selection.students, selection.questions, taskId, returnSearch, locale, taskQuery.data?.submission_sources)
     : [];
-  const pendingReviews = advisoryCandidates.filter(({ student, answer }) => queueItems.some(item => item.key === `${student.stu_id}:${answer.q_id}` && item.severity === "advisory"));
+  const pendingReviews = advisoryCandidates.filter(({ student, answer }) => queueItems.some(item => item.key === `${student.stu_id}:${answer.answer_id ?? answer.q_id}` && item.severity === "advisory"));
 
   async function changeStudentRow(student?: StudentSubmission) {
     if (!taskId || !taskQuery.data || rowBusy) return;
@@ -682,16 +682,21 @@ function buildSubmissionQueueItems(
       if (!question) continue;
       const attention = answerReviewAttention(answer);
       if (attention === "none") continue;
-      items.push({
-        key: `${student.stu_id}:${answer.answer_id ?? question.id}`,
+      const notes = answerReviewNotes(answer, locale, true);
+      for (const severity of ["blocking", "advisory"] as const) {
+        const reasons = notes.filter(note => note.severity === severity).map(note => note.label);
+        if (!reasons.length && (notes.length || attention !== severity)) continue;
+        items.push({
+        key: `${student.stu_id}:${answer.answer_id ?? question.id}${severity === "blocking" ? ":blocking" : ""}`,
         href: studentReviewPath(taskId, student.stu_id, answer.answer_id ?? question.id, returnSearch),
         studentId: student.stu_id,
         studentName: student.stu_name || student.stu_id,
         questionLabel: question.label,
         reasonKey: reasonKeys.flagged,
-        severity: attention,
-        reason: answerReviewLabels(answer, locale).join(" · "),
+        severity,
+        reason: reasons.length ? reasons.join(" · ") : answerReviewLabels(answer, locale).join(" · "),
       });
+      }
     }
   }
 

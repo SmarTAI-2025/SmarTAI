@@ -108,3 +108,19 @@ def conflicting_heading(whole, panel):
         and len([h for h, _ in sources if h == conflicts[0]]) == 1
         else None
     )
+
+
+def isolated_formula_update(before, after, headings):
+    """Permit a source-image correction only within the uniquely located questions."""
+    left, right = list(_sections(before)), list(_sections(after))
+    if not left or [label for label, _ in left] != [label for label, _ in right]:
+        return False
+    labels = [label for label, _ in left]
+    if any(labels.count(label) != 1 for label in headings):
+        return False
+    before_heading, after_heading = _HEADING.search(before), _HEADING.search(after)
+    if before[:before_heading.start()] != after[:after_heading.start()]:
+        return False
+    # Whitespace can carry meaning in neighbouring code questions.
+    return all(label in headings or old == new
+               for (label, old), (_, new) in zip(left, right))

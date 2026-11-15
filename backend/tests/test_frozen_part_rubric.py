@@ -463,6 +463,46 @@ def test_alternative_edit_creates_a_new_frozen_revision_and_retains_teacher_sour
         edit_alternatives(problem, presentation, {"qGhost": "半分"})
 
 
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("ending", ["", ".", "。", ".\n"])
+def test_cosmetic_edit_of_human_alternative_summary_preserves_frozen_json(language, ending):
+    from backend.models import ProblemInfo
+    from backend.services.rubric_drafts import edit_alternatives
+    from backend.services.rubric_display import alternative_display
+    raw = proposed_rates(fixture()["questions"][0])
+    row = question_row(raw)
+    criterion, old = approved_fixture_draft(row, raw)
+    problem = ProblemInfo.model_validate({**row, "criterion": criterion})
+    presentation = {"question_structure": row["question_structure"], "rubric_draft": old.model_dump(mode="json")}
+    problem._math_rubric_source = {"presentation": presentation}
+    text = "  " + alternative_display(old.plan.part_rubric.parts[1], language).rstrip("。.") + ending
+    edit_alternatives(problem, presentation, {"pB": text})
+    assert saved_draft(problem).plan == old.plan
+    assert presentation["rubric_draft"] == old.model_dump(mode="json")
+
+
+@pytest.mark.parametrize("replacement", [
+    ("deduct 1 points", "deduct 0.1 points"),
+    ("can earn", "cannot earn"),
+    ("per independent error", "per independent error only if the result is wrong"),
+])
+def test_meaningful_edit_of_english_alternative_summary_is_not_discarded(replacement):
+    from backend.models import ProblemInfo
+    from backend.services.rubric_drafts import edit_alternatives
+    from backend.services.rubric_display import alternative_display
+    raw = proposed_rates(fixture()["questions"][0])
+    row = question_row(raw)
+    criterion, old = approved_fixture_draft(row, raw)
+    problem = ProblemInfo.model_validate({**row, "criterion": criterion})
+    presentation = {"question_structure": row["question_structure"], "rubric_draft": old.model_dump(mode="json")}
+    problem._math_rubric_source = {"presentation": presentation}
+    original = alternative_display(old.plan.part_rubric.parts[1], "en")
+    text = original.replace(*replacement).rstrip(".")
+    assert text != original.rstrip(".")
+    edit_alternatives(problem, presentation, {"pB": text}, allow_pending=True)
+    assert presentation["alternative_rules"]["pB"]["text"] == text
+
+
 def test_teacher_interpretation_preserves_explicit_numbers_and_marks_only_ordinary_gaps():
     q = proposed_rates(fixture()["questions"][0])
     row = question_row(q)

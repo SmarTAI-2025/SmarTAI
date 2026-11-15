@@ -68,7 +68,7 @@ it.each(["operation_cancelled", "provider_timeout"])("does not present the last 
   state.progress!.error_detail = code;
   state.progress!.messages = [{ ts: 100, level: "info", message: "activity_responding" }];
   render(<RecognitionActivity progress={state.progress} locale="zh-CN" incomplete />);
-  expect(screen.getByText(code === "operation_cancelled" ? "本次识别已停止" : "本次识别未完成")).toBeVisible();
+  expect(screen.getByText(code === "operation_cancelled" ? "本次处理已停止" : "本次处理未完成")).toBeVisible();
   expect(within(screen.getByRole("region")).getByText("请求已发出，等待模型响应")).toBeVisible();
 });
 

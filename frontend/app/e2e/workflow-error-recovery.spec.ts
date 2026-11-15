@@ -212,7 +212,7 @@ test("restored question inputs can start a new job only after manual continuatio
   await expect(page.getByText("已上传文件可继续使用。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "重新识别全部资料" }).click();
   await expect(page).toHaveURL(/\/problems\/progress$/);
-  await expect(page.getByRole("heading", { name: "题目资料准备进度" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "题目准备进度" })).toBeVisible();
   await expect(page.getByRole("button", { name: "重试失败项", exact: true })).toHaveCount(0);
   expect(calls).toHaveLength(2);
   expect(calls[0].body).toContain("stored-pdf");
@@ -225,10 +225,10 @@ test("question failure → model change → restored original form → manual co
   await page.goto("/tasks/recovery-task/problems/progress");
   await expect(page.getByRole("button", { name: "重试失败项", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "检查 BYOK 配置" })).toBeVisible();
-  await page.getByRole("combobox", { name: "题目识别模型" }).selectOption("new");
+  await page.getByRole("combobox", { name: "题目准备模型" }).selectOption("new");
   await page.screenshot({ path: "output/playwright/workflow-question-error.png", fullPage: true });
   await page.getByRole("link", { name: "返回修改配置" }).click();
-  await expect(page.getByLabel("题目识别模型")).toHaveValue("new");
+  await expect(page.getByLabel("题目准备模型")).toHaveValue("new");
   await expect(page.getByLabel("页码（选填）")).toHaveValue("3, 4, 5");
   await expect(page.getByLabel("目标题号（选填）")).toHaveValue("1.1.5");
   await expect(page.getByLabel("补充说明（选填）")).toHaveValue("保留图表");

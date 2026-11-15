@@ -45,6 +45,7 @@ from backend.services.teacher_score_constraints import explicit_teacher_scores, 
 from backend.skills.question_score import resolve_question_score_policy
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import llm_attempt_budget, structured_llm_call
+from backend.services.question_preparation_diagnostics import normalize_formula_issue, preparation_review, bounded_preparation_review
 
 
 class _MaterialItem(BaseModel):
@@ -344,13 +345,37 @@ class IncrementalQuestionPreparation:
                     row["preparation_issues"].append(problem_issue)
             for issue in row["preparation_issues"]:
                 issue["q_id"] = q_id
+            row["preparation_issues"] = [normalize_formula_issue(issue) for issue in row["preparation_issues"]]
             for field in ("stem", "criterion", "reference_answer"):
-                if not str(row.get(field) or "").strip():
+                if not str(row.get(field) or "").strip() and not any(
+                    issue.get("field") == _issue_field(field) and issue.get("code") == "generation_failed"
+                    for issue in row["preparation_issues"]
+                ):
                     row["preparation_issues"].append(_issue(q_id, _issue_field(field), "generation_failed",
                         "warning" if field == "reference_answer" else "blocking", []))
+            generation_failure = self.failures.get("generation:" + identity) if generated else None
+            if generation_failure:
+                from backend.services.background_errors import provider_failure_diagnostic
+                try:
+                    diagnostic = provider_failure_diagnostic(generation_failure)
+                except Exception:
+                    diagnostic = None  # Display metadata must not replace the original failure.
+                if diagnostic:
+                    primary_field = "rubric" if not row.get("criterion") else "answer"
+                    for issue in row["preparation_issues"]:
+                        if issue.get("code") == "generation_failed" and issue.get("field") == primary_field:
+                            issue["details"] = {**issue.get("details", {}),
+                                "provider_error_code": diagnostic.code, "provider_http_status": diagnostic.http_status}
+            if row.get("rubric_draft"):
+                from backend.services.rubric_display import alternative_cap_issue
+                verified = saved_draft(row)
+                if verified and verified.plan.part_rubric:
+                    row["preparation_issues"].extend(alternative_cap_issue(q_id, verified.plan.part_rubric))
             # These are deterministic projection issues, not new events. Stable
             # IDs keep unchanged snapshots reusable across bookkeeping updates.
             for issue in row["preparation_issues"]:
+                if str(issue.get("issue_id", "")).startswith("alternative-cap:"):
+                    continue
                 issue["issue_id"] = "issue_" + _digest({key: value for key, value in issue.items() if key != "issue_id"})[:24]
         from backend.services.question_sources import attach_recognition_review
         attach_recognition_review(result, [])
@@ -613,11 +638,17 @@ class IncrementalQuestionPreparation:
                 reference_answers=sum(bool(str(row.get("reference_answer") or "").strip()) for row in self.latest.values()),
                 rubrics=sum(bool(str(row.get("criterion") or "").strip()) for row in self.latest.values()))
             changes["preparation_counts"] = counts
+            review = preparation_review(self.latest)
+            changes["preparation_review"] = bounded_preparation_review(review)
+            changes["preparation_review_summary"] = dict(questions=len(review),
+                blocking=sum(any(i["severity"] == "blocking" for i in r["issues"]) for r in review),
+                advisory=sum(any(i["severity"] == "warning" for i in r["issues"]) for r in review))
             await self._checkpoint(**changes)
             self._view_digest = view_digest
             # Every later provider event snapshots this same reporter. Keeping
             # counts only in a one-off dict let the next event erase them.
             await self.reporter.set_preparation_counts(**counts)
+            await self.reporter.set_preparation_review(changes["preparation_review"], changes["preparation_review_summary"])
             progress = (await self.reporter.snapshot()).model_dump(mode="json")
             await self.operation.update_progress(progress)
 
@@ -869,8 +900,8 @@ class IncrementalQuestionPreparation:
                                     for extracted in data.values():
                                         if any(normalize_question_number(extracted.get(field)) in formula_conflicts
                                                for field in ("number", "source_display_number") if extracted.get(field)):
-                                            issue = _issue("q1", "stem", "recognition_partial", "blocking", [draft.source_token])
-                                            issue["details"]["reason"] = "conflicting_printed_formula"
+                                            issue = _issue("q1", "stem", "recognition_needs_review", "warning", [draft.source_token])
+                                            issue["details"] = {"reason": "conflicting_printed_formula", "confidence_scope": "question"}
                                             extracted.setdefault("preparation_issues", []).append(issue)
                                     if retained:
                                         data = dedupe_extracted_problems(_rows([*retained, *data.values()]))
@@ -1044,7 +1075,11 @@ class IncrementalQuestionPreparation:
         # their provenance. A new retry worker has no previous call's locals.
         accepted = self.project()
         for q_id, row in self.project(generated=False).items():
+            progress_id = self._generation_progress_id(row)
+            await self.reporter.register_question_generation(progress_id, str(row.get("number") or ""))
             if not str(row.get("stem") or "").strip() or any(issue.get("code") == "recognition_partial" for issue in row.get("preparation_issues", [])):
+                await self.reporter.mark_question_generation_finished(progress_id, succeeded=False,
+                    error_code="question_source_incomplete")
                 continue
             if self.policy.mode == "per_question" and not row.get("max_score_source"):
                 score_rows.append(row)
@@ -1057,7 +1092,9 @@ class IncrementalQuestionPreparation:
                        and f"generated:{identity}:{target['target']}" not in self.units]
             key = "generation:" + identity
             if targets and key not in self.jobs:
-                self.jobs[key] = asyncio.create_task(self._generate(key, identity, accepted[q_id], targets))
+                self.jobs[key] = asyncio.create_task(self._generate(key, identity, accepted[q_id], targets, progress_id=progress_id))
+            elif not targets and key not in self.jobs:
+                await self.reporter.mark_question_generation_finished(progress_id, succeeded=True)
 
         # A natural-language allocation can refer to "the last two questions".
         # Resolve it once against the complete known set, as before incremental
@@ -1089,8 +1126,8 @@ class IncrementalQuestionPreparation:
             await self.finish(key, error=exc)
         await self.schedule_ready()
 
-    async def _generate(self, key, identity, row, targets):
-        progress_id = self._generation_progress_id(row)
+    async def _generate(self, key, identity, row, targets, *, progress_id=None):
+        progress_id = progress_id or self._generation_progress_id(row)
         review_feedback = {}
         data = _rows([row])
         await self.reporter.register_question_generation(progress_id, str(row.get("number") or ""))
@@ -1307,7 +1344,7 @@ class IncrementalQuestionPreparation:
                     for issue in row["preparation_issues"]))
                 for row in self.latest.values()
             ):
-                raise ValidationError("Some question text is incomplete.", code="question_targets_incomplete")
+                raise ValidationError("Some question text is incomplete.", code="question_source_incomplete")
             await self.reporter.set_stage_progress("committing_question_packages", total_steps=8, completed_steps=7)
             await self._finalize_view()
             return self.latest

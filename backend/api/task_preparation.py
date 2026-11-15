@@ -2140,6 +2140,8 @@ def _merge_question_preparation_checkpoint_progress(
     merged = dict(snapshot)
     if checkpoint.get("incremental_version") == 1:
         merged["preparation_counts"] = dict(checkpoint.get("preparation_counts") or {})
+        merged["preparation_review"] = list(checkpoint.get("preparation_review") or [])
+        merged["preparation_review_summary"] = dict(checkpoint.get("preparation_review_summary") or {})
         merged["stage_sequence"] = []
         return merged
     if "generation_question_ids" not in checkpoint:

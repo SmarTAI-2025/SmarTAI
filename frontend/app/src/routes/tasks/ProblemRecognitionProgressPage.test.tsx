@@ -217,7 +217,7 @@ describe("ProblemRecognitionProgressPage recovery", () => {
       </MemoryRouter>,
     );
 
-    const select = screen.getByRole("combobox", { name: "题目识别模型" });
+    const select = screen.getByRole("combobox", { name: "题目准备模型" });
     expect(select).toHaveValue("provider-old");
     expect(select).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "重试失败项" }));
@@ -251,7 +251,7 @@ describe("ProblemRecognitionProgressPage recovery", () => {
     render(<MemoryRouter initialEntries={["/tasks/question-task/problems/progress"]}><Routes><Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} /></Routes></MemoryRouter>);
     expect(screen.getByRole("link", { name: "返回修改配置" })).toHaveAttribute("href", "/tasks/question-task/upload/problems");
     const retry = screen.getByRole("button", { name: "重试失败项" });
-    fireEvent.change(screen.getByRole("combobox", { name: "题目识别模型" }), { target: { value: "provider-new" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "题目准备模型" }), { target: { value: "provider-new" } });
     expect(retryMutateAsync).not.toHaveBeenCalled();
     fireEvent.click(retry); fireEvent.click(retry);
     await waitFor(() => expect(retryMutateAsync).toHaveBeenCalledTimes(1));

@@ -82,7 +82,7 @@ export interface ProblemInfo {
   max_score_source?: "default_10" | "uniform" | "per_question_text" | "teacher_edited" | "legacy";
   max_score_review_status?: "needs_review" | "confirmed";
   question_structure?: MajorQuestionStructureV1 | null;
-  alternative_rules?: { id: string; label: string | null; text: string }[];
+  alternative_rules?: { id: string; label: string | null; text: string; display_text?: string; show_in_review?: boolean }[];
   rubric_point_summary?: RubricPointSummaryV1 | null;
   review_status?: "needs_review" | "edited" | "confirmed";
   reference_answer?: string | null;
@@ -209,6 +209,8 @@ export interface SubmissionSourceOutcome {
   reason_code?: string | null;
   recognition_reason_code?: string | null;
   page_diagnostics?: SubmissionPageDiagnostics | null;
+  answer_diagnostics?: Array<Pick<StudentAnswerInfo, "q_id" | "number" | "flag" | "recognition_confidence"> & { has_content: boolean }>;
+  answer_diagnostic_count?: number;
   resolution_status?: "identity_resolved" | "manual_review" | "manual_resolved" | null;
   failure_phase?: string | null;
   retryable: boolean;

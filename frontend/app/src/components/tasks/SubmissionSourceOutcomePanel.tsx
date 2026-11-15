@@ -12,6 +12,7 @@ import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { getSubmissionPageErrorLabel, getSubmissionSourceReasonCopy } from "@/lib/submissionSourceOutcomes";
 import type { SubmissionSourceOutcome, SubmissionSourceSummary } from "@/types";
+import { answerReviewNotes } from "@/lib/reviewConfirmation";
 
 export function SubmissionSourceOutcomePanel({
   summary,
@@ -147,6 +148,20 @@ function SourceOutcomeRow({ source, locale }: { source: SubmissionSourceOutcome;
             </p>
           ) : null}
           {source.page_diagnostics ? <PageDiagnostics source={source} locale={locale} /> : null}
+          {source.student_candidate ? <p className="mt-1 text-xs text-muted-foreground">{tx(locale, "已识别身份：", "Recognized identity: ")}{source.student_candidate}</p> : null}
+          {(source.answer_diagnostic_count ?? 0) > 0 ? <p className="mt-2 text-xs font-medium">{tx(locale, `${source.answer_diagnostic_count} 份作答需要关注`, `${source.answer_diagnostic_count} responses need attention`)}</p> : null}
+          {(source.answer_diagnostics ?? []).map(answer => {
+            // Review notes only inspect whether content exists; no response
+            // text is sent in this diagnostic projection.
+            const notes = answerReviewNotes({ ...answer, type: "", content: answer.has_content ? "[present]" : "" }, locale, true);
+            return notes.length ? <div key={answer.q_id} className="mt-2 rounded-md border px-3 py-2 text-xs leading-5">
+              <strong>{tx(locale, `第 ${answer.number || answer.q_id} 题`, `Question ${answer.number || answer.q_id}`)}</strong>
+              {notes.map(note => <p key={note.label} className={note.severity === "blocking" ? "text-red-700 dark:text-red-300" : "text-amber-700 dark:text-amber-300"}>
+                {tx(locale, note.severity === "blocking" ? "需处理：" : "建议复核：", note.severity === "blocking" ? "Required: " : "Suggested: ")}{note.label}
+              </p>)}
+            </div> : null;
+          })}
+          {(source.answer_diagnostic_count ?? 0) > (source.answer_diagnostics?.length ?? 0) ? <p className="mt-1 text-xs text-muted-foreground">{tx(locale, "这里先列出部分问题，进入复核可查看全部。", "Some issues are shown here. Open review to see them all.")}</p> : null}
           {source.unknown_question_ids.length > 0 && source.reason_code !== "no_matching_answer" ? (
             <p className="mt-1 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] font-medium leading-5 text-amber-800 dark:bg-amber-950/35 dark:text-amber-200">
               {tx(locale, "同时发现未匹配题号：", "Also found unmatched question IDs: ")}

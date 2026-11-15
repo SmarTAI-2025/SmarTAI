@@ -61,6 +61,26 @@ def test_display_edit_preserves_scoring_without_model(monkeypatch, patch):
     assert new.parts[1].alternative.maximum.resolve(2) == 1
 
 
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_alternative_sentence_stop_edit_saves_and_reloads_without_compilation(monkeypatch, language):
+    from backend.services.rubric_display import alternative_display
+
+    args = seeded()
+    before = record(args)
+    original = saved_draft(problem_from_question(before))
+    # Include a default full-credit policy and an explicit teacher cap.
+    edits = {part.id: alternative_display(part, language).rstrip("。.")
+             for part in original.plan.part_rubric.parts[:2]}
+    def forbidden(*args, **kwargs):
+        pytest.fail("Removing a sentence stop must not recompile the scoring plan")
+    monkeypatch.setattr(task_facade, "_compile_review_edit", forbidden)
+    response = task_facade.update_problem(**args, patch={"alternative_rule_edits": edits})
+    reloaded = record(args)
+    assert response["status"] == "ok"
+    assert saved_draft(problem_from_question(reloaded)).plan.model_dump_json() == original.plan.model_dump_json()
+    assert reloaded.source["presentation"]["alternative_rules"] == before.source["presentation"]["alternative_rules"]
+
+
 def test_semantic_edit_reaches_compiler_before_any_text_sum(monkeypatch):
     args = seeded()
     old = record(args)

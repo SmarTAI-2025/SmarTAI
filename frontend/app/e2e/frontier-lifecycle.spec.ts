@@ -92,7 +92,7 @@ for (const locale of ["zh-CN", "en-US"]) {
       await expect(page).toHaveURL(new RegExp(`/frontier/live\\?taskId=${task.task_id}$`));
     }
     await page.goto(`/frontier/live?taskId=${task.task_id}`);
-    const questionReview = page.getByRole("alert").getByRole("link", { name: zh ? "审核题目" : "Review questions", exact: true });
+    const questionReview = page.getByRole("alert").getByRole("link", { name: zh ? "复核题目资料" : "Review question materials", exact: true });
     await expect(questionReview).toHaveAttribute("href", `/tasks/${task.task_id}/questions`);
     await page.getByRole("alert").screenshot({ path: testInfo.outputPath(`required-questions-${locale}.png`) });
     await questionReview.click();

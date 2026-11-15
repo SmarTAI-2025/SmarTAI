@@ -42,7 +42,7 @@ describe("StageProviderSelect", () => {
     render(
       <StageProviderSelect
         id="recognition-provider"
-        label="题目识别模型"
+        label="题目准备模型"
         hint="默认已选，可改选"
         experts={experts}
         value="provider-default"
@@ -51,7 +51,7 @@ describe("StageProviderSelect", () => {
       />,
     );
 
-    const select = screen.getByRole("combobox", { name: "题目识别模型" });
+    const select = screen.getByRole("combobox", { name: "题目准备模型" });
     expect(select).toHaveValue("provider-default");
     expect(screen.getByRole("option", { name: /默认/ })).toBeInTheDocument();
     await userEvent.selectOptions(select, "provider-vision");
@@ -66,7 +66,7 @@ describe("StageProviderSelect", () => {
       <>
         <StageProviderSelect
           id="question-provider"
-          label="题目识别模型"
+          label="题目准备模型"
           hint=""
           experts={experts}
           value="provider-default"
@@ -94,7 +94,7 @@ describe("StageProviderSelect", () => {
       </>,
     );
 
-    expect(screen.getByRole("combobox", { name: "题目识别模型" })).toHaveValue("provider-default");
+    expect(screen.getByRole("combobox", { name: "题目准备模型" })).toHaveValue("provider-default");
     expect(screen.getByRole("combobox", { name: "作答识别模型" })).toHaveValue("provider-vision");
     const grading = screen.getByRole("combobox", { name: "批改模型" });
     expect(grading).toHaveValue("ocr:baidu_unlimited_ocr:record-1");

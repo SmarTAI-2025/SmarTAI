@@ -461,7 +461,7 @@ async def test_unlabelled_material_matches_only_a_single_known_question(monkeypa
     else:
         with pytest.raises(ValidationError) as failed:
             await pipeline.run()
-        assert failed.value.code == "question_targets_incomplete"
+        assert failed.value.code == "question_source_incomplete"
         _, result = persisted(owner, operation)
         unassigned = [value for value in result.values() if not value["number"]]
         assert len(unassigned) == 1 and unassigned[0][target] == literal

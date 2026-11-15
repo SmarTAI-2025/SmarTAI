@@ -31,7 +31,7 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
     def scoped_request(batch):
         scoped = request.model_copy(update={"scope": "pages", "pages": batch})
         if request.purpose == "problems" and len(batch) == 1 and batch[0] in panel_pages:
-            scoped = scoped.model_copy(update={"policy": scoped.policy.model_copy(update={"version": "printed-formula-panels-v1"})})
+            scoped = scoped.model_copy(update={"policy": scoped.policy.model_copy(update={"version": "printed-formula-panels-v2"})})
         return apply_source_timeout_profile(scoped, engine=engine, timeout_profile=timeout_profile,
                                              total_pages=total_pages)
 

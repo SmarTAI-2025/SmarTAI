@@ -108,6 +108,24 @@ function renderPage(initialEntry: string) {
 }
 
 describe("QuestionPreparationOverviewPage smart search", () => {
+  it("keeps required and suggested issues for the same question in both queue tabs", () => {
+    manualTask.problem_data = { q1: { q_id: "q1", number: "1.10", type: "概念题", stem: "判断正误。",
+      max_score: 10, criterion: "", reference_answer: "", review_status: "needs_review", preparation_issues: [
+        { issue_id: "formula", field: "stem", code: "recognition_partial", severity: "blocking", status: "open", details: { incomplete: true, reason: "conflicting_printed_formula" } },
+        { issue_id: "rubric", field: "rubric", code: "generation_failed", severity: "blocking", status: "open" },
+        { issue_id: "answer", field: "answer", code: "generation_failed", severity: "warning", status: "open" },
+        { issue_id: "manual", field: "source", code: "manual_completion_required", severity: "blocking", status: "open", details: { required_fields: ["criterion"] } },
+      ] } };
+    renderPage("/tasks/task-1/questions");
+    const queue = screen.getByRole("region", { name: "待复核队列" });
+    expect(within(queue).getByRole("tab", { name: "需要处理 (1)" })).toBeVisible();
+    fireEvent.click(within(queue).getByRole("tab", { name: "建议处理 (1)" }));
+    expect(within(queue).getByText(/标答未生成，可重试或人工补充（可选）/)).toBeVisible();
+    expect(within(queue).getByText(/本题公式待核对/)).toBeVisible();
+    expect(within(queue).queryByText(/题目识别不完整|生成失败/)).toBeNull();
+    fireEvent.click(within(queue).getByRole("tab", { name: "需要处理 (1)" }));
+    expect(within(queue).getByText("评分标准未生成或不完整，请重试或补齐。")).toBeVisible();
+  });
   it("offers response upload even when ordinary unconfirmed questions are hidden by a no-match filter", async () => {
     renderPage("/tasks/task-1/questions?q=no-match");
     await userEvent.click(screen.getByRole("button", { name: "进入上传作答" }));

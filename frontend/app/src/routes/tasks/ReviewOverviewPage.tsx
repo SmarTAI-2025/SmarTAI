@@ -436,11 +436,18 @@ function ReviewCell({ locale, href, correction, item, annotated, confirmed, ques
 }
 
 function ReviewQueue({ locale, taskId, items, returnTo, confirmation }: { confirmation: React.ReactNode; locale: Locale; taskId: string; items: ReviewItem[]; returnTo: string }) {
-  return <ReviewQueuePanel locale={locale} confirmation={confirmation} items={items.map(item => ({
-    key: reviewCellKey(item.student.id, item.question.id), title: `${item.student.name} · ${item.question.label}`,
-    reason: queueReason(locale, item), severity: item.severity,
-    href: reviewDetailHref(taskId, item.student.id, item.question.id, returnTo),
-  }))} />;
+  return <ReviewQueuePanel locale={locale} confirmation={confirmation} items={items.flatMap(item => {
+    const notes = correctionReviewNotes(item.correction, locale);
+    return (["blocking", "advisory"] as const).flatMap(severity => {
+      const reasons = notes.filter(note => note.severity === severity).map(note => note.label);
+      if (!reasons.length && (notes.length || item.severity !== severity)) return [];
+      return [{
+        key: `${reviewCellKey(item.student.id, item.question.id)}:${severity}`, title: `${item.student.name} · ${item.question.label}`,
+        reason: reasons.length ? reasons.join(" · ") : queueReason(locale, item), severity,
+        href: reviewDetailHref(taskId, item.student.id, item.question.id, returnTo),
+      }];
+    });
+  })} />;
 }
 
 function PageState({ title, description, busy = false, action, href, onAction }: { title: string; description?: string; busy?: boolean; action?: string; href?: string; onAction?: () => void }) {

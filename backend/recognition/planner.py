@@ -308,7 +308,7 @@ def plan_recognition(
         )
         regions = page.regions if region_safe else [NormalizedRegionV1()]
         verification = []
-        if (request.purpose == "problems" and policy.version == "printed-formula-panels-v1"
+        if (request.purpose == "problems" and policy.version in {"printed-formula-panels-v1", "printed-formula-panels-v2"}
                 and len(request.requested_pages) == 1 and mode == "page_image" and engine.region_reads
                 and not region_safe and page.native_quality == "missing"):
             # This is a single-page budget. Always reserve the ordinary full

@@ -121,6 +121,11 @@ class ProgressReporter:
         async with self._lock:
             self._progress.preparation_counts = dict(counts)
 
+    async def set_preparation_review(self, items: list[dict], summary: dict[str, int]) -> None:
+        async with self._lock:
+            self._progress.preparation_review = items
+            self._progress.preparation_review_summary = summary
+
     async def increment_completed(self) -> None:
         async with self._lock:
             self._progress.completed_units += 1
@@ -397,7 +402,7 @@ class ProgressReporter:
             # Shallow copy is sufficient since the lists are replaced, not mutated
             snap = self._progress.model_copy(deep=True)
             snap.messages = list(self._events)
-            if self.recognition_activity is not None:
+            if self.recognition_activity is not None or snap.workflow == "question_preparation":
                 from backend.progress.recognition_activity import public_message
                 messages, size = [], 0
                 for event in reversed(snap.messages):
@@ -409,7 +414,8 @@ class ProgressReporter:
                         break
                     messages.append(public)
                 snap.messages = list(reversed(messages))
-                snap.recognition_requests = self.recognition_activity.states()
+                if self.recognition_activity is not None:
+                    snap.recognition_requests = self.recognition_activity.states()
             return snap
 
     @asynccontextmanager

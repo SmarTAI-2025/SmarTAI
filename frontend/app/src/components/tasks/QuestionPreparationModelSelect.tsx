@@ -19,7 +19,7 @@ export function QuestionPreparationModelSelect({ locale, value, onChange, disabl
   const models = sortByProvider((providers.data ?? []).filter(model => model.enabled && model.provider_kind !== "ocr"));
   const selected = (value?.startsWith("ocr:") ? null : value) || models.find(model => model.is_default)?.provider_id || "";
   return <div className="flex min-w-0 flex-wrap items-center gap-2" id="question-model-control">
-    <label htmlFor="question-preparation-model" className="text-sm font-medium">{zh ? "题目处理模型" : "Question model"}</label>
+    <label htmlFor="question-preparation-model" className="text-sm font-medium">{zh ? "题目准备模型" : "Question preparation model"}</label>
     <select id="question-preparation-model" value={selected} onChange={event => onChange(event.target.value)}
       disabled={disabled || providers.isPending || !models.length}
       className="h-10 max-w-full rounded-md border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 sm:max-w-72">

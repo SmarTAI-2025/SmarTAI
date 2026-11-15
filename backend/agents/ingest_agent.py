@@ -2247,6 +2247,7 @@ _GENERATED_MATERIAL_GUIDANCE = r"""- reference_answer: a correct model answer or
 AI_COMPLETION_SYSTEM_PROMPT = _MATERIAL_ENVELOPE + _LEGACY_RULE_GUIDANCE + _GENERATED_MATERIAL_GUIDANCE
 
 from backend.services.part_rubric import PART_INSTRUCTION, TEACHER_RULE_INSTRUCTION, parallel_part_budgets, supplied_notation
+from backend.services.rubric_display import DISPLAY_INSTRUCTION
 from backend.services.rubric_drafts import RubricAllocationError, RubricDefinition, RubricDraft, generated_rubric, retarget_draft, saved_draft
 from backend.domain.question_types import normalize_question_type
 from backend.services.math_rubric_plan import _question_input
@@ -2467,12 +2468,19 @@ async def generate_missing_question_materials(
                     '{"candidates":[{"target_id":"q1:reference_answer","text_value":"...worked answer..."},'
                     '{"target_id":"q1:criterion","rubric_definition":{"part_rubric":{"total_pts":10,'
                     '"parts":[{"id":"p1","label":null,"stem":null,"total_pts":10,"steps":'
-                    '[{"id":"s1","criterion":"...mathematical goal...","total_pts":10}]}]}}}]}. '
+                    '[{"id":"s1","criterion":"...mathematical goal...","total_pts":10}],'
+                    '"alternative":{"deduct_per_error":1}}]}}}]}. '
                     "Return only requested entries. Use the source maximum, actual independent goals and "
-                    "budgets; the numbers and number of steps in the example are illustrative. Put step "
+                    "budgets; all numbers, including the alternative-method deduction, are illustrative. "
+                    "Include the independent alternative policy in every part; follow explicit teacher rules. "
+                    "For alternative.maximum/minimum, fractions are of THIS PART's total_pts, not the whole question. "
+                    "For example, if eight parts each have 1.25 points, full alternative credit is 1/1 of "
+                    "1.25, never 1/8 of 1.25. Unless the source restricts other methods, leave the default "
+                    "maximum (full part credit) and minimum (zero) unchanged. "
+                    "Choose an appropriate positive deduct_per_error when that policy needs one. Put step "
                     "objects inside the relevant part, including when the question has no printed subparts. "
                     "The rubric definition schema below applies ONLY inside rubric_definition. "
-                    + PART_INSTRUCTION
+                    + PART_INSTRUCTION + DISPLAY_INSTRUCTION
                     + "\nUse WrittenRubricDefinition for these targets: "
                     + ", ".join(sorted(part_targets | interpret_with_answer)) + ". On a reference-only target with an existing teacher rubric, attach its interpretation to the same candidate. Copy rubric_question identity and source fields; "
                     "fill parts in the same order; supply a stable ID and total_pts per part. "
