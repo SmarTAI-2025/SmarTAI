@@ -725,7 +725,7 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
     if (not teacher_primary and normalize_question_type(problem.get("type") or "") != "推理题"
             and any(part.deductions for part in rubric.parts)):
         raise ValueError("For AI-generated primary rubrics use funded steps, not deductions. "
-                         "Only proof questions retain goal-based deductions; preserve teacher-specified modes.")
+                         "Preserve teacher-specified modes; proof deduction ledgers are validated separately.")
     # Source clauses constrain individual fields. A subtotal, a step budget and a
     # conditional award in the same sentence are three different quantities.
     per_part = PER_PART_POINTS.search(ordinary)
@@ -1053,8 +1053,18 @@ Preserve the original question and all explicit teacher policies. For each known
 total_pts and exactly one of steps (budgets sum to total_pts) or deductions (positive amounts
 per supported error; they do not sum to total_pts), unless the teacher explicitly combines funded
 steps with named deductions. For a mixed part include both lists and quote each additional penalty.
-When the teacher provides no primary scoring mode, use steps for AI-generated non-proof rubrics.
-Proof questions retain goal-based deductions. Complete an incomplete teacher rubric in its existing
+When the teacher provides no primary scoring mode, use funded steps, including for proof questions.
+Use the reference answer to identify concrete mathematical achievements, not generic completion
+tiers or a fixed allocation. Check its reasoning against the stem; a reference can be wrong.
+When both reference_answer and criterion are requested, return the worked reference answer first,
+then the concrete steps based on that argument in the SAME response. If only criterion is requested,
+use the existing reference; when none exists establish a valid argument from the stem before
+allocating points. Do not require a reference answer to exist merely to save a teacher's rubric.
+Write concise teacher-facing criteria in the requested language. Put point amounts only in the
+numeric fields, not repeatedly in criterion. Do not copy the entire question into every item.
+Split meaningful partial progress within a long proof step into separately funded, assessable items;
+each item is earned or missed under the existing ledger, not an invitation to invent a partial score.
+Complete an incomplete teacher rubric in its existing
 mode; do not turn missing details into permission to mix points and deductions.
 For explicit conditions that withhold a step's award, include the exact source clauses in that
 step's required_conditions. Record ambiguous targets in teacher_gaps. Reference solutions can contain detailed

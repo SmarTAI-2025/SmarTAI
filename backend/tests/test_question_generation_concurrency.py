@@ -708,8 +708,8 @@ async def test_generation_request_carries_bounded_subpart_contract(monkeypatch):
     from backend.tests.part_rubric_fixtures import definition_for
     # This test inspects the generation envelope; proof goal acceptance is covered separately.
     from unittest.mock import AsyncMock
-    from backend.services import proof_goals
-    monkeypatch.setattr(proof_goals, "prepare_source_goals", AsyncMock(return_value=None))
+    from backend.services import proof_rubric
+    monkeypatch.setattr(proof_rubric, "prepare_proof_steps", AsyncMock(return_value=None))
     problems = _problems(1)
     captured = {}
 
