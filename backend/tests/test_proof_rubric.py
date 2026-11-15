@@ -1,0 +1,184 @@
+"""Generation/audit/settlement contracts. Fixed replies do not measure AI quality."""
+import json
+
+import pytest
+
+from backend.agents.ingest_agent import generate_missing_question_materials
+from backend.agents.incremental_question_preparation import _rows
+from backend.services import proof_rubric as proof
+from backend.services.part_rubric import PartRubric
+from backend.services.rubric_drafts import RubricDraft, saved_draft
+from backend.services.rubric_display import rubric_display
+from backend.skills.math_grading import ProofPartAssessment
+from backend.skills.part_scoring import settle_parts
+from backend.tests.test_question_material_format_repair import Provider
+
+
+STEM = r"In the dihedral group, prove every non-rotation has order 2. Deduce that s and sr generate the group."
+REFERENCE = r"Use rs=sr^{-1} to write a non-rotation as sr^k. Then (sr^k)^2=r^{-k}r^k=1. Reflections are nonidentity, so their order is 2. In particular s and sr have order 2, and s(sr)=r proves generation."
+POINTS = [
+    ("normal", 3, r"用群关系将非旋转元素表示为 $sr^k$，并说明这种形式覆盖所有非旋转元素"),
+    ("square", 3, r"利用 $r^ks=sr^{-k}$ 证明 $(sr^k)^2=1$"),
+    ("order", 2, r"结合非单位性得出元素的阶恰为 2，包括 $s$ 和 $sr$"),
+    ("generate", 2, r"由 $s(sr)=r$ 说明 $s,sr$ 生成原来的两个生成元，从而生成整个群"),
+]
+
+
+def rubric():
+    return PartRubric.model_validate(dict(id="r", label="1", stem=STEM, total_pts=10,
+        parts=[dict(id="p1", total_pts=10,
+                    steps=[dict(id=key, criterion=text, total_pts=points) for key, points, text in POINTS],
+                    alternative=dict(deduct_per_error=1.5))]))
+
+
+def audit(verdict="consistent", reason="Concrete proof obligations, no duplicate awards.", part_id="p1"):
+    return json.dumps({"parts": [dict(part_id=part_id, verdict=verdict, reason=reason)]})
+
+
+def initial(rules=None, *, reference=True):
+    candidates = [dict(target_id="q1:criterion", rubric_definition={"part_rubric": (rules or rubric()).model_dump(mode="json")})]
+    if reference:
+        # Deliberately put the reference last: binding must not rely on model array order.
+        candidates.append(dict(target_id="q1:reference_answer", text_value=REFERENCE))
+    return json.dumps({"candidates": candidates})
+
+
+async def generate(provider, *, reference=True, existing_reference="", **kwargs):
+    row = dict(number="1", type="推理题", stem=STEM, max_score=10, reference_answer=existing_reference)
+    targets = [dict(q_id="q1", target=key, target_id=f"q1:{key}")
+               for key in (["criterion", "reference_answer"] if reference else ["criterion"])]
+    return await generate_missing_question_materials(_rows([row]), targets, 1, provider,
+        generation_language="zh", **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reference,existing", [(True, ""), (False, REFERENCE), (False, "")])
+async def test_one_generation_one_audit_freezes_concrete_steps(reference, existing):
+    provider = Provider([initial(reference=reference), audit()])
+    candidates = await generate(provider, reference=reference, existing_reference=existing)
+    assert len(provider.calls) == 2
+    assert "funded steps, including for proof questions" in provider.calls[0][0].content
+    assert "SAME response" in provider.calls[0][0].content
+    request = json.loads(provider.calls[1][-1].content)
+    assert request["source"]["question"] == STEM
+    assert request["source"]["reference_answer"] == (REFERENCE if reference or existing else "")
+    assert [s["id"] for s in request["proposal"][0]["steps"]] == [key for key, _, _ in POINTS]
+    candidate = next(c for c in candidates if c.target == "criterion")
+    frozen = RubricDraft.model_validate(candidate.rubric_draft)
+    part = frozen.plan.part_rubric.parts[0]
+    assert [(s.id, s.total_pts, s.criterion) for s in part.steps] == POINTS
+    assert not part.deductions
+    assert part.alternative.deduct_per_error == 1.5
+    assert all(s.follow_through_pts == s.total_pts / 2 for s in part.steps)
+    display = rubric_display(frozen.plan.part_rubric, STEM)
+    for _, points, criterion in POINTS:
+        assert f"{criterion}（{points} 分）" in display
+    assert "未取得有效数学进展" not in display and "配分单位" not in display
+    # The same frozen plan survives serialization and standard preparation reads.
+    completed = _rows([dict(number="1", type="推理题", stem=STEM, max_score=10,
+        reference_answer=REFERENCE if reference or existing else "", criterion=candidate.text_value,
+        rubric_draft=json.loads(frozen.model_dump_json()),
+        ai_completion_provenance={"criterion": {"source_kind": "ai_generated"}})])["q1"]
+    rebound = saved_draft(completed)
+    assert rebound is not None and rebound.plan.part_rubric == frozen.plan.part_rubric
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verdict", ["inconsistent", "uncertain"])
+async def test_semantic_failure_preserves_exact_repair_reason_and_good_sibling(verdict):
+    issue = "square: the reference uses an invalid exponent identity"
+    feedback = {}
+    provider = Provider([initial(), audit(verdict, issue)])
+    candidates = await generate(provider, allow_partial=True, repair_feedback=feedback)
+    assert [c.target for c in candidates] == ["reference_answer"]
+    assert issue in feedback["q1:criterion"]
+    assert len(provider.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_requests_only_failed_rubric_with_existing_reference_and_reason():
+    feedback = {}
+    provider = Provider([initial(), audit("inconsistent", "square: fix the identity"), initial(reference=False), audit()])
+    good = await generate(provider, allow_partial=True, repair_feedback=feedback)
+    assert len(good) == 1
+    repaired = await generate(provider, reference=False, existing_reference=good[0].text_value,
+                              allow_partial=True, repair_feedback=feedback)
+    assert [c.target for c in repaired] == ["criterion"]
+    request = json.loads(provider.calls[2][-1].content.removeprefix("[Generation request]\n"))
+    assert request["known_problems"][0]["existing_reference_answer"] == REFERENCE
+    assert request["validation_feedback"]["q1:criterion"].endswith("square: fix the identity")
+    assert len(provider.calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_audit_cannot_change_the_ledger_or_approve_a_foreign_part():
+    rules = rubric()
+    before = rules.model_dump_json()
+    provider = Provider([audit()])
+    result = await proof.prepare_proof_steps(provider, STEM, rules, reference_answer=REFERENCE, language="zh")
+    assert result is rules and rules.model_dump_json() == before
+    wrong = Provider([audit(part_id="other"), audit(part_id="other")])
+    with pytest.raises(proof.ProofRubricUnverified):
+        await proof.prepare_proof_steps(wrong, STEM, rules, reference_answer=REFERENCE, language="zh")
+    assert len(wrong.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_generic_tiers_are_rejected_without_spending_an_audit_call():
+    from backend.tests.proof_ledger_fixture import goal_ledger
+    rules = goal_ledger(rubric(), [(STEM, 10)])
+    provider = Provider([])
+    with pytest.raises(proof.ProofRubricUnverified, match="concrete funded proof steps"):
+        await proof.prepare_proof_steps(provider, STEM, rules, language="en")
+    assert not provider.calls
+
+
+@pytest.mark.asyncio
+async def test_teacher_rules_are_not_replanned():
+    provider = Provider([])
+    rules = rubric().model_copy(update={"teacher_rubric": "按教师指定步骤给分"})
+    assert await proof.prepare_proof_steps(provider, STEM, rules, language="zh") is None
+    row = dict(stem=STEM, type="推理题")
+    assert proof.use_proof_steps(row)
+    for change in (dict(criterion="按步骤给分"), dict(rubric_draft={"saved": True}),
+                   dict(teacher_subpart_points={"(1)": 5}), dict(type="计算题"),
+                   dict(stem=STEM + " [3 marks for the witness]")):
+        assert not proof.use_proof_steps({**row, **change})
+    assert not provider.calls
+
+
+@pytest.mark.asyncio
+async def test_audit_uses_independent_budget_without_adding_a_planning_call():
+    from backend.tools.structured_llm import llm_attempt_budget, ainvoke_with_retry, StructuredOutputInvalidError
+    from langchain_core.messages import HumanMessage
+    provider = Provider(["generation", "repair", audit(), "last attempt"])
+    with llm_attempt_budget():
+        for _ in range(2):
+            await ainvoke_with_retry(provider, [HumanMessage(content="Generation")])
+        await proof.prepare_proof_steps(provider, STEM, rubric(), language="zh")
+        await ainvoke_with_retry(provider, [HumanMessage(content="Generation")])
+        with pytest.raises(StructuredOutputInvalidError, match="attempt limit"):
+            await ainvoke_with_retry(provider, [HumanMessage(content="Generation")])
+    assert len(provider.calls) == 4
+
+
+@pytest.mark.parametrize("missed,expected", [(set(), 10), ({"order"}, 8), ({"square"}, 7),
+    ({"order", "generate"}, 6), ({"normal", "square", "order", "generate"}, 0)])
+def test_frozen_step_achievements_settle_with_meaningful_partial_scores(missed, expected):
+    rules = rubric()
+    answer = REFERENCE
+    inferences = [dict(evidence="student:1", reasoning=text, result="gap" if key in missed else "written",
+                       step_ids=[key]) for key, _, text in POINTS]
+    decision = dict(part_id="p1", target_quote="part:p1", student_quote="student:1", method="reference",
+                    relevance="partial" if missed else "complete", progress="Assess the individual implications.", inferences=inferences)
+    assessment = ProofPartAssessment.model_validate(dict(comment="Check concrete steps", part_decisions=[decision])).assessment()
+    score, _ = settle_parts(rules, assessment.part_decisions, answer, STEM)
+    assert score == expected
+
+
+def test_one_sound_compressed_argument_can_support_multiple_distinct_steps():
+    decision = dict(part_id="p1", target_quote="part:p1", student_quote="student:1", method="minor_variant",
+        relevance="complete", progress="The compact proof establishes all obligations.",
+        inferences=[dict(evidence="student:1", reasoning=REFERENCE, result="written", step_ids=[key for key, _, _ in POINTS])])
+    assessment = ProofPartAssessment.model_validate(dict(comment="Valid compressed proof", part_decisions=[decision])).assessment()
+    assert settle_parts(rubric(), assessment.part_decisions, REFERENCE, STEM)[0] == 10

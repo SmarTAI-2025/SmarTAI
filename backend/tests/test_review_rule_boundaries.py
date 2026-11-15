@@ -115,17 +115,3 @@ def test_unresolved_question_scope_cannot_fall_back_to_all_questions(notes):
     from backend.services.rubric_drafts import reject_grading_notes, RubricAllocationError
     with pytest.raises(RubricAllocationError, match="each question"):
         reject_grading_notes({"teacher_notes": notes})
-
-
-@pytest.mark.parametrize("targets", [
-    ["设x>0，证明x²>0", "证明x²>0"],
-    ["Prove existence. Decide uniqueness.", "Decide uniqueness."],
-])
-def test_nested_proof_goal_quote_cannot_spend_the_same_budget_twice(targets):
-    from backend.services.proof_goals import ProofOutline, compile_proof_goals
-    from backend.tests.test_proof_judgment_review import material
-    _, plan = material()
-    outline = ProofOutline.model_validate({"parts": [{"part_id": "p", "goals": [
-        {"target": target, "source_id": "question:1", "points": 5} for target in targets]}]})
-    with pytest.raises(ValueError, match="allocate twice"):
-        compile_proof_goals(plan.part_rubric, outline, {"p": {"question:1": targets[0]}}, language="en")

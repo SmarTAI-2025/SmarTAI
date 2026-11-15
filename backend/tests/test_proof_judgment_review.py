@@ -6,7 +6,7 @@ import pytest
 from backend.models import ProblemInfo, StudentAnswerInfo
 from backend.services.math_grading_context import math_plans_context
 from backend.services.part_rubric import PartRubric
-from backend.services.proof_goals import PartGoals, ProofGoal, ProofOutline, compile_proof_goals
+from backend.tests.proof_ledger_fixture import goal_ledger
 from backend.services.rubric_drafts import RubricDefinition, generated_rubric, retarget_draft
 from backend.skills import math_grading as grading
 from backend.skills.part_scoring import PartDecision
@@ -21,12 +21,7 @@ def material():
         id="p", label=None, stem=None, total_pts=10, steps=[dict(id="s", criterion="Proof", total_pts=10)],
         alternative=dict(maximum={"points": 5}, deduct_per_error=1))])
     rubric = PartRubric.model_validate(raw)
-    outline = ProofOutline(parts=[PartGoals(part_id="p", goals=[ProofGoal(
-        target=target, source_id="question:1", points=points,
-        partial_progress="A valid necessary condition has been established.",
-        sufficient_argument="The stated premises imply the requested result.")
-        for target, points in (("Prove existence.", 6), ("Decide uniqueness.", 4))])])
-    rubric = compile_proof_goals(rubric, outline, {"p": {"question:1": stem}}, language="en")
+    rubric = goal_ledger(rubric, (("Prove existence.", 6), ("Decide uniqueness.", 4)))
     row = question_row(raw)
     row["type"] = "推理题"
     row["ai_completion_provenance"] = {"criterion": {"source_kind": "ai_generated"}}
@@ -83,83 +78,6 @@ def test_complete_and_alternative_ledgers_keep_their_existing_review_protocol():
             mode="json", exclude_defaults=True)
 
 
-@pytest.mark.parametrize("language", ["en", "zh"])
-@pytest.mark.parametrize("misclassified_example", [
-    "For every positive integer n, x^n=e iff (x^-1)^n=e; both orders are the same minimum or both infinite.",
-    "Substituting u=2 into the established identity f(u)=u*u gives the requested value f(2)=4.",
-    "For arbitrary a,b, membership in the two sets is equivalent, so the sets are equal.",
-])
-def test_generated_loss_rules_do_not_promote_unverified_proof_examples(language, misclassified_example):
-    _, plan = material()
-    original = plan.part_rubric
-    outline = ProofOutline(parts=[PartGoals(part_id="p", goals=[ProofGoal(
-        target=original.stem, source_id="question:1", points=10,
-        partial_progress=misclassified_example, sufficient_argument="Unverified shortcut.")])])
-    frozen = original.model_dump_json()
-    rules = compile_proof_goals(original, outline, {"p": {"question:1": original.stem}}, language=language)
-    compiled = rules.model_dump_json()
-    assert misclassified_example not in compiled and "Unverified shortcut" not in compiled
-    assert [r.deduct_pts for r in rules.parts[0].deductions] == [10, 5, 1]
-    assert rules.parts[0].alternative == original.parts[0].alternative
-    assert original.model_dump_json() == frozen
-    # New requests only ask for source goals and budgets. Old responses remain
-    # readable, but their proof sketches cannot become score-lowering rules.
-    assert set(ProofGoal.model_json_schema()["properties"]) == {"target", "source_id", "points"}
-    assert ProofGoal(target="Conclusion", source_id="question:1", points=10).points == 10
-
-
-@pytest.mark.parametrize("source,rewritten", [
-    (r"Show that $D_4=\langle r,s\mid r^2=s^2=1,rs=sr^{-1}\rangle$.",
-     r"Show that $D_4=\langle r,s\mid r^4=s^2=1,rs=sr^{-1}\rangle$."),
-    ("For every positive integer n, prove P(n).", "For some positive integer n, prove P(n)."),
-    ("证明当 x>0 时，f(x)=1。", "证明当 x>=0 时，f(x)=1。"),
-    ("Show f(x)=10.", "Show f(x)=1."),
-])
-def test_source_id_cannot_authorize_an_invented_or_changed_goal(source, rewritten):
-    _, plan = material()
-    rules = plan.part_rubric
-    def compile(target):
-        return compile_proof_goals(rules, ProofOutline(parts=[PartGoals(part_id="p", goals=[
-            ProofGoal(target=target, source_id="question:1", points=10)])]),
-            {"p": {"question:1": source}}, language="en")
-    with pytest.raises(ValueError, match="Quote the requested result"):
-        compile(rewritten)
-    correct = compile(source)
-    assert all(rule.criterion.startswith(source) for rule in correct.parts[0].deductions)
-
-
-def test_multiline_goal_uses_original_text_and_an_intersecting_source_line():
-    from backend.services.proof_goals import _source_match
-    lines = {"question:1": "Let f(x)=x*x for real x.", "question:2": "Show that for every real x,",
-             "question:3": "$f(x) = x^{2}$."}
-    def outline(source_id):
-        return ProofOutline(parts=[PartGoals(part_id="p", goals=[ProofGoal(
-            target="Show that for every real x, \\(f(x)=x^{2}\\).", source_id=source_id, points=10)])])
-    found = _source_match(outline("question:2").parts[0].goals[0], lines)
-    assert found.text == lines["question:2"]+"\n"+lines["question:3"]
-    with pytest.raises(ValueError, match="source_id"):
-        _source_match(outline("question:1").parts[0].goals[0], lines)
-
-
-@pytest.mark.parametrize("clauses", [
-    ("Use the recurrence to prove the bound. ", "Deduce convergence."),
-    ("构造一个满足条件的对象。\n", "然后判断该对象是否唯一。"),
-    ("Let x>0. ", "Show f(x)=1."),
-])
-def test_authentic_quotes_must_not_omit_other_requests_or_assumptions(clauses):
-    _, plan = material()
-    source = "".join(clauses)
-    def compile(targets):
-        return compile_proof_goals(plan.part_rubric, ProofOutline(parts=[PartGoals(part_id="p", goals=[
-            ProofGoal(target=t, source_id="question:1", points=10/len(targets)) for t in targets])]),
-            {"p": {"question:1": source}}, language="en")
-    for incomplete in clauses:
-        with pytest.raises(ValueError, match="source content was omitted"):
-            compile([incomplete.strip()])
-    assert len(compile([source]).parts[0].deductions) == 3
-    assert len(compile([c.strip() for c in clauses]).parts[0].deductions) == 6
-
-
 @pytest.mark.parametrize("evidence", ["question:2,question:3", "question:2；question:3",
                                       "question:2 question:3", "Decide whether the witness\nis unique."])
 def test_an_omitted_goal_can_cite_all_its_wrapped_question_lines(evidence):
@@ -195,28 +113,6 @@ def test_question_lines_cannot_replace_student_evidence_for_an_earned_goal():
     with pytest.raises(ValueError, match="completed proof goals require original student evidence"):
         grading.score_assessment(assessment, plan, "Here is a valid witness.",
                                  problem_text="Prove existence.\nDecide uniqueness.")
-
-
-@pytest.mark.asyncio
-async def test_wrapped_source_is_supplied_as_one_task_not_fragment_goals(monkeypatch):
-    from backend.services import proof_goals as module
-    _, plan = material()
-    source = "Let f(x)=x*x\nShow that for every real x\nf(x)=x^2"
-    async def reply(provider, *, user_prompt, validate_output, **kwargs):
-        if kwargs.get("output_model") is module.ProofGoalAudit:
-            outline = json.loads(user_prompt)["proposal"]
-            audit = module.ProofGoalAudit(parts=[dict(part_id=p["part_id"], verdict="consistent",
-                                                  reason="Each part requests the quoted result.") for p in outline["parts"]])
-            validate_output(audit)
-            return audit, None
-        assert json.loads(user_prompt)["question_sources"] == {"question:1": source}
-        outline = ProofOutline(parts=[PartGoals(part_id="p", goals=[ProofGoal(
-            target=source, source_id="question:1", points=10)])])
-        validate_output(outline)
-        return outline, None
-    monkeypatch.setattr(module, "structured_llm_call", reply)
-    rules = await module.prepare_source_goals(None, source, plan.part_rubric, language="en")
-    assert rules.parts[0].deductions[0].criterion.startswith(source)
 
 
 @pytest.mark.asyncio

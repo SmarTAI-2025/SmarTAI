@@ -1728,19 +1728,15 @@ def test_proof_inferences_support_multiple_goals_from_the_same_source():
         settle_parts(rules,invalid.part_decisions,answer,question)
 
 
-def test_source_proof_goals_preserve_budgets_and_select_one_loss_per_goal():
-    from backend.services.proof_goals import PartGoals, ProofGoal, ProofOutline, compile_proof_goals, use_source_goals
+def test_frozen_proof_deductions_select_one_loss_per_goal():
+    from backend.tests.proof_ledger_fixture import goal_ledger
     from backend.skills.part_scoring import ErrorEvent
 
     stem = "Prove existence. Decide uniqueness."
     original = PartRubric.model_validate(dict(id="q",label="1",stem=stem,total_pts=10,parts=[
         dict(id="p",total_pts=10,steps=[dict(id="s",criterion="Original proof",total_pts=10)],
              alternative=dict(maximum={"points":5},deduct_per_error=1))]))
-    goals=[ProofGoal(target=t,source_id="question:1",points=n,partial_progress="Derives a necessary condition",
-                     sufficient_argument="Checks all conditions")
-           for t,n in (("Prove existence.",6),("Decide uniqueness.",4))]
-    outline=ProofOutline(parts=[PartGoals(part_id="p",goals=goals)])
-    rub=compile_proof_goals(original,outline,{"p":{"question:1":stem}},language="en")
+    rub = goal_ledger(original, (("Prove existence.", 6), ("Decide uniqueness.", 4)))
     part=rub.parts[0]
     assert [r.deduct_pts for r in part.deductions]==[6,3,1,4,2,1]
     from backend.skills.math_grading import _part_proof_evidence
@@ -1760,14 +1756,6 @@ def test_source_proof_goals_preserve_budgets_and_select_one_loss_per_goal():
     assert settle_parts(rub,[partial],answer,stem)[0]==7
     with pytest.raises(ValueError,match="one level of loss"):
         settle_parts(rub,[partial.model_copy(update={"errors":(*partial.errors,event("goal1.local","student:2"))})],answer,stem)
-    with pytest.raises(ValueError,match="source|line ID"):
-        compile_proof_goals(original,outline,{"p":{"question:2":stem}},language="en")
-    row=dict(stem=stem,type="推理题")
-    assert use_source_goals(row)
-    for changed in (dict(criterion="Use the given point scheme"),dict(stem=stem+" [3 marks for the witness]"),
-                    dict(rubric_draft={"teacher":"adopted"}),dict(type="计算题")):
-        assert not use_source_goals({**row,**changed})
-
     from backend.skills.math_grading import ProofPartAssessment
 
     # A consequence can be paid in full although the writer never expands the substitution.
@@ -1809,38 +1797,3 @@ def test_omitted_target_address_matches_its_quote_and_stays_in_part_scope():
         read("question:3", "Verify uniqueness.")
     with pytest.raises(ValueError, match="must cite"):
         read("question:1")
-
-
-@pytest.mark.asyncio
-async def test_generated_proof_targets_cannot_quote_a_sibling_part(monkeypatch):
-    from backend.services import proof_goals as goals
-
-    task = "Prove each claim.\n(a) Show closure.\n(b) Show uniqueness."
-    parts = [dict(id=pid, label=label, stem=stem, total_pts=5,
-                  steps=[dict(id="s", criterion=stem, total_pts=5)])
-             for pid, label, stem in (("pa", "(a)", "Show closure."), ("pb", "(b)", "Show uniqueness."))]
-    rubric = PartRubric.model_validate(dict(id="q", label="1", stem="Prove each claim.", total_pts=10, parts=parts))
-
-    async def reply(provider, *, user_prompt, validate_output, **kwargs):
-        if kwargs.get("output_model") is goals.ProofGoalAudit:
-            outline = json.loads(user_prompt)["proposal"]
-            audit = goals.ProofGoalAudit(parts=[dict(part_id=p["part_id"], verdict="consistent",
-                                                  reason="Each part requests the quoted result.") for p in outline["parts"]])
-            validate_output(audit)
-            return audit, None
-        source = json.loads(user_prompt)["parts"]
-        assert source[0]["allowed_goal_sources"] == {"part1:1": "Show closure."}
-        assert source[1]["allowed_goal_sources"] == {"part2:1": "Show uniqueness."}
-        outline = {"parts": [dict(part_id=p["id"], goals=[dict(target=p["stem"], points=5,
-            source_id=f"part{i}:1", partial_progress="A necessary condition.", sufficient_argument="A complete proof.")])
-            for i, p in enumerate(parts, 1)]}
-        correct = goals.ProofOutline.model_validate(outline)
-        outline["parts"][0]["goals"][0]["source_id"] = "part2:1"
-        with pytest.raises(goals.StructuredOutputInvalidError, match="pa:"):
-            validate_output(goals.ProofOutline.model_validate(outline))
-        validate_output(correct)
-        return correct, None
-
-    monkeypatch.setattr(goals, "structured_llm_call", reply)
-    result = await goals.prepare_source_goals(None, task, rubric, language="en")
-    assert [(part.id, part.total_pts) for part in result.parts] == [("pa", 5), ("pb", 5)]

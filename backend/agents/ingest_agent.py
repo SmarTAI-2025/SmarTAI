@@ -2817,20 +2817,23 @@ async def generate_missing_question_materials(
             # It must see only sealed ledgers after the independent audit.
             validate_targets(parsed, defer_policy_audit=False)
 
-    from backend.services.proof_goals import use_source_goals, prepare_source_goals, ProofGoalsUnverified
+    from backend.services.proof_rubric import use_proof_steps, prepare_proof_steps, ProofRubricUnverified
     from backend.services.true_false_answers import DecisionReferenceConflict
 
     for candidate in list(parsed.candidates):
         original = problems_data[candidate.q_id]
         if (candidate.target != "criterion" or not candidate.rubric_draft
                 or not candidate.rubric_definition or not candidate.rubric_definition.part_rubric
-                or not use_source_goals(original)):
+                or not use_proof_steps(original)):
             continue
         current = RubricDraft.model_validate(candidate.rubric_draft)
+        reference = next((s.text_value for s in parsed.candidates
+                          if s.q_id == candidate.q_id and s.target == "reference_answer"),
+                         original.get("reference_answer") or "")
         try:
-            refined = await prepare_source_goals(provider, original["stem"], current.plan.part_rubric,
-                                                 language=generation_language or "zh")
-        except ProofGoalsUnverified as exc:
+            verified = await prepare_proof_steps(provider, original["stem"], current.plan.part_rubric,
+                                                reference_answer=reference, language=generation_language or "zh")
+        except ProofRubricUnverified as exc:
             if not allow_partial:
                 raise
             parsed.candidates.remove(candidate)
@@ -2838,11 +2841,11 @@ async def generate_missing_question_materials(
             if repair_feedback is not None:
                 repair_feedback[candidate.target_id] = str(exc)
             continue
-        if refined is not None:
-            proposal = candidate.rubric_definition.model_copy(update={"part_rubric": refined})
+        if verified is not None:
+            # Audit preserves the original steps. Rebind only to include a
+            # reference returned in this response before sealing the draft.
+            proposal = candidate.rubric_definition.model_copy(update={"part_rubric": verified})
             material = {**original, "q_id": candidate.q_id}
-            reference = next((s.text_value for s in parsed.candidates
-                              if s.q_id == candidate.q_id and s.target == "reference_answer"), None)
             if reference:
                 material["reference_answer"] = reference
             rendered, draft = generated_rubric(material, proposal, language=generation_language or "zh",
