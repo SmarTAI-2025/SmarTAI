@@ -98,6 +98,44 @@ def model_eta_seconds(models, *, now):
     return math.ceil(max(estimates)) if estimates else None
 
 
+def grading_eta_seconds(models, events, *, total, completed, now):
+    """Estimate the whole pipeline, including its observed finalization rate.
+
+    Initial model throughput alone says nothing about a queued verification
+    stage. Require recent final completions too, and use the slower observed
+    stage. Inherited/reseeded completion counts are not fresh work samples.
+    """
+    if completed >= total or total <= 0:
+        return None
+    initial_remaining = any(m["succeeded"] + m["failed"] < m["total"] for m in models)
+    initial_eta = model_eta_seconds(models, now=now) if initial_remaining else 0
+    if initial_eta is None:
+        return None
+    times, previous = [], None
+    for event in events:
+        count = event.get("payload", {}).get("completed_units")
+        if not isinstance(count, int) or isinstance(count, bool):
+            continue
+        if previous is None:
+            previous = count
+            continue
+        if count <= previous:
+            continue
+        if count == previous + 1:
+            times.append(event["created_at"])
+            times = times[-8:]
+        else:
+            times = []
+        previous = count
+    if len(times) < 3:
+        return None
+    span = times[-1] - times[0]
+    interval = span / (len(times) - 1)
+    if span < 5 or now - times[-1] > max(60, interval * 3):
+        return None
+    return math.ceil(max(initial_eta, (total - completed) * interval))
+
+
 class GradingActivity:
     def __init__(self, reporter, total):
         self.reporter = reporter

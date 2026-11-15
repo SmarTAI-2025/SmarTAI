@@ -39,13 +39,26 @@ def test_no_confidence_uses_equal_weights_including_real_zero():
         _weighted_average_fallback(problem(), [expert("failed", 0, .99, "general")])
 
 
-@pytest.mark.parametrize("confidence", [None, "unavailable", float("nan"), float("inf"), -1, 2])
+@pytest.mark.parametrize("confidence", [None, "unavailable", "95%", True, float("nan"), float("inf"), -1, 2])
 def test_invalid_confidence_does_not_erase_a_valid_score(confidence):
     valid = expert("a", 7, confidence)
-    assert valid.confidence == 0
+    assert valid.confidence is None
     assert _weighted_average_fallback(problem(), [valid, expert("b", 10)]).score == 8.5
     without_confidence = ExpertResult(provider="c", score=0, max_score=10, comment="Valid zero")
-    assert without_confidence.confidence == 0
+    assert without_confidence.confidence is None
+
+
+@pytest.mark.parametrize("confidences,expected_score,expected_confidence", [
+    ([None, .9], 7, .9), ([None, None], 7, None), ([0, .9], 7, .9), ([.2, .8], 7.6, .8),
+])
+def test_unknown_confidence_is_not_a_zero_weight_vote(confidences, expected_score, expected_confidence):
+    votes = [expert("a", 6, confidences[0]), expert("b", 8, confidences[1])]
+    result = _weighted_average_fallback(problem(), votes)
+    assert result.score == expected_score
+    assert result.confidence == expected_confidence
+    assert [vote.confidence for vote in result.expert_results] == confidences
+    configured = _weighted_average_fallback(problem(), votes, grading_setup=setup({"a": 1, "b": 3, "failed": 1}))
+    assert configured.score == 7.5
 
 
 @pytest.mark.parametrize("weights", [{"a": 1}, {"a": 1, "b": 1, "other": 1}, {"a": 0, "b": 1, "failed": 1}, {"a": -1, "b": 1, "failed": 1}, {"a": float("nan"), "b": 1, "failed": 1}])

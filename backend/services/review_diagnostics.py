@@ -58,7 +58,7 @@ def public_grading_diagnostics(results, limit=20):
         experts = [{"provider": str(expert.get("provider") or "Model")[:120],
                     "provider_id": str(expert.get("provider_id") or "")[:120], "score": expert.get("score", 0),
                     "max_score": expert.get("max_score", result.ai_max_score),
-                    "confidence": expert.get("confidence", 0), "comment": "", "steps": [],
+                    "confidence": expert.get("confidence"), "comment": "", "steps": [],
                     "error_kind": expert.get("error_kind") if expert.get("error_kind") in {
                         "quota_exhausted", "transient_llm", "parse_failed", "general", "operation_cancelled"} else "general" if expert.get("error_kind") else None}
                    for expert in result.ai_expert_results[:8]]

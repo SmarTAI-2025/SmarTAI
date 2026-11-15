@@ -15,6 +15,17 @@ function progress(overrides: Partial<JobProgress>): JobProgress {
 }
 
 describe("question generation progress", () => {
+  it("counts initial model work and finalization separately without declaring unfinished grading done", () => {
+    const model = { id: "model-1", label: "Model", total: 217, succeeded: 80, failed: 0,
+      cancelled: 0, processing: 0, queued: 0, responding: 0, retrying: 0, completion_times: [] };
+    const value = progress({ phase: "grading", total_students: 31, total_questions: 7, completed_units: 4,
+      model_progress: [model, { ...model, id: "model-2", succeeded: 199, failed: 1 }] });
+    expect(calculateProgressPercent(value, "grading")).toBe(44);
+    expect(calculateProgressPercent({ ...value, completed_units: 5 }, "grading")).toBeGreaterThanOrEqual(44);
+    const finished = { ...value, completed_units: 217, model_progress: [{ ...model, succeeded: 217 }] };
+    expect(calculateProgressPercent(finished, "grading")).toBe(99);
+    expect(calculateProgressPercent({ ...finished, phase: "done" }, "graded")).toBe(100);
+  });
   it("does not move backwards when generation metrics first appear", () => {
     expect(calculateProgressPercent(progress({
       current_step: "generating_solutions",

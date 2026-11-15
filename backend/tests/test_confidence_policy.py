@@ -69,10 +69,51 @@ def test_any_valid_expert_confidence_is_advisory_and_confirmation_clears_it(scor
     assert not _correction_review_blocks_finalization(result)
 
 
-def test_failed_placeholder_confidence_never_creates_low_confidence_advice():
+@pytest.mark.parametrize("failed_confidence", [0, None])
+def test_failed_placeholder_confidence_never_creates_low_confidence_advice(failed_confidence):
     from backend.models import ExpertResult
     correction = Correction(q_id="q", type="reasoning", score=8, max_score=10, confidence=.6,
         comment="Saved", steps=[], expert_results=[
             ExpertResult(provider="ok", score=8, confidence=.6, comment="A"),
-            ExpertResult(provider="failed", score=0, confidence=0, error_kind="transient_llm", comment="B")])
+            ExpertResult(provider="failed", score=0, confidence=failed_confidence, error_kind="transient_llm", comment="B")])
+    assert not _apply_low_confidence_policy(correction, None).review_reasons
+
+
+@pytest.mark.parametrize("value", [None, "unavailable", "95%", -1, 95, True])
+def test_unknown_grading_confidence_is_not_low_confidence_or_failed(value):
+    from backend.agents.grading_agent import _is_retryable_full_failure
+    from backend.agents.multi_expert import _weighted_average_fallback
+    from backend.models import ExpertResult, ProblemInfo
+    from backend.skills.math_grading import MathAssessment, DirectMathGrade
+    from backend.domain.grading_review import review_state
+    draft = MathAssessment(route_id="holistic", route_reason="Original rubric", score=8,
+                           confidence=value, comment="Saved assessment")
+    direct = DirectMathGrade(score=8, rationale="Evidence supports 8 points", comment="Saved", confidence=value)
+    assert draft.confidence is None and direct.confidence is None
+    expert = ExpertResult(provider="model", score=draft.score, confidence=draft.confidence, comment=draft.comment)
+    restored = ExpertResult.model_validate_json(expert.model_dump_json())
+    correction = _weighted_average_fallback(
+        ProblemInfo(q_id="q1", number="1", type="计算题", stem="Synthetic", criterion="Rubric"), [restored])
+    assert correction.score == 8 and correction.confidence is None
+    assert not _is_retryable_full_failure(correction)
     assert "low_confidence" not in _apply_low_confidence_policy(correction, None).review_reasons
+    assert correction.review_reasons == ["confidence_unavailable"]
+    assert review_state(correction.model_dump())[0]
+    assert not review_state({**correction.model_dump(), "teacher_score": 8, "review_status": "confirmed"})[0]
+
+
+def test_confidence_schema_and_prompt_request_assessment_without_inventing_missing_values():
+    from backend.models import GRADING_CONFIDENCE_INSTRUCTION
+    from backend.agents.multi_expert import SynthesisOutput
+    from backend.skills.base import build_system_prompt
+    from backend.skills.math_grading import FrozenPartAssessment, DirectMathGrade, ExpertReview
+    from backend.skills.programming import ProgrammingGradingOutput
+    for model in (FrozenPartAssessment, DirectMathGrade, ProgrammingGradingOutput, SynthesisOutput):
+        schema = model.model_json_schema()
+        assert "confidence" in schema["required"]
+        confidence = schema["properties"]["confidence"]
+        assert "default" not in confidence
+        assert {"type": "number", "minimum": 0, "maximum": 1} in confidence["anyOf"]
+    nested = ExpertReview.model_json_schema()["$defs"]["MathAssessment"]
+    assert "confidence" in nested["required"]
+    assert GRADING_CONFIDENCE_INSTRUCTION in build_system_prompt("Grade from the rubric.")

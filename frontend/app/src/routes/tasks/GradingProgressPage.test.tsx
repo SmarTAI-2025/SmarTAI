@@ -39,6 +39,33 @@ function renderProgress() {
 }
 
 describe("GradingProgressPage completion routing", () => {
+  it("shows exact initial and pending counts, using the whole-run estimate instead of the initial-only estimate", () => {
+    vi.mocked(useTaskProgress).mockReturnValue({
+      data: { status: "grading", problem_count: 7, student_count: 31 },
+      progress: { phase: "grading", total_students: 31, total_questions: 7, completed_units: 4,
+        saved_units: 199, fully_saved_units: 80, pending_finalization_units: 76, messages: [], active: [],
+        model_progress: [{ id: "model-1", label: "Model", total: 217, succeeded: 80, failed: 0 }],
+        model_eta_seconds: 180, grading_eta_seconds: 900 },
+      percent: 44, refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useTaskProgress>);
+    renderProgress();
+    expect(screen.getByText(/Responses with initial grades from all models: 80 \/ 217/)).toBeVisible();
+    expect(screen.getByText(/Responses awaiting verification and aggregation: 76 \/ 217/)).toBeVisible();
+    expect(screen.getByText(/Estimated remaining about 15 min/)).toHaveTextContent("Completed 4 / 217 responses");
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "44");
+  });
+  it("does not promise almost done when initial grading has ended but verification has no reliable rate", () => {
+    vi.mocked(useTaskProgress).mockReturnValue({
+      data: { status: "grading", problem_count: 7, student_count: 31 },
+      progress: { phase: "grading", total_students: 31, total_questions: 7, completed_units: 4,
+        messages: [], active: [], model_progress: [{ id: "model-1", label: "Model", total: 217, succeeded: 217, failed: 0 }],
+        model_eta_seconds: 1, grading_eta_seconds: null },
+      percent: 51, refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useTaskProgress>);
+    renderProgress();
+    expect(screen.getByText(/Estimated remaining Estimating/)).toBeVisible();
+    expect(screen.queryByText(/Almost done/)).not.toBeInTheDocument();
+  });
   it("withdraws a cached model estimate when polling fails", () => {
     (useTaskProgress as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       data: { status: "grading", problem_count: 7, student_count: 2 },

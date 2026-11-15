@@ -275,6 +275,12 @@ export function isLowConfidence(correction: Correction) {
     : confidenceNeedsAttention(correction.confidence));
 }
 
+export function hasUnknownConfidence(correction: Correction) {
+  const experts = validExpertResults(correction);
+  return experts.length ? experts.some(expert => confidenceValue(expert.confidence) === null)
+    : confidenceValue(correction.confidence) === null;
+}
+
 export function hasReviewSignal(correction: Correction) {
   return correctionReviewAttention(correction) !== "none";
 }
@@ -294,7 +300,7 @@ export function correctionReviewBlocked(correction: Correction): boolean {
 /** One pending-review rule for the review queue, analysis, filters and charts. */
 export function correctionReviewAttention(correction: Correction): ReviewAttention {
   if (correctionReviewNextBlocked(correction)) return "blocking";
-  return !isCorrectionReviewConfirmed(correction) && (isLowConfidence(correction) || hasPartialExperts(correction) || hasExpertDisagreement(correction)
+  return !isCorrectionReviewConfirmed(correction) && (isLowConfidence(correction) || hasUnknownConfidence(correction) || hasPartialExperts(correction) || hasExpertDisagreement(correction)
     || correctionReviewReasonIds(correction).some(reason => MATH_REVIEW_REASONS.includes(reason) || reason === "programming_extra_boundary")) ? "advisory" : "none";
 }
 
@@ -371,6 +377,7 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
   const english: Record<string, string> = {
     grading_paused: "Paused before grading finished", partial_experts: "Some experts completed",
     high_indecisiveness: "Experts disagree", low_confidence: "Low confidence", score_spread_high: "Large score difference",
+    confidence_unavailable: "Confidence not provided; review suggested.",
     programming_extra_boundary: "An additional input produced a different result. See the feedback for the example.",
     programming_partial_evidence_conflict: "The evidence does not support one or more deductions. Check the rubric awards.",
     programming_teacher_tests_passed_deduction: "All teacher tests passed. Review the suggested deduction against the rubric.",
@@ -394,6 +401,7 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     high_indecisiveness: "专家分歧较大",
     minority_veto: "个别模型评分偏离较大",
     low_confidence: "置信度偏低",
+    confidence_unavailable: "置信度未提供，建议核对确认。",
     programming_extra_boundary: "额外输入的结果与标答有别，可在评语中查看样例。",
     programming_partial_evidence_conflict: "核对发现部分扣分与依据不符，请按教师标准核实分项。",
     programming_teacher_tests_passed_deduction: "教师用例全部通过，请按评分标准复核模型建议的扣分。",

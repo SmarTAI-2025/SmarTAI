@@ -36,6 +36,48 @@ def retry(case, key):
         retry_scope="failed_only")["job_id"]
 
 
+@pytest.mark.parametrize("multi_sample", [False, True])
+def test_progress_counts_complete_initial_sets_not_independent_model_totals(case, multi_sample):
+    from backend.db.provider_repository import upsert_provider_config
+    from backend.models import ProviderConfig, Correction
+    flow = workflows.get_live_workflow(case[0], owner_id=case[1])
+    first = flow.grading_setup["selected_provider_ids"][0]
+    config = {**flow.grading_setup, "aggregation_method": "weighted_average"}
+    if multi_sample:
+        config["multi_sample_n"] = 2
+        slots = [(first, 1), (first, 2)]
+    else:
+        second = upsert_provider_config(case[1], ProviderConfig(provider_type="openai",
+            api_key="synthetic-key", model="second-model", base_url="https://api.openai.com/v1"),
+            master_key="test-suite-provider-master-key-0123456789abcdef").id
+        config["selected_provider_ids"] = [first, second]
+        slots = [(first, 0), (second, 0)]
+    workflows.update_workflow(case[0], owner_id=case[1], grading_setup=config)
+    run_id = start(case, "progress-initial-sets")["job_id"]
+    checkpoints, _, revisions, _ = prepare(case, run_id)
+    student = revisions[0][1]
+    def save(qid, slot, error=None):
+        provider, index = slot
+        checkpoints.save_expert(student, qid, provider, index, ExpertResult(
+            provider=provider, provider_id=provider, score=0, max_score=10,
+            confidence=0, comment="Valid zero unless explicitly failed", error_kind=error))
+    save("q1", slots[0])
+    save("q2", slots[1])
+    assert task_facade._grading_progress(run_id, case[1])["fully_saved_units"] == 0
+    save("q1", slots[1])
+    save("q2", slots[0], "transient_llm")
+    progress = task_facade._grading_progress(run_id, case[1])
+    assert (progress["saved_units"], progress["fully_saved_units"], progress["pending_finalization_units"]) == (2, 1, 1)
+    stop(case, run_id)
+    assert task_facade._grading_progress(run_id, case[1])["pending_finalization_units"] == 1
+    resumed = retry(case, "progress-initial-resume")
+    restored, _, _, _ = prepare(case, resumed, "resumed-progress-worker")
+    assert task_facade._grading_progress(resumed, case[1])["fully_saved_units"] == 1
+    restored.save_correction(student, Correction(q_id="q1", type="concept", score=0,
+        max_score=10, confidence=.9, comment="Finalized", steps=[], synthesis_method="weighted_average"))
+    assert task_facade._grading_progress(resumed, case[1])["pending_finalization_units"] == 0
+
+
 def test_stop_preserves_each_sample_and_resume_only_calls_missing_samples(case, monkeypatch):
     flow = workflows.get_live_workflow(case[0], owner_id=case[1])
     config = {**flow.grading_setup, "multi_sample_n": 3, "aggregation_method": "weighted_average"}

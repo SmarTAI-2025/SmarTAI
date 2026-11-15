@@ -10,9 +10,27 @@ from backend.agents.grading_agent import grade_batch
 from backend.models import ExpertResult, ProviderConfig
 from backend.progress.grading_activity import (
     GradingActivity, observe_expert, report_provider_state, model_eta_seconds,
+    grading_eta_seconds,
 )
 from backend.progress.tracker import ProgressReporter
 from backend.tests.test_multi_expert_robustness import _FakeProvider, _FakeRegistry
+
+
+def test_whole_grading_eta_requires_recent_finalization_and_uses_slower_stage():
+    models = [{"total": 217, "succeeded": 199, "failed": 1, "retrying": 0,
+               "completion_times": [90, 95, 100]}]
+    events = [{"created_at": ts, "payload": {"completed_units": count}}
+              for ts, count in [(0, 0), (60, 2), (70, 3), (85, 4), (100, 5)]]
+    # Initial estimate is 85s; finalization is much slower: 212 * 15s.
+    assert grading_eta_seconds(models, events, total=217, completed=5, now=100) == 3180
+    assert grading_eta_seconds(models, events, total=217, completed=5, now=200) is None
+    assert grading_eta_seconds(models, events[:3], total=217, completed=3, now=100) is None
+    models[0]["succeeded"] = 216
+    assert grading_eta_seconds(models, events, total=217, completed=5, now=100) == 3180
+    assert grading_eta_seconds(models, events, total=217, completed=217, now=100) is None
+    # A retry's inherited counter must not fabricate fast finalizations.
+    assert grading_eta_seconds(models, [{"created_at": 100, "payload": {"completed_units": 100}}],
+                               total=217, completed=100, now=100) is None
 
 
 def provider(name):

@@ -250,7 +250,7 @@ export interface ExpertResult {
   provider: string;
   score: number;
   max_score: number;
-  confidence: number;
+  confidence: number | null;
   comment: string;
   steps: StepScore[];
   hits?: string[] | null;

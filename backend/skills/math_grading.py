@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, SkipValidation, TypeAdapter, 
 
 from backend.services.part_rubric import supplied_notation
 from backend.skills.part_scoring import INSTRUCTION as PART_SCORING_INSTRUCTION, PROOF_INSTRUCTION, PartDecision, ReasonedDecision, settle_parts
-from backend.models import ExpertResult, GradingConfidence, StepScore
+from backend.models import ExpertResult, GradingModelOutput, StepScore
 from backend.skills.base import (
     GradingSkill, authoritative_score_instruction, build_system_prompt,
     classify_skill_error, format_deterministic_feedback,
@@ -138,10 +138,9 @@ class EvidenceJudgment(BaseModel):
     reason: str = Field(min_length=1)
 
 
-class EvidenceAssessment(BaseModel):
+class EvidenceAssessment(GradingModelOutput):
     claims: list[Claim] = Field(default_factory=list, max_length=_MAX_ASSESSMENT_CLAIMS)
     checks: list[Verification] = Field(default_factory=list, max_length=8)
-    confidence: GradingConfidence = 0.0
     rationale: str = ""  # Detailed evidence for holistic scoring; comment stays concise.
     comment: str = Field(description=(
         "Overall conclusion and useful next-step guidance, following the configured feedback "
@@ -251,13 +250,12 @@ class MathAssessment(EvidenceAssessment):
     ))
 
 
-class DirectMathGrade(BaseModel):
+class DirectMathGrade(GradingModelOutput):
     """Last resort: a genuine model score with an explicit, usable rationale."""
     score: float = Field(ge=0, allow_inf_nan=False)
     binary_correct: bool | None = Field(default=None, strict=True, description=(
         "Required when binary_rule is supplied: whether the final answer satisfies that exact rule."
     ))
-    confidence: GradingConfidence = 0.0
     rationale: str = Field(min_length=1)
     comment: str
 
@@ -269,11 +267,10 @@ class DirectMathGrade(BaseModel):
         return value
 
 
-class SubpartGrade(BaseModel):
+class SubpartGrade(GradingModelOutput):
     """Minimal fallback for a known points ledger; a single proposed total is insufficient."""
     claims: list[Claim] = Field(default_factory=list, max_length=80)
     awards: list[Award] = Field(min_length=1, max_length=80)
-    confidence: GradingConfidence
 
     def assessment(self, plan) -> MathAssessment:
         return MathAssessment(route_id=plan.routes[0].id, route_reason=plan.original_criterion,
@@ -697,6 +694,14 @@ def _part_outcome(part):
 
 def _part_signature(assessment):
     return tuple(sorted((part.part_id, _part_outcome(part)) for part in assessment.part_decisions))
+
+
+def _relevance_needs_review(assessment):
+    # Nonblank work has already received an explicit relevance/method judgment.
+    # Another model call is warranted for unresolved judgments, not mere presence.
+    return any(part.relevance == "uncertain" or (
+        part.relevance != "unanswered" and part.method == "undetermined"
+    ) for part in assessment.part_decisions)
 
 
 def _apply_part_revision(old, revision, review_parts):
@@ -1678,9 +1683,7 @@ class MathGradingSkill(GradingSkill):
             usable_evidence = any(item["status"] in {"supported", "refuted"}
                                   and item["claim_id"] in claims for item in evidence)
             review_failure = None
-            relevance_check = bool(plan.part_rubric and any(
-                d.relevance != "unanswered"
-                for d in draft.part_decisions))
+            relevance_check = _relevance_needs_review(draft)
             review_pending = usable_evidence or relevance_check
             proof_concerns = (proof_audit or {}).get("review_concerns", [])
             if (usable_evidence or relevance_check or draft.needs_review or proof_concerns) and take_review_budget(local=True):
@@ -1716,7 +1719,7 @@ class MathGradingSkill(GradingSkill):
                     if proof_audit is not None:
                         proof_audit = inspect_audit(read_appendix(getattr(response, "content", None)), draft,
                             answer.content or "", problem.stem, plan, previous=proof_audit)
-                    review_pending = _evidence_pending(draft, evidence) or any(part.relevance == "uncertain" for part in draft.part_decisions)
+                    review_pending = _evidence_pending(draft, evidence) or _relevance_needs_review(draft)
                     duration += response.duration_ms or 0
                 except Exception as exc:
                     if _critical_failure(exc):
@@ -1782,10 +1785,16 @@ class MathGradingSkill(GradingSkill):
                     self.language, self.grading_setup),
                 user_prompt=prompt, validator=_assessment_validator(plan,answer,problem),part_output=output_model)
             score,steps=score_assessment(result,plan,answer.content,problem_text=problem.stem)
+            relevance_check = _relevance_needs_review(result)
+            proof_audit = (inspect_audit(read_appendix(getattr(response, "content", None)), result,
+                answer.content or "", problem.stem, plan) if self.template_name == "proof" else None)
             return ExpertResult(provider=self.provider.provider_id,score=score,max_score=problem.max_score,
                 confidence=result.confidence,comment=result.comment,steps=steps,duration_ms=response.duration_ms or 0,
                 raw_output=_json({"version":TRACE_VERSION,"plan_id":plan.plan_id,"assessment":result.model_dump(mode="json"),
-                                  "review_pending":True,"relevance_review_pending":True,"review_advisory":True,"evidence":[]}))
+                                  "review_pending":relevance_check,
+                                  **({"relevance_review_pending": True} if relevance_check else {}),
+                                  **({"proof_audit": proof_audit} if proof_audit is not None else {}),
+                                  "evidence":[], **({"fallback": fallback} if fallback else {})}))
         if plan.compilation_reason == SUBPART_ALLOCATION:
             validate = _assessment_validator(plan, answer, problem)
             result, response = await structured_llm_call(

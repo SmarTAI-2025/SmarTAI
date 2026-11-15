@@ -42,9 +42,9 @@ def _apply_low_confidence_policy(
     grading_setup: Optional[TaskGradingSetup],
 ) -> Correction:
     """Apply the shared policy, independent of legacy saved slider values."""
-    from backend.domain.confidence_policy import confidence_needs_attention
+    from backend.domain.confidence_policy import confidence_needs_attention, confidence_value
 
-    other_reasons = [reason for reason in correction.review_reasons if reason != "low_confidence"]
+    other_reasons = [reason for reason in correction.review_reasons if reason not in {"low_confidence", "confidence_unavailable"}]
     if correction.review_reasons and not other_reasons:
         correction.requires_human_review = False
     correction.review_reasons = other_reasons
@@ -53,6 +53,9 @@ def _apply_low_confidence_policy(
     if (any(confidence_needs_attention(expert.confidence) for expert in valid_experts)
             if valid_experts else confidence_needs_attention(correction.confidence)):
         correction.review_reasons.append("low_confidence")
+    if (any(confidence_value(expert.confidence) is None for expert in valid_experts)
+            if valid_experts else confidence_value(correction.confidence) is None):
+        correction.review_reasons.append("confidence_unavailable")
     return correction
 
 
@@ -277,7 +280,7 @@ def _is_retryable_full_failure(correction: Correction) -> bool:
     raise AllExpertsFailed but returns a 0-confidence Correction tagged with
     the failure kind.  Only then is a question-level retry worthwhile.
     """
-    if correction.confidence > 0 or not correction.expert_results:
+    if not correction.expert_results or any(not expert.error_kind for expert in correction.expert_results):
         return False
     return dominant_error_kind(correction.expert_results) in _RETRYABLE_ERROR_KINDS
 
@@ -337,7 +340,7 @@ async def _grade_single_answer(
             logger.info(
                 f"Graded {student_id}/{problem.q_id} [{problem.type}] "
                 f"score={correction.score}/{correction.max_score} "
-                f"confidence={correction.confidence:.2f} in {duration:.0f}ms"
+                f"confidence={correction.confidence} in {duration:.0f}ms"
             )
             if (
                 _is_retryable_full_failure(correction)
