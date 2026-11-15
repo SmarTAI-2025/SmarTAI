@@ -584,6 +584,17 @@ def _parse_allocations(
             point_matches = point_matches[:1]
         component_scores: list[Decimal] = []
         for match in point_matches:
+            # Keep conditional awards for semantic compilation; a repeated
+            # part label does not turn follow-through or alternatives into
+            # another available budget. Mirror the frontend summary boundary.
+            clause_prefix = re.split(r"[。；;\n]|\.(?=\s|$)", segment[:match.start()])[-1]
+            if re.search(
+                r"沿用[^。；;\n]*错|沿错|前错后对|follow[ -]?through|"
+                r"(?:following|carri(?:ed|es|ying))[^。；;\n]*error|"
+                r"其他[^。；;\n]*解法|另解|alternative\s+(?:methods?|solutions?)|"
+                r"other\s+correct\s+(?:methods?|solutions?)", clause_prefix, re.I,
+            ):
+                continue
             prefix = segment[max(0, match.start() - 20):match.start()].casefold()
             if not included_breakdown and re.search(r"(?:总分|合计|total)\s*[:：=为-]?\s*$", prefix):
                 continue

@@ -34,3 +34,22 @@ it("hides resolved extraction and tolerates absent or malformed details", () => 
   render(<RubricReviewDetails issues={[{ ...issue, status: "resolved" }, { ...issue, details: { rubric_review_draft: { fields: null } } }]} locale="zh-CN" />);
   expect(screen.queryByRole("complementary")).toBeNull();
 });
+
+
+it.each(["zh-CN", "en-US"])("locates whole malformed steps, parts and collections beside preserved fields (%s)", locale => {
+  const zh = locale === "zh-CN";
+  const malformed = { ...issue, details: { rubric_review_draft: {
+    fields: [{ path: "part_rubric.parts[0].steps[0].total_pts", value: 3 }],
+    invalid_fields: ["part_rubric.parts[0].steps[1]", "part_rubric.parts[1]",
+      "part_rubric.parts[2].deductions[0]", "part_rubric.parts[3].steps",
+      "part_rubric.parts", "part_rubric"],
+  } } };
+  render(<RubricReviewDetails issues={[malformed]} locale={locale} />);
+  expect(screen.getByText(zh ? "3 分" : "3 pts")).toBeVisible();
+  for (const label of zh ? ["小问 1 · 步骤 2", "小问 2", "小问 3 · 扣分项 1", "小问 4 · 评分步骤", "整题 · 小问", "整题 · 评分标准"]
+    : ["Part 1 · Step 2", "Part 2", "Part 3 · Deduction 1", "Part 4 · Scoring steps", "Question · Parts", "Question · Rubric"]) {
+    expect(screen.getByText(label)).toBeVisible();
+    expect(screen.getByText(label).parentElement).toHaveTextContent(zh ? "待核对" : "Review needed");
+  }
+  expect(screen.queryByText(/part_rubric/)).toBeNull();
+});

@@ -1,4 +1,6 @@
 """Archive member ownership through the same durable import used by the task UI."""
+from backend.tests.rubric_fixtures import add_reviewed_question
+
 import io
 import zipfile
 from unittest.mock import AsyncMock
@@ -146,7 +148,7 @@ async def test_folder_identity_is_scoped_to_programming_documents(monkeypatch, p
     from backend.tests.test_task_background_workflows import _seed_task
     from backend.db import assignment_repository
     owner, tid = _seed_task()
-    assignment_repository.add_question(tid, teacher_id=owner, q_id="q1", number="1", order_index=0,
+    add_reviewed_question(tid, teacher_id=owner, q_id="q1", number="1", order_index=0,
         type="programming" if programming else "calculation", stem=SUM if programming else "Calculate 2+3.",
         criterion="Award 10 points for the correct solution.")
     reply = dict(stu_id="unidentified", stu_name="[Unknown Student]", stu_ans=[

@@ -1,5 +1,6 @@
+import { questionSaveError } from "@/lib/questionSaveError";
 import { QuestionPreparationModelSelect, isQuestionModelError } from "@/components/tasks/QuestionPreparationModelSelect";
-import { RubricReviewDetails } from "@/components/tasks/RubricReviewDetails";
+import { RubricReviewDetails, RubricReviewErrorDetails } from "@/components/tasks/RubricReviewDetails";
 import { getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
 import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
@@ -70,10 +71,23 @@ function QuestionPreparationDetailPageForm() {
   const taskQuery = useTask(taskId);
   const updateModel = useUpdateQuestionProvider();
   const [modelFailure, setModelFailure] = useState<unknown>();
+  const focusModelAfterClose = useRef(false);
+  useEffect(() => {
+    if (modelFailure || !focusModelAfterClose.current) return;
+    focusModelAfterClose.current = false;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById("question-model-control")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      document.getElementById("question-preparation-model")?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [modelFailure]);
   const changingModel = useRef(false);
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const { updateProblem, latestRevision: latestWorkflowRevisionRef, confirming, confirm, failure, blocked, clearBlocked } = useQuestionReview(stableTaskId, taskQuery.data?.workflow_revision, locale);
+  useEffect(() => {
+    if (failure && isQuestionModelError(failure.error)) setModelFailure(failure.error);
+  }, [failure]);
   const sourcePreview = useSourcePreview({
     taskId,
     workflowRevision: taskQuery.data?.workflow_revision,
@@ -292,12 +306,8 @@ function QuestionPreparationDetailPageForm() {
         leaveLabel={tx(locale, "更换模型", "Change model")}
         onStay={() => setModelFailure(undefined)}
         onLeave={() => {
+          focusModelAfterClose.current = true;
           setModelFailure(undefined);
-          window.requestAnimationFrame(() => {
-            if (!mounted.current) return;
-            document.getElementById("question-model-control")?.scrollIntoView({ behavior: "smooth", block: "center" });
-            document.getElementById("question-preparation-model")?.focus({ preventScroll: true });
-          });
         }}>
         <p className="mt-3 text-sm text-red-700">{tx(locale, "当前修改已保留。选择模型后，再次保存。", "Your edits are kept. Select a model, then save again.")}</p>
       </UnsavedChangesDialog> : null}
@@ -329,8 +339,10 @@ function QuestionPreparationDetailPageForm() {
         placeholder={tx(locale, "按满分升序，或找出缺少标答的题目", "Sort by maximum score, or find missing reference answers")} />
 
       {readOnly ? <p className="mt-4 rounded-[8px] border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">{tx(locale, "当前任务已进入后续阶段，可浏览和确认复核，不能修改资料正文。", "This task has moved to a later stage. You can review and confirm materials; content editing is unavailable.")}</p> : null}
-      {failure ? <div role="alert" className="mt-4 rounded-lg border border-amber-300 p-4 text-sm">
-        <p>{tx(locale, `已确认 ${failure.completed} 道题；第 ${failure.problem.number || "—"} 题未能保存，可能内容已更新或任务正在处理。请重新加载并核对后重试。`, `${failure.completed} questions confirmed; question ${failure.problem.number || "—"} could not be saved. Content may have changed or the task may be busy. Reload and review before retrying.`)}</p>
+      {failure ? <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50/40 p-4 text-sm">
+        <p>{tx(locale, `已确认 ${failure.completed} 道题；请核对第 ${failure.problem.number || "—"} 题。`, `${failure.completed} questions confirmed. Review question ${failure.problem.number || "—"}.`)}</p>
+        <p className="mt-1">{questionSaveError(failure.error, locale)}</p>
+        <RubricReviewErrorDetails error={failure.error} locale={locale} />
         <button type="button" onClick={() => void taskQuery.refetch()} className="mt-2 mr-4 font-semibold text-primary">{tx(locale, "重新加载", "Reload")}</button>
         <button type="button" onClick={() => {
           if (filtered.some((problem) => problem.q_id === failure.problem.q_id)) scrollToQuestion(failure.problem.q_id);
@@ -518,6 +530,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   const [criterionDraft, setCriterionDraft] = useState(originalCriterion);
   const [alternateDrafts, setAlternateDrafts] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [reviewError, setReviewError] = useState<unknown>();
   const dirty = editing && (
     scoreDraft !== originalScore || criterionDraft !== originalCriterion || Object.keys(alternateDrafts).length > 0
   );
@@ -559,11 +572,13 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
       return;
     }
     setError(null);
+    setReviewError(undefined);
     try {
       if (!await localDraft.runFormal(() => onSave(problem, Number(scoreDraft), criterionDraft, Object.keys(alternateDrafts).length ? alternateDrafts : undefined), { scoreDraft, criterionDraft, alternateDrafts })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch (error) {
+      setReviewError(error);
       setError(isQuestionModelError(error) ? null : questionSaveError(error, locale));
     }
   }
@@ -584,6 +599,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
         </button> : null}
       </div>
 
+      {editing && reviewError ? <RubricReviewErrorDetails error={reviewError} locale={locale} /> : null}
       {editing ? (
         <div className="mt-3 space-y-3">
           <label className="block">
@@ -749,38 +765,6 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   );
 }
 
-function questionSaveError(error: unknown, locale: string) {
-  switch (getAPIErrorCode(error)) {
-    case "no_provider_configured":
-    case "recognition_provider_not_enabled":
-      return tx(locale, "请先在 API 设置中启用模型，解析新评分标准后再保存。", "Enable a model in API settings to interpret the updated scoring rules, then save again.");
-    case "provider_auth_failed":
-    case "provider_permission_denied":
-    case "provider_credentials_unavailable":
-    case "provider_credentials_required":
-      return tx(locale, "请在 API 设置中更新模型密钥或权限，再保存。", "Update the model's API key or permissions in API settings, then save again.");
-    case "provider_quota_exceeded":
-    case "provider_zero_quota":
-    case "provider_daily_quota_exceeded":
-    case "shared_pool_daily_limit_reached":
-      return tx(locale, "请更换可用模型，或等模型额度恢复后再保存。", "Choose another available model, or save again once the model's quota is restored.");
-    case "provider_model_not_found":
-    case "provider_model_or_endpoint_not_found":
-      return tx(locale, "请在 API 设置中核对模型名称和地址，再保存。", "Check the model name and endpoint in API settings, then save again.");
-    case "invalid_alternative_rule":
-      return tx(locale, "请核对其他解法的上下限与扣分规则；分数须在 0 与该小问满分之间。", "Check the alternative-method limits and deductions. Scores must be between 0 and this part's maximum.");
-    case "invalid_structured_rubric":
-      return tx(locale, "请核对评分标准中的分值、条件和对应小问，再保存。", "Check the points, conditions and matching question parts, then save again.");
-    case "rubric_subpart_points_mismatch":
-    case "rubric_subpart_points_missing":
-      return tx(locale, "请补全各小问配分，并使合计等于本题满分。", "Complete the points for each part and make their sum equal this question's maximum.");
-    case "version_conflict":
-    case "stale_revision":
-      return tx(locale, "题目已有新版本。请先复制当前修改，刷新核对后再保存。", "A newer version is available. Copy your edits, refresh to review it, then save again.");
-    default:
-      return tx(locale, "请稍后重试保存。", "Please try saving again shortly.");
-  }
-}
 
 function testCaseSaveError(error: unknown, locale: string) {
   if (getAPIErrorCode(error) !== "invalid_programming_test_cases") {

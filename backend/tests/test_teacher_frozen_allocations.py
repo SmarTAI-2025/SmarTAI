@@ -11,12 +11,89 @@ def make_row(text):
                 max_score=10, criterion=text)
 
 
+@pytest.mark.parametrize("zh", [False, True])
+def test_multisentence_parenthesized_losses_preserve_conditions_and_exclusivity(zh):
+    from backend.services.teacher_point_allocations import TeacherPolicyUnresolved
+    conditions = (["证明目标：没有有效进展。仅抄写结论不构成证明。", "证明目标：主要论证成立。局部错误需要修正。"] if zh else
+                  ["Proof target: no valid progress. Copying the conclusion is insufficient.",
+                   "Proof target: the decisive argument is present. A local error needs correction."])
+    quotes = [f"{condition}（扣{points}分，同一目标只取一档）" if zh else
+              f"{condition} (deduct {points} points, choose one loss for this goal)"
+              for condition, points in zip(conditions, [10, 2])]
+    text = "\n".join(quotes) if zh else "Maximum 10 points\n" + "\n".join("- " + q for q in quotes) + "\nBlank answers earn 0 points."
+    row = {**make_row(text), "type": "推理题"}
+    penalties = [dict(id=f"d{i}", criterion=condition, source_quote=quote, deduct_pts=points)
+                 for i, (condition, quote, points) in enumerate(zip(conditions, quotes, [10, 2]))]
+    raw = dict(id="q1", label="1", stem=row["stem"], total_pts=10,
+               parts=[dict(id="p1", total_pts=10, deductions=penalties, alternative={"deduct_per_error": 1})])
+    with pytest.raises(RubricAllocationError, match="exclusive"):
+        generated_rubric(row, RubricDefinition(part_rubric=raw))
+    for penalty in penalties:
+        penalty.update(exclusive_group="goal1", limit=1)
+    raw["parts"][0]["steps"] = [dict(id="invented", criterion="Establish the goal", total_pts=10)]
+    with pytest.raises(RubricAllocationError, match="mixed scoring"):
+        generated_rubric(row, RubricDefinition(part_rubric=raw))
+    del raw["parts"][0]["steps"]
+    with pytest.raises(TeacherPolicyUnresolved) as pending:
+        generated_rubric(row, RubricDefinition(part_rubric=raw))
+    checks = [dict(policy_id=issue["policy_id"], source_quote=issue["source_quote"], verdict="consistent", reason="Same goal tiers.")
+              for issue in pending.value.issues]
+    _, draft = generated_rubric(row, RubricDefinition(part_rubric=raw),
+        verified_policy_ids=[check["policy_id"] for check in checks], verified_policy_checks=checks)
+    draft = draft.model_copy(update={"semantic_policy_checks": tuple(checks)})
+    rules = draft.plan.part_rubric.parts[0].deductions
+    from unicodedata import normalize
+    assert all(normalize("NFKC", condition) in normalize("NFKC", rule.criterion)
+               for condition, rule in zip(conditions, rules))
+    assert [rule.deduct_pts for rule in rules] == [10, 2]
+    assert all(rule.exclusive_group == "goal1" and rule.limit == 1 for rule in rules)
+    assert saved_draft({**row, "rubric_draft": draft.model_dump(mode="json")})
+
+
 def proposed(names=("列式", "计算结果"), points=(3, 7), quotes=("", "")):
     return {"id": "q1", "stem": "求未知数。", "label": "1", "total_pts": 10, "parts": [{
         "id": "p", "total_pts": 10, "alternative": {"deduct_per_error": 2},
         "steps": [{"id": key, "criterion": name, "total_pts": pts, "source_quote": quote}
                   for key, name, pts, quote in zip(("eq","val"),names,points,quotes)]
     }]}
+
+
+@pytest.mark.parametrize("budgets", [(5, 5), (4, 6)])
+def test_collective_part_budgets_are_not_a_single_step_award(budgets):
+    from backend.services.question_structure import build_major_question_structure
+    text = "2个小问各5分，均按步骤给分。每个小问一个评分步骤：答案正确得5分。"
+    row = make_row(text)
+    row["stem"] = "(1) 求 x。\n(2) 求 y。"
+    row["question_structure"] = build_major_question_structure(row, major_order=0).model_dump()
+    parts = [{"id": f"p{i}", "label": f"({i})", "stem": part["stem"], "total_pts": pts,
+              "steps": [{"id": "s1", "criterion": "答案正确", "total_pts": pts,
+                         "source_quote": "每个小问一个评分步骤：答案正确得5分"}],
+              "alternative": {"deduct_per_error": 1}}
+             for i, (part, pts) in enumerate(zip(row["question_structure"]["subparts"], budgets), 1)]
+    definition = RubricDefinition(part_rubric={"id": "q1", "label": "1", "stem": row["stem"], "total_pts": 10, "parts": parts})
+    if budgets == (4, 6):
+        with pytest.raises(RubricAllocationError):
+            generated_rubric(row, definition)
+    else:
+        _, draft = generated_rubric(row, definition)
+        assert saved_draft({**row, "rubric_draft": draft.model_dump(mode="json")})
+
+
+@pytest.mark.parametrize("start", [10, 8])
+def test_deduction_starting_score_is_not_the_per_error_rate(start):
+    text = f"本题满分10分，采用按错误点扣分：从{start}分开始，每个独立的排序错误扣1分，最低0分。"
+    row = make_row(text)
+    raw = {"id": "q1", "label": "1", "stem": row["stem"], "total_pts": 10,
+           "parts": [{"id": "p1", "total_pts": 10, "deductions": [{"id": "d1", "criterion": "排序错误",
+              "deduct_pts": 1, "source_quote": "每个独立的排序错误扣1分"}], "alternative": {"deduct_per_error": 1}}]}
+    if start != 10:
+        with pytest.raises(RubricAllocationError):
+            generated_rubric(row, RubricDefinition(part_rubric=raw))
+    else:
+        _, draft = generated_rubric(row, RubricDefinition(part_rubric=raw))
+        assert not draft.plan.part_rubric.parts[0].steps
+        assert draft.plan.part_rubric.parts[0].deductions[0].deduct_pts == 1
+        assert saved_draft({**row, "rubric_draft": draft.model_dump(mode="json")})
 
 
 @pytest.mark.parametrize("text,names,points", [

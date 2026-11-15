@@ -154,7 +154,19 @@ def _allocation_clauses(text, labels):
     # For prefix awards ("3 points for setup and 7 points for result") the
     # boundary instead precedes the next amount. Never split inside a number.
     join = r"(?:以及|并且|然后|而且|而|并|及|与|和|且|另|\band\b|\bwhile\b|\bthen\b)"
-    for sentence in _source_clauses(_expand_subtotals(text, labels)):
+    def sentences():
+        for line in _expand_subtotals(text, labels).splitlines():
+            # A postfix loss applies to the whole bullet, which may contain
+            # several sentences. Splitting at its last period would replace
+            # the actual condition with just "(deduct".
+            if (re.search(r"[(（]\s*(?:deduct|扣(?:除)?)\s*" + _NUMBER +
+                          r"\s*(?:points?|marks?|分)[^()（）]*[)）]\s*[。.]*\s*$", line, re.I)
+                    and len(list(_AMOUNT.finditer(_scoring_numeric_text(line)))) == 1):
+                yield line.strip().lstrip("-• ")
+            else:
+                yield from _source_clauses(line)
+
+    for sentence in sentences():
         normalized = unicodedata.normalize("NFKC", sentence)
         parallel = re.fullmatch(r"(.+?)分别(?:占|为|得|计|给)?\s*(.+)", normalized)
         if parallel:
@@ -193,6 +205,7 @@ def _allocation_clauses(text, labels):
 
 
 def validate_teacher_point_items(rules, ordinary):
+    from backend.services.part_rubric import PER_PART_POINTS
     from backend.services.math_rubric_plan import (
         _AMOUNT, _DEDUCTION, _FLOOR_RULE, _amount_value, _score_context_clause, _scoring_numeric_text,
     )
@@ -222,11 +235,19 @@ def validate_teacher_point_items(rules, ordinary):
         # Remove the allocation operator only when it follows a named subject.
         # Keep the original clause for evidence, monetary roles and scope.
         prefix = clause[:amount.start()]
+        if ((re.search(r"(?:从|由)\s*$", prefix) and re.match(r"\s*(?:开始|起(?:扣|算|评)?)", clause[amount.end():]))
+                or re.search(r"\bstart(?:ing)?\s+(?:from|at)\s*$", prefix, re.I)):
+            maximum = scope[0].total_pts if len(scope) == 1 else rules.total_pts
+            if _amount_value(*amount.groups(), maximum) != Decimal(str(maximum)):
+                raise ValueError("The starting score must match the applicable maximum; clarify this scoring limit.")
+            continue
         operator = re.search(r"(?:占(?:本[问题]|整题)?(?:总分|满分)|最多|至多|最高|至少)(?:可?[给得]|为)?\s*$", prefix)
         subject = prefix[:operator.start()].strip() if operator else ""
         named_bound = bool(subject and not re.search(r"满分|总分|保底|累计|扣|后续|每错|非空|作答|本题|整题", subject))
         conditional_minimum = named_bound and "至少" in operator[0]
         budget_context = subject + clause[amount.start():] if named_bound else clause
+        if PER_PART_POINTS.search(budget_context):
+            continue  # Checked against each part budget by bind_parts.
         # These amounts play other roles and have their own typed checks.
         if re.search(r"满分|总分|起[评分]|最多|至多|上限|最低|保底|至少|折算|沿用|后传|保留|"
                      r"粒度|(?:配分|评分|计分|给分|分值)单位|每(?:个)?小问|每(?:道)?题|[各每]步|各小问|每空|满打|空白|未作答|"
@@ -238,7 +259,8 @@ def validate_teacher_point_items(rules, ordinary):
         if _score_context_clause(clause, ordinary, scope[0].total_pts if len(scope) == 1 else rules.total_pts):
             continue
         deduction = bool(_DEDUCTION.search(clause))
-        prefix = (subject if named_bound else prefix).rstrip(" (（:：=，,")
+        prefix = re.sub(r"\s*[(（]\s*(?:deduct|扣(?:除)?)\s*$", "",
+                        subject if named_bound else prefix, flags=re.I).rstrip(" (（:：=，,")
         suffix = clause[amount.end():].strip(" ()（）[]【】:：=.")
         amount_first = not prefix or re.fullmatch(r"(?:award|give|earn|deduct|扣除?|给|得)", prefix, re.I)
         condition = re.sub(r"^for\s+", "", suffix, flags=re.I) if amount_first else prefix

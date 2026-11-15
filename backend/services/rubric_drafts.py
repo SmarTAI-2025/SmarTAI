@@ -981,8 +981,9 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
     async def audit_policy_scope(unresolved):
         """One bounded source audit at preparation time, never per student."""
         nonlocal semantic_checks
-        semantic_checks = await audit_teacher_policies(
-            provider, binding_source, pending_candidate.root, unresolved)
+        with llm_attempt_budget(independent=True):
+            semantic_checks = await audit_teacher_policies(
+                provider, binding_source, pending_candidate.root, unresolved)
         validate(pending_candidate)
 
     try:

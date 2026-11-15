@@ -22,7 +22,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1280, 390]) {
       preparation_issues: [{ issue_id: "review", field: "rubric", code: "generation_failed", severity: "blocking", status: "open",
         details: { reason: "invalid_structured_rubric", rubric_review_draft: { status: "needs_review", fields: [
           { path: "part_rubric.parts[0].steps[0].total_pts", value: 3 },
-        ] } } }],
+        ], invalid_fields: ["part_rubric.parts[0].steps[1]"] } } }],
     };
     const task = { task_id: "review-recovery", name: zh ? "评分标准复核" : "Rubric review", status: "problems_ready",
       question_recognition_provider_id: "old-model", workflow_revision: 1, problem_data: { q1: question }, student_data: {}, problem_count: 1, student_count: 0,
@@ -65,6 +65,8 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1280, 390]) {
     await expect(card.getByText(zh ? "已保留已识别评分项，请核对分值和适用条件后保存。"
       : "Extracted scoring details are saved. Review the points and conditions, then save your corrections.")).toBeVisible();
     await expect(card.getByRole("complementary", { name: zh ? "待核对的评分项" : "Scoring details to review" })).toContainText(zh ? "3 分" : "3 pts");
+    const missingStep = card.getByText(zh ? "小问 1 · 步骤 2" : "Part 1 · Step 2", { exact: true }).locator("..");
+    await expect(missingStep).toContainText(zh ? "待核对" : "Review needed");
     const confirm = card.getByRole("button", { name: zh ? "第 1 题 · 待确认" : "Question 1 · Confirm review" });
     await expect(confirm).toHaveClass(/border-red-200/);
     await confirm.click();

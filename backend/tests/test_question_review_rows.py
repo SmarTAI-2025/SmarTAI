@@ -1,3 +1,5 @@
+from backend.tests.rubric_fixtures import review_compiler  # noqa: F401
+
 import pytest
 from sqlalchemy import select
 
@@ -17,7 +19,7 @@ def question_task():
     return owner, task
 
 
-def test_add_edit_remove_questions_use_existing_editor_and_keep_empty_matrix():
+def test_add_edit_remove_questions_use_existing_editor_and_keep_empty_matrix(review_compiler):
     owner, task = question_task()
     before = task_facade.get_task(task_id=task, owner_id=owner)
     created = add_question(task_id=task, owner_id=owner, expected_revision=before["workflow_revision"])

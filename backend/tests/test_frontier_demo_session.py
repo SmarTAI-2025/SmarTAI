@@ -385,7 +385,7 @@ def test_demo_task_knowledge_reads_preserve_document_and_citation_ownership(enab
 @pytest.mark.parametrize("change_provider_before_worker", [False, True])
 @pytest.mark.parametrize("criterion,expected_calls", [
     ("Award up to 5 points for a correct explanation of the concept.", 1),
-    ("Award 5 points for a correct explanation of the concept.", 2),
+    ("Award 5 points for a correct explanation of the concept.", 1),
 ])
 def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(
     enabled, monkeypatch, change_provider_before_worker, criterion, expected_calls,
@@ -435,6 +435,8 @@ def test_demo_task_runs_current_grading_worker_and_rejects_changed_credentials(
         type="concept", stem="Explain a synthetic concept.", max_score=5,
         criterion=criterion,
     )
+    from backend.tests.rubric_fixtures import refresh_reviewed_questions
+    refresh_reviewed_questions((task_id, owner_id), holistic=True)
     workflow = workflow_repository.get_workflow(task_id, owner_id=owner_id)
     # Seed only the recognition output boundary. Everything from setup through
     # durable run creation, worker recovery, skill/model dispatch and result

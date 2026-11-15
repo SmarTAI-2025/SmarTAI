@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 from types import SimpleNamespace
 
@@ -270,7 +271,19 @@ async def test_question_ocr_success_reuses_artifact_and_freezes_three_stage_rout
             task_id=task_id, owner_id=owner_id, filename="S001_Student.txt",
             content=b"answer", content_type="text/plain", registry=registry,
             recognition_provider_id="llm-question")
-    task_facade.update_problem(task_id=task_id, owner_id=owner_id, q_id=questions[0].q_id,
+    from backend.services import rubric_drafts
+    from backend.tests.test_task_background_workflows import _reviewed_source
+
+    async def compile_review(problem, provider, **kwargs):
+        assert provider is registry.providers["llm-question"]
+        source = _reviewed_source(problem.q_id, problem.number, problem.stem, problem.criterion)
+        draft = rubric_drafts.RubricDraft.model_validate(source["presentation"]["rubric_draft"])
+        _, compiled = rubric_drafts.generated_rubric({**problem.model_dump(), "source": problem._math_rubric_source},
+            rubric_drafts.RubricDefinition(part_rubric=draft.plan.part_rubric))
+        return compiled
+
+    monkeypatch.setattr(rubric_drafts, "compile_parts_draft", compile_review)
+    await asyncio.to_thread(task_facade.update_problem, task_id=task_id, owner_id=owner_id, q_id=questions[0].q_id,
         patch={"type": "concept", "criterion": "Award 10 points for explaining constructor injection.", "review_status": "confirmed"})
 
     async def fake_submission_parse(sources, _problems, _provider, **_kwargs):

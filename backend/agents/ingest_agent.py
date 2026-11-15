@@ -2302,6 +2302,7 @@ async def generate_missing_question_materials(
     allow_partial: bool = False,
     follow_through_strictness: int | None = None,
     repair_feedback: dict[str, str] | None = None,
+    review_feedback: dict[str, dict] | None = None,
 ) -> List[AICompletionCandidateOutput]:
     """Generate Q-09 values in one structured call; this function never stores them."""
 
@@ -2506,6 +2507,18 @@ async def generate_missing_question_materials(
         )),
     ]
     expected_targets = {row["target_id"]: row for row in target_rows}
+
+    def retain_review(item):
+        if review_feedback is None or not isinstance(item, dict):
+            return
+        target = expected_targets.get(item.get("target_id"))
+        if not target or target["target"] != "criterion":
+            return
+        from backend.services.rubric_review import review_extraction
+        extraction = review_extraction(item.get("rubric_definition"),
+            {**problems_data[target["q_id"]], "q_id": target["q_id"]})
+        if extraction:
+            review_feedback[target["target_id"]] = extraction
 
     def source_bound_candidate(raw):
         if not isinstance(raw, dict) or raw.get("target_id") not in expected_targets:
@@ -2730,6 +2743,7 @@ async def generate_missing_question_materials(
             accepted = {}
             duplicates = set()
             for item in raw.candidates:
+                bound = None
                 try:
                     bound = source_bound_candidate(item)
                     try:
@@ -2741,6 +2755,7 @@ async def generate_missing_question_materials(
                         candidate = AICompletionCandidateOutput.model_validate({**bound, "rubric_definition": None})
                     validate_targets(AICompletionOutput(candidates=[candidate]))
                 except ValueError as exc:
+                    retain_review(bound if isinstance(bound, dict) else item)
                     if repair_feedback is not None and isinstance(item, dict):
                         key = item.get("target_id")
                         if isinstance(key, str) and key in expected_targets:
@@ -2786,6 +2801,7 @@ async def generate_missing_question_materials(
                 if not allow_partial:
                     raise
                 parsed.candidates.remove(candidate)
+                retain_review(candidate.model_dump(mode="json"))
                 if repair_feedback is not None:
                     repair_feedback[candidate.target_id] = "The teacher policy could not be verified; review its scope."
         if audited_pending:
@@ -2810,6 +2826,7 @@ async def generate_missing_question_materials(
             if not allow_partial:
                 raise
             parsed.candidates.remove(candidate)
+            retain_review(candidate.model_dump(mode="json"))
             if repair_feedback is not None:
                 repair_feedback[candidate.target_id] = str(exc)
             continue
@@ -2857,6 +2874,7 @@ async def generate_missing_question_materials(
                     candidate.rubric_draft = None
                 elif allow_partial:
                     parsed.candidates.remove(candidate)
+                    retain_review(candidate.model_dump(mode="json"))
                     if repair_feedback is not None:
                         repair_feedback[candidate.target_id] = str(exc)
                 else:
@@ -2873,6 +2891,9 @@ async def generate_missing_question_materials(
         await reporter._emit_message(
             f"Generated {len(parsed.candidates[:200])} teacher-review material candidates"
         )
+    if review_feedback is not None:
+        for candidate in parsed.candidates:
+            review_feedback.pop(candidate.target_id, None)
     return parsed.candidates[:200]
 
 

@@ -30,9 +30,16 @@ def review_extraction(proposal, problem):
             invalid.append(path)
             return
         for name, field in model.model_fields.items():
-            if name in server_fields or name not in value:
+            if name in server_fields:
                 continue
             location = f"{path}.{name}"
+            if name not in value:
+                # Optional routes and server-computed follow-through defaults
+                # are not missing scoring values. Required fields are checked
+                # only inside the route/items actually present in this proposal.
+                if field.is_required() and not (model is PartRubric and name in {"id", "label", "stem"}):
+                    invalid.append(location if name != "id" else path)
+                continue
             nested = children.get((model, name))
             if nested:
                 values = value[name]
@@ -49,12 +56,14 @@ def review_extraction(proposal, problem):
                 invalid.append(location)
                 continue
             fields.append({"path": location, "value": adapter.dump_python(parsed, mode="json")})
+        if model is RubricPart and not value.get("steps") and not value.get("deductions"):
+            invalid.append(path)
 
     collect(PartRubric, raw, "part_rubric")
     if not fields or len(fields) > 5000:
         return None
     return {"version": 1, "status": "needs_review", "input_fingerprint": draft_fingerprint(problem),
-            "fields": fields, "invalid_fields": invalid[:500]}
+            "fields": fields, "invalid_fields": list(dict.fromkeys(invalid))[:500]}
 
 
 def review_issue(q_id, extraction):

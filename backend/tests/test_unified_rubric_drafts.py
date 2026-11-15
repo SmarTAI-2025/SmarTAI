@@ -358,7 +358,7 @@ async def test_concurrent_preparation_persists_once_and_reuses_after_configurati
         return await checkpoints.run(prepare_math_plans(
             grading_adapter.build_problem_store(questions), registry))
     first, concurrent = await asyncio.gather(load(), load())
-    assert calls == ["q1", "q2"]
+    assert calls == []  # Reuse the rules already frozen in question review.
     assert first == concurrent
     persisted = assignment_repository.get_questions_by_assignment(case[0])
     assert all(q.source["presentation"]["rubric_draft"] for q in persisted)
@@ -372,28 +372,27 @@ async def test_concurrent_preparation_persists_once_and_reuses_after_configurati
     other, questions, _, _ = prepare(case, next_id)
     rebound = await other.run(prepare_math_plans(
         grading_adapter.build_problem_store(questions), registry, grading_setup={"strictness": 100}))
-    assert calls == ["q1", "q2"]
+    assert calls == []  # Reuse the rules already frozen in question review.
     assert all(plan.strictness == 50 for plan in rebound.values())
 
 
 @pytest.mark.asyncio
-async def test_stop_during_compilation_cannot_write_a_draft(case, monkeypatch):
-    from backend.db import assignment_repository
+async def test_stopped_run_cannot_publish_prepared_plan(case, monkeypatch):
     from backend.domain.errors import LeaseLost
+    from backend.services.grading_checkpoints import CheckpointWriteError
     from backend.services import grading_adapter, math_rubric_plan
 
     run_id = start(case, "stop-before-cache")["job_id"]
     checkpoints, questions, _, _ = prepare(case, run_id)
-    async def compile_plan(problem, provider, **kwargs):
-        stop(case, run_id)
-        return math_rubric_plan.fallback_math_rubric_plan(
-            problem, reason="model_selected_holistic", bind_preferences=False)
-    monkeypatch.setattr(math_rubric_plan, "prepare_math_rubric_plan", compile_plan)
-    with pytest.raises(LeaseLost):
+    compiler = AsyncMock(side_effect=AssertionError("Reviewed rules do not compile during grading"))
+    monkeypatch.setattr(math_rubric_plan, "prepare_math_rubric_plan", compiler)
+    stop(case, run_id)
+    with pytest.raises(CheckpointWriteError) as captured:
         await checkpoints.run(prepare_math_plans(grading_adapter.build_problem_store(questions),
             SimpleNamespace(pick_default=lambda: SimpleNamespace(ainvoke=AsyncMock()))))
-    assert all(not (q.source.get("presentation") or {}).get("rubric_draft")
-               for q in assignment_repository.get_questions_by_assignment(case[0]))
+    assert isinstance(captured.value.__cause__, LeaseLost)
+    compiler.assert_not_called()
+    assert not checkpoints.math_plans
 
 
 @pytest.mark.asyncio

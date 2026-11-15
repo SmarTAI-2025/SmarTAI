@@ -5122,6 +5122,8 @@ def _effective_question_issues(presentation, question_type=None):
 
 
 def _question_review_blockers(questions) -> list[str]:
+    from backend.services.math_grading_context import problem_from_question, uses_math_grading
+    from backend.services.rubric_drafts import saved_draft
     issues = []
     for question in questions:
         presentation = (question.source or {}).get("presentation") or {}
@@ -5133,6 +5135,7 @@ def _question_review_blockers(questions) -> list[str]:
         if (not str(question.number or "").strip() or not normalize_question_type(question.type)
                 or not str(question.stem or "").strip() or not str(question.criterion or "").strip()
                 or not problem["rubric_point_summary"]["is_valid"]
+                or (uses_math_grading(question.type) and saved_draft(problem_from_question(question)) is None)
                 or any(question_issue_blocks_progress(issue, presentation)
                        for issue in review_issues if issue.get("code") != "manual_completion_required")):
             issues.append("question_review_blocked")
@@ -5667,8 +5670,9 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
             and (issue.get("details") or {}).get("reason") == "invalid_structured_rubric"
             for issue in ((question.source or {}).get("presentation") or {}).get("preparation_issues", [])
         )
-        # First-time manual recovery can still save incomplete materials offline.
-        # Editing an existing structured rubric must publish matching rules.
+        # Manual recovery can save draft text offline. Confirmation must seal
+        # the current rules even when generation never produced a valid draft.
+        # Existing unresolved rule errors still require a substantive correction.
         changed_rule = bool(prior_rules or pending_rule_review) and (
             ("stem" in patch and patch["stem"] != question.stem)
             or ("type" in patch and patch["type"] != question.type)
@@ -5676,6 +5680,10 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
             or ("criterion" in patch and patch["criterion"] != question.criterion)
             or ("max_score" in patch and patch["max_score"] != question.max_score)
             or bool(patch.get("alternative_rule_edits"))
+        )
+        changed_rule = changed_rule or (
+            patch.get("review_status") == "confirmed" and not pending_rule_review
+            and uses_math_grading(patch.get("type", question.type))
         )
         prior_problem = problem_from_question(question) if changed_rule else None
         source = dict(question.source or {})

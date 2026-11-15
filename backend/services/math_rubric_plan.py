@@ -808,10 +808,10 @@ def _score_context_clause(clause: str, original: str, maximum: float) -> bool:
     batch = rf"(?:指定|共|共计|本次)?\s*{count}\s*(?:道)?题"
     patterns = {
         "maximum": rf"(?:(?:{batch}\s*)?(?:每(?:小)?题|单题|本题)(?:\s*满分)?|满分|"
-                   r"(?:each|per) question(?: is worth| worth| maximum(?: score)?)?)",
+                   r"maximum(?: score)?|(?:each|per) question(?: is worth| worth| maximum(?: score)?)?)",
         "total": r"(?:(?:本题)?(?:总分|总计|合计)|total(?: score)?)",
         "start": r"(?:从|起始(?:分数)?(?:为)?|start(?:ing)? (?:from|at))",
-        "blank": r"(?:空白(?:作答|答案)?(?:得|计|给)?|blank(?: answers?)?(?: receive| get| score)?)",
+        "blank": r"(?:空白(?:作答|答案)?(?:得|计|给)?|blank(?: answers?)?(?: receive| get| score| earn)?)",
     }
     match = re.fullmatch(
         rf"(?:得分范围|分数范围|score range|scores? range(?: from)?)\s*[:：=]?\s*"

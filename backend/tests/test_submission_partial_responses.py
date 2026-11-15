@@ -1,4 +1,6 @@
 """Independent fields survive malformed siblings, repairs and manual handoff."""
+from backend.tests.rubric_fixtures import add_reviewed_question
+
 import asyncio
 import json
 from types import SimpleNamespace
@@ -27,7 +29,7 @@ def _response(answers, **identity):
 def _setup():
     owner, task = _seed_task()
     for index in (1, 2):
-        assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{index}", order_index=index - 1,
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{index}", order_index=index - 1,
             number=str(index), type="concept", stem=f"Question {index}", criterion="Award 10 points", max_score=10)
     return owner, task
 

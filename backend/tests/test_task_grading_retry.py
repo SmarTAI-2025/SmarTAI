@@ -284,6 +284,8 @@ def test_frozen_inputs_new_revision_and_provider_change_fail_safely(case, monkey
         from backend.db.models import AssignmentQuestionRecord
         row = session.get(AssignmentQuestionRecord, question.id)
         row.stem = "Changed question"
+        from backend.tests.test_task_background_workflows import _reviewed_source
+        row.source = _reviewed_source(row.q_id, row.number, row.stem, row.criterion)
         row.version += 1
     new_run = start(case, "changed-input")
     frozen = workflows.get_run_setup(new_run["job_id"])
@@ -494,6 +496,8 @@ def test_failed_only_rejects_changed_grading_content(case, monkeypatch):
         from backend.db.models import AssignmentQuestionRecord
         question = session.scalar(select(AssignmentQuestionRecord).where(AssignmentQuestionRecord.assignment_id == case[0]))
         question.stem = "Changed grading input"
+        from backend.tests.test_task_background_workflows import _reviewed_source
+        question.source = _reviewed_source(question.q_id, question.number, question.stem, question.criterion)
         question.version += 1
     with pytest.raises(VersionConflict, match="Grading inputs changed"):
         task_facade.start_task_grading(task_id=case[0], owner_id=case[1],
@@ -507,7 +511,7 @@ def test_one_confirmation_acknowledges_all_advice_but_blocks_failed_content(case
     from backend.domain.errors import ValidationError
     with session_scope() as session:
         row = session.scalar(select(AssignmentQuestionRecord).where(AssignmentQuestionRecord.assignment_id == case[0], AssignmentQuestionRecord.q_id == "q1"))
-        row.source = {"presentation": {"max_score_review_status": "needs_review", "review_status": "needs_review", "preparation_issues": [
+        row.source = {"presentation": {**row.source["presentation"], "max_score_review_status": "needs_review", "review_status": "needs_review", "preparation_issues": [
             {"issue_id": "score", "field": "max_score", "code": "default_max_score_requires_review", "status": "open", "severity": "warning"},
             {"issue_id": "ocr", "field": "stem", "code": "recognition_partial", "status": "open", "severity": "warning"},
         ]}}

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from backend.tests.rubric_fixtures import add_reviewed_question
+
+from backend.tests.rubric_fixtures import review_compiler  # noqa: F401
+
 import pytest
 
 
@@ -55,7 +59,7 @@ def _seed_source_case(second_status: str | None):
         course_id=course.id,
         name="Readiness",
     )
-    assignment_repository.add_question(
+    add_reviewed_question(
         assignment_id=assignment.id,
         teacher_id=owner_id,
         q_id="q1",
@@ -237,11 +241,13 @@ def _seed_legacy_structured_case(
         course_id=course.id,
         name="Legacy readiness",
     )
+    from backend.tests.test_task_background_workflows import _reviewed_source
     for index in range(question_count):
-        assignment_repository.add_question(
+        add_reviewed_question(
             assignment_id=assignment.id, teacher_id=owner_id,
             q_id=f"q{index + 1}", order_index=index, number=str(index + 1),
             type="concept", stem=f"Question {index + 1}", criterion="Award up to 10 points for the method and result.", max_score=10,
+            source=_reviewed_source(q_id=f"q{index + 1}", number=str(index + 1), stem=f"Question {index + 1}"),
         )
     workflow = workflow_repository.ensure_workflow(
         assignment_id=assignment.id,
@@ -504,7 +510,7 @@ def test_unusable_question_inputs_cannot_start_grading(condition):
 
 @pytest.mark.parametrize("field,replacement", [("number", "1"), ("type", "concept"), ("stem", "Verified question text"), ("criterion", "Award 10 points")])
 @pytest.mark.parametrize("manual_marker", [False, True])
-def test_saved_question_repair_releases_next_stage_without_confirmation(field, replacement, manual_marker):
+def test_saved_question_repair_releases_next_stage_without_confirmation(review_compiler, field, replacement, manual_marker):
     from sqlalchemy import select
     from backend.db.models import AssignmentQuestionRecord
     from backend.db.session import session_scope
@@ -524,6 +530,10 @@ def test_saved_question_repair_releases_next_stage_without_confirmation(field, r
     repaired = task_facade.update_problem(**args, q_id="q1", patch={field: replacement},
         expected_revision=seeded["workflow"].workflow_revision)
     assert repaired["problem"]["review_status"] != "confirmed"
+    if manual_marker:
+        assert "question_review_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+        repaired = task_facade.update_problem(**args, q_id="q1", patch={"review_status": "confirmed"},
+            expected_revision=repaired["workflow_revision"])
     assert "question_review_blocked" not in task_facade.grading_readiness(**args)["blocking_issues"]
     assert "question_manual_completion_required" not in task_facade.grading_readiness(**args)["blocking_issues"]
     if manual_marker:

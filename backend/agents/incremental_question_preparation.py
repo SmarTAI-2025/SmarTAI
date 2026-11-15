@@ -327,6 +327,14 @@ class IncrementalQuestionPreparation:
                     if bound:
                         row["rubric_draft"] = deepcopy(bound)
             row.setdefault("preparation_issues", [])
+            if generated and not row.get("rubric_draft"):
+                from backend.services.rubric_drafts import draft_fingerprint
+                failed_generation = self.units.get("generation:" + identity) or {}
+                for failed in failed_generation.values():
+                    row["preparation_issues"].extend(deepcopy([
+                        issue for issue in failed.get("preparation_issues", [])
+                        if ((issue.get("details") or {}).get("rubric_review_draft") or {}).get("input_fingerprint")
+                        == draft_fingerprint(row)]))
             if generated and row.get("criterion") and not row.get("rubric_draft"):
                 feedback = self.repair_feedback.get("generation:" + identity, {}).get("q1:criterion") or self.repair_feedback.get("rubric:" + _base_identity(row), {}).get("criterion")
                 if feedback and not any((issue.get("details") or {}).get("rubric_review_draft")
@@ -1083,6 +1091,8 @@ class IncrementalQuestionPreparation:
 
     async def _generate(self, key, identity, row, targets):
         progress_id = self._generation_progress_id(row)
+        review_feedback = {}
+        data = _rows([row])
         await self.reporter.register_question_generation(progress_id, str(row.get("number") or ""))
         try:
             async with self.gate:
@@ -1099,7 +1109,8 @@ class IncrementalQuestionPreparation:
                     for _ in range(3):
                         candidates = await generate_missing_question_materials(data, pending, 6, self.provider,
                             reporter=self.reporter, manage_progress_lifecycle=False, generation_language=self.language,
-                            allow_partial=True, repair_feedback=feedback, follow_through_strictness=self.policy.follow_through_strictness)
+                            allow_partial=True, repair_feedback=feedback, review_feedback=review_feedback,
+                            follow_through_strictness=self.policy.follow_through_strictness)
                         for candidate in candidates:
                             target = next((target for target in pending if target["target_id"] == candidate.target_id), None)
                             if target is None:
@@ -1142,7 +1153,18 @@ class IncrementalQuestionPreparation:
         except Exception as exc:
             await self.reporter.mark_question_generation_finished(progress_id, succeeded=False, revision=identity,
                 error_code=classify_background_error(exc, "question_preparation_failed"))
-            await self.finish(key, error=exc)
+            rows = None
+            extraction = review_feedback.get("q1:criterion")
+            if extraction:
+                from backend.services.rubric_drafts import draft_fingerprint
+                from backend.services.rubric_review import review_issue
+                # Accepted sibling fields may have arrived in this same call.
+                # This is review-only data, never a sealed grading draft.
+                extraction = {**extraction, "input_fingerprint": draft_fingerprint(data["q1"])}
+                rows = _rows([{**{name: value for name, value in data["q1"].items()
+                                 if name != "teacher_subpart_points"},
+                              "preparation_issues": [review_issue("q1", extraction)]}])
+            await self.finish(key, rows, error=exc)
 
     def _generation_progress_id(self, row):
         # Display progress follows the teacher's selected set, while immutable

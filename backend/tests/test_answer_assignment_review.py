@@ -7,6 +7,7 @@ from backend.db.session import session_scope
 from backend.domain.errors import DomainError
 from backend.services import task_facade
 from backend.tests.test_recognition_review_integrity import _case
+from backend.tests.test_task_background_workflows import _reviewed_source
 
 
 def snapshot(args):
@@ -37,6 +38,9 @@ def seed(count=2, flags=()):
             session.add(SubmissionAnswerRecord(id=f"ans-{index}-{uuid.uuid4().hex[:8]}", revision_id=first.revision_id,
                 question_id=question.id, q_id=question.q_id, number=question.number, type=question.type,
                 content=f"Original answer {index}", flag=[]))
+        for question in session.scalars(select(AssignmentQuestionRecord)):
+            question.source = _reviewed_source(question.q_id, question.number, question.stem,
+                                               question.criterion, question.type)
     return args
 
 

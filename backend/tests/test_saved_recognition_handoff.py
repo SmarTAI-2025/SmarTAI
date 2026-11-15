@@ -1,4 +1,6 @@
 """Structured drafts restore to the original matrix; historical AI recovery is retired."""
+from backend.tests.rubric_fixtures import add_reviewed_question, review_compiler  # noqa: F401
+
 import io
 import hashlib
 import json
@@ -97,7 +99,7 @@ async def test_raw_only_questions_enter_original_matrix_without_ai_or_source_los
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stopped", [False, True])
 @pytest.mark.parametrize("target_source", ["options", "hint"])
-async def test_structured_partial_questions_restore_known_missing_rows_into_existing_editor(monkeypatch, stopped, target_source):
+async def test_structured_partial_questions_restore_known_missing_rows_into_existing_editor(review_compiler, monkeypatch, stopped, target_source):
     from backend.agents.incremental_question_preparation import IncrementalQuestionPreparation, _rows
     from backend.db import assignment_repository
     from backend.domain.errors import ValidationError
@@ -175,7 +177,7 @@ async def test_submission_raw_text_handoff_opens_manual_rows_without_model_calls
     from backend.db import assignment_repository
     from backend.services.submission_manual_review import continue_manually
     owner, task = _seed_task(with_question=True)
-    assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1, number="2",
+    add_reviewed_question(task, teacher_id=owner, q_id="q2", order_index=1, number="2",
         type="concept", stem="Second", criterion="Award 10 points.", max_score=10)
     registry = _RecoveryRegistry()
     data, mime = source_file(pdf=True, pages=8)

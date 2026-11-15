@@ -1,4 +1,6 @@
 """Recognition, edits and grading must agree on the selected question type."""
+from backend.tests.rubric_fixtures import review_compiler  # noqa: F401
+
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -33,7 +35,7 @@ def test_preparation_uses_actual_selected_skill_without_another_type_rule(monkey
     ("reasoning", "推理题", ProofSkill),
     ("concept", "概念题", ConceptSkill), ("other", "其他", ConceptSkill),
 ])
-def test_teacher_type_edit_reaches_same_skill_as_recognition(english, chinese, skill):
+def test_teacher_type_edit_reaches_same_skill_as_recognition(review_compiler, english, chinese, skill):
     owner, task = _seed_task(with_question=True)
     task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1", patch={"type": english})
     row = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]["q1"]
@@ -44,7 +46,7 @@ def test_teacher_type_edit_reaches_same_skill_as_recognition(english, chinese, s
 
 
 @pytest.mark.parametrize("value", ["", "  ", "unrecognized", "choice", "multiple_choice", "fill_blank", "short_answer", "short", "简答题", "proof", "证明题", "单选题", "多选题", "填空题"])
-def test_missing_type_preserves_stem_and_blocks_confirm_and_grading(value):
+def test_missing_type_preserves_stem_and_blocks_confirm_and_grading(review_compiler, value):
     owner, task = _seed_task(with_question=True)
     with session_scope() as session:
         row = session.scalar(select(AssignmentQuestionRecord).where(AssignmentQuestionRecord.assignment_id == task))

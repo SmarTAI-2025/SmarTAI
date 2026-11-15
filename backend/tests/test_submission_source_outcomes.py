@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from backend.tests.rubric_fixtures import add_reviewed_question
+
 import io
 import json
 import uuid
@@ -62,7 +64,7 @@ def _seed_task() -> tuple[str, str]:
             version=1,
         ))
     workflow_repository.ensure_workflow(assignment_id=task_id, owner_id=owner_id)
-    assignment_repository.add_question(
+    add_reviewed_question(
         task_id,
         teacher_id=owner_id,
         q_id="q1",

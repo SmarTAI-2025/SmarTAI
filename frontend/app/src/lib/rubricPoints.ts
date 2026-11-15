@@ -132,6 +132,10 @@ export function summarizeRubricPoints(
     if (includedBreakdown || declaredMax) pointMatches = pointMatches.slice(0, 1);
     for (const pointMatch of pointMatches) {
       const pointStart = pointMatch.index ?? 0;
+      // A repeated part label may introduce a conditional award, not another
+      // budget. Keep it for semantic compilation rather than adding it here.
+      const clausePrefix = segment.slice(0, pointStart).split(/[。；;\n]|\.(?=\s|$)/u).at(-1) ?? "";
+      if (/沿用[^。；;\n]*错|沿错|前错后对|follow[ -]?through|(?:following|carri(?:ed|es|ying))[^。；;\n]*error|其他[^。；;\n]*解法|另解|alternative\s+(?:methods?|solutions?)|other\s+correct\s+(?:methods?|solutions?)/iu.test(clausePrefix)) continue;
       const prefix = segment.slice(Math.max(0, pointStart - 20), pointStart);
       if (!includedBreakdown && /(?:总分|合计|total)\s*[:：=为-]?\s*$/iu.test(prefix)) continue;
       // Keep deduction semantics aligned with backend question_structure.py.

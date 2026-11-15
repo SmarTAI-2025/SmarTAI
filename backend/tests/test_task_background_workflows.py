@@ -32,6 +32,9 @@ from backend.services import task_facade
 from backend.tools.structured_llm import PermanentLLMError, RateLimitError, TransientLLMError
 
 
+from backend.tests.rubric_fixtures import _reviewed_source
+
+
 def _seed_task(*, with_question: bool = False, criterion: str = "Award up to 10 points for the method and result.") -> tuple[str, str]:
     suffix = uuid.uuid4().hex[:10]
     owner_id = f"teacher_{suffix}"
@@ -59,6 +62,7 @@ def _seed_task(*, with_question: bool = False, criterion: str = "Award up to 10 
         assignment_repository.add_question(
             task_id, teacher_id=owner_id, q_id="q1", order_index=0, number="1",
             type="concept", stem="Original", criterion=criterion, max_score=10,
+            source=_reviewed_source(criterion=criterion),
         )
     return owner_id, task_id
 

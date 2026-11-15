@@ -244,7 +244,10 @@ async def prepare_source_goals(provider, question, rules, *, language):
             raise StructuredOutputInvalidError(str(exc)) from exc
 
     try:
-        with llm_attempt_budget():
+        # Planning and independently auditing source goals are distinct model
+        # requests, not retries of the preceding rubric-generation request.
+        # Each keeps the ordinary three-attempt ceiling for its own repairs.
+        with llm_attempt_budget(independent=True):
             outline, _ = await structured_llm_call(
                 provider,
                 system_prompt=prompt,
@@ -252,6 +255,7 @@ async def prepare_source_goals(provider, question, rules, *, language):
                 output_model=ProofOutline,
                 validate_output=validate,
             )
+        with llm_attempt_budget(independent=True):
             await audit_source_goals(provider, task, outline)
         return compile_proof_goals(rules, outline, sources_by_part, language=language)
     except (ValueError, OSError, ProviderRequestError, PermanentLLMError, TransientLLMError) as exc:

@@ -141,7 +141,7 @@ def test_v1_paused_vote_is_excluded_but_new_v2_plan_and_vote_resume(case, monkey
     assert {qid: p.model_dump() for qid, p in actual.items()} == {
         qid: p.model_dump() for qid, p in plans.items()}
     assert restored.get(student, "q1", provider, 0).score == 7
-    assert calls == ["q1", "q2"]
+    assert calls == []  # Current reviewed drafts already contain the new plans.
 
 
 @pytest.mark.parametrize("storage", ["manifest", "event"])

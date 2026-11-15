@@ -1,8 +1,10 @@
+import { getAPIErrorDetail } from "@/api/client";
 import type { PreparationIssue } from "@/types";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 
 type Field = { path: string; value: unknown };
 const labels: Record<string, [string, string]> = {
+  parts: ["小问", "Parts"], steps: ["评分步骤", "Scoring steps"], deductions: ["扣分项", "Deductions"],
   criterion: ["评分要求", "Criterion"], total_pts: ["满分", "Maximum"],
   follow_through_pts: ["沿用前一步错值时得分", "Credit for following an earlier error"],
   follow_through_keep: ["沿用前一步错值时保留比例", "Follow-through credit rate"],
@@ -49,8 +51,8 @@ export function rubricReviewRows(issues: PreparationIssue[] = [], locale: string
     const groups = new Map<string, number>();
     const rows: Array<{ key: string; label: string; value: string }> = [];
     const describe = (path: string, value: unknown, pending = false) => {
-      const match = /^part_rubric(?:\.parts\[(\d+)\])?(?:\.(steps|deductions)\[(\d+)\])?\.([a-z_]+)$/.exec(path);
-      if (!match || !labels[match[4]]) return;
+      const match = /^part_rubric(?:\.parts\[(\d+)\])?(?:\.(steps|deductions)\[(\d+)\])?(?:\.([a-z_]+))?$/.exec(path);
+      if (!match || (match[4] ? !labels[match[4]] : !pending)) return;
       const [, part, kind, index, key] = match;
       const partLabel = values.get(`part_rubric.parts[${part}].label`);
       const scope = part === undefined ? (lang === 0 ? "整题" : "Question")
@@ -76,7 +78,8 @@ export function rubricReviewRows(issues: PreparationIssue[] = [], locale: string
         text = lang === 0 ? `第 ${groups.get(value)} 组（同一目标只取一档）` : `Group ${groups.get(value)} (one loss per target)`;
       } else if (Array.isArray(value)) text = value.filter(v => typeof v === "string").join("\n");
       else if (typeof value === "string" || typeof value === "number") text = String(value);
-      if (text) rows.push({ key: `${issue.issue_id}:${path}`, label: [scope, item, labels[key][lang]].filter(Boolean).join(" · "), value: text });
+      const fieldLabel = key ? labels[key][lang] : path === "part_rubric" ? (lang === 0 ? "评分标准" : "Rubric") : "";
+      if (text) rows.push({ key: `${issue.issue_id}:${path}`, label: [scope, item, fieldLabel].filter(Boolean).join(" · "), value: text });
     };
     fields.forEach(f => describe(f.path, f.value));
     if (Array.isArray(draft.invalid_fields)) for (const path of draft.invalid_fields) {
@@ -97,4 +100,14 @@ export function RubricReviewDetails({ issues, locale }: { issues?: PreparationIs
       {rows.map(row => <div key={row.key}><dt className="text-xs font-medium text-muted-foreground">{row.label}</dt><dd className="mt-1 break-words"><MarkdownMath>{row.value}</MarkdownMath></dd></div>)}
     </dl>
   </aside>;
+}
+
+/** A rejected edit stays a draft; expose its parsed values without replacing saved rules. */
+export function RubricReviewErrorDetails({ error, locale }: { error: unknown; locale: string }) {
+  const extraction = object(getAPIErrorDetail(error)?.details)?.rubric_review_draft;
+  if (!extraction) return null;
+  return <RubricReviewDetails locale={locale} issues={[{
+    issue_id: "pending-edit", q_id: "", field: "rubric", code: "generation_failed",
+    severity: "blocking", status: "open", details: { rubric_review_draft: extraction },
+  }]} />;
 }

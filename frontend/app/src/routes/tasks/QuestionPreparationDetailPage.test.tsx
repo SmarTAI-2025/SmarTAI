@@ -623,7 +623,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
     mutateAsync.mockResolvedValueOnce({ workflow_revision: 8 }).mockRejectedValueOnce(new Error("stale_workflow_revision"));
     const router = await renderPage();
     await userEvent.click(screen.getByRole("button", { name: "全部确认" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("已确认 1 道题；第 2 题未能保存");
+    expect(await screen.findByRole("alert")).toHaveTextContent("已确认 1 道题；请核对第 2 题");
     expect(mutateAsync).toHaveBeenCalledTimes(2);
     expect(mutateAsync.mock.calls[1][0]).toEqual({ taskId: "task-1", qId: "Q2", expectedWorkflowRevision: 8, review_status: "confirmed" });
     expect(router.state.location.pathname).toBe("/tasks/task-1/questions/Q1/content");
@@ -644,6 +644,31 @@ describe("QuestionPreparationDetailPage navigation", () => {
     expect(mutateAsync).toHaveBeenCalledTimes(1);
     finish({ workflow_revision: 8 });
     await waitFor(() => expect(button).toBeEnabled());
+  });
+
+  it("opens the existing model recovery dialog when first confirmation needs a model", async () => {
+    mutateAsync.mockRejectedValueOnce(new APIError(422, "quota", { error: { code: "provider_quota_exceeded" } }));
+    await renderPage();
+    await userEvent.click(screen.getAllByRole("button", { name: "第 1 题 · 待确认" })[0]);
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("请更换可用模型");
+    await userEvent.click(within(dialog).getByRole("button", { name: "更换模型" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "题目处理模型" })).toHaveFocus());
+  });
+
+  it("shows the usable and missing scoring values when confirmation cannot seal a rubric", async () => {
+    mutateAsync.mockRejectedValueOnce(new APIError(422, "invalid rubric", { error: {
+      code: "invalid_structured_rubric", details: { rubric_review_draft: {
+        fields: [{ path: "part_rubric.parts[0].steps[0].total_pts", value: 3 }],
+        invalid_fields: ["part_rubric.parts[0].steps[1].total_pts"],
+      } },
+    } }));
+    await renderPage();
+    await userEvent.click(screen.getAllByRole("button", { name: "第 1 题 · 待确认" })[0]);
+    const retained = await screen.findByLabelText("待核对的评分项");
+    expect(retained).toHaveTextContent("步骤 1 · 满分3 分");
+    expect(retained).toHaveTextContent("步骤 2 · 满分待核对");
+    expect(mutateAsync).toHaveBeenCalledTimes(1);
   });
 
   it("opens a failed question outside the current filter directly", async () => {

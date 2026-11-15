@@ -53,6 +53,25 @@ async def test_wrong_audit_identity_is_not_approval_and_total_calls_are_bounded(
 
 
 @pytest.mark.asyncio
+async def test_required_goal_checks_keep_their_budget_after_generation_repair():
+    from backend.tools.structured_llm import llm_attempt_budget, ainvoke_with_retry, StructuredOutputInvalidError
+    from langchain_core.messages import HumanMessage
+    source = "Prove x=x."
+    _, plan = material()
+    provider = Provider(["first generation", "generation repair", outline([source]).model_dump_json(),
+        json.dumps({"parts": [{"part_id": "p", "verdict": "consistent", "reason": "One requested result."}]}),
+        "last generation attempt"])
+    with llm_attempt_budget():
+        for _ in range(2):
+            await ainvoke_with_retry(provider, [HumanMessage(content="Generation")])
+        result = await goals.prepare_source_goals(provider, source, plan.part_rubric, language="en")
+        await ainvoke_with_retry(provider, [HumanMessage(content="Generation")])
+        with pytest.raises(StructuredOutputInvalidError, match="attempt limit"):
+            await ainvoke_with_retry(provider, [HumanMessage(content="Generation")])
+    assert result.parts[0].deductions and len(provider.calls) == 5
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("allow_partial", [False, True])
 async def test_generation_never_adopts_an_unverified_goal_but_keeps_valid_siblings(allow_partial):
     from backend.agents.ingest_agent import generate_missing_question_materials

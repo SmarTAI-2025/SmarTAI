@@ -72,6 +72,18 @@ describe("summarizeRubricPoints", () => {
 
 describe("deductions are not additional available points", () => {
   it.each([
+    "(a) 方法2分，结果2分；第(a)小问若沿用前一步错值但本步正确，得1分。其他正确解法最高4分，最低0分；(b) 6分",
+    "(a) method 2 points + result 2 points; Part (a): following an earlier error earns 1 point. Alternative methods receive at most 4 points; (b) 6 points",
+  ])("keeps follow-through and alternative awards out of the budget: %s", criterion => {
+    expect(summarizeRubricPoints(criterion, 10, LETTER_STRUCTURE)).toMatchObject({ is_valid: true, total_points: "10" });
+  });
+
+  it("defers unitemized teacher rules instead of treating an explicit follow-through amount as a part budget", () => {
+    const criterion = "本题满分10分，2个小问各5分。第(a)小问第二步若方法正确但沿用前一步错值，得0.25分。其他正确解法每小问最高5分，每个独立错误扣0.5分，最低0分。";
+    expect(summarizeRubricPoints(criterion, 10, LETTER_STRUCTURE)).toMatchObject({ is_valid: true, has_explicit_subpart_points: false });
+  });
+
+  it.each([
     "(a) 4分，漏步骤扣1分；(b) 6分",
     "(a) 4 points; deduct 1 point for a missing step. (b) 6 points",
     "(a) 方法2分、结果2分，错误减去1分；(b) 证明6分",

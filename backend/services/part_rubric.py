@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 Points = Annotated[float, Field(ge=0, le=10000, allow_inf_nan=False)]
 Key = Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[\w.():-]+$")]
 Text = Annotated[str, Field(min_length=1, max_length=12000)]
+PER_PART_POINTS = re.compile(r"(?:每(?:个)?小问|(?:\d+\s*个)?小问各|各小问)\s*(\d+(?:\.\d+)?)\s*分")
 
 
 class Frozen(BaseModel):
@@ -708,7 +709,7 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
                          "Only proof questions retain goal-based deductions; preserve teacher-specified modes.")
     # Source clauses constrain individual fields. A subtotal, a step budget and a
     # conditional award in the same sentence are three different quantities.
-    per_part = re.search(r"每(?:个)?小问\s*(\d+(?:\.\d+)?)\s*分", ordinary)
+    per_part = PER_PART_POINTS.search(ordinary)
     if per_part:
         for label in labels:
             expected.setdefault(label, per_part[1])
@@ -1088,7 +1089,10 @@ children; do not add the subtotal as another scored step. Follow-through belongs
 step and uses that step's budget. Do not turn an ordinary correctness requirement into
 required_conditions: that field is only for exact teacher clauses explicitly withholding credit.
 Do not add origin to steps. Unstated alternative-method fields use AI defaults without teacher
-source attribution. Check all these constraints before returning, including when repairing a reply.
+source attribution. For mutually exclusive loss tiers on one goal, use the same exclusive_group
+and limit=1 for each tier. Different goals require different groups. Preserve the full condition
+and its amount together in source_quote, including sentences preceding a parenthesized loss.
+Check all these constraints before returning, including when repairing a reply.
 """
 
 
@@ -1129,6 +1133,8 @@ def _mixed_source_has_unparsed_text(ordinary, rubric, anchors):
     from backend.services.question_structure import _allocation_marker_pattern
 
     def without_heading(clause):
+        clause = unicodedata.normalize("NFKC", clause)
+        clause = re.sub(r"^\s*[-•]\s*", "", clause)
         return re.sub(r"^(?:评分(?:标准|参考|说明)?|主标准|marking scheme|rubric)\s*[:：]\s*", "", clause, flags=re.I)
 
     quoted = {without_heading(clause) for part in rubric.parts for rule in part.deductions
@@ -1224,6 +1230,18 @@ def verify_teacher_numbers(teacher, rubric, maximum, *, anchors=None, verified_p
             if any((part.id, rule.id) not in anchors for rule in part.deductions):
                 raise ValueError(f"{part.id}: mixed parts need an explicit teacher allocation for each penalty.")
     teacher_penalty_counts(rubric.parts, ordinary, anchors)
+    if re.search(r"同一目标只取一档|choose one loss for this goal", ordinary, re.I):
+        tiered = []
+        for part in rubric.parts:
+            for rule in part.deductions:
+                condition, quote = anchors.get((part.id, rule.id), (rule.criterion, rule.source_quote))
+                if re.search(r"同一目标只取一档|choose one loss for this goal", quote, re.I):
+                    if not rule.exclusive_group or rule.limit != 1:
+                        raise ValueError(f"{part.id}/{rule.id}: preserve the exclusive goal tier with exclusive_group and limit=1.")
+                tiered.append({"part_id": part.id, "id": rule.id, "criterion": condition,
+                               "deduct_pts": float(rule.deduct_pts), "exclusive_group": rule.exclusive_group,
+                               "limit": rule.limit, "count_by": rule.count_by})
+        issue("exclusive_deductions", teacher, tiered)
     unresolved_floors = []
     floors = question_floor_amounts(ordinary, maximum, unresolved=unresolved_floors)
     if (floors or not unresolved_floors) and (floors or {Decimal(0)}) != {rubric.nonblank_floor.resolve(maximum)}:
