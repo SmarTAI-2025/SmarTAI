@@ -101,14 +101,22 @@ export function correctionReviewNotes(correction: Correction, locale: Locale) {
   } else if (confidenceNeedsAttention(correction.confidence) && !correctionReviewBlocked(correction)) {
     add(text(`置信度 ${correction.confidence} 较低，建议核对确认。`, `Low confidence (${correction.confidence}); review suggested.`));
   }
-  if (hasPartialExperts(correction)) add(text("部分专家完成，已保留有效评分和评语，建议核对。", "Some experts completed. Valid scores and feedback are retained; review suggested."));
+  const failedExperts = (correction.expert_results ?? []).filter(expert => expert.error_kind);
+  const failureLabels = [...new Set(failedExperts.map(expert => `${expert.provider}：${reviewReasonLabel(expert.error_kind!, locale)}`))];
+  if (hasPartialExperts(correction)) {
+    add(text("部分专家完成，已保留有效评分和评语，建议核对。", "Some experts completed. Valid scores and feedback are retained; review suggested.")
+      + (failureLabels.length ? ` ${failureLabels.join("；")}` : ""));
+  } else for (const expert of failedExperts) {
+    add(`${expert.provider}：${reviewReasonLabel(expert.error_kind!, locale)}`,
+      correctionReviewBlocked(correction) ? "blocking" : "advisory");
+  }
   for (const label of mathReviewLabels(correction, locale)) {
-    const persistedReason = correctionReviewReasonIds(correction).some(reason =>
-      MATH_REVIEW_REASONS.includes(reason) && reviewReasonLabel(reason, locale) === label);
-    add(label, correctionReviewBlocked(correction) && persistedReason ? "blocking" : "advisory");
+    add(label);
   }
   if (correctionReviewBlocked(correction)) for (const reason of correctionReviewReasonIds(correction)) {
     if ([...MATH_REVIEW_REASONS, "low_confidence", "partial_experts", "degraded_to_single", "high_indecisiveness", "score_spread_high", "minority_veto"].includes(reason)) continue;
+    if (["all_failed", "missing_correction", "llm_failed"].includes(reason)
+      || failedExperts.some(expert => expert.error_kind === reason)) continue;
     add(reviewReasonLabel(reason, locale), "blocking");
   }
   return Array.from(labels, ([label, severity]) => ({ label, severity }));

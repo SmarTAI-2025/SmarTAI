@@ -58,7 +58,7 @@ describe('fixed Demo uploads', () => {
   });
   it('preflights the fixed question file with an explicit score policy', async () => {
     vi.mocked(useTask).mockReturnValue({ data: { status: 'draft', problem_count: 0 } } as any);
-    mount('questions'); fireEvent.click(screen.getByRole('button', { name: 'Recognize Questions' }));
+    mount('questions'); fireEvent.click(screen.getByRole('button', { name: 'Prepare Questions' }));
     await screen.findByText('Recognition progress');
     expect(vi.mocked(startQuestionPreparation).mock.calls[0][0]).toEqual(expect.objectContaining({ sourceTokens: ['source'], expectedWorkflowRevision: 8, scorePolicy: { mode: 'per_question', perQuestionText: expect.stringContaining('Q4: 10') } }));
   });

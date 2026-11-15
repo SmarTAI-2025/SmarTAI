@@ -279,8 +279,8 @@ function QuestionPreparationDetailPageForm() {
     <div className="w-full max-w-[1300px]">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">{tx(locale, "题目资料审核", "Review Question Materials")}</h1>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">{tx(locale, "连续浏览每道题的题目、标答和评分标准；只有编程题显示测试样例。", "Review each question, reference answer, and rubric together. Test cases appear only for programming questions.")}</p>
+          <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">{tx(locale, "复核题目资料", "Review Question Materials")}</h1>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">{tx(locale, "连续浏览每道题的题干、标答和评分标准；只有编程题显示测试样例。", "Review each question, reference answer, and rubric together. Test cases appear only for programming questions.")}</p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <span className="text-xs text-muted-foreground">{taskQuery.data?.name ?? ""}</span>
@@ -300,7 +300,7 @@ function QuestionPreparationDetailPageForm() {
           onChange={value => void chooseModel(value)} disabled={updateModel.isPending || updateProblem.isPending || confirming} />
       </div> : null}
       {modelFailure ? <UnsavedChangesDialog
-        title={tx(locale, "请检查题目处理模型", "Check the question model")}
+        title={tx(locale, "请检查题目准备模型", "Check the question preparation model")}
         description={questionSaveError(modelFailure, locale)}
         stayLabel={tx(locale, "返回编辑", "Back to editing")}
         leaveLabel={tx(locale, "更换模型", "Change model")}
@@ -451,7 +451,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   onConfirm: (problem: ProblemInfo) => void;
 }) {
   const programming = isProgrammingProblem(problem);
-  const risks = questionReviewIssues(problem);
+  const risks = questionReviewNotes(problem, locale, code => riskShortLabel(code, locale));
   return (
     <article id={questionAnchorId(problem.q_id)} data-question-id={problem.q_id} className="scroll-mt-[86px] overflow-hidden rounded-[10px] border bg-card">
       <header className="flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
@@ -461,11 +461,11 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-muted-foreground dark:bg-slate-800">{questionTypeLabel(problem.type, locale)}</span>
             <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", problem.max_score_review_status === "confirmed" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35" : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35")}>{tx(locale, `满分 ${formatScore(problem.max_score ?? 10)} 分`, `${formatScore(problem.max_score ?? 10)} points max`)}</span>
             {problem.question_structure?.subparts.length ? <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 dark:bg-violet-950/30 dark:text-violet-300">{tx(locale, `含 ${problem.question_structure.subparts.length} 个小问 · ${problem.question_structure.subparts.map((part) => part.label).join(" ")}`, `${problem.question_structure.subparts.length} subparts · ${problem.question_structure.subparts.map((part) => part.label).join(" ")}`)}</span> : null}
-            {risks.length ? <span tabIndex={0} title={risks.map(issue => recognitionIssueLabel(issue, locale) ?? riskShortLabel(issue.code, locale)).join("；")} className={cn("cursor-help rounded-full px-2.5 py-1 text-xs font-semibold", risks.some(issue => issue.severity === "blocking") ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800")}>{tx(locale, `${risks.length} 项待确认`, `${risks.length} to confirm`)}</span> : null}
+            {risks.length ? <span tabIndex={0} title={risks.map(issue => issue.label).join("；")} className={cn("cursor-help rounded-full px-2.5 py-1 text-xs font-semibold", risks.some(issue => issue.severity === "blocking") ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800")}>{tx(locale, `${risks.length} 项待确认`, `${risks.length} to confirm`)}</span> : null}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
             <p className="text-xs text-muted-foreground">{tx(locale, `筛选结果中的第 ${index + 1} / ${total} 题`, `${index + 1} of ${total}`)}</p>
-            <ReviewIssueNotes issues={questionReviewNotes(problem, locale, code => riskShortLabel(code, locale))} />
+            <ReviewIssueNotes issues={risks} />
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 max-sm:[&_button]:px-2 max-sm:[&_button]:text-xs! sm:shrink-0">
@@ -519,6 +519,12 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   const originalScore = String(problem.max_score ?? 10);
   const originalCriterion = problem.criterion ?? "";
   const scoringRules = problem.effective_criterion?.trim() || originalCriterion;
+  const alternativeGroups = new Map<string, string[]>();
+  for (const part of problem.alternative_rules ?? []) {
+    if (part.show_in_review === false) continue;
+    const text = part.display_text ?? part.text;
+    alternativeGroups.set(text, [...(alternativeGroups.get(text) ?? []), ...(part.label ? [part.label] : [])]);
+  }
   const legacyRubricNotes = (problem.preparation_issues ?? [])
     .filter(issue => issue.code === "math_rubric_advisory" && issue.status === "open"
       && issue.details?.reason !== "teacher_rule_interpretation")
@@ -623,7 +629,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           </label>
           {!scoreValid ? <p id={`${fieldKey}-score-error`} role="alert" className="text-xs text-danger">{scoringValidationMessage(draftSummary, false, locale)}</p> : null}
           <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold text-foreground">{tx(locale, "评分标准（与标答步骤对应）", "Rubric (Aligned with Reference Answer Steps)")}</span>
+            <span className="mb-1.5 block text-xs font-semibold text-foreground">{tx(locale, "评分标准", "Scoring rubric")}</span>
             <textarea aria-label={tx(locale, `第 ${problem.number || "—"} 题评分标准`, `Rubric for question ${problem.number || "—"}`)} value={criterionDraft} onChange={(event) => { setCriterionDraft(event.target.value); setError(null); }} rows={8} className="w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
           </label>
           <RubricPointStatus summary={draftSummary} locale={locale} />
@@ -646,15 +652,17 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
         <h4 className="font-semibold">{tx(locale, "评分标准待核对", "Rubric details to review")}</h4>
         {[...new Set(legacyRubricNotes)].map(note => <p key={note} className="mt-1 whitespace-pre-line">{note}</p>)}
       </aside>}
-      {Boolean(problem.alternative_rules?.length) && <div className="mt-4 space-y-2 border-t pt-3">
+      {Boolean(problem.alternative_rules?.some(part => part.show_in_review !== false)) && <div className="mt-4 space-y-2 border-t pt-3">
         <h4 className="text-sm font-semibold">{tx(locale, "其他解法评分标准", "Scoring alternative methods")}</h4>
-        {problem.alternative_rules?.map(part => <div key={part.id} className="text-sm leading-6">
+        {editing ? problem.alternative_rules?.filter(part => part.show_in_review !== false).map(part => <div key={part.id} className="text-sm leading-6">
           {part.label && <span className="mr-2 font-medium">{part.label}</span>}
-          {editing ? <textarea value={alternateDrafts[part.id] ?? part.text}
+          <textarea value={alternateDrafts[part.id] ?? part.display_text ?? part.text}
             aria-label={tx(locale, `其他解法评分标准 ${part.label ?? ""}`, `Alternative methods ${part.label ?? ""}`)}
             className="w-full rounded-md border bg-background p-2" maxLength={4000}
-            onChange={event => setAlternateDrafts({ ...alternateDrafts, [part.id]: event.target.value })} /> : part.text}
-        </div>)}
+            onChange={event => setAlternateDrafts({ ...alternateDrafts, [part.id]: event.target.value })} />
+        </div>) : [...alternativeGroups].map(([text, labels]) => <p key={text} className="text-sm leading-6">
+          {labels.length > 0 && <span className="mr-2 font-medium">{labels.join("、")}{labels.length > 1 ? tx(locale, " 各小问：", " — each part: ") : ""}</span>}{text}
+        </p>)}
       </div>}
     </section>
   );

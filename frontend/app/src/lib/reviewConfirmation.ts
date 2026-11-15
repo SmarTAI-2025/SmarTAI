@@ -14,6 +14,7 @@ function questionHasLowConfidence(issue: PreparationIssue, problem?: ProblemInfo
 }
 export function questionIssueSeverity(issue: PreparationIssue, problem?: ProblemInfo): ReviewAttention {
   if (questionHasMissingEvidence(issue)) return issue.field === "answer" ? "advisory" : "blocking";
+  if (issue.details?.reason === "conflicting_printed_formula") return issue.status === "open" ? "advisory" : "none";
   if (issue.status !== "open") return "none";
   if (["low_confidence", "recognition_partial", "recognition_needs_review"].includes(issue.code)) {
     return questionHasLowConfidence(issue, problem) ? "advisory" : "none";
@@ -32,6 +33,8 @@ export function questionIssueSeverity(issue: PreparationIssue, problem?: Problem
 
 function questionHasMissingEvidence(issue: PreparationIssue): boolean {
   const coverage = issue.details?.coverage as Record<string, unknown[]> | undefined;
+  const failed = Boolean(issue.details?.error_code) || ["failed_pages", "unprocessed_pages", "missing_targets"].some(key => Boolean(coverage?.[key]?.length));
+  if (issue.details?.reason === "conflicting_printed_formula") return issue.status !== "resolved" && failed;
   return ["recognition_partial", "recognition_needs_review"].includes(issue.code) && issue.status !== "resolved"
     && (issue.details?.incomplete === true || issue.severity === "blocking"
       || Boolean(issue.details?.error_code) || ["failed_pages", "unprocessed_pages", "missing_targets"].some(key => Boolean(coverage?.[key]?.length)));
@@ -50,6 +53,20 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
 }
 
 export function recognitionIssueLabel(issue: PreparationIssue, locale: string): string | null {
+  if (issue.details?.reason === "alternative_cap_review") {
+    const caps = issue.details.alternative_caps;
+    const values = Array.isArray(caps) ? caps.filter((cap): cap is { label: string; maximum: number; total: number } =>
+      cap && typeof cap === "object" && typeof cap.maximum === "number" && typeof cap.total === "number") : [];
+    const amounts = [...new Set(values.map(cap => locale === "zh-CN"
+      ? `最高 ${cap.maximum} 分（本问满分 ${cap.total} 分）` : `at most ${cap.maximum} of ${cap.total} points`))].join("；");
+    return locale === "zh-CN" ? `其他解法${amounts ? `设为${amounts}，` : "的得分上限偏低，"}未找到对应的教师限制，请确认。`
+      : `Alternative methods ${amounts || "have a reduced score cap"}; no corresponding teacher restriction was found. Please review.`;
+  }
+  const invalidFields = (issue.details?.rubric_review_draft as { invalid_fields?: string[] } | undefined)?.invalid_fields
+    ?? issue.details?.invalid_fields;
+  if (Array.isArray(invalidFields) && invalidFields.some(path => typeof path === "string" && /\.alternative(?:\.|$)/.test(path))) return locale === "zh-CN"
+    ? "评分标准缺少其他正确解法的扣分规则，请补齐。"
+    : "The rubric lacks deduction rules for alternative correct methods. Complete them.";
   if (issue.details?.review_display_reason === "missing_type") return locale === "zh-CN"
     ? "请选择题型。" : "Select the question type.";
   if (issue.details?.review_display_reason === "missing_number") return locale === "zh-CN"
@@ -62,6 +79,25 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
     : "Extracted scoring details are saved. Review the points and conditions, then save your corrections.";
   if (issue.details?.reason === "invalid_structured_rubric") return locale === "zh-CN"
     ? "请对照教师原文补全评分标准。" : "Complete the scoring rules using the original teacher rubric.";
+  if (issue.details?.review_display_reason === "missing_answer") return locale === "zh-CN"
+    ? "缺少标答（可选），可按需补充。" : "The reference answer is optional; add one if helpful.";
+  if (issue.code === "generation_failed") {
+    const labels: Record<string, [string, string]> = {
+      stem: ["题干缺失，请对照原件补齐。", "Question text is missing. Complete it against the source."],
+      answer: ["标答未生成，可重试或人工补充（可选）。", "The reference answer was not generated; retry or add it manually (optional)."],
+      rubric: ["评分标准未生成或不完整，请重试或补齐。", "Rubric not generated or incomplete. Retry or complete it."],
+      programming_tests: ["测试样例未生成，请核对或补充。", "Test cases were not generated. Review or add them."],
+    };
+    if (labels[issue.field]) {
+      const label = labels[issue.field][locale === "zh-CN" ? 0 : 1];
+      if (issue.details?.provider_error_code === "provider_upstream_unavailable") {
+        const status = issue.details?.provider_http_status;
+        const suffix = typeof status === "number" && status >= 500 && status <= 599 ? `（HTTP ${status}）` : "";
+        return locale === "zh-CN" ? `${label}模型服务暂时不可用${suffix}。` : `${label} The model service is temporarily unavailable${suffix}.`;
+      }
+      return label;
+    }
+  }
   if (issue.code === "math_rubric_advisory" && issue.details?.reason === "teacher_rule_interpretation" && typeof issue.details?.message === "string") return issue.details.message;
   if (issue.code === "math_rubric_advisory") return locale === "zh-CN"
     ? "本题评分标准有待核对的内容。" : "Some rubric details need review.";
@@ -69,8 +105,6 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
     ? "题干为空，请对照原件补齐。" : "Question text is empty. Complete it against the source.";
   if (issue.details?.review_display_reason === "missing_rubric") return locale === "zh-CN"
     ? "评分标准缺失或不完整，请补齐。" : "The rubric is missing or incomplete. Complete it.";
-  if (issue.details?.review_display_reason === "missing_answer") return locale === "zh-CN"
-    ? "标答缺失或不完整，建议补充或核对确认。" : "The reference answer is missing or incomplete; review suggested.";
   if (issue.details?.review_display_reason === "rubric_conflict") return locale === "zh-CN"
     ? "小问分值缺失、重复或合计与大题满分冲突，请修正。"
     : "Subpart points are missing, duplicated, or inconsistent with the question maximum. Correct them.";
@@ -87,7 +121,7 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
     : "Some source content is unmatched. Check whether this question is complete.";
   if (!["recognition_partial", "recognition_needs_review", "low_confidence"].includes(issue.code) && !questionHasLowConfidence(issue)) return null;
   const zh = locale === "zh-CN";
-  if (issue.details?.reason === "conflicting_printed_formula") return zh
+  if (issue.details?.reason === "conflicting_printed_formula" && !questionHasMissingEvidence(issue)) return zh
     ? "本题公式待核对。请对照原图检查底数、上下标和运算符。"
     : "Review this question’s formulas against the original image, including bases, subscripts, superscripts and operators.";
   const coverage = issue.details?.coverage as Record<string, unknown[]> | undefined;
@@ -148,6 +182,8 @@ export function questionReviewNextBlocked(problem: ProblemInfo): boolean {
 export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
   const confirmed = problem.review_status === "confirmed";
   const issues: PreparationIssue[] = (problem.preparation_issues ?? []).flatMap(issue => {
+    // The aggregate handoff marker repeats field-specific checks below.
+    if (issue.code === "manual_completion_required" && Array.isArray(issue.details?.required_fields)) return [];
     const severity = questionIssueSeverity(issue, problem);
     if (severity === "none" || (confirmed && severity === "advisory" && issue.code !== "math_rubric_advisory")) return [];
     const confidence = questionConfidence(issue, problem);
@@ -180,19 +216,23 @@ export function questionReviewNotes(problem: ProblemInfo, locale: string, fallba
   ] as const;
   const names = missing.filter(([absent]) => absent).map(([, zh, en]) => locale === "zh-CN" ? zh : en);
   const answerMissing = !problem.reference_answer?.trim();
-  const notes = issues.filter(issue => !(splitMissingFields && ["parse_anomaly", "generation_failed"].includes(issue.code)
-    && ((issue.field === "rubric" && !problem.criterion?.trim()) || (issue.field === "stem" && !problem.stem?.trim()))))
+  const generatedFields = new Set(issues.filter(issue => issue.code === "generation_failed" && !issue.details?.review_display_reason).map(issue => issue.field));
+  const missingNames = names.filter(name => !generatedFields.has(({ "题干": "stem", "question text": "stem", "评分标准": "rubric", "rubric": "rubric" } as Record<string, PreparationIssue["field"]>)[name]));
+  const notes = issues.filter(issue => !(issue.code === "parse_anomaly"
+    && !issue.details?.rubric_review_draft && !issue.details?.invalid_fields
+    && ((issue.field === "rubric" && !problem.criterion?.trim()) || (issue.field === "stem" && !problem.stem?.trim())
+      || (issue.field === "answer" && answerMissing))))
     .filter(issue => !((names.length || answerMissing) && (issue.code === "manual_completion_required"
     || ["missing_number", "missing_type", "empty_stem", "missing_rubric", "missing_answer"].includes(String(issue.details?.review_display_reason)))))
     .map(issue => ({ label: recognitionIssueLabel(issue, locale) ?? fallbackLabel(issue.code),
       severity: issue.severity === "blocking" ? "blocking" as const : "advisory" as const }));
-  for (const fields of splitMissingFields ? names.map(name => [name]) : names.length ? [names] : []) {
+  for (const fields of splitMissingFields ? missingNames.map(name => [name]) : missingNames.length ? [missingNames] : []) {
     notes.push({ label: locale === "zh-CN"
       ? `请补齐缺失的${fields.join("、")}。`
       : `Complete the missing ${fields.join(", ")}.`,
       severity: "blocking" });
   }
-  if (answerMissing && problem.review_status !== "confirmed") {
+  if (answerMissing && problem.review_status !== "confirmed" && !generatedFields.has("answer")) {
     notes.push({ label: locale === "zh-CN"
       ? "缺少标答（可选），可按需补充。"
       : "The reference answer is optional; add one if helpful.", severity: "advisory" });
@@ -304,8 +344,13 @@ export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale:
     && !flag.startsWith("recognition_failed_pages:") && !flag.startsWith("recognition_unprocessed_pages:")
     && !((metadataOnly || matchingOnly) && ["recognition_failed", "recognition_manual_pending"].includes(flag)));
   const required = new Set(["answer_assignment_conflict", "recognition_matching_review", "recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending", "recognition_paused", "recognition_incomplete"]);
+  const specificFailure = flags.some(flag => flag.startsWith("recognition_invalid_fields:")
+    || ["no_matching_answer", "parse_failed", "recognition_matching_review", "answer_assignment_conflict", "recognition_paused", "recognition_incomplete"].includes(flag));
+  const visibleFlags = flags.filter(flag => !(specificFailure && ["recognition_failed", "recognition_manual_pending"].includes(flag))
+    && !(flag === "recognition_manual_pending" && flags.includes("recognition_failed"))
+    && !(flag === "parse_failed" && flags.some(item => item.startsWith("recognition_invalid_fields:"))));
   return [
     ...(confidenceNeedsAttention(confidence) ? [{ label: locale === "zh-CN" ? `置信度 ${confidence} 较低，建议核对确认。` : `Low confidence (${confidence}); review suggested.`, severity: "advisory" as const }] : []),
-    ...[...new Set(flags)].map(flag => ({ label: formatSubmissionFlag(flag, locale), severity: required.has(flag) || flag.startsWith("recognition_invalid_fields:") ? "blocking" as const : "advisory" as const })),
+    ...[...new Set(visibleFlags)].map(flag => ({ label: formatSubmissionFlag(flag, locale), severity: required.has(flag) || flag.startsWith("recognition_invalid_fields:") ? "blocking" as const : "advisory" as const })),
   ];
 }

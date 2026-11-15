@@ -176,7 +176,8 @@ def test_teacher_words_and_full_scoring_projection_are_both_returned():
     record.criterion=row["criterion"]
     response=task_facade._serialize_problem(record,math_plan=draft.plan)
     assert response["criterion"]=="过程正确即可"
-    assert all(s in response["effective_criterion"] for s in ("建立方程","4分","求出结果","6分","保底","折算"))
+    assert all(s in response["effective_criterion"] for s in ("建立方程","4 分","求出结果","6 分"))
+    assert not any(s in response["effective_criterion"] for s in ("保底", "折算", "配分单位"))
     assert response["alternative_rules"][0]["text"]
 
 

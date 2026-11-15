@@ -19,7 +19,7 @@ export const TASK_STAGE_KEYS: Record<TaskStatus, MessageKey> = {
 };
 
 export const TASK_ACTION_KEYS: Record<TaskStatus, MessageKey> = {
-  problems_paused: "taskActionContinueRecognition",
+  problems_paused: "taskActionContinuePreparation",
   submissions_paused: "taskActionContinueRecognition",
   grading_paused: "taskActionContinueGrading",
   draft: "dashboardActionContinue",

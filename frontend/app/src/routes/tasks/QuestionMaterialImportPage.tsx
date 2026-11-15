@@ -596,7 +596,7 @@ function localizeImportError(error: unknown, locale: "zh-CN" | "en-US") {
     material_ocr_confirmation_required: ["该资料需要视觉识别，请勾选启用 OCR 或改用文本文件。", "Enable visual OCR for this material or use a text file."],
     material_parser_provider_required: ["请为资料解析选择文本模型。", "Choose a text model for material parsing."],
     recognition_route_changed: ["模型配置已变化，请重新准备资料。", "The model configuration changed. Prepare the material again."],
-    material_import_requires_problems_ready: ["请先完成题目识别与准备。", "Finish question recognition and preparation first."],
+    material_import_requires_problems_ready: ["请先完成题目准备。", "Finish question preparation first."],
     material_import_source_changed: ["课程资料已发生变化，请重新选择。", "The Course Library material changed. Select it again."],
     material_import_source_unavailable: ["资料来源已失效，请重新选择。", "The material source expired. Select it again."],
     task_workflow_changed: ["任务内容已发生变化，请刷新后重新导入。", "The task changed. Refresh and start the import again."],

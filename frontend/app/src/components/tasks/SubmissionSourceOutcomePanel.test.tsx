@@ -59,6 +59,16 @@ const sources: SubmissionSourceOutcome[] = [
   },
 ];
 
+it("shows both required field repairs and optional confidence checks for one answer", () => {
+  render(<MemoryRouter><SubmissionSourceOutcomePanel locale="zh-CN" sources={[{
+    ...sources[1], student_candidate: "样例学生", answer_diagnostics: [{ q_id: "q1", number: "1.10",
+      has_content: true, recognition_confidence: .4, flag: ["recognition_invalid_fields:content"] }],
+  }]} /></MemoryRouter>);
+  expect(screen.getByText("第 1.10 题")).toBeVisible();
+  expect(screen.getByText(/需处理：待核对：作答内容/)).toHaveClass("text-red-700");
+  expect(screen.getByText(/建议复核：置信度 0.4/)).toHaveClass("text-amber-700");
+});
+
 describe("SubmissionSourceOutcomePanel", () => {
   it.each(["zh-CN", "en-US"] as const)("describes save-only manual resolution accurately in expanded diagnostics (%s)", async (locale) => {
     // The backend can resolve a paused source after saving valid answers and

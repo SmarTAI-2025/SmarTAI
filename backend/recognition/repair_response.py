@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import re
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, ValidationError, model_validator
 
@@ -35,6 +35,8 @@ class RepairContextV1(EvidenceModel):
     visual_text: str = Field(strict=True, max_length=6000, repr=False)
     before_text: str = Field(strict=True, max_length=6000, repr=False)
     issue_codes: list[Code] = Field(default_factory=list, max_length=32)
+    formula_headings: list[Annotated[str, Field(max_length=120)]] = Field(default_factory=list, max_length=2, exclude_if=lambda value: not value)
+    formula_comparisons: list[Annotated[str, Field(max_length=6000)]] = Field(default_factory=list, max_length=2, exclude_if=lambda value: not value)
 
     @model_validator(mode="after")
     def preserve_source_context(self):
@@ -136,6 +138,10 @@ def _interpret(candidate: RecognitionCandidateV1, context: RepairContextV1) -> _
     baseline = max(len(context.native_text), len(context.visual_text))
     if baseline and len(response.text) > baseline * 2 + 256:
         return _rejected(context, "invalid", "repair_expansion_limit")
+    if context.formula_headings:
+        from backend.recognition.formula_panel import isolated_formula_update
+        if not isolated_formula_update(context.before_text, response.text, context.formula_headings):
+            return _rejected(context, "invalid", "repair_changed_unrelated_question")
     return _Parsed("ok", "replace", response.text, response.text, response.source_evidence,
                    ["repair_fidelity_unverified", "repair_requires_review"])
 

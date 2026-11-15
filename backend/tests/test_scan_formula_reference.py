@@ -198,6 +198,67 @@ def test_single_fenced_program_and_reference_to_the_wrong_algebra_are_distinct()
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome,corrected", [("replace", True), ("still_unknown", False), ("unrelated_edit", False)])
+async def test_formula_conflict_gets_one_image_recheck_without_losing_other_questions(outcome, corrected):
+    import io
+    import json
+    import pymupdf
+    from PIL import Image
+    from backend.tests.test_recognition_agent import Engine, request
+    from backend.agents.recognition_agent import RecognitionAgent
+    from backend.recognition.runtime import RecognitionCapacity
+
+    with pymupdf.open() as pdf:
+        page = pdf.new_page(width=400, height=640)
+        for box in [(25, 20, 350, 260), (25, 290, 350, 330)]:
+            buf = io.BytesIO()
+            Image.new("RGB", (600, 80), color="#333333").save(buf, format="PNG")
+            page.insert_image(box, stream=buf.getvalue(), keep_proportion=False)
+        data = pdf.tobytes()
+    whole = r"1.10 Formulas: $n^n,2^n,n/\log_2 2,n^2$" + "\n1.12 Statements."
+    panel = r"1.10 Formulas: $n^n,2^n,n/\log_n 2,n^2$"
+
+    class Reader(Engine):
+        def __init__(self):
+            super().__init__()
+            self.caps = self.caps.model_copy(update={"semantic_repair": True, "response_recheck": True})
+            self.rechecks = []
+
+        async def recognize(self, unit):
+            self.reads.append(unit)
+            return self.candidate(whole if unit.region == NormalizedRegionV1() else panel)
+
+        async def repair(self, unit):
+            self.rechecks.append(unit)
+            assert unit.repair_context.formula_headings == ["1.10"]
+            assert unit.repair_context.formula_comparisons == [panel]
+            replacement = panel + "\n1.12 Statements."
+            if outcome == "unrelated_edit":
+                replacement = panel + "\n1.12 Different question."
+            return self.candidate(json.dumps({"decision": "still_unknown" if outcome == "still_unknown" else "replace",
+                "text": "" if outcome == "still_unknown" else replacement,
+                "source_evidence": "The printed logarithm has subscript n."}))
+
+    reader = Reader()
+    result = await RecognitionAgent(reader, capacity=RecognitionCapacity()).recognize(
+        request(data, scope="pages", pages=[1], policy=RecognitionPolicyV1(version="printed-formula-panels-v2")),
+        data, authorized_owner_id="owner", prompt_version="faithful-reader-v2")
+    assert len(reader.reads) == 2 and len(reader.rechecks) == 1
+    assert result.safe_error_code is None
+    assert result.document.coverage.processed_pages == [1]
+    assert not result.document.coverage.failed_pages
+    assert result.document.final_markdown == (panel + "\n1.12 Statements." if corrected else whole)
+    assert result.document.pages[0].formula_conflicts == ["1.10"]
+
+
+def test_formula_recheck_cannot_change_neighbouring_code_indentation():
+    from backend.recognition.formula_panel import isolated_formula_update
+    before = "1.10 Formulas: $n^n$\n1.12 Code:\nif x:\n    y()"
+    after = "1.10 Formulas: $n^2$\n1.12 Code:\nif x:\ny()"
+    assert not isolated_formula_update(before, after, ["1.10"])
+
+
 def test_formula_summary_binds_to_the_disputed_number_and_is_idempotent():
     from backend.services.question_sources import attach_recognition_review
 
@@ -206,13 +267,13 @@ def test_formula_summary_binds_to_the_disputed_number_and_is_idempotent():
     attach_recognition_review(rows, [source])
     attach_recognition_review(rows, [source])
     assert [i["code"] for i in rows["qa"]["preparation_issues"]] == [
-        "recognition_partial"
+        "recognition_needs_review"
     ]
     assert not rows["qb"].get("preparation_issues")
 
 
 @pytest.mark.asyncio
-async def test_preparation_saves_neighbour_and_holds_only_disputed_question(
+async def test_formula_disagreement_warns_without_skipping_question_materials(
     monkeypatch,
 ):
     from unittest.mock import AsyncMock
@@ -261,16 +322,20 @@ async def test_preparation_saves_neighbour_and_holds_only_disputed_question(
         ]
 
     monkeypatch.setattr(inc, "generate_missing_question_materials", complete)
-    with pytest.raises(ValidationError):
-        await pipeline.run()
+    await pipeline.run()
     _, rows = persisted(owner, op)
     by_number = {r["number"]: r for r in rows.values()}
-    assert attempted == ["1.12"]
-    assert by_number["1.12"]["criterion"] and not by_number["1.10"]["criterion"]
+    assert sorted(attempted) == ["1.10", "1.12"]
+    assert by_number["1.12"]["criterion"] and by_number["1.10"]["criterion"]
     assert any(
         i["details"].get("reason") == "conflicting_printed_formula"
+        and i["severity"] == "warning" and i["code"] == "recognition_needs_review"
         for i in by_number["1.10"]["preparation_issues"]
     )
+    progress = await pipeline.reporter.snapshot()
+    assert progress.total_questions == 2
+    assert len(progress.completed_question_ids) == 2
+    assert not progress.failed_question_ids
 
 
 @pytest.mark.parametrize(

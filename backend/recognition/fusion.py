@@ -140,6 +140,9 @@ def _build_document(raw: RecognitionWorkflowReadV1, prompt_version: str):
                     label = conflicting_heading(unit.candidate.text, panel.candidate.text)
                     if label and label not in conflicts:
                         conflicts.append(label)
+        if conflicts and spans and raw.execution_policy.version == "printed-formula-panels-v2":
+            spans[0] = spans[0].model_copy(update={"issues": list(dict.fromkeys([
+                *spans[0].issues, "conflicting_printed_formula"]))[:32]})
         page = RecognitionPageV1(
             formula_conflicts=conflicts,
             page_index=number - 1, page_number=number, **geometry, native_text=detail.native_text,

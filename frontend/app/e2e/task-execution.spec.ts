@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 const stages = {
-  problems: { active: "extracting_problems", paused: "problems_paused", operation: "question_preparation", label: "题目识别暂停", action: "继续识别" },
+  problems: { active: "extracting_problems", paused: "problems_paused", operation: "question_preparation", label: "题目准备暂停", action: "继续准备题目" },
   submissions: { active: "parsing_submissions", paused: "submissions_paused", operation: "submission_recognition", label: "作答识别暂停", action: "继续识别" },
   grading: { active: "grading", paused: "grading_paused", operation: "grading", label: "批改暂停", action: "继续批改" },
 } as const;

@@ -26,6 +26,10 @@ class WrittenRubricDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     part_rubric: PartRubric
+    # Optional view metadata is never part of the executable scoring plan.
+    # Parse it after accepting the rubric so malformed presentation cannot fail
+    # otherwise valid reference/rubric generation.
+    display_plan: object | None = Field(default=None, exclude_if=lambda v: v is None)
     expected_truth_by_part: dict[str, StrictBool] = Field(default_factory=dict, strict=True, exclude_if=lambda v: not v)
 
 
@@ -35,6 +39,10 @@ class _WrittenProposal(RootModel[dict]):
     @classmethod
     def model_json_schema(cls, *args, **kwargs):
         schema = WrittenRubricDefinition.model_json_schema(*args, **kwargs)
+        from backend.services.rubric_display import DisplayProposal
+        display_schema = DisplayProposal.model_json_schema()
+        schema["$defs"].update(display_schema.pop("$defs", {}))
+        schema["properties"]["display_plan"] = display_schema
         types = schema["$defs"]
         program_fields = {
             "PartRubric": ("id", "label", "stem", "teacher_rubric", "rubric_origin", "rubric_version", "base_unit_pts", "follow_through_strictness"),
@@ -51,6 +59,17 @@ class _WrittenProposal(RootModel[dict]):
         types["PointStep"]["properties"]["follow_through_pts"]["description"] = (
             "Optional award for correct downstream work on a previously wrong value. "
             "It must not exceed this step's total_pts. Omit when unspecified.")
+        # The persisted model accepts old/incomplete drafts. The generation
+        # contract must describe the stricter acceptance rule, otherwise a
+        # response can follow its schema yet fail the numerical binding step.
+        types["RubricPart"]["required"] = list(dict.fromkeys([
+            *types["RubricPart"].get("required", []), "alternative"]))
+        types["Alternative"]["required"] = list(dict.fromkeys([
+            *types["Alternative"].get("required", []), "deduct_per_error"]))
+        types["Alternative"]["properties"]["deduct_per_error"]["description"] = (
+            "Supply a positive deduction in absolute points for this part's variable "
+            "alternative policy. Null is allowed only for a fixed award whose minimum "
+            "equals its maximum. Preserve explicit teacher rules; do not copy example values.")
         return schema
 
 
@@ -148,6 +167,7 @@ class RubricDraft(BaseModel):
     semantic_policy_checks: tuple[TeacherPolicyCheck, ...] = Field(default=(), max_length=100, exclude_if=lambda v: not v)
     # Unbound means no strictness/partial-credit prose has been appended.
     plan: MathRubricPlan
+    display_plan: dict | None = Field(default=None, exclude_if=lambda v: v is None)
 
 
 def draft_fingerprint(problem) -> str:
@@ -310,8 +330,9 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
         if truth_key:
             body["expected_truth_by_part"] = truth_key
         plan = MathRubricPlan(**body, plan_id=_content_hash(body))
+        from backend.services.rubric_display import accept_display_plan
         return criterion, RubricDraft(alternative_policy_version=3, content_fingerprint=draft_fingerprint(completed),
-                                     plan=plan)
+                                     plan=plan, display_plan=accept_display_plan(definition.display_plan, rules))
     explicit = subpart_plan(context, candidate=definition)
     if explicit:
         return original, RubricDraft(content_fingerprint=draft_fingerprint(problem), plan=explicit)
@@ -568,6 +589,17 @@ def edit_alternatives(problem, presentation, updates, *, previous=None, allow_pe
     if updates is not None:
         if not updates or any(identities.get(key) not in budgets for key in updates):
             raise ValueError("Unknown or changed scoring part. Reload the question.")
+        # The editor shows the human-readable projection. Punctuation/spacing
+        # edits of that exact projection must not become new scoring policies.
+        from backend.services.question_structure import scoring_stem
+        from backend.services.rubric_display import alternative_display
+        from backend.services.part_rubric import alternative_text
+        if displayed and displayed.plan.part_rubric:
+            originals = {p.id: p for p in displayed.plan.part_rubric.parts}
+            updates = {key: text for key, text in updates.items() if key not in originals or
+                scoring_stem(text) not in {scoring_stem(rendered) for language in ("zh", "en")
+                    for rendered in (alternative_display(originals[key], language),
+                                     alternative_text(originals[key], zh=language == "zh"))}}
         for key, text in updates.items():
             label, stem = identities[key]
             # A regenerated plan may assign a new ID to the same source part.
@@ -865,6 +897,7 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
     from backend.domain.errors import ValidationError
     from pydantic import ValidationError as SchemaError
     from backend.services.part_rubric import PART_INSTRUCTION, TEACHER_RULE_INSTRUCTION, alternative_clauses, ordinary_criterion
+    from backend.services.rubric_display import DISPLAY_INSTRUCTION
     from backend.tools.structured_llm import llm_attempt_budget, structured_llm_call, StructuredOutputInvalidError
 
     context = _question_input(problem)
@@ -966,7 +999,8 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
             raise error from exc
 
     system = (
-            PART_INSTRUCTION + "\nReturn a single object with part_rubric containing total_pts and parts. "
+            PART_INSTRUCTION + DISPLAY_INSTRUCTION
+            + "\nReturn a single object with part_rubric containing total_pts and parts. "
             "Keep only the applicable fields. The server supplies the question identity and stem. "
             "Use teacher_ordinary_rules for the primary method; fill missing primary criteria from the "
             "question and adopted answer. Bind teacher_alternative_rules only to alternative. An error "

@@ -99,7 +99,7 @@ describe("submission review confirmation", () => {
     const user = userEvent.setup();
     renderPage("");
     expect(screen.queryByRole("button", { name: "全部确认" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "建议处理 (2)" }));
+    await user.click(screen.getByRole("tab", { name: "建议处理 (3)" }));
     await user.click(screen.getByRole("button", { name: "全部确认" }));
     await waitFor(() => expect(state.answer).toHaveBeenCalledTimes(2));
     expect(state.answer.mock.calls.map(([input]) => [input.studentId, input.expectedWorkflowRevision])).toEqual([["S001", 3], ["S003", 4]]);

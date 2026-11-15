@@ -176,7 +176,7 @@ export function getGradingGuard({
     return { disabled: true, reason: modelReadiness.disabledReason };
   }
   if (problemCount <= 0) {
-    return { disabled: true, reason: "请先上传并校对题目。" };
+    return { disabled: true, reason: "请先上传并复核题目资料。" };
   }
   if (studentCount <= 0) {
     return { disabled: true, reason: "请先上传并校对学生作答。" };
@@ -354,7 +354,7 @@ export function classifyRecoverableError(
   if (code === "question_source_incomplete") {
     return {
       title: tx(locale, "资料尚未完整读取", "Source reading is incomplete"),
-      description: tx(locale, "部分页面未能读取，题目生成已暂停。请检查资料后重试。", "Some pages could not be read, so question generation is paused. Check the source and try again."),
+      description: tx(locale, "部分题干或页面尚未完整读取，已完成的资料已保留。请查看具体问题，重试未完成项或人工补齐。", "Some question text or pages could not be fully read. Completed materials are saved. Review the details, then retry incomplete items or complete them manually."),
       actionLabel: tx(locale, "检查资料", "Check source"), actionKind: "reselect",
       actionHref: taskHref("/upload/problems"), tone: "warning", technicalDetails,
     };
@@ -362,7 +362,7 @@ export function classifyRecoverableError(
 
   if (code === "problem_extraction_failed") {
     return {
-      title: tx(locale, "题目识别未完成", "Question recognition did not complete"),
+      title: tx(locale, "题目准备未完成", "Question preparation did not complete"),
       description: tx(locale, "请检查原文件和识别描述后重试，也可以人工继续补充题目。", "Check the source file and recognition instructions, then retry, or continue manually to add questions."),
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry", tone: "danger", technicalDetails,

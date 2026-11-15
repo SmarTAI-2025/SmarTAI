@@ -130,7 +130,7 @@ describe("FrontierLiveDemoPage", () => {
       const stopped = vi.mocked(getTaskState).mock.calls.length;
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       expect(getTaskState).toHaveBeenCalledTimes(stopped);
-      if (terminal === "pause") expect(screen.getByRole("button", { name: "Continue recognition" })).toBeEnabled();
+      if (terminal === "pause") expect(screen.getByRole("button", { name: "Continue preparing questions" })).toBeEnabled();
       if (terminal === "error" || terminal === "session expired") expect(screen.getByRole("alert")).toBeVisible();
       for (const method of [createTask, retryQuestionPreparation, retrySubmissionRecognition, parseSubmissions, startGrading]) expect(method).not.toHaveBeenCalled();
     } finally { view?.unmount(); vi.useRealTimers(); }
@@ -285,7 +285,7 @@ describe("FrontierLiveDemoPage", () => {
       const view = renderLive("asg_demo123");
       const panel = (await screen.findByText(zh ? "处理进度" : "Progress")).parentElement!.parentElement!;
       expect(within(panel).getByText(expected)).toBeVisible();
-      expect(within(panel).getByText(status === "grading" ? (zh ? "批改中" : "Grading") : (zh ? "题目识别" : "Processing questions"))).toBeVisible();
+      expect(within(panel).getByText(status === "grading" ? (zh ? "批改中" : "Grading") : (zh ? "题目准备" : "Processing questions"))).toBeVisible();
       expect(panel).not.toHaveTextContent(/normalizing_ocr_output|activity_responding|private provider diagnostic/);
       view.unmount();
     }
@@ -398,7 +398,7 @@ describe("FrontierLiveDemoPage", () => {
     vi.mocked(getTask).mockResolvedValue(task);
     renderLive("asg_demo123");
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByRole("link", { name: submissions ? "Review submissions" : "Review questions" })).toHaveAttribute("href", `/tasks/asg_demo123/${submissions ? "submissions" : "questions"}`);
+    expect(within(alert).getByRole("link", { name: submissions ? "Review submissions" : "Review question materials" })).toHaveAttribute("href", `/tasks/asg_demo123/${submissions ? "submissions" : "questions"}`);
     expect(screen.queryByRole("button", { name: /Retry failed items|Continue to submissions|Start grading/ })).not.toBeInTheDocument();
     expect(preflightProblemSource).not.toHaveBeenCalled();
     expect(parseSubmissions).not.toHaveBeenCalled();
@@ -414,7 +414,7 @@ describe("FrontierLiveDemoPage", () => {
     vi.mocked(getTask).mockImplementation(async () => structuredClone(task));
     const user = userEvent.setup();
     renderLive("asg_demo123");
-    const reviewLabel = submissions ? "Review submissions" : "Review questions";
+    const reviewLabel = submissions ? "Review submissions" : "Review question materials";
     await user.click(await screen.findByRole("link", { name: reviewLabel }));
     await user.click(screen.getByRole("link", { name: "Return to Demo" }));
     // No persisted correction: returning must still lead to manual review.
@@ -452,7 +452,7 @@ describe("FrontierLiveDemoPage", () => {
     await user.click((await screen.findAllByRole("button", { name: stage === "problems_ready" ? "Continue to submissions" : "Start grading" }))[0]);
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByRole("button", { name: "Retry failed items" })).toBeVisible();
-    expect(within(alert).queryByRole("link", { name: /Review questions|Review submissions/ })).not.toBeInTheDocument();
+    expect(within(alert).queryByRole("link", { name: /Review question materials|Review submissions/ })).not.toBeInTheDocument();
     expect(parseSubmissions).not.toHaveBeenCalled();
     expect(startGrading).not.toHaveBeenCalled();
     expect(saveGradingSetup).not.toHaveBeenCalled();
@@ -495,7 +495,7 @@ describe("FrontierLiveDemoPage", () => {
     const user = userEvent.setup();
     renderLive("asg_demo123");
     await user.click((await screen.findAllByRole("button", { name: stage === "problems_ready" ? "Continue to submissions" : "Start grading" }))[0]);
-    expect(await screen.findByRole("link", { name: stage === "problems_ready" ? "Review questions" : "Review submissions" })).toBeVisible();
+    expect(await screen.findByRole("link", { name: stage === "problems_ready" ? "Review question materials" : "Review submissions" })).toBeVisible();
     expect(parseSubmissions).not.toHaveBeenCalled();
     expect(startGrading).not.toHaveBeenCalled();
     expect(saveGradingSetup).not.toHaveBeenCalled();
@@ -578,7 +578,7 @@ describe("FrontierLiveDemoPage", () => {
     const user = userEvent.setup();
     renderLive("asg_demo123");
     await user.click((await screen.findAllByRole("button", { name: stage === "problems_ready" ? "Continue to submissions" : "Start grading" }))[0]);
-    expect(await screen.findByRole("button", { name: "Continue recognition" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: stage === "problems_ready" ? "Continue preparing questions" : "Continue recognition" })).toBeEnabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(parseSubmissions).not.toHaveBeenCalled();
     expect(startGrading).not.toHaveBeenCalled();
@@ -596,7 +596,7 @@ describe("FrontierLiveDemoPage", () => {
     expect(await screen.findByRole("button", { name: "Running…" })).toBeDisabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     await act(async () => pending.resolve(taskState(stage === "problems_ready" ? "problems_paused" : "submissions_paused")));
-    expect(await screen.findByRole("button", { name: "Continue recognition" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: stage === "problems_ready" ? "Continue preparing questions" : "Continue recognition" })).toBeEnabled();
     expect(preflightProblemSource).not.toHaveBeenCalled();
     expect(parseSubmissions).not.toHaveBeenCalled();
     expect(startGrading).not.toHaveBeenCalled();
@@ -626,7 +626,7 @@ describe("FrontierLiveDemoPage", () => {
     const user = userEvent.setup();
     renderLive("asg_demo123");
     await user.click(await screen.findByRole("button", { name: "Continue to submissions" }));
-    expect(await screen.findByRole("link", { name: "Review questions" })).toHaveAttribute("href", "/tasks/asg_demo123/questions");
+    expect(await screen.findByRole("link", { name: "Review question materials" })).toHaveAttribute("href", "/tasks/asg_demo123/questions");
     expect(parseSubmissions).not.toHaveBeenCalled();
   });
 
@@ -767,7 +767,7 @@ describe("FrontierLiveDemoPage", () => {
     vi.mocked(retry).mockReturnValue(request.promise);
     const user = userEvent.setup();
     renderLive("asg_demo123");
-    await user.dblClick(await screen.findByRole("button", { name: paused ? "Continue recognition" : "Retry failed items" }));
+    await user.dblClick(await screen.findByRole("button", { name: paused ? submissions ? "Continue recognition" : "Continue preparing questions" : "Retry failed items" }));
     await waitFor(() => expect(retry).toHaveBeenCalledExactlyOnceWith({ taskId: "asg_demo123", jobId: "failed", recognitionProviderId: "demo:vision", expectedWorkflowRevision: 7, acknowledgePossibleDuplicateCall: true }));
     await act(async () => request.resolve({ status: "started", job_id: "retry" }));
     expect((await screen.findAllByRole("button", { name: submissions ? "Start grading" : "Continue to submissions" }))[0]).toBeEnabled();
@@ -1059,13 +1059,13 @@ describe("FrontierLiveDemoPage", () => {
     );
 
     expect(await screen.findByText(/Cannot reach the model service/)).toBeInTheDocument();
-    expect(screen.getByText("Prepare and review questions").closest("li")).toHaveClass("border-danger/30");
+    expect(screen.getByText("Prepare and review question materials").closest("li")).toHaveClass("border-danger/30");
     expect(screen.getByText("Create a dedicated demo task").closest("li")).toHaveClass("border-accent/25");
     expect(screen.getByText("Recognize mixed submissions").closest("li")).not.toHaveClass("border-danger/30");
   });
 
   it.each([
-    ["extract-job", "Prepare and review questions"],
+    ["extract-job", "Prepare and review question materials"],
     ["parse-job", "Recognize mixed submissions"],
     ["grading-job", "Run AI grading"],
   ])("restores the failed %s without moving the error to task creation", async (failedJobId, failedStep) => {

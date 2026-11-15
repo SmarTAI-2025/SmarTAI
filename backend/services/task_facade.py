@@ -542,6 +542,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
 
 
 def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, int], list[dict]]:
+    from backend.services.review_diagnostics import public_answer_diagnostics
     empty = {
         "uploaded": 0,
         "parsed": 0,
@@ -665,6 +666,9 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
             ),
             "recognition_reason_code": safe_reason,
             "page_diagnostics": source_states.get(result.source.stored_file_id, {}).get("page_diagnostics"),
+            "answer_diagnostics": public_answer_diagnostics(
+                source_states.get(result.source.stored_file_id, {}).get("answer_diagnostics", [])) if not manual_review else [],
+            "answer_diagnostic_count": source_states.get(result.source.stored_file_id, {}).get("answer_diagnostic_count", 0) if not manual_review else 0,
             "resolution_status": (
                 "identity_resolved"
                 if outcome
@@ -1017,16 +1021,26 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     rubric_summary = summarize_rubric_points(
         question.criterion or "", max_score, structure, rubric_draft=presentation.get("rubric_draft")
     ).model_dump()
-    from backend.services.part_rubric import alternative_text, render_parts
+    from backend.services.part_rubric import alternative_text
+    from backend.services.rubric_display import rubric_display, alternative_display, show_alternative, alternative_cap_issue
     from backend.services.math_grading_context import problem_from_question
     from backend.services.rubric_drafts import saved_draft
     if math_plan is None and presentation.get("rubric_draft"):
         verified = saved_draft(problem_from_question(question), allow_incomplete_alternative=True)
         math_plan = verified.plan if verified else None
     alternatives = []
+    display_plan = (presentation.get("rubric_draft") or {}).get("display_plan")
+    cap_issues = alternative_cap_issue(question.q_id, math_plan.part_rubric) if math_plan and math_plan.part_rubric else []
+    current_cap_ids = {issue["issue_id"] for issue in cap_issues}
+    existing_issue_ids = {issue.get("issue_id") for issue in presentation.get("preparation_issues", [])}
+    effective_issues = [issue for issue in _effective_question_issues(presentation, question.type)
+        if (issue.get("details") or {}).get("reason") != "alternative_cap_review"
+        or issue.get("issue_id") in current_cap_ids]
     if math_plan and math_plan.part_rubric:
         alternatives = [{"id": part.id, "label": part.label,
                          "text": alternative_text(part, zh=feedback_language == "zh"),
+                         "display_text": alternative_display(part, feedback_language),
+                         "show_in_review": show_alternative(math_plan.part_rubric, part, display_plan, math_plan.expected_truth_by_part),
                          **({"cap_from_required_method": True} if part.alternative.inferred_method_cap else {})}
                         for part in math_plan.part_rubric.parts]
     elif presentation.get("alternative_rules"):
@@ -1058,7 +1072,9 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         ),
         "question_structure": structure,
         "alternative_rules": alternatives,
-        **({"effective_criterion": render_parts(math_plan.part_rubric, feedback_language, full_policy=True),
+        **({"effective_criterion": rubric_display(math_plan.part_rubric, question.stem, feedback_language,
+                                                 display_plan=display_plan, expected_truth=math_plan.expected_truth_by_part,
+                                                 semantic_policy_checks=(presentation.get("rubric_draft") or {}).get("semantic_policy_checks", ())),
             "rubric_version": math_plan.part_rubric.rubric_version}
            if math_plan and math_plan.part_rubric else {}),
         "rubric_point_summary": rubric_summary,
@@ -1069,8 +1085,10 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         "material_provenance": presentation.get("material_provenance", {}),
         "ai_completion_provenance": presentation.get("ai_completion_provenance", {}),
         "preparation_issues": [
-            *_effective_question_issues(presentation, question.type),
+            *effective_issues,
             *_math_rubric_advisory(question, math_plan, feedback_language),
+            *(issue for issue in cap_issues if issue["issue_id"] not in existing_issue_ids
+              and presentation.get("review_status") != "confirmed"),
         ],
     }
 
@@ -3472,6 +3490,11 @@ async def run_task_submission_parsing(
                         answer["q_id"]: answer for answer in student.get("stu_ans", [])})
                 if source_complete:
                     completed_sources.add(result.source_id)
+                    if student is not None:
+                        from backend.services.review_diagnostics import public_answer_diagnostics
+                        diagnostics = public_answer_diagnostics(student.get("stu_ans", []), limit=None)
+                        await save_source_state(result.source_id, result.stored_file_id,
+                            answer_diagnostics=diagnostics[:20], answer_diagnostic_count=len(diagnostics))
                     await reporter.set_completed_units(len(completed_sources))
                 await reporter.update_stage_metrics(
                     submissions_recognized=len(progress_students),
@@ -4886,6 +4909,11 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
     # active-unit names and free-form messages never cross the grading boundary.
     safe_waits = public_waits(model_waits)
     models = public_models(models, terminal=run.status in {"completed", "partial_failed", "failed", "cancelled"})
+    review_rows, review_summary = [], {}
+    if run.status in {"partial_failed", "failed", "cancelled"}:
+        from backend.services.review_diagnostics import public_grading_diagnostics
+        review_rows, review_summary = public_grading_diagnostics(
+            grading_repository.list_results_for_run(run_id, include_missing=True))
     return {
         "contract_version": 1, "job_id": run_id,
         "phase": "paused" if paused else "done" if run.status in {"completed", "partial_failed"} else (
@@ -4903,6 +4931,7 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
         "activity_cursor": events[-1]["sequence"] if events else 0,
         "running_units": 0,
         "error_detail": None if paused else _grading_failure_code(run),
+        "grading_review": review_rows, "grading_review_summary": review_summary,
         "started_at": run.started_at or run.created_at,
         "workflow": "grading", "stage_sequence": [],
         "current_step": "completed" if run.status in {"completed", "partial_failed"} else "grading",
@@ -5083,10 +5112,12 @@ def _public_answer_flags(flags, *, content=None, review_status=None):
 
 
 def _effective_question_issues(presentation, question_type=None):
+    from backend.services.question_preparation_diagnostics import normalize_formula_issue
     from backend.services.math_grading_context import uses_math_grading
     non_math = bool(normalize_question_type(question_type)) and not uses_math_grading(question_type)
     issues = []
     for issue in presentation.get("preparation_issues", []):
+        issue = normalize_formula_issue(issue)
         if (non_math and issue.get("field") == "rubric"
                 and (issue.get("details") or {}).get("reason") == "invalid_structured_rubric"):
             # Keep the old diagnostic for provenance, but do not require a

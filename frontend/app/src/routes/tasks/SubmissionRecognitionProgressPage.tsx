@@ -149,7 +149,6 @@ export function SubmissionRecognitionProgressPage() {
     return (
       <ProgressPageFrame title={paused ? t("submissionProgressTitle") : locale === "en-US" ? "Submission recognition did not complete" : "作答识别未完成"} returnState={{ imageRecoveryModel: providerId }}>
         <>
-          <RecognitionActivity progress={progressQuery.progress} locale={locale} incomplete={!paused} />
           {!info.retryUnavailable && !requiresReupload ? <StageProviderSelect id="submission-retry-provider" label={locale === "zh-CN" ? "作答识别模型" : "Submission recognition model"}
             hint={paused ? (locale === "zh-CN" ? "继续识别时将使用此模型。" : "This model will be used when recognition continues.") : locale === "zh-CN" ? "只重试失败文件，成功结果保留；可先切换模型。返回修改配置后再开始识别，会重新处理全部文件。" : "Retry only failed files and keep successful results. You can switch models first. Starting again from settings processes all files."}
             experts={(expertsQuery.data ?? []).filter((item) => item.enabled)} value={providerId} locale={locale}
@@ -173,6 +172,7 @@ export function SubmissionRecognitionProgressPage() {
             taskId={taskId}
             className="mt-4"
           />}
+          <RecognitionActivity progress={progressQuery.progress} locale={locale} incomplete={!paused} />
         </>
       </ProgressPageFrame>
     );

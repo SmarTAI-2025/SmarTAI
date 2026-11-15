@@ -198,9 +198,9 @@ for (const stage of ["problems", "submissions", "grading"] as const) {
     await page.goto(`/tasks/navigation-task/${paths[stage]}`);
     if (stage !== "grading") {
       await page.locator('input[type="file"]').first().setInputFiles({ name: "synthetic.txt", mimeType: "text/plain", buffer: Buffer.from("1. What is 6 × 7?") });
-      await expect(page.getByLabel(stage === "problems" ? "题目识别模型" : "作答识别模型", { exact: true })).toHaveValue("test-provider");
+      await expect(page.getByLabel(stage === "problems" ? "题目准备模型" : "作答识别模型", { exact: true })).toHaveValue("test-provider");
     }
-    await page.getByRole("button", { name: stage === "problems" ? "直接识别题目资料" : stage === "submissions" ? "开始识别作答" : "立即开始批改", exact: true }).click();
+    await page.getByRole("button", { name: stage === "problems" ? "直接开始准备题目" : stage === "submissions" ? "开始识别作答" : "立即开始批改", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/${stage}/progress$`));
     await expect(page.locator("main h1")).toBeVisible();
     await expect(page.getByRole("alertdialog")).toHaveCount(0);

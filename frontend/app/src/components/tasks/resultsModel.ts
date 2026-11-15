@@ -408,7 +408,7 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     math_alternative_method: "该生采用了与标答不同的解题思路。",
     math_model_review: "模型建议人工复核。",
     score_spread_high: "评分差异较大",
-    parse_failed: "解析失败",
+    parse_failed: "模型返回的评分格式无法读取",
     degraded_to_single: "部分专家完成",
     transient_llm: "模型网络或超时错误",
     llm_failed: "模型未完成批改",

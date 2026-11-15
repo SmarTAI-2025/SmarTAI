@@ -112,6 +112,10 @@ def public_progress(progress, *, terminal=False):
     if isinstance(metrics, dict):
         result["stage_metrics"] = {k: int(v) for k, v in metrics.items() if k in METRICS and number(v)}
     counts = mapping(progress.get("preparation_counts"))
+    from backend.services.question_preparation_diagnostics import public_preparation_review
+    result["preparation_review"] = public_preparation_review(progress.get("preparation_review"))
+    review_summary = mapping(progress.get("preparation_review_summary"))
+    result["preparation_review_summary"] = {key: int(review_summary[key]) for key in ("questions", "blocking", "advisory") if number(review_summary.get(key))}
     count_keys = ("questions", "stems", "reference_answers", "rubrics")
     if all(number(counts.get(key)) for key in count_keys):
         result["preparation_counts"] = {key: int(counts[key]) for key in count_keys}
