@@ -115,3 +115,15 @@ def test_shared_config_edit_and_revert_never_revives_previous_proof(client, chan
     reverted = shared_image_evidence("teacher", config)
     assert reverted.status == "unverified" and reverted.updated_at != original.updated_at
     assert not set_shared_image_evidence("teacher", original, status="passed", checked_at=time.time(), reason="old")
+
+
+@pytest.mark.parametrize("status", ["passed", "unsupported"])
+def test_shared_listing_uses_the_real_adapters_owner_scoped_image_evidence(shared_registry, monkeypatch, status):
+    from backend.llm.providers import build_provider
+    monkeypatch.setattr("backend.llm.registry.build_provider", build_provider)
+    config = shared_registry.pick_default().config
+    snapshot = shared_image_evidence("teacher", config, create=True)
+    assert set_shared_image_evidence("teacher", snapshot, status=status, checked_at=time.time(), reason="test")
+    registry = _build_scoped_registry(User(id="teacher", username="teacher"))
+    assert registry.pick_default().config.image_capability_status == status
+    assert registry.list_configs()[0]["image_capability_status"] == status

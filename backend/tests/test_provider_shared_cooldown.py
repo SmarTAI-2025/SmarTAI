@@ -252,3 +252,47 @@ async def test_run_stop_keeps_the_response_that_just_completed(monkeypatch, resp
             assert response.content == "keep original result"
             assert current_execution().blocked
         await run_controlled("retain-completed", lambda: False, work())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vision", [False, True])
+async def test_early_retry_wakeup_still_queues_until_cooldown_expires(monkeypatch, vision):
+    from backend.llm.providers import VisionImage
+    from backend.tools import structured_llm as llm
+
+    clock = FakeClock()
+    scheduler = ModelScheduler(clock=clock, host_capacity=FakeHost(), memory_reader=lambda: None)
+    monkeypatch.setattr(providers, "get_scheduler", lambda: scheduler)
+    sends = []
+    async def invoke(_):
+        sends.append(clock())
+        if len(sends) == 1:
+            raise ProviderRequestError("provider_rate_limited", status_code=429)
+        return SimpleNamespace(content="ok")
+
+    async def wake_immediately(_):
+        return
+    retry = llm._invoke_with_rate_retry if vision else llm._ainvoke_with_retry
+    monkeypatch.setattr(retry.retry, "sleep", wake_immediately)
+    requeued = asyncio.Event()
+    acquire = scheduler.acquire
+    async def observe(**kwargs):
+        if sends:
+            requeued.set()
+        return await acquire(**kwargs)
+    monkeypatch.setattr(scheduler, "acquire", observe)
+    async with provider_for("openai", invoke, monkeypatch) as provider:
+        work = (llm.ainvoke_vision_with_rate_retry(provider, "read", [VisionImage(b"image", "image/png")])
+                if vision else llm.ainvoke_with_retry(provider, MESSAGES))
+        task = asyncio.create_task(work)
+        try:
+            await asyncio.wait_for(requeued.wait(), 2)
+            clock.advance(64, scheduler)
+            await turns()
+            assert sends == [100] and not task.done()
+            clock.advance(1, scheduler)
+            assert (await asyncio.wait_for(task, 2)).content == "ok"
+            assert sends == [100, 165]
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)

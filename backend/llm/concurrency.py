@@ -22,6 +22,8 @@ from itertools import count
 from pathlib import Path
 from typing import Any
 
+from backend.llm.adaptive_admission import AdaptiveAdmission, valid_profile
+
 HARD_LIMIT = 50
 INITIAL_SECONDS = 120.0
 MEMORY_PER_CALL = 32 * 1024 * 1024
@@ -167,7 +169,7 @@ class _Budget:
     rate_limited_until: float | None = None
     last_reduction: float = -math.inf
     recovery_after: float = 0.0
-    adaptive: dict = field(default_factory=dict)
+    adaptive: dict[str, AdaptiveAdmission] = field(default_factory=dict)
 
     @property
     def rpm(self) -> int:
@@ -248,7 +250,7 @@ class ModelScheduler:
         self._thread_limiter = None
         self._adaptive_keys: dict[str, str] = {}
         self._adaptive_revisions: dict[str, float] = {}
-        self._adaptive_sources: dict[str, tuple[str, str]] = {}
+        self._adaptive_sources: dict[str, tuple[str | None, str]] = {}
         self._adaptive_refresh_after = 0.0
         self._adaptive_refresh_lock = asyncio.Lock()
         self._adaptive_refresh_task: asyncio.Task | None = None
@@ -273,9 +275,23 @@ class ModelScheduler:
     def limit(self, key: str, rpm: int) -> int:
         return self.budget(key, rpm).limit
 
+    async def bind_provider_admission(self, key: str, rpm: int, identity: str, profile: dict | None,
+                                      revision: float, *, source: tuple[str | None, str] | None) -> None:
+        if source is not None and source[0] is None and identity not in self._adaptive_keys:
+            # Load once per scheduling loop, before even the first send after a
+            # restart. Concurrent owners wait for the same initial read.
+            async with self._adaptive_refresh_lock:
+                if identity in self._adaptive_keys:
+                    return
+                from backend.db.provider_repository import load_adaptive_states
+                states = await asyncio.to_thread(load_adaptive_states, {identity: source})
+                profile = states[identity]["profile"]
+                self.bind_adaptive(key, rpm, identity, profile, revision, source=source)
+        else:
+            self.bind_adaptive(key, rpm, identity, profile, revision, source=source)
+
     def bind_adaptive(self, key: str, rpm: int, identity: str, profile: dict | None,
-                      revision: float, *, source: tuple[str, str] | None = None) -> None:
-        from backend.llm.adaptive_admission import AdaptiveAdmission, valid_profile
+                      revision: float, *, source: tuple[str | None, str] | None = None) -> None:
         if revision < self._adaptive_revisions.get(identity, -math.inf):
             return  # A running task may still hold an edited/deleted snapshot.
         previous_key = self._adaptive_keys.get(identity)
@@ -318,7 +334,6 @@ class ModelScheduler:
             if not observed:
                 return
             from backend.db.provider_repository import load_adaptive_states
-            from backend.llm.adaptive_admission import AdaptiveAdmission, valid_profile
             try:
                 async with asyncio.timeout(10):
                     states = await asyncio.to_thread(load_adaptive_states, {
@@ -347,29 +362,28 @@ class ModelScheduler:
                             saved, revision, control.rpm, self.clock())
                     self.wake.set()
 
-    def record_adaptive_start(self, key: str, started_at: float) -> None:
-        for control in self.budgets[key].adaptive.values():
+    def start_adaptive_sample(self, key: str, identity: str | None, revision: float | None,
+                              started_at: float) -> AdaptiveAdmission | None:
+        # The quota gate is shared. A sample belongs to the profile that sent it.
+        control = self.budgets[key].adaptive.get(identity)
+        if control is not None and control.revision == revision:
             control.started(started_at)
-
-    def record_adaptive_failure(self, key: str, started_at: float) -> None:
-        for control in self.budgets[key].adaptive.values():
-            control.finished(started_at, success=False)
-
-    def adjustment_count(self, key: str) -> int:
-        return sum(c.adjustments for c in self.budgets[key].adaptive.values())
-
-    def record_adaptive_success(self, key: str, identity: str, revision: float, started_at: float,
-                                *, run: str = "unscoped", busy: bool = False) -> dict | None:
-        budget = self.budgets[key]
-        for control in budget.adaptive.values():
-            control.succeeded(now=self.clock(), started_at=started_at, run=run, busy=busy)
-        # next_start derives from the current controls, including removals.
-        control = budget.adaptive.get(identity)
-        if (control is not None and control.revision == revision and control.pending is not None
-                and self.clock() >= control.save_after):
-            control.save_after = self.clock() + 30
-            return dict(control.pending)
+            return control
         return None
+
+    def record_adaptive_success(self, key: str, identity: str | None, control: AdaptiveAdmission | None,
+                                started_at: float,
+                                *, run: str = "unscoped", busy: bool = False) -> tuple[dict | None, bool]:
+        if control is None or self.budgets[key].adaptive.get(identity) is not control:
+            return None, False  # A replaced profile cannot inherit an in-flight sample.
+        before = control.adjustments
+        now = self.clock()
+        control.succeeded(now=now, started_at=started_at, run=run, busy=busy)
+        adjusted = control.adjustments != before
+        if control.pending is not None and now >= control.save_after:
+            control.save_after = now + 30
+            return dict(control.pending), adjusted
+        return None, adjusted
 
     def adaptive_saved(self, key: str, identity: str, profile: dict) -> None:
         control = self.budgets[key].adaptive.get(identity)
@@ -413,7 +427,7 @@ class ModelScheduler:
 
     async def record_rate_limit(self, key: str, rpm: int, seconds: float, *,
                                run: str = "unscoped", started_at: float | None = None,
-                               active: int = 1, extend: bool = False) -> float:
+                               active: int = 1, extend: bool = False, learner: AdaptiveAdmission | None = None) -> float:
         """Pause all new calls sharing this quota, without cancelling responses.
 
         A generic 429 does not identify RPM, TPM or a concurrency ceiling.
@@ -438,8 +452,8 @@ class ModelScheduler:
             until = self.clock() + remaining if remaining > 0 else min(until, self.clock())
         budget.rate_limited_until = until
         budget.blocked_until = max(previous_block, until)
-        for control in budget.adaptive.values():
-            control.limited(run, now=self.clock(), started_at=started_at, until=until, active=active)
+        if learner is not None:
+            learner.limited(run, now=self.clock(), started_at=started_at, until=until, active=active)
         return until
 
     def cooldown_remaining(self, key: str) -> float | None:

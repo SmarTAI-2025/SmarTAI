@@ -5,8 +5,9 @@ import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 
-from backend.db.models import ProviderConfigRecord, ProviderPreferenceRecord
+from backend.db.models import ProviderConfigRecord, ProviderPreferenceRecord, SharedProviderAdmissionRecord
 from backend.db.session import session_scope
 from backend.llm.endpoint_policy import (
     normalize_provider_endpoint,
@@ -439,16 +440,51 @@ def record_adaptive_limits(owner_id: str, provider_id: str, profile: dict, *,
         return result.rowcount == 1
 
 
-def load_adaptive_states(sources: dict[str, tuple[str, str]]) -> dict[str, dict]:
-    """Read only owner-scoped lifecycle/learning metadata, never credentials."""
+def record_shared_adaptive_limits(fingerprint: str, profile: dict) -> bool:
+    """Insert the first estimate or advance the stored generation exactly once."""
+    from backend.llm.adaptive_admission import valid_profile
+    profile = valid_profile(profile)
+    if profile is None or profile["config_version"] != 0 or profile["generation"] < 1:
+        return False
+    with session_scope() as session:
+        if profile["generation"] == 1:
+            session.add(SharedProviderAdmissionRecord(fingerprint=fingerprint, adaptive_limits=profile))
+            try:
+                session.flush()
+            except IntegrityError:
+                session.rollback()
+                if session.get(SharedProviderAdmissionRecord, fingerprint) is None:
+                    raise
+                return False
+            return True
+        result = session.execute(update(SharedProviderAdmissionRecord).where(
+            SharedProviderAdmissionRecord.fingerprint == fingerprint,
+            SharedProviderAdmissionRecord.adaptive_limits["generation"].as_integer() == profile["generation"] - 1,
+        ).values(adaptive_limits=profile))
+        return result.rowcount == 1
+
+
+def load_adaptive_states(sources: dict[str, tuple[str | None, str]]) -> dict[str, dict]:
+    """Batch-read admission metadata. A None owner denotes a platform quota group."""
     if not sources:
         return {}
+    shared = {identity: key for identity, (owner, key) in sources.items() if owner is None}
+    owned = {identity: source for identity, source in sources.items() if source[0] is not None}
+    states = {}
     with session_scope() as session:
-        rows = session.execute(select(
-            ProviderConfigRecord.id, ProviderConfigRecord.owner_id,
-            ProviderConfigRecord.updated_at, ProviderConfigRecord.enabled,
-            ProviderConfigRecord.adaptive_limits,
-        ).where(ProviderConfigRecord.id.in_({provider_id for _, provider_id in sources.values()}))).all()
-    records = {(row.owner_id, row.id): row for row in rows}
-    return {identity: {"revision": row.updated_at, "enabled": row.enabled, "profile": row.adaptive_limits}
-            for identity, source in sources.items() if (row := records.get(source)) is not None}
+        if shared:
+            profiles = dict(session.execute(select(
+                SharedProviderAdmissionRecord.fingerprint, SharedProviderAdmissionRecord.adaptive_limits,
+            ).where(SharedProviderAdmissionRecord.fingerprint.in_(set(shared.values())))).all())
+            # An absent platform row is a cold start, not a deleted BYOK.
+            states.update({identity: {"revision": 0.0, "enabled": True, "profile": profiles.get(key)}
+                           for identity, key in shared.items()})
+        if owned:
+            rows = session.execute(select(
+                ProviderConfigRecord.id, ProviderConfigRecord.owner_id,
+                ProviderConfigRecord.updated_at, ProviderConfigRecord.enabled, ProviderConfigRecord.adaptive_limits,
+            ).where(ProviderConfigRecord.id.in_({key for _, key in owned.values()}))).all()
+            records = {(row.owner_id, row.id): row for row in rows}
+            states.update({identity: {"revision": row.updated_at, "enabled": row.enabled, "profile": row.adaptive_limits}
+                           for identity, source in owned.items() if (row := records.get(source)) is not None})
+    return states

@@ -1538,3 +1538,8 @@ async def test_postgres_cleanup_rechecks_saved_inputs(pg_database, tmp_path, mon
         test_queued_cleanup_rechecks_missing_structured_input_before_delete,
     )
     await test_queued_cleanup_rechecks_missing_structured_input_before_delete(tmp_path, monkeypatch)
+
+
+def test_postgres_shared_admission_profile_races(pg_database):
+    from backend.tests.test_shared_admission import test_platform_profile_has_one_winner_for_insert_and_update
+    test_platform_profile_has_one_winner_for_insert_and_update()

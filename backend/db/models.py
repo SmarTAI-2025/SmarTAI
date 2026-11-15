@@ -307,6 +307,12 @@ class ProviderConfigRecord(Base):
     )
 
 
+class SharedProviderAdmissionRecord(Base):
+    __tablename__ = "shared_provider_admission"
+    fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
+    adaptive_limits: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+
 class SharedProviderImageRecord(Base):
     """Per-user evidence only. Never stores a shared API key or endpoint override."""
     __tablename__ = "shared_provider_image_evidence"
