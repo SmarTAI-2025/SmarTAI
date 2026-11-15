@@ -75,6 +75,15 @@ export function calculateProgressPercent(
   if (totalUnits <= 0) {
     return 0;
   }
+  if ((status === "grading" || status === "grading_paused" || progress.workflow === "grading") && progress.model_progress?.length) {
+    // Count real completed steps: each model/sample assessment plus each
+    // finalized response. This is work progress, not a prediction of time.
+    const initialTotal = progress.model_progress.reduce((sum, model) => sum + model.total, 0);
+    const initialDone = progress.model_progress.reduce((sum, model) => sum + Math.min(model.total, model.succeeded + model.failed), 0);
+    if (initialTotal > 0) return Math.min(99, Math.max(0, Math.round(
+      ((initialDone + Math.min(totalUnits, progress.completed_units)) / (initialTotal + totalUnits)) * 100,
+    )));
+  }
   return Math.min(100, Math.round((progress.completed_units / totalUnits) * 100));
 }
 

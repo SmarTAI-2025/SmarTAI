@@ -142,7 +142,8 @@ Schema and data semantics:
   teacher-confirmed grades are not pending. Do not pick an arbitrary grades.review_status from a GROUP BY student.
   low_confidence_count counts not-yet-teacher-confirmed low-confidence grades (any valid expert
   confidence <0.60; aggregate confidence only when no valid expert details exist), not a test of
-  average confidence. Confidence is advisory. Required review is for missing or invalid essential
+  average confidence. Unknown grading confidence is separately advisory and belongs in the
+  review queue, but is not a numeric low-confidence value. Required review is for missing or invalid essential
   content, including grading without a usable score; partial experts with a usable score are advisory.
   Use the stored count unless the user specifies another threshold.
   Comparing counts across ALL questions/students includes zero-count groups. Do not add

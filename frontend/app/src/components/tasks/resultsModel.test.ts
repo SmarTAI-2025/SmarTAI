@@ -58,7 +58,7 @@ describe("review score presentation", () => {
     ] }] };
     const model = buildResultsModel(undefined, result as Parameters<typeof buildResultsModel>[1]);
     expect(model.students[0].avgConfidence).toBe(0.6);
-    expect(model.reviewCount).toBe(0);
+    expect(model.reviewCount).toBe(1);
     expect(formatConfidence(null)).toBe("--");
     expect(formatConfidence(60)).toBe("--");
   });

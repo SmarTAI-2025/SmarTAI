@@ -36,7 +36,7 @@ import {
   type QuestionSummary,
   type StudentSummary,
 } from "@/components/tasks/resultsModel";
-import { collectResultReviewItems, correctionReviewNotes } from "@/components/tasks/resultsReviewModel";
+import { collectResultReviewItems, correctionReviewNotes, pausedGradingMessage } from "@/components/tasks/resultsReviewModel";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
@@ -547,7 +547,7 @@ function ReviewDetailForm() {
           />
           {savingReviews ? <p role="status" className="mt-2 rounded-lg bg-primary/5 px-3 py-2 text-xs text-primary">{savingNavigationMessage}</p> : null}
 
-          {student.corrections.some(item => effectiveCorrectionScore(item) === null) ? <section className="mt-4 rounded-lg border border-red-200 bg-red-50/30 p-4"><RetryFailedGrading taskId={taskId} revision={taskQuery.data?.workflow_revision ?? 0} locale={locale} paused={student.corrections.some(item => item.initial_review_reasons?.includes("grading_paused"))} /></section> : null}
+          {student.corrections.some(item => effectiveCorrectionScore(item) === null || pausedGradingMessage(item, locale)) ? <section className="mt-4 rounded-lg border bg-card p-4"><RetryFailedGrading taskId={taskId} revision={taskQuery.data?.workflow_revision ?? 0} locale={locale} paused={student.corrections.some(item => Boolean(pausedGradingMessage(item, locale)))} /></section> : null}
 
 
           <ResultQuestionQuery className="mt-3" locale={locale} taskId={taskId} filter={questionFilter}
@@ -671,6 +671,7 @@ function ReviewQuestionCard({ locale, student, question, correction, primaryProv
 }) {
   const displayScore = correction ? aiCorrectionScore(correction) : null;
   const validExperts = correction ? validExpertResults(correction) : [];
+  const pausedMessage = correction ? pausedGradingMessage(correction, locale) : null;
   const primaryExpert = validExperts.find(expert => expert.provider_id === primaryProviderId) ?? validExperts[0];
   const programmingReview = correction && pendingProgrammingReview(correction);
   // A later expert may disagree with the shared execution. The synthesized
@@ -719,13 +720,14 @@ function ReviewQuestionCard({ locale, student, question, correction, primaryProv
                     ? tx(locale, "无有效分数", "No valid score")
                     : disputedScore
                       ? tx(locale, `建议 ${formatScore(displayScore, correction.max_score)} / ${correction.max_score}，待复核`, `Suggested ${formatScore(displayScore, correction.max_score)} / ${correction.max_score}, pending review`)
-                      : `${formatScore(displayScore, correction.max_score)} / ${correction.max_score}`
+                      : `${pausedMessage ? tx(locale, "暂定 ", "Provisional ") : ""}${formatScore(displayScore, correction.max_score)} / ${correction.max_score}`
                   : "— / —"}
               </span>
             </div>
+            {pausedMessage ? <p className="mt-3 rounded-[7px] border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-6 text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100">{pausedMessage}</p> : null}
             {correction ? (
               <>
-                {primaryExpert ? <p className="mt-3 break-words text-xs font-semibold text-foreground">{primaryExpert.provider}（{expertScoreSummary(primaryExpert)}, conf={primaryExpert.confidence.toFixed(2)}）</p> : null}
+                {primaryExpert ? <p className="mt-3 break-words text-xs font-semibold text-foreground">{primaryExpert.provider}（{expertScoreSummary(primaryExpert)}, conf={primaryExpert.confidence?.toFixed(2) ?? "--"}）</p> : null}
                 <MarkdownMath className="mt-3 text-[13px] leading-6 text-foreground">{(primaryExpert && !disputedScore ? primaryExpert.comment : correction.comment) || tx(locale, "SmarTAI 未返回文字说明。", "SmarTAI returned no written rationale.")}</MarkdownMath>
                 <ScoringSteps locale={locale} steps={primaryExpert && !disputedScore ? primaryExpert.steps : correction.steps} />
                   <dl className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
@@ -746,7 +748,7 @@ function ReviewQuestionCard({ locale, student, question, correction, primaryProv
                   </dl>
                 ) : null}
                 {correction.expert_results?.length ? (
-                  <details className="mt-3 text-xs text-muted-foreground">
+                  <details open={Boolean(pausedMessage)} className="mt-3 text-xs text-muted-foreground">
                     <summary className="cursor-pointer font-semibold text-foreground">{tx(locale, "查看各专家原始结果", "View Original Model Results")}</summary>
                     <ExpertResults key={correction.expert_results.map(expert => `${expert.provider_id}:${expert.provider}`).join("|")} locale={locale} experts={correction.expert_results} />
                   </details>
@@ -827,7 +829,7 @@ function ExpertScore({ locale, expert }: { locale: Locale; expert: ExpertResult 
     return <>{tx(locale, "无有效分数，不参与合成", "No valid score; excluded from synthesis")}</>;
   }
   if (expert.error_kind) return <>{expert.error_kind === "quota_exhausted" ? tx(locale, "额度不足", "Quota exhausted") : expert.error_kind === "transient_llm" ? tx(locale, "网络或超时错误", "Network error or timeout") : tx(locale, "模型出错", "Model error")} · {tx(locale, "无有效分数，不参与合成", "No valid score; excluded from synthesis")}</>;
-  return <>{expertScoreSummary(expert)}, conf={expert.confidence.toFixed(2)}</>;
+  return <>{expertScoreSummary(expert)}, conf={expert.confidence?.toFixed(2) ?? "--"}</>;
 }
 
 function ExpertResults({ locale, experts }: { locale: Locale; experts: ExpertResult[] }) {

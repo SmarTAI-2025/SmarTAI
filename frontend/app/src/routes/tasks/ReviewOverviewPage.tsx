@@ -18,7 +18,7 @@ import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
-import { correctionReviewReasonIds, pendingProgrammingReview, reviewReasonLabel, buildResultsModel, hasPartialExperts, effectiveCorrectionScore, formatConfidence, formatPercent, mathReviewLabels, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
+import { correctionReviewReasonIds, pendingProgrammingReview, reviewReasonLabel, buildResultsModel, hasPartialExperts, hasUnknownConfidence, effectiveCorrectionScore, formatConfidence, formatPercent, mathReviewLabels, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
 import { collectResultReviewItems, correctionReviewNotes, type ReviewItem } from "@/components/tasks/resultsReviewModel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
@@ -470,21 +470,19 @@ function queueReason(locale: Locale, item: ReviewItem): string {
   const programming = pendingProgrammingReview(item.correction);
   if (programming) return reviewReasonLabel(programming, locale);
   if (item.severity === "advisory" && correctionReviewReasonIds(item.correction).includes("programming_extra_boundary")) return reviewReasonLabel("programming_extra_boundary", locale);
-  if (item.correction.initial_review_reasons?.includes("grading_paused") || item.correction.review_reasons?.includes("grading_paused")) {
-    return effectiveCorrectionScore(item.correction) === null
-      ? (locale === "zh-CN" ? "已暂停尚未批改 · 请人工补齐" : "Paused, ungraded · complete manually")
-      : (locale === "zh-CN" ? "部分专家完成 · 已保存有效评分和评语" : "Some experts completed · valid scores and feedback saved");
-  }
+  if (correctionReviewReasonIds(item.correction).includes("grading_paused") && effectiveCorrectionScore(item.correction) === null)
+    return locale === "zh-CN" ? "已暂停尚未批改 · 请人工补齐" : "Paused, ungraded · complete manually";
   if (effectiveCorrectionScore(item.correction) === null) return locale === "zh-CN" ? "缺少有效分数 · 需处理" : "Missing valid score · action required";
   if (correctionReviewBlocked(item.correction)) return locale === "zh-CN" ? "分数无效 · 需修正" : "Invalid score · correction required";
   if (item.correction.review_status === "edited") return copy(locale, "savedPendingReason");
   const mathLabels = mathReviewLabels(item.correction, locale);
-  if (mathLabels.length) {
+  const unknownConfidence = hasUnknownConfidence(item.correction) ? [reviewReasonLabel("confidence_unavailable", locale)] : [];
+  if (mathLabels.length || unknownConfidence.length) {
     const lowConfidence = item.category === "low-confidence"
       ? [locale === "zh-CN" ? "置信度较低 · 建议核对" : "Low confidence · review suggested"] : [];
     const partialExperts = hasPartialExperts(item.correction)
       ? [locale === "zh-CN" ? "部分专家完成 · 建议核对" : "Some experts completed · review suggested"] : [];
-    return [...partialExperts, ...lowConfidence, ...mathLabels].join(" · ");
+    return [...partialExperts, ...lowConfidence, ...unknownConfidence, ...mathLabels].join(" · ");
   }
   if (hasPartialExperts(item.correction)) return locale === "zh-CN" ? "部分专家完成 · 建议核对" : "Some experts completed · review suggested";
   if (item.category === "low-confidence") return locale === "zh-CN" ? "置信度较低 · 建议核对" : "Low confidence · review suggested";

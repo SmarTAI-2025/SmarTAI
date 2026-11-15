@@ -54,6 +54,7 @@ export interface JobProgress {
   recognition_requests?: RecognitionRequestState[];
   model_progress?: GradingModelProgress[];
   model_eta_seconds?: number | null;
+  grading_eta_seconds?: number | null;
   running_units?: number;
   activity_latest?: GradingActivityEvent | null;
   activity_cursor?: number;
@@ -64,6 +65,8 @@ export interface JobProgress {
   total_questions: number;
   completed_units: number;
   saved_units?: number;
+  fully_saved_units?: number;
+  pending_finalization_units?: number;
   active: ActiveUnit[];
   messages: ProgressEvent[];
   error_detail?: string | null;

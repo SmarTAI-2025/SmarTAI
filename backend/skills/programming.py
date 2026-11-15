@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, model_validator
 
 from backend.llm.providers import BaseProvider
-from backend.models import ExpertResult, GradingConfidence, ProblemInfo, StepScore, StudentAnswerInfo, TestCase
+from backend.models import ExpertResult, GradingModelOutput, ProblemInfo, StepScore, StudentAnswerInfo, TestCase
 from backend.services.grading_scores import round_ai_score
 from backend.services.programming_reference_inputs import NewTestInput
 from backend.services.programming_test_contract import has_single_required_argument, required_function_name
@@ -39,12 +39,11 @@ class ProgrammingAward(StepScore):
     max_points: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
-class ProgrammingGradingOutput(BaseModel):
+class ProgrammingGradingOutput(GradingModelOutput):
     steps: list[ProgrammingAward]
     # Keep explicitly supplied legacy totals subject to the consistency check.
     score: float = Field(default_factory=_sum_step_awards, ge=0, allow_inf_nan=False, validate_default=True)
     max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False)
-    confidence: GradingConfidence = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
     comment: str = ""
     logs: str | None = ""
     boundary_case: object = None  # Optional diagnostic; malformed proposals never invalidate a score.
@@ -412,7 +411,7 @@ class ProgrammingSkill(GradingSkill):
                 confidence = result.confidence
                 if (not evidence.teacher_tests.total and evidence.generated_tests.total >= 3
                         and evidence.generated_tests.passed == 0):
-                    confidence = min(confidence, 0.5)
+                    confidence = min(confidence, 0.5) if confidence is not None else None
                 # A second, freely generated summary can contradict a validated
                 # award and the executed cases. Present the same rubric judgments
                 # in the summary and detail views when the provider supplied them.

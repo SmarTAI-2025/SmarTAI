@@ -7,8 +7,10 @@ import {
   correctionReviewReasonIds,
   hasExpertDisagreement,
   hasPartialExperts,
+  hasUnknownConfidence,
   pendingProgrammingReview,
   validExpertResults,
+  isCorrectionReviewConfirmed,
   isLowConfidence,
   reviewReasonLabel,
   mathReviewLabels,
@@ -29,6 +31,19 @@ export interface ReviewItem {
 }
 
 export { isCorrectionReviewConfirmed, correctionReviewBlocked, correctionReviewNextBlocked, correctionReviewAttention, getExpertScoreSpread } from "./resultsModel";
+
+export function pausedGradingMessage(correction: Correction, locale: Locale): string | null {
+  if (isCorrectionReviewConfirmed(correction) || !correctionReviewReasonIds(correction).includes("grading_paused")) return null;
+  if (!validExpertResults(correction).length) return locale === "zh-CN"
+    ? "已暂停，尚无有效模型评分。可继续运行或人工填写。"
+    : "Paused with no valid model grades. Resume grading or enter a score manually.";
+  if (hasPartialExperts(correction)) return locale === "zh-CN"
+    ? "部分模型初评已保存。可查看已有评分，或继续运行。"
+    : "Some model grades are saved. View the saved grades or resume grading.";
+  return locale === "zh-CN"
+    ? "初评已保存，待 AI 核验与汇总。可查看已有评分，或继续运行。"
+    : "Initial grades are saved, awaiting AI verification and aggregation. View the saved grades or resume grading.";
+}
 
 export function collectResultReviewItems(model: ResultsModel, students: StudentSummary[], locale: Locale = "zh-CN"): ReviewItem[] {
   return students
@@ -101,6 +116,12 @@ export function correctionReviewNotes(correction: Correction, locale: Locale) {
   } else if (confidenceNeedsAttention(correction.confidence) && !correctionReviewBlocked(correction)) {
     add(text(`置信度 ${correction.confidence} 较低，建议核对确认。`, `Low confidence (${correction.confidence}); review suggested.`));
   }
+  if (hasUnknownConfidence(correction) && !correctionReviewBlocked(correction)) {
+    const unknown = experts.filter(expert => confidenceValue(expert.confidence) === null);
+    if (multi && unknown.length) for (const expert of unknown) {
+      add(text(`${expert.provider} 置信度未提供，建议核对确认。`, `${expert.provider}: confidence not provided; review suggested.`));
+    } else add(reviewReasonLabel("confidence_unavailable", locale));
+  }
   const failedExperts = (correction.expert_results ?? []).filter(expert => expert.error_kind);
   const failureLabels = [...new Set(failedExperts.map(expert => `${expert.provider}：${reviewReasonLabel(expert.error_kind!, locale)}`))];
   if (hasPartialExperts(correction)) {
@@ -114,7 +135,7 @@ export function correctionReviewNotes(correction: Correction, locale: Locale) {
     add(label);
   }
   if (correctionReviewBlocked(correction)) for (const reason of correctionReviewReasonIds(correction)) {
-    if ([...MATH_REVIEW_REASONS, "low_confidence", "partial_experts", "degraded_to_single", "high_indecisiveness", "score_spread_high", "minority_veto"].includes(reason)) continue;
+    if ([...MATH_REVIEW_REASONS, "low_confidence", "confidence_unavailable", "partial_experts", "degraded_to_single", "high_indecisiveness", "score_spread_high", "minority_veto"].includes(reason)) continue;
     if (["all_failed", "missing_correction", "llm_failed"].includes(reason)
       || failedExperts.some(expert => expert.error_kind === reason)) continue;
     add(reviewReasonLabel(reason, locale), "blocking");

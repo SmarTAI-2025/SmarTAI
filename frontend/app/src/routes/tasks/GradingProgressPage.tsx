@@ -150,6 +150,7 @@ export function GradingProgressPage() {
           {status === "grading_paused" && !retryGrading.error ? (
             <TaskPausedState status="grading_paused" onContinue={() => void handleRetry()} onManual={() => void handleManual()} busy={retryGrading.isPending || manualBusy} manualBusy={manualBusy}>
               <p className="text-sm text-muted-foreground">{locale === "zh-CN" ? "已保存 AI 评分" : "Saved AI grades"} {progress?.saved_units ?? queue.completed} / {queue.total} {copy(locale, "unitSuffix")} · {locale === "zh-CN" ? "已汇总" : "Aggregated"} {queue.completed} / {queue.total}</p>
+              <GradingStageCounts progress={progress} total={queue.total} locale={locale} />
               <ModelProgressRows models={progress?.model_progress ?? []} locale={locale} stopped />
             </TaskPausedState>
           ) : recoveryInfo ? (
@@ -179,8 +180,10 @@ export function GradingProgressPage() {
                 </p>
                 <ModelProgressRows models={progress?.model_progress ?? []} locale={locale} />
                 {progress?.saved_units !== undefined ? <p className="mt-1 text-xs text-muted-foreground">{locale === "zh-CN" ? "已保存至少一个模型评分的题次" : "Responses with at least one saved model grade"}: {progress.saved_units} / {queue.total}</p> : null}
+                <GradingStageCounts progress={progress} total={queue.total} locale={locale} />
 
-                <div className="mt-4 flex items-center gap-3">
+                <p className="mt-4 text-xs text-muted-foreground">{locale === "zh-CN" ? "整体进度（含初评与核验汇总）" : "Overall progress (initial grading, verification and aggregation)"}</p>
+                <div className="mt-1 flex items-center gap-3">
                   <div
                     className="relative h-2 flex-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"
                     role="progressbar"
@@ -242,6 +245,13 @@ type QueueSummary = {
   errorSignals: number;
 };
 
+function GradingStageCounts({ progress, total, locale }: { progress: JobProgress | null; total: number; locale: Locale }) {
+  return <div className="mt-1 space-y-1 text-xs text-muted-foreground">
+    <p>{copy(locale, "initialCompleted")}: {progress?.fully_saved_units ?? "—"} / {total}</p>
+    <p>{copy(locale, "pendingVerification")}: {progress?.pending_finalization_units ?? "—"} / {total}</p>
+  </div>;
+}
+
 function deriveQueue(progress: JobProgress | null, problemCount: number, studentCount: number): QueueSummary {
   const total = progress && progress.total_students > 0 && progress.total_questions > 0
     ? progress.total_students * progress.total_questions
@@ -262,9 +272,8 @@ function estimateRemaining(progress: JobProgress | null, total: number, complete
   if (progress.model_progress?.length) {
     if (completed >= total) return copy(locale, "almostDone");
     const remaining = progress.model_progress.filter((model) => model.succeeded + model.failed < model.total);
-    if (!remaining.length) return copy(locale, "almostDone");
     if (remaining.some((model) => model.retrying)) return locale === "zh-CN" ? "等待模型重试" : "Waiting for model retry";
-    return progress.model_eta_seconds != null ? formatRemaining(progress.model_eta_seconds, locale) : copy(locale, "estimating");
+    return progress.grading_eta_seconds != null ? formatRemaining(progress.grading_eta_seconds, locale) : copy(locale, "estimating");
   }
   if (completed <= 0) return copy(locale, "waitingFirst");
   if (completed >= total) return copy(locale, "almostDone");

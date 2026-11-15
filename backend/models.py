@@ -19,15 +19,45 @@ from backend.services.question_structure import (
 
 # ─── Grading result models ────────────────────────────────────────────────────
 
-def _optional_confidence(value: Any) -> float:
+def _optional_confidence(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         confidence = float(value)
     except (TypeError, ValueError):
-        return 0.0
-    return confidence if math.isfinite(confidence) and 0 <= confidence <= 1 else 0.0
+        return None
+    return confidence if math.isfinite(confidence) and 0 <= confidence <= 1 else None
 
 
-GradingConfidence = Annotated[float, BeforeValidator(_optional_confidence)]
+GradingConfidence = Annotated[Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] | None,
+    BeforeValidator(_optional_confidence), Field(description=(
+        "Confidence in this grading judgment, from 0 to 1. Return your assessed confidence; "
+        "use null only when unavailable. Zero means explicitly no confidence, not a missing value."
+    ))]
+
+GRADING_CONFIDENCE_INSTRUCTION = (
+    "\n\nFor each grading assessment, always include confidence as a JSON number from 0 to 1 "
+    "(for example 0.83), not a percentage, string, boolean or omitted field. Assess confidence "
+    "in the correctness of your grading from the rubric, readable evidence and unresolved ambiguity; "
+    "it is not the student's fraction of points earned. A confidently incorrect answer can have "
+    "high grading confidence. Use 0 only if you genuinely have no confidence, never as a missing-value "
+    "placeholder. If you cannot assess confidence, explicitly return null. Do not inflate confidence."
+)
+
+
+def _require_grading_confidence(schema):
+    schema["required"] = list(dict.fromkeys([*schema.get("required", []), "confidence"]))
+    schema["properties"]["confidence"].pop("default", None)
+
+
+class GradingModelOutput(BaseModel):
+    """Require confidence in the requested wire schema, retaining useful imperfect replies.
+
+    Missing/invalid confidence parses as unknown rather than discarding a valid
+    score or purchasing another grading call solely to populate this metadata.
+    """
+    model_config = ConfigDict(json_schema_extra=_require_grading_confidence)
+    confidence: GradingConfidence = None
 
 # Like grading, recognition receives an item-specific model assessment.
 # Old artifacts and unavailable/invalid assessments remain unknown.
@@ -74,7 +104,7 @@ class ExpertResult(BaseModel):
     provider_id: Optional[str] = Field(default=None, description="Stable selected configuration ID; distinct from the model display name")
     score: float = Field(ge=0, allow_inf_nan=False)
     max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False)
-    confidence: GradingConfidence = Field(default=0.0, ge=0, le=1, allow_inf_nan=False)
+    confidence: GradingConfidence = None
     comment: str
     steps: List[StepScore] = []
     hits: Optional[List[str]] = None
@@ -86,7 +116,7 @@ class ExpertResult(BaseModel):
     duration_ms: Optional[float] = Field(None, description="Wall-clock time for this expert's grading")
     error_kind: Optional[str] = Field(
         None,
-        description="When confidence==0 (skill failed), why: "
+        description="When the skill failed (independent of confidence), why: "
                     "'quota_exhausted' | 'transient_llm' | 'parse_failed' | 'general'. "
                     "Used by multi_expert/grading_agent to pick a friendly comment.",
     )
@@ -98,7 +128,7 @@ class Correction(BaseModel):
     type: str
     score: float = Field(ge=0, allow_inf_nan=False)
     max_score: float = Field(gt=0, allow_inf_nan=False)
-    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    confidence: GradingConfidence = None
     comment: str
     steps: List[StepScore]
     hits: Optional[List[str]] = None

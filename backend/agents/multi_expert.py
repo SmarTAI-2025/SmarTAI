@@ -52,11 +52,11 @@ import time
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from backend.config import settings as _settings
 from backend.domain.grading_review import expert_disagreement_signal, programming_evidence_review_reason
-from backend.models import Correction, ExpertResult, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
+from backend.models import Correction, ExpertResult, GradingModelOutput, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.llm.registry import ExpertRegistry
 from backend.skills.base import (
@@ -78,10 +78,9 @@ logger = logging.getLogger(__name__)
 
 # ─── Synthesis output ─────────────────────────────────────────────────────────
 
-class SynthesisOutput(BaseModel):
+class SynthesisOutput(GradingModelOutput):
     score: float = Field(ge=0, allow_inf_nan=False)
     max_score: float = Field(default=10.0, gt=0, allow_inf_nan=False)
-    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
     comment: str = Field(description="Synthesized feedback incorporating all experts")
     steps: List[dict] = Field(default_factory=list)
 
@@ -512,8 +511,8 @@ async def _run_multi_expert(
     # drag a confident sibling's verdict into the low-confidence review
     # queue — genuine disagreement is already covered by the fairness
     # signal computed below (IS).
-    best_expert_confidence = max(er.confidence for er in successes)
-    if correction.confidence < best_expert_confidence:
+    best_expert_confidence = max((er.confidence for er in successes if er.confidence is not None), default=None)
+    if best_expert_confidence is not None and (correction.confidence is None or correction.confidence < best_expert_confidence):
         correction.confidence = round(best_expert_confidence, 2)
 
     # Re-attach failures so the frontend can show why they failed.
@@ -591,7 +590,7 @@ async def _synthesize(
         expert_summary_parts.append(
             f"Expert {i} ({er.provider}):\n"
             f"  Score: {er.score}/{er.max_score}\n"
-            f"  Confidence: {er.confidence:.2f}\n"
+            f"  Confidence: {_confidence_text(er.confidence)}\n"
             f"  Comment: {er.comment}\n"
         )
     expert_summary = "\n".join(expert_summary_parts)
@@ -656,7 +655,7 @@ async def _synthesize(
             type=problem.type,
             score=aggregate.score,
             max_score=problem.max_score,
-            confidence=max(0.0, min(result.confidence, 1.0)),
+            confidence=result.confidence,
             comment=result.comment,
             steps=(aggregate.steps if math_results or any(e.programming_evidence for e in expert_results) else
                    normalized_steps if normalized_score == aggregate.score else []),
@@ -677,13 +676,17 @@ async def _synthesize(
         return _weighted_average_fallback(problem, expert_results, grading_setup=grading_setup)
 
 
+def _confidence_text(value: float | None) -> str:
+    return "unknown" if value is None else f"{value:.2f}"
+
+
 def _weighted_average_fallback(
     problem: ProblemInfo,
     expert_results: List[ExpertResult],
     *,
     grading_setup: Optional[TaskGradingSetup] = None,
 ) -> Correction:
-    """Custom weights > confidence weights > equal weights, using valid votes.
+    """Custom weights > complete positive confidence weights > equal weights.
 
     Failed experts remain available as evidence but never affect the average.
     Round once after aggregation; original expert scores remain unchanged.
@@ -693,7 +696,13 @@ def _weighted_average_fallback(
     if not expert_results:
         raise AllExpertsFailed(failures)
     custom = grading_setup.expert_weights if grading_setup else {}
-    weights = [custom.get(er.provider_id or er.provider.split("#sample", 1)[0], er.confidence) for er in expert_results]
+    # Zero or unknown confidence must not silently discard a valid vote.
+    # Without positive assessments for every vote, use equal weights.
+    default_weights = ([er.confidence for er in expert_results]
+                       if all(er.confidence is not None and er.confidence > 0 for er in expert_results)
+                       else [1.0] * len(expert_results))
+    weights = [custom.get(er.provider_id or er.provider.split("#sample", 1)[0], weight)
+               for er, weight in zip(expert_results, default_weights)]
     if not any(weights):
         weights = [1.0] * len(expert_results)
     weights = [Decimal(str(weight)) for weight in weights]
@@ -703,13 +712,13 @@ def _weighted_average_fallback(
     # contributing expert. Averaging confidences let a weak model's low
     # self-confidence flag the whole verdict for review even when a sibling
     # model was confident ("any high confidence wins").
-    best_confidence = max(er.confidence for er in expert_results)
+    best_confidence = max((er.confidence for er in expert_results if er.confidence is not None), default=None)
 
     if len(expert_results) == 1:
         comment = expert_results[0].comment
     else:
         parts = [
-            f"【{er.provider}（{er.score:.1f}/{er.max_score:.0f}, conf={er.confidence:.2f}）】\n{er.comment}"
+            f"【{er.provider}（{er.score:.1f}/{er.max_score:.0f}, conf={_confidence_text(er.confidence)}）】\n{er.comment}"
             for er in expert_results
         ]
         comment = "\n\n———\n\n".join(parts)
@@ -723,7 +732,7 @@ def _weighted_average_fallback(
         type=problem.type,
         score=final_score,
         max_score=max_score,
-        confidence=round(best_confidence, 2),
+        confidence=round(best_confidence, 2) if best_confidence is not None else None,
         comment=comment,
         steps=weighted_math_steps(expert_results, weights, problem.max_score, final_score),
         expert_results=expert_results + failures,

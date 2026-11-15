@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Correction } from "@/types";
 import { buildResultsModel, hasReviewSignal, summarizeReviewScoreSources } from "./resultsModel";
-import { collectResultReviewItems, correctionReviewNotes, correctionReviewAttention, correctionReviewBlocked, correctionReviewNextBlocked, isCorrectionReviewConfirmed } from "./resultsReviewModel";
+import { collectResultReviewItems, correctionReviewNotes, correctionReviewAttention, correctionReviewBlocked, correctionReviewNextBlocked, isCorrectionReviewConfirmed, pausedGradingMessage } from "./resultsReviewModel";
 
 const correction = (overrides: Partial<Correction> = {}): Correction => ({
   q_id: "q1", type: "concept", score: 8, max_score: 10, confidence: 0.9,
@@ -9,6 +9,18 @@ const correction = (overrides: Partial<Correction> = {}): Correction => ({
 });
 
 describe("grading review attention", () => {
+  it("explains saved initial grades without making pending AI verification a yellow review issue", () => {
+    const expert = { provider: "a", score: 8, max_score: 10, confidence: .9, comment: "Saved", steps: [] };
+    const paused = correction({ initial_review_reasons: ["grading_paused"],
+      expert_results: [expert, { ...expert, provider: "b" }] });
+    expect(pausedGradingMessage(paused, "zh-CN")).toBe("初评已保存，待 AI 核验与汇总。可查看已有评分，或继续运行。");
+    expect(correctionReviewAttention(paused)).toBe("none");
+    expect(correctionReviewNotes(paused, "zh-CN")).toEqual([]);
+    expect(correctionReviewAttention({ ...paused, expert_results: [expert, { ...expert, confidence: .4 }] })).toBe("advisory");
+    expect(pausedGradingMessage({ ...paused, expert_results: [expert, { ...expert, error_kind: "operation_cancelled" }] }, "zh-CN")).toContain("部分模型初评已保存");
+    expect(pausedGradingMessage({ ...paused, expert_results: [], score: null }, "en-US")).toContain("no valid model grades");
+    expect(pausedGradingMessage({ ...paused, review_status: "confirmed", teacher_score: 8 }, "zh-CN")).toBeNull();
+  });
   it("does not block a valid grade merely because the task paused", () => {
     const paused = correction({ review_reasons: ["grading_paused"], requires_human_review: true });
     expect(correctionReviewAttention(paused)).toBe("none");
@@ -64,6 +76,15 @@ describe("grading review attention", () => {
     expect(correctionReviewAttention(value)).toBe("advisory");
     expect(correctionReviewNotes(value, "en-US")).toEqual([{ severity: "advisory", label: "low: low confidence (0.45); review suggested." }]);
     expect(correctionReviewNotes({ ...value, expert_results: [{ ...expert, confidence: .45 }] }, "en-US")[0].label).toBe("Low confidence (0.45); review suggested.");
+  });
+
+  it("flags unknown confidence separately from real zero and permits teacher confirmation", () => {
+    const expert = { provider: "model", score: 8, max_score: 10, confidence: null, comment: "Saved", steps: [] };
+    const value = correction({ confidence: null, expert_results: [expert] });
+    expect(correctionReviewAttention(value)).toBe("advisory");
+    expect(correctionReviewNotes(value, "zh-CN")).toEqual([{ severity: "advisory", label: "置信度未提供，建议核对确认。" }]);
+    expect(correctionReviewAttention({ ...value, teacher_score: 8, review_status: "confirmed" })).toBe("none");
+    expect(correctionReviewAttention({ ...value, expert_results: [{ ...expert, confidence: 0 }] })).toBe("advisory");
   });
 
   it.each([0, 8])("retains valid partial scores (%s), excluding failed confidence placeholders", score => {

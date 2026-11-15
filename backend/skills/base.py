@@ -144,11 +144,13 @@ def build_system_prompt(
     `role_description` is the per-skill bit (e.g. "You are a mathematics teacher grading a calculation problem...").
     """
     language = grading_setup.feedback_language if grading_setup else language
+    from backend.models import GRADING_CONFIDENCE_INSTRUCTION
     lang_instruction = "English" if language == "en" else "Chinese"
     return (
         ANTI_JAILBREAK_PREFIX
         + role_description
         + _grading_policy_prompt(grading_setup)
+        + GRADING_CONFIDENCE_INSTRUCTION
         + f"\n\nIMPORTANT: You MUST write your comment and step descriptions in {lang_instruction}. "
         "However, if the student's answer is in a different language, provide bilingual feedback "
         "(primary language + student's language). "

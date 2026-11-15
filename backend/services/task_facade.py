@@ -4871,7 +4871,7 @@ async def async_task_state(*, task_id: str, owner_id: str) -> dict:
 
 
 def _grading_progress(run_id: str, owner_id: str) -> dict:
-    from backend.progress.grading_activity import public_models, public_event, public_waits, model_eta_seconds
+    from backend.progress.grading_activity import public_models, public_event, public_waits, model_eta_seconds, grading_eta_seconds
     run = grading_repository.get_run(run_id, actor_id=owner_id)
     paused = run.status == "cancelled" and run.error_message == "operation_cancelled"
     events = grading_repository.list_events(run_id, actor_id=owner_id)
@@ -4880,15 +4880,32 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
     question_count = len(assignment_repository.get_questions_by_assignment(run.assignment_id))
     completed_units = run.completed_submissions * question_count
     saved_pairs = set()
+    saved_slots = {}
     from backend.services.grading_checkpoints import saved_experts
     from backend.models import ExpertResult
     from backend.agents.multi_expert import _is_successful_expert
     for item in saved_experts(run_id):
         if _is_successful_expert(ExpertResult.model_validate(item["result"])):
-            saved_pairs.add((item["student_id"], item["q_id"]))
+            pair = (item["student_id"], item["q_id"])
+            saved_pairs.add(pair)
+            saved_slots.setdefault(pair, set()).add((item["provider_id"], item["sample_index"]))
+    setup = workflow_repository.get_run_setup(run_id)
+    config = TaskGradingSetup.model_validate(setup.setup) if setup else None
+    expected_slots = {
+        (provider, index)
+        for provider in (config.selected_provider_ids if config else [])
+        for index in (range(1, config.multi_sample_n + 1)
+                      if len(config.selected_provider_ids) == 1 and config.multi_sample_n > 1 else [0])
+    }
+    fully_saved_pairs = {pair for pair, slots in saved_slots.items()
+                        if expected_slots and expected_slots <= slots}
+    finalized_pairs = set()
     for result in grading_repository.list_results_for_run(run_id):
         if result.effective_score is not None:
             saved_pairs.add((result.student_id, result.q_id))
+        # Stop-time aggregates preserve votes but have not completed AI review.
+        if not {"grading_paused", "grading_incomplete"}.intersection(result.initial_review_reasons):
+            finalized_pairs.add((result.student_id, result.q_id))
     for item in events:
         value = item.get("payload", {}).get("completed_units")
         if isinstance(value, int) and not isinstance(value, bool):
@@ -4923,10 +4940,14 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
         "total_questions": question_count,
         "completed_units": completed_units,
         "saved_units": len(saved_pairs),
+        "fully_saved_units": len(fully_saved_pairs),
+        "pending_finalization_units": len(fully_saved_pairs - finalized_pairs),
         "active": [], "messages": messages,
         "model_waits": safe_waits if run.status == "running" else [],
         "model_progress": models,
         "model_eta_seconds": model_eta_seconds(models, now=time.time()) if run.status == "running" else None,
+        "grading_eta_seconds": grading_eta_seconds(models, events, total=run.total_submissions * question_count,
+            completed=completed_units, now=time.time()) if run.status == "running" else None,
         "activity_latest": latest,
         "activity_cursor": events[-1]["sequence"] if events else 0,
         "running_units": 0,
