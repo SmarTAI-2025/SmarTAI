@@ -61,7 +61,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) {
     });
 
     const cases = [
-      { id: "questions", suffix: "questions", label: zh ? "复核题目资料" : "Review question materials", heading: zh ? "题目资料总览" : "Question Material Overview" },
+      { id: "questions", suffix: "questions", label: zh ? "审核题目" : "Review question materials", heading: zh ? "题目资料总览" : "Question Material Overview" },
       { id: "answers", suffix: "submissions", label: zh ? "校对作答" : "Review submissions", heading: zh ? "作答校对总览" : "Submission Review Overview" },
       { id: "configured", suffix: "grading-setup", label: zh ? "批改配置" : "Grading setup", heading: zh ? "批改设置" : "Grading Setup" },
     ];

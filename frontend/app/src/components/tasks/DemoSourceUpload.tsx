@@ -45,7 +45,7 @@ export function DemoSourceUpload({ stage }: { stage: "questions" | "submissions"
   const sourceFailed = task?.status === "error" && Boolean(task.last_failed_job_id)
     && task.last_failed_job_id === (questions ? task.extract_job_id : task.parse_job_id);
   const label = running || sourceFailed ? tx("查看识别进度与恢复", "View recognition and recovery") : ready
-    ? tx(questions ? "复核题目资料" : "进入校对作答", questions ? "Review Question Materials" : "Review Submissions")
+    ? tx(questions ? "审核题目资料" : "进入校对作答", questions ? "Review Question Materials" : "Review Submissions")
     : tx(questions ? "开始准备题目" : "开始识别作答", questions ? "Prepare Questions" : "Recognize Submissions");
 
   async function start() {
