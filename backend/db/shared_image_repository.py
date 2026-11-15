@@ -36,9 +36,10 @@ def shared_image_fingerprint(config: ProviderConfig) -> str:
 
 def shared_image_evidence(owner: str, config: ProviderConfig, *, create: bool = False) -> SharedImageEvidence:
     fingerprint = shared_image_fingerprint(config)
-    # The platform has one configured slot per provider. Keep that identity
-    # stable across model edits so changing A -> B -> A never revives A's proof.
-    slot = config.provider_type
+    # Fixed OpenAI presets each need independent evidence. Other configured
+    # providers retain their legacy slot and edit/revert invalidation behavior.
+    from backend.llm.registry import SHARED_OPENAI_MODELS
+    slot = f"openai:{config.model}" if config.provider_type == "openai" and config.model in SHARED_OPENAI_MODELS else config.provider_type
     with session_scope() as session:
         row = session.get(SharedProviderImageRecord, (owner, slot))
         if row is None and create:

@@ -4,13 +4,14 @@ from backend.config import settings
 from backend.llm.registry import ExpertRegistry
 
 
-def test_seed_from_settings_registers_domestic_providers(monkeypatch):
+def test_demo_seed_from_settings_registers_domestic_providers(monkeypatch):
     """DeepSeek/Moonshot/Qwen must env-seed into the shared pool when their API
     keys are set. This is the path that makes domestic models usable on
     deployments that rely on the platform/shared pool instead of per-user BYOK
     — it was the missing piece behind "DeepSeek 还不能用" after the BYOK-only
     provider classes landed."""
     monkeypatch.setattr(settings, "shared_pool_enabled", True)
+    monkeypatch.setattr(settings, "frontier_demo_enabled", True)
     monkeypatch.setattr(settings, "deepseek_api_key", "sk-deepseek")
     monkeypatch.setattr(settings, "deepseek_api_base", "https://api.deepseek.com/v1")
     monkeypatch.setattr(settings, "deepseek_model", "deepseek-v4-flash")
@@ -24,7 +25,7 @@ def test_seed_from_settings_registers_domestic_providers(monkeypatch):
     for foreign in ("gemini_api_key", "openai_api_key", "zhipu_api_key", "anthropic_api_key"):
         monkeypatch.setattr(settings, foreign, "")
 
-    registry = ExpertRegistry(seed_from_settings=True)
+    registry = ExpertRegistry(seed_from_settings=True, frontier_demo=True)
 
     configs = {c["provider_type"]: c for c in registry.list_configs()}
     assert {"deepseek", "moonshot", "qwen"} <= set(configs)

@@ -170,7 +170,7 @@ def _provider_submission_may_exist(exc: Exception) -> bool:
         "quota",
         "resource_exhausted",
         "resourceexhausted",
-        "shared_pool_daily_limit_reached",
+        "shared_pool_daily_limit_reached", "shared_pool_sol_daily_limit_reached",
         "shared_pool_disabled",
     )):
         return False

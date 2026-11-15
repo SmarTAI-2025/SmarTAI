@@ -10,6 +10,8 @@ class ModelDailyUsageRecord(Base):
     day: Mapped[str] = mapped_column(String(10), primary_key=True)
     requests: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     estimated_input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    sol_requests: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    sol_estimated_input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
     last_admitted_at: Mapped[float] = mapped_column(Float, nullable=False)
     __table_args__ = (CheckConstraint("scope IN ('shared', 'history')", name="ck_model_usage_scope"),
                       CheckConstraint("requests >= 0 AND estimated_input_tokens >= 0", name="ck_model_usage_nonnegative"))

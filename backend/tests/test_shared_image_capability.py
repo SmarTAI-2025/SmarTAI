@@ -53,7 +53,7 @@ async def test_shared_opt_in_probe_charges_once_without_storing_key_and_isolates
     assert other.list_configs()[0]["image_capability_status"] == "unverified"
     with session_scope() as session:
         assert session.scalar(select(ProviderConfigRecord).where(ProviderConfigRecord.owner_id == "teacher")) is None
-        record = session.get(SharedProviderImageRecord, ("teacher", "openai"))
+        record = session.get(SharedProviderImageRecord, ("teacher", "openai:synthetic"))
         assert record is not None and len(record.fingerprint) == 64
         assert "synthetic-platform-key" not in str(record.__dict__)
 

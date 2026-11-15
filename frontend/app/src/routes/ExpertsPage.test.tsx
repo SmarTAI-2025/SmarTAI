@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
@@ -60,12 +61,21 @@ vi.mock("@/api/hooks", () => ({
 }));
 
 function renderPage() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  queryClient.setQueryData(["model-quota"], {
+    shared_pool_enabled: true, resets_at: "2026-11-17T00:00:00Z",
+    shared: { requests: 8, request_limit: 100, estimated_input_tokens: 6000, estimated_token_limit: 100000 },
+    shared_sol: { requests: 3, request_limit: 50, estimated_input_tokens: 2000, estimated_token_limit: 50000 },
+    history: { requests: 0, request_limit: 10 },
+  });
   return render(
+    <QueryClientProvider client={queryClient}>
     <I18nProvider>
       <MemoryRouter initialEntries={["/settings/byok"]}>
         <ExpertsPage />
       </MemoryRouter>
-    </I18nProvider>,
+    </I18nProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -202,11 +212,18 @@ describe("ExpertsPage editable vendor Base URL", () => {
     expect(verifyImage).not.toHaveBeenCalled();
   });
 
-  it("keeps shared configuration read-only while allowing opt-in image verification", async () => {
+  it("keeps shared configuration read-only while allowing opt-in text and image verification", async () => {
     window.localStorage.setItem("smartai_locale", "en-US");
     hookState.experts = [{ provider_id: "qwen:shared", provider_type: "qwen", model: "shared", enabled: true, editable: false, is_shared: true, rpm: 0, max_concurrent: 1 }];
     const user = userEvent.setup(); renderPage();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Disable" })).not.toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Verify (optional)" })[0]!);
+    const textDialog = screen.getByRole("dialog", { name: "Verify model text connectivity" });
+    expect(verifyExpert).not.toHaveBeenCalled();
+    await user.click(within(textDialog).getByRole("button", { name: "Run connectivity check" }));
+    expect(verifyExpert).toHaveBeenCalledWith("qwen:shared");
     expect(verifyImage).not.toHaveBeenCalled();
     await user.click(screen.getAllByRole("button", { name: "Verify vision capability" })[0]!);
     const dialog = screen.getByRole("dialog", { name: "Verify model vision capability" });
@@ -214,6 +231,26 @@ describe("ExpertsPage editable vendor Base URL", () => {
     expect(verifyImage).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Run image test" }));
     expect(verifyImage).toHaveBeenCalledWith("qwen:shared");
+  });
+
+  it("shows three shared presets beside editable personal BYOK and one total with Sol's half allowance", async () => {
+    window.localStorage.setItem("smartai_locale", "en-US");
+    hookState.experts = [
+      ...["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"].map(model => ({
+        provider_id: "openai:" + model, provider_type: "openai", model,
+        enabled: true, editable: false, is_shared: true, rpm: 0, max_concurrent: 1,
+      })),
+      { provider_id: "pc-own", provider_type: "openai", model: "gpt-6.1-sol",
+        display_name: "My Sol", enabled: true, editable: true, is_shared: false, rpm: 0, max_concurrent: 1 },
+    ];
+    const user = userEvent.setup(); renderPage();
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(4);
+    expect(rows.filter(row => within(row).queryByRole("button", { name: "Edit" }))).toHaveLength(1);
+    expect(screen.getByRole("region", { name: "Daily model allowance" })).toHaveTextContent("8 / 100");
+    expect(screen.getByRole("region", { name: "Daily model allowance" })).toHaveTextContent("3 / 50");
+    await user.click(screen.getByRole("button", { name: "Add configuration" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   it("uses the official DeepSeek URL by default and saves USTC without extra gates", async () => {
@@ -544,8 +581,4 @@ describe("ExpertsPage editable vendor Base URL", () => {
     expect(screen.getByLabelText("模型名称")).toHaveValue("saved-model");
     expect(verifyImage).not.toHaveBeenCalled();
   });
-
-
 });
-
-vi.mock("@/components/ModelQuotaCard", () => ({ ModelQuotaCard: () => null }));

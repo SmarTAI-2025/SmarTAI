@@ -226,6 +226,11 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   pdf_response_too_large: recognitionLimitCopy,
   pdf_structure_limit_exceeded: pdfLocalLimitCopy.pdf_structure_limit_exceeded,
   provider_credentials_required: recognitionProviderCopy,
+  shared_pool_sol_daily_limit_reached: (locale) => ({
+    title: tx(locale, "Sol 今日半额已用完。", "Sol's daily half-allowance is exhausted."),
+    description: tx(locale, "本次识别请求未发送。Sol 和其他共享模型共用总日额度。", "This recognition request was not sent. Sol and the other shared models use the same daily allowance."),
+    nextStep: tx(locale, "请选择 Luna、Terra 或自己的模型继续，或等待 UTC 00:00 重置。", "Choose Luna, Terra or your own model, or wait for UTC midnight."),
+  }),
   shared_pool_daily_limit_reached: (locale) => ({
     title: tx(locale, "共享模型日额度已用完。", "Shared model daily allowance exhausted."),
     description: tx(locale, "共享模型今日额度不足，本次识别请求未发送。", "The shared model daily allowance is insufficient. This recognition request was not sent."),

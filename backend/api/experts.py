@@ -279,16 +279,7 @@ def add_key(
             status.HTTP_409_CONFLICT,
             detail={"code": "expert_provider_conflict"},
         ) from exc
-    # A teacher with no saved BYOK configuration may have received a transient
-    # shared-pool registry for this request. Persist the custom configuration,
-    # but never inject it into that shared object; the next owner-scoped request
-    # rebuilds a registry from this saved record only.
-    provider_id = record.id
-    if not registry.uses_shared_pool():
-        provider_id = registry.register(
-            config,
-            provider_id=record.id, stored=record,
-        )
+    provider_id = registry.register(config, provider_id=record.id, stored=record)
     return {
         "status": "success",
         "provider_id": provider_id,
@@ -408,7 +399,7 @@ def set_default_provider(
     registry: ExpertRegistry = Depends(get_scoped_expert_registry),
 ):
     """Set the single owner default used to prefill task stages and Ask."""
-    if registry.uses_shared_pool():
+    if getattr(registry.get(request.provider_id), "is_shared_pool", False):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail={"code": "default_provider_platform_managed"},
@@ -499,11 +490,7 @@ def update_provider(
         ) from exc
     if updated is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Provider not found")
-    if not registry.uses_shared_pool():
-        registry.register(
-            config,
-            provider_id=provider_id, stored=updated,
-        )
+    registry.register(config, provider_id=provider_id, stored=updated)
     return {
         "status": "success",
         "provider_id": provider_id,
@@ -529,12 +516,16 @@ async def verify_provider(
         else None
     )
     provider = registry.get(provider_id)
-    if stored is None or provider is None or registry.uses_shared_pool():
+    shared = bool(getattr(provider, "is_shared_pool", False))
+    if provider is None or (stored is None and not shared):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Provider not found")
+    if shared:
+        _check_custom_probe_limit(current.id, "verify_text")
+    config = provider.config if shared else stored.config
     if is_user_defined_provider_endpoint(
-        stored.config.provider_type,
-        stored.config.base_url,
-        stored.config.wire_protocol,
+        config.provider_type,
+        config.base_url,
+        config.wire_protocol,
     ):
         if not settings.custom_provider_endpoints_available:
             raise HTTPException(
@@ -543,7 +534,7 @@ async def verify_provider(
             )
         _check_custom_probe_limit(current.id, "verify_text")
     try:
-        validate_provider_api_key(stored.config.api_key)
+        validate_provider_api_key(config.api_key)
         timeout_seconds = max(
             5,
             min(
@@ -552,12 +543,12 @@ async def verify_provider(
             ),
         )
         await asyncio.wait_for(
-            provider.ainvoke([HumanMessage(content="Reply with exactly OK.")]),
+            provider.ainvoke([HumanMessage(content="Reply with exactly OK.")], **({"max_output_tokens": 256} if shared else {})),
             timeout=timeout_seconds,
         )
     except Exception as exc:
         error_code = _verification_error_code(exc)
-        persisted = set_provider_verification(
+        persisted = shared or set_provider_verification(
             current.id,
             provider_id,
             verification_status="failed",
@@ -581,7 +572,7 @@ async def verify_provider(
             detail={"code": error_code, "provider_id": provider_id},
         ) from exc
     checked_at = time.time()
-    persisted = set_provider_verification(
+    persisted = shared or set_provider_verification(
         current.id,
         provider_id,
         verification_status="verified",
@@ -614,7 +605,7 @@ async def verify_provider_image(
 ):
     """One opt-in image request using the saved endpoint/protocol/model/key."""
     stored = get_provider_config(current.id, provider_id, master_key=settings.provider_encryption_key) if settings.provider_encryption_key else None
-    shared = registry.uses_shared_pool()
+    shared = bool(getattr(registry.get(provider_id), "is_shared_pool", False))
     shared_snapshot = None
     if shared:
         # Rebuild from current platform settings, retaining the owner-bound
@@ -622,7 +613,7 @@ async def verify_provider_image(
         from backend.db.shared_image_repository import shared_image_evidence
         registry = _build_scoped_registry(current)
         provider = registry.get(provider_id)
-        if provider is None or not registry.uses_shared_pool():
+        if provider is None or not getattr(provider, "is_shared_pool", False):
             raise HTTPException(404, detail="Provider not found")
         shared_snapshot = shared_image_evidence(current.id, provider.config, create=True)
         provider.config.image_capability_status = "unverified"
@@ -665,7 +656,7 @@ async def verify_provider_image(
         from backend.db.shared_image_repository import shared_image_fingerprint, set_shared_image_evidence
         latest_registry = _build_scoped_registry(current)
         latest = latest_registry.get(provider_id)
-        saved = bool(shared_snapshot and latest and latest_registry.uses_shared_pool()
+        saved = bool(shared_snapshot and latest and getattr(latest, "is_shared_pool", False)
             and shared_image_fingerprint(latest.config) == shared_snapshot.fingerprint
             and set_shared_image_evidence(current.id, shared_snapshot,
                                          status=state, checked_at=checked_at, reason=reason))
@@ -809,7 +800,7 @@ def _verification_error_code(exc: Exception) -> str:
 
 
 def _verification_http_status(error_code: str) -> int:
-    if error_code == "expert_verification_rate_limited":
+    if error_code in {"expert_verification_rate_limited", "shared_pool_daily_limit_reached", "shared_pool_sol_daily_limit_reached"}:
         return status.HTTP_429_TOO_MANY_REQUESTS
     if error_code in {
         "expert_verification_timeout",

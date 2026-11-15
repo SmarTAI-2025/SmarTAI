@@ -77,7 +77,7 @@ async def search_knowledge(request: KnowledgeSearchRequest, current: User = Depe
         if request.query_provider_id:
             registry = await run_in_threadpool(get_scoped_expert_registry, current)
             provider = registry.get(request.query_provider_id)
-            if registry.uses_shared_pool() or provider is None or not provider.config.enabled:
+            if provider is None or getattr(provider, "is_shared_pool", False) or not provider.config.enabled:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"code":"knowledge_query_provider_unavailable"})
             if refs:
                 plan = await QUERY_PLANNER.plan(request.query, provider=provider, scope="owner:" + current.id)

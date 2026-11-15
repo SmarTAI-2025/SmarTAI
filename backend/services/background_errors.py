@@ -61,7 +61,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "provider_quota_exceeded",
     "provider_unavailable",
     "shared_pool_disabled",
-    "shared_pool_daily_limit_reached",
+    "shared_pool_daily_limit_reached", "shared_pool_sol_daily_limit_reached",
     "provider_submit_uncertain",
     "provider_task_failed",
     "provider_request_failed",

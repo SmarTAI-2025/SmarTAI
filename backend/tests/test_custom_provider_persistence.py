@@ -263,10 +263,9 @@ def test_registry_resolves_duplicate_user_labels_with_a_stable_id_suffix(
 def test_relay_cannot_be_added_to_an_active_shared_pool_registry(monkeypatch):
     monkeypatch.setattr(settings, "runtime_environment", "development")
     registry = ExpertRegistry(seed_from_settings=False)
-    registry._uses_shared_pool = True
 
     with pytest.raises(ValueError, match="custom_provider_shared_pool_not_allowed"):
-        registry.register(_deepseek_config("https://relay.example.com/v1"))
+        registry.register(_deepseek_config("https://relay.example.com/v1"), shared_pool=True)
 
 
 def test_shared_pool_seed_skips_custom_environment_route(monkeypatch):

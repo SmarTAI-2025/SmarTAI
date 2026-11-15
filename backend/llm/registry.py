@@ -128,11 +128,11 @@ def _shared_input_estimate(messages: List[Any], *, image_count: int = 0) -> int:
 
 
 class _SharedPoolUsageLimiter:
-    def consume(self, owner_id: str, messages: List[Any], *, image_count: int = 0) -> None:
+    def consume(self, owner_id: str, messages: List[Any], *, image_count: int = 0, sol: bool = False) -> None:
         from backend.services.model_quota import admit_model_call, ModelQuotaError
         estimate = _shared_input_estimate(messages, image_count=image_count)
         try:
-            admit_model_call(owner_id, "shared", estimated_input_tokens=estimate)
+            admit_model_call(owner_id, "shared", estimated_input_tokens=estimate, shared_sol=sol)
         except ModelQuotaError as exc:
             raise SharedPoolLimitError(str(exc)) from None
 
@@ -140,18 +140,23 @@ class _SharedPoolUsageLimiter:
 _shared_pool_usage = _SharedPoolUsageLimiter()
 
 
-def shared_provider_configs() -> list[ProviderConfig]:
+SHARED_OPENAI_MODELS = ("gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol")
+
+
+def shared_provider_configs(*, frontier_demo: bool = False) -> list[ProviderConfig]:
     """One source for environment credentials, registry seeding and fingerprints."""
     configs = []
-    for provider_type in ("gemini", "openai", "zhipu", "anthropic", "deepseek", "moonshot", "qwen"):
+    provider_types = ("gemini", "openai", "zhipu", "anthropic", "deepseek", "moonshot", "qwen") if frontier_demo else ("openai",)
+    for provider_type in provider_types:
         api_key = getattr(settings, provider_type + "_api_key")
         if not api_key or (provider_type == "openai" and api_key == "YOUR_API_KEY_HERE"):
             continue
-        configs.append(ProviderConfig(
-            provider_type=provider_type, api_key=api_key,
-            model=getattr(settings, provider_type + "_model"),
-            base_url=getattr(settings, provider_type + "_api_base", None),
-        ))
+        models = (getattr(settings, provider_type + "_model"),) if frontier_demo else SHARED_OPENAI_MODELS
+        for model in models:
+            configs.append(ProviderConfig(
+                provider_type=provider_type, api_key=api_key, model=model,
+                base_url=getattr(settings, provider_type + "_api_base", None),
+            ))
     return configs
 
 
@@ -176,7 +181,8 @@ class _GuardedSharedProvider:
             return
         if not settings.shared_pool_enabled:
             raise SharedPoolLimitError("shared_pool_disabled")
-        _shared_pool_usage.consume(self._owner_id, messages, image_count=image_count)
+        _shared_pool_usage.consume(self._owner_id, messages, image_count=image_count,
+                                   sol=self.provider_type == "openai" and self.model == "gpt-6.1-sol")
 
     async def ainvoke(self, messages: List[Any], *, max_output_tokens: int | None = None) -> LLMResponse:
         self._admit(messages)
@@ -210,19 +216,19 @@ class ExpertRegistry:
         self._providers: Dict[str, BaseProvider] = {}  # keyed by provider_id
         self._configs: Dict[str, ProviderConfig] = {}  # keyed by provider_id
         self._verification: Dict[str, Dict[str, object]] = {}
+        self._shared_ids: set[str] = set()
         self._lock = Lock()
         self._shared_owner_id = shared_owner_id
         self._frontier_demo = bool(frontier_demo and settings.frontier_demo_enabled)
-        self._uses_shared_pool = bool(
+        seed_shared = bool(
             seed_from_settings and (settings.shared_pool_enabled or self._frontier_demo)
         )
-        if self._uses_shared_pool:
+        if seed_shared:
             self._seed_from_settings()
-            self._uses_shared_pool = bool(self._providers)
 
     def _seed_from_settings(self) -> None:
-        """Populate from env vars at startup. User can override via API."""
-        for config in shared_provider_configs():
+        """Seed server-managed presets; owner records are registered separately."""
+        for config in shared_provider_configs(frontier_demo=self._frontier_demo):
             self._register_shared_setting(config)
 
     def _register_shared_setting(self, config: ProviderConfig) -> None:
@@ -246,7 +252,7 @@ class ExpertRegistry:
                 config.provider_type,
             )
             return
-        provider_id = self.register(config)
+        provider_id = self.register(config, shared_pool=True)
         if self._shared_owner_id and self._shared_owner_id != "anonymous":
             from backend.db.shared_image_repository import shared_image_evidence, record_shared_image_rejection
             snapshot = shared_image_evidence(self._shared_owner_id, config)
@@ -265,6 +271,7 @@ class ExpertRegistry:
         verification_status: str = "unverified",
         last_checked_at: float | None = None,
         verification_error_code: str | None = None,
+        shared_pool: bool = False,
     ) -> str:
         """Register or update a provider. Returns its provider_id."""
         custom_route = is_user_defined_provider_endpoint(
@@ -272,7 +279,7 @@ class ExpertRegistry:
             config.base_url,
             config.wire_protocol,
         )
-        if self._uses_shared_pool and custom_route:
+        if shared_pool and custom_route:
             raise ValueError("custom_provider_shared_pool_not_allowed")
         if custom_route and not settings.custom_provider_endpoints_available:
             registry_id = provider_id or f"{config.provider_type}:{config.model}"
@@ -293,9 +300,13 @@ class ExpertRegistry:
         config = config.model_copy(update={
             "scheduling_owner": self._shared_owner_id or "anonymous",
         })
-        provider = build_configured_provider(config, stored=stored, shared_pool=self._uses_shared_pool)
+        provider = build_configured_provider(config, stored=stored, shared_pool=shared_pool)
         registry_id = provider_id or provider.provider_id
         with self._lock:
+            if shared_pool:
+                self._shared_ids.add(registry_id)
+            else:
+                self._shared_ids.discard(registry_id)
             self._providers[registry_id] = provider
             self._configs[registry_id] = config
             self._verification[registry_id] = {
@@ -316,6 +327,7 @@ class ExpertRegistry:
             self._providers.pop(provider_id, None)
             self._configs.pop(provider_id, None)
             self._verification.pop(provider_id, None)
+            self._shared_ids.discard(provider_id)
         if existed:
             logger.info(f"Unregistered expert: {provider_id}")
         return existed
@@ -364,7 +376,7 @@ class ExpertRegistry:
         )
 
     def _guard_shared(self, provider: Optional[BaseProvider]):
-        if provider is None or not self._uses_shared_pool:
+        if provider is None or self._registry_id_for_provider(provider) not in self._shared_ids:
             return provider
         return _GuardedSharedProvider(provider, self._shared_owner_id or "anonymous", frontier_demo=self._frontier_demo)
 
@@ -400,6 +412,7 @@ class ExpertRegistry:
                 provider_id: config.model_copy(deep=True)
                 for provider_id, config in self._configs.items()
                 if self._is_text_available_unlocked(provider_id)
+                and provider_id not in self._shared_ids
                 and not is_user_defined_provider_endpoint(
                     config.provider_type,
                     config.base_url,
@@ -408,7 +421,10 @@ class ExpertRegistry:
             }
 
     def uses_shared_pool(self) -> bool:
-        return self._uses_shared_pool
+        return bool(self._shared_ids)
+
+    def is_shared(self, provider_id: str) -> bool:
+        return provider_id in self._shared_ids
 
     def list_configs(self) -> List[Dict[str, object]]:
         """Return redacted config dicts (api_key stripped) for UI listing.
@@ -468,6 +484,7 @@ class ExpertRegistry:
 
             out: List[Dict[str, object]] = []
             for pid, c in self._configs.items():
+                shared = pid in self._shared_ids
                 verification = self._verification.get(pid, {})
                 # Live image evidence belongs to this owner's adapter. Keep
                 # the original config for frozen workflow serialization.
@@ -495,15 +512,15 @@ class ExpertRegistry:
                     "max_concurrent": initial_concurrency(c.rpm),
                     "concurrency_mode": "automatic",
                     "rpm": c.rpm,
-                    "scope": "shared" if self._uses_shared_pool else "owner",
-                    "is_shared": self._uses_shared_pool,
-                    "editable": not self._uses_shared_pool,
+                    "scope": "shared" if shared else "owner",
+                    "is_shared": shared,
+                    "editable": not shared,
                     "supports_vision": getattr(provider, "supports_vision", None),
                     "image_capability_status": image_config.image_capability_status,
                     "image_checked_at": _iso_utc_timestamp(image_config.image_checked_at),
                     "image_reason": image_config.image_reason,
                     "verification_status": (
-                        "platform_managed" if self._uses_shared_pool
+                        "platform_managed" if shared
                         else verification.get("verification_status", "unverified")
                     ),
                     "last_checked_at": _iso_utc_timestamp(
@@ -549,15 +566,17 @@ class ExpertRegistry:
         return len(self.list_available())
 
     def pick_default(self) -> Optional[BaseProvider]:
-        """Return one provider for single-expert mode.
-        Prefers the setting's default_provider type, falls back to first available."""
+        """Prefer an owner configuration; otherwise use the platform default."""
         available = self.list_available()
-        if not available:
-            return None
-        for p in available:
-            if p.provider_type == settings.default_provider:
-                return p
-        return available[0]
+        owned = [provider for provider in available if not getattr(provider, "is_shared_pool", False)]
+        if owned:
+            available = owned
+        elif not self._frontier_demo:
+            luna = next((provider for provider in available if provider.provider_id == "openai:gpt-6-luna"), None)
+            if luna is not None:
+                return luna
+        return next((provider for provider in available if provider.provider_type == settings.default_provider),
+                    available[0] if available else None)
 
     def pick_default_id(self) -> Optional[str]:
         """Return the registry key for the deterministic default provider.
@@ -577,6 +596,11 @@ class ExpertRegistry:
             )
         if not enabled:
             return None
+        owned = [item for item in enabled if item[0] not in self._shared_ids]
+        if owned:
+            enabled = owned
+        elif not self._frontier_demo and any(pid == "openai:gpt-6-luna" for pid, _ in enabled):
+            return "openai:gpt-6-luna"
         preferred = next(
             (
                 provider_id
@@ -648,7 +672,7 @@ class ExpertRegistryView:
         ]
 
     def uses_shared_pool(self) -> bool:
-        return self._registry.uses_shared_pool()
+        return any(self._registry.is_shared(pid) for pid in self._provider_ids)
 
     def count(self) -> int:
         return len(self.list_available())
@@ -698,10 +722,6 @@ def resolve_owner_default_provider_id(
             return picker()
         provider = registry.pick_default()
         return str(provider.provider_id) if provider is not None else None
-
-    uses_shared_pool = getattr(registry, "uses_shared_pool", None)
-    if callable(uses_shared_pool) and uses_shared_pool():
-        return registry_default_id()
 
     from backend.db.provider_repository import (
         ensure_default_provider_id,
@@ -785,11 +805,8 @@ def _build_scoped_registry(current) -> ExpertRegistry:
             current.id,
             master_key=settings.provider_encryption_key,
         )
-        # BYOK and the shared environment pool must never be combined. An owner
-        # with at least one persisted config receives only those configs;
-        # otherwise an explicitly enabled shared pool is used as fallback.
+        # Platform presets coexist with owner records; source is per entry.
         registry = ExpertRegistry(
-            seed_from_settings=not stored_configs,
             shared_owner_id=owner_id,
         )
         for stored in stored_configs:

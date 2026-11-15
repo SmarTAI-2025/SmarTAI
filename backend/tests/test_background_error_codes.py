@@ -76,7 +76,7 @@ def test_dns_rebinding_block_keeps_its_safe_specific_code():
 
 @pytest.mark.parametrize(
     "code",
-    ["shared_pool_disabled", "shared_pool_daily_limit_reached"],
+    ["shared_pool_disabled", "shared_pool_daily_limit_reached", "shared_pool_sol_daily_limit_reached"],
 )
 def test_shared_pool_preflight_failures_keep_their_safe_codes(code):
     cause = SharedPoolLimitError(code)

@@ -70,6 +70,32 @@ def _seed_user(role: str) -> str:
     return uid
 
 
+@pytest.mark.parametrize("request_limit,token_limit", [(10, 1000), (100, 100)])
+def test_shared_sol_subcap_and_total_are_atomic_on_postgres(pg_database, monkeypatch, request_limit, token_limit):
+    from backend.config import settings
+    from backend.db.session import session_scope, configure_database
+    from backend.services.model_quota import admit_model_call, ModelQuotaError, model_usage
+    monkeypatch.setattr(settings, "shared_pool_daily_request_limit", request_limit)
+    monkeypatch.setattr(settings, "shared_pool_daily_estimated_token_limit", token_limit)
+    owner = _seed_user("teacher")
+    def call(sol):
+        try:
+            admit_model_call(owner, "shared", shared_sol=sol, estimated_input_tokens=10)
+            return True
+        except ModelQuotaError:
+            return False
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        assert sum(pool.map(call, [True] * 24)) == 5
+        assert sum(pool.map(call, [True, False] * 20)) == 5
+    configure_database().dispose()
+    with session_scope() as session:
+        usage = model_usage(session, owner)
+    assert usage["shared"]["requests"] == 10
+    assert usage["shared"]["estimated_input_tokens"] == 100
+    assert usage["shared_sol"]["requests"] == 5
+    assert usage["shared_sol"]["estimated_input_tokens"] == 50
+
+
 @pytest.mark.asyncio
 async def test_provider_admission_recovers_a_conflicting_learning_write(pg_database, monkeypatch):
     from backend.tests.test_adaptive_admission_lifecycle import (

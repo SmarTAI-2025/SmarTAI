@@ -351,9 +351,9 @@ def test_missing_provider_master_key_keeps_shared_pool_for_owner_without_byok(
 
     assert response.status_code == 200
     providers = response.json()
-    assert len(providers) == 1
-    assert providers[0]["is_shared"] is True
-    assert providers[0]["model"] == "shared-test-model"
+    assert len(providers) == 3
+    assert all(p["is_shared"] for p in providers)
+    assert {p["model"] for p in providers} == {"gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"}
     assert "sk-shared-test-only" not in response.text
 
 

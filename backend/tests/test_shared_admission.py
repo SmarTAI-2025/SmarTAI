@@ -173,6 +173,7 @@ async def test_matching_platform_and_byok_share_cooldown_but_learn_from_their_ow
     monkeypatch.setattr(settings, "shared_pool_enabled", True)
     monkeypatch.setattr(settings, "openai_api_key", config.api_key)
     monkeypatch.setattr(settings, "openai_model", config.model)
+    monkeypatch.setattr("backend.llm.registry.SHARED_OPENAI_MODELS", (config.model,))
     monkeypatch.setattr(settings, "openai_api_base", platform_url)
     for name in ("gemini", "zhipu", "anthropic", "deepseek", "moonshot", "qwen"):
         monkeypatch.setattr(settings, name + "_api_key", "")

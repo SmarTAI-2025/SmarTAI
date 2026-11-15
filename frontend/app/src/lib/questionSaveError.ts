@@ -15,6 +15,7 @@ export function questionSaveError(error: unknown, locale: string) {
     case "provider_zero_quota":
     case "provider_daily_quota_exceeded":
     case "shared_pool_daily_limit_reached":
+    case "shared_pool_sol_daily_limit_reached":
       return tx(locale, "请更换可用模型，或等模型额度恢复后再保存。", "Choose another available model, or save again once the model's quota is restored.");
     case "provider_model_not_found":
     case "provider_model_or_endpoint_not_found":

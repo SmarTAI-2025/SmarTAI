@@ -743,7 +743,7 @@ function ExpertTableRow({
       </td>
       <td className="px-3 text-center align-middle">
         <VerificationBadge expert={expert} locale={locale} />
-        {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={verificationDisabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
+        <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={verificationDisabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction>
       </td>
       <td className="px-3 text-center align-middle">
         <ImageVerification expert={expert} locale={locale} disabled={verificationDisabled} onVerifyImage={onVerifyImage} />
@@ -796,6 +796,7 @@ function ExpertMobileRow(props: ExpertRowProps) {
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
               <p className="truncate font-semibold">{modelDisplayName(expert)}</p>
+              {expert.is_shared ? <span className="shrink-0 text-xs text-blue-700">{zh ? "平台" : "Platform"}</span> : null}
               {expert.is_default ? <DefaultBadge locale={locale} /> : null}
             </div>
             <p className="mt-1 truncate text-xs text-muted-foreground">
@@ -807,7 +808,7 @@ function ExpertMobileRow(props: ExpertRowProps) {
       </div>
       <div className="grid grid-cols-2 items-start gap-3 text-center text-xs text-muted-foreground">
         <div><p>{zh ? "文本测试" : "Text test"}</p><VerificationBadge expert={expert} locale={locale} />
-          {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={props.onVerify} disabled={props.verificationDisabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
+          <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={props.onVerify} disabled={props.verificationDisabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction>
         </div>
         <div><p>{zh ? "图像测试" : "Image test"}</p><ImageVerification expert={expert} locale={locale} disabled={props.verificationDisabled} onVerifyImage={props.onVerifyImage} /></div>
       </div>
@@ -1634,6 +1635,7 @@ function verificationReasonSummary(reason: string, zh: boolean) {
     image_probe_response_truncated: ["测试响应未完成", "Response truncated"],
     provider_vision_not_supported: ["不支持图片", "No image support"],
     shared_pool_daily_limit_reached: ["今日共享额度用完", "Daily quota used"],
+    shared_pool_sol_daily_limit_reached: ["Sol 今日半额已用完", "Sol daily half-allowance used"],
     shared_pool_disabled: ["共享模型已关闭", "Shared pool off"],
   };
   const aliases: Record<string, string> = {
@@ -1658,6 +1660,7 @@ function imageReasonLabel(reason: string, zh: boolean) {
     expert_verification_connection_failed: ["网络连接失败", "Network connection failed"],
     expert_verification_model_not_found: ["模型或端点不存在", "Model or endpoint not found"],
     shared_pool_daily_limit_reached: ["共享模型日额度已用完，可等待重置或配置自己的模型", "Shared daily allowance exhausted; wait for reset or use BYOK"],
+    shared_pool_sol_daily_limit_reached: ["Sol 今日半额已用完，可选择 Luna、Terra 或自己的模型", "Sol's daily half-allowance is exhausted; choose Luna, Terra or your own model"],
     shared_pool_disabled: ["平台共享模型当前关闭", "The shared model pool is disabled"],
   };
   return labels[reason]?.[zh ? 0 : 1] ?? expertErrorMessage(reason, zh ? "zh-CN" : "en-US")
