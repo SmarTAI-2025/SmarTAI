@@ -7,6 +7,7 @@ this agent owns ordering, progress and the single atomic result payload.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 import unicodedata
 import uuid
@@ -42,6 +43,8 @@ from backend.services.background_errors import classify_background_error
 from backend.services.question_structure import (
     MajorQuestionStructureV1,
     QuestionRubricValidationError,
+    summarize_rubric_points,
+    _allocation_marker_pattern,
     validate_generated_math_rubric_percentages,
     validate_rubric_points,
 )
@@ -368,9 +371,9 @@ async def generate_major_question_materials(
                         _validate_major_question_candidates(q_id, targets_by_question[q_id],
                                                             candidates, problems_data[q_id])
                     except ValidationError as exc:
-                        raise StructuredOutputInvalidError(
-                            "Generated material omitted required content or violated scoring constraints."
-                        ) from exc
+                        error = StructuredOutputInvalidError("Generated material failed question validation.")
+                        error.repair_context = exc.message
+                        raise error from exc
                 candidates = await generate_missing_question_materials(
                     problems_data={q_id: problems_data[q_id]},
                     requested_targets=targets_by_question[q_id],
@@ -486,27 +489,27 @@ def _validate_major_question_candidates(
         structure = MajorQuestionStructureV1.model_validate(
             problem.get("question_structure")
         )
+        typed = candidate.rubric_draft and (candidate.rubric_draft.get("plan") or {}).get("part_rubric")
         if candidate.target == "criterion" and structure.subparts:
+            summary = summarize_rubric_points(candidate.text_value or "", problem.get("max_score", 10), structure, rubric_draft=candidate.rubric_draft)
+            if not summary.is_valid or not summary.has_explicit_subpart_points:
+                present = {item.label for item in summary.items}
+                missing = [part.label for part in structure.subparts if part.label not in present]
+                raise ValidationError(
+                    f"{summary.issue_code or 'rubric_subpart_points_incomplete'}. "
+                    f"Missing subparts: {', '.join(missing) or 'none'}. "
+                    f"Parsed budgets: {', '.join(f'{i.label}={i.points}' for i in summary.items) or 'none'}. "
+                    f"Required total: {summary.major_max_score}; parsed total: {summary.total_points or '0'}. "
+                    "Return one allocation for each subpart, with separately identified steps when needed.",
+                    code="provider_response_invalid",
+                )
+        if candidate.target == "criterion" and not typed:
+            expected_points = problem.get("teacher_subpart_points") or {}
             try:
-                rubric_summary = validate_rubric_points(
-                    candidate.text_value or "",
-                    problem.get("max_score", 10),
-                    structure,
-                )
-            except QuestionRubricValidationError as exc:
-                raise ValidationError(
-                    "The generated rubric did not preserve the major-question score.",
-                    code="provider_response_invalid",
-                ) from exc
-            if not rubric_summary.has_explicit_subpart_points:
-                raise ValidationError(
-                    "The generated rubric omitted explicit subpart allocations.",
-                    code="provider_response_invalid",
-                )
-        if candidate.target == "criterion":
-            validate_teacher_subpart_rubric(
-                candidate.text_value or "", problem, problem.get("teacher_subpart_points") or {},
-            )
+                validate_teacher_subpart_rubric(candidate.text_value or "", problem, expected_points)
+            except ValidationError as exc:
+                raise ValidationError("Preserve the teacher's subpart budgets: " + ", ".join(
+                    f"{label}={points}" for label, points in expected_points.items()), code=exc.code) from exc
             try:
                 validate_generated_math_rubric_percentages(
                     candidate.text_value or "",
@@ -522,13 +525,11 @@ def _validate_major_question_candidates(
             normalized_answer = unicodedata.normalize(
                 "NFKC", candidate.text_value or ""
             ).casefold()
-            if any(
-                unicodedata.normalize("NFKC", part.label).casefold()
-                not in normalized_answer
-                for part in structure.subparts
-            ):
+            missing = [part.label for part in structure.subparts
+                       if not re.search(_allocation_marker_pattern(part.label), normalized_answer, re.I)]
+            if missing:
                 raise ValidationError(
-                    "The generated answer omitted a labelled subpart.",
+                    "The generated answer omitted subparts: " + ", ".join(missing),
                     code="provider_response_invalid",
                 )
         accepted[candidate.target_id] = candidate
@@ -893,6 +894,8 @@ async def prepare_question_packages(
         completed_steps=3,
         message="Generating complete answers for material not supplied by the teacher",
     )
+    for problem in problem_data.values():
+        problem["rubric_generation_preferences"] = {"follow_through_strictness": score_policy.follow_through_strictness}
     requested_targets = requested_major_question_materials(problem_data)
 
     teacher_points = teacher_score_requirements(problem_data, score_policy)
@@ -1012,7 +1015,7 @@ async def prepare_question_packages(
             rubric_summary = validate_rubric_points(
                 str(problem.get("criterion") or ""),
                 problem.get("max_score", 10),
-                structure,
+                structure, rubric_draft=problem.get("rubric_draft"),
             )
         except QuestionRubricValidationError as exc:
             raise ValidationError(
@@ -1099,6 +1102,7 @@ async def prepare_ocr_question_packages(
                 [],
             ))
         problem["preparation_issues"] = issues
+        problem["rubric_generation_preferences"] = {"follow_through_strictness": score_policy.follow_through_strictness}
 
         try:
             structure = MajorQuestionStructureV1.model_validate(
@@ -1107,7 +1111,7 @@ async def prepare_ocr_question_packages(
             problem["rubric_point_summary"] = validate_rubric_points(
                 str(problem.get("criterion") or ""),
                 problem.get("max_score", 10),
-                structure,
+                structure, rubric_draft=problem.get("rubric_draft"),
             ).model_dump()
         except QuestionRubricValidationError as exc:
             raise ValidationError(

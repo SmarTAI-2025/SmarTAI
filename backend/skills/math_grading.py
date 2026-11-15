@@ -14,12 +14,14 @@ from pathlib import Path
 from time import perf_counter
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError, field_validator, model_validator
 
+from backend.services.part_rubric import supplied_notation
+from backend.skills.part_scoring import INSTRUCTION as PART_SCORING_INSTRUCTION, PROOF_INSTRUCTION, PartDecision, ReasonedDecision, settle_parts
 from backend.models import ExpertResult, GradingConfidence, StepScore
 from backend.skills.base import (
     GradingSkill, authoritative_score_instruction, build_system_prompt,
-    classify_skill_error,
+    classify_skill_error, format_deterministic_feedback,
 )
 from backend.tools import knowledge as kb_tool
 from backend.tools.structured_llm import PermanentLLMError, TransientLLMError, structured_llm_call
@@ -136,18 +138,9 @@ class EvidenceJudgment(BaseModel):
     reason: str = Field(min_length=1)
 
 
-class MathAssessment(BaseModel):
-    route_id: str
-    route_reason: str
+class EvidenceAssessment(BaseModel):
     claims: list[Claim] = Field(default_factory=list, max_length=_MAX_ASSESSMENT_CLAIMS)
     checks: list[Verification] = Field(default_factory=list, max_length=8)
-    awards: list[Award] = Field(default_factory=list, max_length=80)
-    deductions: list[Deduction] = Field(default_factory=list, max_length=80)
-    score: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-    binary_correct: bool | None = Field(default=None, strict=True, description=(
-        "For an explicit whole-question zero/full rule only: whether the entire final answer "
-        "satisfies that rule. Judge correctness independently of the proposed numerical score."
-    ))
     confidence: GradingConfidence = 0.0
     rationale: str = ""  # Detailed evidence for holistic scoring; comment stays concise.
     comment: str = Field(description=(
@@ -157,6 +150,105 @@ class MathAssessment(BaseModel):
     ))
     needs_review: bool = False
     evidence_judgments: list[EvidenceJudgment] = Field(default_factory=list, max_length=8)
+
+
+class FrozenPartAssessment(EvidenceAssessment):
+    """Wire shape for frozen written rubrics, including independent review."""
+    model_config = ConfigDict(extra="forbid")
+    part_decisions: list[PartDecision] = Field(min_length=1, max_length=100)
+
+    def assessment(self):
+        return MathAssessment(route_id="parts", route_reason="Frozen part rules", **self.model_dump())
+
+
+class ProofPartAssessment(FrozenPartAssessment):
+    part_decisions: list[ReasonedDecision] = Field(min_length=1, max_length=100)
+
+
+class AddressedPartAssessment(FrozenPartAssessment):
+    """On repair, select original line numbers instead of retyping their mathematics."""
+
+    @classmethod
+    def model_json_schema(cls, *args, **kwargs):
+        schema = super().model_json_schema(*args, **kwargs)
+        addresses = {
+            "type": "array",
+            "items": {"type": "integer", "minimum": 1, "maximum": 500000},
+            "maxItems": 100,
+            "description": "Original student line numbers, e.g. [1, 3].",
+        }
+        for name, field in (
+            ("PartDecision", "student_quote"),
+            ("StepDecision", "evidence"),
+        ):
+            schema["$defs"][name]["properties"][field] = addresses
+        return schema
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_line_numbers(cls, value):
+        if not isinstance(value, dict) or not isinstance(
+            value.get("part_decisions"), list
+        ):
+            return value
+
+        def addressed(item, key):
+            if not isinstance(item, dict) or not isinstance(item.get(key), list):
+                return item
+            numbers = item[key]
+            if len(numbers) > 100 or any(
+                type(n) is not int or not 1 <= n <= 500000 for n in numbers
+            ):
+                raise ValueError("Source line numbers must be positive integers.")
+            return {**item, key: ", ".join(f"student:{n}" for n in numbers)}
+
+        parts = []
+        for raw in value["part_decisions"]:
+            part = addressed(raw, "student_quote")
+            if isinstance(part, dict) and isinstance(part.get("steps"), list):
+                part = {
+                    **part,
+                    "steps": [addressed(step, "evidence") for step in part["steps"]],
+                }
+            parts.append(part)
+        return {**value, "part_decisions": parts}
+
+
+class StepsOnlyRepair(AddressedPartAssessment):
+    """The selected frozen routes have no independently chargeable deductions."""
+
+    @classmethod
+    def model_json_schema(cls, *args, **kwargs):
+        schema = super().model_json_schema(*args, **kwargs)
+        schema["$defs"]["PartDecision"]["properties"]["errors"] = {
+            "type": "array",
+            "maxItems": 0,
+        }
+        schema["$defs"].pop("ErrorEvent", None)
+        return schema
+
+    @model_validator(mode="after")
+    def step_ledger_only(self):
+        if any(d.errors for d in self.part_decisions):
+            raise ValueError(
+                "For step scoring put error explanations in the affected step reasons; leave errors empty."
+            )
+        return self
+
+
+class MathAssessment(EvidenceAssessment):
+    part_decisions: list[PartDecision] = Field(
+        default_factory=list, max_length=100, exclude_if=lambda v: not v
+    )
+    route_id: str
+    route_reason: str
+    awards: list[Award] = Field(default_factory=list, max_length=80)
+    deductions: list[Deduction] = Field(default_factory=list, max_length=80)
+    score: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    binary_correct: bool | None = Field(default=None, strict=True, description=(
+        "For an explicit whole-question zero/full rule only: whether the entire final answer "
+        "satisfies that rule. Judge correctness independently of the proposed numerical score."
+    ))
 
 
 class DirectMathGrade(BaseModel):
@@ -224,6 +316,26 @@ class PointRevision(BaseModel):
 class PointReview(BaseModel):
     """Narrow generation schema when the entire dispute is ordinary point credit."""
     revisions: list[SkipValidation[PointRevision]] = Field(max_length=10)
+
+
+class PartRevision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expert_index: int = Field(ge=0, strict=True)
+    reason: str = Field(min_length=1)
+    comment: str = Field(min_length=1)
+    decisions: list[PartDecision] = Field(min_length=1, max_length=100)
+
+
+class ProofPartRevision(PartRevision):
+    decisions: list[ReasonedDecision] = Field(min_length=1, max_length=100)
+
+
+class ProofPartReview(BaseModel):
+    revisions: list[SkipValidation[ProofPartRevision]] = Field(max_length=10)
+
+
+class PartReview(BaseModel):
+    revisions: list[SkipValidation[PartRevision]] = Field(max_length=10)
 
 
 _REVIEW_ENTRY = TypeAdapter(PointRevision | ExpertRevision)
@@ -391,6 +503,10 @@ def _default_fraction(kind, item, claims, targets, origin, plan):
 
 def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_text="") -> tuple[float, list[StepScore]]:
     """Validate and sum one selected rubric route; no CAS-result score rules."""
+    if plan.part_rubric is not None:
+        if assessment.route_id != "parts" or assessment.awards or assessment.deductions:
+            raise ValueError("Use the frozen parts only, without a second question-level ledger.")
+        return settle_parts(plan.part_rubric, assessment.part_decisions, answer, problem_text)
     claims = _claim_map(assessment, answer, plan, problem_text=problem_text)
     if answer.strip() and not claims:
         raise ValueError("detailed_assessment_requires_claims")
@@ -570,6 +686,27 @@ def _deduction_signature(assessment: MathAssessment) -> tuple:
                         for item in assessment.deductions))
 
 
+def _part_outcome(part):
+    method = "reference" if part.method == "minor_variant" else part.method
+    # A complete decision has already passed settlement at the full route cap.
+    # Explicit earned steps and the shorthand for a single earned step are identical.
+    steps = () if part.relevance == "complete" else tuple(sorted((s.id, s.outcome) for s in part.steps))
+    errors = tuple(sorted((e.rule_id, e.origin_quote) for e in part.errors))
+    return part.relevance, method, steps, errors, tuple(sorted(part.condition_results.items()))
+
+
+def _part_signature(assessment):
+    return tuple(sorted((part.part_id, _part_outcome(part)) for part in assessment.part_decisions))
+
+
+def _apply_part_revision(old, revision, review_parts):
+    edits = {d.part_id: d for d in revision.decisions}
+    if len(edits) != len(revision.decisions) or edits.keys() - review_parts:
+        raise ValueError("review_changed_undisputed_award")
+    decisions = [edits.get(part.part_id, part) for part in old.part_decisions]
+    return old.model_copy(update={"part_decisions": decisions, "comment": revision.comment})
+
+
 def _award_signatures(assessment):
     quotes = {claim.id: claim.quote for claim in assessment.claims}
     return {award.item_id: (award.score, award.conditional_credit, award.adjustment,
@@ -585,6 +722,7 @@ def math_scoring_disagreement(experts: list[ExpertResult]) -> bool:
             continue
         assessment = MathAssessment.model_validate(trace["assessment"])
         signatures.add((trace.get("plan_id"), assessment.route_id, expert.score,
+                        _part_signature(assessment),
                         tuple(sorted(_award_signatures(assessment).items())),
                         _deduction_signature(assessment)))
     scores = {expert.score for expert in experts if not expert.error_kind and read_math_trace(expert)}
@@ -622,7 +760,7 @@ def _with_pending_advice(expert, language):
     reasons = [item.get("reason", "") for item in trace.get("evidence", [])
                if item.get("status") in {"supported", "refuted"}]
     advice = []
-    if trace.get("review_pending"):
+    if trace.get("review_pending") and not trace.get("relevance_review_pending"):
         advice.append((label, label + ("; ".join(reasons) or (
             "核验反馈未完成。" if language == "zh" else "Evidence feedback did not complete."))))
     if proof_concerns:
@@ -658,12 +796,53 @@ def _validate_claim_identity(original: MathAssessment, revised: MathAssessment, 
         raise ValueError("review_changed_claim_identity")
 
 
+def _assessment_for_model(draft, plan):
+    """Project the persisted ledger back onto the schema used by this model call."""
+    fields = set(FrozenPartAssessment.model_fields) if plan.part_rubric else None
+    return draft.model_dump(mode="json", include=fields)
+
+
+def _proof_review_observations(decision, rules):
+    """Review a grouped proof's mathematics without repeating its old loss tier.
+
+    This is an input projection, never a replacement for the persisted ledger.
+    Numeric rules, source evidence and teacher conditions still come from the
+    unchanged plan. Non-grouped and alternative decisions keep their protocol.
+    """
+    part = next((p for p in rules.parts if p.id == decision.part_id), None)
+    if (part is None or part.steps or not part.deductions or not decision.errors
+            or not all(rule.exclusive_group for rule in part.deductions)
+            or decision.method not in {"reference", "minor_variant"}):
+        return decision.model_dump(mode="json", exclude_defaults=True)
+    observations = []
+    if decision.goal_findings:
+        observations = [finding.model_dump(
+            mode="json", exclude={"repair"}, exclude_defaults=True
+        ) for finding in decision.goal_findings]
+    else:
+        groups = {rule.id: rule.exclusive_group for rule in part.deductions}
+        observations = [{"group": groups.get(event.rule_id), "evidence": event.evidence,
+                         "origin_quote": event.origin_quote, "remaining": event.reason}
+                        for event in decision.errors]
+    return {
+        "part_id": decision.part_id,
+        "target_quote": decision.target_quote,
+        "student_quote": decision.student_quote,
+        "method": decision.method,
+        "reference_method": decision.reference_method,
+        "student_method": decision.student_method,
+        "mathematical_observations": observations,
+    }
+
+
 def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=None, evidence=None):
     """Repair local validation failures within the parser's ONE repair budget.
 
     Matching excerpts are fixed before feedback and must survive a repair. A
     bad excerpt is never simply dropped (which could erase a valid deduction).
     """
+    from backend.services.count_witnesses import marked_counts, submitted_count_checks, require_consistent_count_grades
+    count_checks = submitted_count_checks(answer.content or "", marked_counts(problem.stem))
     preserved = {}
     catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
 
@@ -696,6 +875,7 @@ def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=No
                 _validate_claim_identity(original, draft, answer=answer.content or "", plan=plan,
                                          problem_text=problem.stem)
             score_assessment(draft, plan, answer.content or "", problem_text=problem.stem)
+            require_consistent_count_grades(count_checks, plan, draft, answer.content or "", problem.stem)
             if evidence is not None:
                 required = {item["evidence_id"] for item in evidence if item.get("status") in {"supported", "refuted"}}
                 ids = [item.evidence_id for item in draft.evidence_judgments]
@@ -716,12 +896,15 @@ def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=No
             }.get(str(exc), "")
             error.repair_context = _json({"validation_error": str(exc), "validation_hint": hint,
                 "unresolved_sources": unresolved,
-                "preserve_claim_quotes": preserved, "draft": draft.model_dump(mode="json"),
-                "repair_scope": "Fix invalid source citations or ledger links using the original input. "
+                "preserve_claim_quotes": preserved, "draft": _assessment_for_model(draft, plan),
+                "repair_scope": ("Return the same part_decisions schema. Correct the indicated part or step, keeping "
+                    "valid source IDs. For step.evidence and student_quote use a student line ID or exact "
+                    "text, and for target_quote use part:<part_id>. Never supply a numeric score."
+                    if plan.part_rubric else "Fix invalid source citations or ledger links using the original input. "
                     "Preserve all located claim IDs and quotes. Do not invent omitted student work. "
                     "Use source_catalog IDs and empty quote fields for unresolved citations instead of "
                     "retyping or rewriting LaTeX. Do not drop claims merely to pass validation. "
-                    "Use omission evidence with a question/rubric source for a missing obligation."})
+                    "Use omission evidence with a question/rubric source for a missing obligation.")})
             raise error from exc
     return validate
 
@@ -831,6 +1014,90 @@ def _review_index(entry):
         return None
 
 
+def _part_proof_evidence(problem, rules=None):
+    if problem.type != "推理题":
+        return ""
+    correspondence = ""
+    if supplied_notation(problem.stem):
+        correspondence = (
+            "Read the quoted notation convention in context. Use only correspondences the source actually "
+            "grants; a conjecture, requested construction, prohibition or implication to prove is still "
+            "a student obligation. Apply a granted correspondence to the student's last justified "
+            "statement and compare with the target definition, including the direction(s) that must hold. "
+            "For an identification of objects by defining conditions, establishing equivalence in both "
+            "directions under the GIVEN correspondence establishes the identification itself. Award the "
+            "identification step when this holds; write the short substitution in the scoring reason. "
+            "Do not demand the student copy the supplied names. If withholding credit, identify the "
+            "mathematical condition still missing after substitution or quote the explicit source demand "
+            "for a separately written map. A one-way implication alone does not establish equivalence. "
+        )
+    # One proof can supply a premise to another independently scored goal.
+    # Single-goal parts already use the ordinary source/implication checks below.
+    cross_goal = ""
+    if rules and any(
+        len({rule.exclusive_group for rule in part.deductions if rule.exclusive_group}) > 1
+        for part in rules.parts
+    ):
+        cross_goal = (
+            "When a student explicitly states AND uses an intermediate fact, first check that fact on its own. "
+            "Distinguish an auxiliary fact from the actual result the problem asks them to prove. "
+            "Starting with the GIVEN laws, try to justify the stated fact: for a claimed form of an expression, "
+            "apply those laws to an arbitrary expression, showing what is eliminated at each rewrite and why "
+            "it terminates. For a standard theorem check its hypotheses, permitted method and actual use. "
+            "If this verifies a routine auxiliary fact, accept it as a premise everywhere it is used. "
+            "Apply the student's resulting general conclusion to the objects they use in the next goal. "
+            "In the judgment record the short mathematical justification and what still needs new work AFTER it. "
+            "Do not require a separate proof of an admissible intermediate fact merely because its justification "
+            "was omitted. A claimed target, a circular citation, an impermissible method or a missing independent "
+            "argument is still assessed under the frozen policy. Never invent a premise the student did not use. "
+        )
+    return "On the alternative route, use these proof checks to support the decision and independent errors only. " + correspondence + (
+        "\nFor each scored proof obligation, check what follows from the cited student statements under "
+        "the problem's hypotheses and definitions. A direct consequence of a definition, a substitution "
+        "or a reversible algebraic equality may establish the goal without an extra sentence. "
+    ) + cross_goal + (
+        "For an existence or uniqueness goal where the student supplies a witness or construction, "
+        "substitute that specific candidate into the defining conditions yourself over the ENTIRE "
+        "stated domain. Record the resulting short calculation in the decision's progress or step "
+        "reason. If it follows immediately with no new choice, lemma or case, mark the step earned. "
+        "Naming the requested witness is evidence beyond asserting the theorem. If it fails at an "
+        "admissible input or requires an unwritten substantive argument, identify that input or gap. "
+        "An AI rubric saying 'verify' describes what must be true; require a written intermediate "
+        "calculation only if the question or teacher explicitly asks for it. "
+        "For each missed goal, name the substantive premise, invalid implication, unproved case or "
+        "explicit teacher requirement that remains. A chain of equivalences can prove both implications. For a universal result, compare the domain "
+        "actually covered by the cited argument to the original domain. A partial-domain example in an "
+        "AI-authored step cannot discharge the missing cases. "
+        "Do not count a single missing justification again when its conclusion follows independently "
+        "from the student's written premises. A bare restatement of the claim, a circular argument or "
+        "examples covering only a special case do not establish a general proof. If the transcription "
+        "has conflicting spatial order or unreadable notation that changes this judgment, identify the "
+        "affected step and request review. Preserve all explicit teacher requirements.\n"
+    )
+
+
+def _part_rule_projection(rules, part_ids=None):
+    """Only executable rules and their sources belong in an expert's input."""
+    data = rules.model_dump(mode="json", exclude={"teacher_gaps", "low_confidence"})
+    if part_ids is not None:
+        data["parts"] = [part for part in data["parts"] if part["id"] in part_ids]
+    return data
+
+
+def _expert_sources(catalog, plan):
+    # AI-authored rubric prose is a rendering of the same JSON, not another
+    # teacher instruction. Keep the original text and line IDs for supplied policies.
+    generated = plan.part_rubric and plan.part_rubric.rubric_origin == "ai"
+    return {key: entry[0] for key, entry in catalog.items()
+            if not (generated and key.startswith("rubric:"))}
+
+
+def _adopted_problem(problem, plan):
+    if plan.adopted_material is None:
+        return problem
+    return problem.model_copy(update=plan.adopted_material.model_dump())
+
+
 def _generated_proof_guidance(problem):
     from backend.services.math_rubric_plan import _question_input
     if problem.type != "推理题" or _question_input(problem)["criterion_source"] != "ai":
@@ -840,8 +1107,8 @@ def _generated_proof_guidance(problem):
         "Unless the question or teacher specifies a method, an item describing a reference step is one "
         "way to earn its allocated credit. For another route, identify the corresponding mathematical "
         "work (premise or witness, decisive inference, conclusion) in the student's text. A counterexample "
-        "to a different necessary condition can prove the same negative claim. Credit a complete valid "
-        "proof across the applicable items even when its lemma is different. Keep item budgets, independent "
+        "to a different necessary condition can prove the same negative claim. Under a per-part rubric, "
+        "settle a different strategy using only its alternative policy. Keep independent "
         "subquestions, explicit instructions and real gaps intact. Give the precise missing implication "
         "if withholding credit. An unsupported conclusion alone does not earn the reasoning points.\n"
     )
@@ -870,14 +1137,14 @@ def _point_review_evidence(assessment, trace, disputed):
 
 async def review_math_experts(problem, answer, experts, provider, *, language="en", grading_setup=None):
     """Resolve concrete disagreements once, retaining weights and provenance."""
-    from backend.services.math_grading_context import get_math_plan
-    from backend.services.math_rubric_plan import fallback_math_rubric_plan
+    from backend.services.math_grading_context import scoring_plan
     traces = [read_math_trace(expert) for expert in experts]
     if not all(trace and ("assessment" in trace or "direct" in trace) for trace in traces):
         return experts
-    plan = get_math_plan(problem) or fallback_math_rubric_plan(problem, grading_setup=grading_setup)
+    plan = scoring_plan(problem, grading_setup)
     if any(trace["plan_id"] != plan.plan_id for trace in traces):
         return experts
+    problem = _adopted_problem(problem, plan)
     assessments = [MathAssessment.model_validate(trace["assessment"]) if "assessment" in trace else None for trace in traces]
     route_ids = {assessment.route_id for assessment in assessments if assessment is not None}
     signatures = [_award_signatures(assessment) if assessment is not None else {}
@@ -885,12 +1152,15 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
     item_ids = set().union(*(signature.keys() for signature in signatures))
     disputed = {key for key in item_ids
                 if len({signature.get(key) for signature in signatures}) > 1}
-    other_dispute = (len(route_ids) > 1 or
+    other_dispute = (len({_part_signature(a) for a in assessments if a is not None}) > 1 or len(route_ids) > 1 or
                      len({expert.score for expert in experts}) > 1 or
                      len({_deduction_signature(a) for a in assessments if a is not None}) > 1)
-    requested_review = any(a.needs_review for a in assessments if a is not None) or any(
-        trace.get("review_pending") or trace.get("proof_audit", {}).get("review_concerns") for trace in traces)
-    if not (disputed or other_dispute or requested_review) or not take_review_budget():
+    relevance_review = any(trace.get("relevance_review_pending") for trace in traces)
+    evidence_review = any(
+        (trace.get("review_pending") and not trace.get("relevance_review_pending"))
+        or trace.get("proof_audit", {}).get("review_concerns") for trace in traces)
+    requested_review = evidence_review or any(a.needs_review for a in assessments if a is not None)
+    if not (disputed or other_dispute or requested_review or relevance_review) or not take_review_budget():
         return experts
 
     catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
@@ -906,6 +1176,18 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                            for a in assessments)
                    and any(key.startswith("student:") for key in catalog)
                    and not requested_review and not any(t.get("evidence") for t in traces))
+    part_outcomes = [dict(_part_signature(a)) if a is not None else {} for a in assessments]
+    disputed_parts = {part.id for part in plan.part_rubric.parts
+                      if len({outcomes.get(part.id) for outcomes in part_outcomes}) > 1} if plan.part_rubric else set()
+    # A proof expert's own doubt concerns the judgment, not the identity of its
+    # immutable source claims. Only actual pending evidence needs the full format.
+    proof_judgment_review = (problem.type == "推理题" and requested_review and not evidence_review
+                             and not any(t.get("evidence") for t in traces))
+    review_parts = ({part.id for part in plan.part_rubric.parts}
+                    if plan.part_rubric and (relevance_review or proof_judgment_review) else disputed_parts)
+    compact_parts = bool(review_parts and all(a and a.part_decisions for a in assessments)
+                         and (not requested_review or proof_judgment_review) and not any(t.get("evidence") for t in traces))
+    part_revision = ProofPartRevision if problem.type == "推理题" else PartRevision
     accepted = {}
     validation_issues = []
     last_review = None
@@ -924,13 +1206,15 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
         for raw, index in zip(review.revisions, indices):
             revision = None
             try:
-                revision = _REVIEW_ENTRY.validate_python(raw)
+                revision = (part_revision.model_validate(raw) if compact_parts else _REVIEW_ENTRY.validate_python(raw))
                 if index is None or not 0 <= index < len(experts):
                     raise ValueError("review_source_or_expert_not_found")
                 if counts[index] != 1:
                     raise ValueError("duplicate_expert_revision")
                 old, trace = assessments[index], traces[index]
-                if isinstance(revision, PointRevision):
+                if isinstance(revision, PartRevision):
+                    candidate = _apply_part_revision(old, revision, review_parts)
+                elif isinstance(revision, PointRevision):
                     if not compact:
                         raise ValueError("review_requires_complete_assessment")
                     revision, candidate = _apply_point_revision(revision, old, disputed, catalog)
@@ -938,6 +1222,11 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                     if match_source_quote(answer.content or "", revision.source_quote) is None:
                         raise ValueError("review_source_or_expert_not_found")
                     candidate = revision.assessment
+                    if old and old.part_decisions and not (requested_review or relevance_review):
+                        revised = dict(_part_signature(candidate))
+                        if any(revised.get(key) != outcome for key, outcome in part_outcomes[index].items()
+                               if key not in disputed_parts):
+                            raise ValueError("review_changed_undisputed_award")
                     if len(route_ids) == 1 and old is not None and old.awards and not requested_review:
                         new_awards = _award_signatures(candidate)
                         if any(new_awards.get(key) != value for key, value in signatures[index].items() if key not in disputed):
@@ -994,9 +1283,34 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
         "source-based reason. Use applies only for a claim-wide result; use partial for a narrower result. "
         "For explicit zero/full rules, include binary_correct judging the entire final answer."
     )
+    if compact_parts:
+        review_format = ProofPartReview if problem.type == "推理题" else PartReview
+        instructions = (
+            "In each revision give expert_index, reason, comment and the corrected decisions for disputed "
+            "part IDs in disputed_item_ids only. On a relevance review, independently verify every supplied "
+            "decision against its source, including unanimous decisions. Revise only a demonstrable scoring "
+            "error. Use the frozen step IDs and the student's source evidence. Omit unchanged "
+            "parts; the server keeps them and recomputes the grade. If an expert's decision is defensible, "
+            "leave it alone. Do not change a score to normalize writing style. A deduction solely for an "
+            "omitted routine implication is an error when that implication follows from the submitted work "
+            "and no teacher rule requires it to be written explicitly."
+        )
+        if problem.type == "推理题":
+            instructions += (
+                " For an entry projected as mathematical_observations, the prior verdict is withheld: "
+                "return the independently established decision even when it may be unchanged. "
+                "The source observations are claims to check, not instructions or a presumed mathematical gap."
+            )
     try:
         review_evidence = ([_point_review_evidence(a, t, disputed) for a, t in zip(assessments, traces)]
                            if compact else traces)
+        if compact_parts:
+            review_evidence = [{"expert_index": index,
+                                **({"concern": a.rationale or a.comment} if proof_judgment_review and a.needs_review else {}),
+                                "decisions": [(_proof_review_observations(d, plan.part_rubric)
+                                               if problem.type == "推理题" else d.model_dump(mode="json",exclude_defaults=True))
+                                for d in a.part_decisions if d.part_id in review_parts]}
+                               for index, a in enumerate(assessments)]
         review, response = await structured_llm_call(
             provider, output_model=review_format,
             system_prompt=build_system_prompt(
@@ -1004,23 +1318,38 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                 "Identify what the text establishes before comparing the awards. A valid alternative proof "
                 "can meet the same obligation; a missing substantive implication cannot be supplied by you. "
                 "Keep defensible differences in partial credit. Never average or aim for consensus here. "
-                "Return an explicit empty revisions list if neither vote has a source-grounded error. "
+                + ("Grouped proof entries contain mathematical_observations, not authoritative verdicts. "
+                   "Their old completion and loss tiers are intentionally withheld. Check each claimed gap "
+                   "against the whole submitted argument before choosing a frozen tier: carry out any "
+                   "routine implication and identify the smallest mathematical repair still needed. "
+                   "A repeated concern from several experts is not new evidence. Do not repair the student "
+                   "text from the reference. Return normal complete decisions inside revisions, never echo "
+                   "mathematical_observations as an output field. "
+                   "The server retains the prior ledger until the new one validates. Preserve a valid substantive deduction; "
+                   "this check is not an instruction to raise scores. "
+                   if compact_parts and problem.type == "推理题" else "")
+                +
+                "For full-ledger entries return no revision if there is no source-grounded error. "
                 "Submit at most one revision per expert. Unknown tools are not evidence of error. "
                 "Keep teacher review suggestions optional. "
-                + proof_guidance
-                + instructions
+                + proof_guidance + (_part_proof_evidence(problem, plan.part_rubric) if plan.part_rubric else "")
+                + instructions + (PROOF_INSTRUCTION if review_format is ProofPartReview else "")
                 + ("\n" + REVIEW_INSTRUCTION + " After the complete review JSON, append PROOF_AUDIT "
                    "followed by a separate JSON object mapping each revised proof expert's index "
                    "(string) to an audit object with the same steps/context_source_ids shape as its trace. "
                    "This optional appendix must never be placed inside a revision or assessment."
-                   if any("proof_audit" in trace for trace in traces) else "")
-                + authoritative_score_instruction(problem.max_score)
+                   if not compact_parts and any("proof_audit" in trace for trace in traces) else "")
+                + (PART_SCORING_INSTRUCTION if plan.part_rubric else authoritative_score_instruction(problem.max_score))
                 + "\nJSON Schema:\n" + _json(review_format.model_json_schema()), language, grading_setup,
-                **({"output_instruction": OUTPUT_INSTRUCTION} if any("proof_audit" in trace for trace in traces) else {})),
+                **({"output_instruction": OUTPUT_INSTRUCTION} if not compact_parts and any("proof_audit" in trace for trace in traces) else {})),
             user_prompt=_json({"problem": problem.stem, "reference": problem.reference_answer,
-                               "answer": answer.content, "plan": plan.model_dump(mode="json"),
-                               "source_catalog": {key: value[0] for key, value in catalog.items()},
-                               "disputed_item_ids": sorted(disputed), "experts": review_evidence}),
+                               **({"source_supplied_correspondence": notation}
+               if plan.part_rubric and problem.type == "推理题" and (notation := supplied_notation(problem.stem)) else {}),
+                               "answer": answer.content,
+                               "plan": (_part_rule_projection(plan.part_rubric, review_parts if compact_parts else None)
+                                        if plan.part_rubric else plan.model_dump(mode="json")),
+                               "source_catalog": _expert_sources(catalog, plan),
+                               "disputed_item_ids": sorted(review_parts if compact_parts else disputed), "experts": review_evidence}),
             validate_output=validate_review,
         )
         # Mock callers may bypass structured_llm_call's validator; this is also
@@ -1041,6 +1370,8 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                     answer.content or "", problem.stem, plan, previous=trace["proof_audit"])
             trace.pop("review_advisory", None)
             trace["targeted_review"] = {"provider": provider.provider_id, "reason": revision.reason}
+            if isinstance(revision, PartRevision):
+                trace["targeted_review"]["part_ids"] = [d.part_id for d in revision.decisions]
             if isinstance(revision, PointRevision):
                 trace["targeted_review"]["item_ids"] = [award.item_id for award in revision.awards]
             if steps:
@@ -1062,6 +1393,17 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
                     status = "invalid_revision"
                 trace["review_diagnostic"] = {"status": status, "validation_issues": validation_issues}
                 revised[index] = expert.model_copy(update={"raw_output": _json(trace)})
+        for index, expert in enumerate(revised):
+            trace = read_math_trace(expert)
+            if not trace.get("relevance_review_pending") or index in rejected_indices:
+                continue
+            # A valid abstention also completes an independent relevance check.
+            # CAS evidence and unresolved proof concerns keep their own disposition.
+            trace.pop("relevance_review_pending")
+            current = MathAssessment.model_validate(trace["assessment"])
+            trace["review_pending"] = _evidence_pending(current, trace.get("evidence", []))
+            trace.pop("review_advisory", None)
+            revised[index] = expert.model_copy(update={"raw_output": _json(trace)})
         return [_with_pending_advice(expert, language) for expert in revised]
     except Exception as exc:
         if _critical_failure(exc):
@@ -1088,6 +1430,26 @@ def weighted_math_steps(experts, weights, maximum, score):
     same_route = len({trace.get("assessment", {}).get("route_id") for trace in traces}) == 1
     keys = [[award["item_id"] for award in trace.get("assessment", {}).get("awards", [])]
             for trace in traces]
+    if all(trace.get("assessment", {}).get("part_decisions") for trace in traces):
+        keys = [[(step.part_id, step.item_id) for step in expert.steps] for expert in experts]
+        if keys and any(group != keys[0] for group in keys):
+            # A method-specific deduction may have one subtotal where another
+            # expert has three steps. Compare the common frozen part IDs.
+            parts = list(dict.fromkeys(step.part_id for expert in experts for step in expert.steps))
+            reduced = []
+            for expert in experts:
+                totals = []
+                for index, part_id in enumerate(parts, 1):
+                    leaves = [step for step in expert.steps if step.part_id == part_id]
+                    totals.append(StepScore(step_no=index, part_id=part_id, item_id=None,
+                        score=float(sum((_points(step.score) for step in leaves), Decimal(0))),
+                        desc="\n".join(step.desc for step in leaves) or expert.comment,
+                        is_correct=bool(leaves) and all(step.is_correct for step in leaves)))
+                reduced.append(expert.model_copy(update={"steps": totals}))
+            experts = reduced
+            keys = [parts for _ in experts]
+    from backend.services.grading_scores import score_quantum
+    quantum = score_quantum(experts[0].steps)
     if same_route and keys[0] and all(key == keys[0] for key in keys) and all(
             len(expert.steps) == len(keys[0]) for expert in experts):
         result, subtotal, previous = [], Decimal(0), Decimal(0)
@@ -1095,9 +1457,10 @@ def weighted_math_steps(experts, weights, maximum, score):
             amount = sum(_points(expert.steps[index].score) * weight
                          for expert, weight in zip(experts, weights)) / sum(weights)
             subtotal += amount
-            current = _points(_rounded(subtotal, maximum))
+            current = min(_points(maximum), subtotal.quantize(quantum, rounding=ROUND_HALF_UP))
             desc = join_expert_feedback((expert.provider, expert.steps[index].desc) for expert in experts)
             result.append(StepScore(step_no=index + 1, desc=desc, score=float(current - previous),
+                                    part_id=experts[0].steps[index].part_id, item_id=experts[0].steps[index].item_id,
                                     is_correct=all(expert.steps[index].is_correct for expert in experts)))
             previous = current
         if _points(score) == previous:
@@ -1119,16 +1482,41 @@ class MathGradingSkill(GradingSkill):
     def _prompt(self, problem, answer, plan, context):
         # There is one maintained prompt per specialization, no embedded old
         # prompt or legacy scoring branch to become a silent fallback.
+        from backend.services.count_witnesses import marked_counts, submitted_count_checks
+        from backend.services.growth_order import ordered_growth_classes
+        checks = marked_counts(problem.stem)
+        growth = ordered_growth_classes(problem.stem)
         template = (Path(__file__).resolve().parents[1] / "prompts" /
                     f"{self.template_name}.txt").read_text(encoding="utf-8")
-        return template + "\n" + LEDGER_INSTRUCTION + _generated_proof_guidance(problem) + "\nINPUT DATA:\n" + _json({
+        return ("" if plan.part_rubric else template + "\n" + LEDGER_INSTRUCTION) + _generated_proof_guidance(problem) + "\nINPUT DATA:\n" + _json({
             "problem": problem.stem, "reference_answer": problem.reference_answer,
-            "student_answer": answer.content, "rubric_plan": plan.model_dump(mode="json"),
-            "binary_rule": frozen_binary_rule(plan),
-            "source_catalog": {key: value[0] for key, value in
-                source_catalog(answer.content or "", problem.stem, plan.original_criterion).items()},
+            "student_answer": answer.content,
+            **({"source_supplied_correspondence": notation}
+               if plan.part_rubric and problem.type == "推理题" and (notation := supplied_notation(problem.stem)) else {}),
+            "rubric_plan": _part_rule_projection(plan.part_rubric) if plan.part_rubric else plan.model_dump(mode="json"),
+            "binary_rule": None if plan.part_rubric else frozen_binary_rule(plan),
+            **({"frozen_targets": {f"part:{part.id}": part.stem or problem.stem
+                                    for part in plan.part_rubric.parts}} if plan.part_rubric else {}),
+            "source_catalog": _expert_sources(source_catalog(answer.content or "", problem.stem, plan.original_criterion), plan),
+            **({"required_decisions": [{
+                "part_id": part.id, "target_quote": f"part:{part.id}",
+                "step_ids": [step.id for step in part.steps], "deduction_ids": [rule.id for rule in part.deductions],
+                "alternative_error_id": "alternative",
+            } for part in plan.part_rubric.parts]} if plan.part_rubric else {}),
             "retrieved_material": context,
+            **({"source_growth_order": growth, "growth_order_instruction": "Compare the submitted order to these ordered classes of the original expressions. Terms within the same group have equal asymptotic growth."} if growth else {}),
+            **({"source_execution_checks": checks, "submitted_count_checks": submitted_count_checks(answer.content, checks),
+                "execution_check_instruction": "Grade each marked statement against its own source trace. A counterexample refutes a general answer for that part; matching finite samples alone is not a proof. The exact field is a proven count of an input-independent program."} if checks else {}),
         })
+
+    async def _assess(self, plan, *, system_prompt, user_prompt, validator, part_output=FrozenPartAssessment):
+        if plan.part_rubric:
+            assessment, response = await structured_llm_call(self.provider,
+                output_model=part_output, system_prompt=system_prompt, user_prompt=user_prompt,
+                validate_output=lambda candidate: validator(candidate.assessment()))
+            return assessment.assessment(), response
+        return await structured_llm_call(self.provider, output_model=MathAssessment,
+            system_prompt=system_prompt, user_prompt=user_prompt, validate_output=validator)
 
     async def _verify(self, draft, problem, answer, plan):
         from backend.tools.math_verification import MathVerificationRequest, verify_math
@@ -1161,9 +1549,9 @@ class MathGradingSkill(GradingSkill):
 
     async def grade(self, problem, answer, *, student_id="") -> ExpertResult:
         started = perf_counter()
-        from backend.services.math_grading_context import get_math_plan
-        from backend.services.math_rubric_plan import fallback_math_rubric_plan
-        plan = get_math_plan(problem) or fallback_math_rubric_plan(problem, grading_setup=self.grading_setup)
+        from backend.services.math_grading_context import scoring_plan
+        plan = scoring_plan(problem, self.grading_setup)
+        problem = _adopted_problem(problem, plan)
         unit, cm = None, None
         if self.reporter:
             from backend.services.math_grading_context import report_math_progress
@@ -1172,6 +1560,41 @@ class MathGradingSkill(GradingSkill):
         chunks, evidence, draft, duration = [], [], None, 0.0
         diagnostic = {}
         try:
+            if not (answer.content or "").strip():
+                if any(flag in {"recognition_partial", "parse_failed", "recognition_failed", "recognition_manual_pending", "no_matching_answer"}
+                       or flag.startswith(("recognition_failed_pages:", "recognition_unprocessed_pages:", "recognition_invalid_fields:"))
+                       for flag in (answer.flag or [])):
+                    raise ValueError("Unresolved recognition cannot be graded as blank.")
+                return ExpertResult(provider=self.provider.provider_id, score=0, max_score=problem.max_score,
+                    confidence=1, comment=format_deterministic_feedback(self.grading_setup,
+                        zh_message="本题尚未作答，得0分。", en_message="No answer was submitted; this question receives 0 points.",
+                        zh_suggestion="请补充作答。", en_suggestion="Add your answer to this question.",
+                        legacy_message="空白作答 / Blank answer"), steps=[],
+                    raw_output=_json({"version":TRACE_VERSION,"plan_id":plan.plan_id,"blank":True}))
+            if plan.part_rubric and plan.expected_truth_by_part:
+                from backend.services.true_false_answers import adopted_truth_key, submitted_truth_values
+                choices = submitted_truth_values(answer.content, plan.part_rubric.parts, question_label=plan.part_rubric.label)
+                key = adopted_truth_key(plan.part_rubric, problem.stem, problem.reference_answer)
+                if choices is not None and key:
+                    judgments = []
+                    for part in plan.part_rubric.parts:
+                        correct = choices[part.id] == key[part.id]
+                        reason = ("判断正确" if correct else "判断错误") if self.language == "zh" else (
+                            "Correct judgment" if correct else "Incorrect judgment")
+                        judgments.append(PartDecision(part_id=part.id, target_quote=f"part:{part.id}",
+                            student_quote=answer.content, progress=reason, method="reference",
+                            relevance="complete" if correct else "incorrect"))
+                    assessment = MathAssessment(route_id="parts", route_reason="Exact labelled judgments",
+                        part_decisions=judgments, confidence=1, comment="逐项核对判断答案。" if self.language == "zh"
+                        else "Compared each labelled judgment with the frozen answer key.")
+                    score, steps = score_assessment(assessment, plan, answer.content, problem_text=problem.stem)
+                    return ExpertResult(provider=self.provider.provider_id, score=score, max_score=problem.max_score,
+                        confidence=1, steps=steps, comment=format_deterministic_feedback(self.grading_setup,
+                            zh_message="已逐项核对判断答案。", en_message="Each answer has been checked against the answer key.",
+                            zh_detail=f"本题得分：{score:g}/{problem.max_score:g}。", en_detail=f"Score: {score:g}/{problem.max_score:g}.",
+                            legacy_message=assessment.comment, complete=score == problem.max_score),
+                        raw_output=_json({"version": TRACE_VERSION, "plan_id": plan.plan_id,
+                                          "assessment": assessment.model_dump(mode="json"), "exact_truth_match": True}))
             await self._substep(unit, "retrieve_knowledge")
             try:
                 chunks = await kb_tool.retrieve_for_grading(
@@ -1183,10 +1606,6 @@ class MathGradingSkill(GradingSkill):
                 # Reference retrieval is optional evidence, not a grade gate.
                 chunks = []
             prompt = self._prompt(problem, answer, plan, kb_tool.context_text(chunks))
-            if not (answer.content or "").strip():
-                # There are no student claims to build. Preserve any explicit
-                # teacher blank-answer policy with one direct grading call.
-                return await self._direct(problem, answer, plan, prompt, unit, chunks, started=started)
             system = build_system_prompt(
                 "Grade only the submitted work under the frozen rubric. "
                 "For each point item identify the obligation, locate the student's relevant passage, "
@@ -1206,12 +1625,18 @@ class MathGradingSkill(GradingSkill):
                 + authoritative_score_instruction(problem.max_score)
                 + "\nJSON Schema:\n" + _json(MathAssessment.model_json_schema()), self.language, self.grading_setup,
                 **({"output_instruction": OUTPUT_INSTRUCTION} if self.template_name == "proof" else {}))
+            part_output = ProofPartAssessment if problem.type == "推理题" else FrozenPartAssessment
+            if plan.part_rubric:
+                system = build_system_prompt(PART_SCORING_INSTRUCTION + _part_proof_evidence(problem, plan.part_rubric) + "\nUse the supplied part and student line IDs "
+                    "for target_quote, student_quote and step evidence. Only include conventional claims when "
+                    "requesting mathematical verification. All arithmetic is performed by the server. Schema:\n"
+                    + (PROOF_INSTRUCTION if part_output is ProofPartAssessment else "")
+                    + _json(part_output.model_json_schema()), self.language, self.grading_setup)
             try:
                 await self._substep(unit, "llm_grade")
-                draft, response = await structured_llm_call(
-                    self.provider, system_prompt=system, user_prompt=prompt,
-                    output_model=MathAssessment,
-                    validate_output=_assessment_validator(plan, answer, problem, diagnostic=diagnostic))
+                draft, response = await self._assess(
+                    plan, system_prompt=system, user_prompt=prompt, part_output=part_output,
+                    validator=_assessment_validator(plan, answer, problem, diagnostic=diagnostic))
                 duration += response.duration_ms or 0
                 score, steps = score_assessment(draft, plan, answer.content or "", problem_text=problem.stem)
             except Exception as exc:
@@ -1223,7 +1648,7 @@ class MathGradingSkill(GradingSkill):
                 }:
                     raise
                 return await self._direct(problem, answer, plan, prompt, unit, chunks,
-                    started=started,
+                    started=started, repair_context=getattr(exc, "repair_context", None),
                     fallback={"reason": "invalid_detailed_assessment", "error_type": type(exc).__name__,
                               "draft": draft.model_dump(mode="json") if draft else diagnostic.get("draft")})
             proof_audit = (inspect_audit(read_appendix(getattr(response, "content", None)), draft, answer.content or "", problem.stem, plan)
@@ -1253,20 +1678,25 @@ class MathGradingSkill(GradingSkill):
             usable_evidence = any(item["status"] in {"supported", "refuted"}
                                   and item["claim_id"] in claims for item in evidence)
             review_failure = None
-            review_pending = usable_evidence
+            relevance_check = bool(plan.part_rubric and any(
+                d.relevance != "unanswered"
+                for d in draft.part_decisions))
+            review_pending = usable_evidence or relevance_check
             proof_concerns = (proof_audit or {}).get("review_concerns", [])
-            if (usable_evidence or draft.needs_review or proof_concerns) and take_review_budget(local=True):
+            if (usable_evidence or relevance_check or draft.needs_review or proof_concerns) and take_review_budget(local=True):
                 await self._substep(unit, "llm_grade")
                 try:
-                    reviewed, response = await structured_llm_call(
-                        self.provider, system_prompt=system,
+                    reviewed, response = await self._assess(
+                        plan, system_prompt=system, part_output=part_output,
                         user_prompt=prompt + "\nAPPLY SCOPED EVIDENCE (one pass):\n" + _json({
-                            "draft": draft.model_dump(mode="json"), "evidence": evidence,
+                            "draft": _assessment_for_model(draft, plan), "evidence": evidence,
                             **({"proof_concerns": proof_concerns, "proof_instruction": REVIEW_INSTRUCTION}
                                if proof_audit is not None else {}),
-                            "instruction": "Check affected scoring points against original text and rubric. "
+                            "instruction": "Independently verify relevance and method against each exact target. Unrelated true statements earn no academic credit. Check affected scoring points against original text and rubric. "
                             "Check that the tool's assumed conditions really hold. Unknown is not incorrect. "
-                            "Return a complete ledger with a concrete score; retain supported credit. "
+                            + ("Return a complete part_decisions ledger; the server calculates the score. "
+                               if plan.part_rubric else "Return a complete ledger with a concrete score; retain supported credit. ")
+                            +
                             "Do not extend the tool result to a different relation or the entire answer. "
                             "Do not propose further tools or reconstruct missing student work. "
                             "Preserve all existing claim IDs and their exact original quotes; "
@@ -1276,8 +1706,8 @@ class MathGradingSkill(GradingSkill):
                             "Use applies only for a claim-wide result consistent with its verdict; partial "
                             "requires explaining the limited scope. Explain any decision not to apply a result using the original conditions. "
                             "State a specific residual concern only when teacher attention would help.",
-                        }), output_model=MathAssessment,
-                        validate_output=_assessment_validator(plan, answer, problem, original=draft, evidence=evidence))
+                        }),
+                        validator=_assessment_validator(plan, answer, problem, original=draft, evidence=evidence))
                     _claim_map(reviewed, answer.content or "", plan, problem_text=problem.stem)
                     _validate_claim_identity(draft, reviewed, answer=answer.content or "", plan=plan,
                                              problem_text=problem.stem)
@@ -1286,7 +1716,7 @@ class MathGradingSkill(GradingSkill):
                     if proof_audit is not None:
                         proof_audit = inspect_audit(read_appendix(getattr(response, "content", None)), draft,
                             answer.content or "", problem.stem, plan, previous=proof_audit)
-                    review_pending = _evidence_pending(draft, evidence)
+                    review_pending = _evidence_pending(draft, evidence) or any(part.relevance == "uncertain" for part in draft.part_decisions)
                     duration += response.duration_ms or 0
                 except Exception as exc:
                     if _critical_failure(exc):
@@ -1306,6 +1736,8 @@ class MathGradingSkill(GradingSkill):
                                   "rejected_checks": rejected_checks,
                                   "tool_applicability_reason": "explicit_relations_scheduled" if scheduled else "no_supported_relation_identified",
                                   "review_pending": review_pending,
+                                  **({"relevance_review_pending": True} if relevance_check and review_pending
+                                     and not usable_evidence else {}),
                                   **({"proof_audit": proof_audit} if proof_audit is not None else {}),
                                   **({"review_failure": review_failure} if review_failure else {})}),
             )
@@ -1321,8 +1753,39 @@ class MathGradingSkill(GradingSkill):
             if cm:
                 await report_math_progress(cm.__aexit__, None, None, None)
 
-    async def _direct(self, problem, answer, plan, prompt, unit, chunks, *, fallback=None, started=None):
+    async def _direct(self, problem, answer, plan, prompt, unit, chunks, *, fallback=None, started=None, repair_context=None):
         await self._substep(unit, "llm_grade")
+        if plan.part_rubric is not None:
+            # This fallback still uses the frozen decision schema. Carry forward
+            # the failed validation and supply the exact addresses it can accept.
+            output_model = (StepsOnlyRepair if all(
+                p.steps and not p.deductions and p.alternative.deduct_per_error is None for p in plan.part_rubric.parts
+            ) else AddressedPartAssessment)
+            recovery = {
+                "validation_feedback": repair_context,
+                "student_line_ids": list(source_catalog(answer.content or "", "", "")),
+                "parts": [{"part_id": p.id, "target_quote": f"part:{p.id}",
+                           "step_ids": [step.id for step in p.steps],
+                           "deduction_rule_ids": [rule.id for rule in p.deductions], "alternative_error_id": "alternative"}
+                          for p in plan.part_rubric.parts],
+                "instruction": "For student_quote and each step.evidence return an array of source line numbers, "
+                               "e.g. [1,3] references student:1 and student:3. Use [] for an absent step. Keep any "
+                               "paraphrase in progress/reason. On the points route put lost credit in "
+                               "the corresponding missed step. Charge only explicitly listed deduction rules. For actual "
+                               "deductions keep each independent error grounded at its source. For method=alternative, "
+                               "leave steps empty and use only rule_id=alternative for any errors.",
+            }
+            prompt += "\nRepair the rejected decision from the original sources:\n" + _json(recovery)
+            result, response = await self._assess(plan,
+                system_prompt=build_system_prompt(
+                    PART_SCORING_INSTRUCTION + _part_proof_evidence(problem, plan.part_rubric) + "\nRepair format: student_quote and step.evidence are arrays of original line numbers.\n" + _json(output_model.model_json_schema()),
+                    self.language, self.grading_setup),
+                user_prompt=prompt, validator=_assessment_validator(plan,answer,problem),part_output=output_model)
+            score,steps=score_assessment(result,plan,answer.content,problem_text=problem.stem)
+            return ExpertResult(provider=self.provider.provider_id,score=score,max_score=problem.max_score,
+                confidence=result.confidence,comment=result.comment,steps=steps,duration_ms=response.duration_ms or 0,
+                raw_output=_json({"version":TRACE_VERSION,"plan_id":plan.plan_id,"assessment":result.model_dump(mode="json"),
+                                  "review_pending":True,"relevance_review_pending":True,"review_advisory":True,"evidence":[]}))
         if plan.compilation_reason == SUBPART_ALLOCATION:
             validate = _assessment_validator(plan, answer, problem)
             result, response = await structured_llm_call(

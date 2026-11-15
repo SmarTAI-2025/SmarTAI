@@ -84,7 +84,7 @@ def test_v1_completed_run_regrades_math_and_preserves_teacher_override(case, mon
     resumed = retry(case, "v2-retry")
     assert resumed != first
     manifest = workflows.get_run_setup(resumed).input_manifest
-    assert manifest["math_grading_engine_version"] == "math_evidence_v2"
+    assert manifest["math_grading_engine_version"] == "math_evidence_v3"
     assert manifest["math_rubric_plans"] == {} and manifest["reused_experts"] == []
     assert [row["q_id"] for row in manifest["reused_results"]] == ["q2"]
     assert manifest["teacher_review_overrides"][0]["teacher_review"]["confirmed"] is confirmed
@@ -141,7 +141,7 @@ def test_v1_paused_vote_is_excluded_but_new_v2_plan_and_vote_resume(case, monkey
     assert {qid: p.model_dump() for qid, p in actual.items()} == {
         qid: p.model_dump() for qid, p in plans.items()}
     assert restored.get(student, "q1", provider, 0).score == 7
-    assert calls == ["q1", "q2"]
+    assert calls == []  # Current reviewed drafts already contain the new plans.
 
 
 @pytest.mark.parametrize("storage", ["manifest", "event"])
@@ -171,7 +171,7 @@ def test_current_engine_stamp_cannot_restore_a_v1_schema_plan(case, storage):
             ))
             event.payload = {**event.payload, "plan": v1_plan(question)}
     frozen = workflows.get_run_setup(run_id)
-    assert frozen.input_manifest["math_grading_engine_version"] == "math_evidence_v2"
+    assert frozen.input_manifest["math_grading_engine_version"] == "math_evidence_v3"
     assert saved_math_plans(run_id) == {}
     with pytest.raises(VersionConflict, match="plan is missing"):
         context.ensure_run_math_version(run_id=run_id, worker_id="checkpoint-test",

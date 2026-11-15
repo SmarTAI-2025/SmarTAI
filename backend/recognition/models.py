@@ -193,6 +193,7 @@ class RecognitionPageV1(EvidenceModel):
     verified_blank: bool = False
     selected_for_visual: bool = False
     selection_reasons: list[Code] = Field(default_factory=list, max_length=32)
+    formula_conflicts: list[str] = Field(default_factory=list, max_length=2, exclude_if=lambda value: not value)
     spans: list[RecognitionSpanV1] = Field(default_factory=list, max_length=128)
 
     @model_validator(mode="after")

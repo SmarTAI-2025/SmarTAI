@@ -147,6 +147,8 @@ class AllExpertsFailed(Exception):
 # ─── Multi-expert fan-out ─────────────────────────────────────────────────────
 
 async def run_multi_expert(**kwargs) -> Correction:
+    if kwargs.get("grading_setup") is not None:
+        kwargs["language"] = kwargs["grading_setup"].feedback_language
     from backend.skills.math_grading import math_review_scope
     from backend.models import is_programming_question_type
     if is_programming_question_type(kwargs["problem"].type):
@@ -159,7 +161,7 @@ async def run_multi_expert(**kwargs) -> Correction:
                                        student_id=kwargs["student_id"], language=language, reporter=kwargs.get("reporter"))
             return correction
     with math_review_scope():
-        return _apply_math_review_advisory(await _run_multi_expert(**kwargs))
+        return _apply_math_review_advisory(await _run_multi_expert(**kwargs), problem=kwargs["problem"])
 
 
 def _project_programming_result(correction: Correction, language: str) -> Correction:
@@ -205,7 +207,7 @@ def _project_programming_result(correction: Correction, language: str) -> Correc
     return correction
 
 
-def _apply_math_review_advisory(correction: Correction) -> Correction:
+def _apply_math_review_advisory(correction: Correction, *, problem=None) -> Correction:
     """Keep a residual evidence concern visible without changing score/confidence."""
     from backend.skills.math_grading import math_scoring_disagreement, read_math_trace
 
@@ -214,9 +216,23 @@ def _apply_math_review_advisory(correction: Correction) -> Correction:
         reasons.append("math_expert_disagreement")
     model_requested = False
     unclassified_advisory = False
+    uncredited = []
     for expert in correction.expert_results:
         trace = read_math_trace(expert) if _is_successful_expert(expert) else None
         assessment = trace.get("assessment") if trace else None
+        if isinstance(assessment, dict):
+            decisions = assessment.get("part_decisions") or []
+            if problem is not None and correction.score == 0:
+                uncredited.append({d["part_id"] for d in decisions
+                    if d.get("part_id") and d.get("method") in {"reference", "minor_variant"} and d.get("relevance") == "partial"
+                    and len(d.get("steps") or []) > 1
+                    and all(s.get("outcome") == "missed" for s in d["steps"])})
+            if any(d.get("method") == "alternative" and d.get("relevance") in {"partial", "complete"} for d in decisions):
+                reasons.append("math_alternative_method")
+            if any(d.get("relevance") == "uncertain" for d in decisions):
+                reasons.append("math_verification_conflict")
+        elif problem is not None and correction.score == 0 and _is_successful_expert(expert):
+            uncredited.append(set())
         if trace and trace.get("review_advisory"):
             # Classify only an already-active advisory; do not add review triggers.
             if trace.get("review_pending"):
@@ -229,6 +245,13 @@ def _apply_math_review_advisory(correction: Correction) -> Correction:
                 unclassified_advisory = True
         if isinstance(assessment, dict) and assessment.get("needs_review") is True:
             model_requested = True
+    if uncredited and set.intersection(*uncredited):
+        from backend.services.math_grading_context import get_math_plan
+        plan = get_math_plan(problem)
+        if plan and plan.allow_partial_credit and plan.part_rubric and plan.part_rubric.rubric_origin == "ai":
+            # All ledgers locate progress, yet no funded step captures it.
+            # Preserve the frozen grade and expose the allocation gap for review.
+            reasons.append("math_scoring_uncertainty")
     if not reasons:
         if model_requested:
             reasons.append("math_model_review")
@@ -691,7 +714,9 @@ def _weighted_average_fallback(
         ]
         comment = "\n\n———\n\n".join(parts)
 
-    final_score = min(max(float(weighted_score.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)), 0.0), problem.max_score)
+    from backend.services.grading_scores import score_quantum
+    quantum = score_quantum(step for expert in expert_results for step in expert.steps)
+    final_score = min(max(float(weighted_score.quantize(quantum, rounding=ROUND_HALF_UP)), 0.0), problem.max_score)
     from backend.skills.math_grading import weighted_math_steps
     return _apply_math_review_advisory(Correction(
         q_id=problem.q_id,
@@ -723,7 +748,7 @@ def _expert_to_correction(
     return _apply_math_review_advisory(Correction(
         q_id=q_id,
         type=q_type,
-        score=round_ai_score(expert.score, expert.max_score),
+        score=round_ai_score(expert.score, expert.max_score, expert.steps),
         max_score=expert.max_score,
         confidence=expert.confidence,
         comment=expert.comment,

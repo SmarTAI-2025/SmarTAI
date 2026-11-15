@@ -282,7 +282,7 @@ def _load_facts(task_id: str, owner_id: str) -> _AnalyticsFacts:
                 score=(
                     float(review.new_score)
                     if review is not None
-                    else round_ai_score(record.ai_score, record.ai_max_score)
+                    else round_ai_score(record.ai_score, record.ai_max_score, record.ai_steps)
                 ),
                 max_score=float(record.ai_max_score),
                 comment=(

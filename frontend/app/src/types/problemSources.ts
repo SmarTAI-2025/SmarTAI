@@ -111,6 +111,7 @@ export interface StartQuestionPreparationInput {
 export type QuestionScorePolicyMode = "default_10" | "uniform" | "per_question";
 
 export type QuestionScorePolicyInput = {
+  followThroughStrictness?: number;
   mode: QuestionScorePolicyMode;
   uniformMaxScore?: number;
   perQuestionText?: string;

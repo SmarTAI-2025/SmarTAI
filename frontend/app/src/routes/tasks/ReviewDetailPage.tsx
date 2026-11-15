@@ -739,7 +739,7 @@ function ReviewQuestionCard({ locale, student, question, correction, primaryProv
                       <div key={`${expert.provider}-${index}`} className="min-w-0 rounded-[7px] bg-muted/60 px-3 py-2">
                         <dt className="break-words text-muted-foreground">{expert.provider}</dt>
                         <dd className="mt-1 font-semibold text-foreground">
-                          {expert.error_kind ? `--/${expert.max_score}` : <>{formatScore(expert.score, expert.max_score)}/{expert.max_score}{expert.steps?.length ? <span className="mt-1 block break-words text-muted-foreground">{expertStepScores(expert)}</span> : null}</>}
+                          {expert.error_kind ? `--/${expert.max_score}` : <>{formatScore(expert.score, expert.max_score, expert.steps?.some(step => step.part_id) ? 2 : 1)}/{expert.max_score}{expert.steps?.length ? <span className="mt-1 block break-words text-muted-foreground">{expertStepScores(expert)}</span> : null}</>}
                         </dd>
                       </div>
                     ))}
@@ -805,11 +805,20 @@ function ReviewQuestionCard({ locale, student, question, correction, primaryProv
 }
 
 function expertStepScores(expert: ExpertResult) {
-  return `[${expert.steps.map(step => formatScore(step.score)).join(",")}]`;
+  const groups = new Map<string, string[]>();
+  for (const step of expert.steps) {
+    const key = step.part_id ?? `row:${step.step_no}`;
+    const scores = groups.get(key) ?? [];
+    scores.push(formatScore(step.score, undefined, step.part_id ? 2 : 1));
+    groups.set(key, scores);
+  }
+  if (groups.size === 1) return `[${Array.from(groups.values())[0].join(",")}]`;
+  const parts = Array.from(groups.values(), scores => scores.length === 1 ? scores[0] : `[${scores.join(",")}]`);
+  return `[${parts.join(",")}]`;
 }
 
 function expertScoreSummary(expert: ExpertResult) {
-  return `${formatScore(expert.score, expert.max_score)}/${expert.max_score}${expert.steps?.length ? `, ${expertStepScores(expert)}` : ""}`;
+  return `${formatScore(expert.score, expert.max_score, expert.steps?.some(step => step.part_id) ? 2 : 1)}/${expert.max_score}${expert.steps?.length ? `, ${expertStepScores(expert)}` : ""}`;
 }
 
 function ExpertScore({ locale, expert }: { locale: Locale; expert: ExpertResult }) {
@@ -858,7 +867,7 @@ function ScoringSteps({ locale, steps }: { locale: Locale; steps?: StepScore[] }
       <li key={`${step.step_no}-${index}`} className="grid grid-cols-[24px_minmax(0,1fr)_auto] gap-2 rounded-[7px] bg-muted/55 px-3 py-2 text-[11px] leading-5">
         <span className="font-semibold text-muted-foreground">{step.step_no}</span>
         <MarkdownMath className="min-w-0 text-foreground">{step.desc}</MarkdownMath>
-        <span className={cn("font-semibold", step.is_correct ? "text-emerald-600" : "text-amber-600")}>{formatScore(step.score)} {tx(locale, "分", "pts")}</span>
+        <span className={cn("font-semibold", step.is_correct ? "text-emerald-600" : "text-amber-600")}>{formatScore(step.score, undefined, step.part_id ? 2 : 1)} {tx(locale, "分", "pts")}</span>
       </li>
     ))}</ol>
   </div>;

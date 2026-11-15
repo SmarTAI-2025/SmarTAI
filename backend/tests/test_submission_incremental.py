@@ -1,4 +1,6 @@
 import asyncio
+from backend.tests.rubric_fixtures import add_reviewed_question
+
 import io
 import json
 import zipfile
@@ -58,7 +60,7 @@ async def test_two_page_submission_batches_questions_and_manual_never_calls_ai(m
     from backend.tests.test_recognition_agent import pdf
     owner, task = _seed_task()
     for number in range(1, 5):
-        assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
             number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
     saved, calls = _saved_signal(monkeypatch), []
     async def invoke(messages):
@@ -238,9 +240,9 @@ async def test_restored_submission_aggregate_restores_progress_without_model_cal
 @pytest.mark.parametrize("manual", [False, True])
 async def test_one_question_is_durable_before_next_question_finishes(monkeypatch, manual):
     owner, task = _seed_task()
-    assignment_repository.add_question(task, teacher_id=owner, q_id="q1", order_index=0,
+    add_reviewed_question(task, teacher_id=owner, q_id="q1", order_index=0,
         number="1", type="concept", stem="First", criterion="Award 10 points", max_score=10)
-    assignment_repository.add_question(task, teacher_id=owner, q_id="q2", order_index=1,
+    add_reviewed_question(task, teacher_id=owner, q_id="q2", order_index=1,
         number="2", type="concept", stem="Second", criterion="Award 10 points", max_score=10)
     saved = _saved_signal(monkeypatch)
     calls, resumed = [], False
@@ -384,7 +386,7 @@ async def test_response_arriving_after_stop_cannot_write_a_source_structure(monk
 async def test_closed_answer_is_saved_before_later_ocr_and_is_not_invalidated_by_its_failure(monkeypatch, later_page_fails):
     owner, task = _seed_task()
     for number in (1, 2):
-        assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
             number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
     saved, calls = _saved_signal(monkeypatch), []
     async def invoke(messages):
@@ -426,7 +428,7 @@ async def test_unknown_structure_request_keeps_retry_guard_and_independent_quest
     from backend.llm.request_timeouts import current_response_scope
     owner, task = _seed_task()
     for number in (1, 2):
-        assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
             number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
     calls = []
     async def invoke(messages):
@@ -463,7 +465,7 @@ async def test_unknown_structure_request_keeps_retry_guard_and_independent_quest
 async def test_later_repeated_heading_revokes_saved_answer_completeness_even_if_stopped(monkeypatch, paused):
     owner, task = _seed_task()
     for number in (1, 2):
-        assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
             number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
     saved, calls = _saved_signal(monkeypatch), []
     async def invoke(messages):
@@ -510,7 +512,7 @@ async def test_two_page_answer_is_saved_while_later_page_provider_is_waiting(mon
 
     owner, task = _seed_task()
     for number in (1, 2):
-        assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
             number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
     saved, page_calls, structure_calls = _saved_signal(monkeypatch), [], []
     async def invoke(messages):
@@ -558,7 +560,7 @@ async def test_two_page_answer_is_saved_while_later_page_provider_is_waiting(mon
 async def test_many_saved_units_do_not_fill_parent_artifact_reference_budget(monkeypatch, large_aggregate):
     owner, task = _seed_task()
     for number in range(1, 7):
-        assignment_repository.add_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
             number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
     registry = _registry(monkeypatch, lambda messages: _response(_questions(messages)[0]["q_id"], "A" * 400))
     # The production boundary is 2,048 refs (500 students x 5 questions crosses

@@ -20,7 +20,17 @@ from backend.services import task_facade
 from backend.services.grading_checkpoints import CheckpointWriteError, MATH_TRACE_EVENT, saved_experts
 from backend.tests.test_grading_checkpoints import prepare, retry, stop
 from backend.tests.test_postgres_integration import pg_database  # noqa: F401
-from backend.tests.test_task_grading_retry import case, finish, start  # noqa: F401
+from backend.tests.test_task_grading_retry import case as base_case, finish, start  # noqa: F401
+
+
+from backend.tests.rubric_fixtures import refresh_reviewed_questions
+
+
+@pytest.fixture
+def case(base_case):
+    # These lifecycle tests exercise the explicit holistic assessment contract.
+    refresh_reviewed_questions(base_case, holistic=True)
+    return base_case
 
 
 def problem(**changes):
@@ -163,6 +173,7 @@ def test_question_advisory_projects_once_without_mutating_source_or_input_identi
         if ai_original:
             presentation["ai_completion_provenance"] = {"criterion": {"source_kind": "ai_generated"}}
         question.source = source
+    refresh_reviewed_questions(case, holistic=True)
     run_id = start(case, f"rubric-advice-{language}-{ai_original}")["job_id"]
     checkpoints, questions, _, frozen = prepare(case, run_id)
     original_manifest = deepcopy(frozen.input_manifest)
@@ -215,12 +226,18 @@ def test_rubric_advisory_never_leaks_from_obsolete_inputs_or_engine(case, change
     elif change == "setup":
         flow = workflows.get_live_workflow(case[0], owner_id=case[1])
         workflows.update_workflow(case[0], owner_id=case[1], grading_setup={
-            **flow.grading_setup, "teacher_notes": "Different grading preference.",
+            **flow.grading_setup, "feedback_tone": "strict",
         })
     elif change == "run":
         workflows.update_workflow(case[0], owner_id=case[1], grading_job_id=None, presentation_status="grading_setup")
     else:
         old_run(run_id)
+    # Isolate the run snapshot from the independently valid preparation draft.
+    with session_scope() as session:
+        row = session.get(AssignmentQuestionRecord, q.id)
+        source = deepcopy(row.source or {})
+        source.setdefault("presentation", {}).pop("rubric_draft", None)
+        row.source = source
     public = task_facade.get_task(task_id=case[0], owner_id=case[1])
     assert not any(item["code"] == "math_rubric_advisory"
                    for item in public["problem_data"][q.q_id]["preparation_issues"])
@@ -506,7 +523,7 @@ def test_paid_plan_survives_stop_and_multiple_failed_only_retries(case, monkeypa
         assert restored.get(student, "q1", provider, 0).score == 8
         assert not [event for event in grades.list_events(resumed) if event["message"] == context.PLAN_EVENT]
         stop(case, resumed)
-    assert calls == ["q1", "q2"]
+    assert calls == []  # Rules were frozen in question review.
 
 
 def test_plan_save_is_lease_fenced_and_cannot_change_mid_run(case):

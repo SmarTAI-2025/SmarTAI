@@ -45,7 +45,7 @@ def saved_experts(run_id):
             saved[checkpoint_key(event["payload"])] = event["payload"]
     manifest = (setup.input_manifest if setup else {}) or {}
     math_qids = {q["q_id"] for q in manifest.get("questions", []) if uses_math_grading(q.get("type", ""))}
-    plans = plans_from_snapshots(manifest, events)
+    plans = plans_from_snapshots(manifest, events, for_grading=True)
     if manifest.get("questions") and all("assignment_id" in q for q in manifest["questions"]):
         plans = matching_math_plans(
             [QuestionDTO.model_validate(q) for q in manifest["questions"]], plans,
@@ -58,7 +58,7 @@ def saved_math_plans(run_id, *, questions=None):
 
     setup = workflow_repository.get_run_setup(run_id)
     plans = plans_from_snapshots(
-        (setup.input_manifest if setup else {}) or {}, repository.list_events(run_id),
+        (setup.input_manifest if setup else {}) or {}, repository.list_events(run_id), for_grading=True,
     )
     return matching_math_plans(questions, plans) if questions is not None else plans
 
@@ -301,7 +301,7 @@ def persist_paused_results(session, run):
             saved[checkpoint_key(event.payload)] = event.payload
     plans = plans_from_snapshots(manifest, [
         {"message": event.message, "payload": event.payload} for event in events
-    ])
+    ], for_grading=True)
     math_qids = {q["q_id"] for q in manifest.get("questions", []) if uses_math_grading(q.get("type", ""))}
     saved = {key: item for key, item in saved.items() if expert_matches_plan(item, math_qids, plans)}
     existing = {(row.submission_revision_id, row.question_id) for row in session.scalars(

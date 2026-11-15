@@ -92,20 +92,36 @@ def _build_document(raw: RecognitionWorkflowReadV1, prompt_version: str):
     units = batch.units if batch else []
     grouped = [unit for unit in units if len(unit.page_numbers) != 1 or unit.output_mapping != "single_region"
                or unit.region != NormalizedRegionV1()]
+    decisions = {item.page_number: item for item in batch.plan.decisions} if batch else {}
+    def supplemental(unit):
+        if len(unit.page_numbers) != 1 or unit.region == NormalizedRegionV1():
+            return False
+        decision = decisions.get(unit.page_numbers[0])
+        return bool(decision and "scan_formula_crosscheck" in decision.reason_codes and unit.region in decision.regions)
+
+    panels = [unit for unit in grouped if supplemental(unit)]
     unaligned = [RecognitionUnalignedUnitV1(
         unit_id=unit.unit_id, page_numbers=unit.page_numbers, region=unit.region, candidate=unit.candidate,
         submission_may_exist=unit.submission_may_exist,
         reason="document_page_alignment_unverified" if len(unit.page_numbers) > 1 else "region_composition_unverified",
-    ) for unit in grouped]
-    grouped_pages = {p for unit in grouped for p in unit.page_numbers}
+    ) for unit in grouped if not supplemental(unit)]
+    grouped_pages = {p for unit in unaligned for p in unit.page_numbers}
     single = {unit.page_numbers[0]: unit for unit in units if unit not in grouped}
-    decisions = {page.page_number: page for page in batch.plan.decisions} if batch else {}
     failed = set(batch.failed_pages if batch else []) | {p for unit in units if _failed(unit) for p in unit.page_numbers}
     partial = set(batch.partial_pages if batch else [])
+    # An optional panel cannot invalidate a completed full-page transcription.
+    # Uncertain provider submissions remain in the raw call ledger.
+    for number, unit in single.items():
+        decision = decisions.get(number)
+        if decision and "scan_formula_crosscheck" in decision.reason_codes and not _failed(unit):
+            failed.discard(number)
+            partial.discard(number)
     processed, pages = [], []
     warnings = list(raw.stop_codes)
     if grouped:
         warnings.extend(unit.reason for unit in unaligned)
+    if any(_failed(unit) for unit in panels):
+        warnings.append("optional_formula_read_unavailable")
     for number, detail in sorted(details.items()):
         decision, unit = decisions.get(number), single.get(number)
         native = _native(detail.native_text)
@@ -116,7 +132,16 @@ def _build_document(raw: RecognitionWorkflowReadV1, prompt_version: str):
             geometry = {"geometry_unit": "pixels", "width_pixels": detail.width_pixels, "height_pixels": detail.height_pixels}
         else:
             geometry = {"width_points": detail.width_points, "height_points": detail.height_points}
+        conflicts = []
+        if panels and unit is not None and not _failed(unit):
+            from backend.recognition.formula_panel import conflicting_heading
+            for panel in panels:
+                if panel.page_numbers == [number] and not _failed(panel):
+                    label = conflicting_heading(unit.candidate.text, panel.candidate.text)
+                    if label and label not in conflicts:
+                        conflicts.append(label)
         page = RecognitionPageV1(
+            formula_conflicts=conflicts,
             page_index=number - 1, page_number=number, **geometry, native_text=detail.native_text,
             verified_blank=blank, selected_for_visual=bool(decision and decision.action == "visual"),
             selection_reasons=decision.reason_codes if decision else ["localization_evidence_only"], spans=spans,

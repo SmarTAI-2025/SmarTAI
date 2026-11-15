@@ -419,10 +419,24 @@ class ProgrammingSkill(GradingSkill):
                 comment = result.comment
                 if isinstance(result, ProgrammingGradingOutput) and all(step.max_points is not None for step in result.steps):
                     deductions = [step.desc for step in result.steps if not step.is_correct]
-                    comment = "\n".join(deductions) if deductions else (
-                        "按本题评分标准，各项均获满分。" if self.language == "zh"
-                        else "All rubric criteria received full credit."
-                    )
+                    if deductions:
+                        comment = "\n".join(deductions)
+                    else:
+                        # This summary is derived from validated awards, so it
+                        # must apply feedback preferences after replacing the
+                        # model's independently generated overall comment.
+                        detail = "\n".join(
+                            f"{step.desc} ({step.score:g}/{step.max_points:g})"
+                            for step in result.steps
+                        )
+                        comment = format_deterministic_feedback(
+                            self.grading_setup, complete=True,
+                            zh_message="按本题评分标准，各项均获满分。",
+                            en_message="All rubric criteria received full credit.",
+                            zh_detail=detail, en_detail=detail,
+                            legacy_message=("按本题评分标准，各项均获满分。" if self.language == "zh"
+                                            else "All rubric criteria received full credit."),
+                        )
                 from backend.services.programming_boundary_checks import boundary_feedback, verified_boundary
                 boundary = await verified_boundary(problem, run, evidence, getattr(result, "boundary_case", None), run_sandbox, self.reporter)
                 if boundary:

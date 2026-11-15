@@ -11,7 +11,7 @@ export function useQuestionReview(taskId: string, workflowRevision: number | und
   const inFlight = useRef(false);
   const [blocked, setBlocked] = useState<ReviewBlocker[]>([]);
   const [confirming, setConfirming] = useState(false);
-  const [failure, setFailure] = useState<{ problem: ProblemInfo; completed: number } | null>(null);
+  const [failure, setFailure] = useState<{ problem: ProblemInfo; completed: number; error: unknown } | null>(null);
 
   useEffect(() => {
     if (taskRef.current !== taskId) {
@@ -47,8 +47,8 @@ export function useQuestionReview(taskId: string, workflowRevision: number | und
           latestRevision.current = response.workflow_revision;
           expectedWorkflowRevision = response.workflow_revision;
           completed += 1;
-        } catch {
-          setFailure({ problem, completed });
+        } catch (error) {
+          setFailure({ problem, completed, error });
           return false;
         }
       }

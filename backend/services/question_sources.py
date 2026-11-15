@@ -184,9 +184,13 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
             text = await text_reader(content, filename, purpose=purpose, reporter=reporter)
         return QuestionSourceRead(text, stored_file_id=stored_file_id)
     total_pages = None
+    formula_panel_scan = False
     if media_type == "application/pdf":
         index = await read_pdf_evidence(content, PdfIndexRequest(window_pages=1), progress=reporter, wait_for_slot=True)
         total_pages = index.total_pages
+        formula_panel_scan = purpose == "problems" and any(
+            getattr(getattr(page, "observation", None), "formula_panels", ()) for page in getattr(index, "pages", ())
+        )
         if scope.pages and max(scope.pages) > index.total_pages:
             raise RecognitionError("question_source_pages_out_of_range")
     if not allow_vision and media_type.startswith("image/"):
@@ -212,7 +216,8 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         targets=scope.targets if locate_targets else [], pages=[] if locate_targets else scope.pages,
         page_hints={target: scope.pages for target in scope.targets} if locate_targets and scope.pages else {},
         search_start_page=scope.search_start_page, search_window_pages=scope.search_window_pages,
-        policy=RecognitionPolicyV1(allow_native_fallback=allow_vision, execution_scope=execution_scope),
+        policy=RecognitionPolicyV1(allow_native_fallback=allow_vision, execution_scope=execution_scope,
+            **({"version": "printed-formula-panels-v1"} if formula_panel_scan and (locate_targets or total_pages == 1) else {})),
     )
     async with recognition_engine(owner_id=owner_id, route=route if allow_vision else None, registry=registry) as engine:
         if media_type.startswith("image/") and engine is None:
@@ -283,6 +288,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     coverage = document.coverage
     if on_pages is not None:
         ready = [dict(page_number=page.page_number,
+                    **({"formula_conflicts": page.formula_conflicts} if getattr(page, "formula_conflicts", None) else {}),
             text="\n".join(span.final_text for span in page.spans if span.final_text))
             for page in document.pages if page.page_number in coverage.processed_pages]
         if ready:
@@ -307,6 +313,8 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         schema_version=1, operation_id=run.operation_id, status="failed" if incomplete else run.status,
         artifact_ids=list(run.artifact_ids), coverage=document.coverage.model_dump(mode="json"),
         confidence=document.confidence, warning_codes=document.warning_codes,
+        **({"formula_conflicts": sorted({label for page in document.pages for label in getattr(page,"formula_conflicts",[])})}
+           if any(getattr(page,"formula_conflicts",None) for page in document.pages) else {}),
         confidence_reasons=document.confidence_reasons,
         error_code=(run.safe_error_code or assembly.safe_error_code or "question_source_incomplete") if incomplete else run.safe_error_code,
         page_diagnostics=recognition_page_diagnostics(assembly),
@@ -371,6 +379,26 @@ def attach_recognition_review(packages, sources):
             continue
         coverage = summary.get("coverage") or {}
         incomplete = any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
+        conflicts = set(summary.get("formula_conflicts") or [])
+        if conflicts:
+            from backend.services.teacher_score_constraints import normalize_question_number
+            matches = {}
+            for q_id, problem in packages.items():
+                labels = {normalize_question_number(problem[key]) for key in ("number","source_display_number") if problem.get(key)}
+                for label in labels & conflicts:
+                    matches.setdefault(label,set()).add(q_id)
+            # The streaming extractor can bind duplicates by source. This legacy
+            # summary has only labels; never attach a conflict to an unrelated row.
+            located = {next(iter(ids)) for ids in matches.values() if len(ids) == 1}
+            for q_id in located:
+                problem = packages[q_id]
+                issues = problem.setdefault("preparation_issues", [])
+                if any(item.get("details", {}).get("reason") == "conflicting_printed_formula" for item in issues):
+                    continue
+                problem["review_status"] = "needs_review"
+                issues.append(dict(issue_id=f"formula_conflict_{q_id}", q_id=q_id, field="stem", severity="blocking",
+                    status="open", code="recognition_partial", source_ids=[summary["operation_id"]],
+                    details={"incomplete": True, "reason": "conflicting_printed_formula"}))
         if not recognition_has_failure(summary):
             continue
         for q_id, problem in packages.items():

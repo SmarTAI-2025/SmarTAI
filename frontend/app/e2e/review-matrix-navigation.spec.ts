@@ -3,8 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 
 async function expectPageTop(page: Page) {
-  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
 }
 
 async function checkStudentSwitch(page: Page, nextButton: string) {

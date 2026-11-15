@@ -101,6 +101,7 @@ SAFE_BACKGROUND_ERROR_CODES = frozenset({
     "grading_question_snapshot_invalid",
     "grading_question_snapshot_missing",
     "grading_setup_invalid",
+    "invalid_teacher_note_scope",
     "unknown_ai_completion_target",
     "workflow_busy",
     "workflow_revision_conflict",

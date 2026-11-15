@@ -128,11 +128,13 @@ class InitializeContentLanguageRequest(BaseModel):
 
 
 class UpdateProblemRequest(BaseModel):
+    model_config = {"extra": "forbid"}
     expected_workflow_revision: int | None = Field(default=None, ge=0)
     number: str | None = Field(default=None, min_length=1, max_length=64)
     type: str | None = Field(default=None, min_length=1, max_length=64)
     stem: str | None = None
     criterion: str | None = None
+    alternative_rule_edits: dict[str, str] = Field(default_factory=dict, max_length=100)
     max_score: float | None = Field(
         default=None,
         gt=0,
@@ -765,13 +767,29 @@ def delete_review_student(task_id: str, student_id: str, request: ReviewRowMutat
         expected_revision=request.expected_workflow_revision))
 
 
+class UpdateQuestionProviderRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    provider_id: str = Field(min_length=1, max_length=240)
+    expected_workflow_revision: int = Field(ge=0)
+
+
+@router.put("/{task_id}/question-preparation/provider")
+def update_question_provider(task_id: str, request: UpdateQuestionProviderRequest,
+                             current: User = Depends(require_teacher)):
+    return _domain(lambda: task_facade.update_question_provider(
+        task_id=task_id, owner_id=current.id, provider_id=request.provider_id,
+        expected_revision=request.expected_workflow_revision,
+    ))
+
+
 @router.put("/{task_id}/problems/{q_id}")
 def update_problem(task_id: str, q_id: str, request: UpdateProblemRequest,
                    current: User = Depends(require_teacher)):
+    from anyio.from_thread import run
     return _domain(lambda: task_facade.update_problem(
         task_id=task_id, owner_id=current.id, q_id=q_id,
         patch=request.model_dump(exclude_unset=True, exclude={"expected_workflow_revision"}),
-        expected_revision=request.expected_workflow_revision,
+        expected_revision=request.expected_workflow_revision, run_async=run,
     ))
 
 
@@ -965,6 +983,7 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
     )
     blocking.extend(source_readiness["blocking_issues"])
     warnings.extend(source_readiness["warnings"])
+    saved_setup = None
     if workflow.grading_setup:
         try:
             saved_setup = TaskGradingSetup.model_validate(workflow.grading_setup)
@@ -974,13 +993,16 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
                 for provider_id in saved_setup.selected_provider_ids
             ):
                 blocking.append("ocr_provider_grading_not_supported")
-        except (HTTPException, PydanticValidationError):
+        except PydanticValidationError:
+            saved_setup = None
+            blocking.append("invalid_grading_setup")
+        except HTTPException:
             blocking.append("invalid_grading_setup")
     return {
         "task_id": task_id, "task_status": task["status"],
         "workflow_revision": workflow.workflow_revision,
         "configured": workflow.grading_setup is not None,
-        "grading_setup": workflow.grading_setup,
+        "grading_setup": saved_setup.model_dump(mode="json") if saved_setup else None,
         "suggested_setup": suggested,
         "grading_setup_fingerprint": workflow.grading_setup_fingerprint,
         "grading_setup_updated_at": workflow.grading_setup_updated_at,

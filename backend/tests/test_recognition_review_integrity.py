@@ -1,6 +1,8 @@
 """Recognition failures must survive projection, confirmation and grading gates."""
 from __future__ import annotations
 
+from backend.tests.rubric_fixtures import review_compiler  # noqa: F401
+
 import pytest
 from sqlalchemy import select
 
@@ -138,7 +140,7 @@ def test_question_partial_evidence_is_blocking_even_when_stored_as_warning(cover
     _seeded, args = _case(flags=[])
     with session_scope() as session:
         question = session.scalar(select(AssignmentQuestionRecord))
-        question.source = {"presentation": {"preparation_issues": [{
+        question.source = {**(question.source or {}), "presentation": {**((question.source or {}).get("presentation") or {}), "preparation_issues": [{
             "issue_id": "partial-source", "q_id": "q1", "field": "stem",
             "code": "recognition_partial", "status": "open", "severity": "warning",
             "details": {"coverage": coverage},
@@ -164,7 +166,7 @@ def test_question_unverified_target_is_not_proof_of_missing_content():
     _seeded, args = _case(flags=[])
     with session_scope() as session:
         question = session.scalar(select(AssignmentQuestionRecord))
-        question.source = {"presentation": {"preparation_issues": [{
+        question.source = {**(question.source or {}), "presentation": {**((question.source or {}).get("presentation") or {}), "preparation_issues": [{
             "issue_id": "unverified-source", "q_id": "q1", "field": "stem",
             "code": "recognition_partial", "status": "open", "severity": "warning",
             "details": {"coverage": {"unverified_targets": ["1.2.3"]}},
@@ -174,11 +176,11 @@ def test_question_unverified_target_is_not_proof_of_missing_content():
     assert task_facade.grading_readiness(**args)["blocking_issues"] == []
 
 
-def test_question_low_confidence_edit_remains_advisory():
+def test_question_low_confidence_edit_remains_advisory(review_compiler):
     _seeded, args = _case(flags=[])
     with session_scope() as session:
         question = session.scalar(select(AssignmentQuestionRecord))
-        question.source = {"presentation": {"preparation_issues": [{
+        question.source = {**(question.source or {}), "presentation": {**((question.source or {}).get("presentation") or {}), "preparation_issues": [{
             "issue_id": "low-source", "q_id": "q1", "field": "stem", "code": "recognition_needs_review",
             "status": "open", "severity": "warning", "details": {"confidence": 0.2},
         }]}}
@@ -204,7 +206,7 @@ def test_source_confidence_reaches_persisted_question_gate(confidence, required)
     attach_recognition_review(packages, [{"recognition": {"operation_id": "source", "confidence": confidence, "coverage": {}}}])
     with session_scope() as session:
         question = session.scalar(select(AssignmentQuestionRecord))
-        question.source = {"presentation": packages["q1"]}
+        question.source = {**(question.source or {}), "presentation": {**((question.source or {}).get("presentation") or {}), **packages["q1"]}}
     assert ("question_review_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]) is required
 
 
@@ -215,7 +217,7 @@ def test_source_failure_is_required_even_with_high_confidence():
     attach_recognition_review(packages, [{"recognition": {"operation_id": "source", "confidence": .99, "error_code": "provider_unreachable", "coverage": {}}}])
     with session_scope() as session:
         question = session.scalar(select(AssignmentQuestionRecord))
-        question.source = {"presentation": packages["q1"]}
+        question.source = {**(question.source or {}), "presentation": {**((question.source or {}).get("presentation") or {}), **packages["q1"]}}
     assert "question_review_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
 
 
@@ -237,7 +239,7 @@ def test_old_blocking_low_confidence_and_missing_answer_are_advisory_but_empty_r
     with session_scope() as session:
         question = session.scalar(select(AssignmentQuestionRecord))
         question.reference_answer = ""
-        question.source = {"presentation": {"preparation_issues": [
+        question.source = {**(question.source or {}), "presentation": {**((question.source or {}).get("presentation") or {}), "preparation_issues": [
             {"issue_id": "low", "field": "stem", "code": "low_confidence", "status": "open", "severity": "blocking", "details": {"confidence": .1}},
             {"issue_id": "answer", "field": "answer", "code": "generation_failed", "status": "open", "severity": "blocking"},
             {"issue_id": "answer-partial", "field": "answer", "code": "recognition_partial", "status": "open", "severity": "blocking", "details": {"coverage": {"failed_pages": [2]}}},
@@ -313,7 +315,7 @@ def test_explicit_partial_evidence_survives_reference_answer_projection():
 
 
 @pytest.mark.parametrize("missing", [[], ["criterion"], ["type", "criterion"]])
-def test_required_material_repairs_allow_confirmation_without_reference_answer(missing):
+def test_required_material_repairs_allow_confirmation_without_reference_answer(review_compiler, missing):
     _seeded, args = _case(flags=[])
     with session_scope() as session:
         question = session.scalar(select(AssignmentQuestionRecord))

@@ -1,4 +1,6 @@
 """Model assessments belong to individual extracted questions and answers."""
+from backend.tests.rubric_fixtures import review_compiler  # noqa: F401
+
 import json
 from types import SimpleNamespace
 
@@ -104,7 +106,7 @@ def test_high_item_confidence_never_suppresses_real_source_failure():
     assert packages["q1"]["preparation_issues"][0]["severity"] == "blocking"
 
 
-def test_question_scores_survive_persistence_refresh_and_teacher_edit():
+def test_question_scores_survive_persistence_refresh_and_teacher_edit(review_compiler):
     from backend.tests.test_task_background_workflows import _seed_task
 
     owner, task = _seed_task()

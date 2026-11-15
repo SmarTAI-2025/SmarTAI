@@ -183,7 +183,8 @@ describe("Current task Ask SmarTAI", () => {
       ask("线性代数");
       await waitFor(() => expect(router.state.location.search).toContain("course=algebra"));
       expect(new URLSearchParams(router.state.location.search).has("tags")).toBe(false);
-      expect(mocks.history).toHaveBeenLastCalledWith({ page: 1, page_size: 25, sort: "updated_desc", course_id: "algebra" }, true);
+      // Router state is published before React commits the corresponding query.
+      await waitFor(() => expect(mocks.history).toHaveBeenLastCalledWith({ page: 1, page_size: 25, sort: "updated_desc", course_id: "algebra" }, true));
     } finally {
       release();
       router.dispose();

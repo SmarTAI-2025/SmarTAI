@@ -17,6 +17,7 @@ from backend.tests.test_grading_checkpoints import prepare, retry, stop
 from backend.tests.test_math_grading import answer, assessment, expert_for, plan_for, problem
 from backend.tests.test_multi_expert_robustness import _FakeProvider, _FakeRegistry
 from backend.tests.test_postgres_integration import pg_database  # noqa: F401
+from backend.tests.rubric_fixtures import refresh_reviewed_questions
 from backend.tests.test_task_grading_retry import Registry, case, finish, start  # noqa: F401
 
 
@@ -214,6 +215,8 @@ def test_teacher_override_survives_failure_before_any_retry_result(case, monkeyp
     if interpreter_changed:
         from backend.services import math_rubric_plan
         monkeypatch.setattr(math_rubric_plan, "INTERPRETATION_VERSION", "test-new-interpreter")
+    if interpreter_changed:
+        refresh_reviewed_questions(case)
     third = retry(case, "retry-after-failure")
     finish(case, third, monkeypatch, failed=())
     result = next(row for row in grades.list_results_for_run(third) if row.q_id == "q1")
@@ -262,6 +265,8 @@ def test_changed_work_or_explicit_full_batch_does_not_inherit_confirmation(case,
         revision = submissions.get_revision(revision_id=old_revision.id, actor_id=case[1])
         submissions.add_revision(submission_id=revision.submission_id, student_id=old_revision.student_id,
             source="online", answers=[{**a.model_dump(), "content": "Changed answer"} for a in revision.answers])
+    if change in {"stem", "structure", "provenance"}:
+        refresh_reviewed_questions(case)
     if change in {"stem", "answer"}:
         with pytest.raises(VersionConflict, match="Grading inputs changed"):
             retry(case, "invalid-old-confirmation")

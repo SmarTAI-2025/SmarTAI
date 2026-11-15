@@ -19,7 +19,7 @@ import {
   Trash2,
   UploadCloud,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
@@ -41,6 +41,7 @@ import { useProblemDraftReferences } from "@/hooks/useProblemDraftReferences";
 import { createSourceDraft, problemDraftFromInput, problemDraftCodec, sourceSignature, type SourceDraft, type ScorePolicyDraft } from "@/lib/taskPageDrafts";
 import { useImeSafeQuery } from "@/hooks/useImeSafeQuery";
 import { useI18n } from "@/i18n/I18nProvider";
+import { gradingSetupText } from "@/lib/gradingSetupCopy";
 import { cn } from "@/lib/cn";
 import { parseQuestionRecognitionScope } from "@/lib/questionRecognitionScope";
 import { classifyRecoverableError } from "@/lib/taskActionGuards";
@@ -53,7 +54,7 @@ import type {
   QuestionScorePolicyInput,
 } from "@/types";
 
-const SOURCE_ROLES: PreparationSourceRole[] = ["problem", "reference_answer", "rubric", "programming_tests"];
+const SOURCE_ROLES: PreparationSourceRole[] = ["problem", "rubric", "reference_answer", "programming_tests"];
 
 type AddProblemsRouteState = Record<string, never>;
 
@@ -103,6 +104,7 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
   const [activeRole, setActiveRole] = draft.field("activeRole");
   const [sources, setSources] = draft.field("sources");
   const [scorePolicy, setScorePolicy] = draft.field("scorePolicy");
+  const [followThroughStrictness, setFollowThroughStrictness] = draft.field("followThroughStrictness");
   const [recognitionProviderId, setRecognitionProviderId] = draft.field("recognitionProviderId");
   useImageRecoveryReturn(draft.protection.loaded, setRecognitionProviderId);
   const references = useProblemDraftReferences(taskId, sources, (id, patch) => updateSource(id, patch, false));
@@ -285,7 +287,7 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
         sourceTokens: tokens,
         expectedWorkflowRevision: taskQuery.data.workflow_revision,
         replaceConfirmed,
-        scorePolicy: resolvedScorePolicy.value,
+        scorePolicy: { ...resolvedScorePolicy.value, followThroughStrictness: followThroughStrictness ?? 50 },
         generationLanguage: generationLanguage || initialLanguage,
         recognitionProviderId,
       });
@@ -339,6 +341,11 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
   }
 
   const roleIndex = SOURCE_ROLES.indexOf(activeRole);
+  const nextRole = SOURCE_ROLES[roleIndex + 1];
+  const questionReady = configuredSources.some(source => source.role === "problem"
+    && !(source.sourceMode === "upload" && !source.file && !source.storedFileId)
+    && !["missing", "unavailable", "checking"].includes(references.status(source.id) ?? ""));
+  const navButtonClass = "inline-flex min-h-10 items-center justify-center gap-2 rounded-[8px] border px-4 py-2 text-sm font-semibold hover:bg-muted disabled:opacity-45";
   const recoveryInfo = preparationFailure
     ? classifyRecoverableError(preparationFailure.error, {
       locale,
@@ -381,29 +388,12 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
           </div>
         ) : null}
         <section className="overflow-hidden rounded-[10px] border bg-card">
-          <div className="flex items-center justify-between border-b px-5 py-3 sm:px-7">
-            <button
-              type="button"
-              onClick={() => moveRole(-1)}
-              disabled={roleIndex === 0 || isBusy}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-[7px] border text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-30"
-              aria-label={tx(locale, "上一类资料", "Previous source type")}
-            >
-              <ArrowLeft aria-hidden="true" className="h-4 w-4" />
-            </button>
+          <div className="flex justify-center border-b px-5 py-3 sm:px-7">
             <div className="min-w-0 text-center">
               <p className="text-[17px] font-bold text-foreground">{roleMeta(activeRole, locale).title}</p>
               <p className="mt-1 text-xs text-muted-foreground">{roleMeta(activeRole, locale).description}</p>
             </div>
-            <button
-              type="button"
-              onClick={() => moveRole(1)}
-              disabled={roleIndex === SOURCE_ROLES.length - 1 || isBusy}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-[7px] border text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-30"
-              aria-label={tx(locale, "下一类资料", "Next source type")}
-            >
-              <ArrowRight aria-hidden="true" className="h-4 w-4" />
-            </button>
+
           </div>
 
           <nav className="grid grid-cols-2 border-b sm:grid-cols-4" aria-label={tx(locale, "题目资料类型", "Question material types")}>
@@ -414,6 +404,8 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
                 <button
                   key={role}
                   type="button"
+                  aria-current={active ? "step" : undefined}
+                  disabled={isBusy}
                   onClick={() => setActiveRole(role)}
                   className={cn(
                     "min-h-[54px] border-b-2 px-3 text-left transition-colors sm:text-center",
@@ -429,6 +421,26 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
 
           <div className="space-y-3 bg-slate-50/60 p-3 dark:bg-slate-950/20 sm:p-4">
             {activeRole === "rubric" ? (
+              <>
+                <label className="mt-3 block">
+                  <span className="flex items-center justify-between gap-4 text-[14px] font-semibold leading-5 text-foreground">
+                    <span>{gradingSetupText(locale, "strictness")}</span>
+                    <span className="shrink-0 text-primary">{followThroughStrictness ?? 50}</span>
+                  </span>
+                  <input type="range" min={0} max={100} step={5} value={followThroughStrictness ?? 50}
+                    aria-label={gradingSetupText(locale, "strictness")} disabled={isBusy}
+                    onChange={(event) => setFollowThroughStrictness(Number(event.target.value))}
+                    className="grading-range mt-3 w-full"
+                    style={{ "--range-progress": `${followThroughStrictness ?? 50}%` } as CSSProperties} />
+                  <span className="mt-1.5 flex justify-between text-[13px] leading-5 text-muted-foreground">
+                    <span>{gradingSetupText(locale, "lenient")}</span><span>{gradingSetupText(locale, "standard")}</span><span>{gradingSetupText(locale, "strict")}</span>
+                  </span>
+                  <span className="mt-2 block text-[13px] leading-5 text-muted-foreground">
+                    {tx(locale, `本步方法正确但沿用前一步错值时，扣除本步 ${followThroughStrictness ?? 50}%，保留 ${100 - (followThroughStrictness ?? 50)}%。教师已有规定时，按教师标准给分。`,
+                      `For a correct method using an earlier wrong result, deduct ${followThroughStrictness ?? 50}% of the step's points and award ${100 - (followThroughStrictness ?? 50)}%. Any teacher-specified credit takes priority.`)}
+                  </span>
+                </label>
+
               <ScorePolicyEditor
                 value={scorePolicy}
                 disabled={isBusy}
@@ -441,6 +453,7 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
                   setPreparationFailure(null);
                 }}
               />
+              </>
             ) : null}
             {activeSources.length ? activeSources.map((source, index) => (
               <SourceEditor
@@ -513,22 +526,25 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
             </p>
           </div>
           <GenerationLanguageSelect value={generationLanguage || initialLanguage} onChange={setGenerationLanguage} disabled={isBusy} />
-          <button
-            type="button"
-            onClick={() => void handleStart()}
-            disabled={isBusy}
-            title={primaryDisabledReason ?? undefined}
-            className={cn(
-              "inline-flex h-10 w-full shrink-0 items-center justify-center rounded-[8px] bg-primary px-5 text-sm font-semibold text-primary-foreground outline-none transition hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45 sm:w-[210px]",
-              primaryDisabledReason && "cursor-help opacity-50 hover:opacity-65",
-            )}
-          >
-            {isBusy ? <LoaderCircle aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" /> : null}
-            {busyLabel ?? (hasExistingProblems
-              ? tx(locale, "重新识别全部资料", "Prepare All Materials Again")
-              : tx(locale, "识别并准备题目资料", "Prepare Question Materials"))}
-          </button>
         </section>
+        <nav aria-label={tx(locale, "资料步骤操作", "Material step actions")} className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          {roleIndex > 0 && <button type="button" disabled={isBusy} className={navButtonClass} onClick={() => moveRole(-1)}>
+            <ArrowLeft className="h-4 w-4" />{tx(locale, "上一步", "Previous")}
+          </button>}
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+            <button type="button" onClick={() => void handleStart()} disabled={isBusy || !questionReady}
+              title={primaryDisabledReason ?? undefined}
+              className={cn(navButtonClass, !nextRole && "border-primary bg-primary text-primary-foreground hover:bg-primary/90")}>
+              {isBusy && <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />}
+              {busyLabel ?? (hasExistingProblems ? tx(locale, "重新识别全部资料", "Prepare All Materials Again")
+                : nextRole ? tx(locale, "直接识别题目资料", "Prepare Materials Now") : tx(locale, "识别题目资料", "Prepare Question Materials"))}
+            </button>
+            {nextRole && <button type="button" disabled={isBusy || !questionReady} onClick={() => moveRole(1)}
+              className={cn(navButtonClass, "border-primary bg-primary text-primary-foreground hover:bg-primary/90")}>
+              {tx(locale, "下一步：", "Next: ")}{roleMeta(nextRole, locale).shortTitle}<ArrowRight className="h-4 w-4" />
+            </button>}
+          </div>
+        </nav>
         <ManualReviewButton taskId={taskId} task={taskQuery.data} stage="questions" />
         {formError ? <p role="alert" className="mt-3 text-sm text-danger">{formError}</p> : null}
         <ImageRecognitionRecovery error={preparationFailure?.error} expert={enabledExperts.find(e => e.provider_id === recognitionProviderId)} returnTo={taskReturnPath} controller={draft.protection.controller} isCurrent={draft.protection.isCurrent} locale={locale} />

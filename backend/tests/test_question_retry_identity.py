@@ -63,7 +63,8 @@ async def test_retry_failed_materials_never_rereads_or_reextracts_completed_ques
         generations.append((number, tuple(target["target"] for target in targets)))
         if number in failed_numbers:
             raise ValidationError("Synthetic failure", code="provider_response_invalid")
-        return [generated(target["target"], f"Saved {target['target']} for {number}.") for target in targets]
+        from backend.tests.part_rubric_fixtures import freeze_reply
+        return freeze_reply(data["q1"], [generated(target["target"], f"Saved {target['target']} for {number}.") for target in targets])
 
     monkeypatch.setattr(api, "_recognize_saved_question_sources", read)
     monkeypatch.setattr(inc, "_extract_problems_call", extract)
@@ -120,7 +121,8 @@ async def test_retry_preserves_different_questions_with_the_same_chapter_local_n
         calls.append(stem)
         if failing and stem == rows["q2"]["stem"]:
             raise ValidationError("Synthetic failure", code="provider_response_invalid")
-        return [generated(target["target"], f"Saved {target['target']}.") for target in targets]
+        from backend.tests.part_rubric_fixtures import freeze_reply
+        return freeze_reply(data["q1"], [generated(target["target"], f"Saved {target['target']}.") for target in targets])
 
     monkeypatch.setattr(inc, "generate_missing_question_materials", generate)
     await api.run_durable_question_preparation(_claim(owner, job, "repeated-number"))

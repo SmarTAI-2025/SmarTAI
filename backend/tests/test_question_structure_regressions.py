@@ -29,6 +29,28 @@ def test_penalties_do_not_increase_subpart_maximum(criterion):
     assert [item.points for item in summary.items] == ["4", "6"]
 
 
+@pytest.mark.parametrize("criterion", [
+    "(a) 方法2分，结果2分；第(a)小问若沿用前一步错值但本步正确，得1分。其他正确解法最高4分，最低0分；(b) 6分",
+    "(a) method 2 points + result 2 points; Part (a): following an earlier error earns 1 point. Alternative methods receive at most 4 points; (b) 6 points",
+])
+def test_conditional_awards_do_not_increase_or_duplicate_part_budgets(criterion):
+    structure = build_major_question_structure(
+        {"number": "1", "stem": "(a) Calculate. (b) Prove."}, major_order=0)
+    summary = summarize_rubric_points(criterion, 10, structure)
+    assert summary.is_valid and summary.total_points == "10"
+    assert [item.points for item in summary.items] == ["4", "6"]
+
+
+def test_unitemized_follow_through_rule_defers_to_semantic_compilation():
+    structure = build_major_question_structure(
+        {"number": "1.8", "stem": "\n".join(f"({i}) Calculate." for i in range(1, 9))}, major_order=0)
+    criterion = ("本题满分10分，8个小问各1.25分，均按步骤给分：正确分析循环次数得0.5分，得出正确语句频度得0.75分。"
+                 "第(1)小问第二步若方法正确但沿用前一步错值，得0.25分。"
+                 "其他正确解法每小问最高1.25分，每个独立错误扣0.5分，最低0分。")
+    summary = summarize_rubric_points(criterion, 10, structure)
+    assert summary.is_valid and not summary.has_explicit_subpart_points
+
+
 def test_repository_edit_rebuilds_stale_structure_without_discarding_other_source_metadata():
     from backend.db.assignment_repository import _normalise_question_source
     original = build_major_question_structure(

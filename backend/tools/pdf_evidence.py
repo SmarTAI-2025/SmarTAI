@@ -66,11 +66,13 @@ class PdfRenderRequest(EvidenceModel):
     operation: Literal["render"] = "render"
     page_number: PageNumber
     region: Region = (0, 0, 1, 1)
-    scale: float = Field(default=2, gt=0, le=2)
+    scale: float = Field(default=2, gt=0, le=5)
 
     @model_validator(mode="after")
     def valid_region(self):
         NormalizedRegionV1(**dict(zip(("x0", "y0", "x1", "y1"), self.region)))
+        if self.region == (0, 0, 1, 1) and self.scale > 2:
+            raise ValueError("Full-page renders use the established scale limit.")
         return self
 
 
@@ -335,6 +337,11 @@ def decode_image_payload(result: ImagePreparedResult) -> bytes:
 
 def recognition_page_render(page: PdfDetailPage, region: Region, purpose: str) -> PdfRenderRequest:
     request = PdfRenderRequest(page_number=page.page_number, region=region)
+    if purpose == "problems" and region in [panel.as_tuple() for panel in page.observation.formula_panels]:
+        width = page.width_points * (region[2] - region[0])
+        height = page.height_points * (region[3] - region[1])
+        return PdfRenderRequest(page_number=page.page_number, region=region,
+                                scale=fit_full_page_scale(width, height, min(5, max(2, 1500 / width))))
     if purpose != "submissions" or region != (0, 0, 1, 1):
         return request
     scale = fit_full_page_scale(page.width_points, page.height_points, request.scale)

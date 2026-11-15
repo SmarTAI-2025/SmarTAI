@@ -133,8 +133,9 @@ async def test_actual_generation_payload_keeps_exact_points(monkeypatch):
     from backend.agents import ingest_agent
     problem = questions()["q1"]
     problem["teacher_subpart_points"] = {"(a)": "8", "(b)": "12"}
+    from backend.tests.part_rubric_fixtures import definition_for
     call = AsyncMock(return_value=SimpleNamespace(content=json.dumps({"candidates": [{
-        "target_id": "q1:criterion", "q_id": "q1", "target": "criterion", "text_value": "(a) 8分\n(b) 12分",
+        "rubric_definition": definition_for(problem), "target_id": "q1:criterion", "q_id": "q1", "target": "criterion", "text_value": "(a) 8分\n(b) 12分",
     }]})))
     monkeypatch.setattr(ingest_agent, "ainvoke_with_retry", call)
     await ingest_agent.generate_missing_question_materials(

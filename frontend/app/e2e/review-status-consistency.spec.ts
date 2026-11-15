@@ -97,17 +97,14 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
       await expect(questionQueue.getByRole("tab", { name: zh ? "建议处理 (1)" : "Suggested review (1)", exact: true })).toBeVisible();
       await questionQueue.getByRole("link").click();
       const question = page.locator('[data-question-id="q1"]');
-      const guidance = question.locator("details").filter({ hasText: zh ? "查看 AI 补充评分说明" : "View AI scoring guidance" });
-      await expect(guidance.locator("summary")).toBeVisible();
-      await expect(guidance.locator("p")).not.toBeVisible();
-      await guidance.locator("summary").click();
+      const guidance = question.getByRole("note").filter({ hasText: sharedRule });
+      await expect(guidance.getByRole("heading", { name: zh ? "评分标准待核对" : "Rubric details to review" })).toBeVisible();
       await expect(guidance.locator("p")).toBeVisible();
       expect(await guidance.locator("p").textContent()).toBe(sharedRule);
-      await expect(page.locator('[data-question-id="q2"] details')).toHaveCount(0);
+      await expect(question.locator("details")).toHaveCount(0);
+      await expect(page.locator('[data-question-id="q2"]').getByText(sharedRule)).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
       await page.screenshot({ path: testInfo.outputPath("question-scoring-guidance.png"), fullPage: true });
-      await guidance.locator("summary").click();
-      await expect(guidance.locator("p")).not.toBeVisible();
       expect(writes).toEqual([]);
     }
     // Partial experts and disagreement are suggestions; valid results remain accessible.

@@ -63,12 +63,13 @@ class PageObservationV1(EvidenceModel):
     risks: list[Risk] = Field(default_factory=list, max_length=6)
     regions: list[NormalizedRegionV1] = Field(default_factory=list, max_length=24)
     regions_cover_all_risks: bool = False
+    formula_panels: list[NormalizedRegionV1] = Field(default_factory=list, max_length=2, exclude_if=lambda value: not value)
 
     @model_validator(mode="after")
     def consistent_observation(self):
         if (self.native_quality == "missing") != (self.native_char_count == 0):
             raise ValueError("native quality must agree with text availability")
-        if self.verified_blank and (self.native_char_count or self.risks or self.regions):
+        if self.verified_blank and (self.native_char_count or self.risks or self.regions or self.formula_panels):
             raise ValueError("blank pages cannot also contain evidence")
         if len(set(self.risks)) != len(self.risks):
             raise ValueError("duplicate page risk")
@@ -306,6 +307,15 @@ def plan_recognition(
                  or len(page.regions) <= min(policy.max_regions, policy.max_initial_calls))
         )
         regions = page.regions if region_safe else [NormalizedRegionV1()]
+        verification = []
+        if (request.purpose == "problems" and policy.version == "printed-formula-panels-v1"
+                and len(request.requested_pages) == 1 and mode == "page_image" and engine.region_reads
+                and not region_safe and page.native_quality == "missing"):
+            # This is a single-page budget. Always reserve the ordinary full
+            # page before spending a remaining slot on corroborating detail.
+            slots = min(policy.max_initial_calls, policy.max_calls, policy.max_regions) - 1
+            verification = page.formula_panels[:max(0, slots)]
+            regions = [*regions, *verification]
         regions_count = len(regions)
         group = None
         units = regions_count
@@ -317,7 +327,7 @@ def plan_recognition(
             continue
         decisions.append(PageDecisionV1(
             page_number=number, action="visual", input_mode=mode,
-            regions=regions, reason_codes=reasons + ["localized_risks" if region_safe else "full_page_context"],
+            regions=regions, reason_codes=reasons + ["localized_risks" if region_safe else "full_page_context"] + (["scan_formula_crosscheck"] if verification else []),
             initial_calls=units, document_call_group=group,
             repair_allowed=policy.enable_repair and policy.max_patches > 0 and engine.semantic_repair and engine.response_recheck,
         ))

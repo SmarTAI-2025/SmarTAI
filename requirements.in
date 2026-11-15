@@ -43,6 +43,7 @@ python-pptx>=1.0,<2.0
 
 # Symbolic evaluation, RAG, retries and health metrics.
 sympy>=1.14,<2.0
+pycparser>=3,<4 ; implementation_name != 'PyPy'
 numpy>=2.0,<3.0
 rank-bm25>=0.2.2,<0.3
 snowballstemmer==3.1.1

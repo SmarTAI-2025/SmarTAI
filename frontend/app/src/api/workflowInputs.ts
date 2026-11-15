@@ -6,7 +6,7 @@ import type { PreparationSourceRole, ProblemSourceMode, ProblemStructureMode, Qu
 export interface ProblemInput {
   generation_language?: "zh" | "en" | null;
   job_id: string; recognition_provider_id: string;
-  score_policy: { mode: QuestionScorePolicyInput["mode"]; uniform_max_score?: number | null; per_question_text?: string | null };
+  score_policy: { follow_through_strictness?: number; mode: QuestionScorePolicyInput["mode"]; uniform_max_score?: number | null; per_question_text?: string | null };
   sources: Array<{
     source_token: string; role: PreparationSourceRole; source_kind: ProblemSourceMode;
     filename: string; stored_file_id: string | null; library_material_id: string | null;

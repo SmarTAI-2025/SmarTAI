@@ -1,3 +1,5 @@
+import { RubricReviewErrorDetails } from "@/components/tasks/RubricReviewDetails";
+import { questionSaveError } from "@/lib/questionSaveError";
 import { questionIssueCodeLabel as issueCodeLabel } from "@/lib/reviewLabels";
 import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewQueue as ReviewQueuePanel } from "@/components/tasks/ReviewQueue";
@@ -145,8 +147,10 @@ export function QuestionPreparationOverviewPage() {
           label={tx(locale, "Ask SmarTAI：题目资料", "Ask SmarTAI: question materials")}
           placeholder={tx(locale, "按满分升序，或找出缺少标答的题目", "Sort by maximum score, or find missing reference answers")} />
 
-        {failure ? <div role="alert" className="mt-4 rounded-lg border border-amber-300 p-4 text-sm">
-          <p>{tx(locale, `已确认 ${failure.completed} 道题；第 ${failure.problem.number || "—"} 题未能保存，可能内容已更新或任务正在处理。请重新加载并核对后重试。`, `${failure.completed} questions confirmed; question ${failure.problem.number || "—"} could not be saved. Content may have changed or the task may be busy. Reload and review before retrying.`)}</p>
+        {failure ? <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50/40 p-4 text-sm">
+        <p>{tx(locale, `已确认 ${failure.completed} 道题；请核对第 ${failure.problem.number || "—"} 题。`, `${failure.completed} questions confirmed. Review question ${failure.problem.number || "—"}.`)}</p>
+        <p className="mt-1">{questionSaveError(failure.error, locale)}</p>
+        <RubricReviewErrorDetails error={failure.error} locale={locale} />
           <button type="button" onClick={() => void taskQuery.refetch()} className="mt-2 mr-4 font-semibold text-primary">{tx(locale, "重新加载", "Reload")}</button>
           <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(failure.problem.q_id)}/content#question-${encodeURIComponent(failure.problem.q_id)}`} className="mt-2 font-semibold text-primary">{tx(locale, "前往该题", "Go to question")}</Link>
         </div> : null}

@@ -86,7 +86,7 @@ def _normalise_question_source(
         structure = current_structure
     try:
         summary = validate_rubric_points(
-            criterion or "", max_score, structure
+            criterion or "", max_score, structure, rubric_draft=presentation.get("rubric_draft")
         )
     except QuestionRubricValidationError as exc:
         raise ValidationError(

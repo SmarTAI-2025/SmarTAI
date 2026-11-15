@@ -193,9 +193,12 @@ async def test_fresh_ai_worker_applies_generated_patch_once(monkeypatch, unresol
     )
 
     async def fake_generate(**kwargs):
+        from backend.tests.test_task_background_workflows import _reviewed_source
         return [AICompletionCandidateOutput(
             target_id="q1:criterion", q_id="q1", target="criterion",
             text_value="100% correct",
+            rubric_draft=_reviewed_source(criterion="100% correct",
+                ai_completion_provenance={"criterion": {}})["presentation"]["rubric_draft"],
         )]
 
     monkeypatch.setattr(task_preparation, "generate_missing_question_materials", fake_generate)

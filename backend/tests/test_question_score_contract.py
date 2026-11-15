@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from backend.tests.rubric_fixtures import review_compiler  # noqa: F401
+
 import base64
 import io
 import json
@@ -632,7 +634,7 @@ async def test_oversized_question_source_reports_the_exact_limit():
     }
 
 
-def test_confirming_question_also_confirms_default_max_score():
+def test_confirming_question_also_confirms_default_max_score(review_compiler):
     from backend.services import task_facade
 
     owner_id = "confirm-score-owner"
@@ -654,7 +656,7 @@ def test_confirming_question_also_confirms_default_max_score():
 @pytest.mark.parametrize(
     "blocking_issue", [False, True], ids=["warning-can-confirm", "blocking-cannot-confirm"],
 )
-def test_question_review_acknowledges_recognition_without_changing_content_or_submissions(blocking_issue):
+def test_question_review_acknowledges_recognition_without_changing_content_or_submissions(review_compiler, blocking_issue):
     from sqlalchemy import select
     from backend.db import assignment_repository
     from backend.db.models import AssignmentQuestionRecord

@@ -16,6 +16,12 @@ from backend.tests.test_task_background_workflows import _seed_task
 
 def _case(kind):
     owner, task = _seed_task(with_question=True)
+    if kind == "question":
+        # Exercise real edit transactions without requiring external math-rule
+        # compilation for the deliberately changed stem in these lock tests.
+        question = assignment_repository.list_questions(task, teacher_id=owner)[0]
+        assignment_repository.update_question(task, teacher_id=owner, q_id="q1",
+            expected_version=question.version, type="编程题", source={})
     service = question_review_rows if kind == "question" else student_review_rows
     add = service.add_question if kind == "question" else service.add_student
     delete = service.delete_question if kind == "question" else service.delete_student

@@ -337,6 +337,17 @@ export function useDeleteTaskQuestion() {
   return useMutation({ mutationFn: tasksApi.deleteTaskQuestion, onSuccess: (_data, input) => invalidateTask(client, input.taskId) });
 }
 
+export function useUpdateQuestionProvider() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: tasksApi.updateQuestionProvider,
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData<Task>(taskKeys.detail(variables.taskId), current =>
+        !current || current.workflow_revision > data.workflow_revision ? current : { ...current, ...data });
+    },
+  });
+}
+
 export function useUpdateProblem() {
   const queryClient = useQueryClient();
 
@@ -348,6 +359,7 @@ export function useUpdateProblem() {
       type?: string;
       stem?: string;
       criterion?: string;
+      alternative_rule_edits?: Record<string, string>;
       max_score?: number;
       review_status?: "needs_review" | "edited" | "confirmed";
       review_fields?: import("@/types").PreparationIssue["field"][];

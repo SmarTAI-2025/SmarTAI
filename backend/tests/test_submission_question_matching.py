@@ -1,4 +1,6 @@
 """Alias matching is global, order independent, and adds no matching model pass."""
+from backend.tests.rubric_fixtures import add_reviewed_question
+
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -168,7 +170,7 @@ async def test_real_saved_out_of_order_answers_keep_canonical_identity(monkeypat
     owner, task = _seed_task()
     known = problems()
     for index, (q_id, row) in enumerate(known.items()):
-        assignment_repository.add_question(task, teacher_id=owner, q_id=q_id, order_index=index,
+        add_reviewed_question(task, teacher_id=owner, q_id=q_id, order_index=index,
             number=row['number'], type=row['type'], stem=row['stem'], criterion='Teacher rubric.', max_score=10)
     calls = []
     async def invoke(messages):
@@ -207,7 +209,7 @@ async def test_pdf_running_labels_with_different_aliases_keep_full_answer(monkey
     from backend.tests.test_submission_incremental import _claim, _registry
     from backend.tests.test_task_background_workflows import _seed_task
     owner, task = _seed_task()
-    assignment_repository.add_question(task, teacher_id=owner, q_id='q1', order_index=0,
+    add_reviewed_question(task, teacher_id=owner, q_id='q1', order_index=0,
         number=catalog_number, type='概念题', stem='A mathematical question.', criterion='Teacher rubric.', max_score=10)
     pages = ['Question 1.2.1: First part.', 'Question 1: Continued part.']
     calls = []
@@ -271,7 +273,7 @@ async def test_format_repair_rechecks_retained_answer_matching_before_real_save(
     owner, task = _seed_task()
     known = problems(('1', '2'))
     for index, (q_id, row) in enumerate(known.items()):
-        assignment_repository.add_question(task, teacher_id=owner, q_id=q_id, order_index=index,
+        add_reviewed_question(task, teacher_id=owner, q_id=q_id, order_index=index,
             number=row['number'], type=row['type'], stem=row['stem'], criterion='Teacher rubric.', max_score=10)
     retained_content = known['q2' if repair_case == 'retained_conflict' else 'q1']['stem'] + '\nStudent work.'
     calls = []
@@ -337,7 +339,7 @@ async def test_model_matching_uncertainty_survives_type_repair_and_saved_grading
     owner, task = _seed_task()
     known = problems(('1.2.1', '1.3.1'))
     for index, (q_id, row) in enumerate(known.items()):
-        assignment_repository.add_question(task, teacher_id=owner, q_id=q_id, order_index=index,
+        add_reviewed_question(task, teacher_id=owner, q_id=q_id, order_index=index,
             number=row['number'], type=row['type'], stem=row['stem'], criterion='Teacher rubric.', max_score=10)
     calls = []
     async def invoke(messages):

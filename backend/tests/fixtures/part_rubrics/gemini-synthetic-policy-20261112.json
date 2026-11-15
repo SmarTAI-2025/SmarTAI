@@ -1,0 +1,18 @@
+{
+  "provenance": "Synthetic question; real AWS test1 BYOK Gemini responses captured 2026-11-12. No student data.",
+  "model": "gemini-flash-lite-latest",
+  "live_source_commit": "af9cb8818c9fcc10349a1cbca682d018e57f61a3",
+  "question": {
+    "q_id": "synthetic",
+    "number": "1",
+    "type": "计算题",
+    "max_score": 10,
+    "stem": "笔记本与笔共花费17元，笔记本10元，求笔的价格并列出方程。",
+    "reference_answer": "设笔价为x元，10+x=17，解得x=7元。",
+    "criterion": "列式3分，计算结果7分。非空作答最低分按满分的五分之一计算。"
+  },
+  "responses": [
+    "```json\n{\n  \"part_rubric\": {\n    \"total_pts\": 10.0,\n    \"nonblank_floor\": {\n      \"fraction\": 0.2\n    },\n    \"teacher_gaps\": [],\n    \"low_confidence\": false,\n    \"parts\": [\n      {\n        \"id\": \"part_1\",\n        \"label\": null,\n        \"total_pts\": 10.0,\n        \"steps\": [\n          {\n            \"id\": \"step_1\",\n            \"criterion\": \"列出正确方程，设笔价为 $x$ 元并写出 $10+x=17$（或等价方程）。\",\n            \"source_quote\": \"列式3分\",\n            \"total_pts\": 3.0\n          },\n          {\n            \"id\": \"step_2\",\n            \"criterion\": \"正确求解方程并得出笔的价格为 $7$ 元。\",\n            \"source_quote\": \"计算结果7分\",\n            \"total_pts\": 7.0\n          }\n        ],\n        \"deductions\": [],\n        \"alternative\": {\n          \"maximum\": {\n            \"points\": 10.0\n          },\n          \"minimum\": {\n            \"points\": 0.0\n          },\n          \"deduct_per_error\": 1.0,\n          \"max_deduction\": 10.0,\n          \"field_sources\": {}\n        }\n      }\n    ]\n  }\n}\n```",
+    "```json\n{\n  \"checks\": [\n    {\n      \"policy_id\": \"teacher_policy_v1:83f56675e5e53b84ee9f62f7854d4ec9c34a9ce79c60a6ba2647cd304e81d4fe\",\n      \"source_quote\": \"非空作答最低分按满分的五分之一计算\",\n      \"verdict\": \"consistent\",\n      \"reason\": \"The teacher sentence states that a non-blank response receives a minimum score equal to one-fifth of the total score. The candidate ledger sets total_pts to 10.0 and the nonblank_floor fraction to 0.2, which evaluates to $10.0 \\\\times \\\\frac{1}{5} = 2.0$ points, faithfully implementing the entire rule without dropping or inventing constraints.\"\n    }\n  ]\n}\n```"
+  ]
+}

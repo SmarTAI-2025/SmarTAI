@@ -117,7 +117,8 @@ def _validate_request(request: object) -> dict:
         result["page_number"] = _integer(request.get("page_number"), 1, MAX_PAGES)
         result["region"] = _region(request.get("region", [0, 0, 1, 1]))
         scale = request.get("scale", 2)
-        if type(scale) not in {int, float} or not math.isfinite(scale) or not 0 < scale <= 2:
+        max_scale = 2 if tuple(result["region"]) == (0, 0, 1, 1) else 5
+        if type(scale) not in {int, float} or not math.isfinite(scale) or not 0 < scale <= max_scale:
             raise EvidenceFailure("pdf_invalid_request")
         result["scale"] = float(scale)
     return result
@@ -286,6 +287,18 @@ def _page_evidence(page, targets: list[str], *, detail: bool) -> dict:
     quality = "missing" if not char_count else ("suspect" if damaged or "damaged_text" in risks or not native_text.strip() else "clean")
     result["observation"] = {"page_number": page.number + 1, "native_char_count": char_count,
                              "native_quality": quality, "verified_blank": verified_blank, "risks": sorted(risks)}
+    if not native_text.strip() and 2 <= len(images) <= 12 and not drawings:
+        panels = []
+        for block in blocks:
+            if block["kind"] != "image":
+                continue
+            x0, y0, x1, y1 = block["region"]
+            width, height = (x1-x0)*visual.width, (y1-y0)*visual.height
+            if x1-x0 >= .25 and 12 <= height <= 95 and width >= 4 * height:
+                panels.append(block["region"])
+        if panels:
+            result["observation"]["formula_panels"] = [dict(zip(("x0","y0","x1","y1"), box))
+                for box in sorted(panels, key=lambda box:(box[1],box[0]))[:2]]
     result["target_matches"] = [target for target in targets if _target_pattern(target).search(native_text)]
     if detail:
         result.update(page_index=page.number, native_text=native_text, blocks=blocks)

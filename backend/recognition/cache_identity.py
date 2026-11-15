@@ -67,7 +67,7 @@ def _local_identity(source, request, layer, tool_version):
 
 
 def native_cache_identity(source: RecognitionSourceRefV1, request: PdfIndexRequest | PdfPagesRequest,
-                          *, tool_version: str = TOOL_VERSION) -> RecognitionCacheIdentityV1:
+                          *, tool_version: str = "bounded-pdf-native-panels-v2") -> RecognitionCacheIdentityV1:
     try:
         if not isinstance(request, (PdfIndexRequest, PdfPagesRequest)) or source.content_type != "application/pdf":
             raise ValueError

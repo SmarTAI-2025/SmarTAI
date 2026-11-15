@@ -259,10 +259,12 @@ def _seed_figma_grading_task(owner_id: str):
     assignment = assignment_repository.create_assignment(
         teacher_id=owner_id, course_id=course.id, name="Frozen Inputs"
     )
+    from backend.tests.test_task_background_workflows import _reviewed_source
     question = assignment_repository.add_question(
         assignment_id=assignment.id, teacher_id=owner_id,
         q_id="q1", order_index=0, number="1", type="concept", stem="original stem",
         criterion="rubric", reference_answer="answer", max_score=10,
+        source=_reviewed_source(stem="original stem", criterion="rubric", reference_answer="answer"),
     )
     assignment_repository.publish(
         assignment_id=assignment.id, teacher_id=owner_id,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from backend.tests.rubric_fixtures import add_reviewed_question
+
 import asyncio
 import io
 import json
@@ -1244,7 +1246,7 @@ async def test_outcome_and_finalizer_failures_still_leave_terminal_failed_projec
     monkeypatch,
 ):
     owner_id, task_id = _seed_task()
-    assignment_repository.add_question(
+    add_reviewed_question(
         task_id,
         teacher_id=owner_id,
         q_id="q1",
@@ -1339,7 +1341,7 @@ async def test_archive_member_persistence_failure_is_terminal_and_does_not_skip_
     monkeypatch,
 ):
     owner_id, task_id = _seed_task()
-    assignment_repository.add_question(
+    add_reviewed_question(
         task_id,
         teacher_id=owner_id,
         q_id="q1",
@@ -1453,7 +1455,7 @@ async def test_equal_size_zip_replacement_survives_old_delete_retry_and_keeps_pr
     monkeypatch,
 ):
     owner_id, task_id = _seed_task()
-    assignment_repository.add_question(
+    add_reviewed_question(
         task_id,
         teacher_id=owner_id,
         q_id="q1",

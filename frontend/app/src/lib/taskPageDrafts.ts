@@ -14,7 +14,7 @@ export type SourceDraft = {
   prepared: { operationId: string; signature: string } | null;
 };
 export type ScorePolicyDraft = { mode: QuestionScorePolicyInput["mode"]; uniformMaxScore: string; perQuestionText: string };
-export type ProblemDraft = { activeRole: PreparationSourceRole; sources: SourceDraft[]; scorePolicy: ScorePolicyDraft; recognitionProviderId: string; generationLanguage?: ContentLanguage; formError: string | null };
+export type ProblemDraft = { followThroughStrictness?: number; activeRole: PreparationSourceRole; sources: SourceDraft[]; scorePolicy: ScorePolicyDraft; recognitionProviderId: string; generationLanguage?: ContentLanguage; formError: string | null };
 export type SubmissionDraft = {
   selectedFile: File | null; rosterFile: File | null; selectedFileName: string; rosterFileName: string;
   identityMode: SubmissionIdentityMode; recognitionProviderId: string;
@@ -61,7 +61,7 @@ export function createSourceDraft(role: PreparationSourceRole): SourceDraft {
     saveToLibrary: false, storedFileId: null, prepared: null };
 }
 export function initialProblemDraft(): ProblemDraft {
-  return { activeRole: "problem", sources: [createSourceDraft("problem")], scorePolicy: { mode: "default_10", uniformMaxScore: "10", perQuestionText: "" }, recognitionProviderId: "", formError: null };
+  return { followThroughStrictness: 50, activeRole: "problem", sources: [createSourceDraft("problem")], scorePolicy: { mode: "default_10", uniformMaxScore: "10", perQuestionText: "" }, recognitionProviderId: "", formError: null };
 }
 export function initialSubmissionDraft(): SubmissionDraft {
   return { selectedFile: null, rosterFile: null, selectedFileName: "", rosterFileName: "", identityMode: "filename", recognitionProviderId: "", storedFileId: null, savedRosterJobId: null, savedRosterCount: 0 };
@@ -72,6 +72,7 @@ export function problemDraftFromInput(input?: ProblemInput | null, initialLangua
   const policy = input.score_policy;
   return { ...initialProblemDraft(), recognitionProviderId: input.recognition_provider_id,
     generationLanguage: input.generation_language ?? initialLanguage,
+    followThroughStrictness: policy.follow_through_strictness ?? 50,
     scorePolicy: { mode: policy.mode, uniformMaxScore: String(policy.uniform_max_score ?? 10),
       perQuestionText: policy.per_question_text ?? "" },
     sources: input.sources.map((item) => {
@@ -129,7 +130,7 @@ export const problemDraftCodec = codec<ProblemDraft>(
 );
 function parseProblem(value: unknown): ProblemDraft {
   const data = record(value); const score = record(data.scorePolicy);
-  return { activeRole: choice(data.activeRole, roles), sources: list(data.sources, source), recognitionProviderId: string(data.recognitionProviderId, 240), formError: nullableString(data.formError),
+  return { followThroughStrictness: typeof data.followThroughStrictness === "number" && Number.isInteger(data.followThroughStrictness) && data.followThroughStrictness >= 0 && data.followThroughStrictness <= 100 ? data.followThroughStrictness : 50, activeRole: choice(data.activeRole, roles), sources: list(data.sources, source), recognitionProviderId: string(data.recognitionProviderId, 240), formError: nullableString(data.formError),
     generationLanguage: data.generationLanguage === undefined ? undefined : choice<ContentLanguage>(data.generationLanguage, ["zh", "en"]),
     scorePolicy: { mode: choice(score.mode, ["default_10", "uniform", "per_question"]), uniformMaxScore: string(score.uniformMaxScore, 32), perQuestionText: string(score.perQuestionText) } };
 }

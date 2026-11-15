@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from backend.tests.rubric_fixtures import review_compiler  # noqa: F401
+
 import pytest
 
 from backend.api import task_preparation
@@ -54,7 +56,7 @@ def test_empty_manual_rows_keep_frozen_teacher_score_policy(policy, maximum, sou
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stopped_after", [None, "q1", "q2"])
-async def test_paused_question_handoff_keeps_completed_questions_and_sources(monkeypatch, stopped_after):
+async def test_paused_question_handoff_keeps_completed_questions_and_sources(review_compiler, monkeypatch, stopped_after):
     import asyncio
     from backend.services.task_execution import stop_task_run
     owner, task = _seed_task()
@@ -129,7 +131,7 @@ async def test_paused_question_handoff_keeps_completed_questions_and_sources(mon
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fill_reference", [False, True])
-async def test_manual_completion_preserves_success_and_requires_saved_fields_only(monkeypatch, fill_reference):
+async def test_manual_completion_preserves_success_and_requires_saved_fields_only(review_compiler, monkeypatch, fill_reference):
     owner, task, job, revision, calls = await failed_preparation(monkeypatch)
     before_calls = list(calls)
     refused = await manual(owner, task, job, revision, question_count=2)
@@ -153,6 +155,8 @@ async def test_manual_completion_preserves_success_and_requires_saved_fields_onl
         task_facade.update_problem(task_id=task, owner_id=owner, q_id="q2", patch={"review_status": "confirmed"})
     task_facade.update_problem(task_id=task, owner_id=owner, q_id="q2",
         patch={"criterion": "Award 10 points for the solution.", **({"reference_answer": "Teacher solution"} if fill_reference else {})})
+    assert "question_review_blocked" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+    task_facade.update_problem(task_id=task, owner_id=owner, q_id="q2", patch={"review_status": "confirmed"})
     blockers = task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
     assert "question_manual_completion_required" not in blockers
     assert "question_review_blocked" not in blockers
@@ -221,6 +225,8 @@ async def test_all_question_units_failed_can_enter_manual_review(monkeypatch):
 @pytest.mark.parametrize("outcome", ["failed", "empty", "paused"])
 @pytest.mark.parametrize("enter_review_first", [False, True])
 async def test_empty_worker_projection_allows_manual_count_and_completion(monkeypatch, outcome, enter_review_first):
+    from backend.tests.rubric_fixtures import install_review_compiler
+    install_review_compiler(monkeypatch)
     import asyncio
     from unittest.mock import AsyncMock
     from backend.agents import incremental_question_preparation as incremental
@@ -311,11 +317,20 @@ async def test_manual_count_cannot_replace_frozen_targets_before_worker_starts(m
 
 @pytest.mark.asyncio
 async def test_regular_recognized_question_number_uses_the_same_editor(monkeypatch):
+    import asyncio
+    import json
+    from backend.tests.test_alternative_route import _edit_provider
     owner, task, job, revision, _ = await failed_preparation(monkeypatch)
     await manual(owner, task, job, revision)
     original = task_facade.get_task(task_id=task, owner_id=owner)
-    changed = task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1",
+    stored = assignment_repository.list_questions(task, teacher_id=owner)[0]
+    rules = stored.source["presentation"]["rubric_draft"]["plan"]["part_rubric"]
+    provider = _edit_provider(monkeypatch, [json.dumps({"part_rubric": rules})])
+    # The synchronous production endpoint runs outside the event loop; a type
+    # change now also validates the existing scoring plan for the new type.
+    changed = await asyncio.to_thread(task_facade.update_problem, task_id=task, owner_id=owner, q_id="q1",
         expected_revision=original["workflow_revision"], patch={"number": "1.1.5", "type": "other"})
+    assert len(provider.calls) == 1
     question = changed["problem"]
     assert question["number"] == "1.1.5" and question["q_id"] == "q1"
     assert question["type"] == "其他"

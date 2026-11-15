@@ -255,7 +255,7 @@ test("real question-review route retains question navigation while the original 
     if (route.request().method() !== "GET") { unexpected.push(path); return route.abort(); }
     if (path.endsWith("/content")) return route.fulfill({ body: pdf, contentType: "application/pdf", headers: cors });
     const value = path === "/auth/me" ? { id: "synthetic", username: "PDF local test", email: "local@example.invalid", role: "teacher", is_active: true, created_at: 0 }
-      : path === "/experts/available" ? []
+      : ["/experts/available", "/experts/stage-options"].includes(path) ? []
       : path === "/tasks/local-pdf" ? task
       : path === "/tasks/local-pdf/source-files" ? { task_id: "local-pdf", workflow_revision: 1, problem_source: { source_id: "pdf", file_id: "pdf", display_name: "multiple.pdf", mime_type: "application/pdf", size_bytes: pdf.length, status: "available", preview_kind: "pdf" }, submission_sources: {} }
       : null;
@@ -265,6 +265,7 @@ test("real question-review route retains question navigation while the original 
   await page.evaluate(() => localStorage.setItem("smartai_token", "synthetic-local-pdf-only"));
   await page.goto("/tasks/local-pdf/questions/Q1/content");
   await expect(page.getByRole("heading", { name: "题目资料审核", exact: true })).toBeVisible().catch((error) => { throw new Error(`${error}\n${JSON.stringify({ errors, unexpected })}`); });
+  await expect(page.getByRole("combobox", { name: "题目处理模型" })).toBeDisabled();
   await page.getByRole("button", { name: "查看题目原文件" }).click();
   await ready(page, 1);
   await scroll(page).hover();

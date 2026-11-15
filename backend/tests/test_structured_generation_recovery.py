@@ -6,9 +6,45 @@ from backend.tools.structured_llm import (
     StructuredOutputInvalidError,
     _collapse_duplicate_json_colons,
     _escape_latex_backslashes,
+    _fix_incomplete_json,
     _protect_json_math_escapes,
     extract_and_parse_json,
 )
+
+
+def test_nested_close_repair_composes_with_tex_without_changing_values():
+    from pydantic import BaseModel
+    class Payload(BaseModel):
+        candidates: list[dict]
+    raw = r'{"candidates":[{"text":"$x \le 1$", "rule":{"steps":[{"points":1.25}],"code":"print(\"{[\")","source_quote":"raw } ]"}}]}'
+    expected = json.loads(_escape_latex_backslashes(raw))
+    # Actual failure shape: candidate closes are missing before the array close.
+    damaged = raw[:-3] + raw[-2:]
+    assert extract_and_parse_json(damaged, Payload).model_dump() == expected
+    assert _fix_incomplete_json(json.dumps(expected)) == json.dumps(expected)
+
+
+@pytest.mark.parametrize("raw", [
+    '{"items":[{"points":2}', '{"items":[{"points":2}]',
+])
+def test_truncated_containers_close_in_nesting_order(raw):
+    assert json.loads(_fix_incomplete_json(raw)) == {"items": [{"points": 2}]}
+
+
+@pytest.mark.parametrize("raw", [
+    '{"points":', '{"text":"unfinished', '{"items":[1,',
+    '{"items":[{"points":}]}', '{"items":[1}}',
+])
+def test_container_repair_never_fills_values_or_text(raw):
+    assert _fix_incomplete_json(raw) == raw
+
+
+def test_verification_verdict_still_requires_original_complete_json():
+    from pydantic import BaseModel
+    class Verdict(BaseModel):
+        valid: bool
+    with pytest.raises(ValueError):
+        extract_and_parse_json('{"valid":true', Verdict, require_complete=True)
 
 
 @pytest.mark.parametrize("invalid_escape", [r"\uffa", r"\u4f", r"\u鍚ng"])
