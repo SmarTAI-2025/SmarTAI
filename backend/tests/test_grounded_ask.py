@@ -131,7 +131,7 @@ def test_teacher_score_overrides_ai_and_failed_score_stays_unknown():
     ({"confidence": .5, "requires_human_review": True, "review_reasons": ["low_confidence"]}, 1, 0),
     ({"expert_results": [{"score": 5}, {"score": 0, "error_kind": "general"}, {"score": None}]}, 1, 0),
     ({"expert_results": [{"score": 5}, {"score": 0}]}, 1, 0),
-    ({"expert_results": [{"score": 5, "confidence": .95}, {"score": 3.5, "confidence": .95}]}, 0, 0),
+    ({"expert_results": [{"score": 5, "confidence": .95}, {"score": 3.8, "confidence": .95}]}, 0, 0),
     ({"expert_results": [{"score": 5, "confidence": .95}, {"score": 3.5, "confidence": None}]}, 1, 0),
     ({"expert_results": [{"score": 5}, {"score": 3.49}]}, 1, 0),
     ({"expert_results": [{"score": 5}, {"score": 0}], "teacher_score": 5, "review_status": "confirmed"}, 0, 1),
