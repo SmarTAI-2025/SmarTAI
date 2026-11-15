@@ -55,6 +55,21 @@ export function collectResultReviewItems(model: ResultsModel, students: StudentS
     .sort((a, b) => b.priority - a.priority);
 }
 
+/** Overview shows only large score disagreement; detailed evidence stays intact. */
+export function collectOverviewReviewItems(model: ResultsModel, students: StudentSummary[], locale: Locale = "zh-CN"): ReviewItem[] {
+  const overviewStudents = students.map(student => ({
+    ...student,
+    corrections: student.corrections.map(correction => hasExpertDisagreement(correction) ? correction : {
+      ...correction,
+      // A display-only copy: preserve every independent concern and never
+      // change the saved reasons used by the question detail or grading.
+      review_reasons: correctionReviewReasonIds(correction).filter(reason => reason !== "math_expert_disagreement"),
+      initial_review_reasons: [],
+    }),
+  }));
+  return collectResultReviewItems(model, overviewStudents, locale);
+}
+
 function buildReviewItem(
   student: StudentSummary,
   correction: Correction,

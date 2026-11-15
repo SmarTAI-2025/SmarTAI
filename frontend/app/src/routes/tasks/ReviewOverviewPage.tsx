@@ -19,7 +19,7 @@ import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
 import { correctionReviewReasonIds, pendingProgrammingReview, reviewReasonLabel, buildResultsModel, hasPartialExperts, hasUnknownConfidence, effectiveCorrectionScore, formatConfidence, formatPercent, mathReviewLabels, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
-import { collectResultReviewItems, correctionReviewNotes, type ReviewItem } from "@/components/tasks/resultsReviewModel";
+import { collectOverviewReviewItems, correctionReviewNotes, type ReviewItem } from "@/components/tasks/resultsReviewModel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
@@ -49,7 +49,7 @@ export function ReviewOverviewPage() {
   // that read before redirecting back, just as the two recognition overviews do.
   const readingCompletion = taskQuery.isFetching && task && !hasTaskReachedStep(task, 6);
   const model = useMemo(() => buildResultsModel(task, resultQuery.data), [resultQuery.data, task]);
-  const reviewItems = useMemo(() => collectResultReviewItems(model, model.students, locale).filter(item => !isCorrectionReviewConfirmed(item.correction)), [model, locale]);
+  const reviewItems = useMemo(() => collectOverviewReviewItems(model, model.students, locale).filter(item => !isCorrectionReviewConfirmed(item.correction)), [model, locale]);
   const annotatedKeys = useMemo(() => {
     const keys = new Set(Object.entries(commentsQuery.data?.comments ?? {}).filter(([, comment]) => comment.trim()).map(([key]) => key));
     for (const student of model.students) {

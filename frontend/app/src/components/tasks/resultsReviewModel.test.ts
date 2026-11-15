@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Correction } from "@/types";
 import { buildResultsModel, hasReviewSignal, summarizeReviewScoreSources } from "./resultsModel";
-import { collectResultReviewItems, correctionReviewNotes, correctionReviewAttention, correctionReviewBlocked, correctionReviewNextBlocked, isCorrectionReviewConfirmed, pausedGradingMessage } from "./resultsReviewModel";
+import { collectOverviewReviewItems, collectResultReviewItems, correctionReviewNotes, correctionReviewAttention, correctionReviewBlocked, correctionReviewNextBlocked, isCorrectionReviewConfirmed, pausedGradingMessage } from "./resultsReviewModel";
 
 const correction = (overrides: Partial<Correction> = {}): Correction => ({
   q_id: "q1", type: "concept", score: 8, max_score: 10, confidence: 0.9,
@@ -63,9 +63,9 @@ describe("grading review attention", () => {
     expect(correctionReviewAttention(correction({ expert_results: [successful, zero] }))).toBe("advisory");
   });
 
-  it.each([2, 2.6, 3, 3.01, 4])("uses population standard deviation over 15% without blocking results (spread=%s)", spread => {
+  it.each([2, 2.4, 2.41, 2.6, 3, 4])("uses population standard deviation over 12% without blocking results (spread=%s)", spread => {
     const value = correction({ expert_results: [10, 10 - spread].map(score => ({ provider: "expert", score, max_score: 10, confidence: .95, comment: "", steps: [] })) });
-    expect(correctionReviewAttention(value)).toBe(spread > 3 ? "advisory" : "none");
+    expect(correctionReviewAttention(value)).toBe(spread > 2.4 ? "advisory" : "none");
     expect(correctionReviewNextBlocked(value)).toBe(false);
     expect(correctionReviewAttention({ ...value, teacher_score: 8, review_status: "confirmed" })).toBe("none");
   });
@@ -147,6 +147,43 @@ it.each([0, 7, 10])("releases a saved replacement score without a confirm click 
   const repaired = correction({ score: teacher_score, provisional_score: null, teacher_score, review_status: "edited", synthesis_method: "all_failed" });
   expect(correctionReviewNextBlocked(repaired)).toBe(false);
   expect(correctionReviewNotes(repaired, "zh-CN").filter(note => note.severity === "blocking")).toEqual([]);
+});
+
+describe("overview disagreement policy", () => {
+  it.each([
+    [[10, 8], false], [[10, 9.34], false], [[8, 8], false],
+    [[10, 7.6], false], [[10, 7.59], true], [[10, 7.4], true],
+    [[10, 10, 7.4], true], [[10, 8.7, 7.4], false],
+  ] as const)("uses large score disagreement in overview, keeping details for %j", (scores, expected) => {
+    const value = correction({ review_reasons: [], initial_review_reasons: ["math_expert_disagreement"],
+      expert_results: scores.map((score, i) => ({ provider: `expert${i}`, score, max_score: 10, confidence: .95, comment: "", steps: [] })) });
+    const model = buildResultsModel(undefined, { task_id: "T1", status: "graded", timestamp: 0,
+      results: [{ student_id: "S1", corrections: [value] }] } as Parameters<typeof buildResultsModel>[1]);
+    const original = JSON.stringify(model);
+    expect(collectOverviewReviewItems(model, model.students)).toHaveLength(expected ? 1 : 0);
+    expect(collectResultReviewItems(model, model.students)).toHaveLength(1);
+    expect(JSON.stringify(model)).toBe(original);
+  });
+
+  it.each(["low", "unknown", "partial", "proof", "missing", "programming"])("retains independent %s concerns without a small-disagreement label", concern => {
+    const expert = { provider: "expert", score: 10, max_score: 10, confidence: .95, comment: "", steps: [] };
+    const value = correction({ review_reasons: ["math_expert_disagreement"],
+      initial_review_reasons: ["math_expert_disagreement,math_proof_concern"],
+      expert_results: [expert, { ...expert, provider: "second", score: 9.34 }],
+      ...(concern !== "proof" ? { initial_review_reasons: [] } : {}),
+      ...(concern === "low" ? { expert_results: [{ ...expert, confidence: .4 }] } : {}),
+      ...(concern === "unknown" ? { expert_results: [{ ...expert, confidence: null }] } : {}),
+      ...(concern === "partial" ? { expert_results: [expert, { ...expert, error_kind: "parse_failed" }] } : {}),
+      ...(concern === "missing" ? { score: null, provisional_score: null } : {}),
+      ...(concern === "programming" ? { initial_review_reasons: ["programming_code_review_only"] } : {}),
+    });
+    const model = buildResultsModel(undefined, { task_id: "T1", status: "graded", timestamp: 0,
+      results: [{ student_id: "S1", corrections: [value] }] } as Parameters<typeof buildResultsModel>[1]);
+    const [item] = collectOverviewReviewItems(model, model.students);
+    expect(item).toBeDefined();
+    expect(item.reasons.join(" ")).not.toContain("专家分歧");
+    expect(item.severity).toBe(["missing", "programming"].includes(concern) ? "blocking" : "advisory");
+  });
 });
 
 describe("specific math review reasons", () => {
