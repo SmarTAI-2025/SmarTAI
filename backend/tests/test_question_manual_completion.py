@@ -224,7 +224,9 @@ async def test_all_question_units_failed_can_enter_manual_review(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["failed", "empty", "paused"])
 @pytest.mark.parametrize("enter_review_first", [False, True])
-async def test_empty_worker_projection_allows_manual_count_and_completion(review_compiler, monkeypatch, outcome, enter_review_first):
+async def test_empty_worker_projection_allows_manual_count_and_completion(monkeypatch, outcome, enter_review_first):
+    from backend.tests.rubric_fixtures import install_review_compiler
+    install_review_compiler(monkeypatch)
     import asyncio
     from unittest.mock import AsyncMock
     from backend.agents import incremental_question_preparation as incremental
