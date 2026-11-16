@@ -1,6 +1,6 @@
 import { userFacingError } from "@/lib/taskActionGuards";
 import { compareValues } from "@/lib/sortValues";
-import { isTaskProcessing } from "@/lib/taskFlow";
+import { isTaskPaused, isTaskProcessing } from "@/lib/taskFlow";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { taskKeys } from "@/api/hooks/keys";
 import { getTaskState, listTasks } from "@/api/tasks";
@@ -93,7 +93,7 @@ export function GradingHistoryPanel({ dashboard = false, deletion }: { dashboard
   }, [location.key, location.state, navigationType, query, restoredField]);
 
   const selectedTasks = interpretation?.execution?.selection?.kind === "tasks" ? interpretation.execution.tasks : undefined;
-  const activeSelectedTasks = useMemo(() => selectedTasks?.filter(task => isTaskProcessing(task.status)) ?? [], [selectedTasks]);
+  const activeSelectedTasks = useMemo(() => selectedTasks?.filter(task => isTaskProcessing(task.status) || isTaskPaused(task.status)) ?? [], [selectedTasks]);
   const liveStates = useQueries({
     queries: activeSelectedTasks.map(task => ({
       queryKey: taskKeys.state(task.task_id),

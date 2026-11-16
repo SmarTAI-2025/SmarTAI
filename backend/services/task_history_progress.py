@@ -64,11 +64,11 @@ def progress_fields(status: str, progress: dict | None) -> dict:
 
 
 async def enrich_history_progress(items: list[dict], *, owner_id: str) -> list[dict]:
-    """Enrich already-owned summaries; do not fetch state for inactive tasks."""
+    """Enrich owned running/paused summaries, including saved pause progress."""
     result = []
     for item in items:
         status, progress = item.get("status"), None
-        if status in ACTIVE_STATUSES:
+        if status in SNAPSHOT_STATUSES:
             try:
                 state = await task_facade.async_task_state(task_id=item["task_id"], owner_id=owner_id)
                 status, progress = state.get("status"), state.get("progress")

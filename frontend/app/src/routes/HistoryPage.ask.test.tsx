@@ -53,6 +53,21 @@ describe("Current task Ask SmarTAI", () => {
     expect(screen.getByText("教材进度测试面板")).toBeInTheDocument();
   });
 
+  it("loads saved progress for paused tasks returned by an intelligent search", async () => {
+    const task = { task_id: "paused", name: "Paused batch", status: "grading_paused", workflow_revision: 3,
+      owner_id: "teacher", problem_count: 7, student_count: 31, kb_docs: {}, kb_doc_count: 0,
+      created_at: 1, updated_at: 1, progress_percent: null, eta_seconds: null } as TaskLite;
+    mocks.state.mockResolvedValue({ ...task, progress_percent: 44 });
+    mocks.interpret.mockResolvedValue({ ...interpretation, execution: {
+      recognized: true, kind: "tasks", explanation: "", data: { columns: [], rows: [] },
+      selection: { kind: "tasks", ids: [task.task_id] }, tasks: [task], chart: null,
+    } });
+    mount(); ask();
+    expect(await screen.findByText("44%")).toBeVisible();
+    expect(mocks.state).toHaveBeenCalledWith(task.task_id);
+    expect(screen.getByText("批改暂停")).toBeVisible();
+  });
+
   it("opens saved drafts directly and navigates all three tabs by keyboard without losing grading filters", () => {
     mount("/history?view=drafts&sort=name_asc");
     const drafts = screen.getByRole("tab", { name: "暂存草稿" });

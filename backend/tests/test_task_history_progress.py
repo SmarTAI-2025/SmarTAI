@@ -167,15 +167,36 @@ def test_history_and_live_state_share_grading_boundary(history, monkeypatch, sta
     assert row["eta_seconds"] == state["eta_seconds"] == (900 if completed == 4 else 0 if status == "graded" else None)
 
 
-def test_unavailable_progress_stays_unknown_without_exposing_errors(monkeypatch):
+@pytest.mark.parametrize("status,progress,expected", [
+    ("grading_paused", _grading(phase="paused", grading_eta_seconds=900,
+        model_progress=[{"total": 20, "succeeded": 20, "failed": 0}]), 60),
+    ("submissions_paused", _grading(phase="paused", completed_units=2), 50),
+    ("problems_paused", {"phase": "paused", "total_steps": 8, "completed_steps": 3}, 38),
+])
+def test_paused_history_fetches_saved_owner_scoped_progress(history, monkeypatch, status, progress, expected):
+    client, items, _ = history
+    items["slow"]["status"] = status
+    async def snapshot(*, task_id, owner_id):
+        assert owner_id == "owner"
+        return {"status": status, "progress": progress}
+    monkeypatch.setattr(task_facade, "async_task_state", snapshot)
+    row = next(row for row in client.get("/tasks/", params={"page": 1}).json()["items"] if row["task_id"] == "slow")
+    state = client.get("/tasks/slow/state").json()
+    assert row["status"] == state["status"] == status
+    assert row["progress_percent"] == state["progress_percent"] == expected
+    assert row["eta_seconds"] == state["eta_seconds"] is None
+
+
+@pytest.mark.parametrize("status", ["grading", "grading_paused"])
+def test_unavailable_progress_stays_unknown_without_exposing_errors(monkeypatch, status):
     async def missing(*, task_id, owner_id):
         assert task_id == "owned-task" and owner_id == "owner"
         raise NotFound("private-detail")
     monkeypatch.setattr(task_facade, "async_task_state", missing)
     rows = asyncio.run(task_history_progress.enrich_history_progress(
-        [{"task_id": "owned-task", "status": "grading"}], owner_id="owner",
+        [{"task_id": "owned-task", "status": status}], owner_id="owner",
     ))
-    assert rows == [{"task_id": "owned-task", "status": "grading", "progress_percent": None, "eta_seconds": None}]
+    assert rows == [{"task_id": "owned-task", "status": status, "progress_percent": None, "eta_seconds": None}]
 
 
 def test_task_state_keeps_reporter_on_event_loop_and_database_off_loop(monkeypatch):

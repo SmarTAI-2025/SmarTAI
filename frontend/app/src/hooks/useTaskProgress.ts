@@ -2,10 +2,10 @@ import { useTaskState } from "@/api/hooks/tasks";
 
 const ACTIVE_STATUSES = new Set(["extracting_problems", "parsing_submissions", "grading"]);
 
-export function useTaskProgress(taskId?: string, options: { enabled?: boolean } = {}) {
+export function useTaskProgress(taskId?: string, options: { enabled?: boolean; refetchInterval?: number | false } = {}) {
   const query = useTaskState(taskId, {
     enabled: options.enabled,
-    refetchInterval: options.enabled === false ? false : 1_500,
+    refetchInterval: options.enabled === false ? false : options.refetchInterval ?? 1_500,
   });
 
   const isActive = Boolean(query.data?.status && ACTIVE_STATUSES.has(query.data.status));
