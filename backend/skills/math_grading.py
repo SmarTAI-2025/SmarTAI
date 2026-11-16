@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, SkipValidation, TypeAdapter, 
 
 from backend.services.part_rubric import supplied_notation
 from backend.skills.part_scoring import INSTRUCTION as PART_SCORING_INSTRUCTION, PROOF_INSTRUCTION, PartDecision, ReasonedDecision, settle_parts
-from backend.models import ExpertResult, GradingModelOutput, StepScore
+from backend.models import ExpertResult, GradingModelOutput, ScoreDeduction, StepScore
 from backend.skills.base import (
     GradingSkill, authoritative_score_instruction, build_system_prompt,
     classify_skill_error, format_deterministic_feedback,
@@ -1464,8 +1464,16 @@ def weighted_math_steps(experts, weights, maximum, score):
             subtotal += amount
             current = min(_points(maximum), subtotal.quantize(quantum, rounding=ROUND_HALF_UP))
             desc = join_expert_feedback((expert.provider, expert.steps[index].desc) for expert in experts)
+            deductions = None
+            if all(expert.steps[index].deductions is not None for expert in experts):
+                deductions = [ScoreDeduction(desc=f"{expert.provider}: {item.desc}",
+                                            points=float(_points(item.points) * weight / sum(weights)))
+                              for expert, weight in zip(experts, weights) if weight > 0
+                              for item in expert.steps[index].deductions]
             result.append(StepScore(step_no=index + 1, desc=desc, score=float(current - previous),
                                     part_id=experts[0].steps[index].part_id, item_id=experts[0].steps[index].item_id,
+                                    deductions=deductions,
+                                    is_alternative=all(expert.steps[index].is_alternative for expert in experts),
                                     is_correct=all(expert.steps[index].is_correct for expert in experts)))
             previous = current
         if _points(score) == previous:
@@ -1570,11 +1578,17 @@ class MathGradingSkill(GradingSkill):
                        or flag.startswith(("recognition_failed_pages:", "recognition_unprocessed_pages:", "recognition_invalid_fields:"))
                        for flag in (answer.flag or [])):
                     raise ValueError("Unresolved recognition cannot be graded as blank.")
+                blank_steps = []
+                if plan.part_rubric:
+                    _, blank_steps = settle_parts(plan.part_rubric, [PartDecision(
+                        part_id=part.id, target_quote=f"part:{part.id}", student_quote="",
+                        relevance="unanswered", method="reference", progress="空白作答 / Blank answer",
+                    ) for part in plan.part_rubric.parts], "", problem.stem)
                 return ExpertResult(provider=self.provider.provider_id, score=0, max_score=problem.max_score,
                     confidence=1, comment=format_deterministic_feedback(self.grading_setup,
                         zh_message="本题尚未作答，得0分。", en_message="No answer was submitted; this question receives 0 points.",
                         zh_suggestion="请补充作答。", en_suggestion="Add your answer to this question.",
-                        legacy_message="空白作答 / Blank answer"), steps=[],
+                        legacy_message="空白作答 / Blank answer"), steps=blank_steps,
                     raw_output=_json({"version":TRACE_VERSION,"plan_id":plan.plan_id,"blank":True}))
             if plan.part_rubric and plan.expected_truth_by_part:
                 from backend.services.true_false_answers import adopted_truth_key, submitted_truth_values

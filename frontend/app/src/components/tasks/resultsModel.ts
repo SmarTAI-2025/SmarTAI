@@ -1,4 +1,4 @@
-import type { Correction, ProblemInfo, StudentAnswerInfo, StudentResult, StudentSubmission, Task, TaskResultResponse } from "@/types";
+import type { Correction, ProblemInfo, StepScore, StudentAnswerInfo, StudentResult, StudentSubmission, Task, TaskResultResponse } from "@/types";
 import type { Locale } from "@/i18n/messages";
 import type { ReviewAttention } from "@/lib/reviewConfirmation";
 import { confidenceNeedsAttention, confidenceValue } from "@/lib/confidencePolicy";
@@ -155,6 +155,11 @@ function roundAIScore(value: number, maxScore: number, decimals = 1): number {
   const shifted = Number(`${coefficient}e${Number(exponent) + decimals}`);
   const rounded = Number.isFinite(shifted) ? Math.round(shifted) / (10 ** decimals) : value;
   return value <= maxScore ? Math.min(rounded, maxScore) : rounded;
+}
+
+export function scoringRows(steps: StepScore[] = []) {
+  return steps.flatMap(step => step.deductions == null ? [{ ...step, deduction: false }] :
+    step.deductions.map(item => ({ ...step, desc: item.desc, score: -item.points, is_correct: false, deduction: true })));
 }
 
 export function formatScore(value: number | null | undefined, maxScore?: number, decimals?: number) {

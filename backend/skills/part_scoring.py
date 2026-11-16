@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from pydantic import BeforeValidator, Field, StrictBool
 from pydantic.json_schema import SkipJsonSchema
 
-from backend.models import StepScore
+from backend.models import ScoreDeduction, StepScore
 from backend.services.math_source_evidence import SourceMatch, match_source_quote, source_catalog
 from backend.services.part_rubric import Frozen, Key, Text
 
@@ -245,6 +245,30 @@ def _amount(value):
     return Fraction(str(value))
 
 
+def charged_deductions(part, decision, base):
+    """Project effective charges under the same frozen caps as settlement."""
+    alternative = decision.method == "alternative"
+    rules = {rule.id: rule for rule in part.deductions}
+    floor = part.alternative.minimum.resolve(part.total_pts) if alternative else Fraction(0)
+    remaining, charged, counts, details = base - floor, {}, {}, []
+    for event in decision.errors:
+        rule = rules.get(event.rule_id)
+        count = counts.get(event.rule_id, 0) + 1
+        counts[event.rule_id] = count
+        amount = _amount(part.alternative.deduct_per_error or 0) if alternative else _amount(rule.deduct_pts)
+        if rule and rule.limit is not None and count > rule.limit:
+            amount = Fraction(0)
+        ceiling = part.alternative.max_deduction if alternative else rule.max_deduction
+        if ceiling is not None:
+            amount = min(amount, max(Fraction(0), _amount(ceiling) - charged.get(event.rule_id, 0)))
+        amount = min(amount, max(Fraction(0), remaining))
+        charged[event.rule_id] = charged.get(event.rule_id, Fraction(0)) + amount
+        remaining -= amount
+        if amount:
+            details.append(ScoreDeduction(desc=event.reason, points=float(amount)))
+    return details
+
+
 def _obligation_span(question, scope, fragment, question_lines):
     """Resolve omissions to offsets in this part, including original question line IDs."""
     if not fragment.startswith("question:"):
@@ -299,6 +323,7 @@ def settle_parts(rules, decisions, answer, question):
                     verified_errors.add((origin.start, origin.end))
     total = Fraction(0)
     rows = []
+    deduction_details = {}
     for part in rules.parts:
         d = by_id[part.id]
         scope = part.stem or question
@@ -362,7 +387,9 @@ def settle_parts(rules, decisions, answer, question):
                     f"{part.id}: zero credit permits only known, missed step IDs. "
                     "Omit earned steps and deduction events, or classify supported progress as partial."
                 )
-            amounts = [(None, Fraction(0), d.progress)]
+            reasons = {step.id: step.reason for step in d.steps}
+            amounts = ([(step.id, Fraction(0), reasons.get(step.id, d.progress)) for step in part.steps]
+                       if part.steps and not alternative else [(None, Fraction(0), d.progress)])
         elif not alternative and part.steps:
             decisions_for_steps = d.steps
             if (
@@ -494,12 +521,17 @@ def settle_parts(rules, decisions, answer, question):
                     rule = penalty_rules[rule_id]
                     loss = _amount(rule.deduct_pts) * min(count, rule.limit or count)
                     losses += min(loss, _amount(rule.max_deduction)) if rule.max_deduction is not None else loss
+            deduction_base = sum(value for _, value, _ in amounts) if mixed else cap
             if mixed and losses:
                 earned = sum(value for _, value, _ in amounts)
                 detail = " · ".join([*(reason for _, _, reason in amounts), *(event.reason for event in d.errors)])
                 amounts = [(None, max(Fraction(0), earned - losses), detail)]
             elif not mixed:
                 amounts = [(None, max(floor, cap - losses), d.progress)]
+            if not mixed:
+                deduction_details[part.id] = charged_deductions(part, d, deduction_base)
+        elif alternative or not part.steps:
+            deduction_details[part.id] = []
         subtotal = sum(x[1] for x in amounts)
         if d.relevance == "complete" and (subtotal != cap or d.errors):
             raise ValueError("Complete work must satisfy all applicable goals.")
@@ -545,6 +577,8 @@ def settle_parts(rules, decisions, answer, question):
                 desc=reason,
                 is_correct=full,
                 score=float(current - previous),
+                deductions=deduction_details.get(part) if step is None else None,
+                is_alternative=bool(part and by_id[part].method == "alternative"),
             )
         )
         previous = current

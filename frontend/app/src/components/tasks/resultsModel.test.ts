@@ -14,7 +14,20 @@ import {
   reviewConfirmationScore,
   reviewReasonLabel,
   summarizeReviewScoreSources,
+  scoringRows,
 } from "./resultsModel";
+
+it("shows only charged errors for a deduction subtotal and preserves step awards", () => {
+  const subtotal = { step_no: 1, part_id: "p1", desc: "Net score", score: 7, is_correct: false,
+    deductions: [1, 2, 3].map(n => ({ desc: `Error ${n}`, points: 1 })) };
+  expect(scoringRows([subtotal]).map(row => [row.desc, row.score])).toEqual([
+    ["Error 1", -1], ["Error 2", -1], ["Error 3", -1],
+  ]);
+  expect(subtotal.score).toBe(7);
+  expect(scoringRows([{ ...subtotal, score: 10, deductions: [] }])).toEqual([]);
+  const step = { step_no: 1, desc: "First rubric goal", score: 0, is_correct: false };
+  expect(scoringRows([step])).toEqual([{ ...step, deduction: false }]);
+});
 
 function correction(patch: Partial<Correction> = {}): Correction {
   return {

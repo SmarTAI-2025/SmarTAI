@@ -13,6 +13,59 @@ const results = [{ student_id: "S1", student_name: "Example teacher data", corre
 const task = { task_id: taskId, owner_id: "shared-owner", name: "Expert evidence", status: "graded", workflow_revision: 1, final_result_version: 0, problem_data, student_data,
   problem_count: 2, student_count: 1, created_at: 1, updated_at: 1, kb_docs: {}, kb_doc_count: 0 };
 
+for (const width of [390, 1440]) test(`deductions retain one net score and reference steps remain fixed at ${width}px`, async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+  await page.setViewportSize({ width, height: 1000 });
+  await page.addInitScript(() => {
+    localStorage.setItem("smartai_locale", "zh-CN");
+    localStorage.setItem("smartai_token", "synthetic-teacher-token");
+  });
+  const votes = [
+    { ...experts[0], provider: "Deducted", score: 7, steps: [{ step_no: 1, part_id: "p1", score: 7, is_correct: false, is_alternative: true, desc: "Net subtotal should not be a step",
+      deductions: [1,2,3].map(n => ({ desc: `Independent error ${n}`, points: 1 })) }] },
+    { ...experts[1], provider: "Complete", score: 10, steps: [{ step_no: 1, part_id: "p1", score: 10, is_correct: true, is_alternative: true, desc: "Correct work should not be a deduction", deductions: [] }] },
+    { ...experts[2], provider: "Reference", score: 0, steps: [1,2,3].map(n => ({ step_no: n, part_id: "p1", item_id: `s${n}`, score: 0, is_correct: false, desc: `Missing frozen goal ${n}` })) },
+  ];
+  await page.route(`${backend}/**`, async route => {
+    const path = new URL(route.request().url()).pathname;
+    const json = (value: unknown) => route.fulfill({ json: value });
+    if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" } });
+    if (path === "/auth/me") return json({ id: "shared-owner", username: "Synthetic teacher", role: "teacher", is_active: true });
+    if (path === "/auth/activity") return json({ token: "synthetic-teacher-token" });
+    if (path.startsWith("/experts") || path === "/tags/") return json([]);
+    if (path === `/tasks/${taskId}`) return json(task);
+    if (path.endsWith("/result")) return json({ task_id: taskId, primary_provider_id: votes[0].provider_id, problem_data, student_data,
+      results: [{ ...results[0], corrections: [{ ...results[0].corrections[0], expert_results: votes }] }], timestamp: 1 });
+    if (path.endsWith("/finalization")) return json({ task_id: taskId, workflow_revision: 1, final_result_version: 0, final_result_dirty: false, remaining_review_count: 0, ready_for_confirmation: true });
+    throw new Error(`Unexpected request ${path}`);
+  });
+  await page.goto(`/tasks/${taskId}/review/S1/q1`);
+  const result = page.locator('[data-question-id="q1"]').getByRole("region", { name: "SmarTAI 批改结果" });
+  await expect(result.getByText("Deducted（7/10, [7], conf=0.95）")).toBeVisible();
+  await expect(result.locator("ol").first().getByText("-1 分", { exact: true })).toHaveCount(3);
+  await expect(result.getByText("Net subtotal should not be a step")).toHaveCount(0);
+  await expect(result).toContainText("[10]");
+  await expect(result).toContainText("[0,0,0]");
+  await result.getByText("查看各专家原始结果").click();
+  const panel = result.getByRole("tabpanel");
+  await expect(panel.getByText("-1 分", { exact: true })).toHaveCount(3);
+  await result.getByRole("tab", { name: "Complete", exact: true }).click();
+  await expect(panel).toContainText("10/10, [10]");
+  await expect(panel.getByText("另解批改", { exact: true })).toBeVisible();
+  await expect(panel.locator("ol")).toHaveCount(0);
+  await result.getByRole("tab", { name: "Reference", exact: true }).click();
+  await expect(panel).toContainText("0/10, [0,0,0]");
+  await expect(panel.getByText("另解批改", { exact: true })).toHaveCount(0);
+  await expect(panel.locator("li")).toHaveCount(3);
+  await result.getByRole("tab", { name: "Deducted", exact: true }).click();
+  await expect(panel.getByText("Independent error 3")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth+1)).toBe(true);
+  expect(errors).toEqual([]);
+  await result.screenshot({ path: `/private/tmp/grading-deductions-${width}.png` });
+});
+
 for (const demo of [false, true]) for (const locale of ["zh-CN", "en-US"]) {
   test(`${demo ? "Demo" : "Teacher"} ${locale}: same evidence and score precision for both disagreement signals`, async ({ page }, testInfo) => {
     const errors: string[] = [];

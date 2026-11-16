@@ -63,6 +63,11 @@ class GradingModelOutput(BaseModel):
 # Old artifacts and unavailable/invalid assessments remain unknown.
 RecognitionConfidence = Annotated[float | None, BeforeValidator(confidence_value)]
 
+class ScoreDeduction(BaseModel):
+    desc: str
+    points: float = Field(gt=0, allow_inf_nan=False)
+
+
 class StepScore(BaseModel):
     part_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
     item_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
@@ -70,6 +75,9 @@ class StepScore(BaseModel):
     desc: str
     is_correct: bool
     score: float = Field(ge=0, allow_inf_nan=False)
+    # None is an awarded step; [] is a deduction subtotal with no charged errors.
+    deductions: list[ScoreDeduction] | None = Field(default=None, exclude_if=lambda v: v is None)
+    is_alternative: bool = Field(default=False, exclude_if=lambda v: not v)
 
 
 class ProgrammingTestCounts(BaseModel):
