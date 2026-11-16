@@ -15,6 +15,13 @@ const unnamedGemini = {
 };
 
 describe("model presentation", () => {
+  it.each(["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"])("keeps shared %s concise even with a cached disambiguated label", (model) => {
+    const oldLabel = `OpenAI · ${model} · api.openai.com/v1 · OpenAI Chat Completions · ${model.slice(-8)}`;
+    const expert = { provider_id: `openai:${model}`, provider_type: "openai", model, is_shared: true,
+      display_name: oldLabel, resolved_display_name: oldLabel };
+    expect(modelDisplayName(expert)).toBe(`OpenAI · ${model}`);
+    expect(modelDisplayName({ ...expert, provider_id: "personal", is_shared: false })).toBe(oldLabel);
+  });
   it("orders providers without mutating records or changing order within a provider", () => {
     const records = [
       { provider_type: "qwen", provider_id: "q", is_default: true },

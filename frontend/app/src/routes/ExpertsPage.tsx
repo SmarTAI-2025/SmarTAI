@@ -836,8 +836,11 @@ function ExpertActions({
   const zh = locale === "zh-CN";
   if (expert.editable === false) {
     return (
-      <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 text-xs text-muted-foreground">
-        <span>{zh ? "平台托管，只读" : "Platform managed, read-only"}</span>
+      <div className="flex min-w-0 flex-col items-end gap-1">
+        <span className="inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-950/50 dark:text-blue-200">
+          {zh ? "平台托管" : "Platform managed"}
+        </span>
+        <span className="text-[10px] text-muted-foreground">{zh ? "不可编辑修改" : "Cannot be edited"}</span>
       </div>
     );
   }
@@ -959,7 +962,7 @@ function VerificationBadge({
   locale: "zh-CN" | "en-US";
 }) {
   const zh = locale === "zh-CN";
-  const status = expert.verification_status ?? (expert.is_shared ? "platform_managed" : "unverified");
+  const status = expert.verification_status ?? "unverified";
   const statuses = {
     verified: {
       label: zh ? "验证通过" : "Verified",
@@ -969,16 +972,12 @@ function VerificationBadge({
       label: zh ? "验证失败" : "Failed",
       className: "bg-rose-50 text-rose-700 dark:bg-rose-950/50 dark:text-rose-200",
     },
-    platform_managed: {
-      label: zh ? "平台托管" : "Platform managed",
-      className: "bg-blue-50 text-blue-700 dark:bg-blue-950/50 dark:text-blue-200",
-    },
     unverified: {
       label: zh ? "未验证" : "Unchecked",
       className: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-200",
     },
   };
-  const meta = statuses[status] ?? statuses.unverified;
+  const meta = statuses[status === "platform_managed" ? "unverified" : status] ?? statuses.unverified;
   return (
     <div className="flex min-h-[45px] flex-col items-center justify-center">
       <span className={cn("inline-flex rounded-full px-3 py-1 text-xs font-semibold", meta.className)}>

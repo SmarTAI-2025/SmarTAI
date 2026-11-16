@@ -34,12 +34,17 @@ def shared_image_fingerprint(config: ProviderConfig) -> str:
     return hmac.new(settings.jwt_secret.encode(), content, hashlib.sha256).hexdigest()
 
 
-def shared_image_evidence(owner: str, config: ProviderConfig, *, create: bool = False) -> SharedImageEvidence:
+def shared_image_evidence(owner: str, config: ProviderConfig, *, create: bool = False,
+                          text_probe: bool = False) -> SharedImageEvidence:
     fingerprint = shared_image_fingerprint(config)
     # Fixed OpenAI presets each need independent evidence. Other configured
     # providers retain their legacy slot and edit/revert invalidation behavior.
     from backend.llm.registry import SHARED_OPENAI_MODELS
     slot = f"openai:{config.model}" if config.provider_type == "openai" and config.model in SHARED_OPENAI_MODELS else config.provider_type
+    # Reuse the bounded evidence record in a separate namespace, so text
+    # checks never replace image evidence and no credential is duplicated.
+    if text_probe:
+        slot = "text:" + slot
     with session_scope() as session:
         row = session.get(SharedProviderImageRecord, (owner, slot))
         if row is None and create:
@@ -63,8 +68,9 @@ def shared_image_evidence(owner: str, config: ProviderConfig, *, create: bool = 
 
 
 def set_shared_image_evidence(owner: str, snapshot: SharedImageEvidence, *, status: str,
-                              checked_at: float, reason: str | None) -> bool:
-    if status not in {"passed", "unsupported", "inconclusive"}:
+                              checked_at: float, reason: str | None, text_probe: bool = False) -> bool:
+    allowed = {"verified", "failed"} if text_probe else {"passed", "unsupported", "inconclusive"}
+    if status not in allowed or snapshot.provider_type.startswith("text:") != text_probe:
         raise ValueError("invalid_image_capability_status")
     with session_scope() as session:
         if snapshot.updated_at is None:
@@ -82,7 +88,8 @@ def set_shared_image_evidence(owner: str, snapshot: SharedImageEvidence, *, stat
             SharedProviderImageRecord.owner_id == owner, SharedProviderImageRecord.provider_type == snapshot.provider_type,
             SharedProviderImageRecord.fingerprint == snapshot.fingerprint,
             SharedProviderImageRecord.updated_at == snapshot.updated_at,
-        ).values(status=status, checked_at=checked_at, reason=reason))
+        ).values(status=status, checked_at=checked_at, reason=reason,
+                 **({"updated_at": time.time()} if text_probe else {})))
         return result.rowcount == 1
 
 

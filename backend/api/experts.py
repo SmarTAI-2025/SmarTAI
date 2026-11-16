@@ -519,8 +519,11 @@ async def verify_provider(
     shared = bool(getattr(provider, "is_shared_pool", False))
     if provider is None or (stored is None and not shared):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Provider not found")
+    shared_snapshot = None
     if shared:
         _check_custom_probe_limit(current.id, "verify_text")
+        from backend.db.shared_image_repository import shared_image_evidence
+        shared_snapshot = shared_image_evidence(current.id, provider.config, create=True, text_probe=True)
     config = provider.config if shared else stored.config
     if is_user_defined_provider_endpoint(
         config.provider_type,
@@ -533,6 +536,18 @@ async def verify_provider(
                 detail={"code": "custom_provider_endpoints_disabled"},
             )
         _check_custom_probe_limit(current.id, "verify_text")
+
+    def persist_verification(state: str, checked_at: float, error_code: str | None = None) -> bool:
+        if shared:
+            from backend.db.shared_image_repository import shared_image_fingerprint, set_shared_image_evidence
+            latest = _build_scoped_registry(current).get(provider_id)
+            return bool(shared_snapshot and latest and getattr(latest, "is_shared_pool", False)
+                        and shared_image_fingerprint(latest.config) == shared_snapshot.fingerprint
+                        and set_shared_image_evidence(current.id, shared_snapshot, status=state,
+                            checked_at=checked_at, reason=error_code, text_probe=True))
+        return set_provider_verification(current.id, provider_id, verification_status=state,
+            checked_at=checked_at, error_code=error_code, expected_updated_at=stored.updated_at)
+
     try:
         validate_provider_api_key(config.api_key)
         timeout_seconds = max(
@@ -548,14 +563,7 @@ async def verify_provider(
         )
     except Exception as exc:
         error_code = _verification_error_code(exc)
-        persisted = shared or set_provider_verification(
-            current.id,
-            provider_id,
-            verification_status="failed",
-            checked_at=time.time(),
-            error_code=error_code,
-            expected_updated_at=stored.updated_at,
-        )
+        persisted = persist_verification("failed", time.time(), error_code)
         if not persisted:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -572,13 +580,7 @@ async def verify_provider(
             detail={"code": error_code, "provider_id": provider_id},
         ) from exc
     checked_at = time.time()
-    persisted = shared or set_provider_verification(
-        current.id,
-        provider_id,
-        verification_status="verified",
-        checked_at=checked_at,
-        expected_updated_at=stored.updated_at,
-    )
+    persisted = persist_verification("verified", checked_at)
     if not persisted:
         raise HTTPException(
             status.HTTP_409_CONFLICT,

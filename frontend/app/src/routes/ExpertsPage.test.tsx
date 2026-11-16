@@ -234,6 +234,31 @@ describe("ExpertsPage editable vendor Base URL", () => {
     expect(verifyImage).toHaveBeenCalledWith("qwen:shared");
   });
 
+  it.each(["zh-CN", "en-US"])("shows real text states like BYOK and management in the last column in %s", (locale) => {
+    window.localStorage.setItem("smartai_locale", locale);
+    const zh = locale === "zh-CN";
+    const states = ["platform_managed", "verified", "failed"];
+    hookState.experts = states.flatMap((status, index) => [true, false].map(shared => ({
+      provider_id: `${shared ? "shared" : "own"}-${index}`, provider_type: "openai", model: `model-${index}`,
+      enabled: true, editable: !shared, is_shared: shared, rpm: 0, max_concurrent: 1,
+      verification_status: shared ? status : status === "platform_managed" ? "unverified" : status,
+      last_checked_at: index ? "2026-11-16T08:39:00Z" : null,
+      verification_error_code: status === "failed" ? "expert_verification_auth_failed" : null,
+    })));
+    renderPage();
+    const rows = screen.getAllByRole("row").slice(1);
+    for (let index = 0; index < states.length; index++) {
+      const shared = rows.find(row => within(row).queryByText(zh ? "平台" : "Platform") && row.textContent?.includes(`model-${index}`))!;
+      const personal = rows.find(row => within(row).queryByRole("button", { name: zh ? "编辑" : "Edit" }) && row.textContent?.includes(`model-${index}`))!;
+      const textCell = within(shared).getAllByRole("cell")[2]!;
+      expect(textCell.textContent).toBe(within(personal).getAllByRole("cell")[2]!.textContent);
+      expect(textCell).not.toHaveTextContent(zh ? "平台托管" : "Platform managed");
+      const actions = within(shared).getAllByRole("cell").at(-1)!;
+      expect(within(actions).getByText(zh ? "平台托管" : "Platform managed")).toHaveClass("text-blue-700");
+      expect(within(actions).getByText(zh ? "不可编辑修改" : "Cannot be edited")).toHaveClass("text-muted-foreground");
+    }
+  });
+
   it.each(["zh-CN", "en-US"])("explains exhausted shared allowance during text verification in %s", async (locale) => {
     window.localStorage.setItem("smartai_locale", locale);
     const failureToast = vi.spyOn(toast, "error");

@@ -82,6 +82,19 @@ def test_three_presets_coexist_with_byok_default_and_frozen_selection(presets, c
     assert fingerprint != provider_configuration_fingerprint(owner_id="teacher", selected_provider_ids=[SOL])
 
 
+def test_shared_names_remain_short_beside_identical_personal_models(presets):
+    for model in ("gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"):
+        own(model=model)
+        own(model=model)
+    configs = registries._build_scoped_registry(OWNER).list_configs()
+    for item in configs:
+        if item["is_shared"]:
+            assert item["display_name"] == item["resolved_display_name"] == f"OpenAI · {item['model']}"
+        else:
+            assert "api.openai.com/v1" in item["resolved_display_name"]
+    assert len({c["resolved_display_name"] for c in configs}) == len(configs)
+
+
 @pytest.mark.asyncio
 async def test_text_image_and_same_named_byok_charge_only_their_owner_pool(presets, client):
     assert save(client, {"shared_pool_daily_request_limit": 4, "shared_pool_daily_estimated_token_limit": 10000}).status_code == 200
@@ -129,6 +142,56 @@ async def test_shared_text_and_image_probes_are_bounded_quota_guarded_and_indepe
     assert usage()["shared"]["requests"] == 3 and usage()["shared_sol"]["requests"] == 2
     with session_scope() as session:
         assert list(session.scalars(select(ProviderConfigRecord))) == []
+
+
+@pytest.mark.asyncio
+async def test_shared_text_results_survive_reload_and_keep_model_owner_and_image_isolation(presets, client, monkeypatch):
+    from backend.llm.providers import ProviderRequestError
+    await experts.verify_provider(TERRA, OWNER, presets)
+    fresh = {c["provider_id"]: c for c in registries._build_scoped_registry(OWNER).list_configs()}
+    assert fresh[TERRA]["verification_status"] == "verified"
+    assert fresh[TERRA]["last_checked_at"] == fresh[TERRA]["verified_at"]
+    listed = client.get("/experts/available", headers=headers("teacher"))
+    assert next(c for c in listed.json() if c["provider_id"] == TERRA)["verification_status"] == "verified"
+    assert "synthetic-platform-key" not in listed.text
+    assert fresh[TERRA]["image_capability_status"] == "unverified"
+    assert fresh[LUNA]["verification_status"] == fresh[SOL]["verification_status"] == "unverified"
+    other = registries._build_scoped_registry(User(id="other", username="other"))
+    assert all(c["verification_status"] == "unverified" for c in other.list_configs())
+
+    async def reject(*args, **kwargs):
+        raise ProviderRequestError("provider_auth_failed", status_code=401)
+    monkeypatch.setattr(FakeProvider, "ainvoke", reject)
+    with pytest.raises(HTTPException):
+        await experts.verify_provider(TERRA, OWNER, presets)
+    failed = next(c for c in registries._build_scoped_registry(OWNER).list_configs() if c["provider_id"] == TERRA)
+    assert failed["verification_status"] == "failed" and failed["verified_at"] is None
+    assert failed["verification_error_code"] == "expert_verification_auth_failed"
+    monkeypatch.setattr(settings, "openai_api_key", "rotated-platform-key")
+    assert all(c["verification_status"] == "unverified" for c in registries._build_scoped_registry(OWNER).list_configs())
+
+
+def test_shared_text_evidence_does_not_overwrite_a_newer_probe_or_image(presets):
+    from backend.db.shared_image_repository import shared_image_evidence, set_shared_image_evidence
+    config = presets.get(SOL).config
+    old = shared_image_evidence(OWNER.id, config, create=True, text_probe=True)
+    assert set_shared_image_evidence(OWNER.id, old, status="verified", checked_at=1, reason=None, text_probe=True)
+    assert not set_shared_image_evidence(OWNER.id, old, status="failed", checked_at=2, reason="stale", text_probe=True)
+    fresh = shared_image_evidence(OWNER.id, config, text_probe=True)
+    assert fresh.status == "verified" and fresh.checked_at == 1
+    assert shared_image_evidence(OWNER.id, config).status == "unverified"
+
+
+@pytest.mark.asyncio
+async def test_shared_text_inflight_credential_change_rejects_stale_result(presets, monkeypatch):
+    async def change(self, messages, **kwargs):
+        monkeypatch.setattr(settings, "openai_api_key", "replacement-platform-key")
+        return LLMResponse(content="OK", model=self.model, provider=self.provider_id, duration_ms=1)
+    monkeypatch.setattr(FakeProvider, "ainvoke", change)
+    with pytest.raises(HTTPException) as error:
+        await experts.verify_provider(SOL, OWNER, presets)
+    assert error.value.status_code == 409
+    assert all(c["verification_status"] == "unverified" for c in registries._build_scoped_registry(OWNER).list_configs())
 
 
 def test_shared_rows_cannot_be_edited_disabled_deleted_and_personal_add_stays_available(presets, client):

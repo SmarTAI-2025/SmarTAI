@@ -37,6 +37,24 @@ const experts: ExpertConfig[] = [
 ];
 
 describe("StageProviderSelect", () => {
+  it("uses short shared names in stage options while preserving the selected provider ID", async () => {
+    const shared = ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"].map(model => ({
+      ...experts[0]!, provider_id: `openai:${model}`, model, is_shared: true,
+      resolved_display_name: `OpenAI · ${model} · api.openai.com/v1 · OpenAI Chat Completions · t-6-luna`,
+    }));
+    const onChange = vi.fn();
+    render(<StageProviderSelect id="shared-stage" label="题目准备模型" hint="" experts={shared}
+      value={shared[0]!.provider_id} locale="zh-CN" onChange={onChange} />);
+    for (const expert of shared) {
+      const option = screen.getByRole("option", { name: new RegExp(`^OpenAI · ${expert.model}`) });
+      expect(option).not.toHaveTextContent("api.openai.com");
+      expect(option).not.toHaveTextContent(" · t-6-luna");
+    }
+    const select = screen.getByRole("combobox", { name: "题目准备模型" });
+    expect(select).toHaveValue("openai:gpt-6-luna");
+    await userEvent.selectOptions(select, "openai:gpt-6.1-terra");
+    expect(onChange).toHaveBeenCalledWith("openai:gpt-6.1-terra");
+  });
   it("shows the automatic default and lets the teacher explicitly switch stages", async () => {
     const onChange = vi.fn();
     render(
