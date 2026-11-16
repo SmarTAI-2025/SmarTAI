@@ -13,7 +13,7 @@ const results = [{ student_id: "S1", student_name: "Example teacher data", corre
 const task = { task_id: taskId, owner_id: "shared-owner", name: "Expert evidence", status: "graded", workflow_revision: 1, final_result_version: 0, problem_data, student_data,
   problem_count: 2, student_count: 1, created_at: 1, updated_at: 1, kb_docs: {}, kb_doc_count: 0 };
 
-for (const width of [390, 1440]) test(`deductions retain one net score and reference steps remain fixed at ${width}px`, async ({ page }) => {
+for (const width of [390, 1440]) test(`deductions retain one net score and reference steps remain fixed at ${width}px`, async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -70,7 +70,7 @@ for (const width of [390, 1440]) test(`deductions retain one net score and refer
   for (const detail of errorDetails) await expect(panel.getByText(detail, { exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth+1)).toBe(true);
   expect(errors).toEqual([]);
-  await panel.screenshot({ path: `/private/tmp/grading-deductions-${width}.png` });
+  await panel.screenshot({ path: testInfo.outputPath(`grading-deductions-${width}.png`) });
 });
 
 for (const demo of [false, true]) for (const locale of ["zh-CN", "en-US"]) {
