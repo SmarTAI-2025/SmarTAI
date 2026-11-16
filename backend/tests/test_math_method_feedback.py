@@ -6,7 +6,7 @@ import pytest
 from backend.services.rubric_drafts import bind_draft, retarget_draft
 from backend.skills import math_grading as grading
 from backend.tests.test_alternative_route import alternate, material
-from backend.tests.test_math_method_review import case, choice, revision, provider, run
+from backend.tests.test_math_method_review import case, choice, revision, reassessment, provider, run
 from backend.tests.test_task_grading_retry import case as db_case, start  # noqa: F401
 
 
@@ -44,7 +44,7 @@ async def test_final_review_rationale_is_outside_score_rows_after_roundtrip(db_c
     final = revision(right if errors else alternate("complete"))
     final["reason"] = "代入第二个根仍违反原方程，因此保留此处扣分。" if errors else "原等价变换已覆盖两个方向，不要求重抄标答。"
     main, _ = provider("primary", choice(), {"revisions": [final] if final_change else []})
-    regrader, _ = provider("a", revision(right))
+    regrader, _ = provider("a", reassessment(right))
     result = await run(p, a, plan, experts, main, {"a": regrader})
     expert = result[0]
     method_reason = choice()['choices'][0]['reason']

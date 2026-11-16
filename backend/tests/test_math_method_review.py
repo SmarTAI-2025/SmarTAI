@@ -46,6 +46,12 @@ def revision(decision, index=0):
             "decisions": [decision.model_dump(mode="json")]}
 
 
+def reassessment(decision, index=0, *, reference_support="supported", student_support="supported"):
+    return {**revision(decision, index), "evidence_checks": [{"part_id": decision.part_id,
+        "reference_support": reference_support, "student_support": student_support,
+        "reason": "本问标答采用配方；本问作答明确展开因式分解运算，与配方实质不同。"}]}
+
+
 def provider(name, *outputs):
     value, calls = raw_provider(*(json.dumps(o, ensure_ascii=False) if isinstance(o, dict) else o for o in outputs))
     value.provider_id = name
@@ -64,7 +70,7 @@ async def test_only_wrong_route_expert_reassesses_before_final_review(same_total
     p, a, plan, experts, right = case(same_total=same_total, proof=proof)
     original = [e.model_dump(mode="json") for e in experts]
     main, main_calls = provider("primary", choice(), {"revisions": []})
-    regrader, regrade_calls = provider("a", revision(right))
+    regrader, regrade_calls = provider("a", reassessment(right))
     untouched, untouched_calls = provider("b")
     from backend.progress.tracker import ProgressReporter
     reporter = ProgressReporter("method-review-test")
@@ -105,7 +111,7 @@ async def test_reference_and_minor_variant_do_not_add_arbitration_calls():
 async def test_bad_arbitration_sources_repair_before_any_reassessment():
     p, a, plan, experts, right = case()
     main, calls = provider("primary", choice(student_source_ids=["student:999"]), choice(), {"revisions": []})
-    regrader, regrade_calls = provider("a", revision(right))
+    regrader, regrade_calls = provider("a", reassessment(right))
     result = await run(p, a, plan, experts, main, {"a": regrader})
     assert [e.score for e in result] == [8, 8]
     assert len(calls) == 3 and len(regrade_calls) == 1
@@ -116,7 +122,7 @@ async def test_reassessment_cannot_keep_wrong_route_and_repairs_with_original_pr
     p, a, plan, experts, right = case()
     wrong = grading.MathAssessment.model_validate(grading.read_math_trace(experts[0])["assessment"]).part_decisions[0]
     main, calls = provider("primary", choice(), {"revisions": []})
-    regrader, regrade_calls = provider("a", revision(wrong), revision(right))
+    regrader, regrade_calls = provider("a", reassessment(wrong), reassessment(right))
     result = await run(p, a, plan, experts, main, {"a": regrader})
     assert [e.score for e in result] == [8, 8]
     assert len(calls) == len(regrade_calls) == 2
@@ -127,7 +133,7 @@ async def test_final_review_cannot_silently_switch_back_to_wrong_policy():
     p, a, plan, experts, right = case()
     wrong = grading.MathAssessment.model_validate(grading.read_math_trace(experts[0])["assessment"]).part_decisions[0]
     main, calls = provider("primary", choice(), {"revisions": [revision(wrong)]}, {"revisions": []})
-    regrader, _ = provider("a", revision(right))
+    regrader, _ = provider("a", reassessment(right))
     result = await run(p, a, plan, experts, main, {"a": regrader})
     assert [e.score for e in result] == [8, 8]
     assert len(calls) == 3
@@ -139,7 +145,7 @@ async def test_pipeline_is_bounded_even_if_reassessment_disagreement_remains():
     p, a, plan, experts, right = case()
     different = alternate("complete")
     main, calls = provider("primary", choice(), {"revisions": []})
-    regrader, regrade_calls = provider("a", revision(different))
+    regrader, regrade_calls = provider("a", reassessment(different))
     with math_plans_context({p.q_id: plan}), grading.math_review_scope():
         result = await grading.review_math_experts(p, a, experts, main, expert_providers={"a": regrader})
         assert [e.score for e in result] == [10, 8]
@@ -152,7 +158,7 @@ async def test_agent_uses_selected_primary_and_original_provider_configuration_i
     from backend.agents import multi_expert
     p, a, plan, experts, right = case()
     main, main_calls = provider("model-b", choice(), {"revisions": []})
-    regrader, regrade_calls = provider("model-a", revision(alternate("complete")))
+    regrader, regrade_calls = provider("model-a", reassessment(alternate("complete")))
     registry = SimpleNamespace(list_available=lambda: [regrader, main], get=lambda key: {"a": regrader, "b": main}.get(key))
     class InitialVotes:
         name = "synthetic"
@@ -199,10 +205,10 @@ def multipart_case():
 @pytest.mark.asyncio
 async def test_reassessment_keeps_other_parts_and_rejects_out_of_scope_edits():
     p, a, plan, experts, right, unchanged = multipart_case()
-    bad = revision(right)
+    bad = reassessment(right)
     bad["decisions"].append(unchanged.model_dump(mode="json"))
     main, calls = provider("primary", choice(), {"revisions": []})
-    regrader, regrade_calls = provider("a", bad, revision(right))
+    regrader, regrade_calls = provider("a", bad, reassessment(right))
     result = await run(p, a, plan, experts, main, {"a": regrader})
     assert [e.score for e in result] == [16, 16]
     assert len(calls) == len(regrade_calls) == 2
@@ -248,7 +254,7 @@ async def test_progress_storage_failure_is_not_swallowed_as_model_failure():
 async def test_missing_reference_does_not_accept_an_invented_method_quote():
     p, a, plan, experts, right = case(reference="")
     main, calls = provider("primary", choice(reference_quote="使用韦达定理"), choice(reference_quote="参考解配方"), {"revisions": []})
-    regrader, _ = provider("a", revision(right))
+    regrader, _ = provider("a", reassessment(right))
     result = await run(p, a, plan, experts, main, {"a": regrader})
     assert [e.score for e in result] == [8, 8] and len(calls) == 3
 
@@ -258,7 +264,7 @@ async def test_primary_can_select_reference_without_regrading_the_matching_exper
     p, a, plan, experts, _ = case(same_total=True)
     reference = grading.MathAssessment.model_validate(grading.read_math_trace(experts[0])["assessment"]).part_decisions[0]
     main, calls = provider("primary", choice("reference"), {"revisions": []})
-    regrader, regrade_calls = provider("b", revision(reference, index=1))
+    regrader, regrade_calls = provider("b", reassessment(reference, index=1))
     untouched, untouched_calls = provider("a")
     result = await run(p, a, plan, experts, main, {"a": untouched, "b": regrader})
     assert [e.score for e in result] == [10, 10]
@@ -275,7 +281,7 @@ async def test_failure_keeps_originals_and_runs_the_original_joint_review(stage)
     first = (PermanentLLMError("offline failure") if stage == "arbitration" else
              choice("undetermined", reference_quote="") if stage == "undetermined" else choice())
     main, calls = provider("primary", first, {"revisions": [revision(right)]})
-    replies = [revision(wrong)] * 2 if stage == "invalid_reassessment" else [PermanentLLMError("offline failure")]
+    replies = [reassessment(wrong)] * 2 if stage == "invalid_reassessment" else [PermanentLLMError("offline failure")]
     regrader, regrade_calls = provider("a", *replies)
     result = await run(p, a, plan, experts, main, {"b": regrader} if stage == "missing_provider" else {"a": regrader})
     assert len(calls) == 2
@@ -294,7 +300,7 @@ async def test_later_reassessment_failure_discards_all_staged_changes():
     experts.insert(1, experts[0].model_copy(update={"provider_id": "c", "provider": "c"}))
     snapshots = [e.model_dump_json() for e in experts]
     main, calls = provider("primary", choice())
-    first, first_calls = provider("a", revision(right))
+    first, first_calls = provider("a", reassessment(right))
     second, second_calls = provider("c", PermanentLLMError("offline failure"))
     traces = [grading.read_math_trace(e) for e in experts]
     assessments = [grading.MathAssessment.model_validate(t["assessment"]) for t in traces]
@@ -334,7 +340,7 @@ async def test_invalid_arbitration_is_bounded_and_never_locks_any_route(bad_kind
 @pytest.mark.parametrize("bad_kind", ["wrong_expert", "duplicate_part", "missing_part", "extra_part", "invented_evidence"])
 async def test_invalid_reassessment_cannot_escape_its_scope(bad_kind):
     p, a, plan, experts, right, other = multipart_case()
-    invalid = revision(right)
+    invalid = reassessment(right)
     if bad_kind == "wrong_expert":
         invalid["expert_index"] = 1
     elif bad_kind == "duplicate_part":
@@ -379,7 +385,7 @@ async def test_full_ledger_final_review_is_also_bound_to_the_adjudicated_method(
     invalid = {"expert_index": 0, "reason": "Try to restore the old route", "source_quote": "因式分解为 (x−1)(x−2)=0。",
                "assessment": trace["assessment"]}
     main, calls = provider("primary", choice(), {"revisions": [invalid]}, {"revisions": [invalid]})
-    regrader, _ = provider("a", revision(right))
+    regrader, _ = provider("a", reassessment(right))
     result = await run(p, a, plan, experts, main, {"a": regrader})
     assert len(calls) == 3 and [e.score for e in result] == [8, 8]
     final = grading.read_math_trace(result[0])
@@ -391,7 +397,7 @@ async def test_full_ledger_final_review_is_also_bound_to_the_adjudicated_method(
 async def test_final_review_may_change_credit_within_the_fixed_route_and_keeps_rationale():
     p, a, plan, experts, right = case()
     main, calls = provider("primary", choice(), {"revisions": [revision(alternate("complete"))]})
-    regrader, _ = provider("a", revision(right))
+    regrader, _ = provider("a", reassessment(right))
     result = await run(p, a, plan, experts, main, {"a": regrader})
     assert len(calls) == 2 and [e.score for e in result] == [10, 8]
     assert grading.read_math_trace(result[0])["assessment"]["part_decisions"][0]["method"] == "alternative"
@@ -420,7 +426,7 @@ async def test_normal_notation_does_not_acquire_a_heading_or_method_keyword_gate
         trace["assessment"]["part_decisions"][0]["student_quote"] = f"student:{line}"
         experts[index] = expert.model_copy(update={"raw_output": json.dumps(trace)})
     main, calls = provider("primary", choice(student_source_ids=[f"student:{line}"]), {"revisions": []})
-    regrader, regrade_calls = provider("a", revision(right))
+    regrader, regrade_calls = provider("a", reassessment(right))
     result = await run(p, a, plan, experts, main, {"a": regrader})
     assert len(calls) == 2 and len(regrade_calls) == 1
     assert [e.score for e in result] == [10, 10]
@@ -437,7 +443,7 @@ async def test_unchanged_blank_part_stays_blank_and_zero():
         assessment.part_decisions[1] = blank
         experts[index] = expert_for(assessment, plan, a.content).model_copy(update={"provider_id": expert.provider_id})
     main, calls = provider("primary", choice(), {"revisions": []})
-    regrader, _ = provider("a", revision(right))
+    regrader, _ = provider("a", reassessment(right))
     result = await run(p, a, plan, experts, main, {"a": regrader})
     assert len(calls) == 2 and [e.score for e in result] == [8, 8]
     for expert in result:
@@ -455,8 +461,8 @@ async def test_two_disputed_parts_regrade_only_each_experts_wrong_part():
     both = choice()
     both["choices"].append({**choice()["choices"][0], "part_id": "p2", "student_source_ids": ["student:3"]})
     main, calls = provider("primary", both, {"revisions": []})
-    first, first_calls = provider("a", revision(right))
-    second, second_calls = provider("b", revision(other, index=1))
+    first, first_calls = provider("a", reassessment(right))
+    second, second_calls = provider("b", reassessment(other, index=1))
     result = await run(p, a, plan, experts, main, {"a": first, "b": second})
     assert len(calls) == 2 and len(first_calls) == len(second_calls) == 1
     assert json.loads(first_calls[0][-1].content)["requested_part_ids"] == ["p"]
@@ -469,9 +475,172 @@ async def test_multi_sample_votes_keep_sample_identity_and_use_their_shared_prov
     p, a, plan, experts, right = case()
     for index, expert in enumerate(experts):
         experts[index] = expert.model_copy(update={"provider_id": "configuration", "provider": f"same#{index + 1}"})
-    main, calls = provider("same", choice(), revision(right), {"revisions": []})
+    main, calls = provider("same", choice(), reassessment(right), {"revisions": []})
     result = await run(p, a, plan, experts, main, {"configuration": main})
     assert len(calls) == 3 and [e.provider for e in result] == ["same#1", "same#2"]
     assert [e.provider_id for e in result] == ["configuration"] * 2
     assert [e.confidence for e in result] == [.7, .9]
     assert [e.score for e in result] == [8, 8]
+
+
+def bound_multipart_case(*, step_links=False):
+    from backend.services.part_rubric import PartRubric
+    p, a, plan, experts, right, other = multipart_case()
+    rules = plan.part_rubric.model_dump(mode="json")
+    rules["answer_segments"] = [
+        {"id": "answer1", "text": "用配方法解得 1 和 2。", "origin": "teacher"},
+        {"id": "answer2", "text": "用因式分解解得 1 和 2。", "origin": "teacher"},
+    ]
+    for part, ref in zip(rules["parts"], ("answer1", "answer2")):
+        target = part["steps"][0] if step_links else part
+        target["answer_refs"] = [ref]
+    plan = plan.model_copy(update={"part_rubric": PartRubric.model_validate(rules)})
+    return p, a, plan, experts, right, other
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("step_links", [False, True])
+async def test_explicit_reference_binding_cannot_be_bypassed_through_whole_answer(step_links):
+    p, a, plan, experts, right, _ = bound_multipart_case(step_links=step_links)
+    invalid = choice(reference_quote="用因式分解解得 1 和 2。", student_source_ids=["student:3"])
+    main, calls = provider("primary", invalid, invalid, {"revisions": []})
+    borrowed = right.model_copy(update={"student_quote": "student:3"})
+    regrader, regrade_calls = provider("a", reassessment(borrowed))
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    assert not regrade_calls
+    assert [e.score for e in result] == [8, 16]
+    assert all("method_review" not in grading.read_math_trace(e) for e in result)
+    assert "selected_methods" not in json.loads(calls[-1][-1].content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("step_links", [False, True])
+async def test_own_bound_reference_still_allows_reassessment(step_links):
+    p, a, plan, experts, right, _ = bound_multipart_case(step_links=step_links)
+    main, calls = provider("primary", choice(), {"revisions": []})
+    regrader, regrade_calls = provider("a", reassessment(right))
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    assert [e.score for e in result] == [16, 16]
+    assert len(calls) == 2 and len(regrade_calls) == 1
+    for request in (calls[0], regrade_calls[0]):
+        allowed = json.loads(request[-1].content)["allowed_reference_sources"]["p"]
+        assert allowed["include_full_reference"] is False
+        assert "用配方法解得 1 和 2。" in allowed["texts"]
+        assert not any("因式分解" in text for text in allowed["texts"])
+    assert grading.read_math_trace(result[0])["method_review"]["evidence_checks"] == reassessment(right)["evidence_checks"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("proof", [False, True])
+@pytest.mark.parametrize("reference,quote", [
+    ("禁止使用配方。", "禁止使用配方。"),
+    ("禁止使用配方。", "配方"),
+    ("不得\n使用配方，应使用求根公式。", "使用配方"),
+    ("正确作答得10分。", "正确作答得10分。"),
+])
+async def test_semantic_reference_refusal_falls_back_without_forcing_agreement(proof, reference, quote):
+    # Located text is deliberately NOT sufficient: the original expert's
+    # semantic verdict must support it. Fixed replies test the contract, not
+    # whether a real provider will always interpret the language correctly.
+    p, a, plan, experts, right = case(reference=reference, proof=proof)
+    main, calls = provider("primary", choice(reference_quote=quote), {"revisions": []})
+    declined = reassessment(right, reference_support="unsupported")
+    declined["decisions"] = []
+    declined["evidence_checks"][0]["reason"] = "引文没有陈述本问标答实际采用的配方法，不能据此比较学生方法。"
+    regrader, regrade_calls = provider("a", declined)
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    assert len(calls) == 2 and len(regrade_calls) == 1
+    assert json.loads(regrade_calls[0][-1].content)["reference"] == reference
+    assert [e.score for e in result] == [e.score for e in experts]
+    assert all("method_review" not in grading.read_math_trace(e) for e in result)
+    assert "selected_methods" not in json.loads(calls[-1][-1].content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("student_support", ["unsupported", "uncertain"])
+@pytest.mark.parametrize("blank", [False, True])
+async def test_student_evidence_must_support_this_part_before_locking(student_support, blank):
+    p, a, plan, experts, right, _ = bound_multipart_case()
+    if blank:
+        a = a.model_copy(update={"content": "(1)\n(2)"})
+    source = "student:2" if blank else "student:3"
+    main, calls = provider("primary", choice(student_source_ids=[source]), {"revisions": []})
+    declined = reassessment(right, student_support=student_support)
+    declined["decisions"] = []
+    declined["evidence_checks"][0]["reason"] = "该引文只有题号。" if blank else "引用的是第二问的运算，不能证明第一问使用此方法。"
+    regrader, regrade_calls = provider("a", declined)
+    original = [e.model_dump(mode="json") for e in experts]
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    assert len(calls) == 2 and len(regrade_calls) == 1
+    assert [e.score for e in result] == [8, 16]
+    assert [e.model_dump(mode="json") for e in experts] == original
+    assert all("method_review" not in grading.read_math_trace(e) for e in result)
+    assert "selected_methods" not in json.loads(calls[-1][-1].content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_kind", ["missing_checks", "empty_checks", "duplicate_check", "other_part", "missing_method"])
+async def test_reassessment_requires_explicit_complete_evidence_confirmation(bad_kind):
+    p, a, plan, experts, right = case()
+    invalid = reassessment(right)
+    if bad_kind == "missing_checks":
+        del invalid["evidence_checks"]
+    elif bad_kind == "empty_checks":
+        invalid["evidence_checks"] = []
+    elif bad_kind == "duplicate_check":
+        invalid["evidence_checks"] *= 2
+    elif bad_kind == "other_part":
+        invalid["evidence_checks"][0]["part_id"] = "p2"
+    else:
+        invalid["decisions"][0]["student_method"] = " "
+    main, calls = provider("primary", choice(), {"revisions": []})
+    regrader, regrade_calls = provider("a", invalid, invalid)
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    assert len(calls) == 2 and len(regrade_calls) == 2
+    assert [e.score for e in result] == [e.score for e in experts]
+    assert "selected_methods" not in json.loads(calls[-1][-1].content)
+
+
+@pytest.mark.asyncio
+async def test_later_expert_semantic_refusal_discards_earlier_reassessment():
+    p, a, plan, experts, right = case()
+    experts.append(experts[0].model_copy(update={"provider_id": "c"}))
+    original = [e.model_dump(mode="json") for e in experts]
+    main, calls = provider("primary", choice(), {"revisions": []})
+    first, first_calls = provider("a", reassessment(right))
+    declined = reassessment(right, index=2, student_support="uncertain")
+    declined["decisions"] = []
+    second, second_calls = provider("c", declined)
+    result = await run(p, a, plan, experts, main, {"a": first, "c": second})
+    assert len(calls) == 2 and len(first_calls) == len(second_calls) == 1
+    assert [e.score for e in result] == [e.score for e in experts]
+    assert [e.model_dump(mode="json") for e in experts] == original
+    assert all("method_review" not in grading.read_math_trace(e) for e in result)
+    assert "selected_methods" not in json.loads(calls[-1][-1].content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reading", [{"method": "undetermined"}, {"relevance": "unanswered"}])
+async def test_existing_part_judgment_can_also_decline_the_proposed_route(reading):
+    p, a, plan, experts, right = case()
+    main, calls = provider("primary", choice(), {"revisions": []})
+    regrader, regrade_calls = provider("a", reassessment(right.model_copy(update=reading)))
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    assert len(calls) == 2 and len(regrade_calls) == 1
+    assert [e.score for e in result] == [e.score for e in experts]
+    assert "selected_methods" not in json.loads(calls[-1][-1].content)
+
+
+@pytest.mark.asyncio
+async def test_format_repair_may_decline_without_retaining_an_invalid_candidate():
+    p, a, plan, experts, right = case()
+    wrong = grading.MathAssessment.model_validate(grading.read_math_trace(experts[0])["assessment"]).part_decisions[0]
+    main, calls = provider("primary", choice(), {"revisions": []})
+    declined = reassessment(right, student_support="uncertain")
+    declined["decisions"] = []
+    regrader, regrade_calls = provider("a", reassessment(wrong), declined)
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    assert len(calls) == len(regrade_calls) == 2
+    assert [e.score for e in result] == [e.score for e in experts]
+    assert all("method_review" not in grading.read_math_trace(e) for e in result)
+    assert "selected_methods" not in json.loads(calls[-1][-1].content)

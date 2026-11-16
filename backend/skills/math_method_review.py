@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.services.grading_memory import prepared_grading
 from backend.services.math_source_evidence import match_source_quote, source_catalog
 from backend.skills.base import build_system_prompt
-from backend.skills.part_scoring import INSTRUCTION, PROOF_INSTRUCTION
+from backend.skills.math_grading import PartRevision
+from backend.skills.part_scoring import INSTRUCTION, PROOF_INSTRUCTION, PartDecision, ReasonedDecision
 from backend.tools.structured_llm import StructuredOutputInvalidError, structured_llm_call
 
 
@@ -23,6 +24,24 @@ class MethodChoice(BaseModel):
 class MethodReview(BaseModel):
     model_config = ConfigDict(extra="forbid")
     choices: list[MethodChoice] = Field(min_length=1, max_length=100)
+
+
+class MethodEvidenceCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    part_id: str = Field(min_length=1, max_length=100)
+    reference_support: Literal["supported", "unsupported", "uncertain"]
+    student_support: Literal["supported", "unsupported", "uncertain"]
+    reason: str = Field(min_length=1, max_length=4000)
+
+
+class MethodPartRevision(PartRevision):
+    evidence_checks: list[MethodEvidenceCheck] = Field(min_length=1, max_length=100)
+    # An expert can decline an unsupported route without inventing a ledger.
+    decisions: list[PartDecision] = Field(max_length=100)
+
+
+class MethodProofPartRevision(MethodPartRevision):
+    decisions: list[ReasonedDecision] = Field(max_length=100)
 
 
 def method_family(method):
@@ -70,11 +89,26 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
     if not disputed:
         return experts, {}
     catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
+    segments = {s.id: s.text for s in plan.part_rubric.answer_segments}
+    reference_sources = {}
+    for part in plan.part_rubric.parts:
+        if part.id not in disputed:
+            continue
+        refs = {*part.answer_refs, *(ref for step in part.steps for ref in step.answer_refs)}
+        # Explicit frozen ownership is authoritative. The full reference still
+        # supplies context, but must not bypass these links as method evidence.
+        reference_sources[part.id] = {
+            "include_full_reference": not refs,
+            "texts": [*(segments[ref] for ref in sorted(refs)), *(
+                text for item in (*part.steps, *part.deductions)
+                for text in (item.criterion, item.source_quote) if text)],
+        }
     payload = {
         "problem": problem.stem, "reference": problem.reference_answer, "answer": answer.content,
         "plan": grading._part_rule_projection(plan.part_rubric, disputed),
         "source_catalog": grading._expert_sources(catalog, plan),
         "disputed_part_ids": sorted(disputed),
+        "allowed_reference_sources": reference_sources,
         "experts": [{"expert_index": i, "score": expert.score, "comment": expert.comment,
                      "decisions": [d.model_dump(mode="json") for d in a.part_decisions if d.part_id in disputed]}
                     for i, (expert, a) in enumerate(zip(experts, assessments))],
@@ -104,20 +138,17 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
         ids = [choice.part_id for choice in result.choices]
         if len(ids) != len(set(ids)) or set(ids) != disputed:
             raise ValueError("Choose exactly once for every disputed part ID, and no other part.")
-        parts = {p.id: p for p in plan.part_rubric.parts}
-        segments = {s.id: s.text for s in plan.part_rubric.answer_segments}
         for choice in result.choices:
             if any(key not in catalog or not key.startswith("student:") for key in choice.student_source_ids):
                 raise ValueError("Cite original student source IDs.")
             if choice.method == "undetermined":
                 continue
-            part = parts[choice.part_id]
-            references = [problem.reference_answer or "", *(
-                text for item in (*part.steps, *part.deductions) for text in (item.criterion, item.source_quote)),
-                *(segments[ref] for ref in {*part.answer_refs, *(ref for step in part.steps for ref in step.answer_refs)})]
+            scope = reference_sources[choice.part_id]
+            texts = scope["texts"] + ([problem.reference_answer or ""] if scope["include_full_reference"] else [])
             if not choice.student_source_ids or not any(
-                    match_source_quote(text, choice.reference_quote) for text in references if text):
-                raise ValueError("A determined route needs student evidence and a supplied reference-method quote.")
+                    match_source_quote(text, choice.reference_quote)
+                    for text in texts if text):
+                raise ValueError("A determined route needs student evidence and a quote from this part's allowed_reference_sources.")
 
     try:
         selected = await call(coordinator, MethodReview,
@@ -128,7 +159,8 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             "strategy uses alternative, including when the teacher requires the reference method: its cap "
             "is already frozen. Do not grade, change rules or supply missing student work. "
             "Cite original student line IDs and a verbatim reference-method passage from the supplied "
-            "reference or this part's main rules/answer segments. Explain both strategies in reason. "
+            "allowed_reference_sources texts for this part; the full reference is eligible only when "
+            "include_full_reference is true. Explain both strategies in reason. "
             "Resolve subquestion ownership from the whole context, including inline labels and formulas; "
             "a different part's work, a bare target, generic correctness rule, or a negated method mention "
             "cannot establish this part's method. Respect explicit frozen answer-to-part links. "
@@ -149,17 +181,47 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
 
             def validate_revision(revision):
                 nonlocal candidate
+                candidate = None
+                checked = [check.part_id for check in revision.evidence_checks]
+                if revision.expert_index != index or len(checked) != len(set(checked)) or set(checked) != changed:
+                    raise ValueError("Independently check evidence for exactly the requested expert and part IDs.")
+                # A semantic refusal is a valid result, not a format error to
+                # repair into agreement. Discard all staged votes below.
+                if any(check.reference_support != "supported" or check.student_support != "supported"
+                       for check in revision.evidence_checks):
+                    return
                 ids = [d.part_id for d in revision.decisions]
-                if revision.expert_index != index or len(ids) != len(set(ids)) or set(ids) != changed:
+                if len(ids) != len(set(ids)) or set(ids) != changed:
                     raise ValueError("Reassess exactly the requested expert and part IDs.")
+                if any(d.method == "undetermined" or d.relevance in {"unanswered", "unrelated", "uncertain"}
+                       for d in revision.decisions):
+                    return
+                if any(not d.reference_method.strip() or not d.student_method.strip() for d in revision.decisions):
+                    raise ValueError("Identify both actual strategies before accepting a determined route.")
                 candidate = grading._apply_part_revision(old, revision, changed).model_copy(deep=True)
                 validate_selected_methods(candidate, choices)
                 # Claims and tool judgments remain intact. The joint review
                 # still resolves pending evidence after the route is settled.
                 grading._assessment_validator(plan, answer, problem, original=old)(candidate)
 
-            revision = await call(provider, grading.ProofPartRevision if problem.type == "推理题" else grading.PartRevision,
-                "Reassess ONLY requested_part_ids under selected_methods. These routes are fixed; independently "
+            revision = await call(provider, MethodProofPartRevision if problem.type == "推理题" else MethodPartRevision,
+                "First independently verify the proposed selected_methods for ONLY requested_part_ids. "
+                "They are not yet locked. Return one evidence_checks entry per requested part. "
+                "reference_support is supported only when the selected reference_quote, read in its full "
+                "original context and this part's allowed_reference_sources, establishes its actual reference "
+                "strategy. The full reference is context only unless include_full_reference is true. "
+                "A prohibition, negated mention, generic scoring rule or another part's method does not. "
+                "student_support is supported only when the selected student sources and work cited for this "
+                "part's credit demonstrate its actual strategy and the proposed "
+                "reference/alternative relation. A bare heading, isolated result, another part's work or "
+                "mentioning a method without using it does not establish that strategy. Check full context, "
+                "including several parts on one line; do not infer ownership from a line ID alone. "
+                "Earlier-part results may be premises and earlier errors may be follow-through origins under "
+                "the frozen rules, but they cannot replace this part's own credited work. "
+                "Explain the specific operations and ownership in each check's reason. Classify strategy "
+                "independently of mathematical correctness. If any evidence is unsupported or uncertain, "
+                "say so and return decisions=[]; do not force agreement or invent missing work. "
+                "Only if all checks support the proposed routes, reassess those parts under selected_methods; independently "
                 "judge relevance, correctness and credit using the original student work and frozen rules. "
                 "There is no target score or request for consensus. Rebuild the appropriate ledger; never "
                 "convert missed reference steps into alternative errors. Preserve expert_index and all other "
@@ -171,11 +233,14 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
                  "expert_index": index, "requested_part_ids": sorted(changed),
                  "selected_methods": [choices[key].model_dump(mode="json") for key in sorted(changed)],
                  "prior_assessment": grading._assessment_for_model(old, plan)}, validate_revision)
+            if candidate is None:
+                return experts, {}
             score, steps = grading.score_assessment(candidate, plan, answer.content or "", problem_text=problem.stem)
             trace = dict(traces[index], assessment=candidate.model_dump(mode="json"), method_review={
                 "provider": coordinator.provider_id, "status": "reassessed", "part_ids": sorted(changed),
                 "choices": [choice.model_dump(mode="json") for choice in choices.values()],
                 "original_assessment": traces[index]["assessment"], "reason": revision.reason,
+                "evidence_checks": [check.model_dump(mode="json") for check in revision.evidence_checks],
             })
             revised[index] = expert.model_copy(update={"score": score, "steps": steps,
                 "comment": candidate.comment, "raw_output": grading._json(trace)})
