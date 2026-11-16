@@ -46,12 +46,16 @@ def enabled(monkeypatch):
     for provider_type in ("gemini", "openai", "zhipu", "anthropic", "deepseek", "moonshot", "qwen"):
         monkeypatch.setattr(settings, provider_type + "_api_key", "")
     monkeypatch.setattr(settings, "gemini_api_key", "fake-demo-only-secret")
+    monkeypatch.setattr(settings, "openai_api_key", "fake-platform-only-secret")
     monkeypatch.setattr(settings, "gemini_model", "demo-model")
     monkeypatch.setattr(settings, "frontier_demo_daily_session_limit", 20)
     monkeypatch.setattr(settings, "frontier_demo_session_cooldown_seconds", 0)
     monkeypatch.setattr(settings, "frontier_demo_daily_request_limit", 500)
     monkeypatch.setattr(settings, "frontier_demo_daily_estimated_token_limit", 500000)
     monkeypatch.setattr(settings, "shared_pool_enabled", False)
+    # Reused wrapper tests use FakeProvider, not the OpenAI usage transport.
+    # Weekly billing and Demo isolation in weekly mode are tested explicitly.
+    monkeypatch.setattr(settings, "shared_pool_quota_mode", "daily_estimated")
     monkeypatch.setattr(settings, "require_auth", True)
     monkeypatch.setattr(registries, "build_provider", FakeProvider)
     return TestClient(app)
@@ -91,12 +95,64 @@ def test_disabled_and_incomplete_configuration_fail_closed(enabled, monkeypatch)
     monkeypatch.setattr(settings, "frontier_demo_enabled", False)
     assert enabled.post("/auth/frontier-demo-session").status_code == 503
     monkeypatch.setattr(settings, "frontier_demo_enabled", True)
+    # Another configured provider must not replace a missing Demo Gemini key.
+    monkeypatch.setattr(settings, "shared_pool_enabled", True)
+    monkeypatch.setattr(settings, "openai_api_key", "fake-platform-openai-secret")
     monkeypatch.setattr(settings, "gemini_api_key", "")
     unavailable = enabled.post("/auth/frontier-demo-session")
     assert unavailable.status_code == 503
     assert unavailable.json()["detail"]["code"] == "frontier_demo_provider_unavailable"
     with session_scope() as db:
         assert db.scalar(select(FrontierDemoDailyUsageRecord)) is None
+
+
+@pytest.mark.parametrize("shared_enabled", [False, True])
+def test_demo_only_exposes_and_invokes_gemini_when_other_server_keys_exist(enabled, monkeypatch, shared_enabled):
+    from backend.db.model_quota_models import SharedModelChargeRecord, ModelDailyUsageRecord
+    from backend.llm.providers import ProviderRequestError, VisionImage
+    monkeypatch.setattr(settings, "shared_pool_enabled", shared_enabled)
+    monkeypatch.setattr(settings, "shared_pool_quota_mode", "weekly_usd")
+    monkeypatch.setattr(settings, "default_provider", "openai")
+    for kind in ("openai", "deepseek", "anthropic", "zhipu", "moonshot", "qwen"):
+        monkeypatch.setattr(settings, kind + "_api_key", "fake-other-provider-secret")
+    session = issue(enabled)
+    owner = session["user"]["id"]
+    demo = registries.build_frontier_demo_registry(owner)
+    assert [item["provider_type"] for item in demo.list_configs()] == ["gemini"]
+    assert demo.pick_default_id() == "gemini:demo-model"
+    assert demo.get("openai:" + settings.openai_model) is None
+    available = enabled.get("/experts/available", headers=headers(session["token"]))
+    assert [item["provider_type"] for item in available.json()] == ["gemini"]
+    created = task(enabled, session)
+    setup = enabled.get(f"/tasks/{created['task_id']}/grading-setup", headers=headers(session["token"])).json()
+    assert setup["suggested_setup"]["selected_provider_ids"] == ["gemini:demo-model"]
+    assert [item["provider_type"] for item in setup["available_experts"]] == ["gemini"]
+    assert "fake-other-provider-secret" not in available.text
+    rejected = enabled.post(
+        f"/tasks/{created['task_id']}/question-preparation/sources/preflight",
+        headers=headers(session["token"]),
+        data={"inline_text": "Q1. Synthetic", "structure_mode": "organized", "role": "problem",
+              "save_to_library": "false", "recognition_provider_id": "openai:" + settings.openai_model},
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["error"]["code"] == "recognition_provider_not_enabled"
+    provider = demo.pick_default()
+    asyncio.run(provider.ainvoke([HumanMessage(content="synthetic text")]))
+    asyncio.run(provider.ainvoke_vision("synthetic image", [VisionImage(b"synthetic", "image/png", "test.png")]))
+    assert provider._provider.calls == 2
+    with session_scope() as db:
+        assert db.scalar(select(FrontierDemoDailyUsageRecord)).requests == 2
+        assert db.scalar(select(SharedModelChargeRecord)) is None
+        assert db.scalar(select(ModelDailyUsageRecord)) is None
+    # Upstream Gemini failure stays a failure, never another provider's bill.
+    async def fail(*args, **kwargs):
+        raise ProviderRequestError("provider_auth_failed", status_code=401)
+    monkeypatch.setattr(provider._provider, "ainvoke", fail)
+    with pytest.raises(ProviderRequestError, match="provider_auth_failed"):
+        asyncio.run(provider.ainvoke([HumanMessage(content="failed request")]))
+    teacher = registries._build_scoped_registry(User(id="teacher-unconfigured", username="teacher", password_hash=""))
+    assert {p.provider_type for p in teacher.list_available()} == ({"openai"} if shared_enabled else set())
+    assert teacher.count() == (3 if shared_enabled else 0)
 
 
 def test_demo_uses_current_tasks_with_owner_isolation_and_no_teacher_privileges(enabled):

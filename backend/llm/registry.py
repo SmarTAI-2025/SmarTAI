@@ -146,7 +146,8 @@ SHARED_OPENAI_MODELS = ("gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol")
 def shared_provider_configs(*, frontier_demo: bool = False) -> list[ProviderConfig]:
     """One source for environment credentials, registry seeding and fingerprints."""
     configs = []
-    provider_types = ("gemini", "openai", "zhipu", "anthropic", "deepseek", "moonshot", "qwen") if frontier_demo else ("openai",)
+    # Demo must never discover or fall back to the registered-teacher pool.
+    provider_types = ("gemini",) if frontier_demo else ("openai",)
     for provider_type in provider_types:
         api_key = getattr(settings, provider_type + "_api_key")
         if not api_key or (provider_type == "openai" and api_key == "YOUR_API_KEY_HERE"):
