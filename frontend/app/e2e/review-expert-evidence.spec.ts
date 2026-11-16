@@ -22,9 +22,14 @@ for (const width of [390, 1440]) test(`deductions retain one net score and refer
     localStorage.setItem("smartai_locale", "zh-CN");
     localStorage.setItem("smartai_token", "synthetic-teacher-token");
   });
+  const errorDetails = [
+    "由 x² = 1 推出 x = 1 时，遗漏了 x = -1 这一解。",
+    "在等式两边约去 x - 1 前没有排除 x = 1，此时除数为零，约分不成立。",
+    "只验证了 n = 1 的情形，没有给出从 n = k 到 n = k + 1 的归纳步骤，不能证明对所有正整数成立。",
+  ];
   const votes = [
-    { ...experts[0], provider: "Deducted", score: 7, steps: [{ step_no: 1, part_id: "p1", score: 7, is_correct: false, is_alternative: true, desc: "Net subtotal should not be a step",
-      deductions: [1,2,3].map(n => ({ desc: `Independent error ${n}`, points: 1 })) }] },
+    { ...experts[0], provider: "Deducted", comment: "三个独立错误各扣 1 分，得 7 分。", score: 7, steps: [{ step_no: 1, part_id: "p1", score: 7, is_correct: false, is_alternative: true, desc: "Net subtotal should not be a step",
+      deductions: errorDetails.map(desc => ({ desc, points: 1 })) }] },
     { ...experts[1], provider: "Complete", score: 10, steps: [{ step_no: 1, part_id: "p1", score: 10, is_correct: true, is_alternative: true, desc: "Correct work should not be a deduction", deductions: [] }] },
     { ...experts[2], provider: "Reference", score: 0, steps: [1,2,3].map(n => ({ step_no: n, part_id: "p1", item_id: `s${n}`, score: 0, is_correct: false, desc: `Missing frozen goal ${n}` })) },
   ];
@@ -45,6 +50,8 @@ for (const width of [390, 1440]) test(`deductions retain one net score and refer
   const result = page.locator('[data-question-id="q1"]').getByRole("region", { name: "SmarTAI 批改结果" });
   await expect(result.getByText("Deducted（7/10, [7], conf=0.95）")).toBeVisible();
   await expect(result.locator("ol").first().getByText("-1 分", { exact: true })).toHaveCount(3);
+  for (const detail of errorDetails) await expect(result.locator("ol").first().getByText(detail, { exact: true })).toBeVisible();
+  await expect(result.getByText(/Independent error/)).toHaveCount(0);
   await expect(result.getByText("Net subtotal should not be a step")).toHaveCount(0);
   await expect(result).toContainText("[10]");
   await expect(result).toContainText("[0,0,0]");
@@ -60,10 +67,10 @@ for (const width of [390, 1440]) test(`deductions retain one net score and refer
   await expect(panel.getByText("另解批改", { exact: true })).toHaveCount(0);
   await expect(panel.locator("li")).toHaveCount(3);
   await result.getByRole("tab", { name: "Deducted", exact: true }).click();
-  await expect(panel.getByText("Independent error 3")).toBeVisible();
+  for (const detail of errorDetails) await expect(panel.getByText(detail, { exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth+1)).toBe(true);
   expect(errors).toEqual([]);
-  await result.screenshot({ path: `/private/tmp/grading-deductions-${width}.png` });
+  await panel.screenshot({ path: `/private/tmp/grading-deductions-${width}.png` });
 });
 
 for (const demo of [false, true]) for (const locale of ["zh-CN", "en-US"]) {

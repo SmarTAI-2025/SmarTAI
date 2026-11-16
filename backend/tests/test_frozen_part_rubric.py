@@ -190,7 +190,7 @@ def test_nonblank_floor_is_applied_after_unrelated_or_many_real_deductions():
             rule_id="dA",
             evidence=f"错算第{i}项",
             origin_quote=f"错算第{i}项",
-            reason="独立错误",
+            reason=f"第{i}项将减法算成加法，导致该项计算结果错误。",
         )
         for i in range(7)
     ]

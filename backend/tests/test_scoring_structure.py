@@ -25,7 +25,7 @@ def decision(*, method="alternative", errors=3, relevance=None, steps=()):
         reference_method="Construct special elements", student_method="Compare arbitrary coordinates",
         progress="Submitted argument", steps=steps,
         errors=[dict(id=f"e{i}", rule_id="alternative" if method=="alternative" else "error",
-                     evidence=f"student:{i}", origin_quote=f"student:{i}", reason=f"Independent error {i}")
+                     evidence=f"student:{i}", origin_quote=f"student:{i}", reason=f"Assertion {i} divides by x without proving x is nonzero.")
                 for i in range(1, errors+1)])
 
 
@@ -81,6 +81,20 @@ def test_missed_reasons_and_frozen_order_survive_zero_result():
         dict(id=f"s{i}",outcome="missed",evidence="",reason=f"Missing goal {i}") for i in [3,1,2]])
     _,steps=settle_parts(rubric,[d],ANSWER,rubric.stem)
     assert [s.desc for s in steps]==[f"Missing goal {i}" for i in [1,2,3]]
+
+
+@pytest.mark.parametrize("label", ["Independent error 1", "independent error", "独立错误2", "扣分点三", "Deduction point 3."])
+def test_generic_error_labels_require_a_specific_explanation(label):
+    d = decision(errors=1)
+    d = d.model_copy(update={"errors": (d.errors[0].model_copy(update={"reason": label}),)})
+    with pytest.raises(ValueError, match="specific wrong statement"):
+        settle_parts(rules(), [d], ANSWER, rules().stem)
+
+
+def test_error_detail_is_preserved_verbatim():
+    d = decision(errors=1)
+    _, steps = settle_parts(rules(), [d], ANSWER, rules().stem)
+    assert steps[0].deductions[0].desc == d.errors[0].reason
 
 
 def test_synthesis_keeps_deduction_evidence_without_adding_score_leaves(monkeypatch):

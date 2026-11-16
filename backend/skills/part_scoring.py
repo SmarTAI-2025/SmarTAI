@@ -25,7 +25,7 @@ class ErrorEvent(Frozen):
     id: Key
     rule_id: Key
     evidence: Text
-    reason: Text
+    reason: Text = Field(description="Student-facing error detail: identify the exact false statement, invalid operation or omitted obligation, and explain why it is wrong or incomplete. Never use a generic label such as 'Independent error 1'.")
     # The originating wrong step or missing target, not a generated error ID.
     origin_quote: Text
     target_id: Key | None = None
@@ -178,7 +178,10 @@ For funded steps with required_conditions, supply condition_results keyed by ste
 condition in its frozen order. True means credit is allowed by that clause (e.g. the required unit
 is present); false means its disqualifying condition applies. For a mixed part judge
 all steps first and report only the explicitly frozen additional deductions as errors.
-For deductions report actual distinct errors with rule_id, evidence, and origin_quote;
+For deductions report actual distinct errors with rule_id, evidence, and origin_quote.
+Each reason is displayed directly to the student: identify the specific expression, inference or
+omitted obligation and explain why it is wrong or incomplete. Do not output generic labels such as
+"Independent error 1", "独立错误1" or "扣分点1", and do not merely repeat the deduction rule;
 a repeated consequence has the same origin. If rules have an exclusive_group, select at most one
 loss for the entire goal. For a mathematically complete goal select none. On the main deduction route, determine
 which requested results the work establishes before choosing a rule. For the same
@@ -464,6 +467,8 @@ def settle_parts(rules, decisions, answer, question):
             if len({event.id for event in d.errors}) != len(d.errors):
                 raise ValueError("Duplicate deduction event ID.")
             for event in d.errors:
+                if re.fullmatch(r"(?:independent\s+error|deduction\s+point|独立错误|扣分点)\s*[\d一二三四五六七八九十]*[.。:：]?", event.reason.strip(), re.IGNORECASE):
+                    raise ValueError("Describe the specific wrong statement or omitted obligation and explain why; a generic error label is not a deduction reason.")
                 if not (
                     support(event.evidence)
                     or _obligation_evidence(question, scope, event.evidence, question_lines)
