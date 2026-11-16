@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from pydantic import BeforeValidator, Field, StrictBool
 from pydantic.json_schema import SkipJsonSchema
 
-from backend.models import ScoreDeduction, StepScore
+from backend.models import ScoreAward, ScoreDeduction, StepScore
 from backend.services.math_source_evidence import SourceMatch, match_source_quote, source_catalog
 from backend.services.part_rubric import Frozen, Key, Text
 
@@ -299,7 +299,9 @@ def _obligation_evidence(question, scope, fragment, question_lines):
     )
 
 
-def settle_parts(rules, decisions, answer, question):
+def settle_parts(rules, decisions, answer, question, *, require_specific_reasons=True):
+    # Historical display may retain old wording. Evidence, policies and arithmetic
+    # still pass every check; all new grading uses the strict default.
     catalog = source_catalog(answer, "", "")
     question_lines = source_catalog("", question, "")
 
@@ -327,7 +329,8 @@ def settle_parts(rules, decisions, answer, question):
     total = Fraction(0)
     rows = []
     deduction_details = {}
-    rules_by_id = {part.id: part for part in rules.parts}
+    award_details = {}
+    deduction_bases = {}
     for part in rules.parts:
         d = by_id[part.id]
         scope = part.stem or question
@@ -468,7 +471,7 @@ def settle_parts(rules, decisions, answer, question):
             if len({event.id for event in d.errors}) != len(d.errors):
                 raise ValueError("Duplicate deduction event ID.")
             for event in d.errors:
-                if re.fullmatch(r"(?:independent\s+error|deduction\s+point|独立错误|扣分点)\s*[\d一二三四五六七八九十]*[.。:：]?", event.reason.strip(), re.IGNORECASE):
+                if require_specific_reasons and re.fullmatch(r"(?:independent\s+error|deduction\s+point|独立错误|扣分点)\s*[\d一二三四五六七八九十]*[.。:：]?", event.reason.strip(), re.IGNORECASE):
                     raise ValueError("Describe the specific wrong statement or omitted obligation and explain why; a generic error label is not a deduction reason.")
                 if not (
                     support(event.evidence)
@@ -529,15 +532,20 @@ def settle_parts(rules, decisions, answer, question):
                     losses += min(loss, _amount(rule.max_deduction)) if rule.max_deduction is not None else loss
             deduction_base = sum(value for _, value, _ in amounts) if mixed else cap
             if mixed and losses:
+                budgets = {step.id: _amount(step.total_pts) for step in part.steps}
+                award_details[part.id] = [ScoreAward(item_id=key, desc=reason, points=float(value),
+                    is_correct=value == budgets[key]) for key, value, reason in amounts]
                 earned = sum(value for _, value, _ in amounts)
                 detail = " · ".join([*(reason for _, _, reason in amounts), *(event.reason for event in d.errors)])
                 amounts = [(None, max(Fraction(0), earned - losses), detail)]
             elif not mixed:
                 amounts = [(None, max(floor, cap - losses), d.progress)]
-            if not mixed:
+            if not mixed or losses:
                 deduction_details[part.id] = charged_deductions(part, d, deduction_base)
+                deduction_bases[part.id] = float(deduction_base)
         elif alternative or not part.steps:
             deduction_details[part.id] = []
+            deduction_bases[part.id] = float(cap)
         subtotal = sum(x[1] for x in amounts)
         if d.relevance == "complete" and (subtotal != cap or d.errors):
             raise ValueError("Complete work must satisfy all applicable goals.")
@@ -584,10 +592,9 @@ def settle_parts(rules, decisions, answer, question):
                 is_correct=full,
                 score=float(current - previous),
                 rounding_adjustment=float(Fraction(current - previous) - value),
+                awards=award_details.get(part) if step is None else None,
                 deductions=deduction_details.get(part) if step is None else None,
-                deduction_base=(float(rules_by_id[part].alternative.maximum.resolve(rules_by_id[part].total_pts)
-                    if by_id[part].method == "alternative" else rules_by_id[part].total_pts)
-                    if step is None and part in deduction_details else None),
+                deduction_base=deduction_bases.get(part) if step is None else None,
                 is_alternative=bool(part and by_id[part].method == "alternative"),
             )
         )

@@ -4,7 +4,7 @@ import { ScoreRoundingNotes } from "@/components/tasks/ScoreRoundingNotes";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { aiCorrectionScore, buildResultsModel, formatScore, formatScoringRow, scoringRows, validExpertResults } from "@/components/tasks/resultsModel";
 import type { Locale } from "@/i18n/messages";
-import type { StepScore, TaskResultResponse } from "@/types";
+import type { ExpertResult, StepScore, TaskResultResponse } from "@/types";
 
 export type DemoContentStage = "materials" | "submissions" | "results";
 type ContentTab = "materials" | "submissions" | "grading" | "analysis";
@@ -53,6 +53,37 @@ export function DemoContentTabs({ stage, locale, materials, submissions, result,
   </section>;
 }
 
+function feedbackParagraphs(text = "") {
+  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  // Keep fenced code and display-math blocks intact, including blank lines.
+  if (/(^|\n)[ \t]*(?:`{3,}|~{3,}|\$\$|\\\[)/.test(normalized)) return normalized ? [normalized] : [];
+  return normalized.split(/\n\s*\n/).map(part => part.trim()).filter(Boolean);
+}
+
+/** Prefer attributed expert text; retain distinct summary and expert paragraphs. */
+function demoFeedback(summary: string, experts: ExpertResult[]) {
+  const shown = new Set<string>();
+  const comments = experts.map(expert => {
+    const parts = feedbackParagraphs(expert.comment);
+    const remaining = parts.filter(part => !shown.has(part));
+    parts.forEach(part => shown.add(part));
+    return remaining.join("\n\n");
+  });
+  const remaining = (text: string) => feedbackParagraphs(text).filter(part =>
+    ![...shown].some(text => text === part || text.startsWith(part + "\n") || text.endsWith("\n" + part))).join("\n\n");
+  // The weighted fallback wraps each saved comment in this exact provider header.
+  // Remove that wrapper only for a known expert, never a guessed prose heading.
+  const distinctSummary = summary.split(/\n\n———\n\n/).map(block => {
+    const lines = block.split("\n");
+    if (experts.some(expert => lines[0].startsWith(`【${expert.provider}（`) && lines[0].endsWith("）】"))) {
+      const body = remaining(lines.slice(1).join("\n"));
+      return body ? `${lines[0]}\n${body}` : "";
+    }
+    return remaining(block);
+  }).filter(Boolean).join("\n\n");
+  return { summary: distinctSummary, comments };
+}
+
 function DemoGradingDetails({ result, taskId, locale }: { result: TaskResultResponse; taskId: string; locale: Locale }) {
   const zh = locale === "zh-CN";
   const model = buildResultsModel(undefined, result);
@@ -75,20 +106,20 @@ function DemoGradingDetails({ result, taskId, locale }: { result: TaskResultResp
           <div className="mt-3 grid gap-2 border-t pt-3">
             {student.corrections.map((correction, index) => {
               const experts = validExpertResults(correction);
-              const repeatedComment = experts.length === 1 && correction.comment?.trim() && correction.comment.trim() === experts[0].comment?.trim();
+              const feedback = demoFeedback(correction.comment ?? "", experts);
               return <section key={`${correction.q_id}-${index}`} className="rounded-md bg-muted/45 px-3 py-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[11px] font-bold text-primary">{labels.get(correction.q_id) ?? correction.q_id}</span>
                 <span className="shrink-0 rounded-full bg-primary/5 px-2 py-1 text-[11px] font-semibold text-primary">{scores[index] === null ? (zh ? "无有效分数" : "No valid score") : `${formatScore(scores[index])} / ${formatScore(correction.max_score)}`}</span>
               </div>
-              {!repeatedComment ? <MarkdownMath className="mt-2 text-[12px] leading-5 text-foreground">{correction.comment || (zh ? "SmarTAI 未返回文字说明。" : "SmarTAI returned no written rationale.")}</MarkdownMath> : null}
+              {feedback.summary || !feedback.comments.some(Boolean) ? <MarkdownMath className="mt-2 text-[12px] leading-5 text-foreground">{feedback.summary || (zh ? "SmarTAI 未返回文字说明。" : "SmarTAI returned no written rationale.")}</MarkdownMath> : null}
               {experts.length ? experts.map((expert, expertIndex) =>
                 <section key={`${expert.provider_id ?? expert.provider}-${expertIndex}`} className="mt-3 border-t pt-2">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold">
                     <span className="min-w-0 break-words">{expert.provider}</span>
                     <span className="shrink-0">{formatScore(expert.score)} / {formatScore(expert.max_score ?? correction.max_score)}</span>
                   </div>
-                  <MarkdownMath className="mt-1 text-[12px] leading-5">{expert.comment}</MarkdownMath>
+                  {feedback.comments[expertIndex] ? <MarkdownMath className="mt-1 text-[12px] leading-5">{feedback.comments[expertIndex]}</MarkdownMath> : null}
                   <DemoScoringEvidence steps={expert.steps} zh={zh} />
                 </section>) : <DemoScoringEvidence steps={correction.steps} zh={zh} />}
             </section>; })}

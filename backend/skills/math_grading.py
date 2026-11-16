@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, SkipValidation, TypeAdapter, 
 
 from backend.services.part_rubric import supplied_notation
 from backend.skills.part_scoring import INSTRUCTION as PART_SCORING_INSTRUCTION, PROOF_INSTRUCTION, PartDecision, ReasonedDecision, settle_parts
-from backend.models import ExpertResult, GradingModelOutput, ScoreDeduction, StepScore
+from backend.models import ExpertResult, GradingModelOutput, ScoreAward, ScoreDeduction, StepScore
 from backend.skills.base import (
     GradingSkill, authoritative_score_instruction, build_system_prompt,
     classify_skill_error, format_deterministic_feedback,
@@ -1465,13 +1465,20 @@ def weighted_math_steps(experts, weights, maximum, score):
             current = min(_points(maximum), subtotal.quantize(quantum, rounding=ROUND_HALF_UP))
             desc = join_expert_feedback((expert.provider, expert.steps[index].desc) for expert in experts)
             deductions = None
+            awards = None
             deduction_base = None
             rounding_adjustment = None
             if all(expert.steps[index].rounding_adjustment is not None for expert in experts):
                 raw_amount = sum((_points(expert.steps[index].score) - _points(expert.steps[index].rounding_adjustment)) * weight
                                  for expert, weight in zip(experts, weights)) / sum(weights)
                 rounding_adjustment = float(current - previous - raw_amount)
-            if all(expert.steps[index].deductions is not None for expert in experts):
+            if all(expert.steps[index].awards is not None for expert in experts):
+                awards = [ScoreAward(item_id=item.item_id, desc=f"{expert.provider}: {item.desc}",
+                                    points=float(_points(item.points) * weight / sum(weights)), is_correct=item.is_correct)
+                          for expert, weight in zip(experts, weights) if weight > 0
+                          for item in expert.steps[index].awards]
+            if (all(expert.steps[index].deductions is not None for expert in experts)
+                    and (awards is not None or all(expert.steps[index].awards is None for expert in experts))):
                 deductions = [ScoreDeduction(desc=f"{expert.provider}: {item.desc}",
                                             points=float(_points(item.points) * weight / sum(weights)))
                               for expert, weight in zip(experts, weights) if weight > 0
@@ -1482,6 +1489,7 @@ def weighted_math_steps(experts, weights, maximum, score):
             result.append(StepScore(step_no=index + 1, desc=desc, score=float(current - previous),
                                     part_id=experts[0].steps[index].part_id, item_id=experts[0].steps[index].item_id,
                                     deductions=deductions,
+                                    awards=awards,
                                     deduction_base=deduction_base,
                                     rounding_adjustment=rounding_adjustment,
                                     is_alternative=all(expert.steps[index].is_alternative for expert in experts),

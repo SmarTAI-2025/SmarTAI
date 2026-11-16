@@ -160,7 +160,10 @@ function roundAIScore(value: number, maxScore: number, decimals = 1): number {
 export function scoringRows(steps: StepScore[] = []) {
   return steps.flatMap(step => step.deductions == null
     ? [{ ...step, deduction: false }]
-    : step.deductions.map(item => ({ ...step, desc: item.desc, score: -item.points, is_correct: false, deduction: true })));
+    : [
+      ...(step.awards ?? []).map(item => ({ ...step, item_id: item.item_id, desc: item.desc, score: item.points, is_correct: item.is_correct, deduction: false })),
+      ...step.deductions.map(item => ({ ...step, desc: item.desc, score: -item.points, is_correct: false, deduction: true })),
+    ]);
 }
 
 export function formatEvidenceAmount(value: number, signed = false) {
@@ -172,7 +175,7 @@ export function formatEvidenceAmount(value: number, signed = false) {
 }
 
 export function formatScoringRow(row: ReturnType<typeof scoringRows>[number]) {
-  return row.deduction ? formatEvidenceAmount(row.score) : formatScore(row.score, undefined, row.part_id ? 2 : 1);
+  return row.deduction || row.awards != null ? formatEvidenceAmount(row.score) : formatScore(row.score, undefined, row.part_id ? 2 : 1);
 }
 
 export function formatScore(value: number | null | undefined, maxScore?: number, decimals?: number) {

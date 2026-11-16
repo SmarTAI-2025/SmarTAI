@@ -68,6 +68,13 @@ class ScoreDeduction(BaseModel):
     points: float = Field(gt=0, allow_inf_nan=False)
 
 
+class ScoreAward(BaseModel):
+    item_id: str
+    desc: str
+    points: float = Field(ge=0, allow_inf_nan=False)
+    is_correct: bool
+
+
 class StepScore(BaseModel):
     part_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
     item_id: str | None = Field(default=None, exclude_if=lambda v: v is None)
@@ -75,6 +82,8 @@ class StepScore(BaseModel):
     desc: str
     is_correct: bool
     score: float = Field(ge=0, allow_inf_nan=False)
+    # Display details within a mixed net subtotal, never additional score leaves.
+    awards: list[ScoreAward] | None = Field(default=None, exclude_if=lambda v: v is None)
     # None is an awarded step; [] is a deduction subtotal with no charged errors.
     deductions: list[ScoreDeduction] | None = Field(default=None, exclude_if=lambda v: v is None)
     deduction_base: float | None = Field(default=None, ge=0, allow_inf_nan=False, exclude_if=lambda v: v is None,

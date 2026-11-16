@@ -232,6 +232,7 @@ export interface StepScore {
   desc: string;
   is_correct: boolean;
   score: number;
+  awards?: { item_id: string; desc: string; points: number; is_correct: boolean }[] | null;
   deductions?: { desc: string; points: number }[] | null;
   deduction_base?: number | null;
   rounding_adjustment?: number | null;

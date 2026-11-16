@@ -30,6 +30,22 @@ it("shows only charged errors for a deduction subtotal and preserves step awards
   expect(scoringRows([step])).toEqual([{ ...step, deduction: false }]);
 });
 
+it("expands mixed awards and losses without displaying or adding the saved net subtotal", () => {
+  const subtotal = { step_no: 1, part_id: "p", desc: "Net subtotal", score: 4, is_correct: false,
+    awards: [
+      { item_id: "setup", desc: "Correct setup", points: 5, is_correct: true },
+      { item_id: "result", desc: "Wrong result", points: 0, is_correct: false },
+    ], deductions: [{ desc: "A sign is reversed", points: 1 }] };
+  const before = structuredClone(subtotal);
+  const rows = scoringRows([subtotal]);
+  expect(rows.map(row => [row.desc, row.score, row.deduction])).toEqual([
+    ["Correct setup", 5, false], ["Wrong result", 0, false], ["A sign is reversed", -1, true],
+  ]);
+  expect(rows.reduce((sum, row) => sum + row.score, 0)).toBe(subtotal.score);
+  expect(rows.map(formatScoringRow)).toEqual(["5", "0", "-1"]);
+  expect(subtotal).toEqual(before);
+});
+
 it.each([
   { net: 3.33, base: 10, amounts: [1, 1, 1, 1, 1, 1, 2 / 3], shown: ["-1", "-1", "-1", "-1", "-1", "-1", "≈-0.666667"] },
   { net: 9.63, base: 10, amounts: [.125, .125, .125], shown: ["-0.125", "-0.125", "-0.125"] },

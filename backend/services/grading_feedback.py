@@ -61,7 +61,8 @@ def _part_steps(steps, assessment, rules, *, answer=None, question=None):
     if answer is None:
         return steps
     try:
-        _, replayed = settle_parts(rules, assessment.part_decisions, answer, question or rules.stem)
+        _, replayed = settle_parts(rules, assessment.part_decisions, answer, question or rules.stem,
+                                   require_specific_reasons=False)
     except (ValueError, TypeError, KeyError):
         return steps
     old_by_part, new_by_part = defaultdict(list), defaultdict(list)
@@ -80,7 +81,7 @@ def _part_steps(steps, assessment, rules, *, answer=None, question=None):
         if len(old_by_part[step.get("part_id")]) == 1 and step.get("item_id") is None:
             if len(candidates) == 1 and candidates[0].get("item_id") is None:
                 metadata = {k: candidates[0][k] for k in
-                            ("deductions", "deduction_base", "is_alternative", "rounding_adjustment") if k in candidates[0]}
+                            ("awards", "deductions", "deduction_base", "is_alternative", "rounding_adjustment") if k in candidates[0]}
                 rendered.append({**step, **metadata})
                 continue
             if step["score"] == 0 and all(item["score"] == 0 for item in candidates):
@@ -235,7 +236,8 @@ def concise_result_feedback(results):
     from backend.db.session import session_scope
     answers = defaultdict(list)
     pairs = sorted({(r.submission_revision_id, r.question_id) for rows in by_run.values() for r in rows
-                    if any(step.get("part_id") and step.get("item_id") is None and "rounding_adjustment" not in step
+                    if any(step.get("part_id") and step.get("item_id") is None
+                           and ("rounding_adjustment" not in step or "deductions" not in step)
                            for expert in r.ai_expert_results for step in expert.get("steps", []))})
     if pairs:
         with session_scope() as session:

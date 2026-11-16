@@ -23,6 +23,80 @@ function view(stage: DemoContentStage, locale: Locale = "en-US", gradingResult =
 }
 
 describe("DemoContentTabs", () => {
+  it("retains the missing-rationale message when all valid expert comments are empty", () => {
+    const graded = result();
+    const correction = graded.results![0].corrections[0];
+    correction.comment = "";
+    correction.expert_results = [{ provider: "Model A", score: 4, max_score: 5, confidence: .9, comment: "", steps: correction.steps }];
+    render(view("results", "en-US", graded));
+    expect(screen.getByText("SmarTAI returned no written rationale.")).toBeVisible();
+  });
+
+  it.each(["zh-CN", "en-US"] as const)("removes repeated paragraphs but keeps expert review additions (%s)", locale => {
+    const graded = result();
+    const correction = graded.results![0].corrections[0];
+    correction.comment = "Original explanation.\n\nUnique aggregate conclusion.";
+    correction.expert_results = [
+      { provider: "Model A", score: 4, max_score: 5, confidence: .9, comment: "Original explanation.\n\nFinal review reason.", steps: correction.steps },
+      { provider: "Model B", score: 4, max_score: 5, confidence: .9, comment: "Original explanation.\n\nUnique second expert.\n\nFinal review reason.", steps: correction.steps },
+    ];
+    const before = structuredClone(graded);
+    render(view("results", locale, graded));
+    for (const text of ["Original explanation.", "Unique aggregate conclusion.", "Final review reason.", "Unique second expert."])
+      expect(screen.getAllByText(text, { exact: true })).toHaveLength(1);
+    expect(graded).toEqual(before);
+  });
+
+  it("removes weighted-summary copies while preserving per-expert attribution and distinct content", () => {
+    const graded = result();
+    const correction = graded.results![0].corrections[0];
+    correction.expert_results = [
+      { provider: "Model A", score: 4, max_score: 5, confidence: .9, comment: "First expert explanation.\n\nMethod review reason.", steps: correction.steps },
+      { provider: "Model B", score: 4, max_score: 5, confidence: .9, comment: "Second expert explanation.\n\nUnique second review.", steps: correction.steps },
+    ];
+    correction.comment = "【Model A（4.0/5, conf=0.90）】\nFirst expert explanation.\n\n———\n\n【Model B（4.0/5, conf=0.90）】\nSecond expert explanation.";
+    render(view("results", "en-US", graded));
+    for (const text of ["First expert explanation.", "Second expert explanation.", "Method review reason.", "Unique second review."])
+      expect(screen.getAllByText(text, { exact: true })).toHaveLength(1);
+    for (const provider of ["Model A", "Model B"]) expect(screen.getByText(provider, { exact: true })).toBeVisible();
+    expect(screen.queryByText(/【Model/)).not.toBeInTheDocument();
+  });
+
+  it("keeps materially different near-matching comments", () => {
+    const graded = result();
+    const correction = graded.results![0].corrections[0];
+    correction.comment = "The root is x=1.";
+    correction.expert_results = [{ provider: "Model A", score: 4, max_score: 5, confidence: .9,
+      comment: "The root is x=10.", steps: correction.steps }];
+    render(view("results", "en-US", graded));
+    expect(screen.getByText("The root is x=1.")).toBeVisible();
+    expect(screen.getByText("The root is x=10.")).toBeVisible();
+  });
+
+  it("preserves unique weighted commentary with its attribution", () => {
+    const graded = result();
+    const correction = graded.results![0].corrections[0];
+    correction.comment = "【Model A（4.0/5, conf=0.90）】\nSaved explanation.\n\nDistinct saved conclusion.";
+    correction.expert_results = [{ provider: "Model A", score: 4, max_score: 5, confidence: .9,
+      comment: "Saved explanation.\n\nFinal review reason.", steps: correction.steps }];
+    render(view("results", "en-US", graded));
+    expect(screen.getAllByText("Saved explanation.")).toHaveLength(1);
+    expect(screen.getByText(/Distinct saved conclusion\./)).toBeVisible();
+    expect(screen.getByText(/【Model A/)).toBeVisible();
+    expect(screen.getByText("Final review reason.")).toBeVisible();
+  });
+
+  it("preserves repeated mathematics inside an expert's own fenced explanation", () => {
+    const graded = result();
+    const correction = graded.results![0].corrections[0];
+    correction.comment = "A separate conclusion.";
+    correction.expert_results = [{ provider: "Model A", score: 4, max_score: 5, confidence: .9,
+      comment: "```text\nx=1\n\nx=1\n```\n\nThe repeated equation is intentional.", steps: correction.steps }];
+    render(view("results", "en-US", graded));
+    expect(screen.getByText(/x=1\s+x=1/).tagName).toBe("CODE");
+    expect(screen.getByText("The repeated equation is intentional.")).toBeVisible();
+  });
+
   it.each([true, false])("keeps one copy of a single expert's repeated comment (same=%s)", same => {
     const graded = result();
     const correction = graded.results![0].corrections[0];
