@@ -405,7 +405,7 @@ def _locate_claim(claim, answer, plan, problem_text, catalog):
 
 def _claim_map(assessment: MathAssessment, answer: str, plan, *, problem_text="") -> dict[str, Claim]:
     claims = {claim.id: claim for claim in assessment.claims}
-    catalog = source_catalog(answer, problem_text, plan.original_criterion)
+    catalog = _grading_source_catalog(answer, problem_text, plan)
     if len(claims) != len(assessment.claims) or "" in claims:
         raise ValueError("duplicate_or_empty_claim_id")
     item_ids = {item.id for route in plan.routes if route.id == assessment.route_id for item in (*route.items, *route.exemptions)}
@@ -799,7 +799,7 @@ def _claim_identity(claim: Claim, location):
 
 def _validate_claim_identity(original: MathAssessment, revised: MathAssessment, *, answer, plan, problem_text):
     """A tool's claim reference must keep pointing to the same submitted text."""
-    catalog = source_catalog(answer, problem_text, plan.original_criterion)
+    catalog = _grading_source_catalog(answer, problem_text, plan)
     def identity(claim):
         return _claim_identity(claim, _locate_claim(claim, answer, plan, problem_text, catalog))
     quotes = {claim.id: identity(claim) for claim in revised.claims}
@@ -847,6 +847,11 @@ def _proof_review_observations(decision, rules):
     }
 
 
+def _changed_part_decisions(assessment, original=None):
+    previous = {part.part_id: part for part in original.part_decisions} if original else {}
+    return [part for part in assessment.part_decisions if previous.get(part.part_id) != part]
+
+
 def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=None, evidence=None):
     """Repair local validation failures within the parser's ONE repair budget.
 
@@ -856,7 +861,7 @@ def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=No
     from backend.services.count_witnesses import marked_counts, submitted_count_checks, require_consistent_count_grades
     count_checks = submitted_count_checks(answer.content or "", marked_counts(problem.stem))
     preserved = {}
-    catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
+    catalog = _grading_source_catalog(answer.content or "", problem.stem, plan)
 
     def validate(draft):
         if diagnostic is not None:
@@ -865,6 +870,10 @@ def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=No
         unresolved = []
         current = {}
         try:
+            if plan.part_rubric and draft.part_decisions:
+                from backend.skills.math_method_review import validate_method_part_sources
+                validate_method_part_sources(_changed_part_decisions(draft, original), answer.content or '',
+                                             plan.part_rubric, require_scope=False)
             for claim in draft.claims:
                 try:
                     location = _locate_claim(claim, answer.content or "", plan, problem.stem, catalog)
@@ -1105,6 +1114,13 @@ def _expert_sources(catalog, plan):
             if not (generated and key.startswith("rubric:"))}
 
 
+def _grading_source_catalog(answer, problem, plan):
+    if plan.part_rubric:
+        from backend.skills.math_method_review import method_source_catalog
+        return method_source_catalog(answer, problem, plan.original_criterion, plan.part_rubric)
+    return source_catalog(answer, problem, plan.original_criterion)
+
+
 def _adopted_problem(problem, plan):
     if plan.adopted_material is None:
         return problem
@@ -1273,16 +1289,12 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                         new_awards = _award_signatures(candidate)
                         if any(new_awards.get(key) != value for key, value in signatures[index].items() if key not in disputed):
                             raise ValueError("review_changed_undisputed_award")
-                if plan.part_rubric and candidate.part_decisions:
-                    from backend.skills.math_method_review import validate_method_part_sources
-                    validate_method_part_sources(candidate.part_decisions, answer.content or "", plan.part_rubric,
-                                                 require_scope=False)
                 if selected_methods:
                     from backend.skills.math_method_review import method_family, validate_method_part_sources
                     if any(d.part_id in selected_methods and method_family(d.method) != selected_methods[d.part_id].method
                            for d in candidate.part_decisions):
                         raise ValueError("review_changed_selected_method")
-                    validate_method_part_sources([d for d in candidate.part_decisions if d.part_id in selected_methods],
+                    validate_method_part_sources([d for d in _changed_part_decisions(candidate, old) if d.part_id in selected_methods],
                                                  answer.content or "", plan.part_rubric)
                 _assessment_validator(plan, answer, problem, original=old,
                     evidence=trace.get("evidence", []))(candidate)
@@ -1562,7 +1574,7 @@ class MathGradingSkill(GradingSkill):
             "binary_rule": None if plan.part_rubric else frozen_binary_rule(plan),
             **({"frozen_targets": {f"part:{part.id}": part.stem or problem.stem
                                     for part in plan.part_rubric.parts}} if plan.part_rubric else {}),
-            "source_catalog": _expert_sources(source_catalog(answer.content or "", problem.stem, plan.original_criterion), plan),
+            "source_catalog": _expert_sources(_grading_source_catalog(answer.content or "", problem.stem, plan), plan),
             **({"required_decisions": [{
                 "part_id": part.id, "target_quote": f"part:{part.id}",
                 "step_ids": [step.id for step in part.steps], "deduction_ids": [rule.id for rule in part.deductions],
@@ -1829,15 +1841,22 @@ class MathGradingSkill(GradingSkill):
             output_model = (StepsOnlyRepair if all(
                 p.steps and not p.deductions and p.alternative.deduct_per_error is None for p in plan.part_rubric.parts
             ) else AddressedPartAssessment)
+            catalog = _grading_source_catalog(answer.content or '', problem.stem, plan)
+            bounded = any(key.startswith('student:') and key.count(':') > 1 for key in catalog)
+            if bounded:
+                output_model = ProofPartAssessment if problem.type == '推理题' else FrozenPartAssessment
+            citation_format = ('For student_quote and step.evidence copy exact bounded source IDs or exact text; '
+                               'a whole line spanning multiple parts is not evidence for one part.' if bounded else
+                               'For student_quote and each step.evidence return an array of source line numbers, '
+                               'e.g. [1,3] references student:1 and student:3. Use [] for an absent step.')
             recovery = {
                 "validation_feedback": repair_context,
-                "student_line_ids": list(source_catalog(answer.content or "", "", "")),
+                "student_line_ids": [key for key in catalog if key.startswith('student:')],
                 "parts": [{"part_id": p.id, "target_quote": f"part:{p.id}",
                            "step_ids": [step.id for step in p.steps],
                            "deduction_rule_ids": [rule.id for rule in p.deductions], "alternative_error_id": "alternative"}
                           for p in plan.part_rubric.parts],
-                "instruction": "For student_quote and each step.evidence return an array of source line numbers, "
-                               "e.g. [1,3] references student:1 and student:3. Use [] for an absent step. Keep any "
+                "instruction": citation_format + " Keep any "
                                "paraphrase in progress/reason. On the points route put lost credit in "
                                "the corresponding missed step. Charge only explicitly listed deduction rules. For actual "
                                "deductions keep each independent error grounded at its source. For method=alternative, "
@@ -1846,7 +1865,7 @@ class MathGradingSkill(GradingSkill):
             prompt += "\nRepair the rejected decision from the original sources:\n" + _json(recovery)
             result, response = await self._assess(plan,
                 system_prompt=build_system_prompt(
-                    PART_SCORING_INSTRUCTION + _part_proof_evidence(problem, plan.part_rubric) + "\nRepair format: student_quote and step.evidence are arrays of original line numbers.\n" + _json(output_model.model_json_schema()),
+                    PART_SCORING_INSTRUCTION + _part_proof_evidence(problem, plan.part_rubric) + '\n' + citation_format + '\n' + _json(output_model.model_json_schema()),
                     self.language, self.grading_setup),
                 user_prompt=prompt, validator=_assessment_validator(plan,answer,problem),part_output=output_model)
             score,steps=score_assessment(result,plan,answer.content,problem_text=problem.stem)

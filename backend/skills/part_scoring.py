@@ -140,6 +140,9 @@ Classify by mathematical strategy independently of correctness.
 INSTRUCTION = """
 Return exactly one part_decisions entry per frozen part ID; use the supplied IDs unchanged.
 target_quote may be the exact key part:<part_id>; the server resolves this to the frozen obligation.
+Student quotes and step/error evidence must belong to the current subquestion. If a line spans several
+subquestions, use its bounded source ID or exact text. A follow_through step may cite a verified earlier
+error from another subquestion in error_source, but its earned evidence must still belong to this part.
 For student_quote and step.evidence cite a student:<line number> from source_catalog or a comma-separated
 list of those IDs when an argument spans lines. Use one exact origin for error_source and origin_quote.
 These keys point to the original text. Do not translate or paraphrase mathematical evidence.

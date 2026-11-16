@@ -38,7 +38,9 @@ def _sentences(text):
     # Keep source offsets and the whole statement, including negation. Decimal
     # points do not end a sentence. This is grounding, not a semantic proof.
     start = 0
-    for boundary in re.finditer(r"[。！？!?；;\n]|(?<!\d)\.(?!\d)", text):
+    # A physical line break may wrap "Never use\nsubstitution". It is not a
+    # semantic reset; keep the complete statement and its original offsets.
+    for boundary in re.finditer(r"[。！？!?；;]|(?<!\d)\.(?!\d)", text):
         yield start, boundary.end(), text[start:boundary.end()]
         start = boundary.end()
     if start < len(text):
@@ -72,14 +74,28 @@ def _method_spans(text):
                              r"\w+n['’]t|unnecessary|inapplicable|invalid|fail\w*|unsuccessful|wrong|erroneous)\b", clause, re.I):
                     return False
                 prefix = re.sub(r"^\s*[（(][\w一二三四五六七八九十]+[)）]\s*[:：]?", "", prefix).strip()
+                if not named:
+                    prefix = re.sub(r'(?:\$\$?|\\\(|\\\[)\s*$', '', prefix).strip()
                 if named:
                     suffix = sentence[end - begin:right].strip().rstrip('。！？!?；;.,，')
                     suffix = re.sub(r'^(?:方法|法|(?:method|technique)\b)\s*', '', suffix, flags=re.I)
+                    suffix = suffix.lstrip(':：').strip()
+                    if suffix.startswith('为'):
+                        # "为" can introduce an actual transformation or merely
+                        # a role such as "错误选项". Only the former is evidence.
+                        try:
+                            expressions = re.split(r'=|⇒|⇔', suffix[1:].strip())
+                            trees = [_expression_tree(value) for value in expressions]
+                            if not any(isinstance(node, ast.Name) for tree in trees for node in ast.walk(tree)):
+                                return False
+                        except (SyntaxError, ValueError, RecursionError):
+                            return False
+                        suffix = ''
                     # A bare technique followed by unknown prose is a mention,
                     # not affirmative use. Check its role after the name too.
                     if suffix and not re.match(
-                            r'(?:法|方法)?(?:解|求|得|为|比较|证明|说明|计算|化简|推出|验证|展开|令|设|取)|'
-                            r'[:：=⇒⇔]|(?:to\s+(?:solve|derive|prove|show|obtain|find|calculate|compare)|'
+                            r'(?:法|方法)?(?:解|求|得|比较|证明|说明|计算|化简|推出|验证|展开|令|设|取)|'
+                            r'[=⇒⇔]|(?:to\s+(?:solve|derive|prove|show|obtain|find|calculate|compare)|'
                             r'gives?|yields?|produces?|leads?\s+to|shows?|proves?|is\s+(?:used|applied))\b', suffix, re.I):
                         return False
                 # Unknown prose is not affirmative merely because a small
@@ -100,17 +116,22 @@ def _method_spans(text):
 
     # A connected chain has an explicitly parsed expression between every
     # relation. Whitespace cannot turn two independent equations into a chain
-    # ("x = 1 y = 2" has the invalid middle expression "1 y"). No evaluation,
-    # implicit multiplication or unsupported TeX is guessed here.
-    for candidate in re.finditer(r"[A-Za-z0-9α-ωΑ-Ω_()+*/^ .−=⇒⇔-]+", text):
+    # ("x = 1 y = 2" has the invalid middle expression "1 y"). Use the same
+    # bounded parser for single-line and multiline mathematical notation.
+    for candidate in re.finditer(r"[A-Za-z0-9⁰¹²³⁴⁵⁶⁷⁸⁹α-ωΑ-Ω_()+*/^ .−=⇒⇔-]+", text):
         chain = candidate[0].strip().rstrip('.')
+        start = candidate.start() + len(candidate[0]) - len(candidate[0].lstrip())
+        if (chain.startswith('(') and text[max(0, start - 1):start] == '\\'
+                and text[candidate.end():candidate.end() + 2] == r'\)'):
+            chain = chain[1:]  # Paired TeX delimiters are not an algebraic operand.
+            start += 1
         operands = re.split(r"=|⇒|⇔", chain)
         if len(operands) < 3 or len(chain) > 2000:
             continue
         trees = []
         try:
             for operand in operands:
-                tree = ast.parse(operand.strip().replace('−', '-').replace('^', '**'), mode='eval')
+                tree = _expression_tree(operand)
                 nodes = list(ast.walk(tree))
                 if len(nodes) > 200 or any(not isinstance(node, (ast.Expression, ast.BinOp, ast.UnaryOp,
                         ast.Name, ast.Load, ast.Constant, ast.Add, ast.Sub, ast.Mult, ast.Div,
@@ -122,7 +143,6 @@ def _method_spans(text):
         except (SyntaxError, ValueError, RecursionError):
             continue
         if any(isinstance(node, ast.Name) for node in trees):
-            start = candidate.start() + len(candidate[0]) - len(candidate[0].lstrip())
             end = start + len(chain)
             if affirmed(start, end):
                 yield start, end
@@ -147,12 +167,12 @@ def _method_spans(text):
                 if names and any(isinstance(node, ast.BinOp) for tree in trees for node in ast.walk(tree)):
                     start = offset + len(raw) - len(raw.lstrip())
                     end = offset + len(raw.rstrip())
-                    if affirmed(start, end):
-                        current = (start, end, names, {ast.dump(tree) for tree in trees})
+                    current = (start, end, names, {ast.dump(tree) for tree in trees})
             except (SyntaxError, ValueError, RecursionError):
                 pass
         if (current and previous and current[2] == previous[2]
-                and current[3] & previous[3] and current[3] != previous[3]):
+                and current[3] & previous[3] and current[3] != previous[3]
+                and affirmed(previous[0], current[1])):
             yield previous[0], current[1]
         previous = current
         offset += len(line)
@@ -215,7 +235,7 @@ def _labelled_ranges(text, parts):
     # Explicit headings may share a sentence or occupy their own line.
     # Trailing equation numbers do not override frozen answer-to-part links.
     headings = []
-    for heading in re.finditer(r"(?m)(?:^[ \t]*|(?<=[，,；;。])[ \t]*|(?<=[ \t]))(?P<label>[（(](?:[0-9]{1,2}|[A-Za-z]|[ivxIVX]{1,6})[)）])", text):
+    for heading in re.finditer(r"(?m)(?:^[ \t]*|(?<=[，,；;。])[ \t]*|(?<=[ \t]))(?P<label>[（(](?:[0-9０-９]+|[A-Za-z]|[ivxIVX]{1,6})[)）])", text):
         prefix = text[text.rfind('\n', 0, heading.start()) + 1:heading.start()].rstrip()
         if prefix and prefix[-1] not in '，,；;。':
             tail = text[heading.end():].split('\n', 1)[0].strip()
@@ -315,8 +335,12 @@ def validate_method_part_sources(decisions, answer, rules, *, require_scope=True
         if require_scope and decision.part_id not in ranges:
             raise ValueError("The reviewed part has no unambiguous student source range.")
         start, end = ranges.get(decision.part_id, (0, len(answer)))
+        # A follow-through origin is not this part's earned work. The frozen
+        # settler separately requires an exactly verified, distinct earlier
+        # error and applies only the frozen follow-through award.
         fragments = [decision.student_quote,
-                     *(value for step in decision.steps for value in (step.evidence, step.error_source)),
+                     *(step.evidence for step in decision.steps),
+                     *(step.error_source for step in decision.steps if step.outcome != 'follow_through'),
                      *(value for error in decision.errors for value in (error.evidence, error.origin_quote)),
                      *(value for goal in decision.goal_findings for value in (goal.evidence, goal.origin_quote))]
         for fragment in fragments:
@@ -509,8 +533,10 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
                 "method. Your prior route was different. Rebuild the appropriate ledger from the sources; do "
                 "not convert old missed reference steps into alternative errors. Keep mathematical judgment "
                 "independent: there is no target score or requested agreement. Do not change other parts, "
-                "the frozen rules, or expert_index. Every student quote, step, error and error origin must belong "
-                "to that part's method_student_source_ids or its exact original text. Give concrete source-grounded reasons and overall feedback.\n"
+                "the frozen rules, or expert_index. Every earned-work quote, step and error evidence must belong "
+                "to that part's method_student_source_ids or its exact original text. A follow_through error_source may "
+                "cite a verified earlier error in another part; its positive evidence must remain in this part. "
+                "Give concrete source-grounded reasons and overall feedback.\n"
                 + INSTRUCTION + (PROOF_INSTRUCTION if problem.type == "推理题" else "")
                 + grading._part_proof_evidence(problem, plan.part_rubric),
                 {**payload, "plan": grading._part_rule_projection(plan.part_rubric, changed),
