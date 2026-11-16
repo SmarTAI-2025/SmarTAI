@@ -354,8 +354,8 @@ export function hasExpertDisagreement(correction: Correction): boolean {
   if (scores.length < 2) return false;
   const mean = scores.reduce((sum, score) => sum + score, 0) / scores.length;
   const variance = scores.reduce((sum, score) => sum + (score - mean) ** 2, 0) / scores.length;
-  // Match backend.domain.grading_review, including the exact 15% boundary.
-  return Math.sqrt(variance) / correction.max_score > 0.15 + Number.EPSILON;
+  // Match backend.domain.grading_review, including the exact 12% boundary.
+  return Math.sqrt(variance) / correction.max_score > 0.12 + Number.EPSILON;
 }
 
 export const MATH_REVIEW_REASONS = [

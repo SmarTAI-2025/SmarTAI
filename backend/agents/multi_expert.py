@@ -40,7 +40,7 @@ P0 fairness signals (added 2026-05-03):
   - **Indecisiveness Score (IS)**: normalized std-dev of expert/sample scores.
     Computed in `_compute_review_signal` from the same successes that drive
     the synthesized score. None when only one sample is available.
-  Values above 15% land on `Correction.is_score / requires_human_review /
+  Values above 12% land on `Correction.is_score / requires_human_review /
   review_reasons` and the pipeline never blocks on them — they are advisory
   flags for the frontend to surface.
 """
@@ -547,7 +547,7 @@ def _compute_review_signal(
     - **is_score**: ``std(scores) / max_score`` across the samples. Population
       std (divide by N, not N-1) so 2 samples don't blow up. ``None`` when
       < 2 samples — variance estimation is meaningless on one data point.
-    - **requires_human_review**: True only when ``is_score > 0.15``.
+    - **requires_human_review**: True only when ``is_score > 0.12``.
     - **review_reasons**: ``high_indecisiveness`` for optional teacher attention.
       The same fixed policy is used by review queues, reports and result queries.
     """

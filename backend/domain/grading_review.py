@@ -10,7 +10,7 @@ from typing import Any
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value
 from backend.services.grading_scores import round_ai_score
 
-EXPERT_DISAGREEMENT_THRESHOLD = 0.15
+EXPERT_DISAGREEMENT_THRESHOLD = 0.12
 
 
 def expert_disagreement_signal(scores: list[float], maximum: float) -> tuple[float | None, bool]:
@@ -19,7 +19,7 @@ def expert_disagreement_signal(scores: list[float], maximum: float) -> tuple[flo
         return None, False
     mean = sum(scores) / len(scores)
     normalized_std = (sum((value - mean) ** 2 for value in scores) / len(scores)) ** .5 / maximum
-    # Avoid flagging an exact 15% boundary due to floating-point noise.
+    # Avoid flagging an exact 12% boundary due to floating-point noise.
     return normalized_std, normalized_std > EXPERT_DISAGREEMENT_THRESHOLD + math.ulp(1.0)
 
 
@@ -112,6 +112,14 @@ def score(correction: dict) -> float | None:
         return None
     current = number(correction.get("score"))
     return current if current is not None else number(correction.get("provisional_score"))
+
+
+def overview_review_state(correction: dict) -> tuple[bool, bool]:
+    """Overview queue: score spread supplies disagreement, not detailed flags."""
+    reasons = [part.strip() for reason in [*(correction.get("review_reasons") or []),
+                                          *(correction.get("initial_review_reasons") or [])]
+               for part in reason.split(",") if part.strip() != "math_expert_disagreement"]
+    return review_state({**correction, "review_reasons": reasons, "initial_review_reasons": []})
 
 
 def review_state(correction: dict) -> tuple[bool, bool]:

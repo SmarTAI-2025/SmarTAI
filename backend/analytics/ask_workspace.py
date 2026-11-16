@@ -19,7 +19,7 @@ from typing import Any
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value
 
 from backend.domain.errors import NotFound
-from backend.domain.grading_review import number, review_state, score
+from backend.domain.grading_review import number, overview_review_state, review_state, score
 from backend.services import task_facade
 
 MAX_SOURCE_ROWS = 100_000
@@ -70,7 +70,7 @@ def _question_order(value: dict) -> tuple:
     return tuple((0, int(p)) if p.isdigit() else (1, p) for p in re.split(r"(\d+)", str(value.get("number") or value.get("q_id") or "")))
 
 
-def project_task(task: dict, result: dict) -> dict[str, list[dict]]:
+def project_task(task: dict, result: dict, *, review_overview: bool = False) -> dict[str, list[dict]]:
     """Turn the public task/result response into relational records, without sampling."""
     tables: dict[str, list[dict]] = {name: [] for name in SCHEMA}
     tid = str(task["task_id"])
@@ -108,7 +108,7 @@ def project_task(task: dict, result: dict) -> dict[str, list[dict]]:
             value, maximum, conf = score(c), number(c.get("max_score")), confidence(c.get("confidence"))
             teacher = number(c.get("teacher_score"))
             experts = c.get("expert_results") or []
-            review, reviewed = review_state(c)
+            review, reviewed = (overview_review_state if review_overview else review_state)(c)
             grade = {"task_id": tid, "student_id": sid, "q_id": qid, "score": value, "max_score": maximum,
                      "score_percent": value / maximum * 100 if value is not None and maximum and maximum > 0 else None,
                      "points_lost": maximum - value if value is not None and maximum is not None else None,
@@ -167,10 +167,10 @@ class Snapshot:
     task_id: str | None
 
     @classmethod
-    def from_payloads(cls, payloads: list[tuple[dict, dict]], task_id: str | None):
+    def from_payloads(cls, payloads: list[tuple[dict, dict]], task_id: str | None, *, review_overview: bool = False):
         tables: dict[str, list[dict]] = {name: [] for name in SCHEMA}
         for task, result in payloads:
-            for name, rows in project_task(task, result).items():
+            for name, rows in project_task(task, result, review_overview=review_overview).items():
                 tables[name].extend(rows)
         serialized = dumps(tables).encode()
         if len(serialized) > MAX_SOURCE_BYTES or sum(map(len, tables.values())) > MAX_SOURCE_ROWS:
@@ -178,7 +178,7 @@ class Snapshot:
         return cls(tables, hashlib.sha256(serialized).hexdigest(), task_id)
 
 
-def load_snapshot(task_id: str | None, owner_id: str, *, all_tasks: bool = False) -> Snapshot:
+def load_snapshot(task_id: str | None, owner_id: str, *, all_tasks: bool = False, review_overview: bool = False) -> Snapshot:
     # Authorization is performed before ANY model call, and again on every task.
     if task_id is not None:
         task_facade.get_task(task_id=task_id, owner_id=owner_id, full=False)
@@ -199,7 +199,7 @@ def load_snapshot(task_id: str | None, owner_id: str, *, all_tasks: bool = False
             raise AskDataError("查询期间任务发生变化，请重试。 / Task changed during the query; retry.")
         task = {**task, "course_name": course_names.get(task.get("course_id"))}
         payloads.append((task, result))
-    snapshot = Snapshot.from_payloads(payloads, task_id)
+    snapshot = Snapshot.from_payloads(payloads, task_id, review_overview=review_overview)
     for row in snapshot.tables["task_tags"]:
         row["tag_name"] = tag_names.get(row["tag_id"])
     snapshot.fingerprint = hashlib.sha256(dumps(snapshot.tables).encode()).hexdigest()

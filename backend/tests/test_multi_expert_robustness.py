@@ -46,15 +46,20 @@ from backend.tools.structured_llm import extract_and_parse_json
 
 @pytest.mark.parametrize("scores,maximum,expected_is,flagged", [
     ([10, 6], 10, .2, True),
-    ([10, 7], 10, .15, False),
+    ([10, 7], 10, .15, True),
     ([10, 6.99], 10, .1505, True),
-    ([3.8, 2.6], 4, .15, False),
-    ([10, 7.4], 10, .13, False),
+    ([3.8, 2.6], 4, .15, True),
+    ([10, 7.4], 10, .13, True),
+    ([10, 7.6], 10, .12, False),
+    ([10, 7.59], 10, .1205, True),
+    ([3.8, 2.84], 4, .12, False),
+    ([10, 10, 7.4], 10, .1225651754, True),
+    ([10, 8.7, 7.4], 10, .1061445555, False),
     ([10] * 9 + [6], 10, .12, False),
     ([100, 97.99], 100, .01005, False),
     ([3, 1], 3, 1 / 3, True),
 ])
-def test_only_population_deviation_over_15_percent_signals_disagreement(scores, maximum, expected_is, flagged):
+def test_only_population_deviation_over_12_percent_signals_disagreement(scores, maximum, expected_is, flagged):
     experts = [ExpertResult(provider="expert", score=value, max_score=maximum, confidence=.95, comment="") for value in scores]
     is_score, review, reasons = _compute_review_signal(experts)
     assert is_score == pytest.approx(expected_is)

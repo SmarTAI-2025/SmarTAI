@@ -275,7 +275,9 @@ def _learning_report(
         "",
         "## 逐题表现 / Question Performance",
         "",
-        "| 题目 | 题型 | 作答数 | 平均得分率 | 待复核题次 |",
+        "复核信号包含详情中的细粒度建议，可能多于总览待处理队列。 / Review signals include detailed suggestions and may exceed the overview queue.",
+        "",
+        "| 题目 | 题型 | 作答数 | 平均得分率 | 复核信号（含详情建议） |",
         "|---|---|---:|---:|---:|",
     ]
     for problem in problems:

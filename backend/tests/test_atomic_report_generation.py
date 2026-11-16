@@ -94,7 +94,7 @@ def test_optional_disagreement_does_not_enter_queue_or_rewrite_report_history():
             row.requires_review = False
             row.review_reasons = []
         row = session.get(GradeResultRecord, seeded["optional_result_id"])
-        row.ai_expert_results = [{"score": 10, "confidence": .95}, {"score": 7, "confidence": .95}]
+        row.ai_expert_results = [{"score": 10, "confidence": .95}, {"score": 7.6, "confidence": .95}]
     first = task_facade.generate_artifacts(**args, expected_revision=0)
     original = task_facade.artifact_bytes(**args, version=1, artifact_id="learning_report_md")[0]
     assert next(line for line in original.decode().splitlines() if line.startswith("| q-optional |")).endswith("| 0 |")

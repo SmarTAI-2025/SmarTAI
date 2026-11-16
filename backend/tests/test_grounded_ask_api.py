@@ -62,6 +62,32 @@ def test_authorization_precedes_model_and_no_other_owner_data_is_loaded():
     assert seeded["students"][0].username not in response.text
 
 
+@pytest.mark.parametrize("surface", ["review_overview", "student_analysis"])
+def test_http_overview_uses_queue_counts_but_preserves_detailed_evidence(surface):
+    owner = _user("teacher", "overview-review")
+    seeded = _seed_graded_assignment(owner)
+    with session_scope() as session:
+        row = session.get(GradeResultRecord, seeded["result_ids"][1])
+        row.ai_score, row.ai_confidence = 8, .95
+        row.review_reasons = row.initial_review_reasons = ["math_expert_disagreement"]
+        row.ai_expert_results = [{"provider": f"expert{i}", "score": 8, "max_score": 10,
+            "confidence": .95, "comment": "Different step evidence", "steps": []} for i in range(2)]
+    provider = Provider({}, {"result_kind": "students",
+        "sql": "SELECT student_id,pending_review_count FROM students WHERE pending_review_count>0 ORDER BY student_name"})
+    response = _client(owner, _Registry(provider)).post(f"/analytics/{seeded['task_id']}/ask", json={
+        "question": "需要复核的学生按姓名排序", "surface": surface,
+    })
+    assert response.status_code == 200, response.text
+    expected = [seeded["students"][2].id]  # Missing score stays in the queue.
+    if surface != "review_overview":
+        expected.insert(0, seeded["students"][1].id)
+    assert response.json()["recognized"]
+    assert response.json()["selection"]["ids"] == expected
+    with session_scope() as session:
+        row = session.get(GradeResultRecord, seeded["result_ids"][1])
+        assert row.ai_score == 8 and row.review_reasons == ["math_expert_disagreement"]
+
+
 def test_public_presentation_identity_not_internal_username_drives_chart():
     owner=_user("teacher","ask-names")
     seeded=_seed_graded_assignment(owner)

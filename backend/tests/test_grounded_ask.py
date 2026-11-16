@@ -131,7 +131,7 @@ def test_teacher_score_overrides_ai_and_failed_score_stays_unknown():
     ({"confidence": .5, "requires_human_review": True, "review_reasons": ["low_confidence"]}, 1, 0),
     ({"expert_results": [{"score": 5}, {"score": 0, "error_kind": "general"}, {"score": None}]}, 1, 0),
     ({"expert_results": [{"score": 5}, {"score": 0}]}, 1, 0),
-    ({"expert_results": [{"score": 5, "confidence": .95}, {"score": 3.5, "confidence": .95}]}, 0, 0),
+    ({"expert_results": [{"score": 5, "confidence": .95}, {"score": 3.8, "confidence": .95}]}, 0, 0),
     ({"expert_results": [{"score": 5, "confidence": .95}, {"score": 3.5, "confidence": None}]}, 1, 0),
     ({"expert_results": [{"score": 5}, {"score": 3.49}]}, 1, 0),
     ({"expert_results": [{"score": 5}, {"score": 0}], "teacher_score": 5, "review_status": "confirmed"}, 0, 1),
@@ -152,6 +152,38 @@ def test_ask_review_counts_match_the_review_queue(patch, pending, reviewed):
     assert (grade["requires_review"], grade["reviewed"]) == (pending, reviewed)
     assert snapshot.tables["students"][0]["pending_review_count"] == pending
     assert snapshot.tables["questions"][0]["review_count"] == pending
+
+
+@pytest.mark.parametrize("surface", ["review_overview", "student_analysis"])
+@pytest.mark.parametrize("patch,overview_pending", [
+    ({}, False),
+    ({"expert_results": [{"score": 10, "confidence": .95}, {"score": 7.6, "confidence": .95}]}, False),
+    ({"expert_results": [{"score": 10, "confidence": .95}, {"score": 7.59, "confidence": .95}]}, True),
+    ({"review_reasons": ["math_expert_disagreement", "math_proof_concern"]}, True),
+    ({"expert_results": [{"score": 8, "confidence": .4}]}, True),
+    ({"score": None, "provisional_score": None}, True),
+    ({"expert_results": [{"score": 8, "confidence": .95}, {"score": 0, "error_kind": "parse_failed"}]}, True),
+    ({"teacher_score": 8, "review_status": "confirmed"}, False),
+])
+def test_ask_uses_the_overview_queue_policy_only_on_that_surface(monkeypatch, surface, patch, overview_pending):
+    task, result = payload()
+    task["problem_data"]["Q1"]["max_score"] = 10
+    c = result["results"][0]["corrections"][0]
+    c.update(score=8, provisional_score=8, max_score=10, confidence=.95,
+        review_reasons=["math_expert_disagreement"],
+        expert_results=[{"provider": "same#sample1", "score": 8, "confidence": .95},
+                        {"provider": "same#sample2", "score": 8, "confidence": .95}])
+    c.update(patch)
+    original = json.dumps((task, result), sort_keys=True)
+    def load(task_id, owner_id, *, all_tasks=False, review_overview=False):
+        return Snapshot.from_payloads([(task, result)], task_id, **({"review_overview": True} if review_overview else {}))
+    monkeypatch.setattr("backend.agents.grounded_ask.load_snapshot", load)
+    response = asyncio.run(ask(task_id="task", owner_id="teacher", question="需要复核的学生按姓名排序", surface=surface,
+        provider=Provider({}, {"result_kind": "students", "sql": "SELECT student_id FROM students WHERE pending_review_count > 0 ORDER BY student_name"})))
+    pending = overview_pending if surface == "review_overview" else patch.get("review_status") != "confirmed"
+    assert response["recognized"]
+    assert response["selection"]["ids"] == (["DEMO-001"] if pending else [])
+    assert json.dumps((task, result), sort_keys=True) == original
 
 
 def test_answer_review_state_keeps_confirmed_blanks_distinct_from_pending_and_missing():

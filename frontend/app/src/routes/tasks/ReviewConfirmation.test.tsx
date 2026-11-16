@@ -88,12 +88,24 @@ describe("one-click grading review", () => {
     show();
     const queue = screen.getByRole("region", { name: locale === "en-US" ? "Review queue" : "待复核队列" });
     const expected = locale === "en-US"
-      ? ["Some experts completed", "low confidence (0.4)", "Expert disagreement; review suggested.", "Verification evidence still needs checking.", "Key reasoning evidence needs checking."]
-      : ["部分专家完成", "置信度 0.4 较低", "专家分歧，建议复核。", "核验结果与评分依据待核对。", "关键推理依据待核对。"];
+      ? ["Some experts completed", "low confidence (0.4)", "Verification evidence still needs checking.", "Key reasoning evidence needs checking."]
+      : ["部分专家完成", "置信度 0.4 较低", "核验结果与评分依据待核对。", "关键推理依据待核对。"];
     for (const label of expected) expect(queue).toHaveTextContent(label);
+    expect(queue).not.toHaveTextContent(locale === "en-US" ? "Expert disagreement; review suggested." : "专家分歧，建议复核。");
     expect(queue).not.toHaveTextContent(locale === "en-US" ? "The model suggests human review." : "模型建议人工复核。");
     expect(state.update).not.toHaveBeenCalled();
     expect(state.bulk).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("keeps small disagreement only beside the question in detail (detail=%s)", detail => {
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", {
+      confidence: .95, review_status: "pending", review_reasons: ["math_expert_disagreement"],
+      expert_results: [10, 9.34].map(score => ({ provider: "expert", score, max_score: 10, confidence: .95, comment: "", steps: [] })),
+    })] }];
+    show(detail);
+    const label = "Expert disagreement; review suggested.";
+    if (detail) expect(screen.getByText(label, { exact: true })).toBeVisible();
+    else expect(screen.getByRole("region", { name: "Review queue" })).not.toHaveTextContent(label);
   });
 
   it.each([false, true])("shows a 10-versus-6 review signal without requiring confirmation (detail=%s)", async detail => {
