@@ -45,7 +45,8 @@ jobs:
             candidate/render-requirements.txt
             candidate/requirements-dev.txt
       - name: Install pinned dependencies
-        run: python -m pip install --require-hashes --only-binary=:all: -r candidate/requirements-dev.txt
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r candidate/requirements-dev.txt
       - name: Replay identical synthetic workload in separate processes
         run: |
           mkdir results
