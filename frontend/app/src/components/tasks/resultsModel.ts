@@ -158,29 +158,21 @@ function roundAIScore(value: number, maxScore: number, decimals = 1): number {
 }
 
 export function scoringRows(steps: StepScore[] = []) {
-  return steps.flatMap(step => {
-    if (step.deductions == null) return [{ ...step, deduction: false, roundedDeduction: false }];
-    // Round successive balances, not each loss independently. The server's
-    // pre-deduction base and saved net score anchor the displayed arithmetic.
-    const cents = (value: number) => Math.round((value + Number.EPSILON * Math.max(1, Math.abs(value)) * 8) * 100);
-    let balance = step.deduction_base ?? 0;
-    let previous = cents(balance);
-    return step.deductions.map((item, index) => {
-      balance -= item.points;
-      const current = index === step.deductions!.length - 1 ? cents(step.score) : Math.max(cents(step.score), cents(balance));
-      const points = step.deduction_base == null ? item.points : (previous - current) / 100;
-      previous = current;
-      return { ...step, desc: item.desc, score: -points, is_correct: false, deduction: true,
-        roundedDeduction: Math.abs(points - item.points) > 1e-9 };
-    });
-  });
+  return steps.flatMap(step => step.deductions == null
+    ? [{ ...step, deduction: false }]
+    : step.deductions.map(item => ({ ...step, desc: item.desc, score: -item.points, is_correct: false, deduction: true })));
+}
+
+export function formatEvidenceAmount(value: number, signed = false) {
+  // Preserve small nonzero charges. Long recurring values are explicitly
+  // approximate; neither net-score rounding nor another part changes a charge.
+  const magnitude = Math.abs(value);
+  const shown = Number(magnitude.toPrecision(6));
+  return `${shown === magnitude ? "" : "≈"}${value < 0 ? "-" : signed && value > 0 ? "+" : ""}${shown}`;
 }
 
 export function formatScoringRow(row: ReturnType<typeof scoringRows>[number]) {
-  // Unmatched legacy evidence has no authoritative base; retain its precision
-  // rather than guessing a rounded allocation. Both surfaces use this format.
-  if (row.deduction && row.deduction_base == null) return String(row.score);
-  return formatScore(row.score, undefined, row.part_id || row.deduction ? 2 : 1);
+  return row.deduction ? formatEvidenceAmount(row.score) : formatScore(row.score, undefined, row.part_id ? 2 : 1);
 }
 
 export function formatScore(value: number | null | undefined, maxScore?: number, decimals?: number) {

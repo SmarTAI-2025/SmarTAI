@@ -583,6 +583,7 @@ def settle_parts(rules, decisions, answer, question):
                 desc=reason,
                 is_correct=full,
                 score=float(current - previous),
+                rounding_adjustment=float(Fraction(current - previous) - value),
                 deductions=deduction_details.get(part) if step is None else None,
                 deduction_base=(float(rules_by_id[part].alternative.maximum.resolve(rules_by_id[part].total_pts)
                     if by_id[part].method == "alternative" else rules_by_id[part].total_pts)

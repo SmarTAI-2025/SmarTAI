@@ -12,7 +12,7 @@ def join_expert_feedback(entries):
                        for description, providers in grouped.items())
 
 
-def _concise_steps(steps, trace, plan):
+def _concise_steps(steps, trace, plan, *, answer=None):
     from backend.skills.math_grading import MathAssessment, TRACE_VERSION
 
     if (not plan or not isinstance(trace, dict) or trace.get("version") != TRACE_VERSION
@@ -21,7 +21,8 @@ def _concise_steps(steps, trace, plan):
     try:
         assessment = MathAssessment.model_validate(trace.get("assessment"))
         if plan.part_rubric and assessment.route_id == "parts":
-            return _part_steps(steps, assessment, plan.part_rubric)
+            return _part_steps(steps, assessment, plan.part_rubric, answer=answer,
+                question=getattr(getattr(plan, "adopted_material", None), "stem", None))
         route = next(route for route in plan.routes if route.id == assessment.route_id)
         if route.mode == "deductions" and len(steps) == 1 and not assessment.awards:
             return _concise_deductions(steps, assessment, route)
@@ -48,41 +49,45 @@ def _concise_steps(steps, trace, plan):
         return steps
 
 
-def _part_steps(steps, assessment, rules):
-    """Expose saved route evidence without changing a saved numerical judgment."""
-    from fractions import Fraction
-    from backend.skills.part_scoring import charged_deductions
+def _part_steps(steps, assessment, rules, *, answer=None, question=None):
+    """Replay only saved judgments, using the original cumulative settlement.
 
-    decisions = {d.part_id: d for d in assessment.part_decisions}
-    if len(decisions) != len(assessment.part_decisions) or set(decisions) != {part.id for part in rules.parts}:
+    Source validation and exact arithmetic are shared with new grading. No model
+    is called; no persisted numerical judgment or explanation is overwritten.
+    """
+    from decimal import Decimal
+    from backend.skills.part_scoring import settle_parts
+
+    if answer is None:
         return steps
-    replacements = {}
-    for part in rules.parts:
-        decision = decisions[part.id]
-        leaves = [(i, s) for i, s in enumerate(steps) if s.get("part_id") == part.id]
-        if len(leaves) != 1 or leaves[0][1].get("item_id") is not None:
-            continue
-        index, step = leaves[0]
-        alternative = decision.method == "alternative"
-        if not alternative and part.steps:
-            if step["score"] == 0 and decision.relevance in {"incorrect", "unanswered", "unrelated", "uncertain"}:
-                reasons = {s.id: s.reason for s in decision.steps}
-                replacements[index] = [{**step, "item_id": s.id, "desc": reasons.get(s.id, step["desc"])} for s in part.steps]
-            continue
-        details = []
-        if decision.relevance in {"complete", "partial", "incorrect"}:
-            cap = part.alternative.maximum.resolve(part.total_pts) if alternative else Fraction(str(part.total_pts))
-            details = charged_deductions(part, decision, cap)
-            expected = float(cap) - sum(item.points for item in details)
-            if abs(expected - step["score"]) > .005 + 1e-9:
-                continue  # A differing saved score is not permission to invent charges.
-        elif step["score"] != 0:
-            continue
-        replacements[index] = [{**step, "deductions": [item.model_dump() for item in details],
-                                "deduction_base": float(part.alternative.maximum.resolve(part.total_pts) if alternative else part.total_pts),
-                                **({"is_alternative": True} if alternative else {})}]
-    rows = [item for i, step in enumerate(steps) for item in replacements.get(i, [step])]
-    return [{**step, "step_no": i} for i, step in enumerate(rows, 1)]
+    try:
+        _, replayed = settle_parts(rules, assessment.part_decisions, answer, question or rules.stem)
+    except (ValueError, TypeError, KeyError):
+        return steps
+    old_by_part, new_by_part = defaultdict(list), defaultdict(list)
+    for step in steps:
+        old_by_part[step.get("part_id")].append(step)
+    for step in replayed:
+        new_by_part[step.part_id].append(step.model_dump())
+    def total(items):
+        return sum((Decimal(str(item["score"])) for item in items), Decimal(0))
+    if (old_by_part.keys() != new_by_part.keys()
+            or any(total(items) != total(new_by_part[key]) for key, items in old_by_part.items())):
+        return steps  # Inconsistent/missing evidence is not permission to change history.
+    rendered = []
+    for step in steps:
+        candidates = new_by_part[step.get("part_id")]
+        if len(old_by_part[step.get("part_id")]) == 1 and step.get("item_id") is None:
+            if len(candidates) == 1 and candidates[0].get("item_id") is None:
+                metadata = {k: candidates[0][k] for k in
+                            ("deductions", "deduction_base", "is_alternative", "rounding_adjustment") if k in candidates[0]}
+                rendered.append({**step, **metadata})
+                continue
+            if step["score"] == 0 and all(item["score"] == 0 for item in candidates):
+                rendered.extend({**step, "item_id": item.get("item_id"), "desc": item["desc"]} for item in candidates)
+                continue
+        rendered.append(step)
+    return [{**step, "step_no": i} for i, step in enumerate(rendered, 1)]
 
 
 def _concise_deductions(steps, assessment, route):
@@ -223,6 +228,22 @@ def concise_result_feedback(results):
     for result in results:
         if result.ai_expert_results:
             by_run[result.grading_run_id].append(result)
+    # Bounded batches for the immutable revisions behind these authorized
+    # result DTOs. Do not read the student's newer, edited current submission.
+    from sqlalchemy import select, tuple_
+    from backend.db.models import SubmissionAnswerRecord
+    from backend.db.session import session_scope
+    answers = defaultdict(list)
+    pairs = sorted({(r.submission_revision_id, r.question_id) for rows in by_run.values() for r in rows
+                    if any(step.get("part_id") and step.get("item_id") is None and "rounding_adjustment" not in step
+                           for expert in r.ai_expert_results for step in expert.get("steps", []))})
+    if pairs:
+        with session_scope() as session:
+            for offset in range(0, len(pairs), 400):
+                for revision, question, content in session.execute(select(
+                        SubmissionAnswerRecord.revision_id, SubmissionAnswerRecord.question_id, SubmissionAnswerRecord.content
+                        ).where(tuple_(SubmissionAnswerRecord.revision_id, SubmissionAnswerRecord.question_id).in_(pairs[offset:offset + 400]))):
+                    answers[(revision, question)].append(content)
     projected = {}
     for run_id, rows in by_run.items():
         plans, final = _feedback_context(run_id)
@@ -239,7 +260,8 @@ def concise_result_feedback(results):
                 comment = expert.get("comment", "")
                 if len(matches) == 1 and not expert.get("error_kind"):
                     trace, plan = matches[0].get("trace", {}), plans.get(row.q_id)
-                    steps = _concise_steps(steps, trace, plan)
+                    source = answers.get((row.submission_revision_id, row.question_id), [])
+                    steps = _concise_steps(steps, trace, plan, answer=source[0] if len(source) == 1 else None)
                     comment = _review_comment(expert, trace, plan)
                 rendered.append({**expert, "steps": steps, "comment": comment})
             if rendered == row.ai_expert_results:

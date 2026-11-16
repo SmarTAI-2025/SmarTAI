@@ -234,6 +234,7 @@ export interface StepScore {
   score: number;
   deductions?: { desc: string; points: number }[] | null;
   deduction_base?: number | null;
+  rounding_adjustment?: number | null;
   is_alternative?: boolean;
 }
 

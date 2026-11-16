@@ -75,7 +75,7 @@ def test_alternative_charges_ignore_same_named_primary_rule_limits():
     from types import SimpleNamespace
     from backend.services.grading_feedback import _part_steps
     saved = [dict(step_no=1, part_id="p", score=7, is_correct=False, desc="Saved explanation")]
-    projected = _part_steps(saved, SimpleNamespace(part_decisions=[decision()]), rubric)
+    projected = _part_steps(saved, SimpleNamespace(part_decisions=[decision()]), rubric, answer=ANSWER)
     assert [d["points"] for d in projected[0]["deductions"]] == [1, 1, 1]
 
 
@@ -89,7 +89,7 @@ def test_fractional_charges_keep_exact_values_and_authoritative_display_base(rat
     assert score == expected and steps[0].deduction_base == 10
     assert steps[0].deductions[0].points == rate
     legacy = [{k: v for k, v in steps[0].model_dump().items() if k not in {"deductions", "deduction_base"}}]
-    projected = _part_steps(legacy, SimpleNamespace(part_decisions=[d]), rubric)
+    projected = _part_steps(legacy, SimpleNamespace(part_decisions=[d]), rubric, answer=ANSWER)
     assert projected[0]["deduction_base"] == 10 and projected[0]["score"] == expected
     assert projected[0]["deductions"] == [item.model_dump() for item in steps[0].deductions]
 
@@ -151,14 +151,14 @@ def test_saved_trace_projects_route_and_charges_without_regrading(method, errors
     plan=SimpleNamespace(plan_id="frozen-plan",part_rubric=rubric)
     trace=dict(version=TRACE_VERSION,plan_id=plan.plan_id,assessment=assessment.model_dump(mode="json"))
     old=[dict(step_no=1,part_id="p",score=10-errors,is_correct=not errors,desc="Saved explanation")]
-    shown=_concise_steps(old,trace,plan)
+    shown=_concise_steps(old,trace,plan, answer=ANSWER)
     assert shown[0]["score"]==old[0]["score"]
     assert shown[0].get("is_alternative",False)==(method=="alternative")
     assert [d["points"] for d in shown[0]["deductions"]]==[1]*errors
     assert "deductions" not in old[0]
     assert _concise_steps(old,{**trace,"plan_id":"different"},plan)==old
     inconsistent=[{**old[0],"score":9.5}]
-    assert _concise_steps(inconsistent,trace,plan)==inconsistent
+    assert _concise_steps(inconsistent,trace,plan, answer=ANSWER)==inconsistent
 
 
 def test_saved_primary_zero_expands_only_the_frozen_steps():
@@ -167,6 +167,54 @@ def test_saved_primary_zero_expands_only_the_frozen_steps():
     rubric=rules()
     d=decision(method="reference",errors=0,relevance="incorrect")
     old=[dict(step_no=1,part_id="p",score=0,is_correct=False,desc="No credit")]
-    shown=_part_steps(old,SimpleNamespace(part_decisions=[d]),rubric)
+    shown=_part_steps(old,SimpleNamespace(part_decisions=[d]),rubric, answer=ANSWER)
     assert [(s["item_id"],s["score"]) for s in shown]==[(f"s{i}",0) for i in [1,2,3]]
     assert len(old)==1 and "item_id" not in old[0]
+
+
+@pytest.mark.parametrize('errors,expected', [([0,1],[3.33,3.34]),([0,0,0],[3.33,3.34,3.33])])
+def test_cumulative_rounding_restores_every_legacy_alternative(errors,expected):
+    from types import SimpleNamespace
+    from backend.services.grading_feedback import _part_steps
+    template=rules(alternative={'maximum':{'fraction':'1/3'},'deduct_per_error':.001})
+    rubric=template.model_copy(update={'total_pts':10*len(errors),'parts':tuple(
+        template.parts[0].model_copy(update={'id':f'p{i}'}) for i in range(len(errors)))})
+    decisions=[decision(errors=count).model_copy(update={'part_id':f'p{i}','target_quote':f'part:p{i}'}) for i,count in enumerate(errors)]
+    total,rows=settle_parts(rubric,decisions,ANSWER,rubric.stem)
+    assert [row.score for row in rows]==expected
+    legacy=[{k:v for k,v in row.model_dump().items() if k not in {'deductions','deduction_base','is_alternative','rounding_adjustment'}} for row in rows]
+    restored=_part_steps(legacy,SimpleNamespace(part_decisions=decisions),rubric, answer=ANSWER)
+    assert [s['score'] for s in restored]==expected
+    assert all(s.get('is_alternative') and 'deductions' in s for s in restored)
+    assert [len(s['deductions']) for s in restored]==errors
+
+
+@pytest.mark.parametrize('method', ['alternative','reference'])
+@pytest.mark.parametrize('fraction', ['1/3','2/3','1/7','1/2'])
+@pytest.mark.parametrize('rate', [.001,.005,.125,.5])
+def test_new_and_historical_multi_part_evidence_share_exact_settlement(method,fraction,rate):
+    from fractions import Fraction
+    from types import SimpleNamespace
+    from copy import deepcopy
+    from backend.services.grading_feedback import _part_steps
+    template=rules(deduction=method=='reference',alternative={'maximum':{'fraction':fraction},'deduct_per_error':rate},
+                   penalty={'deduct_pts':rate})
+    for counts in ([0,0,0],[0,1],[1,0,3,1],[7,1,2,0,3]):
+        rubric=template.model_copy(update={'total_pts':10*len(counts),'parts':tuple(
+            template.parts[0].model_copy(update={'id':f'p{i}'}) for i in range(len(counts)))})
+        decisions=[decision(method=method,errors=count).model_copy(update={'part_id':f'p{i}','target_quote':f'part:p{i}'}) for i,count in enumerate(counts)]
+        score,rows=settle_parts(rubric,decisions,ANSWER,rubric.stem)
+        assert sum(Decimal(str(row.score)) for row in rows)==Decimal(str(score))
+        for row,count in zip(rows,counts):
+            cap=10*Fraction(fraction) if method=='alternative' else Fraction(10)
+            raw=max(Fraction(0),cap-Fraction(str(rate))*count)
+            assert row.score-row.rounding_adjustment==pytest.approx(float(raw),abs=1e-12)
+            assert all(d.points>0 for d in row.deductions)
+        legacy=[{k:v for k,v in row.model_dump().items() if k not in {'deductions','deduction_base','is_alternative','rounding_adjustment'}} for row in rows]
+        before=deepcopy(legacy)
+        restored=_part_steps(legacy,SimpleNamespace(part_decisions=decisions),rubric,answer=ANSWER)
+        assert restored==[row.model_dump() for row in rows]
+        assert _part_steps(restored,SimpleNamespace(part_decisions=decisions),rubric,answer=ANSWER)==restored
+        assert legacy==before
+        damaged=deepcopy(legacy);damaged[0]['score']+=.01
+        assert _part_steps(damaged,SimpleNamespace(part_decisions=decisions),rubric,answer=ANSWER)==damaged

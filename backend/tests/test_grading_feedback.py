@@ -266,3 +266,58 @@ def test_review_copy_cannot_inherit_unrelated_evidence(case, monkeypatch, field)
         return frozen if key == run_id else SimpleNamespace(**{**identity, field: "different"})
     monkeypatch.setattr(workflows, "get_run_setup", get_setup)
     assert _feedback_context(run_id) == ({}, {})
+
+
+@pytest.mark.parametrize('counts', [[0,1],[0,0,0]])
+def test_legacy_cumulative_rounding_survives_database_roundtrip(case,counts):
+    from sqlalchemy import select
+    from backend.db import grading_repository as grades
+    from backend.db.models import AssignmentQuestionRecord, SubmissionAnswerRecord
+    from backend.db.session import session_scope
+    from backend.services import task_facade
+    from backend.services.rubric_drafts import RubricDefinition, generated_rubric, bind_draft, retarget_draft
+    from backend.services.math_grading_context import problem_from_question
+    from backend.tests.test_frozen_part_rubric import question_row
+    from backend.tests.test_scoring_structure import rules, decision, ANSWER
+    from backend.skills.math_grading import MathAssessment
+    from backend.skills.part_scoring import settle_parts
+
+    template=rules(alternative={'maximum':{'fraction':'1/3'},'deduct_per_error':.001})
+    rubric=template.model_copy(update={'total_pts':10*len(counts),'parts':tuple(template.parts[0].model_copy(
+        update={'id':f'p{i}','label':f'({i+1})','stem':f'Prove claim {i+1}.'}) for i in range(len(counts)))})
+    row=question_row(rubric.model_dump(mode='json'))
+    row['reference_answer']='Use a direct argument.'
+    row['ai_completion_provenance']={'criterion':{}}
+    row['criterion'],draft=generated_rubric(row,RubricDefinition(part_rubric=rubric))
+    with session_scope() as session:
+        question=session.scalar(select(AssignmentQuestionRecord).where(
+            AssignmentQuestionRecord.assignment_id==case[0],AssignmentQuestionRecord.q_id=='q1'))
+        for key in ('number','type','stem','criterion','reference_answer','max_score'):
+            setattr(question,key,row[key])
+        question.source={'presentation':{'rubric_draft':draft.model_dump(mode='json'), 'question_structure':row.get('question_structure'), 'ai_completion_provenance':row['ai_completion_provenance']}}
+        for answer in session.scalars(select(SubmissionAnswerRecord).where(SubmissionAnswerRecord.question_id==question.id)):
+            answer.content=ANSWER
+    run_id=start(case,'rounding-history-'+str(len(counts)))['job_id']
+    checkpoints,questions,revisions,setup=prepare(case,run_id)
+    p=problem_from_question(questions[0]);plan=bind_draft(retarget_draft(draft,p),p)
+    checkpoints.save_math_plan(p,plan)
+    decisions=[decision(errors=count).model_copy(update={'part_id':f'p{i}','target_quote':f'part:p{i}'}) for i,count in enumerate(counts)]
+    assessment=MathAssessment(route_id='parts',route_reason='Frozen',comment='Saved final review reason.',part_decisions=decisions)
+    score,steps=settle_parts(plan.part_rubric,decisions,ANSWER,p.stem)
+    assert [s.score for s in steps]==([3.33,3.34] if len(counts)==2 else [3.33,3.34,3.33])
+    legacy=[StepScore(**{k:v for k,v in s.model_dump().items() if k not in {'deductions','deduction_base','is_alternative','rounding_adjustment'}}) for s in steps]
+    expert=ExpertResult(provider='old-model',provider_id=setup.setup['primary_provider_id'],score=score,max_score=p.max_score,
+        confidence=.99,comment=assessment.comment,steps=legacy,raw_output=json.dumps(
+            {'version':TRACE_VERSION,'plan_id':plan.plan_id,'assessment':assessment.model_dump(mode='json')}))
+    checkpoints.save_correction(revisions[0][1],Correction(q_id='q1',type=p.type,score=score,max_score=p.max_score,
+        confidence=.99,comment=expert.comment,steps=legacy,expert_results=[expert],synthesis_method='single'))
+    stop(case,run_id)
+    before=[r.model_dump() for r in grades.list_results_for_run(run_id)]
+    payload=task_facade.task_results(task_id=case[0],owner_id=case[1])
+    shown=next(c for s in payload['results'] for c in s['corrections'] if c['q_id']=='q1')
+    assert shown['expert_results'][0]['steps']==[s.model_dump(mode='json') for s in steps]
+    assert shown['steps']==shown['expert_results'][0]['steps']
+    assert shown['provisional_score']==score
+    assert shown['expert_results'][0]['comment']=='Saved final review reason.'
+    assert [r.model_dump() for r in grades.list_results_for_run(run_id)]==before
+    assert task_facade.task_results(task_id=case[0],owner_id=case[1])==payload

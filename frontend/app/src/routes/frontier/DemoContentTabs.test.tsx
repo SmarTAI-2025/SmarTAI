@@ -34,17 +34,18 @@ describe("DemoContentTabs", () => {
     if (!same) expect(screen.getByText("Distinct expert explanation")).toBeVisible();
   });
 
-  it.each(["zh-CN", "en-US"] as const)("shows additive fractional deductions (%s)", locale => {
+  it.each(["zh-CN", "en-US"] as const)("keeps actual fractional deductions and separate rounding (%s)", locale => {
     const graded = result();
     const correction = graded.results![0].corrections[0];
     Object.assign(correction, { score: 9.63, provisional_score: 9.63, max_score: 10,
-      steps: [{ step_no: 1, part_id: "p", score: 9.63, deduction_base: 10, is_correct: false,
+      steps: [{ step_no: 1, part_id: "p", score: 9.63, deduction_base: 10, rounding_adjustment: .005, is_correct: false,
         deductions: [1, 2, 3].map(i => ({ desc: `Equation ${i} loses a solution.`, points: .125 })), desc: "Net" }] });
     render(view("results", locale, graded));
-    fireEvent.click(screen.getByText(locale === "zh-CN" ? "扣分点" : "Deductions", { exact: false }));
+    fireEvent.click(screen.getByText(locale === "zh-CN" ? "扣分点" : "Deductions", { exact: false, selector: "summary" }));
     const unit = locale === "zh-CN" ? "分" : "pts";
-    expect(screen.getAllByText(`-0.12 ${unit}`)).toHaveLength(2);
-    expect(screen.getByText(`-0.13 ${unit}`)).toBeVisible();
+    expect(screen.getAllByText(`-0.125 ${unit}`)).toHaveLength(3);
+    expect(screen.getByText(/\+0.005/)).toBeVisible();
+    expect(screen.getByText(/\+0.005/).closest("li")).toBeNull();
     expect(screen.getAllByText("9.63 / 10")).toHaveLength(2);
   });
 
@@ -140,7 +141,7 @@ describe("DemoContentTabs", () => {
     const reference = screen.getByText("Reference", { exact: true }).closest("section")!;
     expect(within(alternative).getByText(zh ? "另解批改" : "Alternative method")).toBeVisible();
     expect(within(reference).queryByText(zh ? "另解批改" : "Alternative method")).not.toBeInTheDocument();
-    fireEvent.click(within(alternative).getByText(zh ? "扣分点" : "Deductions", { exact: false }));
+    fireEvent.click(within(alternative).getByText(zh ? "扣分点" : "Deductions", { exact: false, selector: "summary" }));
     expect(within(alternative).getAllByText(zh ? "-1 分" : "-1 pts")).toHaveLength(3);
     expect(within(alternative).getByText("Wrong sign in equation 2.")).toBeVisible();
     expect(screen.queryByText("Net subtotal")).not.toBeInTheDocument();

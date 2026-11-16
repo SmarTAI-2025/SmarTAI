@@ -1466,6 +1466,11 @@ def weighted_math_steps(experts, weights, maximum, score):
             desc = join_expert_feedback((expert.provider, expert.steps[index].desc) for expert in experts)
             deductions = None
             deduction_base = None
+            rounding_adjustment = None
+            if all(expert.steps[index].rounding_adjustment is not None for expert in experts):
+                raw_amount = sum((_points(expert.steps[index].score) - _points(expert.steps[index].rounding_adjustment)) * weight
+                                 for expert, weight in zip(experts, weights)) / sum(weights)
+                rounding_adjustment = float(current - previous - raw_amount)
             if all(expert.steps[index].deductions is not None for expert in experts):
                 deductions = [ScoreDeduction(desc=f"{expert.provider}: {item.desc}",
                                             points=float(_points(item.points) * weight / sum(weights)))
@@ -1478,6 +1483,7 @@ def weighted_math_steps(experts, weights, maximum, score):
                                     part_id=experts[0].steps[index].part_id, item_id=experts[0].steps[index].item_id,
                                     deductions=deductions,
                                     deduction_base=deduction_base,
+                                    rounding_adjustment=rounding_adjustment,
                                     is_alternative=all(expert.steps[index].is_alternative for expert in experts),
                                     is_correct=all(expert.steps[index].is_correct for expert in experts)))
             previous = current

@@ -1,0 +1,150 @@
+[
+  {
+    "score": 3.33,
+    "max_score": 10,
+    "steps": [
+      {
+        "part_id": "p0",
+        "step_no": 1,
+        "desc": "Submitted argument",
+        "is_correct": false,
+        "score": 3.33,
+        "deductions": [
+          {
+            "desc": "Assertion 1 divides by x without proving x is nonzero.",
+            "points": 1.0
+          },
+          {
+            "desc": "Assertion 2 divides by x without proving x is nonzero.",
+            "points": 1.0
+          },
+          {
+            "desc": "Assertion 3 divides by x without proving x is nonzero.",
+            "points": 1.0
+          },
+          {
+            "desc": "Assertion 4 divides by x without proving x is nonzero.",
+            "points": 1.0
+          },
+          {
+            "desc": "Assertion 5 divides by x without proving x is nonzero.",
+            "points": 1.0
+          },
+          {
+            "desc": "Assertion 6 divides by x without proving x is nonzero.",
+            "points": 1.0
+          },
+          {
+            "desc": "Assertion 7 divides by x without proving x is nonzero.",
+            "points": 0.6666666666666666
+          }
+        ],
+        "deduction_base": 10.0,
+        "rounding_adjustment": -0.0033333333333333335,
+        "is_alternative": true
+      }
+    ]
+  },
+  {
+    "score": 9.63,
+    "max_score": 10,
+    "steps": [
+      {
+        "part_id": "p0",
+        "step_no": 1,
+        "desc": "Submitted argument",
+        "is_correct": false,
+        "score": 9.63,
+        "deductions": [
+          {
+            "desc": "Assertion 1 divides by x without proving x is nonzero.",
+            "points": 0.125
+          },
+          {
+            "desc": "Assertion 2 divides by x without proving x is nonzero.",
+            "points": 0.125
+          },
+          {
+            "desc": "Assertion 3 divides by x without proving x is nonzero.",
+            "points": 0.125
+          }
+        ],
+        "deduction_base": 10.0,
+        "rounding_adjustment": 0.005,
+        "is_alternative": true
+      }
+    ]
+  },
+  {
+    "score": 6.67,
+    "max_score": 20,
+    "steps": [
+      {
+        "part_id": "p0",
+        "step_no": 1,
+        "desc": "Submitted argument",
+        "is_correct": true,
+        "score": 3.33,
+        "deductions": [],
+        "deduction_base": 3.3333333333333335,
+        "rounding_adjustment": -0.0033333333333333335,
+        "is_alternative": true
+      },
+      {
+        "part_id": "p1",
+        "step_no": 2,
+        "desc": "Submitted argument",
+        "is_correct": false,
+        "score": 3.34,
+        "deductions": [
+          {
+            "desc": "Assertion 1 divides by x without proving x is nonzero.",
+            "points": 0.001
+          }
+        ],
+        "deduction_base": 3.3333333333333335,
+        "rounding_adjustment": 0.007666666666666666,
+        "is_alternative": true
+      }
+    ]
+  },
+  {
+    "score": 10.0,
+    "max_score": 30,
+    "steps": [
+      {
+        "part_id": "p0",
+        "step_no": 1,
+        "desc": "Submitted argument",
+        "is_correct": true,
+        "score": 3.33,
+        "deductions": [],
+        "deduction_base": 3.3333333333333335,
+        "rounding_adjustment": -0.0033333333333333335,
+        "is_alternative": true
+      },
+      {
+        "part_id": "p1",
+        "step_no": 2,
+        "desc": "Submitted argument",
+        "is_correct": true,
+        "score": 3.34,
+        "deductions": [],
+        "deduction_base": 3.3333333333333335,
+        "rounding_adjustment": 0.006666666666666667,
+        "is_alternative": true
+      },
+      {
+        "part_id": "p2",
+        "step_no": 3,
+        "desc": "Submitted argument",
+        "is_correct": true,
+        "score": 3.33,
+        "deductions": [],
+        "deduction_base": 3.3333333333333335,
+        "rounding_adjustment": -0.0033333333333333335,
+        "is_alternative": true
+      }
+    ]
+  }
+]

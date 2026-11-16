@@ -27,22 +27,31 @@ it("shows only charged errors for a deduction subtotal and preserves step awards
   expect(subtotal.score).toBe(7);
   expect(scoringRows([{ ...subtotal, score: 10, deductions: [] }])).toEqual([]);
   const step = { step_no: 1, desc: "First rubric goal", score: 0, is_correct: false };
-  expect(scoringRows([step])).toEqual([{ ...step, deduction: false, roundedDeduction: false }]);
+  expect(scoringRows([step])).toEqual([{ ...step, deduction: false }]);
 });
 
 it.each([
-  { net: 3.33, base: 10, amounts: [1, 1, 1, 1, 1, 1, 2 / 3], shown: ["-1", "-1", "-1", "-1", "-1", "-1", "-0.67"] },
-  { net: 9.63, base: 10, amounts: [.125, .125, .125], shown: ["-0.12", "-0.13", "-0.12"] },
-  { net: 4.67, base: 5, amounts: [.125, .125, 1 / 12], shown: ["-0.12", "-0.13", "-0.08"] },
-])("reconciles displayed charges with the saved net $net", ({ net, base, amounts, shown }) => {
+  { net: 3.33, base: 10, amounts: [1, 1, 1, 1, 1, 1, 2 / 3], shown: ["-1", "-1", "-1", "-1", "-1", "-1", "≈-0.666667"] },
+  { net: 9.63, base: 10, amounts: [.125, .125, .125], shown: ["-0.125", "-0.125", "-0.125"] },
+  { net: 4.67, base: 5, amounts: [.125, .125, 1 / 12], shown: ["-0.125", "-0.125", "≈-0.0833333"] },
+])("keeps actual charges independent from saved rounded net $net", ({ net, base, amounts, shown }) => {
   const step = { step_no: 1, part_id: "p", score: net, deduction_base: base, desc: "Net", is_correct: false,
     deductions: amounts.map((points, i) => ({ desc: `Equation ${i} loses a solution.`, points })) };
   const original = structuredClone(step);
   const rows = scoringRows([step]);
   expect(rows.map(formatScoringRow)).toEqual(shown);
-  expect(Math.round((base + rows.reduce((sum, row) => sum + row.score, 0)) * 100)).toBe(Math.round(net * 100));
-  expect(rows.some(row => row.roundedDeduction)).toBe(true);
+  expect(rows.every(row => row.score < 0)).toBe(true);
+  expect(rows.map(row => row.score)).toEqual(amounts.map(points => -points));
   expect(step).toEqual(original);
+});
+
+it.each([.001, .0000001, .005, .125, 2 / 3])("never turns a small charge %s into credit or zero", points => {
+  const step = { step_no: 2, part_id: "p2", desc: "Net", score: 3.34, is_correct: false,
+    deduction_base: 10 / 3, rounding_adjustment: 3.34 - (10 / 3 - points), deductions: [{ desc: "A sign was reversed.", points }] };
+  const row = scoringRows([step])[0];
+  expect(row.score).toBe(-points);
+  expect(Number(formatScoringRow(row).replace("≈", ""))).toBeLessThan(0);
+  expect(scoringRows([{ ...step, deductions: [] }])).toEqual([]);
 });
 
 function correction(patch: Partial<Correction> = {}): Correction {

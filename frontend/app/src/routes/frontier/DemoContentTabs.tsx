@@ -1,5 +1,6 @@
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { ScoreRoundingNotes } from "@/components/tasks/ScoreRoundingNotes";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { aiCorrectionScore, buildResultsModel, formatScore, formatScoringRow, scoringRows, validExpertResults } from "@/components/tasks/resultsModel";
 import type { Locale } from "@/i18n/messages";
@@ -109,7 +110,7 @@ function DemoScoringEvidence({ steps, zh }: { steps: StepScore[]; zh: boolean })
         <MarkdownMath className="min-w-0 text-foreground">{step.desc}</MarkdownMath>
         <span className={`font-semibold ${step.is_correct ? "text-accent" : "text-warning"}`}>{formatScoringRow(step)} {zh ? "分" : "pts"}</span>
       </li>)}</ol>
-      {rows.some(row => row.roundedDeduction) ? <p className="mt-2 text-[11px] text-muted-foreground">{zh ? "扣分按累计余额取两位小数，明细合计与净分一致。" : "Amounts use rounded running balances so their sum matches the net score."}</p> : null}
     </details> : null}
+    <ScoreRoundingNotes steps={steps} zh={zh} />
   </>;
 }

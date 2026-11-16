@@ -79,6 +79,8 @@ class StepScore(BaseModel):
     deductions: list[ScoreDeduction] | None = Field(default=None, exclude_if=lambda v: v is None)
     deduction_base: float | None = Field(default=None, ge=0, allow_inf_nan=False, exclude_if=lambda v: v is None,
         description="Server-computed balance before deductions, used only to reconcile displayed rounding.")
+    rounding_adjustment: float | None = Field(default=None, allow_inf_nan=False, exclude_if=lambda v: v is None,
+        description="Cumulative display rounding minus the exact ledger amount; never an award or deduction.")
     is_alternative: bool = Field(default=False, exclude_if=lambda v: not v)
 
 

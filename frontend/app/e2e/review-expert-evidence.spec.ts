@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import settledExamples from "./fixtures/cumulative-scoring.json" with { type: "json" };
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 const taskId = "asg_review_evidence";
@@ -200,19 +201,17 @@ for (const surface of ["teacher", "demo"]) for (const width of [390, 1440]) {
         sessionStorage.setItem("smartai_frontier_tasks", JSON.stringify([taskId]));
       }
     }, { surface, taskId });
-    const examples = [
-      { score: 3.33, points: [1, 1, 1, 1, 1, 1, 2 / 3], expected: ["-1", "-1", "-1", "-1", "-1", "-1", "-0.67"] },
-      { score: 9.63, points: [.125, .125, .125], expected: ["-0.12", "-0.13", "-0.12"] },
-    ];
+    const examples = settledExamples.map((example, index) => ({ ...example,
+      expected: [["-1", "-1", "-1", "-1", "-1", "-1", "≈-0.666667"], ["-0.125", "-0.125", "-0.125"], ["-0.001"], []][index] }));
     const corrections = examples.map((example, index) => {
       const comment = `Review ${index + 1}: each cited equation loses a solution; the frozen deduction policy applies.`;
-      const steps = [{ step_no: 1, part_id: "p", score: example.score, deduction_base: 10, is_correct: false, is_alternative: true,
-        desc: "Net balance", deductions: example.points.map((points, n) => ({ desc: `Equation ${n + 1} cancels a factor without checking its zero.`, points })) }];
-      return { ...results[0].corrections[0], q_id: `q${index + 1}`, score: example.score, provisional_score: example.score,
-        comment, steps, expert_results: [{ provider: `Fractional model ${index + 1}`, provider_id: "fractional", score: example.score, max_score: 10, confidence: .99, comment, steps }], synthesis_method: "single" };
+      const steps = example.steps;
+      return { ...results[0].corrections[0], q_id: `q${index + 1}`, score: example.score, provisional_score: example.score, max_score: example.max_score,
+        comment, steps, expert_results: [{ provider: `Fractional model ${index + 1}`, provider_id: "fractional", score: example.score, max_score: example.max_score, confidence: .99, comment, steps }], synthesis_method: "single" };
     });
-    const current = { ...task, problem_data, student_data: { S1: { ...student_data.S1,
-      stu_ans: student_data.S1.stu_ans.map((answer, index) => ({ ...answer, number: String(index + 1), type: "reasoning" })) } } };
+    const current = { ...task,
+      problem_data: Object.fromEntries(examples.map((example, index) => [`q${index + 1}`, { ...problem_data.q1, q_id: `q${index + 1}`, number: String(index + 1), max_score: example.max_score }])),
+      student_data: { S1: { ...student_data.S1, stu_ans: examples.map((_, index) => ({ ...student_data.S1.stu_ans[0], q_id: `q${index + 1}`, number: String(index + 1), type: "reasoning" })) } } };
     await page.route(`${backend}/**`, async route => {
       const path = new URL(route.request().url()).pathname;
       if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" } });
@@ -232,11 +231,17 @@ for (const surface of ["teacher", "demo"]) for (const width of [390, 1440]) {
       const panel = surface === "teacher" ? area.getByRole("tabpanel") : area.locator("section").filter({ has: page.getByText(`Fractional model ${index + 1}`, { exact: true }) }).last();
       if (surface === "demo") {
         await expect(area.getByText(corrections[index].comment, { exact: true })).toHaveCount(1);
-        await panel.locator("summary").click();
+        if (example.expected.length) await panel.locator("summary").click();
       }
       const amounts = await panel.locator("li > span:last-child").allTextContents();
       expect(amounts).toEqual(example.expected.map(value => `${value} pts`));
-      expect(Math.round((10 + amounts.reduce((total, value) => total + parseFloat(value), 0)) * 100)).toBe(Math.round(example.score * 100));
+      expect(amounts.every(value => parseFloat(value.replace("≈", "")) < 0)).toBe(true);
+      await expect(panel.locator("[data-score-rounding]")).toHaveCount(example.steps.filter(step => Math.abs(step.rounding_adjustment) > 1e-12).length);
+      await expect(panel.locator("li [data-score-rounding]")).toHaveCount(0);
+      if (!example.expected.length) {
+        await expect(panel.getByText("Scoring steps", { exact: true })).toHaveCount(0);
+        await expect(panel.getByText("Deductions", { exact: true })).toHaveCount(0);
+      }
       await expect(panel.getByText(corrections[index].comment, { exact: true })).toBeVisible();
       await panel.screenshot({ path: testInfo.outputPath(`fractional-${surface}-${index}-${width}.png`) });
     }
