@@ -138,7 +138,7 @@ export interface StudentAnswerInfo {
   type: string;
   content: string;
   flag: string[];
-  review_status?: "pending" | "confirmed";
+  review_status?: "pending" | "edited" | "confirmed";
 }
 
 export interface StudentSubmission {

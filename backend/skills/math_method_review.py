@@ -228,7 +228,9 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
                     "judge relevance, correctness and credit using the original student work and frozen rules. "
                     "There is no target score or request for consensus. Rebuild the appropriate ledger; never "
                     "convert missed reference steps into alternative errors. Preserve expert_index and all other "
-                    "parts. Give specific reasons and updated overall feedback.\n" + INSTRUCTION
+                    "parts. Give specific reasons and updated overall feedback. Write comment and scoring "
+                    "reasons about the final student work and applicable rubric. Do not describe earlier "
+                    "grades, reassessment, adjudication or internal model calls.\n" + INSTRUCTION
                     + (PROOF_INSTRUCTION if problem.type == "推理题" else "")
                     + grading._part_proof_evidence(problem, plan.part_rubric)
                     + " In this targeted response use decisions (not part_decisions), containing only requested_part_ids.",
@@ -260,19 +262,17 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
         return experts, {}  # Adjudication failed before any reassessment.
 
 
-def with_method_feedback(expert, language):
-    """Persist the route rationale in existing feedback, outside the score rows."""
+def with_method_feedback(expert, language, *, trace=None):
+    """Expose the adopted method without narrating internal review history."""
     from backend.skills.math_grading import read_math_trace
-    trace = read_math_trace(expert) or {}
-    review = trace.get("method_review", {})
-    comment = expert.comment
-    label = "解法改判依据：" if language == "zh" else "Method reassessment: "
-    for choice in review.get("choices", []):
-        if choice["part_id"] in review.get("part_ids", []) and choice["reason"] not in comment:
-            comment += "\n\n" + label + choice["reason"]
-    if trace.get("method_review_pending"):
-        message = ("解法已重判，最终联合复核未完成。请核对并确认或修改分数。" if language == "zh" else
-                   "Method reassessed; final joint review did not complete. Check and confirm or adjust the score.")
-        if message not in comment:
-            comment += "\n\n" + message
-    return expert.model_copy(update={"comment": comment}) if comment != expert.comment else expert
+    from backend.services.grading_feedback import final_math_feedback
+    trace = (read_math_trace(expert) or {}) if trace is None else trace
+    if not (trace.get("method_review") or trace.get("targeted_review") or any(
+            d.get("method") == "alternative" for d in trace.get("assessment", {}).get("part_decisions", []))):
+        return expert
+    original_steps = [s.model_dump() for s in expert.steps]
+    comment, steps = final_math_feedback(expert.comment, original_steps, trace, language)
+    if comment == expert.comment and steps == original_steps:
+        return expert
+    return expert.model_copy(update={"comment": comment,
+        "steps": [step.model_copy(update={"desc": shown["desc"]}) for step, shown in zip(expert.steps, steps)]})

@@ -80,11 +80,12 @@ def programming_review_reason(reasons, experts) -> str | None:
     return next((reason for reason in PROGRAMMING_REVIEW_REASONS if reason in restored), None)
 
 
-def teacher_resolved_programming_score(ai_score, teacher_score, maximum, confirmed) -> bool:
+def teacher_resolved_score(ai_score, teacher_score, maximum, confirmed, steps=()) -> bool:
+    """Compare with the same AI precision used to persist and display this vote."""
     value = number(teacher_score)
     if value is None or not 0 <= value <= maximum:
         return False
-    return confirmed is True or value != round_ai_score(number(ai_score), maximum)
+    return confirmed is True or value != round_ai_score(number(ai_score), maximum, steps)
 
 
 def result_programming_review_reason(result) -> str | None:
@@ -147,6 +148,7 @@ def review_state(correction: dict) -> tuple[bool, bool]:
     confirmed = correction.get("review_status") == "confirmed"
     blocked = not valid(score(correction))
     reviewed = number(correction.get("teacher_score")) is not None and confirmed and not blocked
+    saved = valid(correction.get("teacher_score")) and correction.get("review_status") in {"edited", "confirmed"}
     conf = number(correction.get("confidence"))
     expert_scores = [
         number(expert.get("score"))
@@ -165,10 +167,11 @@ def review_state(correction: dict) -> tuple[bool, bool]:
                                           *(correction.get("initial_review_reasons") or [])]
                for part in reason.split(",")}
     score_reason = score_review_reason(reasons, experts)
-    score_pending = score_reason and not teacher_resolved_programming_score(
+    score_pending = score_reason and not teacher_resolved_score(
         correction.get("provisional_score"), correction.get("teacher_score"), maximum or 0, confirmed,
+        correction.get("steps"),
     )
-    pending = blocked or bool(score_pending) or (not reviewed and (low_confidence or unknown_confidence or (not expert_scores and confidence_needs_attention(conf))
+    pending = blocked or bool(score_pending) or (not saved and (low_confidence or unknown_confidence or (not expert_scores and confidence_needs_attention(conf))
                                             or disagreement or partial or bool(reasons & {
                                                 "partial_experts", "degraded_to_single", "math_scoring_uncertainty",
                                                 "math_expert_disagreement", "math_verification_conflict",

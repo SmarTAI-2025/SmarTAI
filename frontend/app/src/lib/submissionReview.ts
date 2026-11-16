@@ -84,7 +84,7 @@ export function answerReviewAttention(answer?: StudentAnswerInfo): ReviewAttenti
 
 /** Suggestions appear in the queue and beside the individual confirmation. */
 export function answerHasOptionalAdvice(answer?: StudentAnswerInfo): boolean {
-  if (!answer || answer.review_status === "confirmed") return false;
+  if (!answer || answer.review_status === "confirmed" || answer.review_status === "edited") return false;
   const confidence = confidenceValue(answer.recognition_confidence);
   return Boolean(answer.flag?.some(flag => ["authorship_uncertain", "external_annotation_present"].includes(flag)))
     || confidenceNeedsAttention(confidence);

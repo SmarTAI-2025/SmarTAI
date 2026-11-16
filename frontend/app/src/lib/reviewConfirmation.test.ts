@@ -173,7 +173,7 @@ describe("review hard failures", () => {
       review_status: "confirmed", max_score_review_status: "confirmed",
       preparation_issues: [warning],
     });
-    expect(questionReviewIssues(problem)).toEqual([warning]);
+    expect(questionReviewIssues(problem)).toEqual([]);
     expect(recognitionIssueLabel(warning, "zh-CN")).toBe("本题评分标准有待核对的内容。");
     expect(recognitionIssueLabel(warning, "en-US")).toBe("Some rubric details need review.");
     expect(warning.details?.message).toContain("本轮 AI 评分解释");

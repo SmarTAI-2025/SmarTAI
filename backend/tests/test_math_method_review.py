@@ -395,7 +395,7 @@ async def test_full_ledger_final_review_is_also_bound_to_the_adjudicated_method(
 
 
 @pytest.mark.asyncio
-async def test_final_review_may_change_credit_within_the_fixed_route_and_keeps_rationale():
+async def test_final_review_may_change_credit_without_exposing_method_history():
     p, a, plan, experts, right = case()
     main, calls = provider("primary", choice(), {"revisions": [revision(alternate("complete"))]})
     regrader, _ = provider("a", reassessment(right))
@@ -403,7 +403,8 @@ async def test_final_review_may_change_credit_within_the_fixed_route_and_keeps_r
     assert len(calls) == 2 and [e.score for e in result] == [10, 8]
     assert grading.read_math_trace(result[0])["assessment"]["part_decisions"][0]["method"] == "alternative"
     reason = choice()["choices"][0]["reason"]
-    assert result[0].comment.count(reason) == 1
+    assert reason not in result[0].comment
+    assert result[0].comment.count("解题思路与标答不同，按另解标准评分。") == 1
     assert all(reason not in s.desc for s in result[0].steps)
     assert grading.ExpertResult.model_validate_json(result[0].model_dump_json()).comment == result[0].comment
 

@@ -2,6 +2,17 @@ import { describe, expect, it } from "vitest";
 import { answerNeedsConfirmation, answerReviewAttention, answerReviewNotes, formatSubmissionFlag, getAnswerState, getSubmissionReviewStats, selectSubmissionReview, studentNeedsAttention } from "./submissionReview";
 
 describe("OCR review labels", () => {
+  it.each(["edited", "confirmed"] as const)("clears yellow advice after %s while retaining an unresolved red issue", review_status => {
+    const answer = { q_id: "q1", number: "1", type: "reasoning", content: "Saved text", recognition_confidence: .2,
+      flag: ["authorship_uncertain"], review_status };
+    expect(answerReviewAttention(answer)).toBe("none");
+    expect(answerReviewNotes(answer, "zh-CN")).toEqual([]);
+    expect(answerNeedsConfirmation(answer)).toBe(review_status !== "confirmed");
+    const failed = { ...answer, flag: ["recognition_failed", "recognition_failed_pages:2", "authorship_uncertain"] };
+    expect(answerReviewAttention(failed)).toBe("blocking");
+    expect(answerReviewNotes(failed, "zh-CN").every(note => note.severity === "blocking")).toBe(true);
+  });
+
   it("explains incomplete fields without exposing internal parser markers", () => {
     const flag = "recognition_invalid_fields:type,content,untrusted_detail";
     expect(formatSubmissionFlag(flag, "zh-CN")).toBe("待核对：题型、作答内容");

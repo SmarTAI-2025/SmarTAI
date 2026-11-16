@@ -37,7 +37,7 @@ from backend.db.models import (
 )
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.grading_review import result_score_review_reason, teacher_resolved_programming_score
+from backend.domain.grading_review import result_score_review_reason, teacher_resolved_score
 from backend.domain.errors import (
     DuplicateActiveRun,
     InvalidTransition,
@@ -1208,7 +1208,7 @@ def persisted_result_counters(run_id: str) -> tuple[int, int]:
 def _apply_teacher_review_state(result, score, confirmed) -> None:
     """Apply the same current state for a fresh or inherited human judgment."""
     reason = result_score_review_reason(result)
-    if reason and not teacher_resolved_programming_score(result.ai_score, score, result.ai_max_score, confirmed):
+    if reason and not teacher_resolved_score(result.ai_score, score, result.ai_max_score, confirmed, result.ai_steps):
         result.result_status = education.GradeResultStatus.NEEDS_REVIEW.value
         result.requires_review = True
         result.review_reasons = [reason]
@@ -1647,8 +1647,8 @@ def _ensure_releasable_scores(session, run_id: str) -> None:
         if effective is None or not math.isfinite(effective) or not 0 <= effective <= row.ai_max_score:
             raise ResultNotReleasable("missing_or_invalid_score")
         reason = result_score_review_reason(row)
-        if reason and (review is None or not teacher_resolved_programming_score(
-            row.ai_score, review.new_score, row.ai_max_score, review.confirmed,
+        if reason and (review is None or not teacher_resolved_score(
+            row.ai_score, review.new_score, row.ai_max_score, review.confirmed, row.ai_steps,
         )):
             raise ResultNotReleasable("math_review_required" if reason == "math_method_review_incomplete"
                                      else "programming_review_required")

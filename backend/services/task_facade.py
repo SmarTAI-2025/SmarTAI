@@ -63,7 +63,7 @@ from backend.db.models import (
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.grading_review import result_score_review_reason, teacher_resolved_programming_score
+from backend.domain.grading_review import result_score_review_reason, teacher_resolved_score
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
 from backend.domain.errors import (
@@ -933,6 +933,9 @@ def _math_rubric_advisory(question, plan, language: str) -> list[dict]:
         draft = saved_draft(problem_from_question(question))
         plan = draft.plan if draft else None
     if plan is None or not any(text.strip() for text in plan.advisories):
+        return []
+    presentation = (question.source or {}).get("presentation") or {}
+    if presentation.get("reviewed_rubric_advisory_fingerprint") == plan.input_fingerprint:
         return []
     from backend.services.math_rubric_plan import _FALLBACK_ADVISORY
 
@@ -5063,7 +5066,7 @@ def grading_readiness(
                 issues.append("submission_identities_unresolved")
 
     reviewed = workflow_repository.answer_review_statuses(recognition_review_ids) if recognition_review_ids else {}
-    if any(reviewed.get(answer_id) != "confirmed" for answer_id in recognition_review_ids):
+    if any(reviewed.get(answer_id) not in {"edited", "confirmed"} for answer_id in recognition_review_ids):
         warnings.append("submission_recognition_needs_review")
     if any(row.get("unknown_question_ids") for row in source_rows):
         warnings.append("submission_question_ids_unmatched")
@@ -5952,6 +5955,12 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                 rubric_draft=presentation["rubric_draft"],
             ).model_dump()
             question.source = {**source, "presentation": presentation}
+        if patch.get("review_status") == "confirmed" or "rubric" in fixed_fields or patch.get("alternative_rule_edits"):
+            # Acknowledge only this saved rubric; new inputs get a new fingerprint.
+            fingerprint = ((presentation.get("rubric_draft") or {}).get("plan") or {}).get("input_fingerprint")
+            if fingerprint:
+                presentation["reviewed_rubric_advisory_fingerprint"] = fingerprint
+                question.source = {**source, "presentation": presentation}
         question.version += 1
         question.updated_at = now
         if substantive:
@@ -6137,6 +6146,8 @@ def update_student_answer(
             if flags != list(target.flag or []) or patch.get("flag") is not None:
                 patch = {**patch, "flag": flags}
         flags_changed = patch.get("flag") is not None and list(patch["flag"]) != list(target.flag or [])
+        if (content_changed or assignment_changed or flags_changed) and patch.get("review_status") is None:
+            patch = {**patch, "review_status": "edited"}
         if patch.get("review_status") == "confirmed" and not matching_confirmation and any(
             flag in failed_flags
             for flag in (patch.get("flag", target.flag) or [])
@@ -6452,8 +6463,8 @@ def _correction_review_blocks_finalization(result) -> bool:
     if result.result_status in education.NON_SCOREABLE_RESULT_STATUSES or not valid_score(result.effective_score):
         return True
     review = result.teacher_review or {}
-    return bool(result_score_review_reason(result)) and not teacher_resolved_programming_score(
-        result.ai_score, review.get("new_score"), result.ai_max_score, review.get("confirmed"),
+    return bool(result_score_review_reason(result)) and not teacher_resolved_score(
+        result.ai_score, review.get("new_score"), result.ai_max_score, review.get("confirmed"), result.ai_steps,
     )
 
 

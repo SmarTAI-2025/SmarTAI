@@ -115,7 +115,7 @@ export function ReviewOverviewPage() {
   const confirmableReviews = model.students.flatMap((student) => student.corrections.flatMap((correction) => {
     const score = effectiveCorrectionScore(correction);
     const teacherConfirmed = Number.isFinite(correction.teacher_score) && correction.review_status === "confirmed";
-    return !teacherConfirmed && visibleReviewItems.some(item => item.student.id === student.id && item.question.id === correction.q_id && item.severity === "advisory") && score !== null && score >= 0 && score <= correction.max_score
+    return !teacherConfirmed && visibleReviewItems.some(item => item.student.id === student.id && item.question.id === correction.q_id) && score !== null && score >= 0 && score <= correction.max_score
       ? [{ studentId: student.id, qId: correction.q_id, score, comment: correction.teacher_comment ?? "" }]
       : [];
   }));

@@ -13,7 +13,8 @@ from backend.tests.test_task_grading_retry import case as db_case, start  # noqa
 @pytest.mark.asyncio
 @pytest.mark.parametrize("errors", [False, True])
 @pytest.mark.parametrize("final_change", [False, True])
-async def test_final_review_rationale_is_outside_score_rows_after_roundtrip(db_case, errors, final_change):
+@pytest.mark.parametrize("legacy_annotations", [False, True])
+async def test_only_final_grading_feedback_survives_public_roundtrip(db_case, errors, final_change, legacy_annotations):
     from sqlalchemy import select
     from backend.db import grading_repository as grades
     from backend.db.models import AssignmentQuestionRecord
@@ -47,6 +48,13 @@ async def test_final_review_rationale_is_outside_score_rows_after_roundtrip(db_c
     regrader, _ = provider("a", reassessment(right))
     result = await run(p, a, plan, experts, main, {"a": regrader})
     expert = result[0]
+    if legacy_annotations:
+        trace = grading.read_math_trace(expert)
+        trace["method_review"]["original_assessment"]["comment"] = "PRIVATE superseded wrong-method feedback"
+        expert = expert.model_copy(update={"comment": expert.comment + "\n\n解法改判依据：PRIVATE process history\n\n解法已重判，最终联合复核未完成。",
+                                          "raw_output": json.dumps(trace)})
+        if final_change:
+            expert.steps[0] = expert.steps[0].model_copy(update={"desc": expert.steps[0].desc + "\n定向复核依据：" + final["reason"]})
     method_reason = choice()['choices'][0]['reason']
     checkpoints.save_correction(student, Correction(q_id=p.q_id, type=p.type, score=expert.score,
         max_score=10, confidence=.9, comment=expert.comment, steps=expert.steps,
@@ -56,7 +64,10 @@ async def test_final_review_rationale_is_outside_score_rows_after_roundtrip(db_c
     payload = task_facade.task_results(task_id=db_case[0], owner_id=db_case[1])
     restored = next(c for s in payload["results"] for c in s["corrections"] if c["q_id"] == p.q_id)["expert_results"][0]
     assert restored["score"] == (8 if errors or not final_change else 10)
-    assert restored['comment'].count(method_reason) == 1
+    assert method_reason not in restored['comment']
+    assert restored['comment'].count("解题思路与标答不同，按另解标准评分。") == 1
+    assert all(word not in str(restored) for word in ("PRIVATE", "解法已重判", "改判依据", "定向复核依据", "联合复核"))
+    assert len(next(c for s in payload["results"] for c in s["corrections"] if c["q_id"] == p.q_id)["expert_results"]) == 1
     assert all(method_reason not in step['desc'] for step in restored['steps'])
     assert len(restored["steps"]) == 1 and sum(s["score"] for s in restored["steps"]) == restored["score"]
     assert restored["raw_output"] is None

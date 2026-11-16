@@ -77,7 +77,7 @@ async def test_one_expert_cannot_discard_or_prevent_another_reassessment(reverse
         assessment = grading.FrozenPartAssessment(part_decisions=entry["decisions"], comment="").assessment()
         assert grading.score_assessment(assessment, plan, a.content, problem_text=p.stem)[0] == expected[expert.provider_id]
     assert grading.read_math_trace(result[indices["a"]])["method_review"]["status"] == "reassessed"
-    assert choice()["choices"][0]["reason"] in result[indices["a"]].comment
+    assert choice()["choices"][0]["reason"] not in result[indices["a"]].comment
     assert [e.model_dump_json() for e in experts] == before
 
 
@@ -124,14 +124,14 @@ async def test_unfinished_final_review_keeps_valid_regrade_but_requires_teacher_
     trace = grading.read_math_trace(result[1])
     assert trace["method_review_pending"] is True
     message = "解法已重判，最终联合复核未完成" if language == "zh" else "Method reassessed; final joint review did not complete"
-    assert message in result[1].comment
+    assert message not in result[1].comment
     assert not any(message in step.desc for step in result[1].steps)
     assert trace["method_review"]["original_assessment"] == grading.read_math_trace(experts[1])["assessment"]
     correction = _apply_math_review_advisory(_weighted_average_fallback(p, result))
     assert correction.score == 10 and correction.requires_human_review
     assert REASON in correction.review_reasons
     assert review_state(correction.model_dump()) == (True, False)
-    dto = SimpleNamespace(result_status="needs_review", effective_score=10, ai_score=10, ai_max_score=10,
+    dto = SimpleNamespace(result_status="needs_review", effective_score=10, ai_score=10, ai_max_score=10, ai_steps=[],
         review_reasons=correction.review_reasons, initial_review_reasons=correction.review_reasons,
         ai_expert_results=[e.model_dump() for e in result], teacher_review=None)
     assert task_facade._correction_review_blocks_finalization(dto)
@@ -200,7 +200,7 @@ async def test_saved_reassessment_requires_decision_before_reports_and_release(d
     public = next(c for s in task_facade.task_results(**args)["results"] for c in s["corrections"] if c["q_id"] == "q1")
     assert [e["score"] for e in public["expert_results"]] == [10, 10]
     assert all(e["raw_output"] is None for e in public["expert_results"])
-    assert "解法已重判，最终联合复核未完成" in public["comment"]
+    assert "解法已重判" not in public["comment"] and "联合复核" not in public["comment"]
     assert REASON in public["initial_review_reasons"]
 
     def assert_blocked():
@@ -272,7 +272,7 @@ async def test_later_critical_failure_still_propagates(critical, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_summary_model_cannot_hide_unfinished_review_notice():
+async def test_summary_keeps_user_feedback_separate_from_review_status():
     from backend.agents.multi_expert import _synthesize
     p, a, plan, experts, full = reference_case()
     main, _ = provider("primary", choice("reference"), PermanentLLMError("offline failure"))
@@ -282,4 +282,6 @@ async def test_summary_model_cannot_hide_unfinished_review_notice():
         "comment": "A summary omitting the incomplete review.", "steps": []})
     correction = await _synthesize(problem=p, expert_results=result, synthesis_provider=summary, language="zh", answer=a)
     assert len(calls) == 1 and correction.score == 10
-    assert "解法已重判，最终联合复核未完成" in correction.comment
+    assert correction.comment == "A summary omitting the incomplete review."
+    _apply_math_review_advisory(correction)
+    assert REASON in correction.review_reasons

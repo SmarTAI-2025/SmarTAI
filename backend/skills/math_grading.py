@@ -754,9 +754,11 @@ def _evidence_pending(assessment, evidence):
 
 def _with_pending_advice(expert, language):
     """Project a real unresolved contradiction through existing evidence text."""
+    from backend.skills.math_method_review import with_method_feedback
     trace = read_math_trace(expert)
     if not trace:
         return expert
+    expert = with_method_feedback(expert, language, trace=trace)
     proof_concerns = trace.get("proof_audit", {}).get("review_concerns", [])
     if not trace.get("review_pending") and not proof_concerns:
         return expert
@@ -1375,6 +1377,8 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                 +
                 "For full-ledger entries return no revision if there is no source-grounded error. "
                 "Submit at most one revision per expert. Unknown tools are not evidence of error. "
+                "Write comments and scoring reasons as final feedback about the student work and applicable "
+                "rubric; do not narrate prior grades, reassessment, adjudication or internal model calls. "
                 "Keep teacher review suggestions optional. "
                 + proof_guidance + (_part_proof_evidence(problem, plan.part_rubric) if plan.part_rubric else "")
                 + instructions + (PROOF_INSTRUCTION if review_format is ProofPartReview else "")
@@ -1424,11 +1428,8 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                 trace["targeted_review"]["part_ids"] = [d.part_id for d in revision.decisions]
             if isinstance(revision, PointRevision):
                 trace["targeted_review"]["item_ids"] = [award.item_id for award in revision.awards]
-            if steps:
-                label = "定向复核依据：" if language == "zh" else "Targeted review: "
-                steps[0] = steps[0].model_copy(update={"desc": steps[0].desc + "\n" + label + revision.reason})
-            # The original vote remains in the private trace. Make the review
-            # reason visible; confidence/configured weights remain unchanged.
+            # Keep the original vote and review reason in the private trace;
+            # expose final grading feedback without changing confidence/weights.
             revised[index] = experts[index].model_copy(update={
                 "score": score, "steps": steps, "comment": candidate.comment,
                 "raw_output": _json(trace),

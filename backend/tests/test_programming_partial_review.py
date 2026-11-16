@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from backend.agents.multi_expert import run_multi_expert
-from backend.domain.grading_review import programming_review_reason, teacher_resolved_programming_score
+from backend.domain.grading_review import programming_review_reason, teacher_resolved_score
 from backend.models import TestCase
 from backend.services import programming_runs as runs
 from backend.services.programming_partial_review import REVIEW_REASON, review_inputs, review_partial_score
@@ -89,8 +89,8 @@ async def test_confirmation_requires_independent_witness(kind, first, second, ru
     assert (programming_review_reason([], [vote.model_dump()]) == REVIEW_REASON) == confirmed
     if confirmed:
         assert "扣分依据待复核" in vote.comment and "扣分依据待复核" in corr.comment
-        assert not teacher_resolved_programming_score(6, 6, 10, False)
-        assert teacher_resolved_programming_score(6, 6, 10, True)
+        assert not teacher_resolved_score(6, 6, 10, False)
+        assert teacher_resolved_score(6, 6, 10, True)
 
 
 @pytest.mark.asyncio

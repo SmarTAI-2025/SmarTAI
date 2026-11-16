@@ -228,7 +228,7 @@ def _apply_math_review_advisory(correction: Correction, *, problem=None) -> Corr
                     if d.get("part_id") and d.get("method") in {"reference", "minor_variant"} and d.get("relevance") == "partial"
                     and len(d.get("steps") or []) > 1
                     and all(s.get("outcome") == "missed" for s in d["steps"])})
-            if any(d.get("method") == "alternative" and d.get("relevance") in {"partial", "complete"} for d in decisions):
+            if any(d.get("method") == "alternative" and d.get("relevance") in {"partial", "complete", "incorrect"} for d in decisions):
                 reasons.append("math_alternative_method")
             if any(d.get("relevance") == "uncertain" for d in decisions):
                 reasons.append("math_verification_conflict")
@@ -660,7 +660,7 @@ async def _synthesize(
             score=aggregate.score,
             max_score=problem.max_score,
             confidence=result.confidence,
-            comment=aggregate.comment if "math_method_review_incomplete" in aggregate.review_reasons else result.comment,
+            comment=result.comment,
             steps=(aggregate.steps if math_results or any(e.programming_evidence for e in expert_results) else
                    normalized_steps if normalized_score == aggregate.score else []),
             expert_results=aggregate.expert_results,

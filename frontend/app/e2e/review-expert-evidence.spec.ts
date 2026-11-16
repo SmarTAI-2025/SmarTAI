@@ -64,7 +64,7 @@ for (const demo of [false, true]) for (const locale of ["zh-CN", "en-US"]) {
       expect(boxes.every(box => box.width >= 150)).toBe(true);
       expect(new Set(boxes.map(box => box.y)).size).toBeGreaterThan(1);
       await expect(card.getByRole("textbox", { name: `Q${n} ${zh ? "最终得分" : "final score"}` })).toHaveValue("8.5");
-      await card.getByText(zh ? "查看各专家原始结果" : "View Original Model Results").click();
+      await card.getByText(zh ? "查看各专家批改结果" : "View Expert Grading Details").click();
       const panel = card.getByRole("tabpanel");
       await expect(panel.getByText("Expert 0 reasoning")).toBeVisible();
       await expect(panel.getByText("Original expert explanation 1.")).toHaveCount(0);
@@ -109,7 +109,7 @@ for (const demo of [false, true]) for (const locale of ["zh-CN", "en-US"]) {
     const singleResult = page.locator('[data-question-id="q1"]').getByRole("region", { name: zh ? "SmarTAI 批改结果" : "SmarTAI Grading Result" });
     await expect(singleResult.getByText("model-1（10/10, [0,0,1,9], conf=0.99）")).toBeVisible();
     await expect(singleResult.locator("dl")).toHaveCount(1);
-    await singleResult.getByText(zh ? "查看各专家原始结果" : "View Original Model Results").click();
+    await singleResult.getByText(zh ? "查看各专家批改结果" : "View Expert Grading Details").click();
     await expect(singleResult.getByRole("tab")).toHaveCount(1);
     await expect(singleResult.getByRole("tabpanel").getByText("Original expert explanation 1.")).toBeVisible();
     expect(errors).toEqual([]);

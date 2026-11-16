@@ -270,7 +270,7 @@ export function formatConfidence(value: number | null | undefined) {
 }
 
 export function isLowConfidence(correction: Correction) {
-  return !isCorrectionReviewConfirmed(correction) && (validExpertResults(correction).length
+  return !hasSavedCorrectionReview(correction) && (validExpertResults(correction).length
     ? validExpertResults(correction).some(expert => confidenceNeedsAttention(expert.confidence))
     : confidenceNeedsAttention(correction.confidence));
 }
@@ -289,6 +289,12 @@ export function isCorrectionReviewConfirmed(correction: Correction): boolean {
   return Number.isFinite(correction.teacher_score) && correction.review_status === "confirmed" && !correctionReviewBlocked(correction);
 }
 
+/** A saved edit resolves general advice without implying score confirmation. */
+export function hasSavedCorrectionReview(correction: Correction): boolean {
+  return validReviewScore(correction.teacher_score, correction.max_score)
+    && (correction.review_status === "edited" || correction.review_status === "confirmed");
+}
+
 function validReviewScore(value: number | null | undefined, maxScore: number): boolean {
   return typeof value === "number" && Number.isFinite(value) && Number.isFinite(maxScore) && maxScore > 0 && value >= 0 && value <= maxScore;
 }
@@ -300,7 +306,7 @@ export function correctionReviewBlocked(correction: Correction): boolean {
 /** One pending-review rule for the review queue, analysis, filters and charts. */
 export function correctionReviewAttention(correction: Correction): ReviewAttention {
   if (correctionReviewNextBlocked(correction)) return "blocking";
-  return !isCorrectionReviewConfirmed(correction) && (isLowConfidence(correction) || hasUnknownConfidence(correction) || hasPartialExperts(correction) || hasExpertDisagreement(correction)
+  return !hasSavedCorrectionReview(correction) && (isLowConfidence(correction) || hasUnknownConfidence(correction) || hasPartialExperts(correction) || hasExpertDisagreement(correction)
     || correctionReviewReasonIds(correction).some(reason => MATH_REVIEW_REASONS.includes(reason) || reason === "programming_extra_boundary")) ? "advisory" : "none";
 }
 
@@ -374,6 +380,7 @@ export const MATH_REVIEW_REASONS = [
 
 /** Display categories only: keep numeric disagreement filters/priority unchanged. */
 export function mathReviewLabels(correction: Correction, locale: Locale): string[] {
+  if (hasSavedCorrectionReview(correction)) return [];
   const reasons = correctionReviewReasonIds(correction);
   const specific = MATH_REVIEW_REASONS.slice(0, 4).filter(reason => reasons.includes(reason)
     || (reason === "math_expert_disagreement" && hasExpertDisagreement(correction)));
@@ -398,9 +405,9 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     math_expert_disagreement: "Expert disagreement; review suggested.",
     math_verification_conflict: "Verification evidence still needs checking.",
     math_proof_concern: "Key reasoning evidence needs checking.",
-    math_alternative_method: "The student used a materially different solution method.",
+    math_alternative_method: "Different approach from the reference; scored using the alternative rubric. Please check.",
     math_model_review: "The model suggests human review.",
-    math_method_review_incomplete: "Method reassessed; final joint review did not complete. Confirm or adjust the score.",
+    math_method_review_incomplete: "Check each expert’s scores and reasoning, then confirm the score for this question.",
     minority_veto: "Outlying expert score", parse_failed: "Could not parse result", degraded_to_single: "Some experts completed",
     transient_llm: "Model network error or timeout", llm_failed: "Model could not grade", quota_exhausted: "Quota exhausted", general: "Teacher review required",
   };
@@ -423,9 +430,9 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     math_expert_disagreement: "专家分歧，建议复核。",
     math_verification_conflict: "核验结果与评分依据待核对。",
     math_proof_concern: "关键推理依据待核对。",
-    math_alternative_method: "该生采用了与标答不同的解题思路。",
+    math_alternative_method: "解题思路与标答不同，按另解标准评分，请核对。",
     math_model_review: "模型建议人工复核。",
-    math_method_review_incomplete: "解法已重判，最终联合复核未完成。请确认或修改分数。",
+    math_method_review_incomplete: "请核对各专家评分及依据，确认本题得分。",
     score_spread_high: "评分差异较大",
     parse_failed: "模型返回的评分格式无法读取",
     degraded_to_single: "部分专家完成",
