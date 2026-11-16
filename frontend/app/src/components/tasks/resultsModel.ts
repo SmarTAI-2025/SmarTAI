@@ -337,8 +337,7 @@ export function correctionReviewNextBlocked(correction: Correction): boolean {
 
 export function pendingScoreReview(correction: Correction): string | undefined {
   if (correctionReviewReasonIds(correction).includes("math_method_review_incomplete") &&
-      !(validReviewScore(correction.teacher_score, correction.max_score) &&
-        (correction.review_status === "confirmed" || correction.teacher_score !== aiCorrectionScore(correction)))) {
+      !hasSavedCorrectionReview(correction)) {
     return "math_method_review_incomplete";
   }
   return pendingProgrammingReview(correction);
@@ -407,7 +406,7 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     math_proof_concern: "Key reasoning evidence needs checking.",
     math_alternative_method: "Different approach from the reference; scored using the alternative rubric. Please check.",
     math_model_review: "The model suggests human review.",
-    math_method_review_incomplete: "Check each expert’s scores and reasoning, then confirm the score for this question.",
+    math_method_review_incomplete: "Check each expert’s score and reasoning.",
     minority_veto: "Outlying expert score", parse_failed: "Could not parse result", degraded_to_single: "Some experts completed",
     transient_llm: "Model network error or timeout", llm_failed: "Model could not grade", quota_exhausted: "Quota exhausted", general: "Teacher review required",
   };
@@ -432,7 +431,7 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     math_proof_concern: "关键推理依据待核对。",
     math_alternative_method: "解题思路与标答不同，按另解标准评分，请核对。",
     math_model_review: "模型建议人工复核。",
-    math_method_review_incomplete: "请核对各专家评分及依据，确认本题得分。",
+    math_method_review_incomplete: "请核对各专家的评分和依据。",
     score_spread_high: "评分差异较大",
     parse_failed: "模型返回的评分格式无法读取",
     degraded_to_single: "部分专家完成",

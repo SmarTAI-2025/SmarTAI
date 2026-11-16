@@ -3,37 +3,6 @@ from collections import defaultdict
 import re
 
 
-def final_math_feedback(comment, steps, trace, language):
-    """Show the adopted vote, keeping review history in the private trace."""
-    from backend.skills.math_grading import TRACE_VERSION
-    if not trace or trace.get("version") != TRACE_VERSION or not isinstance(trace.get("assessment"), dict):
-        return comment, steps
-    assessment = trace["assessment"]
-    if trace.get("method_review") or trace.get("targeted_review"):
-        comment = assessment.get("comment", comment)
-    reason = trace.get("targeted_review", {}).get("reason")
-    if reason:
-        suffixes = ["\n定向复核依据：" + reason, "\nTargeted review: " + reason]
-        steps = [{**step, "desc": next((step["desc"][:-len(suffix)] for suffix in suffixes
-                                       if step["desc"].endswith(suffix)), step["desc"])} for step in steps]
-    decisions = assessment.get("part_decisions") or []
-    alternative = [part for part in decisions if part.get("method") == "alternative"
-                   and part.get("relevance") in {"partial", "complete", "incorrect"}]
-    notes = {
-        "zh": ("解题思路与标答不同，按另解标准评分。", "部分小问解题思路与标答不同，按另解标准评分。"),
-        "en": ("Different approach from the reference; scored using the alternative rubric.",
-               "Some parts use a different approach and are scored using the alternative rubric."),
-    }
-    # Replace only our own current-method note, never mathematical feedback.
-    for messages in notes.values():
-        for message in messages:
-            comment = comment.removesuffix("\n\n" + message)
-    if alternative:
-        note = notes["zh" if language == "zh" else "en"][len(alternative) != len(decisions)]
-        comment = (comment + "\n\n" + note).strip()
-    return comment, steps
-
-
 def join_expert_feedback(entries):
     """Retain attribution while showing identical explanations only once."""
     grouped = {}
@@ -163,13 +132,13 @@ def _feedback_context(run_id):
         final = {(event["payload"].get("student_id"), event["payload"].get("q_id")): event["payload"]
                  for event in events if event["message"] == MATH_TRACE_EVENT}
         if final:
-            return plans_from_snapshots(frozen.input_manifest or {}, events), final, frozen.setup.get("feedback_language", "en")
+            return plans_from_snapshots(frozen.input_manifest or {}, events), final
         sources = [event["payload"].get("source_run_id") for event in events
                    if event["message"] == "review_revision_created"]
         if len(sources) != 1 or not isinstance(sources[0], str):
             break
         run_id = sources[0]
-    return {}, {}, "en"
+    return {}, {}
 
 
 def concise_result_feedback(results):
@@ -184,7 +153,7 @@ def concise_result_feedback(results):
             by_run[result.grading_run_id].append(result)
     projected = {}
     for run_id, rows in by_run.items():
-        plans, final, language = _feedback_context(run_id)
+        plans, final = _feedback_context(run_id)
         for row in rows:
             saved = final.get((row.student_id, row.q_id), {}).get("experts") or []
             if not isinstance(saved, list):
@@ -195,36 +164,13 @@ def concise_result_feedback(results):
                            and item.get("provider_id") == expert.get("provider_id")
                            and item.get("provider") == expert.get("provider")]
                 steps = expert.get("steps", [])
-                comment = expert.get("comment", "")
                 if len(matches) == 1 and not expert.get("error_kind"):
-                    trace = matches[0].get("trace", {})
-                    steps = _concise_steps(steps, trace, plans.get(row.q_id))
-                    plan = plans.get(row.q_id)
-                    if plan and trace.get("plan_id") == plan.plan_id:
-                        comment, steps = final_math_feedback(comment, steps, trace, language)
-                rendered.append({**expert, "steps": steps, "comment": comment})
+                    steps = _concise_steps(steps, matches[0].get("trace", {}), plans.get(row.q_id))
+                rendered.append({**expert, "steps": steps})
             if rendered == row.ai_expert_results:
                 continue
             projected[row.id] = row.model_copy(update={
                 "ai_expert_results": rendered,
-                "ai_comment": _combined_comment(row.ai_comment, row.ai_expert_results, rendered),
                 "ai_steps": _combined_steps(row.ai_steps, row.ai_expert_results, rendered, row.ai_max_score),
             })
     return [projected.get(row.id, row) for row in results]
-
-
-def _combined_comment(comment, original, rendered):
-    """Keep existing summaries, replacing only their exact embedded vote text."""
-    if len(original) == 1 and comment == original[0].get("comment"):
-        return rendered[0]["comment"]
-    def combined(experts):
-        try:
-            return "\n\n———\n\n".join(
-                f"【{expert['provider']}（{expert['score']:.1f}/{expert['max_score']:.0f}, conf="
-                + (f"{expert['confidence']:.2f}" if expert.get("confidence") is not None else "unknown")
-                + f"）】\n{expert['comment']}" for expert in experts)
-        except (KeyError, TypeError, ValueError):
-            return None
-    if original and comment == combined(original):
-        return combined(rendered) or comment
-    return comment

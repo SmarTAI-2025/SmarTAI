@@ -79,7 +79,7 @@ describe("one-click grading review", () => {
   it.each(["zh-CN", "en-US"])("keeps review instructions outside final expert feedback (%s)", async locale => {
     state.locale = locale;
     const zh = locale === "zh-CN";
-    const note = zh ? "请核对各专家评分及依据，确认本题得分。" : "Check each expert’s scores and reasoning, then confirm the score for this question.";
+    const note = zh ? "请核对各专家的评分和依据。" : "Check each expert’s score and reasoning.";
     const alternative = zh ? "解题思路与标答不同，按另解标准评分。" : "Different approach from the reference; scored using the alternative rubric.";
     const experts = ["a", "b"].map((provider, index) => ({ provider, provider_id: provider, score: 10, max_score: 10,
       confidence: .95, comment: index ? alternative : "Final reference scoring.",
@@ -525,7 +525,7 @@ describe("one-click grading review", () => {
   });
   it("bulk confirmation handles valid score decisions and yellow advice while excluding missing scores", async () => {
     state.result.results = [{ student_id: "S1", corrections: [
-      correction("Q1", { score: 9, provisional_score: 9, teacher_score: 9, review_status: "edited", teacher_comment: "Keep this", initial_review_reasons: ["math_method_review_incomplete"] }),
+      correction("Q1", { score: 9, provisional_score: 9, review_status: "pending", teacher_comment: "Keep this", initial_review_reasons: ["math_method_review_incomplete"] }),
       correction("Q2", { review_status: "pending" }),
       correction("Q3", { score: null, provisional_score: null, review_status: "pending" }),
     ] }];

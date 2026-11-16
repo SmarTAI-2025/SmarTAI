@@ -62,7 +62,9 @@ async def test_only_final_grading_feedback_survives_public_roundtrip(db_case, er
     stop(db_case, run_id)
     before = [r.model_dump() for r in grades.list_results_for_run(run_id)]
     payload = task_facade.task_results(task_id=db_case[0], owner_id=db_case[1])
-    restored = next(c for s in payload["results"] for c in s["corrections"] if c["q_id"] == p.q_id)["expert_results"][0]
+    correction = next(c for s in payload["results"] for c in s["corrections"] if c["q_id"] == p.q_id)
+    restored = correction["expert_results"][0]
+    assert all(word not in correction["comment"] for word in ("PRIVATE", "解法已重判", "改判依据", "定向复核依据", "联合复核"))
     assert restored["score"] == (8 if errors or not final_change else 10)
     assert method_reason not in restored['comment']
     assert restored['comment'].count("解题思路与标答不同，按另解标准评分。") == 1

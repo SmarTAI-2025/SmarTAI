@@ -5,7 +5,7 @@ import pytest
 
 from backend.agents.multi_expert import _expert_to_correction
 from backend.domain.grading_review import review_state
-from backend.services.grading_feedback import _combined_comment, final_math_feedback
+from backend.services.math_final_feedback import _combined_comment, final_math_feedback
 from backend.skills import math_grading as grading
 from backend.skills.math_method_review import with_method_feedback
 from backend.tests.test_math_grading import expert_for
@@ -14,7 +14,8 @@ from backend.tests.test_math_method_review import case
 
 @pytest.mark.parametrize("language", ["zh", "en"])
 @pytest.mark.parametrize("method", ["reference", "alternative"])
-def test_public_feedback_uses_current_vote_and_keeps_private_history(method, language):
+@pytest.mark.parametrize("tail", ["", "\n工具核验与当前判断仍有待核对之处：请核对定义域。", "\nProof evidence to check: Check the reverse implication.\nEspecially the domain."])
+def test_public_feedback_uses_current_vote_and_keeps_private_history(method, language, tail):
     p, a, plan, experts, _ = case()
     expert = experts[method == "alternative"]
     trace = grading.read_math_trace(expert)
@@ -23,15 +24,17 @@ def test_public_feedback_uses_current_vote_and_keeps_private_history(method, lan
         "original_assessment": {"comment": "PRIVATE superseded feedback", "score": 1}}
     trace["method_review_pending"] = True
     trace["targeted_review"] = {"reason": "PRIVATE review process"}
+    trace["review_advisory"] = bool(tail)
     before_desc = expert.steps[0].desc
+    label = "\n定向复核依据：" if language == "zh" else "\nTargeted review: "
     expert = expert.model_copy(update={"comment": "PRIVATE previous score and 解法已重判",
-        "steps": [expert.steps[0].model_copy(update={"desc": before_desc + "\nTargeted review: PRIVATE review process"}), *expert.steps[1:]],
+        "steps": [expert.steps[0].model_copy(update={"desc": before_desc + label + "PRIVATE review process" + tail}), *expert.steps[1:]],
         "raw_output": json.dumps(trace)})
     before = expert.model_dump_json()
     shown = with_method_feedback(expert, language)
     assert shown.comment.startswith("The final scoring reason.")
     assert "PRIVATE" not in shown.comment
-    assert shown.steps[0].desc == before_desc
+    assert shown.steps[0].desc == before_desc + tail
     assert shown.score == expert.score and shown.confidence == expert.confidence
     assert len(shown.steps) == len(expert.steps)
     assert shown.raw_output == expert.raw_output and expert.model_dump_json() == before

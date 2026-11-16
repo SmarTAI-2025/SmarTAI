@@ -265,7 +265,7 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
 def with_method_feedback(expert, language, *, trace=None):
     """Expose the adopted method without narrating internal review history."""
     from backend.skills.math_grading import read_math_trace
-    from backend.services.grading_feedback import final_math_feedback
+    from backend.services.math_final_feedback import final_math_feedback
     trace = (read_math_trace(expert) or {}) if trace is None else trace
     if not (trace.get("method_review") or trace.get("targeted_review") or any(
             d.get("method") == "alternative" for d in trace.get("assessment", {}).get("part_decisions", []))):

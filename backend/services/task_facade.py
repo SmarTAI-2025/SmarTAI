@@ -63,7 +63,7 @@ from backend.db.models import (
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.grading_review import result_score_review_reason, teacher_resolved_score
+from backend.domain.grading_review import result_score_review_reason, teacher_resolved_review
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
 from backend.domain.errors import (
@@ -5534,7 +5534,7 @@ def _grading_request_response(task_id, run):
 
 
 def task_results(*, task_id: str, owner_id: str) -> dict:
-    from backend.services.grading_feedback import concise_result_feedback
+    from backend.services.math_final_feedback import final_result_feedback
     task = get_task(task_id=task_id, owner_id=owner_id, full=True)
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
@@ -5549,8 +5549,9 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
             "task_id": task_id,
             "error": _grading_failure_code(run),
         }
-    results = concise_result_feedback(grading_repository.list_results_for_run(run.id, include_missing=True))
     frozen_setup = workflow_repository.get_run_setup(run.id)
+    results = final_result_feedback(grading_repository.list_results_for_run(run.id, include_missing=True),
+        language=frozen_setup.setup.get("feedback_language", "en") if frozen_setup else "en")
     presentations = workflow_repository.list_student_presentations(task_id)
     grouped: dict[str, list] = defaultdict(list)
     for result in results:
@@ -5806,6 +5807,10 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         fixed_fields = {field for key, field in {"stem": "stem", "reference_answer": "answer", "criterion": "rubric", "test_cases": "programming_tests", "solution_code": "programming_tests"}.items()
                         if patch.get(key) and (patch[key].strip() if isinstance(patch[key], str) else patch[key])
                         != (original_problem[key].strip() if isinstance(original_problem.get(key), str) else original_problem.get(key))}
+        if fixed_fields and patch.get("review_status") is None:
+            # A previous whole-question confirmation cannot hide another field's
+            # still-open advice after this field is edited.
+            presentation["review_status"] = "edited"
         if fixed_fields:
             presentation["preparation_issues"] = [
                 {**issue, "status": "resolved"} if issue.get("status") == "open"
@@ -6463,8 +6468,9 @@ def _correction_review_blocks_finalization(result) -> bool:
     if result.result_status in education.NON_SCOREABLE_RESULT_STATUSES or not valid_score(result.effective_score):
         return True
     review = result.teacher_review or {}
-    return bool(result_score_review_reason(result)) and not teacher_resolved_score(
-        result.ai_score, review.get("new_score"), result.ai_max_score, review.get("confirmed"), result.ai_steps,
+    reason = result_score_review_reason(result)
+    return bool(reason) and not teacher_resolved_review(
+        reason, result.ai_score, review.get("new_score"), result.ai_max_score, review.get("confirmed"), result.ai_steps, saved=bool(review),
     )
 
 

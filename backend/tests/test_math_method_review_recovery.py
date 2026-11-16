@@ -136,7 +136,7 @@ async def test_unfinished_final_review_keeps_valid_regrade_but_requires_teacher_
         ai_expert_results=[e.model_dump() for e in result], teacher_review=None)
     assert task_facade._correction_review_blocks_finalization(dto)
     dto.teacher_review = {"new_score": 10, "confirmed": False}
-    assert task_facade._correction_review_blocks_finalization(dto)
+    assert not task_facade._correction_review_blocks_finalization(dto)
     dto.teacher_review = {"new_score": 10, "confirmed": True}
     assert not task_facade._correction_review_blocks_finalization(dto)
     dto.teacher_review = {"new_score": 9, "confirmed": False}
@@ -155,7 +155,7 @@ async def test_failed_final_review_without_changed_score_preserves_existing_poli
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("resolve", ["confirm", "edit"])
+@pytest.mark.parametrize("resolve", ["confirm", "edit", "comment"])
 async def test_saved_reassessment_requires_decision_before_reports_and_release(db_case, resolve):
     from sqlalchemy import select
     from backend.db import grading_repository as grades
@@ -213,9 +213,7 @@ async def test_saved_reassessment_requires_decision_before_reports_and_release(d
             task_facade.generate_artifacts(**args, expected_revision=state["workflow_revision"])
         assert not task_facade.artifact_index(**args)["versions"]
     assert_blocked()
-    grades.add_teacher_review(saved.id, teacher_id=db_case[1], new_score=10, new_comment="Only a note", confirm=False)
-    assert_blocked()
-    wanted = 10 if resolve == "confirm" else 9
+    wanted = 9 if resolve == "edit" else 10
     grades.add_teacher_review(saved.id, teacher_id=db_case[1], new_score=wanted,
                              new_comment="Teacher decision", confirm=resolve == "confirm")
     state = task_facade.finalization(**args)

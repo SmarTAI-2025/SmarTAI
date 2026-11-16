@@ -33,12 +33,14 @@ def test_answer_save_clears_yellow_without_confirmation_but_keeps_unrepaired_fai
     assert restored == answer
 
 
-def test_question_edits_resolve_only_affected_field_and_confirmation_handles_remaining_advice(review_compiler):
+@pytest.mark.parametrize("initial_status", ["needs_review", "confirmed"])
+def test_question_edits_resolve_only_affected_field_and_confirmation_handles_remaining_advice(review_compiler, initial_status):
     _, args = _case(flags=[])
     with session_scope() as session:
         question = session.scalar(select(AssignmentQuestionRecord))
         source = copy.deepcopy(question.source or {})
         pres = source.setdefault("presentation", {})
+        pres["review_status"] = initial_status
         pres["preparation_issues"] = [dict(issue_id=field, q_id="q1", field=field, code="low_confidence",
             severity="warning", status="open", details={"confidence": .2}) for field in ["stem", "answer"]]
         question.source = source
@@ -47,6 +49,7 @@ def test_question_edits_resolve_only_affected_field_and_confirmation_handles_rem
         expected_revision=before["workflow_revision"])
     statuses = {issue["issue_id"]: issue["status"] for issue in changed["problem"]["preparation_issues"]}
     assert statuses["stem"] == "resolved" and statuses["answer"] == "open"
+    assert changed["problem"]["review_status"] == "edited"
     confirmed = task_facade.update_problem(**args, q_id="q1", patch={"review_status": "confirmed"},
         expected_revision=changed["workflow_revision"])
     assert all(issue["status"] != "open" for issue in confirmed["problem"]["preparation_issues"])

@@ -25,9 +25,9 @@ describe("grading review attention", () => {
     expect(correctionReviewNextBlocked(pending)).toBe(true);
     expect(correctionReviewBlocked(pending)).toBe(false);
     expect(correctionReviewNotes(pending, "zh-CN")).toContainEqual({ severity: "blocking",
-      label: "请核对各专家评分及依据，确认本题得分。" });
+      label: "请核对各专家的评分和依据。" });
     expect(correctionReviewNotes(pending, "en-US")[0].label).toContain("Check each expert");
-    expect(correctionReviewNextBlocked({ ...pending, teacher_score: 10, review_status: "edited" })).toBe(true);
+    expect(correctionReviewNextBlocked({ ...pending, teacher_score: 10, review_status: "edited" })).toBe(false);
     expect(correctionReviewNextBlocked({ ...pending, teacher_score: 10, review_status: "confirmed" })).toBe(false);
     expect(correctionReviewNextBlocked({ ...pending, teacher_score: 9, review_status: "edited" })).toBe(false);
     expect(pending.score).toBe(10);
@@ -178,10 +178,12 @@ describe("overview disagreement policy", () => {
       teacher_comment: "Check the intermediate work.", initial_review_reasons: ["math_alternative_method"] });
     expect(correctionReviewAttention(value)).toBe("none");
     expect(correctionReviewNotes(value, "zh-CN")).toEqual([]);
-    const required = { ...value, initial_review_reasons: ["math_method_review_incomplete", "math_alternative_method"] };
+    const required = { ...value, score: null, provisional_score: null, teacher_score: null,
+      initial_review_reasons: ["math_alternative_method"] };
     expect(correctionReviewAttention(required)).toBe("blocking");
     expect(correctionReviewNotes(required, "zh-CN")).toEqual([
-      { label: "请核对各专家评分及依据，确认本题得分。", severity: "blocking" },
+      { label: "缺少有效分数，请填写", severity: "blocking" },
+      { label: "解题思路与标答不同，按另解标准评分，请核对。", severity: "advisory" },
     ]);
   });
 
