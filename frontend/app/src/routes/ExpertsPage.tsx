@@ -415,7 +415,7 @@ export function ExpertsPage() {
                     <th className="px-3 text-center align-middle font-medium">
                       {zh ? "调用限制" : "Limits"}
                     </th>
-                    <th className="px-5 text-right align-middle font-medium">
+                    <th className="px-5 text-center align-middle font-medium">
                       {zh ? "操作" : "Actions"}
                     </th>
                   </tr>
@@ -836,7 +836,7 @@ function ExpertActions({
   const zh = locale === "zh-CN";
   if (expert.editable === false) {
     return (
-      <div className="flex min-w-0 flex-col items-end gap-1">
+      <div className="flex min-w-0 flex-col items-center gap-1 text-center">
         <span className="inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-950/50 dark:text-blue-200">
           {zh ? "平台托管" : "Platform managed"}
         </span>
@@ -845,7 +845,7 @@ function ExpertActions({
     );
   }
   return (
-    <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
+    <div className="flex min-w-0 flex-wrap items-center justify-center gap-1">
       <RowAction label={zh ? "编辑" : "Edit"} onClick={onEdit} disabled={disabled}>
         <Pencil aria-hidden="true" size={14} />
       </RowAction>

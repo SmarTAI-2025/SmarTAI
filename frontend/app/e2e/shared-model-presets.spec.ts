@@ -73,6 +73,14 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) {
     for (const model of models) {
       const item = row(`OpenAI · ${model.model}`);
       await expect(item.getByText(zh ? "平台托管" : "Platform managed", { exact: true })).toBeVisible();
+      if (width >= 640) {
+        const center = await item.evaluate(row => {
+          const cell = row.querySelector("td:last-child")!.getBoundingClientRect();
+          const badge = row.querySelector("td:last-child span")!.getBoundingClientRect();
+          return Math.abs((cell.left + cell.right - badge.left - badge.right) / 2);
+        });
+        expect(center).toBeLessThan(1);
+      }
       await expect(item.getByText(zh ? "不可编辑修改" : "Cannot be edited", { exact: true })).toBeVisible();
       const textState = item.getByRole("button", { name: zh ? "验证（可选）" : "Verify (optional)" }).locator("..");
       await expect(textState).toContainText(zh ? "未验证" : "Unchecked");
