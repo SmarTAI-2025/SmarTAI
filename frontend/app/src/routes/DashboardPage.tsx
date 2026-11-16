@@ -14,7 +14,7 @@ import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { modelDisplayName } from "@/lib/modelPresentation";
 import { formatTaskTime, getTaskDestination, isTaskPaused, isTaskProcessing } from "@/lib/taskFlow";
-import { TASK_STAGE_KEYS as STAGE_KEYS, TASK_ACTION_KEYS as ACTION_KEYS, taskStatusTone } from "@/lib/taskPresentation";
+import { TASK_STAGE_KEYS as STAGE_KEYS, TASK_ACTION_KEYS as ACTION_KEYS, taskStatusTone, selectTaskSnapshot } from "@/lib/taskPresentation";
 import type { ExpertConfig, TaskLite, TaskStatus } from "@/types";
 
 const PROCESSING_STATUSES = new Set<TaskStatus>([
@@ -351,11 +351,7 @@ function useDashboardTask(listedTask: TaskLite) {
     enabled: processing || isTaskPaused(listedTask.status),
     refetchInterval: processing ? 1_500 : false,
   });
-  // Keep stage, actions, percentage and ETA in the same snapshot. A cached
-  // previous run must not replace a newer list revision after resume/retry.
-  return data && data.workflow_revision >= listedTask.workflow_revision
-    ? { ...listedTask, ...data }
-    : listedTask;
+  return selectTaskSnapshot(listedTask, data);
 }
 
 function DesktopTaskRow({ task: listedTask, courseTags, deletion }: DashboardTaskProps) {

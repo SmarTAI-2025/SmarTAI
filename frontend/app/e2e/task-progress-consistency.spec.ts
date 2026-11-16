@@ -88,6 +88,57 @@ for (const scenario of [
 }
 
 for (const width of [1440, 390]) {
+  test(`completed list survives an equal-revision running cache at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.addInitScript(() => {
+      localStorage.setItem("smartai_token", "synthetic-teacher");
+      localStorage.setItem("smartai_locale", "zh-CN");
+    });
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    const task = { task_id: "completed-list", name: "同版本完成测试", owner_id: "teacher", workflow_revision: 3,
+      status: "grading", problem_count: 7, student_count: 31, created_at: 1, updated_at: 2,
+      tag_ids: [], kb_docs: {}, kb_doc_count: 0, grading_job_id: "run" };
+    let stateRequests = 0;
+    await page.route(`${backend}/**`, async route => {
+      const request = route.request(), url = new URL(request.url()), path = url.pathname;
+      const json = (value: unknown) => route.fulfill({ json: value });
+      if (request.method() === "OPTIONS") return route.fulfill({ status: 204,
+        headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" } });
+      if (path === "/auth/me") return json({ id: "teacher", username: "示例教师", role: "teacher", is_active: true });
+      if (path === "/auth/activity") return json({ token: "synthetic-teacher" });
+      if (path === "/knowledge/activity") return json({ items: [], total: 0, active_count: 0 });
+      if (path === "/tasks/") return json({ [task.task_id]: { ...task, status: "graded", progress_percent: 100, eta_seconds: 0 } });
+      if (path === `/tasks/${task.task_id}`) return json(task);
+      if (path.endsWith("/state")) {
+        stateRequests++;
+        return json({ ...task, progress_percent: 44, eta_seconds: null, progress: {
+          phase: "grading", workflow: "grading", total_students: 31, total_questions: 7,
+          completed_units: 4, messages: [], active: [] } });
+      }
+      if (path.endsWith("/grading/activity")) return json({ run_id: "run", events: [], cursor: 0, has_more: false });
+      return json([]);
+    });
+    // Navigate within the app so React Query retains the running state cache.
+    await page.goto(`/tasks/${task.task_id}/grading/progress`);
+    await expect(page.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "44");
+    const requestsBeforeDashboard = stateRequests;
+    await page.getByRole("link", { name: "SmarTAI", exact: true }).click();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    const region = page.getByRole("region", { name: "需要关注的任务" });
+    const row = width === 1440 ? region.getByRole("row").filter({ hasText: task.name }) : region.locator("article").filter({ hasText: task.name });
+    await expect(row.getByText("100%", { exact: width === 1440 })).toBeVisible();
+    await expect(row.getByText("批改完成", { exact: true })).toBeVisible();
+    await expect(row.getByText("进入复核", { exact: true })).toBeVisible();
+    await expect(row.getByRole("link", { name: `打开任务 · ${task.name}`, exact: true })).toHaveAttribute("href", `/tasks/${task.task_id}/review`);
+    expect(stateRequests).toBe(requestsBeforeDashboard);
+    expect(errors).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath("equal-revision-completed.png") });
+  });
+}
+
+for (const width of [1440, 390]) {
   for (const scenario of ["paused", "older-state", "completed"] as const) {
     test(`dashboard keeps a coherent saved snapshot: ${scenario} at ${width}px`, async ({ page }, testInfo) => {
       const errors: string[] = [];
@@ -100,11 +151,11 @@ for (const width of [1440, 390]) {
       });
       const paused = scenario === "paused";
       const completed = scenario === "completed";
-      const listed = { task_id: "saved-progress", name: "保留进度测试", owner_id: "teacher", workflow_revision: completed ? 1 : 3,
+      const listed = { task_id: "saved-progress", name: "保留进度测试", owner_id: "teacher", workflow_revision: 3,
         status: paused ? "grading_paused" : "grading", problem_count: 7, student_count: 31,
         created_at: 1, updated_at: 2, tag_ids: [], kb_docs: {}, kb_doc_count: 0, grading_job_id: "run",
         progress_percent: paused ? null : 25, eta_seconds: null };
-      const snapshot = { ...listed, workflow_revision: paused ? 3 : 2, status: paused ? "grading_paused" : "graded",
+      const snapshot = { ...listed, workflow_revision: paused || completed ? 3 : 2, status: paused ? "grading_paused" : "graded",
         progress_percent: paused ? 44 : 100, eta_seconds: paused ? null : 0,
         progress: { phase: "paused", workflow: "grading", total_students: 31, total_questions: 7,
           completed_units: 4, saved_units: 199, fully_saved_units: 80, pending_finalization_units: 76,

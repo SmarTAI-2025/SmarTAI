@@ -1,5 +1,18 @@
 import type { MessageKey } from "@/i18n/messages";
-import type { TaskStatus } from "@/types";
+import type { TaskLite, TaskStatus } from "@/types";
+
+export function selectTaskSnapshot(listed: TaskLite, state?: TaskLite): TaskLite {
+  if (!state || state.workflow_revision < listed.workflow_revision) return listed;
+  if (state.workflow_revision === listed.workflow_revision) {
+    // Automatic completion can share a workflow revision with its running
+    // snapshot. Preserve completion in either source before comparing time.
+    const completedStages: TaskStatus[] = ["graded", "finalized"];
+    const listedStage = completedStages.indexOf(listed.status);
+    const stateStage = completedStages.indexOf(state.status);
+    if (listedStage > stateStage || (listedStage === stateStage && listed.updated_at > state.updated_at)) return listed;
+  }
+  return { ...listed, ...state };
+}
 
 // Dashboard and history must present the same server-derived stage.
 export const TASK_STAGE_KEYS: Record<TaskStatus, MessageKey> = {
