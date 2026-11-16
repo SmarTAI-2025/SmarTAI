@@ -233,6 +233,7 @@ export interface StepScore {
   is_correct: boolean;
   score: number;
   deductions?: { desc: string; points: number }[] | null;
+  deduction_base?: number | null;
   is_alternative?: boolean;
 }
 

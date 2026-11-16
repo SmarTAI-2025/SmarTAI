@@ -77,6 +77,8 @@ class StepScore(BaseModel):
     score: float = Field(ge=0, allow_inf_nan=False)
     # None is an awarded step; [] is a deduction subtotal with no charged errors.
     deductions: list[ScoreDeduction] | None = Field(default=None, exclude_if=lambda v: v is None)
+    deduction_base: float | None = Field(default=None, ge=0, allow_inf_nan=False, exclude_if=lambda v: v is None,
+        description="Server-computed balance before deductions, used only to reconcile displayed rounding.")
     is_alternative: bool = Field(default=False, exclude_if=lambda v: not v)
 
 

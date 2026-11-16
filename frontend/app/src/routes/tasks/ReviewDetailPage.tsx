@@ -33,6 +33,7 @@ import {
   formatConfidence,
   formatScore,
   scoringRows,
+  formatScoringRow,
   reviewConfirmationScore,
   type QuestionSummary,
   type StudentSummary,
@@ -877,9 +878,10 @@ function ScoringSteps({ locale, steps }: { locale: Locale; steps?: StepScore[] }
       <li key={`${step.step_no}-${index}`} className="grid grid-cols-[24px_minmax(0,1fr)_auto] gap-2 rounded-[7px] bg-muted/55 px-3 py-2 text-[11px] leading-5">
         <span className="font-semibold text-muted-foreground">{index + 1}</span>
         <MarkdownMath className="min-w-0 text-foreground">{step.desc}</MarkdownMath>
-        <span className={cn("font-semibold", step.is_correct ? "text-emerald-600" : "text-amber-600")}>{formatScore(step.score, undefined, step.part_id ? 2 : 1)} {tx(locale, "分", "pts")}</span>
+        <span className={cn("font-semibold", step.is_correct ? "text-emerald-600" : "text-amber-600")}>{formatScoringRow(step)} {tx(locale, "分", "pts")}</span>
       </li>
     ))}</ol>
+    {rows.some(row => row.roundedDeduction) ? <p className="mt-2 text-[11px] text-muted-foreground">{tx(locale, "扣分按累计余额取两位小数，明细合计与净分一致。", "Amounts use rounded running balances so their sum matches the net score.")}</p> : null}
   </div>;
 }
 

@@ -40,6 +40,7 @@ def test_deductions_have_one_net_score_and_only_actual_charges(method, errors):
     assert score == max(0, 10-errors)
     assert len(steps) == 1 and steps[0].item_id is None
     assert steps[0].score == score
+    assert steps[0].deduction_base == 10
     assert steps[0].is_alternative == (method == "alternative")
     assert [d.points for d in steps[0].deductions] == [1]*min(errors, 10)
     assert StepScore.model_validate_json(steps[0].model_dump_json()) == steps[0]
@@ -76,6 +77,21 @@ def test_alternative_charges_ignore_same_named_primary_rule_limits():
     saved = [dict(step_no=1, part_id="p", score=7, is_correct=False, desc="Saved explanation")]
     projected = _part_steps(saved, SimpleNamespace(part_decisions=[decision()]), rubric)
     assert [d["points"] for d in projected[0]["deductions"]] == [1, 1, 1]
+
+
+@pytest.mark.parametrize("rate,errors,minimum,expected", [(1, 7, {"fraction": "1/3"}, 3.33), (.125, 3, {"points": 0}, 9.63)])
+def test_fractional_charges_keep_exact_values_and_authoritative_display_base(rate, errors, minimum, expected):
+    from types import SimpleNamespace
+    from backend.services.grading_feedback import _part_steps
+    rubric = rules(alternative={"deduct_per_error": rate, "minimum": minimum})
+    d = decision(errors=errors)
+    score, steps = settle_parts(rubric, [d], ANSWER, rubric.stem)
+    assert score == expected and steps[0].deduction_base == 10
+    assert steps[0].deductions[0].points == rate
+    legacy = [{k: v for k, v in steps[0].model_dump().items() if k not in {"deductions", "deduction_base"}}]
+    projected = _part_steps(legacy, SimpleNamespace(part_decisions=[d]), rubric)
+    assert projected[0]["deduction_base"] == 10 and projected[0]["score"] == expected
+    assert projected[0]["deductions"] == [item.model_dump() for item in steps[0].deductions]
 
 
 @pytest.mark.parametrize("method", ["reference","minor_variant"])
@@ -119,6 +135,7 @@ def test_synthesis_keeps_deduction_evidence_without_adding_score_leaves(monkeypa
         experts.append(ExpertResult(provider=f"model-{count}",score=score,max_score=10,comment="",steps=steps))
     rows=weighted_math_steps(experts,[Decimal(1),Decimal(1)],10,8.5)
     assert [r.score for r in rows]==[8.5]
+    assert rows[0].deduction_base == 10
     assert [d.points for d in rows[0].deductions]==[.5,.5,.5]
     assert rows[0].is_alternative
 

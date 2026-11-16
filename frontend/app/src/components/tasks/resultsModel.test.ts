@@ -15,6 +15,7 @@ import {
   reviewReasonLabel,
   summarizeReviewScoreSources,
   scoringRows,
+  formatScoringRow,
 } from "./resultsModel";
 
 it("shows only charged errors for a deduction subtotal and preserves step awards", () => {
@@ -26,7 +27,22 @@ it("shows only charged errors for a deduction subtotal and preserves step awards
   expect(subtotal.score).toBe(7);
   expect(scoringRows([{ ...subtotal, score: 10, deductions: [] }])).toEqual([]);
   const step = { step_no: 1, desc: "First rubric goal", score: 0, is_correct: false };
-  expect(scoringRows([step])).toEqual([{ ...step, deduction: false }]);
+  expect(scoringRows([step])).toEqual([{ ...step, deduction: false, roundedDeduction: false }]);
+});
+
+it.each([
+  { net: 3.33, base: 10, amounts: [1, 1, 1, 1, 1, 1, 2 / 3], shown: ["-1", "-1", "-1", "-1", "-1", "-1", "-0.67"] },
+  { net: 9.63, base: 10, amounts: [.125, .125, .125], shown: ["-0.12", "-0.13", "-0.12"] },
+  { net: 4.67, base: 5, amounts: [.125, .125, 1 / 12], shown: ["-0.12", "-0.13", "-0.08"] },
+])("reconciles displayed charges with the saved net $net", ({ net, base, amounts, shown }) => {
+  const step = { step_no: 1, part_id: "p", score: net, deduction_base: base, desc: "Net", is_correct: false,
+    deductions: amounts.map((points, i) => ({ desc: `Equation ${i} loses a solution.`, points })) };
+  const original = structuredClone(step);
+  const rows = scoringRows([step]);
+  expect(rows.map(formatScoringRow)).toEqual(shown);
+  expect(Math.round((base + rows.reduce((sum, row) => sum + row.score, 0)) * 100)).toBe(Math.round(net * 100));
+  expect(rows.some(row => row.roundedDeduction)).toBe(true);
+  expect(step).toEqual(original);
 });
 
 function correction(patch: Partial<Correction> = {}): Correction {

@@ -183,3 +183,66 @@ for (const demo of [false, true]) for (const locale of ["zh-CN", "en-US"]) {
     expect(errors).toEqual([]);
   });
 }
+
+for (const surface of ["teacher", "demo"]) for (const width of [390, 1440]) {
+  test(`fractional deductions reconcile on ${surface} at ${width}px`, async ({ page }, testInfo) => {
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    await page.setViewportSize({ width, height: 1000 });
+    await page.addInitScript(({ surface, taskId }) => {
+      localStorage.setItem("smartai_locale", "en-US");
+      localStorage.setItem("smartai_token", "synthetic-teacher-token");
+      if (surface === "demo") {
+        sessionStorage.setItem("smartai_frontier_token", "synthetic-guest-token");
+        sessionStorage.setItem("smartai_frontier_owner", "shared-owner");
+        sessionStorage.setItem("smartai_frontier_generation", "1");
+        sessionStorage.setItem("smartai_frontier_tasks", JSON.stringify([taskId]));
+      }
+    }, { surface, taskId });
+    const examples = [
+      { score: 3.33, points: [1, 1, 1, 1, 1, 1, 2 / 3], expected: ["-1", "-1", "-1", "-1", "-1", "-1", "-0.67"] },
+      { score: 9.63, points: [.125, .125, .125], expected: ["-0.12", "-0.13", "-0.12"] },
+    ];
+    const corrections = examples.map((example, index) => {
+      const comment = `Review ${index + 1}: each cited equation loses a solution; the frozen deduction policy applies.`;
+      const steps = [{ step_no: 1, part_id: "p", score: example.score, deduction_base: 10, is_correct: false, is_alternative: true,
+        desc: "Net balance", deductions: example.points.map((points, n) => ({ desc: `Equation ${n + 1} cancels a factor without checking its zero.`, points })) }];
+      return { ...results[0].corrections[0], q_id: `q${index + 1}`, score: example.score, provisional_score: example.score,
+        comment, steps, expert_results: [{ provider: `Fractional model ${index + 1}`, provider_id: "fractional", score: example.score, max_score: 10, confidence: .99, comment, steps }], synthesis_method: "single" };
+    });
+    const current = { ...task, problem_data, student_data: { S1: { ...student_data.S1,
+      stu_ans: student_data.S1.stu_ans.map((answer, index) => ({ ...answer, number: String(index + 1), type: "reasoning" })) } } };
+    await page.route(`${backend}/**`, async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" } });
+      if (path === "/auth/me") return route.fulfill({ json: { id: "shared-owner", username: "Synthetic teacher", role: "teacher", is_active: true } });
+      if (path === "/auth/activity") return route.fulfill({ json: { token: "synthetic-teacher-token" } });
+      if (path === `/tasks/${taskId}` || path.endsWith("/state")) return route.fulfill({ json: current });
+      if (path.endsWith("/grading-setup")) return route.fulfill({ json: { configured: true, grading_setup: {}, available_experts: [] } });
+      if (path.endsWith("/result")) return route.fulfill({ json: { ...current, primary_provider_id: "fractional", results: [{ ...results[0], corrections }] } });
+      if (path.endsWith("/finalization")) return route.fulfill({ json: { task_id: taskId, remaining_review_count: 0, ready_for_confirmation: true } });
+      return route.fulfill({ json: [] });
+    });
+    if (surface === "demo") await page.goto(`/frontier/live?taskId=${taskId}`);
+    for (const [index, example] of examples.entries()) {
+      if (surface === "teacher") await page.goto(`/tasks/${taskId}/review/S1/q${index + 1}`);
+      const area = surface === "teacher" ? page.locator(`[data-question-id="q${index + 1}"]`).getByRole("region", { name: "SmarTAI Grading Result" }) : page.locator(".demo-content-tabs");
+      if (surface === "teacher") await area.getByText("View Original Model Results").click();
+      const panel = surface === "teacher" ? area.getByRole("tabpanel") : area.locator("section").filter({ has: page.getByText(`Fractional model ${index + 1}`, { exact: true }) }).last();
+      if (surface === "demo") {
+        await expect(area.getByText(corrections[index].comment, { exact: true })).toHaveCount(1);
+        await panel.locator("summary").click();
+      }
+      const amounts = await panel.locator("li > span:last-child").allTextContents();
+      expect(amounts).toEqual(example.expected.map(value => `${value} pts`));
+      expect(Math.round((10 + amounts.reduce((total, value) => total + parseFloat(value), 0)) * 100)).toBe(Math.round(example.score * 100));
+      await expect(panel.getByText(corrections[index].comment, { exact: true })).toBeVisible();
+      await panel.screenshot({ path: testInfo.outputPath(`fractional-${surface}-${index}-${width}.png`) });
+    }
+    await expect(page).toHaveTitle(/SmarTAI/i);
+    await expect(page.locator("vite-error-overlay")).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    expect(errors).toEqual([]);
+  });
+}

@@ -327,6 +327,7 @@ def settle_parts(rules, decisions, answer, question):
     total = Fraction(0)
     rows = []
     deduction_details = {}
+    rules_by_id = {part.id: part for part in rules.parts}
     for part in rules.parts:
         d = by_id[part.id]
         scope = part.stem or question
@@ -583,6 +584,9 @@ def settle_parts(rules, decisions, answer, question):
                 is_correct=full,
                 score=float(current - previous),
                 deductions=deduction_details.get(part) if step is None else None,
+                deduction_base=(float(rules_by_id[part].alternative.maximum.resolve(rules_by_id[part].total_pts)
+                    if by_id[part].method == "alternative" else rules_by_id[part].total_pts)
+                    if step is None and part in deduction_details else None),
                 is_alternative=bool(part and by_id[part].method == "alternative"),
             )
         )

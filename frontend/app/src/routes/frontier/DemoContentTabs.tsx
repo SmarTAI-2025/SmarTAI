@@ -1,7 +1,7 @@
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
-import { aiCorrectionScore, buildResultsModel, formatScore, scoringRows, validExpertResults } from "@/components/tasks/resultsModel";
+import { aiCorrectionScore, buildResultsModel, formatScore, formatScoringRow, scoringRows, validExpertResults } from "@/components/tasks/resultsModel";
 import type { Locale } from "@/i18n/messages";
 import type { StepScore, TaskResultResponse } from "@/types";
 
@@ -72,13 +72,16 @@ function DemoGradingDetails({ result, taskId, locale }: { result: TaskResultResp
             {total !== null ? <span className="shrink-0 rounded-full bg-primary/5 px-2 py-1 text-[11px] font-semibold text-primary">{formatScore(total)} / {formatScore(max)}</span> : null}
           </div>
           <div className="mt-3 grid gap-2 border-t pt-3">
-            {student.corrections.map((correction, index) => <section key={`${correction.q_id}-${index}`} className="rounded-md bg-muted/45 px-3 py-2">
+            {student.corrections.map((correction, index) => {
+              const experts = validExpertResults(correction);
+              const repeatedComment = experts.length === 1 && correction.comment?.trim() && correction.comment.trim() === experts[0].comment?.trim();
+              return <section key={`${correction.q_id}-${index}`} className="rounded-md bg-muted/45 px-3 py-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[11px] font-bold text-primary">{labels.get(correction.q_id) ?? correction.q_id}</span>
                 <span className="shrink-0 rounded-full bg-primary/5 px-2 py-1 text-[11px] font-semibold text-primary">{scores[index] === null ? (zh ? "无有效分数" : "No valid score") : `${formatScore(scores[index])} / ${formatScore(correction.max_score)}`}</span>
               </div>
-              <MarkdownMath className="mt-2 text-[12px] leading-5 text-foreground">{correction.comment || (zh ? "SmarTAI 未返回文字说明。" : "SmarTAI returned no written rationale.")}</MarkdownMath>
-              {validExpertResults(correction).length ? validExpertResults(correction).map((expert, expertIndex) =>
+              {!repeatedComment ? <MarkdownMath className="mt-2 text-[12px] leading-5 text-foreground">{correction.comment || (zh ? "SmarTAI 未返回文字说明。" : "SmarTAI returned no written rationale.")}</MarkdownMath> : null}
+              {experts.length ? experts.map((expert, expertIndex) =>
                 <section key={`${expert.provider_id ?? expert.provider}-${expertIndex}`} className="mt-3 border-t pt-2">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold">
                     <span className="min-w-0 break-words">{expert.provider}</span>
@@ -87,7 +90,7 @@ function DemoGradingDetails({ result, taskId, locale }: { result: TaskResultResp
                   <MarkdownMath className="mt-1 text-[12px] leading-5">{expert.comment}</MarkdownMath>
                   <DemoScoringEvidence steps={expert.steps} zh={zh} />
                 </section>) : <DemoScoringEvidence steps={correction.steps} zh={zh} />}
-            </section>)}
+            </section>; })}
           </div>
         </article>;
       })}
@@ -104,8 +107,9 @@ function DemoScoringEvidence({ steps, zh }: { steps: StepScore[]; zh: boolean })
       <ol className="mt-2 space-y-2">{rows.map((step, index) => <li key={`${step.step_no}-${index}`} className="grid grid-cols-[24px_minmax(0,1fr)_auto] gap-2 rounded-[7px] bg-muted/55 px-3 py-2 text-[11px] leading-5">
         <span className="font-semibold text-muted-foreground">{index + 1}</span>
         <MarkdownMath className="min-w-0 text-foreground">{step.desc}</MarkdownMath>
-        <span className={`font-semibold ${step.is_correct ? "text-accent" : "text-warning"}`}>{formatScore(step.score)} {zh ? "分" : "pts"}</span>
+        <span className={`font-semibold ${step.is_correct ? "text-accent" : "text-warning"}`}>{formatScoringRow(step)} {zh ? "分" : "pts"}</span>
       </li>)}</ol>
+      {rows.some(row => row.roundedDeduction) ? <p className="mt-2 text-[11px] text-muted-foreground">{zh ? "扣分按累计余额取两位小数，明细合计与净分一致。" : "Amounts use rounded running balances so their sum matches the net score."}</p> : null}
     </details> : null}
   </>;
 }

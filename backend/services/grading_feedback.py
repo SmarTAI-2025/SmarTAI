@@ -74,11 +74,12 @@ def _part_steps(steps, assessment, rules):
             cap = part.alternative.maximum.resolve(part.total_pts) if alternative else Fraction(str(part.total_pts))
             details = charged_deductions(part, decision, cap)
             expected = float(cap) - sum(item.points for item in details)
-            if abs(expected - step["score"]) > .005:
+            if abs(expected - step["score"]) > .005 + 1e-9:
                 continue  # A differing saved score is not permission to invent charges.
         elif step["score"] != 0:
             continue
         replacements[index] = [{**step, "deductions": [item.model_dump() for item in details],
+                                "deduction_base": float(part.alternative.maximum.resolve(part.total_pts) if alternative else part.total_pts),
                                 **({"is_alternative": True} if alternative else {})}]
     rows = [item for i, step in enumerate(steps) for item in replacements.get(i, [step])]
     return [{**step, "step_no": i} for i, step in enumerate(rows, 1)]

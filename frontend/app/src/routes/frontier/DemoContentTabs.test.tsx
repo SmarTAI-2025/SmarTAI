@@ -23,6 +23,31 @@ function view(stage: DemoContentStage, locale: Locale = "en-US", gradingResult =
 }
 
 describe("DemoContentTabs", () => {
+  it.each([true, false])("keeps one copy of a single expert's repeated comment (same=%s)", same => {
+    const graded = result();
+    const correction = graded.results![0].corrections[0];
+    correction.expert_results = [{ provider: "Only model", score: 4, max_score: 5, confidence: .9,
+      comment: same ? correction.comment : "Distinct expert explanation", steps: correction.steps }];
+    render(view("results", "en-US", graded));
+    expect(screen.getAllByText(correction.comment)).toHaveLength(1);
+    expect(screen.getByText("Only model")).toBeVisible();
+    if (!same) expect(screen.getByText("Distinct expert explanation")).toBeVisible();
+  });
+
+  it.each(["zh-CN", "en-US"] as const)("shows additive fractional deductions (%s)", locale => {
+    const graded = result();
+    const correction = graded.results![0].corrections[0];
+    Object.assign(correction, { score: 9.63, provisional_score: 9.63, max_score: 10,
+      steps: [{ step_no: 1, part_id: "p", score: 9.63, deduction_base: 10, is_correct: false,
+        deductions: [1, 2, 3].map(i => ({ desc: `Equation ${i} loses a solution.`, points: .125 })), desc: "Net" }] });
+    render(view("results", locale, graded));
+    fireEvent.click(screen.getByText(locale === "zh-CN" ? "扣分点" : "Deductions", { exact: false }));
+    const unit = locale === "zh-CN" ? "分" : "pts";
+    expect(screen.getAllByText(`-0.12 ${unit}`)).toHaveLength(2);
+    expect(screen.getByText(`-0.13 ${unit}`)).toBeVisible();
+    expect(screen.getAllByText("9.63 / 10")).toHaveLength(2);
+  });
+
   it.each(["zh-CN", "en-US"] as const)("shows only completed stages and selects newly available content (%s)", locale => {
     const zh = locale === "zh-CN";
     const current = render(view("materials", locale));

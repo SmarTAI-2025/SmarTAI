@@ -1465,14 +1465,19 @@ def weighted_math_steps(experts, weights, maximum, score):
             current = min(_points(maximum), subtotal.quantize(quantum, rounding=ROUND_HALF_UP))
             desc = join_expert_feedback((expert.provider, expert.steps[index].desc) for expert in experts)
             deductions = None
+            deduction_base = None
             if all(expert.steps[index].deductions is not None for expert in experts):
                 deductions = [ScoreDeduction(desc=f"{expert.provider}: {item.desc}",
                                             points=float(_points(item.points) * weight / sum(weights)))
                               for expert, weight in zip(experts, weights) if weight > 0
                               for item in expert.steps[index].deductions]
+                if all(expert.steps[index].deduction_base is not None for expert in experts):
+                    deduction_base = float(sum(_points(expert.steps[index].deduction_base) * weight
+                        for expert, weight in zip(experts, weights)) / sum(weights))
             result.append(StepScore(step_no=index + 1, desc=desc, score=float(current - previous),
                                     part_id=experts[0].steps[index].part_id, item_id=experts[0].steps[index].item_id,
                                     deductions=deductions,
+                                    deduction_base=deduction_base,
                                     is_alternative=all(expert.steps[index].is_alternative for expert in experts),
                                     is_correct=all(expert.steps[index].is_correct for expert in experts)))
             previous = current
