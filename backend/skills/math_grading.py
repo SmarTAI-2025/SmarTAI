@@ -1170,10 +1170,12 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
         return experts
 
     from backend.skills.math_method_review import align_methods, with_method_feedback
+    original_experts = experts
     experts, selected_methods = await align_methods(
         problem, answer, experts, assessments, traces, plan, provider, expert_providers,
         language=language, grading_setup=grading_setup, reporter=reporter, student_id=student_id)
-    if selected_methods:
+    reassessed = any(new is not old for new, old in zip(experts, original_experts))
+    if reassessed:
         traces = [read_math_trace(expert) for expert in experts]
         assessments = [MathAssessment.model_validate(trace["assessment"]) for trace in traces]
         # Only part decisions changed: claims, whole-question routes/awards and
@@ -1186,7 +1188,15 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
             disputed=disputed, other_dispute=other_dispute, relevance_review=relevance_review,
             evidence_review=evidence_review, requested_review=requested_review,
             route_ids=route_ids, signatures=signatures, selected_methods=selected_methods)
-    return [with_method_feedback(expert, language) for expert in reviewed] if selected_methods else reviewed
+    if reassessed:
+        for index, (original, expert) in enumerate(zip(original_experts, reviewed)):
+            trace = read_math_trace(expert)
+            if (expert.score != original.score and trace.get("method_review") and
+                    trace.get("review_diagnostic", {}).get("status") in {"failed", "invalid_revision"}):
+                trace["method_review_pending"] = True
+                reviewed[index] = expert.model_copy(update={"raw_output": _json(trace)})
+        return [with_method_feedback(expert, language) for expert in reviewed]
+    return reviewed
 
 
 async def _review_math_experts(problem, answer, experts, provider, *, language, grading_setup,

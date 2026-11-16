@@ -219,6 +219,8 @@ def _apply_math_review_advisory(correction: Correction, *, problem=None) -> Corr
     for expert in correction.expert_results:
         trace = read_math_trace(expert) if _is_successful_expert(expert) else None
         assessment = trace.get("assessment") if trace else None
+        if trace and trace.get("method_review_pending"):
+            reasons.append("math_method_review_incomplete")
         if isinstance(assessment, dict):
             decisions = assessment.get("part_decisions") or []
             if problem is not None and correction.score == 0:
@@ -658,7 +660,7 @@ async def _synthesize(
             score=aggregate.score,
             max_score=problem.max_score,
             confidence=result.confidence,
-            comment=result.comment,
+            comment=aggregate.comment if "math_method_review_incomplete" in aggregate.review_reasons else result.comment,
             steps=(aggregate.steps if math_results or any(e.programming_evidence for e in expert_results) else
                    normalized_steps if normalized_score == aggregate.score else []),
             expert_results=aggregate.expert_results,

@@ -27,7 +27,7 @@ import {
   buildResultsModel,
   aiCorrectionScore,
   correctionScoreSource,
-  pendingProgrammingReview,
+  pendingScoreReview,
   correctionReviewDraftScore,
   effectiveCorrectionScore,
   formatConfidence,
@@ -673,10 +673,10 @@ function ReviewQuestionCard({ locale, student, question, correction, primaryProv
   const validExperts = correction ? validExpertResults(correction) : [];
   const pausedMessage = correction ? pausedGradingMessage(correction, locale) : null;
   const primaryExpert = validExperts.find(expert => expert.provider_id === primaryProviderId) ?? validExperts[0];
-  const programmingReview = correction && pendingProgrammingReview(correction);
+  const pendingScore = correction && pendingScoreReview(correction);
   // A later expert may disagree with the shared execution. The synthesized
   // note starts with this evidence even if the selected expert does not.
-  const disputedScore = programmingReview === "programming_teacher_tests_passed_deduction" || programmingReview === "programming_teacher_tests_failed_full_credit" || programmingReview === "programming_partial_evidence_conflict";
+  const disputedScore = pendingScore === "math_method_review_incomplete" || pendingScore === "programming_teacher_tests_passed_deduction" || pendingScore === "programming_teacher_tests_failed_full_credit" || pendingScore === "programming_partial_evidence_conflict";
   const scoreSource = correction ? correctionScoreSource(correction) : null;
   const answer = student.answerByQuestion.get(question.id);
   const alreadyConfirmed = (scoreSource === "teacher_confirmed_same" || scoreSource === "teacher_changed")

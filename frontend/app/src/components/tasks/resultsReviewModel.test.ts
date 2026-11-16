@@ -9,6 +9,22 @@ const correction = (overrides: Partial<Correction> = {}): Correction => ({
 });
 
 describe("grading review attention", () => {
+  it.each(["review_reasons", "initial_review_reasons"] as const)("requires confirmation of a changed method after unfinished review (%s)", field => {
+    const pending = correction({ score: 10, provisional_score: 10, confidence: .95,
+      [field]: ["math_method_review_incomplete"],
+      expert_results: ["a", "b"].map(provider => ({ provider, score: 10, max_score: 10, confidence: .95, comment: "", steps: [] })),
+    });
+    expect(correctionReviewAttention(pending)).toBe("blocking");
+    expect(correctionReviewNextBlocked(pending)).toBe(true);
+    expect(correctionReviewBlocked(pending)).toBe(false);
+    expect(correctionReviewNotes(pending, "zh-CN")).toContainEqual({ severity: "blocking",
+      label: "解法已重判，最终联合复核未完成。请确认或修改分数。" });
+    expect(correctionReviewNotes(pending, "en-US")[0].label).toContain("final joint review did not complete");
+    expect(correctionReviewNextBlocked({ ...pending, teacher_score: 10, review_status: "edited" })).toBe(true);
+    expect(correctionReviewNextBlocked({ ...pending, teacher_score: 10, review_status: "confirmed" })).toBe(false);
+    expect(correctionReviewNextBlocked({ ...pending, teacher_score: 9, review_status: "edited" })).toBe(false);
+    expect(pending.score).toBe(10);
+  });
   it("explains saved initial grades without making pending AI verification a yellow review issue", () => {
     const expert = { provider: "a", score: 8, max_score: 10, confidence: .9, comment: "Saved", steps: [] };
     const paused = correction({ initial_review_reasons: ["grading_paused"],

@@ -326,7 +326,16 @@ export function pendingProgrammingReview(correction: Correction): string | undef
 
 
 export function correctionReviewNextBlocked(correction: Correction): boolean {
-  return correctionReviewBlocked(correction) || Boolean(pendingProgrammingReview(correction));
+  return correctionReviewBlocked(correction) || Boolean(pendingScoreReview(correction));
+}
+
+export function pendingScoreReview(correction: Correction): string | undefined {
+  if (correctionReviewReasonIds(correction).includes("math_method_review_incomplete") &&
+      !(validReviewScore(correction.teacher_score, correction.max_score) &&
+        (correction.review_status === "confirmed" || correction.teacher_score !== aiCorrectionScore(correction)))) {
+    return "math_method_review_incomplete";
+  }
+  return pendingProgrammingReview(correction);
 }
 
 export function validExpertResults(correction: Correction) {
@@ -391,6 +400,7 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     math_proof_concern: "Key reasoning evidence needs checking.",
     math_alternative_method: "The student used a materially different solution method.",
     math_model_review: "The model suggests human review.",
+    math_method_review_incomplete: "Method reassessed; final joint review did not complete. Confirm or adjust the score.",
     minority_veto: "Outlying expert score", parse_failed: "Could not parse result", degraded_to_single: "Some experts completed",
     transient_llm: "Model network error or timeout", llm_failed: "Model could not grade", quota_exhausted: "Quota exhausted", general: "Teacher review required",
   };
@@ -415,6 +425,7 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
     math_proof_concern: "关键推理依据待核对。",
     math_alternative_method: "该生采用了与标答不同的解题思路。",
     math_model_review: "模型建议人工复核。",
+    math_method_review_incomplete: "解法已重判，最终联合复核未完成。请确认或修改分数。",
     score_spread_high: "评分差异较大",
     parse_failed: "模型返回的评分格式无法读取",
     degraded_to_single: "部分专家完成",

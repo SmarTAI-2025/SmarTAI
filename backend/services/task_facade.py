@@ -63,7 +63,7 @@ from backend.db.models import (
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.grading_review import result_programming_review_reason, teacher_resolved_programming_score
+from backend.domain.grading_review import result_score_review_reason, teacher_resolved_programming_score
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
 from backend.domain.errors import (
@@ -6444,7 +6444,7 @@ def update_correction_review(
 
 
 def _correction_review_blocks_finalization(result) -> bool:
-    """A provisional programming score also needs a recorded teacher decision."""
+    """Provisional scores with incomplete evidence need a recorded teacher decision."""
     def valid_score(value):
         return (value is not None and math.isfinite(value)
                 and 0 <= value <= result.ai_max_score)
@@ -6452,7 +6452,7 @@ def _correction_review_blocks_finalization(result) -> bool:
     if result.result_status in education.NON_SCOREABLE_RESULT_STATUSES or not valid_score(result.effective_score):
         return True
     review = result.teacher_review or {}
-    return bool(result_programming_review_reason(result)) and not teacher_resolved_programming_score(
+    return bool(result_score_review_reason(result)) and not teacher_resolved_programming_score(
         result.ai_score, review.get("new_score"), result.ai_max_score, review.get("confirmed"),
     )
 
@@ -6477,8 +6477,8 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
     if run is not None:
         for result in grading_repository.list_results_for_run(run.id, include_missing=True):
             blocked = _correction_review_blocks_finalization(result)
-            programming_reason = result_programming_review_reason(result)
-            if blocked or result.ai_score is None or programming_reason:
+            score_reason = result_score_review_reason(result)
+            if blocked or result.ai_score is None or score_reason:
                 required_review_count += 1
                 review = result.teacher_review or {}
                 if (
@@ -6492,7 +6492,7 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
                 remaining.append({
                     "student_id": presentation.display_student_id if presentation else result.student_id,
                     "q_id": result.q_id,
-                    "reasons": list(result.review_reasons or ([programming_reason] if programming_reason else [])),
+                    "reasons": list(result.review_reasons or ([score_reason] if score_reason else [])),
                     "confirmed": False,
                 })
     released = bool(run and run.released_at is not None)

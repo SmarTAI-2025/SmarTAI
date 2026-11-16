@@ -71,7 +71,7 @@ async def _progress(reporter, student_id, problem, provider):
 
 async def align_methods(problem, answer, experts, assessments, traces, plan, coordinator, providers,
                         *, language, grading_setup, reporter=None, student_id=""):
-    """Return all reassessed votes and route locks, or the untouched input on failure.
+    """Retain each valid reassessment; lock only routes every expert accepted.
 
     The caller owns the one-pass review budget. Each interaction uses the existing
     bounded format repair; there is no agreement loop or new source segmentation.
@@ -169,13 +169,15 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
         if any(choice.method == "undetermined" for choice in choices.values()):
             return experts, {}
         revised = list(experts)
+        unlocked = set()
         for index, expert in enumerate(experts):
             changed = {key for key, choice in choices.items() if methods[index].get(key) != choice.method}
             if not changed:
                 continue
             provider = providers.get(expert.provider_id or expert.provider)
             if provider is None:
-                return experts, {}
+                unlocked.update(changed)
+                continue
             old = assessments[index]
             candidate = None
 
@@ -186,7 +188,7 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
                 if revision.expert_index != index or len(checked) != len(set(checked)) or set(checked) != changed:
                     raise ValueError("Independently check evidence for exactly the requested expert and part IDs.")
                 # A semantic refusal is a valid result, not a format error to
-                # repair into agreement. Discard all staged votes below.
+                # repair into agreement. Keep this expert's original vote.
                 if any(check.reference_support != "supported" or check.student_support != "supported"
                        for check in revision.evidence_checks):
                     return
@@ -204,60 +206,73 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
                 # still resolves pending evidence after the route is settled.
                 grading._assessment_validator(plan, answer, problem, original=old)(candidate)
 
-            revision = await call(provider, MethodProofPartRevision if problem.type == "推理题" else MethodPartRevision,
-                "First independently verify the proposed selected_methods for ONLY requested_part_ids. "
-                "They are not yet locked. Return one evidence_checks entry per requested part. "
-                "reference_support is supported only when the selected reference_quote, read in its full "
-                "original context and this part's allowed_reference_sources, establishes its actual reference "
-                "strategy. The full reference is context only unless include_full_reference is true. "
-                "A prohibition, negated mention, generic scoring rule or another part's method does not. "
-                "student_support is supported only when the selected student sources and work cited for this "
-                "part's credit demonstrate its actual strategy and the proposed "
-                "reference/alternative relation. A bare heading, isolated result, another part's work or "
-                "mentioning a method without using it does not establish that strategy. Check full context, "
-                "including several parts on one line; do not infer ownership from a line ID alone. "
-                "Earlier-part results may be premises and earlier errors may be follow-through origins under "
-                "the frozen rules, but they cannot replace this part's own credited work. "
-                "Explain the specific operations and ownership in each check's reason. Classify strategy "
-                "independently of mathematical correctness. If any evidence is unsupported or uncertain, "
-                "say so and return decisions=[]; do not force agreement or invent missing work. "
-                "Only if all checks support the proposed routes, reassess those parts under selected_methods; independently "
-                "judge relevance, correctness and credit using the original student work and frozen rules. "
-                "There is no target score or request for consensus. Rebuild the appropriate ledger; never "
-                "convert missed reference steps into alternative errors. Preserve expert_index and all other "
-                "parts. Give specific reasons and updated overall feedback.\n" + INSTRUCTION
-                + (PROOF_INSTRUCTION if problem.type == "推理题" else "")
-                + grading._part_proof_evidence(problem, plan.part_rubric)
-                + " In this targeted response use decisions (not part_decisions), containing only requested_part_ids.",
-                {**payload, "plan": grading._part_rule_projection(plan.part_rubric, changed),
-                 "expert_index": index, "requested_part_ids": sorted(changed),
-                 "selected_methods": [choices[key].model_dump(mode="json") for key in sorted(changed)],
-                 "prior_assessment": grading._assessment_for_model(old, plan)}, validate_revision)
-            if candidate is None:
-                return experts, {}
-            score, steps = grading.score_assessment(candidate, plan, answer.content or "", problem_text=problem.stem)
-            trace = dict(traces[index], assessment=candidate.model_dump(mode="json"), method_review={
-                "provider": coordinator.provider_id, "status": "reassessed", "part_ids": sorted(changed),
-                "choices": [choice.model_dump(mode="json") for choice in choices.values()],
-                "original_assessment": traces[index]["assessment"], "reason": revision.reason,
-                "evidence_checks": [check.model_dump(mode="json") for check in revision.evidence_checks],
-            })
-            revised[index] = expert.model_copy(update={"score": score, "steps": steps,
-                "comment": candidate.comment, "raw_output": grading._json(trace)})
-        return revised, choices
+            try:
+                revision = await call(provider, MethodProofPartRevision if problem.type == "推理题" else MethodPartRevision,
+                    "First independently verify the proposed selected_methods for ONLY requested_part_ids. "
+                    "They are not yet locked. Return one evidence_checks entry per requested part. "
+                    "reference_support is supported only when the selected reference_quote, read in its full "
+                    "original context and this part's allowed_reference_sources, establishes its actual reference "
+                    "strategy. The full reference is context only unless include_full_reference is true. "
+                    "A prohibition, negated mention, generic scoring rule or another part's method does not. "
+                    "student_support is supported only when the selected student sources and work cited for this "
+                    "part's credit demonstrate its actual strategy and the proposed "
+                    "reference/alternative relation. A bare heading, isolated result, another part's work or "
+                    "mentioning a method without using it does not establish that strategy. Check full context, "
+                    "including several parts on one line; do not infer ownership from a line ID alone. "
+                    "Earlier-part results may be premises and earlier errors may be follow-through origins under "
+                    "the frozen rules, but they cannot replace this part's own credited work. "
+                    "Explain the specific operations and ownership in each check's reason. Classify strategy "
+                    "independently of mathematical correctness. If any evidence is unsupported or uncertain, "
+                    "say so and return decisions=[]; do not force agreement or invent missing work. "
+                    "Only if all checks support the proposed routes, reassess those parts under selected_methods; independently "
+                    "judge relevance, correctness and credit using the original student work and frozen rules. "
+                    "There is no target score or request for consensus. Rebuild the appropriate ledger; never "
+                    "convert missed reference steps into alternative errors. Preserve expert_index and all other "
+                    "parts. Give specific reasons and updated overall feedback.\n" + INSTRUCTION
+                    + (PROOF_INSTRUCTION if problem.type == "推理题" else "")
+                    + grading._part_proof_evidence(problem, plan.part_rubric)
+                    + " In this targeted response use decisions (not part_decisions), containing only requested_part_ids.",
+                    {**payload, "plan": grading._part_rule_projection(plan.part_rubric, changed),
+                     "expert_index": index, "requested_part_ids": sorted(changed),
+                     "selected_methods": [choices[key].model_dump(mode="json") for key in sorted(changed)],
+                     "prior_assessment": grading._assessment_for_model(old, plan)}, validate_revision)
+                if candidate is None:
+                    unlocked.update(changed)
+                    continue
+                score, steps = grading.score_assessment(candidate, plan, answer.content or "", problem_text=problem.stem)
+                trace = dict(traces[index], assessment=candidate.model_dump(mode="json"), method_review={
+                    "provider": coordinator.provider_id, "status": "reassessed", "part_ids": sorted(changed),
+                    "choices": [choice.model_dump(mode="json") for choice in choices.values()],
+                    "original_assessment": traces[index]["assessment"], "reason": revision.reason,
+                    "evidence_checks": [check.model_dump(mode="json") for check in revision.evidence_checks],
+                })
+                revised[index] = expert.model_copy(update={"score": score, "steps": steps,
+                    "comment": candidate.comment, "raw_output": grading._json(trace)})
+            except Exception as exc:
+                if grading._critical_failure(exc):
+                    raise
+                unlocked.update(changed)
+                # Failure belongs to this vote, not to the other experts.
+        return revised, {key: value for key, value in choices.items() if key not in unlocked}
     except Exception as exc:
         if grading._critical_failure(exc):
             raise
-        return experts, {}  # Discard every staged revision; ordinary review follows.
+        return experts, {}  # Adjudication failed before any reassessment.
 
 
 def with_method_feedback(expert, language):
     """Persist the route rationale in existing feedback, outside the score rows."""
     from backend.skills.math_grading import read_math_trace
-    review = (read_math_trace(expert) or {}).get("method_review", {})
+    trace = read_math_trace(expert) or {}
+    review = trace.get("method_review", {})
     comment = expert.comment
     label = "解法改判依据：" if language == "zh" else "Method reassessment: "
     for choice in review.get("choices", []):
         if choice["part_id"] in review.get("part_ids", []) and choice["reason"] not in comment:
             comment += "\n\n" + label + choice["reason"]
+    if trace.get("method_review_pending"):
+        message = ("解法已重判，最终联合复核未完成。请核对并确认或修改分数。" if language == "zh" else
+                   "Method reassessed; final joint review did not complete. Check and confirm or adjust the score.")
+        if message not in comment:
+            comment += "\n\n" + message
     return expert.model_copy(update={"comment": comment}) if comment != expert.comment else expert

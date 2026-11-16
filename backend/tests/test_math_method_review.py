@@ -58,9 +58,9 @@ def provider(name, *outputs):
     return value, calls
 
 
-async def run(p, a, plan, experts, main, providers, **kwargs):
+async def run(p, a, plan, experts, main, providers, *, language="zh", **kwargs):
     with math_plans_context({p.q_id: plan}), grading.math_review_scope():
-        return await grading.review_math_experts(p, a, experts, main, expert_providers=providers, language="zh", **kwargs)
+        return await grading.review_math_experts(p, a, experts, main, expert_providers=providers, language=language, **kwargs)
 
 
 @pytest.mark.asyncio
@@ -294,7 +294,7 @@ async def test_failure_keeps_originals_and_runs_the_original_joint_review(stage)
 
 
 @pytest.mark.asyncio
-async def test_later_reassessment_failure_discards_all_staged_changes():
+async def test_later_reassessment_failure_preserves_other_experts_changes():
     from backend.skills.math_method_review import align_methods
     p, a, plan, experts, right = case()
     experts.insert(1, experts[0].model_copy(update={"provider_id": "c", "provider": "c"}))
@@ -306,8 +306,9 @@ async def test_later_reassessment_failure_discards_all_staged_changes():
     assessments = [grading.MathAssessment.model_validate(t["assessment"]) for t in traces]
     result, locks = await align_methods(p, a, experts, assessments, traces, plan, main, {"a": first, "c": second},
                                         language="zh", grading_setup=None)
-    assert result is experts and not locks
-    assert [e.model_dump_json() for e in result] == snapshots
+    assert not locks and [e.score for e in result] == [8, 0, 8]
+    assert [e.model_dump_json() for e in experts] == snapshots
+    assert result[1:] == experts[1:]
     assert len(calls) == len(first_calls) == len(second_calls) == 1
 
 
@@ -602,7 +603,7 @@ async def test_reassessment_requires_explicit_complete_evidence_confirmation(bad
 
 
 @pytest.mark.asyncio
-async def test_later_expert_semantic_refusal_discards_earlier_reassessment():
+async def test_later_expert_semantic_refusal_preserves_earlier_reassessment():
     p, a, plan, experts, right = case()
     experts.append(experts[0].model_copy(update={"provider_id": "c"}))
     original = [e.model_dump(mode="json") for e in experts]
@@ -613,9 +614,10 @@ async def test_later_expert_semantic_refusal_discards_earlier_reassessment():
     second, second_calls = provider("c", declined)
     result = await run(p, a, plan, experts, main, {"a": first, "c": second})
     assert len(calls) == 2 and len(first_calls) == len(second_calls) == 1
-    assert [e.score for e in result] == [e.score for e in experts]
+    assert [e.score for e in result] == [8, 8, 0]
     assert [e.model_dump(mode="json") for e in experts] == original
-    assert all("method_review" not in grading.read_math_trace(e) for e in result)
+    assert "method_review" in grading.read_math_trace(result[0])
+    assert all("method_review" not in grading.read_math_trace(e) for e in result[1:])
     assert "selected_methods" not in json.loads(calls[-1][-1].content)
 
 

@@ -94,6 +94,20 @@ def result_programming_review_reason(result) -> str | None:
     )
 
 
+def score_review_reason(reasons, experts) -> str | None:
+    """Reuse teacher confirmation for a changed method with unfinished review."""
+    if "math_method_review_incomplete" in (reasons or ()):
+        return "math_method_review_incomplete"
+    return programming_review_reason(reasons, experts)
+
+
+def result_score_review_reason(result) -> str | None:
+    return score_review_reason(
+        [*(getattr(result, "initial_review_reasons", None) or ()), *(getattr(result, "review_reasons", None) or ())],
+        getattr(result, "ai_expert_results", None),
+    )
+
+
 def score(correction: dict) -> float | None:
     teacher = number(correction.get("teacher_score"))
     if teacher is not None:
@@ -150,11 +164,11 @@ def review_state(correction: dict) -> tuple[bool, bool]:
     reasons = {part.strip() for reason in [*(correction.get("review_reasons") or []),
                                           *(correction.get("initial_review_reasons") or [])]
                for part in reason.split(",")}
-    programming = programming_review_reason(reasons, experts)
-    program_pending = programming and not teacher_resolved_programming_score(
+    score_reason = score_review_reason(reasons, experts)
+    score_pending = score_reason and not teacher_resolved_programming_score(
         correction.get("provisional_score"), correction.get("teacher_score"), maximum or 0, confirmed,
     )
-    pending = blocked or bool(program_pending) or (not reviewed and (low_confidence or unknown_confidence or (not expert_scores and confidence_needs_attention(conf))
+    pending = blocked or bool(score_pending) or (not reviewed and (low_confidence or unknown_confidence or (not expert_scores and confidence_needs_attention(conf))
                                             or disagreement or partial or bool(reasons & {
                                                 "partial_experts", "degraded_to_single", "math_scoring_uncertainty",
                                                 "math_expert_disagreement", "math_verification_conflict",
