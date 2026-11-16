@@ -1271,10 +1271,12 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                         if any(new_awards.get(key) != value for key, value in signatures[index].items() if key not in disputed):
                             raise ValueError("review_changed_undisputed_award")
                 if selected_methods:
-                    from backend.skills.math_method_review import method_family
+                    from backend.skills.math_method_review import method_family, validate_method_part_sources
                     if any(d.part_id in selected_methods and method_family(d.method) != selected_methods[d.part_id].method
                            for d in candidate.part_decisions):
                         raise ValueError("review_changed_selected_method")
+                    validate_method_part_sources([d for d in candidate.part_decisions if d.part_id in selected_methods],
+                                                 answer.content or "", plan.part_rubric)
                 _assessment_validator(plan, answer, problem, original=old,
                     evidence=trace.get("evidence", []))(candidate)
                 score, steps = score_assessment(candidate, plan, answer.content or "", problem_text=problem.stem)

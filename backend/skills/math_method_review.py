@@ -1,6 +1,7 @@
 """One source-grounded route decision, then only mismatched experts reassess."""
 import ast
 import re
+from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -54,10 +55,31 @@ def _method_spans(text):
     def affirmed(start, end):
         for begin, finish, sentence in _sentences(text):
             if begin <= start < end <= finish:
-                prefix = re.split(r"[，,]", sentence[:start - begin])[-1]
-                suffix = sentence[end - begin:]
-                return (not re.search(r"不|未|无须|无需|禁止|\b(?:not|no|without|avoid)\b", prefix, re.I)
-                        and not re.match(r"\s*(?:不|未|无效|并不|(?:is|was|should|must)\s+not\b)", suffix, re.I))
+                # A comma is not itself a polarity reset ("do not use,
+                # substitution" / "use substitution, which is forbidden").
+                # A new explicit instruction or subquestion starts a clause.
+                breaks = [0, *(m.end() for m in re.finditer(
+                    r"[，,](?=\s*(?:改用|使用|采用|用|利用|通过|根据|运用|"
+                    r"(?:use|using|apply|by|via)\b|[（(][\w一二三四五六七八九十]+[)）]))", sentence, re.I)), len(sentence)]
+                left = max(pos for pos in breaks if pos <= start - begin)
+                right = min(pos for pos in breaks if pos >= end - begin)
+                prefix = sentence[left:start - begin]
+                clause = sentence[left:right]
+                if re.search(r"不|未|无须|无需|勿|禁止|禁用|避免|排除|舍弃|拒绝|"
+                             r"\b(?:not|no|never|without|avoid\w*|refrain\w*|exclud\w*|reject\w*|"
+                             r"forbid\w*|forbidden|prohibit\w*|rule\w*\s+out|instead\s+of|rather\s+than|"
+                             r"\w+n['’]t|unnecessary|inapplicable|invalid)\b", clause, re.I):
+                    return False
+                prefix = re.sub(r"^\s*[（(][\w一二三四五六七八九十]+[)）]\s*[:：]?", "", prefix).strip()
+                # Unknown prose is not affirmative merely because a small
+                # blacklist missed it. Accept bare methods or explicit use/
+                # derivation phrases; uncertain language falls back to review.
+                return not prefix or bool(re.fullmatch(
+                    r"(?:(?:对)?第[一二三四五六七八九十\d]+问\s*|(?:参考|标准|本题|本小问)(?:解法|方法|解|答案)?\s*)?"
+                    r"(?:采用|使用|利用|用|通过|根据|运用|改用|先用|先|由此|因此|所以|故|可得|即|得)?\s*|"
+                    r"(?:(?:the\s+)?(?:reference|standard|student)\s+(?:answer|solution|method|proof)\s*)?"
+                    r"(?:(?:use|uses|using|apply|applying|by|via|then|thus|hence|therefore)\s*)?"
+                    r"(?:proof\s+by\s*)?", prefix, re.I))
         return False
 
     for start, _, sentence in _sentences(text):
@@ -99,29 +121,39 @@ def _has_method_evidence(text):
     return next(_method_spans(text), None) is not None
 
 
-def _supported_method_quote(text, quote):
+def _supported_method_quote(text, quote, *, context=None, offset=0):
     located = match_source_quote(text, quote)
     # Positive evidence must occur INSIDE the quote at its original location.
     # A different positive method elsewhere cannot legitimize a negated excerpt.
-    return bool(located and any(located.start <= start and end <= located.end
-                               for start, end in _method_spans(text)))
+    return bool(located and any(offset + located.start <= start and end <= offset + located.end
+                               for start, end in _method_spans(text if context is None else context)))
+
+
+@dataclass(frozen=True)
+class _MethodPassage:
+    # Citation permission and polarity context are separate: consulting the
+    # original sentence must NEVER enlarge this part's frozen citation span.
+    text: str
+    context: str
+    offset: int = 0
+
+    def supports(self, quote):
+        return _supported_method_quote(self.text, quote, context=self.context, offset=self.offset)
 
 
 def _supported_reference_quote(passages, quote):
     if not quote.strip():
         return False
-    # A short excerpt shared by conflicting passages is ambiguous. Require
-    # positive support in every matching context, or a more complete quote.
-    # Include literal duplicates that the unique-source matcher rejects.
-    matches = [text for text in passages if quote.strip() in text or match_source_quote(text, quote)]
-    return bool(matches) and all(_supported_method_quote(text, quote) for text in matches)
+    sources = [p if isinstance(p, _MethodPassage) else _MethodPassage(p, p) for p in passages]
+    matches = [p for p in sources if quote.strip() in p.text or match_source_quote(p.text, quote)]
+    return bool(matches) and all(p.supports(quote) for p in matches)
 
 
 def _labelled_ranges(text, parts):
     from backend.services.question_structure import _normalize_label
-    # Only explicit line headings are a fallback. Inline/trailing equation
-    # numbers must not override the frozen answer-to-part mapping.
-    headings = list(re.finditer(r"(?m)^[ \t]*(?P<label>[（(](?:[0-9]{1,2}|[A-Za-z]|[ivxIVX]{1,6})[)）])(?=[ \t:：])", text))
+    # Explicit headings may share a sentence or occupy their own line.
+    # Trailing equation numbers do not override frozen answer-to-part links.
+    headings = list(re.finditer(r"(?m)(?:^[ \t]*|(?<=[，,；;。])[ \t]*)(?P<label>[（(](?:[0-9]{1,2}|[A-Za-z]|[ivxIVX]{1,6})[)）])(?=[ \t:：]|\r?$)", text))
     result = {}
     for part in parts:
         label = _normalize_label(part.label)
@@ -132,29 +164,35 @@ def _labelled_ranges(text, parts):
     return result
 
 
-def _method_passages(problem, rules):
+def _method_evidence(problem, rules):
     reference = problem.reference_answer or ''
     ranges = _labelled_ranges(reference, rules.parts)
     segments = {segment.id: segment.text for segment in rules.answer_segments}
     result = {}
     for part in rules.parts:
-        texts = [text for item in (*part.steps, *part.deductions) for text in (item.criterion, item.source_quote)]
+        texts = dict.fromkeys(text for item in (*part.steps, *part.deductions)
+                             for text in (item.criterion, item.source_quote) if text.strip())
+        sources = [_MethodPassage(text, text) for text in texts]
         refs = {*part.answer_refs, *(ref for step in part.steps for ref in step.answer_refs)}
         if refs:
             for ref in sorted(refs):
                 located = match_source_quote(reference, segments.get(ref, ''))
                 if located:
-                    # Even frozen excerpts may omit a prefix such as "无需".
-                    texts.extend(sentence.strip() for start, end, sentence in _sentences(reference)
-                                 if start < located.end and located.start < end)
+                    sources.append(_MethodPassage(located.text, reference, located.start))
         elif len(rules.parts) == 1:
-            texts.append(reference)
+            sources.append(_MethodPassage(reference, reference))
         elif part.id in ranges:
             start, end = ranges[part.id]
             heading = re.match(r'\s*[（(][^）)]+[)）]\s*[:：]?\s*', reference[start:end])
-            texts.append(reference[start + (heading.end() if heading else 0):end].strip())
-        result[part.id] = list(dict.fromkeys(text for text in texts if text.strip()))
+            start += heading.end() if heading else 0
+            sources.append(_MethodPassage(reference[start:end], reference[start:end]))
+        result[part.id] = [source for source in sources if source.text.strip()]
     return result
+
+
+def _method_passages(problem, rules):
+    return {key: list(dict.fromkeys(p.text.strip() for p in sources))
+            for key, sources in _method_evidence(problem, rules).items()}
 
 
 def _student_sources(answer, rules, catalog):
@@ -165,6 +203,27 @@ def _student_sources(answer, rules, catalog):
                      if key.startswith('student:') and part.id in ranges
                      and ranges[part.id][0] <= start < end <= ranges[part.id][1]]
             for part in rules.parts}
+
+
+def validate_method_part_sources(decisions, answer, rules):
+    """Keep the established student scope through regrading and final review."""
+    from backend.skills.part_scoring import _supporting_spans
+    ranges = ({rules.parts[0].id: (0, len(answer))} if len(rules.parts) == 1
+              else _labelled_ranges(answer, rules.parts))
+    catalog = source_catalog(answer, "", "")
+    for decision in decisions:
+        if decision.part_id not in ranges:
+            raise ValueError("The reviewed part has no unambiguous student source range.")
+        start, end = ranges[decision.part_id]
+        fragments = [decision.student_quote,
+                     *(value for step in decision.steps for value in (step.evidence, step.error_source)),
+                     *(value for error in decision.errors for value in (error.evidence, error.origin_quote)),
+                     *(value for goal in decision.goal_findings for value in (goal.evidence, goal.origin_quote))]
+        for fragment in fragments:
+            spans = _supporting_spans(answer, fragment, catalog) if fragment.strip() else ()
+            if (fragment.strip().startswith("student:") and not spans
+                    or any(not start <= span.start < span.end <= end for span in spans)):
+                raise ValueError("Student evidence and error origins must belong to the reviewed part.")
 
 
 async def align_methods(problem, answer, experts, assessments, traces, plan, coordinator,
@@ -188,7 +247,8 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
     # The optional answer is not the only source of a reference strategy.
     # Only this part's frozen primary criteria/teacher clauses may substitute;
     # alternative caps and another part's method are not reference evidence.
-    passages = {key: value for key, value in _method_passages(problem, plan.part_rubric).items() if key in disputed}
+    method_evidence = {key: value for key, value in _method_evidence(problem, plan.part_rubric).items() if key in disputed}
+    passages = {key: list(dict.fromkeys(p.text.strip() for p in sources)) for key, sources in method_evidence.items()}
     catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
     student_sources = _student_sources(answer.content or "", plan.part_rubric, catalog)
     choices = {}
@@ -258,7 +318,7 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             record(index, status, fallback=True)
         return revised, {}, True  # No common route was established; retain the ordinary review.
 
-    if not all(any(_has_method_evidence(text) for text in texts) for texts in passages.values()):
+    if not all(any(p.supports(p.text) for p in sources) for sources in method_evidence.values()):
         return joint_review_fallback("reference_unavailable")
     if any(not student_sources[key] for key in disputed):
         return joint_review_fallback("student_scope_unavailable")
@@ -271,7 +331,8 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             if any(key not in student_sources[choice.part_id] for key in choice.student_source_ids):
                 raise ValueError("Cite original student source IDs belonging to this disputed part.")
             if choice.method != "undetermined" and (not choice.student_source_ids
-                    or not _supported_reference_quote(passages[choice.part_id], choice.reference_quote)):
+                    or not _has_method_evidence("\n".join(catalog[key][0] for key in choice.student_source_ids))
+                    or not _supported_reference_quote(method_evidence[choice.part_id], choice.reference_quote)):
                 raise ValueError("A determined method needs student evidence and a verbatim supplied method passage for this part.")
 
     payload = {"problem": problem.stem, "reference": problem.reference_answer, "answer": answer.content,
@@ -287,7 +348,8 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             "already reflected in the alternative cap. Never choose the route giving the higher/lower score, "
             "rewrite the rubric, or supply missing student work. Cite student source IDs and an exact passage "
             "from this part's method_reference_passages, preserving negation and context. Student IDs must come "
-            "from this part's method_student_source_ids. Explain the strategy comparison. These passages "
+            "from this part's method_student_source_ids and actually show a strategy, not merely roots or a closing remark. "
+            "The original context does not authorize quoting outside a frozen method passage. Explain the strategy comparison. These passages "
             "contain only this part's reference material and frozen primary scoring criteria. They establish "
             "a reference strategy only if they actually specify its mathematical method; a generic correctness "
             "rule, deduction rate or target alone does not. Do not grade or give a score. Use undetermined if "
@@ -333,6 +395,7 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             candidate = grading._apply_part_revision(old, revision, changed).model_copy(deep=True)
             # Tool claims/judgments are unchanged by this narrowly scoped regrade;
             # the final joint review remains responsible for pending tool feedback.
+            validate_method_part_sources(revision.decisions, answer.content or "", plan.part_rubric)
             grading._assessment_validator(plan, answer, problem, original=old)(candidate)
 
         try:
@@ -341,7 +404,8 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
                 "method. Your prior route was different. Rebuild the appropriate ledger from the sources; do "
                 "not convert old missed reference steps into alternative errors. Keep mathematical judgment "
                 "independent: there is no target score or requested agreement. Do not change other parts, "
-                "the frozen rules, or expert_index. Give concrete source-grounded reasons and overall feedback.\n"
+                "the frozen rules, or expert_index. Every student quote, step, error and error origin must belong "
+                "to that part's method_student_source_ids or its exact original text. Give concrete source-grounded reasons and overall feedback.\n"
                 + INSTRUCTION + (PROOF_INSTRUCTION if problem.type == "推理题" else "")
                 + grading._part_proof_evidence(problem, plan.part_rubric),
                 {**payload, "plan": grading._part_rule_projection(plan.part_rubric, changed),
