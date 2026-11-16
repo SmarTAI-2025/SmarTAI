@@ -370,7 +370,7 @@ def _current_exact_name_evidence(ref: Reference, question: str) -> bool:
 async def ask(*, task_id: str | None, owner_id: str, question: str, surface: str,
               provider, context_student_id: str | None = None, history: list[str] | None = None,
               snapshot: Snapshot | None = None) -> dict:
-    snapshot = snapshot or await asyncio.to_thread(load_snapshot, task_id, owner_id)
+    snapshot = snapshot or await asyncio.to_thread(load_snapshot, task_id, owner_id, review_overview=surface == "review_overview")
     if context_student_id and not any(s["student_id"] == context_student_id and s["task_id"] == task_id for s in snapshot.tables["students"]):
         raise NotFound("student")
     intro = {"surface": surface, "current_task": task_id, "current_student": context_student_id,
@@ -383,7 +383,7 @@ async def ask(*, task_id: str | None, owner_id: str, question: str, surface: str
     if intent.clarification:
         return _clarify(intent.clarification)
     if intent.scope == "teacher_tasks" and task_id is not None:
-        snapshot = await asyncio.to_thread(load_snapshot, task_id, owner_id, all_tasks=True)
+        snapshot = await asyncio.to_thread(load_snapshot, task_id, owner_id, all_tasks=True, review_overview=surface == "review_overview")
     # Reference meaning is supplied by the model; the server only executes
     # typed set operations. Never discover another "similar" person as fallback.
     if context_student_id:

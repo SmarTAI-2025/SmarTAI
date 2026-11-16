@@ -22,7 +22,8 @@ def test_report_pending_count_matches_review_queue_contract(case):
     row = next(line for line in report.splitlines() if line.startswith("| Q1 |"))
     assert int(row.split("|")[-2].strip()) == int(case["pending"])
     assert review_state(correction)[0] == case["pending"]
-    assert "待复核题次" in report
+    assert "复核信号（含详情建议）" in report
+    assert "may exceed the overview queue" in report
     assert "快照时间 / Snapshot at" in report
     assert "确认时间" not in report
 

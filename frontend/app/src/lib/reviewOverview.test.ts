@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Correction, FilterIntentResult } from "@/types";
 import type { ResultsModel, StudentSummary } from "@/components/tasks/resultsModel";
-import { collectResultReviewItems } from "@/components/tasks/resultsReviewModel";
+import { collectOverviewReviewItems, collectResultReviewItems } from "@/components/tasks/resultsReviewModel";
 import {
   reviewCellKey,
   reviewQueryNeedsIntentFallback,
@@ -94,6 +94,23 @@ const model = {
 } as ResultsModel;
 
 describe("review overview smart filter", () => {
+  it("applies queue filters even to an executed selection and preserves its order", () => {
+    const scores = [8, 8].map(score => ({ provider: "expert", score, max_score: 10, confidence: .95, comment: "", steps: [] }));
+    const minor = student("minor", "Minor", 80, [correction("Q1", { expert_results: scores, review_reasons: ["math_expert_disagreement"] })]);
+    const proof = student("proof", "Proof", 80, [correction("Q1", { expert_results: scores, review_reasons: ["math_proof_concern"] })]);
+    const low = student("low", "Low", 80, [correction("Q1", { confidence: .4 })]);
+    const scopedModel = { ...model, students: [minor, proof, low] };
+    const items = collectOverviewReviewItems(scopedModel, scopedModel.students);
+    const execution = { recognized: true, explanation: "", kind: "students" as const, chart: null,
+      data: { columns: ["student_id"], rows: [["low"], ["minor"], ["proof"]] },
+      selection: { kind: "students" as const, ids: ["low", "minor", "proof"] } };
+    const selected = selectReviewOverviewFromIntent(scopedModel, items, new Set(), intent({ execution, review_status: "pending" }));
+    expect(selected.students.map(s => s.id)).toEqual(["low", "proof"]);
+    expect([...selected.matchedCellKeys]).not.toContain(reviewCellKey("minor", "Q1"));
+    expect(selectReviewOverviewFromIntent(scopedModel, items, new Set(), intent({ execution })).students.map(s => s.id)).toEqual(["low", "minor", "proof"]);
+    expect(selectReviewOverviewFromIntent(scopedModel, items, new Set(), intent({ execution, review_status: "none" })).students.map(s => s.id)).toEqual(["minor"]);
+  });
+
   it("treats 90分以下 as a total-score student filter", () => {
     const selection = selectReviewOverview(model, [], new Set(), "90分以下的学生");
 

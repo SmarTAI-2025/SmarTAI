@@ -125,7 +125,8 @@ export function selectReviewOverviewFromIntent(
 ): ReviewOverviewSelection {
   if (intent.execution) {
     const students = groundedRows(model.students, intent, "students", student => student.id);
-    return { students, questions: model.questions, matchedCellKeys: new Set(students.flatMap(student => student.corrections.map(c => reviewCellKey(student.id, c.q_id)))), unresolvedText: "", explanation: "all" };
+    return selectReviewOverviewFromIntent({ ...model, students }, reviewItems, annotatedKeys,
+      { ...intent, execution: undefined, sort: null });
   }
   if (!supportsFilterIntent(intent, "review_overview")) return selectReviewOverview(model, reviewItems, annotatedKeys, "");
   const reviewKeys = new Set(reviewItems.map((item) => reviewCellKey(item.student.id, item.question.id)));

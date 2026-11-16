@@ -114,6 +114,14 @@ def score(correction: dict) -> float | None:
     return current if current is not None else number(correction.get("provisional_score"))
 
 
+def overview_review_state(correction: dict) -> tuple[bool, bool]:
+    """Overview queue: score spread supplies disagreement, not detailed flags."""
+    reasons = [part.strip() for reason in [*(correction.get("review_reasons") or []),
+                                          *(correction.get("initial_review_reasons") or [])]
+               for part in reason.split(",") if part.strip() != "math_expert_disagreement"]
+    return review_state({**correction, "review_reasons": reasons, "initial_review_reasons": []})
+
+
 def review_state(correction: dict) -> tuple[bool, bool]:
     """Match the grading review queue (resultsModel.correctionReviewAttention)."""
     maximum = number(correction.get("max_score"))
