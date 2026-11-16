@@ -1,4 +1,5 @@
 """One source-grounded route decision, then only mismatched experts reassess."""
+import ast
 import re
 from typing import Literal
 
@@ -32,67 +33,128 @@ class MethodEvidenceInvalid(StructuredOutputInvalidError):
     """Grounding/scope repair was exhausted, not a provider or quota failure."""
 
 
-def _has_method_evidence(text):
-    # A deliberately conservative gate for locking a route. Unsupported prose
-    # still receives the ordinary joint review; it must not become a hard route
-    # constraint merely because the arbiter calls it a method. This recognizes
-    # explicit operations/techniques or an actual chain of transformations,
-    # not a correctness criterion, point amount, isolated answer or equation.
+def _sentences(text):
+    # Keep source offsets and the whole statement, including negation. Decimal
+    # points do not end a sentence. This is grounding, not a semantic proof.
+    start = 0
+    for boundary in re.finditer(r"[。！？!?；;\n]|(?<!\d)\.(?!\d)", text):
+        yield start, boundary.end(), text[start:boundary.end()]
+        start = boundary.end()
+    if start < len(text):
+        yield start, len(text), text[start:]
+
+
+def _method_spans(text):
     technique = (
         r"配方|因式分解|消元|换元|代入|数学归纳|归纳法|反证|构造反例|逐坐标|逐分量|"
         r"同态映射|单位元嵌入|对角化|分部积分|分离变量|泰勒展开|傅里叶变换|"
         r"\b(?:complet\w*\s+the\s+square|factori[sz]\w*|eliminat\w*|substitut\w*|"
         r"induction|contradiction|counterexample|coordinatewise|componentwise|"
         r"diagonali[sz]\w*|integration\s+by\s+parts|separation\s+of\s+variables)\b")
-    for clause in re.split(r"[。；;\n]", text):
-        for match in re.finditer(technique, clause, re.I):
-            prefix = clause[:match.start()]
-            if not re.search(r"(?:不用|不使用|不采用|不要求|不要|不必|未用|无须|无需|禁止|"
-                             r"\b(?:not|no|without|avoid)\b)[^，,:：]{0,16}$", prefix, re.I):
-                return True
-    # Two connected mathematical relations, with a symbolic operand, provide
-    # a concrete transformation. Mere numbers/points and disconnected goals do not.
-    operand = r"(?:\\[A-Za-z]+|[A-Za-z0-9α-ωΑ-Ω_{}()[\]+*/^ .−-])+"
-    relation = r"(?:=|⇒|⇔|\\(?:implies|iff))"
-    pieces = re.split(relation, text)
-    for index in range(1, len(pieces) - 1):
-        middle = pieces[index]
-        if not middle.strip() or not re.fullmatch(operand, middle):
+    def affirmed(start, end):
+        for begin, finish, sentence in _sentences(text):
+            if begin <= start < end <= finish:
+                prefix = re.split(r"[，,]", sentence[:start - begin])[-1]
+                suffix = sentence[end - begin:]
+                return (not re.search(r"不|未|无须|无需|禁止|\b(?:not|no|without|avoid)\b", prefix, re.I)
+                        and not re.match(r"\s*(?:不|未|无效|并不|(?:is|was|should|must)\s+not\b)", suffix, re.I))
+        return False
+
+    for start, _, sentence in _sentences(text):
+        for match in re.finditer(technique, sentence, re.I):
+            if affirmed(start + match.start(), start + match.end()):
+                yield start + match.start(), start + match.end()
+
+    # A connected chain has an explicitly parsed expression between every
+    # relation. Whitespace cannot turn two independent equations into a chain
+    # ("x = 1 y = 2" has the invalid middle expression "1 y"). No evaluation,
+    # implicit multiplication or unsupported TeX is guessed here.
+    for candidate in re.finditer(r"[A-Za-z0-9α-ωΑ-Ω_()+*/^ .−=⇒⇔-]+", text):
+        chain = candidate[0].strip().rstrip('.')
+        operands = re.split(r"=|⇒|⇔", chain)
+        if len(operands) < 3 or len(chain) > 2000:
             continue
-        # Bound context scans; long source prose must not cause a quadratic
-        # search for an unanchored expression chain.
-        left = re.search(operand + r"$", pieces[index - 1][-500:])
-        right = re.match(operand, pieces[index + 1][:500])
-        if not left or not right or not left[0].strip() or not right[0].strip():
+        trees = []
+        try:
+            for operand in operands:
+                tree = ast.parse(operand.strip().replace('−', '-').replace('^', '**'), mode='eval')
+                nodes = list(ast.walk(tree))
+                if len(nodes) > 200 or any(not isinstance(node, (ast.Expression, ast.BinOp, ast.UnaryOp,
+                        ast.Name, ast.Load, ast.Constant, ast.Add, ast.Sub, ast.Mult, ast.Div,
+                        ast.Pow, ast.UAdd, ast.USub)) for node in nodes):
+                    raise ValueError('Unsupported expression')
+                if any(isinstance(node, ast.Name) and not re.fullmatch(r'[A-Za-zα-ωΑ-Ω](?:_?\d+)?', node.id) for node in nodes):
+                    raise ValueError('Prose is not an expression')
+                trees.extend(nodes)
+        except (SyntaxError, ValueError, RecursionError):
             continue
-        plain = re.sub(r"\\[A-Za-z]+", "", left[0] + "=" + middle + "=" + right[0])
-        if re.search(r"[A-Za-zα-ωΑ-Ω]", plain) and not re.search(r"[A-Za-z]{2,}", plain):
-            return True
-    return False
+        if any(isinstance(node, ast.Name) for node in trees):
+            start = candidate.start() + len(candidate[0]) - len(candidate[0].lstrip())
+            end = start + len(chain)
+            if affirmed(start, end):
+                yield start, end
+
+
+def _has_method_evidence(text):
+    return next(_method_spans(text), None) is not None
+
+
+def _supported_method_quote(text, quote):
+    located = match_source_quote(text, quote)
+    # Positive evidence must occur INSIDE the quote at its original location.
+    # A different positive method elsewhere cannot legitimize a negated excerpt.
+    return bool(located and any(located.start <= start and end <= located.end
+                               for start, end in _method_spans(text)))
+
+
+def _labelled_ranges(text, parts):
+    from backend.services.question_structure import _normalize_label
+    # Only explicit line headings are a fallback. Inline/trailing equation
+    # numbers must not override the frozen answer-to-part mapping.
+    headings = list(re.finditer(r"(?m)^[ \t]*(?P<label>[（(](?:[0-9]{1,2}|[A-Za-z]|[ivxIVX]{1,6})[)）])(?=[ \t:：])", text))
+    result = {}
+    for part in parts:
+        label = _normalize_label(part.label)
+        matches = [(i, h) for i, h in enumerate(headings) if _normalize_label(h['label']) == label]
+        if label and len(matches) == 1 and sum(_normalize_label(p.label) == label for p in parts) == 1:
+            index, heading = matches[0]
+            result[part.id] = (heading.start(), headings[index + 1].start() if index + 1 < len(headings) else len(text))
+    return result
 
 
 def _method_passages(problem, rules):
-    from backend.services.question_structure import build_major_question_structure, _normalize_label
-
-    reference = problem.reference_answer or ""
-    labelled = build_major_question_structure({"stem": reference}, major_order=0).subparts if reference.strip() else []
-    by_label = {_normalize_label(part.label): part.stem for part in labelled}
+    reference = problem.reference_answer or ''
+    ranges = _labelled_ranges(reference, rules.parts)
     segments = {segment.id: segment.text for segment in rules.answer_segments}
     result = {}
     for part in rules.parts:
-        # Frozen criteria belong to this part. Never offer the whole unscoped
-        # answer to every subquestion, even if the same model can read it.
         texts = [text for item in (*part.steps, *part.deductions) for text in (item.criterion, item.source_quote)]
-        if len(rules.parts) == 1:
+        refs = {*part.answer_refs, *(ref for step in part.steps for ref in step.answer_refs)}
+        if refs:
+            for ref in sorted(refs):
+                located = match_source_quote(reference, segments.get(ref, ''))
+                if located:
+                    # Even frozen excerpts may omit a prefix such as "无需".
+                    texts.extend(sentence.strip() for start, end, sentence in _sentences(reference)
+                                 if start < located.end and located.start < end)
+        elif len(rules.parts) == 1:
             texts.append(reference)
-        elif by_label:
-            texts.append(by_label.get(_normalize_label(part.label), ""))
-        else:
-            refs = {*part.answer_refs, *(ref for step in part.steps for ref in step.answer_refs)}
-            texts.extend(segments[ref] for ref in refs if ref in segments
-                         and match_source_quote(reference, segments[ref]))
+        elif part.id in ranges:
+            start, end = ranges[part.id]
+            heading = re.match(r'\s*[（(][^）)]+[)）]\s*[:：]?\s*', reference[start:end])
+            texts.append(reference[start + (heading.end() if heading else 0):end].strip())
         result[part.id] = list(dict.fromkeys(text for text in texts if text.strip() and _has_method_evidence(text)))
     return result
+
+
+def _student_sources(answer, rules, catalog):
+    if len(rules.parts) == 1:
+        return {rules.parts[0].id: [key for key in catalog if key.startswith('student:')]}
+    ranges = _labelled_ranges(answer, rules.parts)
+    return {part.id: [key for key, (_, start, end) in catalog.items()
+                     if key.startswith('student:') and part.id in ranges
+                     and ranges[part.id][0] <= start < end <= ranges[part.id][1]]
+            for part in rules.parts}
 
 
 async def align_methods(problem, answer, experts, assessments, traces, plan, coordinator,
@@ -118,6 +180,7 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
     # alternative caps and another part's method are not reference evidence.
     passages = {key: value for key, value in _method_passages(problem, plan.part_rubric).items() if key in disputed}
     catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
+    student_sources = _student_sources(answer.content or "", plan.part_rubric, catalog)
     choices = {}
     revised = list(experts)
 
@@ -187,22 +250,24 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
 
     if not all(passages.values()):
         return joint_review_fallback("reference_unavailable")
+    if any(not student_sources[key] for key in disputed):
+        return joint_review_fallback("student_scope_unavailable")
 
     def validate_choices(result):
         ids = [choice.part_id for choice in result.choices]
         if len(ids) != len(set(ids)) or set(ids) != disputed:
             raise ValueError("Choose exactly one method for each disputed part, without changing other parts.")
         for choice in result.choices:
-            if any(key not in catalog or not key.startswith("student:") for key in choice.student_source_ids):
-                raise ValueError("Cite original student source IDs for the method decision.")
-            if choice.method != "undetermined" and (not choice.student_source_ids or not _has_method_evidence(choice.reference_quote)
-                    or not any(match_source_quote(text, choice.reference_quote) for text in passages[choice.part_id])):
+            if any(key not in student_sources[choice.part_id] for key in choice.student_source_ids):
+                raise ValueError("Cite original student source IDs belonging to this disputed part.")
+            if choice.method != "undetermined" and (not choice.student_source_ids
+                    or not any(_supported_method_quote(text, choice.reference_quote) for text in passages[choice.part_id])):
                 raise ValueError("A determined method needs student evidence and a verbatim supplied method passage for this part.")
 
     payload = {"problem": problem.stem, "reference": problem.reference_answer, "answer": answer.content,
                "plan": grading._part_rule_projection(plan.part_rubric, disputed),
                "source_catalog": grading._expert_sources(catalog, plan), "disputed_part_ids": sorted(disputed),
-               "method_reference_passages": passages}
+               "method_reference_passages": passages, "method_student_source_ids": student_sources}
     try:
         selected = await call(coordinator, MethodReview,
             "Determine only which frozen scoring route applies to the student's actual mathematical strategy. "
@@ -211,7 +276,8 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             "frozen alternative policy, even if the problem requires the reference method; that requirement is "
             "already reflected in the alternative cap. Never choose the route giving the higher/lower score, "
             "rewrite the rubric, or supply missing student work. Cite student source IDs and an exact passage "
-            "from this part's method_reference_passages and explain the strategy comparison. These passages "
+            "from this part's method_reference_passages, preserving negation and context. Student IDs must come "
+            "from this part's method_student_source_ids. Explain the strategy comparison. These passages "
             "contain only this part's reference material and frozen primary scoring criteria. They establish "
             "a reference strategy only if they actually specify its mathematical method; a generic correctness "
             "rule, deduction rate or target alone does not. Do not grade or give a score. Use undetermined if "

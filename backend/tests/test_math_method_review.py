@@ -210,7 +210,9 @@ def multipart_case():
     row["criterion"], draft = generated_rubric(row, RubricDefinition(part_rubric=rules))
     p = ProblemInfo(**row)
     plan = bind_draft(retarget_draft(draft, p), p)
-    unchanged = right.model_copy(update={"part_id": "p2", "target_quote": "part:p2"})
+    a = a.model_copy(update={"content": "(1) " + a.content + "\n(2) " + a.content})
+    unchanged = right.model_copy(update={"part_id": "p2", "target_quote": "part:p2", "student_quote": "student:3",
+        "errors": tuple(e.model_copy(update={"evidence": "student:4", "origin_quote": "student:4"}) for e in right.errors)})
     experts = []
     for expert in old_experts:
         assessment = grading.MathAssessment.model_validate(grading.read_math_trace(expert)["assessment"])
