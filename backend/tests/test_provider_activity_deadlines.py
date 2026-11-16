@@ -68,7 +68,9 @@ async def test_workflow_status_save_hang_preserves_model_outcome(route, outcome,
 @pytest.mark.parametrize("outcome", ["error", "hang"])
 @pytest.mark.parametrize("response_only", [False, True])
 async def test_rate_wait_status_save_does_not_abort_retry(route, outcome, response_only, scheduler, monkeypatch):
-    monkeypatch.setattr(request_timeouts, "_LOCAL_STEP_SECONDS", .02)
+    # Required cancellation checks also use this allowance to enter a worker
+    # thread. Leave CI scheduling headroom while bounding hanging status saves.
+    monkeypatch.setattr(request_timeouts, "_LOCAL_STEP_SECONDS", .1)
     monkeypatch.setattr(settings, "llm_timeout", .01)
     monkeypatch.setattr(structured_llm._ainvoke_with_retry.retry, "wait", wait_fixed(0))
     async def advance_shared_wait(_seconds):
