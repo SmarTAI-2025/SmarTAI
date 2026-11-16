@@ -433,7 +433,7 @@ def list_tasks(*, owner_id: str) -> dict[str, dict]:
     return output
 
 
-def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
+def get_task(*, task_id: str, owner_id: str, full: bool = True, _include_source_rows: bool = False) -> dict:
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
     try:
         workflow = workflow_repository.get_live_workflow(
@@ -537,6 +537,7 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
             ) for question in questions
         }
         payload["student_data"] = {} if incomplete_submissions else student_data
+    if full or _include_source_rows:
         payload["submission_sources"] = source_rows
     return payload
 
@@ -592,9 +593,7 @@ def _submission_source_projection(workflow, owner_id: str, *, current_students=N
     # Recognition checkpoints are immutable history. Once attached, review
     # edits and confirmations on the current submission are authoritative.
     current_diagnostics = {}
-    diagnostic_sources = {result.source.id for result in results
-        if (state := source_states.get(result.source.stored_file_id, {})).get("answer_diagnostic_count")
-        or state.get("answer_diagnostics")}
+    diagnostic_sources = {result.source.id for result in results}
     if diagnostic_sources and not manual_review and operation.status not in {"pending", "running"}:
         if current_students is None:
             affected_submissions = [submission for submission in _active_submissions(workflow.assignment_id, owner_id)
@@ -4776,14 +4775,14 @@ def _fail_operation(
 
 
 def task_state(*, task_id: str, owner_id: str) -> dict:
-    payload = get_task(task_id=task_id, owner_id=owner_id, full=False)
+    payload = get_task(task_id=task_id, owner_id=owner_id, full=False, _include_source_rows=True)
     try:
         workflow = workflow_repository.get_live_workflow(
             task_id, owner_id=owner_id
         )
     except NotFound:
         return payload
-    _source_summary, source_rows = _submission_source_projection(workflow, owner_id)
+    source_rows = payload["submission_sources"]
     progress: dict | None = None
     active_operation_status: str | None = None
     if workflow.active_job_id:

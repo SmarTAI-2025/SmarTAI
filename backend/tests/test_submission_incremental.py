@@ -631,13 +631,23 @@ async def test_source_attention_tracks_current_answers_after_teacher_repairs(mon
     assert source["answer_required_diagnostic_count"] == 2
     original = load_source_states(workflow_repository.get_operation(queued["job_id"], owner_id=owner))
     calls = registry.provider.ainvoke.await_count
-    display_id = next(iter(before["student_data"]))
+    display_id = next(p.display_student_id for p in workflow_repository.list_student_presentations(task).values()
+                      if p.source_id == source["source_id"])
     task_facade.update_student_answer(**args, display_student_id=display_id, q_id="q2",
         patch={"content": "print(2)", "review_status": "confirmed"}, expected_revision=before["workflow_revision"])
     after_one = task_facade.get_task(**args)
     current = after_one["submission_sources"][0]
     assert current["answer_required_diagnostic_count"] == 1
     assert [a["q_id"] for a in current["answer_diagnostics"]] == ["q3"]
+    reads = []
+    original_serializer = task_facade._serialize_student_data
+    def counted_serializer(*args, **kwargs):
+        reads.append(1)
+        return original_serializer(*args, **kwargs)
+    with monkeypatch.context() as scope:
+        scope.setattr(task_facade, "_serialize_student_data", counted_serializer)
+        assert task_facade.task_state(**args)["submission_sources"][0]["answer_required_diagnostic_count"] == 1
+    assert len(reads) == 1  # One lightweight poll reuses the same current-answer projection.
     task_facade.update_student_identity(**args, current_display_id=display_id,
         new_display_id="RepairedS1", new_display_name="Corrected Student", expected_revision=after_one["workflow_revision"])
     current_task = task_facade.get_task(**args)
@@ -658,3 +668,39 @@ async def test_source_attention_tracks_current_answers_after_teacher_repairs(mon
     assert ("submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]) is second_unresolved
     assert load_source_states(workflow_repository.get_operation(queued["job_id"], owner_id=owner)) == original
     assert registry.provider.ainvoke.await_count == calls  # Reading/repairing does not rerun recognition.
+
+
+@pytest.mark.asyncio
+async def test_clean_source_discovers_new_assignment_conflicts_and_clears_them_after_repair(monkeypatch):
+    from backend.tests.test_programming_source_answers import seed, SUM, COUNT, SOURCE
+    from backend.services.submission_source_state import load_source_states
+    owner, task = seed(SUM, COUNT)
+    registry = _registry(monkeypatch, lambda _: (_ for _ in ()).throw(AssertionError("Native input called a model")))
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="S1_Alice.py", content=SOURCE.encode(), content_type="text/x-python", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    args = dict(task_id=task, owner_id=owner)
+    before = task_facade.get_task(**args)
+    assert before["submission_sources"][0]["status"] == "parsed"
+    assert before["submission_sources"][0]["answer_diagnostic_count"] == 0
+    assert before["submission_sources"][0]["answer_required_diagnostic_count"] == 0
+    history = load_source_states(workflow_repository.get_operation(queued["job_id"], owner_id=owner))
+    original = next(a for a in before["student_data"]["S1"]["stu_ans"] if a["q_id"] == "q2")
+    task_facade.update_student_answer(**args, display_student_id="S1", q_id="q2",
+        patch={"answer_id": original["answer_id"], "target_q_id": "q3"}, expected_revision=before["workflow_revision"])
+    conflicted = task_facade.get_task(**args)
+    assert all("answer_assignment_conflict" in a["flag"] for a in conflicted["student_data"]["S1"]["stu_ans"])
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    for snapshot in [conflicted, task_facade.task_state(**args)]:
+        source = snapshot["submission_sources"][0]
+        assert source["answer_required_diagnostic_count"] == source["answer_diagnostic_count"] == 2
+        assert len(source["answer_diagnostics"]) == 2
+        assert all("answer_assignment_conflict" in a["flag"] for a in source["answer_diagnostics"])
+    task_facade.update_student_answer(**args, display_student_id="S1", q_id="q3",
+        patch={"answer_id": original["answer_id"], "target_q_id": "q2"}, expected_revision=conflicted["workflow_revision"])
+    for snapshot in [task_facade.get_task(**args), task_facade.task_state(**args)]:
+        source = snapshot["submission_sources"][0]
+        assert source["answer_required_diagnostic_count"] == source["answer_diagnostic_count"] == 0
+        assert source["answer_diagnostics"] == []
+    assert load_source_states(workflow_repository.get_operation(queued["job_id"], owner_id=owner)) == history
+    registry.provider.ainvoke.assert_not_awaited()

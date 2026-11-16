@@ -19,8 +19,8 @@ for (const stage of ["problems", "submissions", "grading"] as const) {
         answer_diagnostic_count: 147 + requiredCount, answer_required_diagnostic_count: requiredCount,
         answer_diagnostics: [
           ...Array.from({ length: 147 }, (_, i) => ({ q_id: `advisory-${i}`, number: `2.1.${i + 1}`, has_content: true, recognition_confidence: .2, flag: [] })),
-          ...Array.from({ length: requiredCount }, (_, i) => ({ q_id: `q${i}`, number: `1.2.${i + 1}`, has_content: requiredCount !== 2,
-            recognition_confidence: .2, flag: [requiredCount === 2 ? "no_matching_answer" : "recognition_invalid_fields:content"] })),
+          ...Array.from({ length: requiredCount }, (_, i) => ({ q_id: requiredCount === 2 ? "duplicate" : `q${i}`, number: requiredCount === 2 ? "1.2.2" : `1.2.${i + 1}`, has_content: true,
+            recognition_confidence: .2, flag: [requiredCount === 2 ? "answer_assignment_conflict" : "recognition_invalid_fields:content"] })),
         ] };
       const task = { task_id: "required", name: "Required diagnostics", status: "error", workflow_revision: 2,
         last_failed_job_id: "failed", error: "provider_response_invalid", active_job_id: null,
@@ -78,7 +78,9 @@ for (const stage of ["problems", "submissions", "grading"] as const) {
         expect(await list.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
       }
       const lastNumber = `1.2.${Math.min(20, requiredCount)}`;
-      await expect(panel.getByText(zh ? `第 ${lastNumber} 题` : `Question ${lastNumber}`, { exact: stage !== "grading" })).toBeVisible();
+      const lastQuestion = panel.getByText(zh ? `第 ${lastNumber} 题` : `Question ${lastNumber}`, { exact: stage !== "grading" });
+      if (stage === "submissions" && requiredCount === 2) await expect(lastQuestion).toHaveCount(2);
+      await expect(lastQuestion.last()).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await expect(page.locator("vite-error-overlay")).toHaveCount(0);
       await list.evaluate(el => { el.scrollTop = 0; });

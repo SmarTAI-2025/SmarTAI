@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SubmissionSourceOutcome } from "@/types";
 import { SubmissionSourceOutcomePanel } from "./SubmissionSourceOutcomePanel";
 
@@ -242,4 +242,17 @@ it("keeps the required-answer count outside details in a mixed successful/failed
   const notice = screen.getByText(/有 2 份作答需要处理/);
   expect(notice.closest("details")).toBeNull();
   expect(screen.getByText("第 1 题").closest("details")).toHaveAttribute("open");
+});
+
+it("renders both responses with the same conflicted question ID without duplicate-key errors", () => {
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    render(<MemoryRouter><SubmissionSourceOutcomePanel requiredOnly locale="zh-CN" sources={[{
+      ...sources[0], answer_required_diagnostic_count: 2, answer_diagnostic_count: 2,
+      answer_diagnostics: [1, 2].map(() => ({ q_id: "q2", number: "2", has_content: true, flag: ["answer_assignment_conflict"] })),
+    }]} /></MemoryRouter>);
+    expect(screen.getAllByText("第 2 题")).toHaveLength(2);
+    expect(screen.getByText(/有 2 份作答需要处理/)).toBeVisible();
+    expect(errors).not.toHaveBeenCalled();
+  } finally { errors.mockRestore(); }
 });

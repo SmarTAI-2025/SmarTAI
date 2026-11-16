@@ -177,8 +177,8 @@ function SourceOutcomeRow({ source, locale, requiredOnly }: { source: Submission
           {source.page_diagnostics ? <PageDiagnostics source={source} locale={locale} /> : null}
           {source.student_candidate ? <p className="mt-1 text-xs text-muted-foreground">{tx(locale, "已识别身份：", "Recognized identity: ")}{source.student_candidate}</p> : null}
           {diagnosticCount > 0 ? <p className="mt-2 text-xs font-medium">{tx(locale, `${diagnosticCount} 份作答需要关注`, `${diagnosticCount} responses need attention`)}</p> : null}
-          {shown.map(({ answer, notes }) => {
-            return notes.length ? <div key={answer.q_id} className="mt-2 rounded-md border px-3 py-2 text-xs leading-5">
+          {shown.map(({ answer, notes }, index) => {
+            return notes.length ? <div key={`${answer.q_id}:${index}`} className="mt-2 rounded-md border px-3 py-2 text-xs leading-5">
               <strong>{tx(locale, `第 ${answer.number || answer.q_id} 题`, `Question ${answer.number || answer.q_id}`)}</strong>
               {notes.map(note => <p key={note.label} className={note.severity === "blocking" ? "text-red-700 dark:text-red-300" : "text-amber-700 dark:text-amber-300"}>
                 {tx(locale, note.severity === "blocking" ? "需处理：" : "建议复核：", note.severity === "blocking" ? "Required: " : "Suggested: ")}{note.label}
