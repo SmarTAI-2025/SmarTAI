@@ -15,7 +15,7 @@ import { cn } from "@/lib/cn";
 import { modelDisplayName } from "@/lib/modelPresentation";
 import { formatTaskTime, getTaskDestination, isTaskProcessing } from "@/lib/taskFlow";
 import { TASK_STAGE_KEYS as STAGE_KEYS, TASK_ACTION_KEYS as ACTION_KEYS, taskStatusTone } from "@/lib/taskPresentation";
-import type { ExpertConfig, JobProgress, TaskLite, TaskStatus } from "@/types";
+import type { ExpertConfig, TaskLite, TaskStatus } from "@/types";
 
 const PROCESSING_STATUSES = new Set<TaskStatus>([
   "extracting_problems",
@@ -349,9 +349,9 @@ function DesktopTaskRow({ task, courseTags, deletion }: DashboardTaskProps) {
   const { locale, t } = useI18n();
   const isProcessing = isTaskProcessing(task.status);
   const progressQuery = useTaskProgress(task.task_id, { enabled: isProcessing });
-  const progressValue = getProgressValue(task, progressQuery.progress, progressQuery.percent);
+  const progressValue = getProgressValue(task, progressQuery.percent);
   const complete = task.status === "graded" || task.status === "finalized";
-  const etaSeconds = complete ? 0 : progressQuery.data?.eta_seconds ?? task.eta_seconds;
+  const etaSeconds = complete ? 0 : progressQuery.data ? progressQuery.data.eta_seconds : task.eta_seconds;
   const eta = etaSeconds == null && isProcessing && progressQuery.progress?.phase !== "done"
     ? t("dashboardEtaEstimating")
     : formatHistoryEta(etaSeconds, locale);
@@ -402,7 +402,7 @@ function MobileTaskCard({ task, courseTags, deletion }: DashboardTaskProps) {
   const { locale, t } = useI18n();
   const isProcessing = isTaskProcessing(task.status);
   const progressQuery = useTaskProgress(task.task_id, { enabled: isProcessing });
-  const progressValue = getProgressValue(task, progressQuery.progress, progressQuery.percent);
+  const progressValue = getProgressValue(task, progressQuery.percent);
 
   return (
     <article className="relative [overflow-wrap:anywhere]">
@@ -642,9 +642,9 @@ function compareExperts(a: ExpertConfig, b: ExpertConfig): number {
   return aName.localeCompare(bName);
 }
 
-function getProgressValue(task: TaskLite, progress: JobProgress | null, percent: number): string {
+function getProgressValue(task: TaskLite, percent: number | null): string {
   if (["graded", "finalized"].includes(task.status)) return "100%";
-  if (!isTaskProcessing(task.status) || !progress) return "—";
+  if (!isTaskProcessing(task.status) || percent === null) return "—";
   return `${percent}%`;
 }
 

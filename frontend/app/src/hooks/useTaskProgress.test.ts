@@ -1,86 +1,32 @@
-import { describe, expect, it } from "vitest";
-import type { JobProgress } from "@/types";
-import { calculateProgressPercent } from "./useTaskProgress";
+import { renderHook } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useTaskProgress } from "./useTaskProgress";
 
-function progress(overrides: Partial<JobProgress>): JobProgress {
-  return {
-    phase: "parsing",
-    total_students: 0,
-    total_questions: 0,
-    completed_units: 0,
-    active: [],
-    messages: [],
-    ...overrides,
-  };
-}
+const state = vi.hoisted(() => ({ data: {} as Record<string, unknown> }));
+vi.mock("@/api/hooks/tasks", () => ({ useTaskState: () => ({ data: state.data }) }));
 
-describe("question generation progress", () => {
-  it("counts initial model work and finalization separately without declaring unfinished grading done", () => {
-    const model = { id: "model-1", label: "Model", total: 217, succeeded: 80, failed: 0,
-      cancelled: 0, processing: 0, queued: 0, responding: 0, retrying: 0, completion_times: [] };
-    const value = progress({ phase: "grading", total_students: 31, total_questions: 7, completed_units: 4,
-      model_progress: [model, { ...model, id: "model-2", succeeded: 199, failed: 1 }] });
-    expect(calculateProgressPercent(value, "grading")).toBe(44);
-    expect(calculateProgressPercent({ ...value, completed_units: 5 }, "grading")).toBeGreaterThanOrEqual(44);
-    const finished = { ...value, completed_units: 217, model_progress: [{ ...model, succeeded: 217 }] };
-    expect(calculateProgressPercent(finished, "grading")).toBe(99);
-    expect(calculateProgressPercent({ ...finished, phase: "done" }, "graded")).toBe(100);
-  });
-  it("does not move backwards when generation metrics first appear", () => {
-    expect(calculateProgressPercent(progress({
-      current_step: "generating_solutions",
-      completed_steps: 3,
-      total_steps: 8,
-      stage_metrics: {
-        solution_total_questions: 7,
-        solution_completed_questions: 0,
-        solution_failed_questions: 0,
-      },
-    }))).toBe(38);
+beforeEach(() => {
+  state.data = { status: "grading", progress: { phase: "grading", messages: [],
+    total_students: 31, total_questions: 7, completed_units: 216 } };
+});
+
+describe("one server progress projection for task pages and dashboard", () => {
+  it("uses the server percentage instead of rounding counters to 100%", () => {
+    state.data.progress_percent = 99;
+    const { result, rerender } = renderHook(() => useTaskProgress("task"));
+    expect(result.current.percent).toBe(99);
+    state.data = { ...state.data, status: "graded", progress_percent: 100, progress: null };
+    rerender();
+    expect(result.current.percent).toBe(100);
   });
 
-  it("advances within the generation stage for each completed major question", () => {
-    expect(calculateProgressPercent(progress({
-      current_step: "generating_solutions",
-      completed_steps: 3,
-      total_steps: 8,
-      stage_metrics: {
-        solution_total_questions: 7,
-        solution_completed_questions: 1,
-        solution_failed_questions: 0,
-      },
-    }))).toBe(39);
-
-    expect(calculateProgressPercent(progress({
-      current_step: "generating_solutions",
-      completed_steps: 3,
-      total_steps: 8,
-      stage_metrics: {
-        solution_total_questions: 7,
-        solution_completed_questions: 7,
-        solution_failed_questions: 0,
-      },
-    }))).toBe(50);
+  it("does not replace whole-pipeline progress with a local unit calculation", () => {
+    state.data.progress_percent = 44;
+    expect(renderHook(() => useTaskProgress("task")).result.current.percent).toBe(44);
   });
 
-  it("does not count a failed major question as completed", () => {
-    expect(calculateProgressPercent(progress({
-      current_step: "generating_solutions",
-      completed_steps: 3,
-      total_steps: 8,
-      stage_metrics: {
-        solution_total_questions: 7,
-        solution_completed_questions: 1,
-        solution_failed_questions: 1,
-      },
-    }))).toBe(39);
-  });
-
-  it("keeps the legacy stage-only calculation when new metrics are absent", () => {
-    expect(calculateProgressPercent(progress({
-      current_step: "generating_solutions",
-      completed_steps: 3,
-      total_steps: 8,
-    }))).toBe(38);
+  it.each([null, undefined, NaN])("keeps unavailable progress unknown (%s)", value => {
+    state.data.progress_percent = value;
+    expect(renderHook(() => useTaskProgress("task")).result.current.percent).toBeNull();
   });
 });

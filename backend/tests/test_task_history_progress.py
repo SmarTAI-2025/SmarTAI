@@ -26,9 +26,9 @@ def _grading(**changes):
     ("submissions_ready", None, (None, None)),
     ("error", _grading(phase="error"), (None, None)),
     ("grading", None, (None, None)),
-    ("grading", _grading(), (20, 400)),
-    ("grading", _grading(completed_units=15), (75, 33)),
-    ("grading", _grading(completed_units=20), (100, 0)),
+    ("grading", _grading(), (20, None)),
+    ("grading", _grading(completed_units=15), (75, None)),
+    ("grading", _grading(completed_units=20), (99, None)),
     ("grading", _grading(completed_units=0), (0, None)),
     ("grading", _grading(total_questions=0), (None, None)),
     ("grading", _grading(started_at=None), (20, None)),
@@ -40,15 +40,42 @@ def _grading(**changes):
     ("extracting_problems", {"phase": "done"}, (100, None)),
 ])
 def test_progress_uses_real_units_and_eta_requires_a_measured_grading_rate(status, progress, expected):
-    fields = task_history_progress.progress_fields(status, progress, now=200)
+    fields = task_history_progress.progress_fields(status, progress)
     assert (fields["progress_percent"], fields["eta_seconds"]) == expected
 
 
-def test_eta_accepts_millisecond_start_timestamps():
+@pytest.mark.parametrize("eta,expected", [(123, 123), (None, None), (-1, None), (float("nan"), None)])
+def test_eta_uses_whole_grading_pipeline_without_initial_only_or_elapsed_fallback(eta, expected):
     fields = task_history_progress.progress_fields(
-        "grading", _grading(started_at=1_800_000_000_000), now=1_800_000_100,
+        "grading", _grading(grading_eta_seconds=eta, model_eta_seconds=1,
+                            model_progress=[{"total": 20, "succeeded": 20, "failed": 0}]),
     )
-    assert fields == {"progress_percent": 20, "eta_seconds": 400}
+    assert fields == {"progress_percent": 60, "eta_seconds": expected}
+
+
+@pytest.mark.parametrize("completed,phase,expected", [(216, "grading", 99), (217, "grading", 99), (217, "done", 99)])
+@pytest.mark.parametrize("with_models", [False, True])
+def test_unfinished_grading_never_rounds_up_to_complete(completed, phase, expected, with_models):
+    models = [{"total": 217, "succeeded": 217, "failed": 0}] * 2 if with_models else []
+    snapshot = _grading(total_students=31, total_questions=7, completed_units=completed,
+                        phase=phase, model_progress=models)
+    assert task_history_progress.progress_fields("grading", snapshot)["progress_percent"] == expected
+    assert task_history_progress.progress_fields("graded", snapshot) == {"progress_percent": 100, "eta_seconds": 0}
+
+
+def test_initial_work_and_finalization_use_the_same_fixed_denominator():
+    snapshot = _grading(total_students=31, total_questions=7, completed_units=4,
+        model_progress=[{"total": 217, "succeeded": 80, "failed": 0},
+                        {"total": 217, "succeeded": 199, "failed": 1}])
+    assert task_history_progress.progress_fields("grading", snapshot)["progress_percent"] == 44
+
+
+@pytest.mark.parametrize("done,failed,expected", [(0, 0, 38), (1, 0, 39), (1, 1, 39), (7, 0, 50)])
+def test_question_generation_keeps_per_question_progress(done, failed, expected):
+    snapshot = {"total_steps": 8, "completed_steps": 3, "current_step": "generating_solutions",
+        "stage_metrics": {"solution_total_questions": 7, "solution_completed_questions": done,
+                          "solution_failed_questions": failed}}
+    assert task_history_progress.progress_fields("extracting_problems", snapshot)["progress_percent"] == expected
 
 
 @pytest.fixture
@@ -70,12 +97,11 @@ def history(monkeypatch):
     async def own_state(*, task_id, owner_id):
         assert owner_id == owner.id
         state_calls.append(task_id)
-        return {"status": "grading", "progress": _grading(completed_units=4 if task_id == "slow" else 15)}
+        return {"status": "grading", "progress": _grading(completed_units=4 if task_id == "slow" else 15, grading_eta_seconds=400 if task_id == "slow" else 33)}
 
     monkeypatch.setattr(task_facade, "list_tasks", own_tasks)
     monkeypatch.setattr(task_facade, "async_task_state", own_state)
     monkeypatch.setattr(tasks, "_history_facets", lambda items, owner_id: {})
-    monkeypatch.setattr(task_history_progress.time, "time", lambda: 200)
     return TestClient(app), items, state_calls
 
 
@@ -116,6 +142,29 @@ def test_state_polling_uses_the_same_numeric_progress_and_eta_as_history(history
         assert response.status_code == 200, response.text
         for field in ("progress_percent", "eta_seconds"):
             assert response.json()[field] == row[field]
+
+
+@pytest.mark.parametrize("status,phase,completed,expected", [
+    ("grading", "grading", 4, 44),
+    ("grading", "grading", 216, 99),
+    ("grading", "done", 217, 99),
+    ("graded", "done", 217, 100),
+])
+def test_history_and_live_state_share_grading_boundary(history, monkeypatch, status, phase, completed, expected):
+    client, _, _ = history
+    async def snapshot(**kwargs):
+        early = completed == 4
+        return {"status": status, "progress": _grading(phase=phase,
+            total_students=31, total_questions=7, completed_units=completed,
+            grading_eta_seconds=900 if early else None, model_eta_seconds=1,
+            model_progress=[{"total": 217, "succeeded": 80 if early else 217, "failed": 0},
+                            {"total": 217, "succeeded": 199 if early else 217, "failed": 1 if early else 0}])}
+    monkeypatch.setattr(task_facade, "async_task_state", snapshot)
+    row = next(row for row in client.get("/tasks/", params={"page": 1}).json()["items"] if row["task_id"] == "slow")
+    state = client.get("/tasks/slow/state").json()
+    assert row["status"] == state["status"] == status
+    assert row["progress_percent"] == state["progress_percent"] == expected
+    assert row["eta_seconds"] == state["eta_seconds"] == (900 if completed == 4 else 0 if status == "graded" else None)
 
 
 def test_unavailable_progress_stays_unknown_without_exposing_errors(monkeypatch):

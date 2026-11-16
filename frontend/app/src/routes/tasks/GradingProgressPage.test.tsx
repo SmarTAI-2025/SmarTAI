@@ -41,7 +41,7 @@ function renderProgress() {
 describe("GradingProgressPage completion routing", () => {
   it("shows exact initial and pending counts, using the whole-run estimate instead of the initial-only estimate", () => {
     vi.mocked(useTaskProgress).mockReturnValue({
-      data: { status: "grading", problem_count: 7, student_count: 31 },
+      data: { status: "grading", problem_count: 7, student_count: 31, eta_seconds: 900 },
       progress: { phase: "grading", total_students: 31, total_questions: 7, completed_units: 4,
         saved_units: 199, fully_saved_units: 80, pending_finalization_units: 76, messages: [], active: [],
         model_progress: [{ id: "model-1", label: "Model", total: 217, succeeded: 80, failed: 0 }],
@@ -104,9 +104,9 @@ describe("GradingProgressPage completion routing", () => {
     expect(screen.getByText(/Estimated remaining Estimating/)).toBeInTheDocument();
     expect(screen.queryByText(/about .* hr/)).not.toBeInTheDocument();
   });
-  it("still estimates a batch with several recently completed responses", () => {
+  it("shows the server whole-pipeline estimate", () => {
     (useTaskProgress as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { status: "grading", problem_count: 7, student_count: 2 },
+      data: { status: "grading", problem_count: 7, student_count: 2, eta_seconds: 220 },
       progress: { total_students: 2, total_questions: 7, completed_units: 3,
         started_at: Date.now() / 1000 - 60,
         messages: [{ message: "Completed one grading unit.", ts: Date.now() / 1000, level: "info" }], active: [] },
@@ -115,29 +115,20 @@ describe("GradingProgressPage completion routing", () => {
     renderProgress();
     expect(screen.getByText(/Estimated remaining about 4 min/)).toBeInTheDocument();
   });
-  it("withdraws an estimate when unchanged polling data becomes stale", () => {
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const progress = { total_students: 2, total_questions: 7, completed_units: 3,
-      started_at: now / 1000 - 60,
-      messages: [{ message: "Completed one grading unit.", ts: now / 1000, level: "info" }], active: [] };
-    let updatedAt = now;
+  it("withdraws the previous estimate when the server can no longer estimate reliably", () => {
+    let etaSeconds: number | null = 220;
     (useTaskProgress as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-      data: { status: "grading", problem_count: 7, student_count: 2 },
-      progress, percent: 21, dataUpdatedAt: updatedAt, refetch: vi.fn(),
+      data: { status: "grading", problem_count: 7, student_count: 2, eta_seconds: etaSeconds },
+      progress: { total_students: 2, total_questions: 7, completed_units: 3, messages: [], active: [] },
+      percent: 21, refetch: vi.fn(),
     }));
-    try {
-      const view = renderProgress();
-      expect(screen.getByText(/Estimated remaining about 4 min/)).toBeInTheDocument();
-      clock.mockReturnValue(now + 61_000);
-      updatedAt = now + 61_000;
-      view.rerender(<MemoryRouter initialEntries={["/tasks/task-1/grading/progress"]}>
-        <Routes><Route path="/tasks/:taskId/grading/progress" element={<GradingProgressPage />} /></Routes>
-      </MemoryRouter>);
-      expect(screen.getByText(/Estimated remaining Estimating/)).toBeInTheDocument();
-    } finally {
-      clock.mockRestore();
-    }
+    const view = renderProgress();
+    expect(screen.getByText(/Estimated remaining about 4 min/)).toBeInTheDocument();
+    etaSeconds = null;
+    view.rerender(<MemoryRouter initialEntries={["/tasks/task-1/grading/progress"]}>
+      <Routes><Route path="/tasks/:taskId/grading/progress" element={<GradingProgressPage />} /></Routes>
+    </MemoryRouter>);
+    expect(screen.getByText(/Estimated remaining Estimating/)).toBeInTheDocument();
   });
   beforeEach(() => {
     vi.clearAllMocks();
