@@ -757,6 +757,10 @@ def _with_pending_advice(expert, language):
     trace = read_math_trace(expert)
     if not trace:
         return expert
+    from backend.services.grading_feedback import method_review_comment
+    comment = method_review_comment(expert.comment, trace, language)
+    if comment != expert.comment:
+        expert = expert.model_copy(update={"comment": comment})
     proof_concerns = trace.get("proof_audit", {}).get("review_concerns", [])
     if not trace.get("review_pending") and not proof_concerns:
         return expert
@@ -873,7 +877,7 @@ def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=No
             if plan.part_rubric and draft.part_decisions:
                 from backend.skills.math_method_review import validate_method_part_sources
                 validate_method_part_sources(_changed_part_decisions(draft, original), answer.content or '',
-                                             plan.part_rubric, require_scope=False)
+                                             plan.part_rubric, require_scope=False, known_decisions=draft.part_decisions)
             for claim in draft.claims:
                 try:
                     location = _locate_claim(claim, answer.content or "", plan, problem.stem, catalog)
@@ -1295,7 +1299,7 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                            for d in candidate.part_decisions):
                         raise ValueError("review_changed_selected_method")
                     validate_method_part_sources([d for d in _changed_part_decisions(candidate, old) if d.part_id in selected_methods],
-                                                 answer.content or "", plan.part_rubric)
+                                                 answer.content or "", plan.part_rubric, known_decisions=candidate.part_decisions)
                 _assessment_validator(plan, answer, problem, original=old,
                     evidence=trace.get("evidence", []))(candidate)
                 score, steps = score_assessment(candidate, plan, answer.content or "", problem_text=problem.stem)
@@ -1588,10 +1592,18 @@ class MathGradingSkill(GradingSkill):
 
     async def _assess(self, plan, *, system_prompt, user_prompt, validator, part_output=FrozenPartAssessment):
         if plan.part_rubric:
+            validated = None
+            def validate(candidate):
+                nonlocal validated
+                normalized = candidate.assessment()
+                validator(normalized)
+                validated = candidate, normalized
             assessment, response = await structured_llm_call(self.provider,
                 output_model=part_output, system_prompt=system_prompt, user_prompt=user_prompt,
-                validate_output=lambda candidate: validator(candidate.assessment()))
-            return assessment.assessment(), response
+                validate_output=validate)
+            if validated is None or validated[0] is not assessment:
+                validate(assessment)
+            return validated[1], response
         return await structured_llm_call(self.provider, output_model=MathAssessment,
             system_prompt=system_prompt, user_prompt=user_prompt, validate_output=validator)
 

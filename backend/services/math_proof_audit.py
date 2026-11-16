@@ -79,7 +79,8 @@ def inspect_audit(raw, assessment, answer: str, problem: str, plan, *, previous=
 Only a concrete, source-bound, rubric-linked unresolved scoring concern can
 request review. Existing concerns survive a broken/missing review appendix.
     """
-    catalog = source_catalog(answer, problem, plan.original_criterion)
+    catalog = source_catalog(answer, problem, plan.original_criterion,
+                             parts=plan.part_rubric.parts if plan.part_rubric else ())
     student_ids = {key for key in catalog if key.startswith("student:")}
     claims = {claim.id: claim for claim in assessment.claims}
     result = {"status": "missing" if raw is None else "invalid", "steps": [],

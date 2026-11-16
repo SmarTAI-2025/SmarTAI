@@ -34,7 +34,26 @@ class SourceMatch:
     method: Literal["exact", "format"]
 
 
-def source_catalog(answer: str, problem: str, criterion: str) -> dict[str, tuple[str, int, int]]:
+def source_lines(source: str):
+    """Share Python's line boundaries while preserving original offsets."""
+    offset = 0
+    for number, line in enumerate(source.splitlines(keepends=True), 1):
+        text = line.rstrip("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+        yield number, text, offset, offset + len(text)
+        offset += len(line)
+
+
+def source_identity(span: SourceMatch) -> tuple[int, int]:
+    """Same original lexical span, independent of whitespace/math delimiters.
+
+    Keep occurrence offsets: repeated equal text elsewhere is a distinct source,
+    and a strict subexpression never becomes the identity of the whole line.
+    """
+    tokens = _tokens(span.text)
+    return (span.start + tokens[0][1], span.start + tokens[-1][2]) if tokens else (span.start, span.end)
+
+
+def source_catalog(answer: str, problem: str, criterion: str, *, parts=()) -> dict[str, tuple[str, int, int]]:
     """Address original lines without asking a model to re-encode their TeX.
 
     IDs are local to this immutable answer/question, never model-supplied text.
@@ -42,13 +61,60 @@ def source_catalog(answer: str, problem: str, criterion: str) -> dict[str, tuple
     """
     result, remaining = {}, 40000
     for prefix, source in (("student", answer), ("question", problem), ("rubric", criterion)):
-        offset = 0
-        for number, line in enumerate(source.splitlines(keepends=True), 1):
-            text = line.rstrip("\r\n")
+        for number, text, start, end in source_lines(source):
             if text.strip() and len(text) <= remaining and len(result) < 240:
-                result[f"{prefix}:{number}"] = (text, offset, offset + len(text))
+                result[f"{prefix}:{number}"] = (text, start, end)
                 remaining -= len(text)
-            offset += len(line)
+    ranges = _labelled_ranges(answer, parts) if len(parts) > 1 else {}
+    for key, (_, start, end) in list(result.items()):
+        if not key.startswith('student:'):
+            continue
+        for left, right in ranges.values():
+            first, last = max(left, start), min(right, end)
+            if start <= first < last <= end and (first, last) != (start, end):
+                result[f'{key}:{first - start + 1}-{last - start}'] = (answer[first:last], first, last)
+    return result
+
+
+_PART_LABEL = r'(?:[（(](?:[0-9０-９]+|[A-Za-z]|[ivxIVX]{1,6})[)）]|[0-9０-９]+[)）])'
+
+
+def _part_headings(text):
+    """Prefer explicit line headings over inline equation references/list items.
+
+    Inline headings still support same-line answers. When that label has a
+    line heading, inline mentions cannot duplicate or displace it. Unmapped
+    headings remain boundaries; uncertainty never extends the preceding part.
+    """
+    from backend.services.question_structure import _normalize_label
+    candidates = []
+    for _, line, start, _ in source_lines(text):
+        for match in re.finditer(r'(?:^[ \t]*|(?<=[，,；;。])[ \t]*|(?<=[ \t]))(?P<label>' + _PART_LABEL + ')', line):
+            prefix = line[:match.start()].rstrip()
+            tail = line[match.end():].strip()
+            anchored = not prefix
+            if not anchored and (not tail or tail[0] in '=+*/^<>，,；;。' or
+                                 re.match(r'[A-Za-zα-ωΑ-Ω](?:[=+*/^−-]|$)', tail)):
+                continue
+            label = _normalize_label(match['label'].strip('（()）'))
+            candidates.append((start + match.start(), start + match.end(), label, anchored))
+    anchored_labels = {label for _, _, label, anchored in candidates if anchored}
+    return [(start, end, label) for start, end, label, anchored in candidates
+            if anchored or label not in anchored_labels]
+
+
+def _labelled_ranges(text, parts):
+    from backend.services.question_structure import _normalize_label
+    # Explicit headings may share a sentence or occupy their own line.
+    # Trailing equation numbers do not override frozen answer-to-part links.
+    headings = _part_headings(text)
+    result = {}
+    for part in parts:
+        label = _normalize_label((part.label or '').strip('（()）'))
+        matches = [(i, h) for i, h in enumerate(headings) if h[2] == label]
+        if label and len(matches) == 1 and sum(_normalize_label((p.label or '').strip('（()）')) == label for p in parts) == 1:
+            index, heading = matches[0]
+            result[part.id] = (heading[0], headings[index + 1][0] if index + 1 < len(headings) else len(text))
     return result
 
 

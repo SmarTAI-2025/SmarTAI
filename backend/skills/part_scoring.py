@@ -11,6 +11,7 @@ from pydantic.json_schema import SkipJsonSchema
 from backend.models import StepScore
 from backend.services.math_source_evidence import SourceMatch, match_source_quote, source_catalog
 from backend.services.part_rubric import Frozen, Key, Text
+from backend.services.math_source_evidence import source_identity, source_lines
 
 
 class StepDecision(Frozen):
@@ -211,12 +212,10 @@ def _student_span(answer, fragment):
         if fragment.startswith("student:"):
             return None
         return match_source_quote(answer, fragment)
-    lines = answer.splitlines(keepends=True)
-    index = int(match[1]) - 1
-    if index >= len(lines) or not lines[index].strip():
+    located = next((entry for entry in source_lines(answer) if entry[0] == int(match[1])), None)
+    if located is None or not located[1].strip():
         return None
-    start = sum(map(len, lines[:index]))
-    line = lines[index].rstrip("\r\n")
+    _, line, start, end = located
     if match[2] is not None:
         from backend.services.math_source_evidence import match_source_slice
         first, last = int(match[2]) - 1, int(match[3])
@@ -224,7 +223,7 @@ def _student_span(answer, fragment):
         if not located:
             return None
         return SourceMatch(located.text, start + first, start + last, "exact")
-    return SourceMatch(line, start, start + len(line), "exact")
+    return SourceMatch(line, start, end, "exact")
 
 
 def _supporting_spans(answer, fragment, catalog):
@@ -293,7 +292,7 @@ def settle_parts(rules, decisions, answer, question):
     # Step evidence may cite several source lines. Each is a possible origin
     # in its own right; the unquoted text between them is never evidence.
     verified_errors = {
-        (span.start, span.end)
+        source_identity(span)
         for decision in decisions
         for step in decision.steps if step.outcome == "missed"
         for span in support(step.evidence)
@@ -304,7 +303,7 @@ def settle_parts(rules, decisions, answer, question):
             for event in decision.errors:
                 origin = _student_span(answer, event.origin_quote)
                 if origin is not None:
-                    verified_errors.add((origin.start, origin.end))
+                    verified_errors.add(source_identity(origin))
     total = Fraction(0)
     rows = []
     for part in rules.parts:
@@ -409,8 +408,8 @@ def settle_parts(rules, decisions, answer, question):
                     downstream = support(awarded.evidence)
                     if (
                         not origin
-                        or (origin.start, origin.end) not in verified_errors
-                        or origin.end > min(span.start for span in downstream)
+                        or source_identity(origin) not in verified_errors
+                        or source_identity(origin)[1] > min(source_identity(span)[0] for span in downstream)
                     ):
                         raise ValueError(
                             f"{step.id}: cite a distinct earlier error and the sound dependent work."
@@ -464,9 +463,9 @@ def settle_parts(rules, decisions, answer, question):
                 ):
                     raise ValueError("Use only the selected deduction rule.")
                 identity = (
-                    ("student", location.start, location.end)
+                    ("student", *source_identity(location))
                     if location
-                    else ("target", target.start, target.end)
+                    else ("target", *source_identity(target))
                 )
                 if identity in seen:
                     raise ValueError(

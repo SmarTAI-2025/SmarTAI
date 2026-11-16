@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.services.math_source_evidence import match_source_quote, source_catalog
+from backend.services.math_source_evidence import match_source_quote, source_catalog, source_lines, _PART_LABEL, _part_headings, _labelled_ranges
 from backend.skills.base import build_system_prompt
 from backend.skills.part_scoring import INSTRUCTION, PROOF_INSTRUCTION
 from backend.tools.structured_llm import StructuredOutputInvalidError, structured_llm_call
@@ -40,14 +40,17 @@ def _sentences(text):
     start = 0
     # A physical line break may wrap "Never use\nsubstitution". It is not a
     # semantic reset; keep the complete statement and its original offsets.
-    for boundary in re.finditer(r"[。！？!?；;]|(?<!\d)\.(?!\d)", text):
-        yield start, boundary.end(), text[start:boundary.end()]
-        start = boundary.end()
+    boundaries = {m.end() for m in re.finditer(r"[。！？!?；;]|(?<!\d)\.(?!\d)", text)}
+    boundaries.update(start for start, _, _ in _part_headings(text) if start)
+    for end in sorted(boundaries):
+        yield start, end, text[start:end]
+        start = end
     if start < len(text):
         yield start, len(text), text[start:]
 
 
 def _method_spans(text):
+    sentences = list(_sentences(text))
     technique = (
         r"配方|因式分解|消元|换元|代入|数学归纳|归纳法|反证|构造反例|逐坐标|逐分量|"
         r"同态映射|单位元嵌入|对角化|分部积分|分离变量|泰勒展开|傅里叶变换|"
@@ -55,7 +58,7 @@ def _method_spans(text):
         r"induction|contradiction|counterexample|coordinatewise|componentwise|"
         r"diagonali[sz]\w*|integration\s+by\s+parts|separation\s+of\s+variables)\b")
     def affirmed(start, end, *, named=False):
-        for begin, finish, sentence in _sentences(text):
+        for begin, finish, sentence in sentences:
             if begin <= start < end <= finish:
                 # A comma is not itself a polarity reset ("do not use,
                 # substitution" / "use substitution, which is forbidden").
@@ -68,17 +71,17 @@ def _method_spans(text):
                 prefix = sentence[left:start - begin]
                 clause = sentence[left:right]
                 if re.search(r"不|未|无须|无需|勿|禁止|禁用|避免|排除|舍弃|拒绝|"
-                             r"失败|失效|行不通|错误示范|展示错误|演示错误|错例|反面示例|"
+                             r"失败|失效|无效|毫无|行不通|错误选项|错误示范|展示错误|演示错误|错例|反面示例|"
                              r"\b(?:not|no|never|without|avoid\w*|refrain\w*|exclud\w*|reject\w*|"
                              r"forbid\w*|forbidden|prohibit\w*|rule\w*\s+out|instead\s+of|rather\s+than|"
                              r"\w+n['’]t|unnecessary|inapplicable|invalid|fail\w*|unsuccessful|wrong|erroneous)\b", clause, re.I):
                     return False
-                prefix = re.sub(r"^\s*[（(][\w一二三四五六七八九十]+[)）]\s*[:：]?", "", prefix).strip()
+                prefix = re.sub(r'^\s*' + _PART_LABEL + r'\s*[:：]?', '', prefix).strip()
                 if not named:
                     prefix = re.sub(r'(?:\$\$?|\\\(|\\\[)\s*$', '', prefix).strip()
                 if named:
                     suffix = sentence[end - begin:right].strip().rstrip('。！？!?；;.,，')
-                    suffix = re.sub(r'^(?:方法|法|(?:method|technique)\b)\s*', '', suffix, flags=re.I)
+                    suffix = re.sub(r'^(?:解法|方法|法|(?:method|technique)\b)\s*', '', suffix, flags=re.I)
                     suffix = suffix.lstrip(':：').strip()
                     if suffix.startswith('为'):
                         # "为" can introduce an actual transformation or merely
@@ -94,7 +97,8 @@ def _method_spans(text):
                     # A bare technique followed by unknown prose is a mention,
                     # not affirmative use. Check its role after the name too.
                     if suffix and not re.match(
-                            r'(?:法|方法)?(?:解|求|得|比较|证明|说明|计算|化简|推出|验证|展开|令|设|取)|'
+                            r'(?:解得|求得|解方程|求根|得|比较|证明|说明|计算|化简|推出|验证|展开|令|设|取)|'
+                            r'(?:先)?把.+(?:写成|化为|分解成).+|'
                             r'[=⇒⇔]|(?:to\s+(?:solve|derive|prove|show|obtain|find|calculate|compare)|'
                             r'gives?|yields?|produces?|leads?\s+to|shows?|proves?|is\s+(?:used|applied))\b', suffix, re.I):
                         return False
@@ -109,7 +113,7 @@ def _method_spans(text):
                     r"(?:proof\s+by\s*)?", prefix, re.I))
         return False
 
-    for start, _, sentence in _sentences(text):
+    for start, _, sentence in sentences:
         for match in re.finditer(technique, sentence, re.I):
             if affirmed(start + match.start(), start + match.end(), named=True):
                 yield start + match.start(), start + match.end()
@@ -118,28 +122,20 @@ def _method_spans(text):
     # relation. Whitespace cannot turn two independent equations into a chain
     # ("x = 1 y = 2" has the invalid middle expression "1 y"). Use the same
     # bounded parser for single-line and multiline mathematical notation.
-    for candidate in re.finditer(r"[A-Za-z0-9⁰¹²³⁴⁵⁶⁷⁸⁹α-ωΑ-Ω_()+*/^ .−=⇒⇔-]+", text):
+    for candidate in re.finditer(r"(?:\\[A-Za-z]+|\\[()[\]]|[A-Za-z0-9⁰¹²³⁴⁵⁶⁷⁸⁹α-ωΑ-Ω_{}()+*/^ \t.−=⇒⇔-])+", text):
         chain = candidate[0].strip().rstrip('.')
         start = candidate.start() + len(candidate[0]) - len(candidate[0].lstrip())
-        if (chain.startswith('(') and text[max(0, start - 1):start] == '\\'
-                and text[candidate.end():candidate.end() + 2] == r'\)'):
-            chain = chain[1:]  # Paired TeX delimiters are not an algebraic operand.
-            start += 1
-        operands = re.split(r"=|⇒|⇔", chain)
+        if (chain.startswith(r'\(') and chain.endswith(r'\)') or
+                chain.startswith(r'\[') and chain.endswith(r'\]')):
+            chain = chain[2:-2]
+            start += 2
+        operands = re.split(r"=|⇒|⇔|\\(?:Rightarrow|Leftrightarrow|implies)\b", chain)
         if len(operands) < 3 or len(chain) > 2000:
             continue
         trees = []
         try:
             for operand in operands:
-                tree = _expression_tree(operand)
-                nodes = list(ast.walk(tree))
-                if len(nodes) > 200 or any(not isinstance(node, (ast.Expression, ast.BinOp, ast.UnaryOp,
-                        ast.Name, ast.Load, ast.Constant, ast.Add, ast.Sub, ast.Mult, ast.Div,
-                        ast.Pow, ast.UAdd, ast.USub)) for node in nodes):
-                    raise ValueError('Unsupported expression')
-                if any(isinstance(node, ast.Name) and not re.fullmatch(r'[A-Za-zα-ωΑ-Ω](?:_?\d+)?', node.id) for node in nodes):
-                    raise ValueError('Prose is not an expression')
-                trees.extend(nodes)
+                trees.extend(ast.walk(_expression_tree(operand)))
         except (SyntaxError, ValueError, RecursionError):
             continue
         if any(isinstance(node, ast.Name) for node in trees):
@@ -152,10 +148,8 @@ def _method_spans(text):
     # isolated roots or unrelated equations are not a derivation. This checks
     # the presence of work, not algebraic correctness (the model judges that).
     previous = None
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        raw = line.rstrip('\r\n')
-        expression = re.sub(r'^\s*[（(][\w一二三四五六七八九十]+[)）]\s*[:：]?\s*', '', raw).strip().rstrip('。;；')
+    for _, raw, offset, _ in source_lines(text):
+        expression = re.sub(r'^\s*' + _PART_LABEL + r'\s*[:：]?\s*', '', raw).strip().rstrip('。;；')
         if expression.startswith('$') and expression.endswith('$'):
             expression = expression.strip('$').strip()
         sides = expression.split('=')
@@ -175,12 +169,22 @@ def _method_spans(text):
                 and affirmed(previous[0], current[1])):
             yield previous[0], current[1]
         previous = current
-        offset += len(line)
 
 
 def _expression_tree(expression):
     # Normalize only for syntactic detection; quotations and offsets stay in
     # the original source. Never evaluate or use this to assign points.
+    # Expand a bounded set of notation only for detection. Unknown commands,
+    # unbalanced groups and prose still fail; source quotations stay untouched.
+    for _ in range(10):
+        expanded = re.sub(r'\\(?:frac|dfrac|tfrac)\s*\{([^{}]*)\}\s*\{([^{}]*)\}',
+                          r'((\1)/(\2))', expression)
+        if expanded == expression:
+            break
+        expression = expanded
+    expression = re.sub(r'\\(?:cdot|times)\b', '*', expression)
+    expression = re.sub(r'\\(?:left|right)\b', '', expression)
+    expression = expression.replace('{', '(').replace('}', ')')
     expression = re.sub(r'[⁰¹²³⁴⁵⁶⁷⁸⁹]+', lambda m: '**' + m[0].translate(
         str.maketrans('⁰¹²³⁴⁵⁶⁷⁸⁹', '0123456789')), expression.strip())
     expression = expression.replace('−', '-').replace('^', '**')
@@ -230,50 +234,34 @@ def _supported_reference_quote(passages, quote):
     return bool(matches) and all(p.supports(quote) for p in matches)
 
 
-def _labelled_ranges(text, parts):
-    from backend.services.question_structure import _normalize_label
-    # Explicit headings may share a sentence or occupy their own line.
-    # Trailing equation numbers do not override frozen answer-to-part links.
-    headings = []
-    for heading in re.finditer(r"(?m)(?:^[ \t]*|(?<=[，,；;。])[ \t]*|(?<=[ \t]))(?P<label>[（(](?:[0-9０-９]+|[A-Za-z]|[ivxIVX]{1,6})[)）])", text):
-        prefix = text[text.rfind('\n', 0, heading.start()) + 1:heading.start()].rstrip()
-        if prefix and prefix[-1] not in '，,；;。':
-            tail = text[heading.end():].split('\n', 1)[0].strip()
-            if not tail or tail[0] in '=+*/^<>，,；;。':
-                continue  # An inline trailing equation number is not a heading.
-        headings.append(heading)
-    result = {}
-    for part in parts:
-        label = _normalize_label(part.label)
-        matches = [(i, h) for i, h in enumerate(headings) if _normalize_label(h['label']) == label]
-        if label and len(matches) == 1 and sum(_normalize_label(p.label) == label for p in parts) == 1:
-            index, heading = matches[0]
-            result[part.id] = (heading.start(), headings[index + 1].start() if index + 1 < len(headings) else len(text))
-    return result
-
-
 def _method_evidence(problem, rules):
     reference = problem.reference_answer or ''
     ranges = _labelled_ranges(reference, rules.parts)
-    segments = {segment.id: segment.text for segment in rules.answer_segments}
+    segments = {segment.id: segment for segment in rules.answer_segments}
     result = {}
     for part in rules.parts:
         texts = dict.fromkeys(text for item in (*part.steps, *part.deductions)
                              for text in (item.criterion, item.source_quote) if text.strip())
         sources = [_MethodPassage(text, text) for text in texts]
         refs = {*part.answer_refs, *(ref for step in part.steps for ref in step.answer_refs)}
-        if refs:
-            for ref in sorted(refs):
-                located = match_source_quote(reference, segments.get(ref, ''))
-                if located:
-                    sources.append(_MethodPassage(located.text, reference, located.start))
-        elif len(rules.parts) == 1:
-            sources.append(_MethodPassage(reference, reference))
-        elif part.id in ranges:
-            start, end = ranges[part.id]
-            heading = re.match(r'\s*[（(][^）)]+[)）]\s*[:：]?\s*', reference[start:end])
-            start += heading.end() if heading else 0
-            sources.append(_MethodPassage(reference[start:end], reference[start:end]))
+        linked = False
+        for ref in sorted(refs):
+            segment = segments.get(ref)
+            located = match_source_quote(reference, segment.text if segment else '')
+            if located:
+                linked = True
+                sources.append(_MethodPassage(located.text, reference, located.start))
+        # An AI supplement absent from the teacher's answer is not an explicit
+        # answer-to-part mapping. Valid mappings still bound quotation permission.
+        missing_ai_links = refs and not linked and all(ref in segments and segments[ref].origin == 'ai' for ref in refs)
+        if not refs or missing_ai_links:
+            if len(rules.parts) == 1:
+                sources.append(_MethodPassage(reference, reference))
+            elif part.id in ranges:
+                start, end = ranges[part.id]
+                heading = re.match(r'\s*' + _PART_LABEL + r'\s*[:：]?\s*', reference[start:end])
+                start += heading.end() if heading else 0
+                sources.append(_MethodPassage(reference[start:end], reference[start:end]))
         result[part.id] = [source for source in sources if source.text.strip()]
     return result
 
@@ -295,16 +283,7 @@ def _student_sources(answer, rules, catalog):
 
 def method_source_catalog(answer, problem, criterion, rules):
     """Add exact bounded addresses when a source line contains several parts."""
-    catalog = source_catalog(answer, problem, criterion)
-    ranges = _labelled_ranges(answer, rules.parts) if len(rules.parts) > 1 else {}
-    for key, (_, start, end) in list(catalog.items()):
-        if not key.startswith('student:'):
-            continue
-        for left, right in ranges.values():
-            first, last = max(left, start), min(right, end)
-            if start <= first < last <= end and (first, last) != (start, end):
-                catalog[f'{key}:{first - start + 1}-{last - start}'] = (answer[first:last], first, last)
-    return catalog
+    return source_catalog(answer, problem, criterion, parts=rules.parts)
 
 
 def _cited_student_method(answer, source_ids, catalog, scope):
@@ -325,12 +304,41 @@ def _covered_fragments(answer, start, end):
         yield start + match.start(), start + match.end()
 
 
-def validate_method_part_sources(decisions, answer, rules, *, require_scope=True):
+def validate_method_part_sources(decisions, answer, rules, *, require_scope=True, known_decisions=()):
     """Reject known foreign evidence even when route alignment is unavailable."""
+    from backend.services.math_source_evidence import SourceMatch, source_identity
     from backend.skills.part_scoring import _supporting_spans
     ranges = ({rules.parts[0].id: (0, len(answer))} if len(rules.parts) == 1
               else _labelled_ranges(answer, rules.parts))
     catalog = source_catalog(answer, "", "")
+    # A previously established result can be a premise, never a replacement
+    # for this part's own work. Use only positively judged, scoped earlier
+    # evidence; the full candidate still passes the frozen scoring validator.
+    verified = set()
+    parts = {part.id: part for part in rules.parts}
+    for prior in known_decisions:
+        if prior.part_id not in ranges or prior.method not in {'reference', 'minor_variant'}:
+            continue
+        left, right = ranges[prior.part_id]
+        earned = [step.evidence for step in prior.steps if step.outcome == 'earned']
+        if prior.relevance == 'complete' and not prior.steps and len(parts[prior.part_id].steps) == 1:
+            earned.append(prior.student_quote)
+        for fragment in earned:
+            for span in _supporting_spans(answer, fragment, catalog):
+                if left <= span.start < span.end <= right:
+                    verified.add(source_identity(span))
+
+    def established_premises_with_own_work(spans, start, end):
+        pieces = []
+        for span in spans:
+            bounds = sorted({span.start, span.end, *(point for limits in ranges.values() for point in limits
+                                                   if span.start < point < span.end)})
+            pieces.extend(SourceMatch(answer[left:right], left, right, 'exact')
+                          for left, right in zip(bounds, bounds[1:]) if answer[left:right].strip())
+        own = [span for span in pieces if start <= span.start < span.end <= end]
+        return bool(own) and all(span in own or
+            (source_identity(span) in verified and source_identity(span)[1] <= start) for span in pieces)
+
     for decision in decisions:
         if require_scope and decision.part_id not in ranges:
             raise ValueError("The reviewed part has no unambiguous student source range.")
@@ -338,13 +346,16 @@ def validate_method_part_sources(decisions, answer, rules, *, require_scope=True
         # A follow-through origin is not this part's earned work. The frozen
         # settler separately requires an exactly verified, distinct earlier
         # error and applies only the frozen follow-through award.
-        fragments = [decision.student_quote,
-                     *(step.evidence for step in decision.steps),
-                     *(step.error_source for step in decision.steps if step.outcome != 'follow_through'),
-                     *(value for error in decision.errors for value in (error.evidence, error.origin_quote)),
-                     *(value for goal in decision.goal_findings for value in (goal.evidence, goal.origin_quote))]
-        for fragment in fragments:
+        fragments = [(decision.student_quote, True),
+                     *((step.evidence, step.outcome == 'earned') for step in decision.steps),
+                     *((step.error_source, False) for step in decision.steps if step.outcome != 'follow_through'),
+                     *((value, False) for error in decision.errors for value in (error.evidence, error.origin_quote)),
+                     *((value, False) for goal in decision.goal_findings for value in (goal.evidence, goal.origin_quote))]
+        for fragment, allow_premises in fragments:
             spans = _supporting_spans(answer, fragment, catalog) if fragment.strip() else ()
+            if (allow_premises and decision.part_id in ranges
+                    and established_premises_with_own_work(spans, start, end)):
+                continue
             if (fragment.strip().startswith("student:") and not spans
                     or require_scope and any(not start <= span.start < span.end <= end for span in spans)
                     or not require_scope and decision.part_id in ranges and any(span.end > end for span in spans)
@@ -418,7 +429,7 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
 
     def record(index, status, *, candidate=None, revision=None, error=None, fallback=False):
         trace = dict(traces[index])
-        trace["method_review"] = {"provider": coordinator.provider_id, "status": status,
+        trace["method_review"] = {"provider": coordinator.provider_id, "status": status, "language": language,
                                   "reference_source": "part_reference_and_rubric" if has_reference else "frozen_rubric",
                                   "choices": [choice.model_dump(mode="json") for choice in choices.values()]}
         if fallback:
@@ -524,7 +535,8 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             candidate = grading._apply_part_revision(old, revision, changed).model_copy(deep=True)
             # Tool claims/judgments are unchanged by this narrowly scoped regrade;
             # the final joint review remains responsible for pending tool feedback.
-            validate_method_part_sources(revision.decisions, answer.content or "", plan.part_rubric)
+            validate_method_part_sources(revision.decisions, answer.content or "", plan.part_rubric,
+                                         known_decisions=candidate.part_decisions)
             grading._assessment_validator(plan, answer, problem, original=old)(candidate)
 
         try:

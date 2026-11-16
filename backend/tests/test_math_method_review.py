@@ -416,7 +416,9 @@ def test_method_evidence_requires_an_explicit_technique_or_transformation(text, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("errors", [False, True])
-async def test_final_review_rationale_is_outside_score_rows_after_roundtrip(db_case, errors):
+@pytest.mark.parametrize("final_change", [False, True])
+@pytest.mark.parametrize("legacy_comment", [False, True])
+async def test_final_review_rationale_is_outside_score_rows_after_roundtrip(db_case, errors, final_change, legacy_comment):
     from sqlalchemy import select
     from backend.db import grading_repository as grades
     from backend.db.models import AssignmentQuestionRecord
@@ -446,10 +448,13 @@ async def test_final_review_rationale_is_outside_score_rows_after_roundtrip(db_c
         expert.raw_output = json.dumps(trace)
     final = revision(right if errors else alternate("complete"))
     final["reason"] = "代入第二个根仍违反原方程，因此保留此处扣分。" if errors else "原等价变换已覆盖两个方向，不要求重抄标答。"
-    main, _ = provider("primary", choice(), {"revisions": [final]})
+    main, _ = provider("primary", choice(), {"revisions": [final] if final_change else []})
     regrader, _ = provider("a", revision(right))
     result = await run(p, a, plan, experts, main, {"a": regrader})
     expert = result[0]
+    method_reason = choice()['choices'][0]['reason']
+    if legacy_comment:
+        expert = expert.model_copy(update={'comment': expert.comment.replace('\n\n解法改判依据：' + method_reason, '')})
     checkpoints.save_correction(student, Correction(q_id=p.q_id, type=p.type, score=expert.score,
         max_score=10, confidence=.9, comment=expert.comment, steps=expert.steps,
         expert_results=[expert], synthesis_method="single"))
@@ -457,8 +462,11 @@ async def test_final_review_rationale_is_outside_score_rows_after_roundtrip(db_c
     before = [r.model_dump() for r in grades.list_results_for_run(run_id)]
     payload = task_facade.task_results(task_id=db_case[0], owner_id=db_case[1])
     restored = next(c for s in payload["results"] for c in s["corrections"] if c["q_id"] == p.q_id)["expert_results"][0]
-    assert restored["score"] == (8 if errors else 10)
-    assert final["reason"] in restored["comment"]
+    assert restored["score"] == (8 if errors or not final_change else 10)
+    if final_change:
+        assert final["reason"] in restored["comment"]
+    assert restored['comment'].count(method_reason) == 1
+    assert all(method_reason not in step['desc'] for step in restored['steps'])
     assert len(restored["steps"]) == 1 and sum(s["score"] for s in restored["steps"]) == restored["score"]
     assert restored["raw_output"] is None
     assert [r.model_dump() for r in grades.list_results_for_run(run_id)] == before

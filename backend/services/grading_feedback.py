@@ -163,6 +163,12 @@ def concise_result_feedback(results):
                 matches = [item for item in saved if isinstance(item, dict)
                            and item.get("provider_id") == expert.get("provider_id")
                            and item.get("provider") == expert.get("provider")]
+                if len(matches) == 1 and not expert.get("error_kind"):
+                    trace, plan = matches[0].get("trace", {}), plans.get(row.q_id)
+                    if isinstance(trace, dict) and plan and trace.get('plan_id') == plan.plan_id:
+                        comment = method_review_comment(expert.get('comment', ''), trace)
+                        if comment != expert.get('comment', ''):
+                            expert = {**expert, 'comment': comment}
                 steps = expert.get("steps", [])
                 if len(matches) == 1 and not expert.get("error_kind"):
                     steps = _concise_steps(steps, matches[0].get("trace", {}), plans.get(row.q_id))
@@ -174,3 +180,32 @@ def concise_result_feedback(results):
                 "ai_steps": _combined_steps(row.ai_steps, row.ai_expert_results, rendered, row.ai_max_score),
             })
     return [projected.get(row.id, row) for row in results]
+
+
+def method_review_comment(comment, trace, language=None):
+    """Show the saved route-change rationale independently of scored rows."""
+    from backend.skills.math_grading import TRACE_VERSION
+
+    if not isinstance(trace, dict) or trace.get('version') != TRACE_VERSION:
+        return comment
+    review = trace.get('method_review')
+    if not isinstance(review, dict) or review.get('status') != 'reassessed':
+        return comment
+    original = review.get('original_assessment', {})
+    if (not isinstance(original, dict) or not isinstance(original.get('part_decisions'), list)
+            or not isinstance(review.get('choices'), list)):
+        return comment
+    previous = {d.get('part_id'): d.get('method') for d in original.get('part_decisions', []) if isinstance(d, dict)}
+    for choice in review.get('choices', []):
+        if not isinstance(choice, dict):
+            continue
+        old = previous.get(choice.get('part_id'))
+        old = 'reference' if old == 'minor_variant' else old
+        reason = choice.get('reason')
+        if (old is None or old == choice.get('method') or choice.get('method') not in {'reference', 'alternative'}
+                or not isinstance(reason, str) or not reason.strip() or reason in comment):
+            continue
+        lang = language or review.get('language') or ('zh' if re.search(r'[\u4e00-\u9fff]', reason) else 'en')
+        label = '解法改判依据：' if lang == 'zh' else 'Method reassessment: '
+        comment += '\n\n' + label + reason
+    return comment
