@@ -40,8 +40,11 @@ export function SubmissionSourceOutcomePanel({
   const counts = summary ?? summarize(sources);
   if (counts.uploaded <= 0) return null;
   const hasTerminalAttention = counts.failed > 0 || counts.identity_needs_review > 0 || Boolean(counts.manual_review);
+  const requiredAnswerCount = sources.reduce((total, source) => total + (source.answer_required_diagnostic_count
+    ?? source.answer_diagnostics?.filter(answer => answerReviewNotes({ ...answer, type: "", content: answer.has_content ? "[present]" : "" }, locale)
+      .some(note => note.severity === "blocking")).length ?? 0), 0);
   const hasQuestionWarnings = !requiredOnly && sources.some((source) => source.unknown_question_ids.length > 0);
-  const hasAttention = hasTerminalAttention || hasQuestionWarnings;
+  const hasAttention = hasTerminalAttention || requiredAnswerCount > 0 || hasQuestionWarnings;
   const ordered = sources.filter(source => !requiredOnly || source.status === "failed"
     || source.status === "identity_needs_review" || source.status === "manual_review"
     || source.answer_diagnostics?.some(answer => answerReviewNotes({ ...answer, type: "", content: answer.has_content ? "[present]" : "" }, locale)
@@ -77,12 +80,14 @@ export function SubmissionSourceOutcomePanel({
             {equation(counts, locale)}
             {hasTerminalAttention
               ? tx(locale, "。请查看下方原因并处理。", ". Review the details below to continue.")
+              : requiredAnswerCount > 0
+                ? tx(locale, `。有 ${requiredAnswerCount} 份作答需要处理，请逐题核对。`, `. ${requiredAnswerCount} responses need action; review each answer.`)
               : hasQuestionWarnings
                 ? tx(locale, "。部分成功文件还包含未匹配题号，请展开核对。", ". Some recognized files also contain unmatched question IDs; expand the list to review them.")
               : tx(locale, "。", ".")}
           </p>
         </div>
-        {taskId && hasAttention && !counts.manual_review ? (
+        {taskId && (hasTerminalAttention || hasQuestionWarnings) && !counts.manual_review ? (
           <Link
             to={`/tasks/${taskId}/submissions/upload`}
             className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md border bg-card px-3 text-xs font-semibold text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"

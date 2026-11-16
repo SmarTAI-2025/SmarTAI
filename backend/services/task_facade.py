@@ -66,6 +66,7 @@ from backend.domain import education
 from backend.domain.grading_review import result_programming_review_reason, teacher_resolved_programming_score
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
+from backend.services.question_preparation_diagnostics import effective_question_issues as _effective_question_issues
 from backend.domain.errors import (
     DomainError,
     DuplicateActiveRun,
@@ -5138,47 +5139,6 @@ def _public_answer_flags(flags, *, content=None, review_status=None):
     if _answer_recognition_failures(result) and "recognition_failed" not in result:
         result.append("recognition_failed")
     return result
-
-
-def _effective_question_issues(presentation, question_type=None):
-    from backend.services.question_preparation_diagnostics import normalize_formula_issue
-    from backend.services.math_grading_context import uses_math_grading
-    non_math = bool(normalize_question_type(question_type)) and not uses_math_grading(question_type)
-    issues = []
-    for issue in presentation.get("preparation_issues", []):
-        issue = normalize_formula_issue(issue)
-        if (non_math and issue.get("field") == "rubric"
-                and (issue.get("details") or {}).get("reason") == "invalid_structured_rubric"):
-            # Keep the old diagnostic for provenance, but do not require a
-            # compiler that the corrected question type will never use.
-            issue = {**issue, "status": "resolved"}
-        coverage = (issue.get("details") or {}).get("coverage") or {}
-        # Old source scores/labels were broadcast to every question. They are
-        # not per-question assessments; keep actual failure evidence visible,
-        # including incomplete question fragments from saved-text recovery.
-        if (issue.get("code") in {"recognition_partial", "recognition_needs_review"}
-                and not (issue.get("code") == "recognition_partial" and issue.get("severity") == "blocking")
-                and (issue.get("details") or {}).get("confidence_scope") != "question"
-                and not (issue.get("details") or {}).get("error_code")
-                and not (issue.get("details") or {}).get("incomplete")
-                and not any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))):
-            continue
-        if (issue.get("field") != "answer" and issue.get("code") in {"recognition_partial", "recognition_needs_review"} and issue.get("status") != "resolved"
-                and ((issue.get("details") or {}).get("error_code")
-                     or (issue.get("details") or {}).get("incomplete")
-                     or any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets")))):
-            issue = {**issue, "severity": "blocking", "status": "open"}
-        if issue.get("code") == "manual_completion_required":
-            issue = {**issue, "details": {**(issue.get("details") or {}), "required_fields": [
-                field for field in (issue.get("details") or {}).get("required_fields", []) if field in {"number", "type", "stem", "criterion"}]}}
-        if issue.get("field") == "answer" or (issue.get("code") == "generation_failed" and issue.get("field") == "programming_tests") or (
-            issue.get("code") in {"low_confidence", "recognition_needs_review"}
-            and not (issue.get("details") or {}).get("error_code")
-            and not any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
-        ):
-            issue = {**issue, "severity": "warning"}
-        issues.append(issue)
-    return issues
 
 
 def _question_review_blockers(questions) -> list[str]:

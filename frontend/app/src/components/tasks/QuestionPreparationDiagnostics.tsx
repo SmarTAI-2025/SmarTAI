@@ -1,11 +1,11 @@
 import type { JobProgress } from "@/types";
-import { recognitionIssueLabel } from "@/lib/reviewConfirmation";
+import { recognitionIssueLabel, questionIssueSeverity } from "@/lib/reviewConfirmation";
 import { questionIssueCodeLabel } from "@/lib/reviewLabels";
 
 /** Same field-level explanations as the review pages, before manual handoff. */
 export function QuestionPreparationDiagnostics({ progress, locale }: { progress: JobProgress; locale: string }) {
   const requiredRows = (progress.preparation_review ?? []).map(row => ({ ...row,
-    issues: row.issues.filter(issue => issue.severity === "blocking") })).filter(row => row.issues.length > 0);
+    issues: row.issues.filter(issue => questionIssueSeverity(issue) === "blocking").map(issue => ({ ...issue, severity: "blocking" as const })) })).filter(row => row.issues.length > 0);
   const rows = requiredRows.slice(0, 20);
   if (!rows.length) return null;
   const zh = locale === "zh-CN";

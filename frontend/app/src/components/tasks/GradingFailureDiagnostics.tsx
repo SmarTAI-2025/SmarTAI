@@ -16,8 +16,8 @@ export function GradingFailureDiagnostics({ progress, task, locale }: { progress
     <ul className="mt-3 max-h-48 space-y-3 overflow-y-auto">
       {rows.map(({ row, notes }) => {
         const student = task?.student_data?.[row.student_id];
-        const identity = [student?.stu_name, student?.stu_id || row.student_id]
-          .map(value => value?.trim()).filter((value): value is string => Boolean(value) && !value!.startsWith("imported_") && value !== "[Unknown Student]");
+        const identity = [student?.stu_name, student?.stu_id || (row.student_id.startsWith("imported_") ? undefined : row.student_id)]
+          .map(value => value?.trim()).filter((value): value is string => Boolean(value) && value !== "[Unknown Student]");
         const studentLabel = [...new Set(identity)].join(zh ? "（" : " (") + (new Set(identity).size > 1 ? (zh ? "）" : ")") : "");
         const question = task?.problem_data?.[row.q_id];
         return <li key={`${row.student_id}:${row.q_id}`} className="rounded-md border px-3 py-2 text-sm">

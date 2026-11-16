@@ -25,3 +25,16 @@ it("omits the panel when only suggested review remains", () => {
   ] } as JobProgress} />);
   expect(container).toBeEmptyDOMElement();
 });
+
+it("uses review severity for optional answers and required source conflicts", () => {
+  render(<QuestionPreparationDiagnostics locale="zh-CN" progress={{ preparation_review: [
+    { q_id: "optional", number: "1.1", issues: [{ issue_id: "a", field: "answer", code: "recognition_partial", status: "open", severity: "blocking", details: { incomplete: true } }] },
+    { q_id: "rubric", number: "1.2", issues: [{ issue_id: "b", field: "rubric", code: "source_conflict", status: "open", severity: "warning" }] },
+    { q_id: "tests", number: "1.3", issues: [{ issue_id: "c", field: "programming_tests", code: "source_conflict", status: "open", severity: "warning", details: { reason: "test_case_output_conflict" } }] },
+  ] } as JobProgress} />);
+  expect(screen.getByText("需要处理 2 题")).toBeVisible();
+  expect(screen.queryByText("第 1.1 题")).not.toBeInTheDocument();
+  expect(screen.getByText("第 1.2 题")).toBeVisible();
+  expect(screen.getByText("第 1.3 题")).toBeVisible();
+  expect(screen.queryByText(/建议复核：/)).not.toBeInTheDocument();
+});

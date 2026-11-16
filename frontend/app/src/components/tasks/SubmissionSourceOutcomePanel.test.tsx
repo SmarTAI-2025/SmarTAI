@@ -221,3 +221,14 @@ it.each(["zh-CN", "en-US"] as const)("renders older file records without content
   expect(screen.getByText(locale === "zh-CN" ? /^文件 ·/ : /^File ·/)).toBeVisible();
   expect(screen.getByText(locale === "zh-CN" ? "所选模型不支持图片输入" : "The selected model does not support image input")).toBeVisible();
 });
+
+it.each(["zh-CN", "en-US"] as const)("opens successful sources with required answers without asking for reupload (%s)", locale => {
+  const zh = locale === "zh-CN";
+  render(<MemoryRouter><SubmissionSourceOutcomePanel requiredOnly taskId="task" locale={locale} sources={[{
+    ...sources[0], answer_required_diagnostic_count: 2, answer_diagnostic_count: 2,
+    answer_diagnostics: [1, 2].map(i => ({ q_id: `q${i}`, number: `1.${i}`, has_content: false, flag: ["no_matching_answer"] })),
+  }]} /></MemoryRouter>);
+  expect(screen.getByText(zh ? "第 1.1 题" : "Question 1.1").closest("details")).toHaveAttribute("open");
+  expect(screen.getByText(zh ? /有 2 份作答需要处理/ : /2 responses need action/)).toBeVisible();
+  expect(screen.queryByRole("link", { name: zh ? "重新选择文件" : "Choose files again" })).not.toBeInTheDocument();
+});

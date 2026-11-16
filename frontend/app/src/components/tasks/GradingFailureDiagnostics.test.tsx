@@ -46,3 +46,11 @@ it("uses a readable fallback while student identity is unavailable", () => {
   expect(screen.getByText("身份待确认 · 第 q1 题")).toBeVisible();
   expect(screen.queryByText(/imported_/)).not.toBeInTheDocument();
 });
+
+it("keeps confirmed display identities whose actual student number starts with imported_", () => {
+  render(<GradingFailureDiagnostics locale="zh-CN" task={{ student_data: {
+    imported_real: { stu_id: "imported_real", stu_name: "样例姓名", identity_status: "matched" },
+  }, problem_data: { q1: { number: "1.2.3" } } } as unknown as Task}
+    progress={{ grading_review: [{ student_id: "imported_real", q_id: "q1", score: null, max_score: 10, expert_results: [] }] } as unknown as JobProgress} />);
+  expect(screen.getByText("样例姓名（imported_real） · 第 1.2.3 题")).toBeVisible();
+});
