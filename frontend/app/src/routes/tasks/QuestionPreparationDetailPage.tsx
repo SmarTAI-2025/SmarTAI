@@ -279,7 +279,7 @@ function QuestionPreparationDetailPageForm() {
     <div className="w-full max-w-[1300px]">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">{tx(locale, "复核题目资料", "Review Question Materials")}</h1>
+          <h1 className="text-[30px] font-bold leading-9 tracking-[-0.02em] text-foreground">{tx(locale, "审核题目资料", "Review Question Materials")}</h1>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">{tx(locale, "连续浏览每道题的题干、标答和评分标准；只有编程题显示测试样例。", "Review each question, reference answer, and rubric together. Test cases appear only for programming questions.")}</p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">

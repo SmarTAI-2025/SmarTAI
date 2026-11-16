@@ -36,7 +36,7 @@ const copy = {
   testsMissing: ["道编程题缺少测试样例", "programming questions are missing test cases"],
   answersFlagged: ["个作答待确认", "responses await confirmation"],
   identitiesFlagged: ["名学生身份待确认", "student identities need confirmation"],
-  editQuestions: ["复核题目资料", "Review question materials"],
+  editQuestions: ["审核题目资料", "Review question materials"],
   editSubmissions: ["校对学生作答", "Review submissions"],
   editSetup: ["修改批改设置", "Edit grading setup"],
   configureModels: ["配置模型与 BYOK", "Configure models and BYOK"],
