@@ -107,9 +107,10 @@ def metered(client,monkeypatch):
     async def create(**kwargs):
         calls.append(("create",kwargs))
         if state["failure"]:raise state["failure"]
-        return SimpleNamespace(model=state.get("model","gpt-6-luna"),service_tier=state.get("service_tier","default"),status="completed",id="resp_synthetic",
+        return SimpleNamespace(model=state.get("model","gpt-6-luna"),service_tier=state.get("service_tier","default"),status=state.get("status","completed"),id="resp_synthetic",
             usage=SimpleNamespace(model_dump=lambda:state["usage"]) if state["usage"] is not None else None,
-            output_text="valid response",output=[])
+            output_text=state.get("text","valid response"),output=state.get("output",[]),
+            incomplete_details=SimpleNamespace(reason=state.get("reason")))
     sdk=SimpleNamespace(responses=SimpleNamespace(input_tokens=SimpleNamespace(count=count),create=create))
     sdk.with_options=lambda **kwargs:sdk
     async def get():return SimpleNamespace(root_async_client=sdk)

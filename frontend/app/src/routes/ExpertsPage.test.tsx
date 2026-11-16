@@ -274,6 +274,23 @@ describe("ExpertsPage editable vendor Base URL", () => {
     failureToast.mockRestore();
   });
 
+  it.each([
+    ["empty_response", "未返回文本", "No text returned"],
+    ["response_truncated", "测试响应未完成", "Response truncated"],
+    ["response_refused", "测试请求被拒绝", "Test refused"],
+  ])("explains failed text output %s without claiming verification passed", (reason, chinese, english) => {
+    for (const locale of ["zh-CN", "en-US"]) {
+      window.localStorage.setItem("smartai_locale", locale);
+      hookState.experts = [{ provider_id: "openai:gpt-6-luna", provider_type: "openai", model: "gpt-6-luna",
+        enabled: true, editable: false, is_shared: true, rpm: 0, max_concurrent: 1,
+        verification_status: "failed", verification_error_code: `expert_verification_${reason}` }];
+      const view = renderPage();
+      expect(screen.getAllByText(locale === "zh-CN" ? chinese! : english!).length).toBeGreaterThan(0);
+      expect(screen.queryByText(locale === "zh-CN" ? "验证通过" : "Verified")).not.toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
   it("shows three shared presets beside editable personal BYOK and one total with Sol's half allowance", async () => {
     window.localStorage.setItem("smartai_locale", "en-US");
     hookState.experts = [

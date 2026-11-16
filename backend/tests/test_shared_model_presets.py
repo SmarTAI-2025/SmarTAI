@@ -174,8 +174,9 @@ async def test_shared_text_results_survive_reload_and_keep_model_owner_and_image
 def test_shared_text_evidence_does_not_overwrite_a_newer_probe_or_image(presets):
     from backend.db.shared_image_repository import shared_image_evidence, set_shared_image_evidence
     config = presets.get(SOL).config
-    old = shared_image_evidence(OWNER.id, config, create=True, text_probe=True)
-    assert set_shared_image_evidence(OWNER.id, old, status="verified", checked_at=1, reason=None, text_probe=True)
+    old = shared_image_evidence(OWNER.id, config, create=True, text_probe=True, start_probe=True)
+    newer = shared_image_evidence(OWNER.id, config, create=True, text_probe=True, start_probe=True)
+    assert set_shared_image_evidence(OWNER.id, newer, status="verified", checked_at=1, reason=None, text_probe=True)
     assert not set_shared_image_evidence(OWNER.id, old, status="failed", checked_at=2, reason="stale", text_probe=True)
     fresh = shared_image_evidence(OWNER.id, config, text_probe=True)
     assert fresh.status == "verified" and fresh.checked_at == 1

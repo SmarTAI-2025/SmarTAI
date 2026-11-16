@@ -9,6 +9,8 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) {
     const models = ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"].map(model => ({
       provider_id: "openai:" + model, provider_type: "openai", model, display_name: `OpenAI · ${model}`,
       enabled: true, is_shared: true, scope: "shared", editable: false, rpm: 0, max_concurrent: 1,
+      base_url: "https://api.openai.com/v1", endpoint_descriptor: "api.openai.com/v1 · OpenAI Chat Completions",
+      configured_display_name: null,
       verification_status: "platform_managed", image_capability_status: "unverified",
       last_checked_at: null as string | null,
       image_checked_at: null as string | null, image_reason: null as string | null,
@@ -16,6 +18,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) {
     // Exercise the older Luna label too, as cached API data may still contain it.
     models[0]!.display_name += " · api.openai.com/v1 · OpenAI Chat Completions · t-6-luna";
     const all = [...models, { ...models[0]!, provider_id: "pc-own", display_name: "My personal model",
+      configured_display_name: "My personal model",
       is_shared: false, scope: "owner", editable: true, is_default: true, verification_status: "unverified" }];
     let probes = 0;
     await page.setViewportSize({ width, height: 1000 });
@@ -113,6 +116,17 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) {
     await target.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("shared-models.png") });
     await quota.screenshot({ path: testInfo.outputPath("shared-allowance.png") });
+    await page.goto("/settings/byok?imageRecovery=1&returnTo=%2Ftasks%2Fsynthetic%2Fupload%2Fproblems&providerId=openai%3Agpt-6-luna");
+    const stageSelect = page.getByRole("combobox", { name: zh ? "继续识别所用模型" : "Model for continuing" });
+    await expect(stageSelect).toHaveValue("openai:gpt-6-luna");
+    for (const model of models) {
+      await expect(stageSelect.locator(`option[value="${model.provider_id}"]`)).toHaveText(`OpenAI · ${model.model}`);
+    }
+    await expect(stageSelect.locator('option[value="pc-own"]')).toContainText("api.openai.com/v1");
+    await stageSelect.selectOption("openai:gpt-6.1-terra");
+    await expect(stageSelect).toHaveValue("openai:gpt-6.1-terra");
+    await stageSelect.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("short-stage-options.png") });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     await expect(page.locator("vite-error-overlay")).toHaveCount(0);
     expect(errors).toEqual([]);

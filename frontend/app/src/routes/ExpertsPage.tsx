@@ -270,7 +270,7 @@ export function ExpertsPage() {
   }
 
   return (
-    <div className="grid gap-5">
+    <div className="grid min-w-0 grid-cols-1 gap-5">
       <header className="flex flex-col gap-4 border-b pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-[26px] font-semibold tracking-tight">
@@ -1570,6 +1570,10 @@ function expertErrorMessage(code: string | null | undefined, locale: "zh-CN" | "
     expert_verification_connection_failed: ["无法连接服务商，请检查网络后重试。", "Unable to reach the provider. Check the network and retry."],
     expert_verification_provider_error: ["验证未能完成，请检查配置或稍后重试。", "Verification could not complete. Check the configuration or try again later."],
     expert_verification_stale: ["配置已在验证期间改变，请重新验证。", "The configuration changed during verification. Verify again."],
+    expert_verification_superseded: ["本次验证结果已过期，请查看最新状态。", "This check was superseded. See the latest status."],
+    expert_verification_empty_response: ["模型未返回可用文本，本次验证未通过。", "The model returned no usable text. Verification did not pass."],
+    expert_verification_response_truncated: ["模型达到输出上限，测试响应未完成，本次验证未通过。", "The test response reached its output limit and was incomplete. Verification did not pass."],
+    expert_verification_response_refused: ["模型拒绝了本次测试请求，本次验证未通过。", "The model refused the test request. Verification did not pass."],
     provider_base_url_not_allowed: ["该 Base URL 不符合当前服务商配置。", "The base URL is not valid for this provider configuration."],
     expert_provider_conflict: ["相同厂商、模型、URL 和协议的配置已经存在。", "A configuration with this provider, model, URL, and protocol already exists."],
     custom_provider_endpoints_disabled: ["自定义中转站功能目前未开放。", "Custom relay endpoints are currently disabled."],
@@ -1620,6 +1624,10 @@ function verificationReasonSummary(reason: string, zh: boolean) {
     expert_verification_connection_failed: ["网络连接失败", "Connection failed"],
     expert_verification_provider_error: ["验证未能完成", "Test incomplete"],
     expert_verification_stale: ["配置已变更", "Config changed"],
+    expert_verification_superseded: ["本次验证已过期", "Check superseded"],
+    expert_verification_empty_response: ["未返回文本", "No text returned"],
+    expert_verification_response_truncated: ["测试响应未完成", "Response truncated"],
+    expert_verification_response_refused: ["测试请求被拒绝", "Test refused"],
     provider_endpoint_invalid: ["接口地址格式无效", "Invalid Base URL"],
     provider_endpoint_https_required: ["地址须使用 HTTPS", "HTTPS required"],
     provider_endpoint_host_not_allowed: ["域名不允许使用", "Host blocked"],

@@ -54,7 +54,7 @@ export function StageProviderSelect({
             ) : null}
             {sortByProvider(experts).map((expert) => (
               <option key={expert.provider_id} value={expert.provider_id}>
-                {safeModelDisplayName(expert)} · {safeModelSecondaryLabel(expert)}
+                {safeModelDisplayName(expert)}{!expert.is_shared ? ` · ${safeModelSecondaryLabel(expert)}` : ""}
                 {expert.provider_kind === "ocr" ? " · OCR" : ""}
                 {expert.is_default ? (zh ? " · 默认" : " · Default") : ""}
               </option>

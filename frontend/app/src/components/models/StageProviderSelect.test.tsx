@@ -41,6 +41,8 @@ describe("StageProviderSelect", () => {
     const shared = ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"].map(model => ({
       ...experts[0]!, provider_id: `openai:${model}`, model, is_shared: true,
       resolved_display_name: `OpenAI · ${model} · api.openai.com/v1 · OpenAI Chat Completions · t-6-luna`,
+      endpoint_descriptor: "api.openai.com/v1 · OpenAI Chat Completions",
+      configured_display_name: null,
     }));
     const onChange = vi.fn();
     render(<StageProviderSelect id="shared-stage" label="题目准备模型" hint="" experts={shared}
@@ -49,11 +51,18 @@ describe("StageProviderSelect", () => {
       const option = screen.getByRole("option", { name: new RegExp(`^OpenAI · ${expert.model}`) });
       expect(option).not.toHaveTextContent("api.openai.com");
       expect(option).not.toHaveTextContent(" · t-6-luna");
+      expect(option).toHaveTextContent(`OpenAI · ${expert.model} · 默认`);
     }
     const select = screen.getByRole("combobox", { name: "题目准备模型" });
     expect(select).toHaveValue("openai:gpt-6-luna");
     await userEvent.selectOptions(select, "openai:gpt-6.1-terra");
     expect(onChange).toHaveBeenCalledWith("openai:gpt-6.1-terra");
+  });
+  it("retains endpoint disambiguation for personal BYOK", () => {
+    render(<StageProviderSelect id="personal-stage" label="识别模型" hint="" experts={[{
+      ...experts[0]!, is_shared: false, endpoint_descriptor: "relay.example/v1 · OpenAI Chat Completions",
+    }]} value="provider-default" locale="en-US" onChange={vi.fn()} />);
+    expect(screen.getByRole("option")).toHaveTextContent("relay.example/v1 · OpenAI Chat Completions");
   });
   it("shows the automatic default and lets the teacher explicitly switch stages", async () => {
     const onChange = vi.fn();
