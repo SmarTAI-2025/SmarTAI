@@ -689,7 +689,7 @@ async def _run_grounded_ask(task_id: str | None, req: AskRequest, current: User,
         async with asyncio.timeout(240):
             if any(len(turn) > 2000 for turn in req.history):
                 raise HTTPException(422, detail={"code": "ask_history_too_long"})
-            snapshot = await asyncio.to_thread(load_snapshot, task_id, current.id)
+            snapshot = await asyncio.to_thread(load_snapshot, task_id, current.id, review_overview=req.surface == "review_overview")
             provider = resolve_owner_default_provider(current.id, registry)
             if provider is None:
                 raise HTTPException(503, detail={"code": "analytics_provider_unavailable"})
