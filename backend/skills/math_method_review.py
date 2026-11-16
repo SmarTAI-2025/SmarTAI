@@ -1,6 +1,7 @@
 """One source-grounded route decision, then only mismatched experts reassess."""
 import ast
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Literal
 
@@ -311,21 +312,30 @@ def validate_method_part_sources(decisions, answer, rules, *, require_scope=True
     ranges = ({rules.parts[0].id: (0, len(answer))} if len(rules.parts) == 1
               else _labelled_ranges(answer, rules.parts))
     catalog = source_catalog(answer, "", "")
+
+    def has_own_work(span, start, end):
+        heading = (re.match(r'\s*' + _PART_LABEL, answer[start:end])
+                   if len(rules.parts) > 1 else None)
+        body_start = start + heading.end() if heading else start
+        text = answer[max(span.start, body_start):min(span.end, end)]
+        return any(char.isalnum() or unicodedata.category(char) in {'Sm', 'So'} for char in text)
+
     # A previously established result can be a premise, never a replacement
     # for this part's own work. Use only positively judged, scoped earlier
     # evidence; the full candidate still passes the frozen scoring validator.
     verified = set()
     parts = {part.id: part for part in rules.parts}
     for prior in known_decisions:
-        if prior.part_id not in ranges or prior.method not in {'reference', 'minor_variant'}:
+        if prior.part_id not in ranges or prior.method not in {'reference', 'minor_variant', 'alternative'}:
             continue
         left, right = ranges[prior.part_id]
         earned = [step.evidence for step in prior.steps if step.outcome == 'earned']
-        if prior.relevance == 'complete' and not prior.steps and len(parts[prior.part_id].steps) == 1:
+        if (prior.relevance == 'complete' and not prior.steps and not prior.errors
+                and (prior.method == 'alternative' or len(parts[prior.part_id].steps) == 1)):
             earned.append(prior.student_quote)
         for fragment in earned:
             for span in _supporting_spans(answer, fragment, catalog):
-                if left <= span.start < span.end <= right:
+                if left <= span.start < span.end <= right and has_own_work(span, left, right):
                     verified.add(source_identity(span))
 
     def established_premises_with_own_work(spans, start, end):
@@ -336,13 +346,18 @@ def validate_method_part_sources(decisions, answer, rules, *, require_scope=True
             pieces.extend(SourceMatch(answer[left:right], left, right, 'exact')
                           for left, right in zip(bounds, bounds[1:]) if answer[left:right].strip())
         own = [span for span in pieces if start <= span.start < span.end <= end]
-        return bool(own) and all(span in own or
+        return any(has_own_work(span, start, end) for span in own) and all(span in own or
             (source_identity(span) in verified and source_identity(span)[1] <= start) for span in pieces)
 
     for decision in decisions:
         if require_scope and decision.part_id not in ranges:
             raise ValueError("The reviewed part has no unambiguous student source range.")
         start, end = ranges.get(decision.part_id, (0, len(answer)))
+        work_evidence = {step.evidence for step in decision.steps if step.outcome in {'earned', 'follow_through'}}
+        part = parts.get(decision.part_id)
+        claims_credit = (bool(work_evidence) or decision.relevance == 'complete'
+                         or decision.relevance in {'partial', 'incorrect'}
+                         and (decision.method == 'alternative' or part and part.deductions))
         # A follow-through origin is not this part's earned work. The frozen
         # settler separately requires an exactly verified, distinct earlier
         # error and applies only the frozen follow-through award.
@@ -353,6 +368,11 @@ def validate_method_part_sources(decisions, answer, rules, *, require_scope=True
                      *((value, False) for goal in decision.goal_findings for value in (goal.evidence, goal.origin_quote))]
         for fragment, allow_premises in fragments:
             spans = _supporting_spans(answer, fragment, catalog) if fragment.strip() else ()
+            if ((allow_premises and claims_credit or fragment in work_evidence)
+                    and spans and len(rules.parts) > 1 and decision.part_id in ranges
+                    and any(span.start < end and start < span.end for span in spans)
+                    and not any(has_own_work(span, start, end) for span in spans)):
+                raise ValueError("Earned evidence must include this part's work beyond its heading.")
             if (allow_premises and decision.part_id in ranges
                     and established_premises_with_own_work(spans, start, end)):
                 continue

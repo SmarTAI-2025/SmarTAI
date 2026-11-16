@@ -80,10 +80,10 @@ _PART_LABEL = r'(?:[（(](?:[0-9０-９]+|[A-Za-z]|[ivxIVX]{1,6})[)）]|[0-9０-
 
 
 def _part_headings(text):
-    """Prefer explicit line headings over inline equation references/list items.
+    """Prefer explicit headings over ambiguous coefficients and inline mentions.
 
     Inline headings still support same-line answers. When that label has a
-    line heading, inline mentions cannot duplicate or displace it. Unmapped
+    clear line heading, inline mentions cannot duplicate or displace it. Unmapped
     headings remain boundaries; uncertainty never extends the preceding part.
     """
     from backend.services.question_structure import _normalize_label
@@ -91,15 +91,26 @@ def _part_headings(text):
     for _, line, start, _ in source_lines(text):
         for match in re.finditer(r'(?:^[ \t]*|(?<=[，,；;。])[ \t]*|(?<=[ \t]))(?P<label>' + _PART_LABEL + ')', line):
             prefix = line[:match.start()].rstrip()
-            tail = line[match.end():].strip()
+            raw_tail = line[match.end():]
+            tail = raw_tail.strip()
             anchored = not prefix
-            if not anchored and (not tail or tail[0] in '=+*/^<>，,；;。' or
-                                 re.match(r'[A-Za-zα-ωΑ-Ω](?:[=+*/^−-]|$)', tail)):
+            separated = bool(prefix and prefix[-1] in '，,；;。')
+            formula = bool(re.match(r'[A-Za-zα-ωΑ-Ω](?:[=+*/^−-]|$)', tail))
+            if not anchored and not separated and (not tail or tail[0] in '=+*/^<>，,；;。' or formula):
                 continue
             label = _normalize_label(match['label'].strip('（()）'))
-            candidates.append((start + match.start(), start + match.end(), label, anchored))
-    anchored_labels = {label for _, _, label, anchored in candidates if anchored}
-    return [(start, end, label) for start, end, label, anchored in candidates
+            # A tight parenthesized coefficient at line start is ambiguous.
+            # Keep it as a boundary unless a clearer heading for that label
+            # exists. A sentence separator supports a same-line formula title.
+            coefficient = (formula and raw_tail == raw_tail.lstrip()
+                           and match['label'].startswith(('(', '（')))
+            priority = (3 if anchored and not coefficient else 2 if separated else 1 if anchored else 0)
+            begin = match.start() if anchored else match.start('label')
+            candidates.append((start + begin, start + match.end(), label, anchored, priority))
+    clear_labels = {label for _, _, label, _, priority in candidates if priority >= 2}
+    candidates = [c for c in candidates if c[4] != 1 or c[2] not in clear_labels]
+    anchored_labels = {label for _, _, label, anchored, _ in candidates if anchored}
+    return [(start, end, label) for start, end, label, anchored, _ in candidates
             if anchored or label not in anchored_labels]
 
 
