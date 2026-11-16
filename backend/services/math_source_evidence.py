@@ -52,6 +52,16 @@ def source_catalog(answer: str, problem: str, criterion: str) -> dict[str, tuple
     return result
 
 
+def match_source_slice(source: str, start: int, end: int) -> SourceMatch | None:
+    """Resolve an explicit address without truncating a name, number or command."""
+    if not 0 <= start < end <= len(source) or not source[start:end].strip():
+        return None
+    if any(token.start() < boundary < token.end()
+           for token in _TOKEN.finditer(source) for boundary in (start, end)):
+        return None
+    return SourceMatch(source[start:end], start, end, 'exact')
+
+
 def _tokens(text: str) -> list[tuple[str, int, int]]:
     # Replace only the delimiters of complete, paired spans. Their contents
     # and all source offsets remain intact, including escaped dollar signs.

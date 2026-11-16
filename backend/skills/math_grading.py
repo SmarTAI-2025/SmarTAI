@@ -1202,6 +1202,9 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                                plan, traces, assessments, disputed, other_dispute,
                                relevance_review, evidence_review, requested_review, route_ids, signatures, selected_methods):
     catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
+    if plan.part_rubric:
+        from backend.skills.math_method_review import method_source_catalog
+        catalog = method_source_catalog(answer.content or "", problem.stem, plan.original_criterion, plan.part_rubric)
     # Keep alternative route selection, explicit binary policies and
     # conditional/dependent credit on the complete-ledger review path.
     # A point edit appends one claim per citation. Use the complete format
@@ -1270,6 +1273,10 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                         new_awards = _award_signatures(candidate)
                         if any(new_awards.get(key) != value for key, value in signatures[index].items() if key not in disputed):
                             raise ValueError("review_changed_undisputed_award")
+                if plan.part_rubric and candidate.part_decisions:
+                    from backend.skills.math_method_review import validate_method_part_sources
+                    validate_method_part_sources(candidate.part_decisions, answer.content or "", plan.part_rubric,
+                                                 require_scope=False)
                 if selected_methods:
                     from backend.skills.math_method_review import method_family, validate_method_part_sources
                     if any(d.part_id in selected_methods and method_family(d.method) != selected_methods[d.part_id].method

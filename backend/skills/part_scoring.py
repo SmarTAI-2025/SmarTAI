@@ -202,8 +202,8 @@ route_reason, score, awards and deductions. The program settles the parts and th
 
 
 def _student_span(answer, fragment):
-    """Resolve an explicit line address or a unique verbatim excerpt."""
-    match = re.fullmatch(r"student:([1-9]\d*)", fragment)
+    """Resolve a line, 1-based inclusive columns, or a unique verbatim excerpt."""
+    match = re.fullmatch(r"student:([1-9]\d*)(?::([1-9]\d*)-([1-9]\d*))?", fragment)
     if not match:
         if fragment.startswith("student:"):
             return None
@@ -214,6 +214,13 @@ def _student_span(answer, fragment):
         return None
     start = sum(map(len, lines[:index]))
     line = lines[index].rstrip("\r\n")
+    if match[2] is not None:
+        from backend.services.math_source_evidence import match_source_slice
+        first, last = int(match[2]) - 1, int(match[3])
+        located = match_source_slice(line, first, last)
+        if not located:
+            return None
+        return SourceMatch(located.text, start + first, start + last, "exact")
     return SourceMatch(line, start, start + len(line), "exact")
 
 
@@ -229,8 +236,6 @@ def _supporting_spans(answer, fragment, catalog):
         if key not in catalog:
             # The index is bounded, but the original answer may legitimately
             # contain more lines. Verify the explicit address against the source.
-            if not re.fullmatch(r"student:[1-9]\d*", key):
-                return ()
             match = _student_span(answer, key)
             if not match:
                 return ()

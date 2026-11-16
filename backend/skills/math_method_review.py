@@ -52,7 +52,7 @@ def _method_spans(text):
         r"\b(?:complet\w*\s+the\s+square|factori[sz]\w*|eliminat\w*|substitut\w*|"
         r"induction|contradiction|counterexample|coordinatewise|componentwise|"
         r"diagonali[sz]\w*|integration\s+by\s+parts|separation\s+of\s+variables)\b")
-    def affirmed(start, end):
+    def affirmed(start, end, *, named=False):
         for begin, finish, sentence in _sentences(text):
             if begin <= start < end <= finish:
                 # A comma is not itself a polarity reset ("do not use,
@@ -66,11 +66,22 @@ def _method_spans(text):
                 prefix = sentence[left:start - begin]
                 clause = sentence[left:right]
                 if re.search(r"不|未|无须|无需|勿|禁止|禁用|避免|排除|舍弃|拒绝|"
+                             r"失败|失效|行不通|错误示范|展示错误|演示错误|错例|反面示例|"
                              r"\b(?:not|no|never|without|avoid\w*|refrain\w*|exclud\w*|reject\w*|"
                              r"forbid\w*|forbidden|prohibit\w*|rule\w*\s+out|instead\s+of|rather\s+than|"
-                             r"\w+n['’]t|unnecessary|inapplicable|invalid)\b", clause, re.I):
+                             r"\w+n['’]t|unnecessary|inapplicable|invalid|fail\w*|unsuccessful|wrong|erroneous)\b", clause, re.I):
                     return False
                 prefix = re.sub(r"^\s*[（(][\w一二三四五六七八九十]+[)）]\s*[:：]?", "", prefix).strip()
+                if named:
+                    suffix = sentence[end - begin:right].strip().rstrip('。！？!?；;.,，')
+                    suffix = re.sub(r'^(?:方法|法|(?:method|technique)\b)\s*', '', suffix, flags=re.I)
+                    # A bare technique followed by unknown prose is a mention,
+                    # not affirmative use. Check its role after the name too.
+                    if suffix and not re.match(
+                            r'(?:法|方法)?(?:解|求|得|为|比较|证明|说明|计算|化简|推出|验证|展开|令|设|取)|'
+                            r'[:：=⇒⇔]|(?:to\s+(?:solve|derive|prove|show|obtain|find|calculate|compare)|'
+                            r'gives?|yields?|produces?|leads?\s+to|shows?|proves?|is\s+(?:used|applied))\b', suffix, re.I):
+                        return False
                 # Unknown prose is not affirmative merely because a small
                 # blacklist missed it. Accept bare methods or explicit use/
                 # derivation phrases; uncertain language falls back to review.
@@ -84,7 +95,7 @@ def _method_spans(text):
 
     for start, _, sentence in _sentences(text):
         for match in re.finditer(technique, sentence, re.I):
-            if affirmed(start + match.start(), start + match.end()):
+            if affirmed(start + match.start(), start + match.end(), named=True):
                 yield start + match.start(), start + match.end()
 
     # A connected chain has an explicitly parsed expression between every
@@ -115,6 +126,56 @@ def _method_spans(text):
             end = start + len(chain)
             if affirmed(start, end):
                 yield start, end
+
+    # Adjacent equations can show a transformation without naming it. Require
+    # two nontrivial expressions in the same variables and an unchanged side;
+    # isolated roots or unrelated equations are not a derivation. This checks
+    # the presence of work, not algebraic correctness (the model judges that).
+    previous = None
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        raw = line.rstrip('\r\n')
+        expression = re.sub(r'^\s*[（(][\w一二三四五六七八九十]+[)）]\s*[:：]?\s*', '', raw).strip().rstrip('。;；')
+        if expression.startswith('$') and expression.endswith('$'):
+            expression = expression.strip('$').strip()
+        sides = expression.split('=')
+        current = None
+        if len(sides) == 2 and len(expression) <= 2000:
+            try:
+                trees = [_expression_tree(side) for side in sides]
+                names = {node.id for tree in trees for node in ast.walk(tree) if isinstance(node, ast.Name)}
+                if names and any(isinstance(node, ast.BinOp) for tree in trees for node in ast.walk(tree)):
+                    start = offset + len(raw) - len(raw.lstrip())
+                    end = offset + len(raw.rstrip())
+                    if affirmed(start, end):
+                        current = (start, end, names, {ast.dump(tree) for tree in trees})
+            except (SyntaxError, ValueError, RecursionError):
+                pass
+        if (current and previous and current[2] == previous[2]
+                and current[3] & previous[3] and current[3] != previous[3]):
+            yield previous[0], current[1]
+        previous = current
+        offset += len(line)
+
+
+def _expression_tree(expression):
+    # Normalize only for syntactic detection; quotations and offsets stay in
+    # the original source. Never evaluate or use this to assign points.
+    expression = re.sub(r'[⁰¹²³⁴⁵⁶⁷⁸⁹]+', lambda m: '**' + m[0].translate(
+        str.maketrans('⁰¹²³⁴⁵⁶⁷⁸⁹', '0123456789')), expression.strip())
+    expression = expression.replace('−', '-').replace('^', '**')
+    expression = re.sub(r'(?<=\d)(?=[A-Za-zα-ωΑ-Ω(])|(?<=\))(?=[A-Za-zα-ωΑ-Ω0-9(])|(?<=[A-Za-zα-ωΑ-Ω])(?=\()', '*', expression)
+    tree = ast.parse(expression, mode='eval')
+    nodes = list(ast.walk(tree))
+    if len(nodes) > 200 or any(not isinstance(node, (ast.Expression, ast.BinOp, ast.UnaryOp,
+            ast.Name, ast.Load, ast.Constant, ast.Add, ast.Sub, ast.Mult, ast.Div,
+            ast.Pow, ast.UAdd, ast.USub)) for node in nodes):
+        raise ValueError('Unsupported expression')
+    if any(isinstance(node, ast.Name) and not re.fullmatch(r'[A-Za-zα-ωΑ-Ω](?:_?\d+)?', node.id) for node in nodes):
+        raise ValueError('Prose is not an expression')
+    if any(isinstance(node, ast.Constant) and type(node.value) not in (int, float) for node in nodes):
+        raise ValueError('Non-numeric constant')
+    return tree
 
 
 def _has_method_evidence(text):
@@ -153,7 +214,14 @@ def _labelled_ranges(text, parts):
     from backend.services.question_structure import _normalize_label
     # Explicit headings may share a sentence or occupy their own line.
     # Trailing equation numbers do not override frozen answer-to-part links.
-    headings = list(re.finditer(r"(?m)(?:^[ \t]*|(?<=[，,；;。])[ \t]*)(?P<label>[（(](?:[0-9]{1,2}|[A-Za-z]|[ivxIVX]{1,6})[)）])(?=[ \t:：]|\r?$)", text))
+    headings = []
+    for heading in re.finditer(r"(?m)(?:^[ \t]*|(?<=[，,；;。])[ \t]*|(?<=[ \t]))(?P<label>[（(](?:[0-9]{1,2}|[A-Za-z]|[ivxIVX]{1,6})[)）])", text):
+        prefix = text[text.rfind('\n', 0, heading.start()) + 1:heading.start()].rstrip()
+        if prefix and prefix[-1] not in '，,；;。':
+            tail = text[heading.end():].split('\n', 1)[0].strip()
+            if not tail or tail[0] in '=+*/^<>，,；;。':
+                continue  # An inline trailing equation number is not a heading.
+        headings.append(heading)
     result = {}
     for part in parts:
         label = _normalize_label(part.label)
@@ -205,16 +273,48 @@ def _student_sources(answer, rules, catalog):
             for part in rules.parts}
 
 
-def validate_method_part_sources(decisions, answer, rules):
-    """Keep the established student scope through regrading and final review."""
+def method_source_catalog(answer, problem, criterion, rules):
+    """Add exact bounded addresses when a source line contains several parts."""
+    catalog = source_catalog(answer, problem, criterion)
+    ranges = _labelled_ranges(answer, rules.parts) if len(rules.parts) > 1 else {}
+    for key, (_, start, end) in list(catalog.items()):
+        if not key.startswith('student:'):
+            continue
+        for left, right in ranges.values():
+            first, last = max(left, start), min(right, end)
+            if start <= first < last <= end and (first, last) != (start, end):
+                catalog[f'{key}:{first - start + 1}-{last - start}'] = (answer[first:last], first, last)
+    return catalog
+
+
+def _cited_student_method(answer, source_ids, catalog, scope):
+    # Do not manufacture a derivation by joining nonadjacent cited lines, or
+    # drop a failure/negation written elsewhere on the same original line.
+    spans = [(catalog[key][1], catalog[key][2]) for key in source_ids]
+    first, last = scope
+    for begin, finish in _method_spans(answer[first:last]):
+        if all(any(left <= start and end <= right for left, right in spans)
+               for start, end in _covered_fragments(answer, first + begin, first + finish)):
+            return True
+    return False
+
+
+def _covered_fragments(answer, start, end):
+    """Every non-whitespace fragment of a method must be explicitly cited."""
+    for match in re.finditer(r'\S+', answer[start:end]):
+        yield start + match.start(), start + match.end()
+
+
+def validate_method_part_sources(decisions, answer, rules, *, require_scope=True):
+    """Reject known foreign evidence even when route alignment is unavailable."""
     from backend.skills.part_scoring import _supporting_spans
     ranges = ({rules.parts[0].id: (0, len(answer))} if len(rules.parts) == 1
               else _labelled_ranges(answer, rules.parts))
     catalog = source_catalog(answer, "", "")
     for decision in decisions:
-        if decision.part_id not in ranges:
+        if require_scope and decision.part_id not in ranges:
             raise ValueError("The reviewed part has no unambiguous student source range.")
-        start, end = ranges[decision.part_id]
+        start, end = ranges.get(decision.part_id, (0, len(answer)))
         fragments = [decision.student_quote,
                      *(value for step in decision.steps for value in (step.evidence, step.error_source)),
                      *(value for error in decision.errors for value in (error.evidence, error.origin_quote)),
@@ -222,7 +322,10 @@ def validate_method_part_sources(decisions, answer, rules):
         for fragment in fragments:
             spans = _supporting_spans(answer, fragment, catalog) if fragment.strip() else ()
             if (fragment.strip().startswith("student:") and not spans
-                    or any(not start <= span.start < span.end <= end for span in spans)):
+                    or require_scope and any(not start <= span.start < span.end <= end for span in spans)
+                    or not require_scope and decision.part_id in ranges and any(span.end > end for span in spans)
+                    or any(span.start < right and left < span.end for span in spans
+                           for part_id, (left, right) in ranges.items() if part_id != decision.part_id)):
                 raise ValueError("Student evidence and error origins must belong to the reviewed part.")
 
 
@@ -249,8 +352,10 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
     # alternative caps and another part's method are not reference evidence.
     method_evidence = {key: value for key, value in _method_evidence(problem, plan.part_rubric).items() if key in disputed}
     passages = {key: list(dict.fromkeys(p.text.strip() for p in sources)) for key, sources in method_evidence.items()}
-    catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
+    catalog = method_source_catalog(answer.content or "", problem.stem, plan.original_criterion, plan.part_rubric)
     student_sources = _student_sources(answer.content or "", plan.part_rubric, catalog)
+    student_ranges = ({plan.part_rubric.parts[0].id: (0, len(answer.content or ''))}
+                      if len(plan.part_rubric.parts) == 1 else _labelled_ranges(answer.content or '', plan.part_rubric.parts))
     choices = {}
     revised = list(experts)
 
@@ -331,7 +436,7 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             if any(key not in student_sources[choice.part_id] for key in choice.student_source_ids):
                 raise ValueError("Cite original student source IDs belonging to this disputed part.")
             if choice.method != "undetermined" and (not choice.student_source_ids
-                    or not _has_method_evidence("\n".join(catalog[key][0] for key in choice.student_source_ids))
+                    or not _cited_student_method(answer.content or "", choice.student_source_ids, catalog, student_ranges[choice.part_id])
                     or not _supported_reference_quote(method_evidence[choice.part_id], choice.reference_quote)):
                 raise ValueError("A determined method needs student evidence and a verbatim supplied method passage for this part.")
 
