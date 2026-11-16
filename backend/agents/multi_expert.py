@@ -453,6 +453,8 @@ async def _run_multi_expert(
             successes = await review_math_experts(
                 problem, answer, successes, review_provider,
                 language=language, grading_setup=grading_setup,
+                expert_providers={provider_ids.get(id(p), p.provider_id): p for p in providers},
+                reporter=reporter, student_id=student_id,
             )
         finally:
             if reporter:
