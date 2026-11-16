@@ -14,12 +14,15 @@ from backend.tests.test_math_method_premise_regressions import (
 
 BLANK_TEX = [
     r'$\quad$', r'$\qquad$', r'$\enspace$', r'$\thinspace$', r'$\medspace$',
-    r'$\thickspace$', r'$\negthinspace$', r'$\,$', r'$\;$', r'$\!$', r'$~$',
+    r'$\thickspace$', r'$\negthinspace$', r'$\,$', r'$\;$', r'$\!$', r'$\ $', r'$~$',
     r'$\hspace{2em}$', r'$\hspace*{2em}$', r'$\kern 2em$', r'$\mkern-2mu$',
     r'$\phantom{x=2}$', r'$\hphantom{\frac{4}{2}}$', r'$\vphantom{x}$',
     r'$\text{\qquad}$', r'${\displaystyle\quad}$', r'$\mathrm{}$',
     r'$\begin{aligned}\quad&\quad\\\end{aligned}$', r'$\color{red}\quad$',
     '$% x=2\n$', r'$\quad\quad$',
+    r'$\mathop{\quad}$', r'$\mathrel{\quad}$', r'$\mathclap{\quad}$',
+    r'$\smash[b]{\quad}$', r'$\raisebox{2em}{\quad}$', r'$\overset{\quad}{\quad}$',
+    r'$\mathchoice{\quad}{\quad}{\quad}{\quad}$', '$\\phantom{x % } still hidden\ny}$',
 ]
 
 
@@ -34,7 +37,9 @@ async def test_latex_layout_cannot_fill_an_empty_part(body, stage):
 @pytest.mark.parametrize('body', [r'$\quad 2x=4$', r'$2x=4\qquad$', r'$\text{2x=4}$',
     r'$\frac{4}{2}$', r'$\pi$', r'$\emptyset$', r'$\sqrt{4}$',
     r'$\phantom{x}\,2x=4$', r'$\begin{aligned}2x&=4\end{aligned}$',
-    r'$\color{red}2x=4$', r'$\mathrm{x}=2$', r'$\lnot$'])
+    r'$\color{red}2x=4$', r'$\mathrm{x}=2$', r'$\lnot$',
+    r'$\mathop{x}$', r'$\smash[b]{x=2}$', r'$\raisebox{2em}{x=2}$',
+    r'$\{\}$', r'$\%$', r'$\|$'])
 @pytest.mark.parametrize('stage', ['initial', 'joint'])
 async def test_latex_layout_preserves_actual_cited_content(body, stage):
     p, a, plan, experts, original, second = premise_case(body=body)

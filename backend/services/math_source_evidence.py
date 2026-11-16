@@ -37,12 +37,20 @@ _TEX_LAYOUT = frozenset(r'''
 \text \textrm \textsf \texttt \textnormal \textbf \textit \textup \textmd \textsl \textsc
 \mathrm \mathbf \mathit \mathsf \mathtt \mathnormal \mathbb \mathcal \mathfrak
 \boldsymbol \bm \rm \sf \tt \bf \it \cal \operatorname \mbox \hbox
+\mathop \mathord \mathbin \mathrel \mathopen \mathclose \mathpunct \mathinner \mathchoice
+\llap \rlap \clap \mathllap \mathrlap \mathclap \vcenter \substack \overset \underset \stackrel
 \left \right \big \Big \bigg \Bigg \bigl \bigr \Bigl \Bigr \biggl \biggr \Biggl \Biggr
 '''.split())
 _TEX_HIDDEN_ARGUMENT = frozenset(r'''
-\phantom \hphantom \vphantom \hspace \vspace \color \textcolor \label \tag \begin \end
+\phantom \hphantom \vphantom \hspace \vspace \raisebox \color \textcolor \label \tag \begin \end
 '''.split())
 _TEX_DIMENSION = re.compile(r'\s*[+-]?\s*(?:\d+(?:\.\d*)?|\.\d+)\s*(?:em|ex|mu|pt|pc|in|bp|cm|mm|dd|cc|sp)\b')
+_TEX_LINE_BREAK = re.compile(r'[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]')
+
+
+def _tex_comment_end(text, start):
+    end = _TEX_LINE_BREAK.search(text, start)
+    return end.end() if end else len(text)
 
 
 def _tex_argument_end(text, start):
@@ -56,7 +64,13 @@ def _tex_argument_end(text, start):
     if first.group() != '{':
         return first.end()
     depth = 1
+    skip_until = 0
     for token in tokens:
+        if token.start() < skip_until:
+            continue
+        if token.group() == '%':
+            skip_until = _tex_comment_end(text, token.end())
+            continue
         depth += (token.group() == '{') - (token.group() == '}')
         if depth == 0:
             return token.end()
@@ -76,14 +90,13 @@ def source_has_content(text: str) -> bool:
             continue
         value = token.group()
         if value == '%':
-            end = re.search(r'[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]', text[token.end():])
-            skip_until = token.end() + end.end() if end else len(text)
+            skip_until = _tex_comment_end(text, token.end())
         elif value in _TEX_HIDDEN_ARGUMENT:
             skip_until = _tex_argument_end(text, token.end())
         elif value in {r'\kern', r'\mkern', r'\hskip', r'\mskip', r'\vskip'}:
             size = _TEX_DIMENSION.match(text, token.end())
             skip_until = size.end() if size else _tex_argument_end(text, token.end())
-        elif value in {r'\\', r'\cr', r'\newline'}:
+        elif value in {r'\\', r'\cr', r'\newline', r'\smash'}:
             size = re.match(r'\s*\[[^\[\]]*\]', text[token.end():])
             skip_until = token.end() + size.end() if size else token.end()
         elif value in _TEX_LAYOUT or value == '~':
@@ -92,7 +105,7 @@ def source_has_content(text: str) -> bool:
             # Other control words can be mathematical atoms (pi, emptyset,
             # lnot, ...). Do not reject existing notation through a whitelist;
             # its mathematical meaning remains the grader's responsibility.
-            if value[1:].isalpha():
+            if len(value) > 1 and value not in {r'\(', r'\)', r'\[', r'\]'}:
                 return True
         elif any(char.isalnum() or unicodedata.category(char) in {'Sm', 'So'} for char in value):
             return True
