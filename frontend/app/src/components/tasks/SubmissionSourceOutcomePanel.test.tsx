@@ -69,6 +69,33 @@ it("shows both required field repairs and optional confidence checks for one ans
   expect(screen.getByText(/建议复核：置信度 0.4/)).toHaveClass("text-amber-700");
 });
 
+it("progress counts only severe responses, keeps twenty and hides yellow notes", () => {
+  const answers = Array.from({ length: 25 }, (_, i) => ({ q_id: `q${i}`, number: String(i), has_content: true,
+    recognition_confidence: .4, flag: ["recognition_invalid_fields:content"] }));
+  render(<MemoryRouter><SubmissionSourceOutcomePanel requiredOnly locale="zh-CN" sources={[{
+    ...sources[1], answer_diagnostic_count: 100, answer_required_diagnostic_count: 25,
+    answer_diagnostics: [{ q_id: "yellow", number: "yellow", has_content: true, recognition_confidence: .2, flag: [] }, ...answers],
+  }]} /></MemoryRouter>);
+  expect(screen.getByText("25 份作答需要关注")).toBeVisible();
+  expect(screen.getByText("第 19 题")).toBeVisible();
+  expect(screen.queryByText("第 20 题")).not.toBeInTheDocument();
+  expect(screen.queryByText("第 yellow 题")).not.toBeInTheDocument();
+  expect(screen.queryByText(/建议复核：/)).not.toBeInTheDocument();
+  expect(screen.getByRole("list")).toHaveClass("max-h-[260px]", "overflow-y-auto");
+});
+
+it("shares the twenty-response preview limit across source files", () => {
+  const answers = (prefix: string) => Array.from({ length: 15 }, (_, i) => ({ q_id: `${prefix}${i}`, number: `${prefix}${i}`,
+    has_content: true, flag: ["parse_failed"] }));
+  render(<MemoryRouter><SubmissionSourceOutcomePanel requiredOnly locale="en-US" sources={[
+    { ...sources[1], file_name: "a.txt", answer_diagnostics: answers("A"), answer_required_diagnostic_count: 15 },
+    { ...sources[1], source_id: "second", file_name: "b.txt", answer_diagnostics: answers("B"), answer_required_diagnostic_count: 15 },
+  ]} /></MemoryRouter>);
+  expect(screen.getByText("Question A14")).toBeInTheDocument();
+  expect(screen.getByText("Question B4")).toBeInTheDocument();
+  expect(screen.queryByText("Question B5")).not.toBeInTheDocument();
+});
+
 describe("SubmissionSourceOutcomePanel", () => {
   it.each(["zh-CN", "en-US"] as const)("describes save-only manual resolution accurately in expanded diagnostics (%s)", async (locale) => {
     // The backend can resolve a paused source after saving valid answers and

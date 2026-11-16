@@ -44,10 +44,12 @@ def preparation_review(packages):
 def bounded_preparation_review(rows):
     """Leave room for per-question counters in the 64 KiB progress envelope."""
     result, size = [], 0
-    ordered = sorted(rows, key=lambda row: not any(i.get("severity") == "blocking" for i in row["issues"]))
-    for row in ordered:
+    for original in rows:
+        row = {**original, "issues": [i for i in original["issues"] if i.get("severity") == "blocking"]}
+        if not row["issues"]:
+            continue
         cost = len(json.dumps(row, ensure_ascii=False).encode("utf-8"))
-        if size + cost > 8000 or len(result) >= 12:
+        if size + cost > 8000 or len(result) >= 20:
             break
         result.append(row)
         size += cost

@@ -30,6 +30,34 @@ def stop(case, run_id):
         expected_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision)
 
 
+@pytest.mark.parametrize("programming", [False, True])
+def test_failed_progress_only_counts_required_review_results(case, monkeypatch, programming):
+    from backend.tests.test_task_grading_retry import finish
+    from backend.db.models import GradingRunRecord
+    from backend.db.session import session_scope
+    from copy import deepcopy
+    run_id = start(case, "required-only-diagnostics")["job_id"]
+    finish(case, run_id, monkeypatch)
+    original = grades.list_results_for_run(run_id, include_missing=True)
+    red = next(row for row in original if row.effective_score is None)
+    advisory = deepcopy(next(row for row in original if row.effective_score is not None))
+    advisory.requires_review = True
+    advisory.review_reasons = ["low_confidence", "math_alternative_method", "partial_experts"]
+    rows = [advisory] * 30 + [red] * 25
+    if programming:
+        red.effective_score = red.ai_score = 8
+        red.ai_synthesis_method = "single"
+        red.review_reasons = ["programming_ai_only"]
+        red.ai_expert_results = []
+    monkeypatch.setattr(grades, "list_results_for_run", lambda *args, **kwargs: rows)
+    with session_scope() as session:
+        session.get(GradingRunRecord, run_id).status = "partial_failed"
+    progress = task_facade._grading_progress(run_id, case[1])
+    assert progress["grading_review_summary"] == {"affected": 25, "missing_scores": 0 if programming else 25}
+    assert len(progress["grading_review"]) == 20
+    assert all(row["q_id"] == red.q_id for row in progress["grading_review"])
+
+
 def retry(case, key):
     return task_facade.start_task_grading(task_id=case[0], owner_id=case[1], request_id=key,
         expected_workflow_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision,

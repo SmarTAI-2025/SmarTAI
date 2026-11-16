@@ -669,6 +669,7 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
             "answer_diagnostics": public_answer_diagnostics(
                 source_states.get(result.source.stored_file_id, {}).get("answer_diagnostics", [])) if not manual_review else [],
             "answer_diagnostic_count": source_states.get(result.source.stored_file_id, {}).get("answer_diagnostic_count", 0) if not manual_review else 0,
+            "answer_required_diagnostic_count": source_states.get(result.source.stored_file_id, {}).get("answer_required_diagnostic_count") if not manual_review else 0,
             "resolution_status": (
                 "identity_resolved"
                 if outcome
@@ -3494,7 +3495,8 @@ async def run_task_submission_parsing(
                         from backend.services.review_diagnostics import public_answer_diagnostics
                         diagnostics = public_answer_diagnostics(student.get("stu_ans", []), limit=None)
                         await save_source_state(result.source_id, result.stored_file_id,
-                            answer_diagnostics=diagnostics[:20], answer_diagnostic_count=len(diagnostics))
+                            answer_diagnostics=diagnostics[:20], answer_diagnostic_count=len(diagnostics),
+                            answer_required_diagnostic_count=len(public_answer_diagnostics(diagnostics, limit=None, required_only=True)))
                     await reporter.set_completed_units(len(completed_sources))
                 await reporter.update_stage_metrics(
                     submissions_recognized=len(progress_students),
@@ -4930,7 +4932,8 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
     if run.status in {"partial_failed", "failed", "cancelled"}:
         from backend.services.review_diagnostics import public_grading_diagnostics
         review_rows, review_summary = public_grading_diagnostics(
-            grading_repository.list_results_for_run(run_id, include_missing=True))
+            [result for result in grading_repository.list_results_for_run(run_id, include_missing=True)
+             if _correction_review_blocks_finalization(result)])
     return {
         "contract_version": 1, "job_id": run_id,
         "phase": "paused" if paused else "done" if run.status in {"completed", "partial_failed"} else (

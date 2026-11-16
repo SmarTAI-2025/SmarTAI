@@ -45,3 +45,21 @@ def test_retired_qualitative_warnings_and_confirmed_blanks_do_not_inflate_counts
         dict(q_id="q3", content="answer", flag=["recognition_failed_pages:2"]),
     ]) == []
     assert len(public_answer_diagnostics([dict(q_id="q1", content="answer", flag=["low_confidence"], recognition_confidence=.2)])) == 1
+
+
+def test_required_answers_survive_advisory_rows_before_the_page_limit():
+    yellow = [dict(q_id=f"yellow-{i}", content="answer", recognition_confidence=.3) for i in range(25)]
+    red = [dict(q_id=f"red-{i}", content="answer", flag=["recognition_invalid_fields:content"], recognition_confidence=.3) for i in range(25)]
+    rows = public_answer_diagnostics([*yellow, *red])
+    assert len(rows) == 20 and all(row["q_id"].startswith("red-") for row in rows)
+    assert len(public_answer_diagnostics([*yellow, *red], limit=None, required_only=True)) == 25
+
+
+def test_programming_evidence_remains_a_mandatory_reason_in_safe_diagnostics():
+    source = SimpleNamespace(student_id="s1", q_id="q1", effective_score=8, requires_review=True,
+        ai_max_score=10, ai_confidence=1, ai_synthesis_method="single", review_reasons=[], initial_review_reasons=[],
+        teacher_review=None, ai_expert_results=[dict(provider="test", score=8, programming_evidence={
+            "contract": "smartai.programming_evidence", "score_status": "provisional", "execution_status": "executed"})])
+    rows, _ = public_grading_diagnostics([source])
+    assert rows[0]["review_reasons"] == ["programming_ai_only"]
+    assert "programming_evidence" not in rows[0]["expert_results"][0]

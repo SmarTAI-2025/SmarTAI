@@ -3,18 +3,20 @@ import type { JobProgress, Task } from "@/types";
 import type { Locale } from "@/i18n/messages";
 
 export function GradingFailureDiagnostics({ progress, task, locale }: { progress?: JobProgress | null; task?: Task; locale: Locale }) {
-  const rows = progress?.grading_review ?? [];
+  const required = (progress?.grading_review ?? []).map(row => ({ row,
+    notes: correctionReviewNotes(row, locale).filter(note => note.severity === "blocking") }))
+    .filter(item => item.notes.length > 0);
+  const rows = required.slice(0, 20);
   if (!rows.length) return null;
   const zh = locale === "zh-CN";
-  const total = progress?.grading_review_summary?.affected ?? rows.length;
-  const missing = progress?.grading_review_summary?.missing_scores ?? rows.filter(row => row.score === null).length;
+  const total = progress?.grading_review_summary?.affected ?? required.length;
+  const missing = progress?.grading_review_summary?.missing_scores ?? required.filter(({ row }) => row.score === null).length;
   return <section className="my-4 rounded-lg border bg-card p-5" aria-label={zh ? "批改问题明细" : "Grading issue details"}>
     <h2 className="font-semibold">{zh ? `有 ${total} 份作答需要关注，其中 ${missing} 份缺少有效分数` : `${total} responses need attention; ${missing} have no valid score`}</h2>
-    <ul className="mt-3 max-h-96 space-y-3 overflow-y-auto">
-      {rows.map(row => {
+    <ul className="mt-3 max-h-48 space-y-3 overflow-y-auto">
+      {rows.map(({ row, notes }) => {
         const student = task?.student_data?.[row.student_id];
         const question = task?.problem_data?.[row.q_id];
-        const notes = correctionReviewNotes(row, locale);
         return <li key={`${row.student_id}:${row.q_id}`} className="rounded-md border px-3 py-2 text-sm">
           <strong>{student?.stu_name || row.student_id} · {zh ? `第 ${question?.number || row.q_id} 题` : `Question ${question?.number || row.q_id}`}</strong>
           {notes.map(note => <p key={note.label} className={note.severity === "blocking" ? "mt-1 text-red-700 dark:text-red-300" : "mt-1 text-amber-700 dark:text-amber-300"}>

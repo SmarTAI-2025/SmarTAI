@@ -44,8 +44,7 @@ async def test_three_questions_first_failed_rubric_then_retry_uses_saved_fields(
     assert len(progress["completed_question_ids"]) == 2
     review = {r["number"]: r["issues"] for r in progress["preparation_review"]}
     assert [i["field"] for i in review["1.8"]] == ["rubric"]
-    assert review["1.10"][0]["severity"] == "warning"
-    assert "incomplete" not in review["1.10"][0]["details"]
+    assert "1.10" not in review  # Advisory formula review stays on the review page.
 
     task_facade._fail_operation(task, owner, operation.operation_id, operation.attempt,
         failure.value.code, expected_lease_token=operation.lease_token, operation_progress=progress)
@@ -79,6 +78,18 @@ def test_public_progress_preserves_field_diagnostics_without_model_content():
     assert result[0]["issues"][0]["details"] == dict(reason="invalid_structured_rubric",
         invalid_fields=["part_rubric.parts[0].alternative"])
     assert "private" not in str(result)
+
+
+def test_bounded_progress_excludes_advisory_issues_before_twenty_question_limit():
+    from backend.services.question_preparation_diagnostics import bounded_preparation_review
+    yellow = dict(severity="warning", code="recognition_needs_review")
+    red = dict(severity="blocking", code="generation_failed")
+    rows = bounded_preparation_review([
+        *[dict(q_id=f"yellow-{i}", issues=[yellow]) for i in range(25)],
+        *[dict(q_id=f"red-{i}", issues=[red, yellow]) for i in range(25)],
+    ])
+    assert len(rows) == 20 and all(row["q_id"].startswith("red-") for row in rows)
+    assert all(row["issues"] == [red] for row in rows)
 
 
 def test_formula_warning_is_not_a_backend_progress_blocker():

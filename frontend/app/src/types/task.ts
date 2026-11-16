@@ -211,6 +211,7 @@ export interface SubmissionSourceOutcome {
   page_diagnostics?: SubmissionPageDiagnostics | null;
   answer_diagnostics?: Array<Pick<StudentAnswerInfo, "q_id" | "number" | "flag" | "recognition_confidence"> & { has_content: boolean }>;
   answer_diagnostic_count?: number;
+  answer_required_diagnostic_count?: number | null;
   resolution_status?: "identity_resolved" | "manual_review" | "manual_resolved" | null;
   failure_phase?: string | null;
   retryable: boolean;
