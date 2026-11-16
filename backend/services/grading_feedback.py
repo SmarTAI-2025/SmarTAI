@@ -117,6 +117,10 @@ def _concise_deductions(steps, assessment, route):
 
 def _combined_steps(steps, original, rendered, maximum):
     """Replace only known single/weighted projection shapes, keeping every score."""
+    if len(original) == len(rendered) == 1 and steps == original[0].get("steps"):
+        # A single-expert copy shares its evidence, including route and charges.
+        # Never infer weighted deductions from a multi-expert aggregate total.
+        return [dict(step) for step in rendered[0].get("steps", [])]
     result = []
     for index, step in enumerate(steps):
         desc = step.get("desc", "")

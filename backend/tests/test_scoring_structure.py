@@ -12,7 +12,7 @@ from backend.skills.math_grading import weighted_math_steps
 def rules(*, deduction=False, alternative=None, penalty=None):
     part = dict(id="p", total_pts=10, alternative=alternative or dict(deduct_per_error=1))
     if deduction:
-        part["deductions"] = [dict(id="error", criterion="Each independent error", deduct_pts=1, **(penalty or {}))]
+        part["deductions"] = [{"id": "error", "criterion": "Each independent error", "deduct_pts": 1, **(penalty or {})}]
     else:
         part["steps"] = [dict(id=f"s{i}", criterion=f"Goal {i}", total_pts=pts)
                          for i, pts in enumerate([4, 3, 3], 1)]
@@ -63,6 +63,19 @@ def test_primary_deduction_count_and_amount_caps(penalty, expected):
     score, steps=settle_parts(rubric,[decision(method="reference")],ANSWER,rubric.stem)
     assert [d.points for d in steps[0].deductions] == expected
     assert score == 10-sum(expected)
+
+
+def test_alternative_charges_ignore_same_named_primary_rule_limits():
+    rubric = rules(deduction=True, penalty={"id": "alternative", "limit": 1, "max_deduction": .5})
+    score, steps = settle_parts(rubric, [decision()], ANSWER, rubric.stem)
+    assert score == 7
+    assert [d.points for d in steps[0].deductions] == [1, 1, 1]
+    # Read-time projection must use the same route-specific rule isolation.
+    from types import SimpleNamespace
+    from backend.services.grading_feedback import _part_steps
+    saved = [dict(step_no=1, part_id="p", score=7, is_correct=False, desc="Saved explanation")]
+    projected = _part_steps(saved, SimpleNamespace(part_decisions=[decision()]), rubric)
+    assert [d["points"] for d in projected[0]["deductions"]] == [1, 1, 1]
 
 
 @pytest.mark.parametrize("method", ["reference","minor_variant"])

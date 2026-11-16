@@ -251,7 +251,7 @@ def _amount(value):
 def charged_deductions(part, decision, base):
     """Project effective charges under the same frozen caps as settlement."""
     alternative = decision.method == "alternative"
-    rules = {rule.id: rule for rule in part.deductions}
+    rules = {} if alternative else {rule.id: rule for rule in part.deductions}
     floor = part.alternative.minimum.resolve(part.total_pts) if alternative else Fraction(0)
     remaining, charged, counts, details = base - floor, {}, {}, []
     for event in decision.errors:

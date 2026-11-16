@@ -1,9 +1,9 @@
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
-import { aiCorrectionScore, buildResultsModel, formatScore, scoringRows } from "@/components/tasks/resultsModel";
+import { aiCorrectionScore, buildResultsModel, formatScore, scoringRows, validExpertResults } from "@/components/tasks/resultsModel";
 import type { Locale } from "@/i18n/messages";
-import type { TaskResultResponse } from "@/types";
+import type { StepScore, TaskResultResponse } from "@/types";
 
 export type DemoContentStage = "materials" | "submissions" | "results";
 type ContentTab = "materials" | "submissions" | "grading" | "analysis";
@@ -78,18 +78,34 @@ function DemoGradingDetails({ result, taskId, locale }: { result: TaskResultResp
                 <span className="shrink-0 rounded-full bg-primary/5 px-2 py-1 text-[11px] font-semibold text-primary">{scores[index] === null ? (zh ? "无有效分数" : "No valid score") : `${formatScore(scores[index])} / ${formatScore(correction.max_score)}`}</span>
               </div>
               <MarkdownMath className="mt-2 text-[12px] leading-5 text-foreground">{correction.comment || (zh ? "SmarTAI 未返回文字说明。" : "SmarTAI returned no written rationale.")}</MarkdownMath>
-              {scoringRows(correction.steps).length ? <details className="mt-3 border-t pt-2">
-                <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">{scoringRows(correction.steps).every(row => row.deduction) ? (zh ? "扣分点" : "Deductions") : (zh ? "评分步骤" : "Scoring steps")}<span className="ml-2 font-normal">{scoringRows(correction.steps).length} {zh ? "项" : "items"}</span></summary>
-                <ol className="mt-2 space-y-2">{scoringRows(correction.steps).map((step, stepIndex) => <li key={`${step.step_no}-${stepIndex}`} className="grid grid-cols-[24px_minmax(0,1fr)_auto] gap-2 rounded-[7px] bg-muted/55 px-3 py-2 text-[11px] leading-5">
-                  <span className="font-semibold text-muted-foreground">{stepIndex + 1}</span>
-                  <MarkdownMath className="min-w-0 text-foreground">{step.desc}</MarkdownMath>
-                  <span className={`font-semibold ${step.is_correct ? "text-accent" : "text-warning"}`}>{formatScore(step.score)} {zh ? "分" : "pts"}</span>
-                </li>)}</ol>
-              </details> : null}
+              {validExpertResults(correction).length ? validExpertResults(correction).map((expert, expertIndex) =>
+                <section key={`${expert.provider_id ?? expert.provider}-${expertIndex}`} className="mt-3 border-t pt-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold">
+                    <span className="min-w-0 break-words">{expert.provider}</span>
+                    <span className="shrink-0">{formatScore(expert.score)} / {formatScore(expert.max_score ?? correction.max_score)}</span>
+                  </div>
+                  <MarkdownMath className="mt-1 text-[12px] leading-5">{expert.comment}</MarkdownMath>
+                  <DemoScoringEvidence steps={expert.steps} zh={zh} />
+                </section>) : <DemoScoringEvidence steps={correction.steps} zh={zh} />}
             </section>)}
           </div>
         </article>;
       })}
     </div>
   </section>;
+}
+
+function DemoScoringEvidence({ steps, zh }: { steps: StepScore[]; zh: boolean }) {
+  const rows = scoringRows(steps);
+  return <>
+    {steps.some(step => step.is_alternative) ? <p className="mt-2 text-[11px] text-muted-foreground">{zh ? "另解批改" : "Alternative method"}</p> : null}
+    {rows.length ? <details className="mt-3 border-t pt-2">
+      <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">{rows.every(row => row.deduction) ? (zh ? "扣分点" : "Deductions") : (zh ? "评分步骤" : "Scoring steps")}<span className="ml-2 font-normal">{rows.length} {zh ? "项" : "items"}</span></summary>
+      <ol className="mt-2 space-y-2">{rows.map((step, index) => <li key={`${step.step_no}-${index}`} className="grid grid-cols-[24px_minmax(0,1fr)_auto] gap-2 rounded-[7px] bg-muted/55 px-3 py-2 text-[11px] leading-5">
+        <span className="font-semibold text-muted-foreground">{index + 1}</span>
+        <MarkdownMath className="min-w-0 text-foreground">{step.desc}</MarkdownMath>
+        <span className={`font-semibold ${step.is_correct ? "text-accent" : "text-warning"}`}>{formatScore(step.score)} {zh ? "分" : "pts"}</span>
+      </li>)}</ol>
+    </details> : null}
+  </>;
 }

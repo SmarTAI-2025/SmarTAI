@@ -131,6 +131,18 @@ def test_legacy_aggregate_preserves_other_explanations_and_does_not_mutate():
     assert _combined_steps([{**combined[0], "desc": "Independent judge conclusion."}], old, new, 10)[0]["desc"] == "Independent judge conclusion."
 
 
+def test_legacy_single_expert_projection_retains_deduction_metadata_and_net_score():
+    saved = [dict(step_no=1, part_id="p", score=7, is_correct=False, desc="Saved reasoning")]
+    shown = [{**saved[0], "is_alternative": True, "deductions": [
+        dict(desc=f"Wrong sign in equation {n}.", points=1) for n in range(1, 4)]}]
+    original = [dict(provider="model", score=7, steps=saved)]
+    rendered = [{**original[0], "steps": shown}]
+    assert _combined_steps(saved, original, rendered, 10) == shown
+    assert "deductions" not in saved[0]
+    adjusted = [{**saved[0], "score": 8}]
+    assert _combined_steps(adjusted, original, rendered, 10) == adjusted
+
+
 def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
     from backend.db import grading_repository as grades
     from backend.db import workflow_repository as workflows

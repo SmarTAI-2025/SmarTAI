@@ -96,4 +96,41 @@ describe("DemoContentTabs", () => {
     fireEvent.keyDown(list, { key: "End" });
     expect(analysis).toHaveFocus();
   });
+
+  it.each(["zh-CN", "en-US"] as const)("shows original expert evidence instead of synthesized award steps (%s)", locale => {
+    const zh = locale === "zh-CN";
+    const graded = result();
+    const correction = graded.results![0].corrections[0];
+    Object.assign(correction, { score: 3.5, provisional_score: 3.5, max_score: 10,
+      steps: [{ step_no: 1, score: 3.5, is_correct: false, desc: "Synthetic combined subtotal" }],
+      expert_results: [
+        { provider: "Reference", score: 0, max_score: 10, confidence: .9, comment: "Reference reasoning", steps: [1, 2, 3].map(n => ({ step_no: n, item_id: `s${n}`, part_id: "p", score: 0, is_correct: false, desc: `Missing reference obligation ${n}` })) },
+        { provider: "Alternative", score: 7, max_score: 10, confidence: .9, comment: "Alternative reasoning", steps: [{ step_no: 1, part_id: "p", score: 7, is_correct: false, is_alternative: true, desc: "Net subtotal", deductions: [1, 2, 3].map(n => ({ desc: `Wrong sign in equation ${n}.`, points: 1 })) }] },
+      ],
+    });
+    render(view("results", locale, graded));
+    expect(screen.getAllByText("3.5 / 10")).toHaveLength(2);
+    expect(screen.queryByText("Synthetic combined subtotal")).not.toBeInTheDocument();
+    const alternative = screen.getByText("Alternative", { exact: true }).closest("section")!;
+    const reference = screen.getByText("Reference", { exact: true }).closest("section")!;
+    expect(within(alternative).getByText(zh ? "另解批改" : "Alternative method")).toBeVisible();
+    expect(within(reference).queryByText(zh ? "另解批改" : "Alternative method")).not.toBeInTheDocument();
+    fireEvent.click(within(alternative).getByText(zh ? "扣分点" : "Deductions", { exact: false }));
+    expect(within(alternative).getAllByText(zh ? "-1 分" : "-1 pts")).toHaveLength(3);
+    expect(within(alternative).getByText("Wrong sign in equation 2.")).toBeVisible();
+    expect(screen.queryByText("Net subtotal")).not.toBeInTheDocument();
+    fireEvent.click(within(reference).getByText(zh ? "评分步骤" : "Scoring steps", { exact: false }));
+    expect(within(reference).getAllByText(zh ? "0 分" : "0 pts")).toHaveLength(3);
+  });
+
+  it.each([false, true])("labels full-credit alternatives without inventing a correct step (expert=%s)", expert => {
+    const graded = result();
+    const correction = graded.results![0].corrections[0];
+    correction.steps = [{ step_no: 1, score: 5, is_correct: true, is_alternative: true, desc: "Full-credit subtotal", deductions: [] }];
+    if (expert) correction.expert_results = [{ provider: "Original model", score: 5, max_score: 5, confidence: .9, comment: "Correct equivalences", steps: correction.steps }];
+    render(view("results", "en-US", graded));
+    expect(screen.getByText("Alternative method")).toBeVisible();
+    expect(screen.queryByText("Full-credit subtotal")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Scoring steps|Deductions/)).not.toBeInTheDocument();
+  });
 });
