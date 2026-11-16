@@ -248,30 +248,6 @@ def _amount(value):
     return Fraction(str(value))
 
 
-def charged_deductions(part, decision, base):
-    """Project effective charges under the same frozen caps as settlement."""
-    alternative = decision.method == "alternative"
-    rules = {} if alternative else {rule.id: rule for rule in part.deductions}
-    floor = part.alternative.minimum.resolve(part.total_pts) if alternative else Fraction(0)
-    remaining, charged, counts, details = base - floor, {}, {}, []
-    for event in decision.errors:
-        rule = rules.get(event.rule_id)
-        count = counts.get(event.rule_id, 0) + 1
-        counts[event.rule_id] = count
-        amount = _amount(part.alternative.deduct_per_error or 0) if alternative else _amount(rule.deduct_pts)
-        if rule and rule.limit is not None and count > rule.limit:
-            amount = Fraction(0)
-        ceiling = part.alternative.max_deduction if alternative else rule.max_deduction
-        if ceiling is not None:
-            amount = min(amount, max(Fraction(0), _amount(ceiling) - charged.get(event.rule_id, 0)))
-        amount = min(amount, max(Fraction(0), remaining))
-        charged[event.rule_id] = charged.get(event.rule_id, Fraction(0)) + amount
-        remaining -= amount
-        if amount:
-            details.append(ScoreDeduction(desc=event.reason, points=float(amount)))
-    return details
-
-
 def _obligation_span(question, scope, fragment, question_lines):
     """Resolve omissions to offsets in this part, including original question line IDs."""
     if not fragment.startswith("question:"):
@@ -297,6 +273,30 @@ def _obligation_evidence(question, scope, fragment, question_lines):
         _obligation_span(question, scope, item, question_lines) is not None
         for item in fragments
     )
+
+
+def charged_deductions(part, decision, base):
+    """Project effective charges under the same frozen caps as settlement."""
+    alternative = decision.method == "alternative"
+    rules = {} if alternative else {rule.id: rule for rule in part.deductions}
+    floor = part.alternative.minimum.resolve(part.total_pts) if alternative else Fraction(0)
+    remaining, charged, counts, details = base - floor, {}, {}, []
+    for event in decision.errors:
+        rule = rules.get(event.rule_id)
+        count = counts.get(event.rule_id, 0) + 1
+        counts[event.rule_id] = count
+        amount = _amount(part.alternative.deduct_per_error or 0) if alternative else _amount(rule.deduct_pts)
+        if rule and rule.limit is not None and count > rule.limit:
+            amount = Fraction(0)
+        ceiling = part.alternative.max_deduction if alternative else rule.max_deduction
+        if ceiling is not None:
+            amount = min(amount, max(Fraction(0), _amount(ceiling) - charged.get(event.rule_id, 0)))
+        amount = min(amount, max(Fraction(0), remaining))
+        charged[event.rule_id] = charged.get(event.rule_id, Fraction(0)) + amount
+        remaining -= amount
+        if amount:
+            details.append(ScoreDeduction(desc=event.reason, points=float(amount)))
+    return details
 
 
 def settle_parts(rules, decisions, answer, question, *, require_specific_reasons=True):
