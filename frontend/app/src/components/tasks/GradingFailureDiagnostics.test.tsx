@@ -9,10 +9,10 @@ it("shows the affected student, question and specific failure before entering re
     review_reasons: ["all_failed", "parse_failed"],
     expert_results: [{ provider: "Gemini", score: 0, max_score: 10, confidence: 0, error_kind: "parse_failed", comment: "", steps: [] }],
   } as Correction;
-  render(<GradingFailureDiagnostics locale="zh-CN" task={{ student_data: { s1: { stu_name: "测试教师的样例学生" } },
+  render(<GradingFailureDiagnostics locale="zh-CN" task={{ student_data: { s1: { stu_name: "测试教师的样例学生", stu_id: "S2026001" } },
     problem_data: { q1: { number: "1.10" } } } as unknown as Task}
     progress={{ grading_review: [correction], grading_review_summary: { affected: 25, missing_scores: 3 } } as JobProgress} />);
-  expect(screen.getByText("测试教师的样例学生 · 第 1.10 题")).toBeVisible();
+  expect(screen.getByText("测试教师的样例学生（S2026001） · 第 1.10 题")).toBeVisible();
   expect(screen.getByText(/25 份作答需要关注，其中 3 份缺少有效分数/)).toBeVisible();
   expect(screen.getByText(/Gemini：模型返回的评分格式无法读取/)).toHaveClass("text-red-700");
   expect(screen.queryByText(/所有专家均失败/)).not.toBeInTheDocument();
@@ -36,4 +36,13 @@ it("retains mandatory programming confirmation even when a score exists", () => 
     score: 8, max_score: 10, confidence: 1, review_reasons: ["programming_ai_only"], expert_results: [] }] } as unknown as JobProgress} />);
   expect(screen.getByText("有 1 份作答需要关注，其中 0 份缺少有效分数")).toBeVisible();
   expect(screen.getByText(/需处理：/)).toBeVisible();
+});
+
+it("uses a readable fallback while student identity is unavailable", () => {
+  render(<GradingFailureDiagnostics locale="zh-CN" progress={{ grading_review: [{
+    student_id: "imported_f2036c18adb59b0b", q_id: "q1", score: null, max_score: 10,
+    expert_results: [], review_reasons: ["missing_correction"],
+  }] } as unknown as JobProgress} />);
+  expect(screen.getByText("身份待确认 · 第 q1 题")).toBeVisible();
+  expect(screen.queryByText(/imported_/)).not.toBeInTheDocument();
 });

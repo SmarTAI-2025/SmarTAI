@@ -4934,6 +4934,11 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
         review_rows, review_summary = public_grading_diagnostics(
             [result for result in grading_repository.list_results_for_run(run_id, include_missing=True)
              if _correction_review_blocks_finalization(result)])
+        presentations = workflow_repository.list_student_presentations(run.assignment_id)
+        for row in review_rows:
+            presentation = presentations.get(row["student_id"])
+            if presentation:
+                row["student_id"] = presentation.display_student_id
     return {
         "contract_version": 1, "job_id": run_id,
         "phase": "paused" if paused else "done" if run.status in {"completed", "partial_failed"} else (

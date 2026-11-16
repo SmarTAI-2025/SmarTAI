@@ -58,6 +58,25 @@ def test_failed_progress_only_counts_required_review_results(case, monkeypatch, 
     assert all(row["q_id"] == red.q_id for row in progress["grading_review"])
 
 
+
+def test_failed_progress_uses_current_student_presentation_without_changing_result(case, monkeypatch):
+    from backend.tests.test_task_grading_retry import finish
+    run_id = start(case, "displayed-diagnostics")["job_id"]
+    finish(case, run_id, monkeypatch)
+    failed = next(row for row in grades.list_results_for_run(run_id) if row.effective_score is None)
+    internal_id = failed.student_id
+    for display_id, name in [("S2026001", "示例学生"), ("S2026002", "校正姓名")]:
+        workflows.upsert_student_presentation(assignment_id=case[0], student_id=internal_id,
+            display_student_id=display_id, display_name=name, identity_status="matched")
+        task = task_facade.get_task(task_id=case[0], owner_id=case[1])
+        progress = task_facade._grading_progress(run_id, case[1])
+        row = progress["grading_review"][0]
+        assert row["student_id"] == display_id
+        assert task["student_data"][row["student_id"]]["stu_name"] == name
+        assert progress["grading_review_summary"] == {"affected": 1, "missing_scores": 1}
+    assert all(row.student_id == internal_id for row in grades.list_results_for_run(run_id))
+
+
 def retry(case, key):
     return task_facade.start_task_grading(task_id=case[0], owner_id=case[1], request_id=key,
         expected_workflow_revision=workflows.get_live_workflow(case[0], owner_id=case[1]).workflow_revision,

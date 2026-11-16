@@ -2,7 +2,8 @@ import { expect, test } from "@playwright/test";
 
 for (const stage of ["problems", "submissions", "grading"] as const) {
   for (const locale of ["zh-CN", "en-US"] as const) {
-    test(`${stage} ${locale}: failure diagnostics only count required items and scroll in a compact panel`, async ({ page }, info) => {
+    for (const requiredCount of [25, 1]) {
+    test(`${stage} ${locale} ${requiredCount} required: failure diagnostics only count required items and scroll in a compact panel`, async ({ page }, info) => {
       const zh = locale === "zh-CN";
       await page.setViewportSize({ width: zh ? 1440 : 390, height: 900 });
       const errors: string[] = [];
@@ -11,13 +12,13 @@ for (const stage of ["problems", "submissions", "grading"] as const) {
       const provider = { provider_id: "test", model: "synthetic", enabled: true };
       const red = { issue_id: "red", field: "rubric", code: "generation_failed", status: "open", severity: "blocking" };
       const yellow = { issue_id: "yellow", field: "stem", code: "recognition_needs_review", status: "open", severity: "warning" };
-      const correction = { student_id: "s1", q_id: "yellow", score: 8, max_score: 10, confidence: .2, review_reasons: ["low_confidence"], expert_results: [] };
-      const source = { source_id: "source", file_id: "file", file_name: "Synthetic.txt", content_type: "text/plain", size_bytes: 100,
+      const correction = { student_id: "S2026001", q_id: "advisory", score: 8, max_score: 10, confidence: .2, review_reasons: ["low_confidence"], expert_results: [] };
+      const source = { source_id: "source", file_id: "file", file_name: "示例学生_S2026001.txt", content_type: "text/plain", size_bytes: 100,
         status: "failed", internal_status: "parse_failed", reason_code: "recognition_response_invalid", retryable: true, unknown_question_ids: [],
-        answer_diagnostic_count: 50, answer_required_diagnostic_count: 25,
+        answer_diagnostic_count: 147 + requiredCount, answer_required_diagnostic_count: requiredCount,
         answer_diagnostics: [
-          { q_id: "yellow", number: "yellow", has_content: true, recognition_confidence: .2, flag: [] },
-          ...Array.from({ length: 25 }, (_, i) => ({ q_id: `q${i}`, number: `red-${i}`, has_content: true,
+          ...Array.from({ length: 147 }, (_, i) => ({ q_id: `advisory-${i}`, number: `2.1.${i + 1}`, has_content: true, recognition_confidence: .2, flag: [] })),
+          ...Array.from({ length: requiredCount }, (_, i) => ({ q_id: `q${i}`, number: `1.2.${i + 1}`, has_content: true,
             recognition_confidence: .2, flag: ["recognition_invalid_fields:content"] })),
         ] };
       const task = { task_id: "required", name: "Required diagnostics", status: "error", workflow_revision: 2,
@@ -25,13 +26,14 @@ for (const stage of ["problems", "submissions", "grading"] as const) {
         extract_job_id: stage === "problems" ? "failed" : "question-job", parse_job_id: stage === "submissions" ? "failed" : "answer-job",
         grading_job_id: stage === "grading" ? "failed" : null,
         question_recognition_provider_id: "test", submission_recognition_provider_id: "test", grading_setup_configured: true,
-        problem_data: {}, student_data: {}, submission_sources: [source], problem_count: 25, student_count: 1, kb_docs: {}, kb_doc_count: 0 };
+        problem_data: Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`q${i}`, { q_id: `q${i}`, number: `1.2.${i + 1}`, type: "concept", stem: "Synthetic question", criterion: "Synthetic rubric", max_score: 10 }])),
+        student_data: { S2026001: { stu_id: "S2026001", stu_name: "张三（测试）", stu_ans: [] } }, submission_sources: [source], problem_count: 25, student_count: 1, kb_docs: {}, kb_doc_count: 0 };
       const progress = { phase: "error", error_detail: "provider_response_invalid", active: [], messages: [],
-        preparation_review_summary: { questions: 50, blocking: 25, advisory: 25 },
-        preparation_review: [ { q_id: "yellow", number: "yellow", issues: [yellow] },
-          ...Array.from({ length: 25 }, (_, i) => ({ q_id: `q${i}`, number: `red-${i}`, issues: [red, yellow] })) ],
-        grading_review_summary: { affected: 25, missing_scores: 25 },
-        grading_review: [correction, ...Array.from({ length: 25 }, (_, i) => ({ ...correction, q_id: `red-${i}`, score: null }))] };
+        preparation_review_summary: { questions: 147 + requiredCount, blocking: requiredCount, advisory: 147 },
+        preparation_review: [ ...Array.from({ length: 147 }, (_, i) => ({ q_id: `advisory-${i}`, number: `2.1.${i + 1}`, issues: [yellow] })),
+          ...Array.from({ length: requiredCount }, (_, i) => ({ q_id: `q${i}`, number: `1.2.${i + 1}`, issues: [red, yellow] })) ],
+        grading_review_summary: { affected: requiredCount, missing_scores: requiredCount },
+        grading_review: [...Array.from({ length: 147 }, (_, i) => ({ ...correction, q_id: `advisory-${i}` })), ...Array.from({ length: requiredCount }, (_, i) => ({ ...correction, q_id: `q${i}`, score: null }))] };
       await page.addInitScript(language => { localStorage.setItem("smartai_token", "synthetic"); localStorage.setItem("smartai_locale", language); }, locale);
       const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
       await page.route(`${backend}/**`, route => {
@@ -53,21 +55,28 @@ for (const stage of ["problems", "submissions", "grading"] as const) {
           : page.getByRole("heading", { name: zh ? "本批文件识别结果" : "Submission source results" }).locator("xpath=ancestor::section[1]");
       await expect(panel).toBeVisible();
       await expect(panel).not.toContainText(zh ? "建议复核：" : "Suggested:");
-      await expect(panel).not.toContainText("yellow");
-      await expect(panel).not.toContainText("red-20");
-      if (stage === "problems") await expect(panel).toContainText(zh ? "需要处理 25 题" : "25 questions need action");
-      else await expect(panel).toContainText(zh ? "25 份作答需要关注" : "25 responses need attention");
+      await expect(panel).not.toContainText("2.1.1");
+      await expect(panel).not.toContainText("1.2.21");
+      await expect(panel).not.toContainText(/red-|yellow|红色|imported_/);
+      if (stage === "grading") await expect(panel).toContainText(zh ? "张三（测试）（S2026001）" : "张三（测试） (S2026001)");
+      if (stage === "problems") await expect(panel).toContainText(zh ? `需要处理 ${requiredCount} 题` : `${requiredCount} questions need action`);
+      else await expect(panel).toContainText(zh ? `${requiredCount} 份作答需要关注` : `${requiredCount} responses need attention`);
       const list = panel.locator(stage === "submissions" ? "ol" : "ul").first();
       const dimensions = await list.evaluate(el => ({ height: el.clientHeight, scroll: el.scrollHeight }));
       expect(dimensions.height).toBeLessThanOrEqual(stage === "submissions" ? 260 : 192);
-      expect(dimensions.scroll).toBeGreaterThan(dimensions.height);
-      await list.evaluate(el => { el.scrollTop = el.scrollHeight; });
-      expect(await list.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
-      await expect(panel.getByText(zh ? "第 red-19 题" : "Question red-19", { exact: stage !== "grading" })).toBeVisible();
+      if (requiredCount > 20) {
+        expect(dimensions.scroll).toBeGreaterThan(dimensions.height);
+        await list.evaluate(el => { el.scrollTop = el.scrollHeight; });
+        expect(await list.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+      }
+      const lastNumber = `1.2.${Math.min(20, requiredCount)}`;
+      await expect(panel.getByText(zh ? `第 ${lastNumber} 题` : `Question ${lastNumber}`, { exact: stage !== "grading" })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await expect(page.locator("vite-error-overlay")).toHaveCount(0);
+      await list.evaluate(el => { el.scrollTop = 0; });
       await panel.screenshot({ path: info.outputPath("required-diagnostics.png") });
       expect(errors).toEqual([]);
     });
   }
+}
 }
