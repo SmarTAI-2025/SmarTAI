@@ -71,6 +71,16 @@ def _seed_user(role: str) -> str:
 
 
 @pytest.mark.asyncio
+async def test_postgres_current_source_diagnostics_remain_lightweight_and_match_review(pg_database, monkeypatch):
+    from backend.tests.test_submission_incremental import (
+        test_current_source_review_fields_match_full_review_policy_and_scope,
+        test_state_poll_batches_current_diagnostics_without_serializing_answer_bodies,
+    )
+    await test_current_source_review_fields_match_full_review_policy_and_scope(monkeypatch)
+    await test_state_poll_batches_current_diagnostics_without_serializing_answer_bodies(monkeypatch, 10)
+
+
+@pytest.mark.asyncio
 async def test_provider_admission_recovers_a_conflicting_learning_write(pg_database, monkeypatch):
     from backend.tests.test_adaptive_admission_lifecycle import (
         test_failed_generation_save_refreshes_and_allows_later_verified_save,
