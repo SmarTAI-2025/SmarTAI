@@ -78,10 +78,10 @@ export function SubmissionSourceOutcomePanel({
           </h2>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             {equation(counts, locale)}
-            {hasTerminalAttention
-              ? tx(locale, "。请查看下方原因并处理。", ". Review the details below to continue.")
-              : requiredAnswerCount > 0
-                ? tx(locale, `。有 ${requiredAnswerCount} 份作答需要处理，请逐题核对。`, `. ${requiredAnswerCount} responses need action; review each answer.`)
+            {requiredAnswerCount > 0
+              ? tx(locale, `。有 ${requiredAnswerCount} 份作答需要处理，请逐题核对。`, `. ${requiredAnswerCount} responses need action; review each answer.`)
+              : hasTerminalAttention
+                ? tx(locale, "。请查看下方原因并处理。", ". Review the details below to continue.")
               : hasQuestionWarnings
                 ? tx(locale, "。部分成功文件还包含未匹配题号，请展开核对。", ". Some recognized files also contain unmatched question IDs; expand the list to review them.")
               : tx(locale, "。", ".")}

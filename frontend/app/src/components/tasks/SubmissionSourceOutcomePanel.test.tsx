@@ -232,3 +232,14 @@ it.each(["zh-CN", "en-US"] as const)("opens successful sources with required ans
   expect(screen.getByText(zh ? /有 2 份作答需要处理/ : /2 responses need action/)).toBeVisible();
   expect(screen.queryByRole("link", { name: zh ? "重新选择文件" : "Choose files again" })).not.toBeInTheDocument();
 });
+
+it("keeps the required-answer count outside details in a mixed successful/failed batch", () => {
+  render(<MemoryRouter><SubmissionSourceOutcomePanel requiredOnly locale="zh-CN" sources={[
+    sources[1], { ...sources[0], answer_required_diagnostic_count: 2, answer_diagnostics: [
+      { q_id: "q1", number: "1", has_content: false, flag: ["no_matching_answer"] },
+    ] },
+  ]} /></MemoryRouter>);
+  const notice = screen.getByText(/有 2 份作答需要处理/);
+  expect(notice.closest("details")).toBeNull();
+  expect(screen.getByText("第 1 题").closest("details")).toHaveAttribute("open");
+});
