@@ -67,7 +67,12 @@ async def test_each_math_skill_uses_feedback_choices_without_changing_score(monk
     with math_plans_context({"q1": plan}):
         result = await skill(SimpleNamespace(provider_id="mock:math"), grading_setup=setup).grade(problem(), answer())
     assert not result.error_kind and result.score == 8
-    assert result.comment == assessment().comment
+    # This fixture leaves real tool evidence unresolved. Keep the model's
+    # feedback and expose that advice even when the scoring row is hidden.
+    label = "工具核验与当前判断仍有待核对之处：" if language == "zh" else "Tool verification remains unresolved: "
+    assert result.comment == assessment().comment + "\n\n" + label + (
+        "The constants are not exactly equal; approximation was not permitted.")
+    assert math_grading.read_math_trace(result)["review_pending"]
     assert call.await_count == 2  # Initial assessment and its evidence review.
     for request in call.call_args_list:
         prompt = request.kwargs["system_prompt"]
