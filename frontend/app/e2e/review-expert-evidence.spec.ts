@@ -27,10 +27,13 @@ for (const width of [390, 1440]) test(`deductions retain one net score and refer
     "在等式两边约去 x - 1 前没有排除 x = 1，此时除数为零，约分不成立。",
     "只验证了 n = 1 的情形，没有给出从 n = k 到 n = k + 1 的归纳步骤，不能证明对所有正整数成立。",
   ];
+  const reviewReason = "定向复核依据：已重新核对原作答，三个错误独立，分别按另解规则扣分。";
+  const fullReason = "定向复核依据：原有等价变换已覆盖两个方向，无需重抄标答。";
+  const advice = "证明依据核对建议：请核对第二个推理的定义域。";
   const votes = [
-    { ...experts[0], provider: "Deducted", comment: "三个独立错误各扣 1 分，得 7 分。", score: 7, steps: [{ step_no: 1, part_id: "p1", score: 7, is_correct: false, is_alternative: true, desc: "Net subtotal should not be a step",
+    { ...experts[0], provider: "Deducted", comment: `三个独立错误各扣 1 分，得 7 分。\n\n${reviewReason}\n\n${advice}`, score: 7, steps: [{ step_no: 1, part_id: "p1", score: 7, is_correct: false, is_alternative: true, desc: "Net subtotal should not be a step",
       deductions: errorDetails.map(desc => ({ desc, points: 1 })) }] },
-    { ...experts[1], provider: "Complete", score: 10, steps: [{ step_no: 1, part_id: "p1", score: 10, is_correct: true, is_alternative: true, desc: "Correct work should not be a deduction", deductions: [] }] },
+    { ...experts[1], provider: "Complete", comment: `${fullReason}\n\n${advice}`, score: 10, steps: [{ step_no: 1, part_id: "p1", score: 10, is_correct: true, is_alternative: true, desc: "Correct work should not be a deduction", deductions: [] }] },
     { ...experts[2], provider: "Reference", score: 0, steps: [1,2,3].map(n => ({ step_no: n, part_id: "p1", item_id: `s${n}`, score: 0, is_correct: false, desc: `Missing frozen goal ${n}` })) },
   ];
   await page.route(`${backend}/**`, async route => {
@@ -58,10 +61,15 @@ for (const width of [390, 1440]) test(`deductions retain one net score and refer
   await result.getByText("查看各专家原始结果").click();
   const panel = result.getByRole("tabpanel");
   await expect(panel.getByText("-1 分", { exact: true })).toHaveCount(3);
+  await expect(panel.getByText(reviewReason, { exact: true })).toBeVisible();
+  await expect(panel.getByText(advice, { exact: true })).toBeVisible();
+  await expect(panel.locator("ol").getByText(reviewReason)).toHaveCount(0);
   await result.getByRole("tab", { name: "Complete", exact: true }).click();
   await expect(panel).toContainText("10/10, [10]");
   await expect(panel.getByText("另解批改", { exact: true })).toBeVisible();
   await expect(panel.locator("ol")).toHaveCount(0);
+  await expect(panel.getByText(fullReason, { exact: true })).toBeVisible();
+  await expect(panel.getByText(advice, { exact: true })).toBeVisible();
   await result.getByRole("tab", { name: "Reference", exact: true }).click();
   await expect(panel).toContainText("0/10, [0,0,0]");
   await expect(panel.getByText("另解批改", { exact: true })).toHaveCount(0);

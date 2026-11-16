@@ -158,7 +158,10 @@ for (const width of [390, 1440]) test(`Quick Demo shows expert deductions withou
   const deductions = ["The second root has the wrong sign: x = -2 does not solve the equation.",
     "Dividing by x - 1 discards x = 1 without checking that case.",
     "The concluding inequality reverses direction when multiplying by a negative number."];
-  const alt = (score: number) => ({ provider: "Alternative model", score, max_score: 10, comment: "Coordinate-based reasoning.",
+  const reviewReason = "Targeted review: Rechecking the original equations confirms three independent errors.";
+  const fullReason = "Targeted review: The equivalences already cover both directions and earn full credit.";
+  const advice = "Proof evidence to check: Check the domain of the reverse implication.";
+  const alt = (score: number) => ({ provider: "Alternative model", score, max_score: 10, comment: `${score === 10 ? fullReason : reviewReason}\n\n${advice}`,
     steps: [{ step_no: 1, part_id: "p", score, is_correct: score === 10, is_alternative: true, desc: "Net score is not an awarded step",
       deductions: score === 10 ? [] : deductions.map(desc => ({ desc, points: 1 })) }] });
   const reference = { provider: "Reference model", score: 0, max_score: 10, comment: "Reference obligations were not established.",
@@ -185,6 +188,9 @@ for (const width of [390, 1440]) test(`Quick Demo shows expert deductions withou
   await expect(tabs.getByText("Alternative method", { exact: true })).toHaveCount(2);
   await expect(tabs.getByText("Legacy aggregate award must not render")).toHaveCount(0);
   await expect(tabs.getByText("Net score is not an awarded step")).toHaveCount(0);
+  for (const text of [reviewReason, fullReason]) await expect(tabs.getByText(text, { exact: true })).toBeVisible();
+  await expect(tabs.getByText(advice, { exact: true })).toHaveCount(2);
+  await expect(tabs.locator("li").getByText(/Targeted review|Proof evidence to check/)).toHaveCount(0);
   await tabs.getByText("Deductions", { exact: false }).click();
   for (const detail of deductions) await expect(tabs.getByText(detail)).toBeVisible();
   await expect(tabs.getByText("-1 pts", { exact: true })).toHaveCount(3);

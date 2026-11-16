@@ -183,6 +183,35 @@ def _feedback_context(run_id):
     return {}, {}
 
 
+def _review_comment(expert, trace, plan):
+    """Keep saved review explanations visible when net-score rows are hidden."""
+    from backend.skills.math_grading import TRACE_VERSION
+
+    comment = expert.get("comment", "")
+    if (not plan or not isinstance(trace, dict) or trace.get("version") != TRACE_VERSION
+            or trace.get("plan_id") != plan.plan_id):
+        return comment
+    review = trace.get("targeted_review")
+    reason = review.get("reason") if isinstance(review, dict) else None
+    descriptions = "\n".join(step.get("desc", "") for step in expert.get("steps", []))
+    labels = ("定向复核依据：", "Targeted review: ")
+    if isinstance(reason, str) and reason.strip() and reason not in comment:
+        label = next((label for label in labels if label + reason in descriptions), "")
+        comment += "\n\n" + label + reason
+    if trace.get("review_advisory"):
+        advice_labels = ("工具核验与当前判断仍有待核对之处：", "Tool verification remains unresolved: ",
+                         "证明依据核对建议：", "Proof evidence to check: ",
+                         "解法路线仍需核对：", "Solution method still needs review: ")
+        # Recover only the program's existing suffixes, including multiline
+        # advice. Do not reinterpret the assessment or manufacture a score row.
+        starts = "|".join(re.escape(label) for label in (*labels, *advice_labels))
+        for step in expert.get("steps", []):
+            for note in re.split(r"(?:^|\n)(?=" + starts + ")", step.get("desc", "")):
+                if note.startswith(advice_labels) and note not in comment:
+                    comment += "\n\n" + note
+    return comment
+
+
 def concise_result_feedback(results):
     """Project the selected runs' final traces after the caller checks ownership.
 
@@ -206,9 +235,12 @@ def concise_result_feedback(results):
                            and item.get("provider_id") == expert.get("provider_id")
                            and item.get("provider") == expert.get("provider")]
                 steps = expert.get("steps", [])
+                comment = expert.get("comment", "")
                 if len(matches) == 1 and not expert.get("error_kind"):
-                    steps = _concise_steps(steps, matches[0].get("trace", {}), plans.get(row.q_id))
-                rendered.append({**expert, "steps": steps})
+                    trace, plan = matches[0].get("trace", {}), plans.get(row.q_id)
+                    steps = _concise_steps(steps, trace, plan)
+                    comment = _review_comment(expert, trace, plan)
+                rendered.append({**expert, "steps": steps, "comment": comment})
             if rendered == row.ai_expert_results:
                 continue
             projected[row.id] = row.model_copy(update={

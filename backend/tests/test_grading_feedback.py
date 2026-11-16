@@ -5,7 +5,7 @@ import json
 import pytest
 
 from backend.models import Correction, ExpertResult, StepScore
-from backend.services.grading_feedback import _concise_steps, _combined_steps, concise_result_feedback
+from backend.services.grading_feedback import _concise_steps, _combined_steps, _review_comment, concise_result_feedback
 from backend.skills.math_grading import TRACE_VERSION, weighted_math_steps
 from backend.tests.test_math_grading import assessment, plan_for
 from backend.tests.test_grading_checkpoints import prepare, stop
@@ -160,6 +160,7 @@ def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
     checkpoints.save_math_plan(problem_from_question(q), plan)
     _, steps, trace = legacy_fixture()
     trace["plan_id"] = plan.plan_id
+    trace["targeted_review"] = {"provider": "reviewer", "reason": "The omitted domain condition still warrants the deduction."}
     expert = ExpertResult(provider="model-a", provider_id=setup.setup["primary_provider_id"],
         score=8, max_score=10, confidence=.9, comment="Preserved summary.",
         steps=[StepScore(**s) for s in steps], raw_output=json.dumps(trace))
@@ -179,6 +180,7 @@ def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
     assert shown["expert_results"][0]["steps"][0]["desc"] == "Correct setup."
     assert shown["provisional_score"] == 8
     assert shown["expert_results"][0]["raw_output"] is None
+    assert trace["targeted_review"]["reason"] in shown["expert_results"][0]["comment"]
     assert shown["comment"] == "Preserved summary."
     assert [row.model_dump() for row in grades.list_results_for_run(run_id)] == before
     assert grades.list_events(run_id) == events_before
@@ -212,6 +214,7 @@ def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
         shown = next(c for s in fresh["results"] for c in s["corrections"] if c["q_id"] == q.q_id)
         assert shown["steps"][0]["desc"] == "Correct setup."
         assert shown["expert_results"][0]["steps"][0]["desc"] == "Correct setup."
+        assert trace["targeted_review"]["reason"] in shown["expert_results"][0]["comment"]
         assert shown["provisional_score"] == 8
         assert shown["teacher_score"] == 9-index
         assert shown["teacher_comment"] == f"Review {index+1}"
@@ -223,6 +226,27 @@ def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
             GradingRunEventRecord.message == "review_revision_created"))
         event.payload = {"source_run_id": run_id}
     assert concise_result_feedback(stored) == stored  # Cyclic/broken provenance is not guessed.
+
+
+@pytest.mark.parametrize("deductions", [[], [{"desc": "The root x=-2 fails the original equation.", "points": 2}]])
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_saved_review_notes_remain_visible_outside_hidden_net_score_rows(deductions, language):
+    plan, _, trace = legacy_fixture()
+    reason = "原方程代入已核对，按该路线的独立错误扣分。" if language == "zh" else "Substitution in the original equation confirms the independent error."
+    label = "定向复核依据：" if language == "zh" else "Targeted review: "
+    advice = ("证明依据核对建议：仍需核对逆向推理。\n尤其是定义域。" if language == "zh" else
+              "Proof evidence to check: Verify the reverse implication.\nEspecially the domain.")
+    trace.update(targeted_review={"reason": reason}, review_advisory=True)
+    expert = {"comment": "Original explanation.", "steps": [{"score": 8 if deductions else 10,
+        "desc": "Net score\n" + label + reason + "\n" + advice, "deductions": deductions, "is_alternative": True}]}
+    original = deepcopy(expert)
+    result = _review_comment(expert, trace, plan)
+    assert result == expert["comment"] + "\n\n" + label + reason + "\n\n" + advice
+    assert _review_comment({**expert, "comment": result}, trace, plan) == result
+    assert expert == original
+    assert _review_comment(expert, {**trace, "plan_id": "other"}, plan) == expert["comment"]
+    assert _review_comment(expert, {**trace, "version": "old"}, plan) == expert["comment"]
+    assert _review_comment(expert, trace, None) == expert["comment"]
 
 
 @pytest.mark.parametrize("field", ["owner_id", "assignment_id", "fingerprint"])
