@@ -33,13 +33,14 @@ def checkpoint_key(item):
     return (item["student_id"], item["q_id"], item["provider_id"], item["sample_index"])
 
 
-def saved_experts(run_id):
+def saved_experts(run_id, *, events=None):
     """Include inherited successes so repeated stops retain the same paid work."""
     from backend.db import workflow_repository
     setup = workflow_repository.get_run_setup(run_id)
     saved = {checkpoint_key(item): item for item in
              (setup.input_manifest if setup else {}).get("reused_experts", [])}
-    events = repository.list_events(run_id)
+    if events is None:
+        events = repository.list_events(run_id)
     for event in events:
         if event["message"] == EVENT:
             saved[checkpoint_key(event["payload"])] = event["payload"]

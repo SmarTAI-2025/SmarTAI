@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.llm.adaptive_admission import AdaptiveAdmission, valid_profile
+from backend.llm.memory_reclaim import reclaim_idle_memory
 
 HARD_LIMIT = 50
 INITIAL_SECONDS = 120.0
@@ -225,13 +226,15 @@ class _Lease:
 
 class ModelScheduler:
     def __init__(self, *, memory_reader=read_memory, pressure_clear=memory_pressure_clear,
-                 host_capacity=None, clock=time.monotonic):
+                 host_capacity=None, clock=time.monotonic, memory_reclaimer=reclaim_idle_memory):
         if host_capacity is None:
             from backend.config import settings
             from backend.llm.host_capacity import HostCapacity
             host_capacity = HostCapacity(recovery_seconds=float(settings.llm_rate_limit_retry_seconds))
         self.host_capacity = host_capacity
         self.memory_reader = memory_reader
+        self.memory_reclaimer = memory_reclaimer
+        self.memory_reclaimed_at = -math.inf
         self.pressure_clear = pressure_clear
         self.quiet_small_host = False
         self.clock = clock
@@ -473,6 +476,15 @@ class ModelScheduler:
     def _memory_slot_limit(self, cost: int, now: float) -> int:
         if now - self.memory_at >= MEMORY_SAMPLE_SECONDS:
             self.memory_sample = self.memory_reader()
+            if self.memory_sample is not None and self.active == 0 and now - self.memory_reclaimed_at >= 30:
+                available, total = self.memory_sample
+                if available < max(512 * 1024**2, total // 4) + 2 * MEMORY_PER_CALL:
+                    self.memory_reclaimed_at = now
+                    try:
+                        if self.memory_reclaimer():
+                            self.memory_sample = self.memory_reader()
+                    except Exception:
+                        logger.warning("Idle memory reclaim unavailable; retaining admission guard")
             self.memory_at = now
             self.memory_sample_active = self.memory_active
             self.quiet_small_host = False

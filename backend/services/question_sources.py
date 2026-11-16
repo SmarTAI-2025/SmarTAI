@@ -41,6 +41,12 @@ _CACHE = RecognitionByteCache()
 _VISUAL_TYPES = {"application/pdf", "image/png", "image/jpeg", "image/webp", "image/bmp", "image/tiff"}
 
 
+async def expire_recognition_cache():
+    while True:
+        await asyncio.sleep(30)
+        _CACHE.expire()
+
+
 def recognition_capacity():
     loop = asyncio.get_running_loop()
     if loop not in _CAPACITIES:

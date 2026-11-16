@@ -4874,7 +4874,8 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
     from backend.progress.grading_activity import public_models, public_event, public_waits, model_eta_seconds, grading_eta_seconds
     run = grading_repository.get_run(run_id, actor_id=owner_id)
     paused = run.status == "cancelled" and run.error_message == "operation_cancelled"
-    events = grading_repository.list_events(run_id, actor_id=owner_id)
+    events = grading_repository.list_events(run_id, actor_id=owner_id,
+        omit_payloads=("grading_math_final_trace",))
     model_waits = next((item.get("payload", {}).get("model_waits", [])
                         for item in reversed(events) if "model_waits" in item.get("payload", {})), [])
     question_count = len(assignment_repository.get_questions_by_assignment(run.assignment_id))
@@ -4884,7 +4885,7 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
     from backend.services.grading_checkpoints import saved_experts
     from backend.models import ExpertResult
     from backend.agents.multi_expert import _is_successful_expert
-    for item in saved_experts(run_id):
+    for item in saved_experts(run_id, events=events):
         if _is_successful_expert(ExpertResult.model_validate(item["result"])):
             pair = (item["student_id"], item["q_id"])
             saved_pairs.add(pair)

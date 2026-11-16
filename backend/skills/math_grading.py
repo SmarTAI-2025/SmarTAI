@@ -1141,6 +1141,13 @@ def _point_review_evidence(assessment, trace, disputed):
 
 
 async def review_math_experts(problem, answer, experts, provider, *, language="en", grading_setup=None):
+    from backend.services.grading_memory import prepared_grading
+    async with prepared_grading(provider):
+        return await _review_math_experts(problem, answer, experts, provider,
+            language=language, grading_setup=grading_setup)
+
+
+async def _review_math_experts(problem, answer, experts, provider, *, language="en", grading_setup=None):
     """Resolve concrete disagreements once, retaining weights and provenance."""
     from backend.services.math_grading_context import scoring_plan
     traces = [read_math_trace(expert) for expert in experts]
@@ -1553,6 +1560,11 @@ class MathGradingSkill(GradingSkill):
         return evidence
 
     async def grade(self, problem, answer, *, student_id="") -> ExpertResult:
+        from backend.services.grading_memory import prepared_grading
+        async with prepared_grading(self.provider):
+            return await self._grade_prepared(problem, answer, student_id=student_id)
+
+    async def _grade_prepared(self, problem, answer, *, student_id="") -> ExpertResult:
         started = perf_counter()
         from backend.services.math_grading_context import scoring_plan
         plan = scoring_plan(problem, self.grading_setup)

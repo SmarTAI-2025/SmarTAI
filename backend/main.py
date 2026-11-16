@@ -192,6 +192,25 @@ def create_app() -> FastAPI:
             with suppress(asyncio.CancelledError):
                 await task
 
+    # ─── Recognition cache lifecycle ─────────────────────────────────────
+    _recognition_cache_cleanup = {"task": None}
+
+    @app.on_event("startup")
+    async def _start_recognition_cache_cleanup():
+        import asyncio
+        from backend.services.question_sources import expire_recognition_cache
+        _recognition_cache_cleanup["task"] = asyncio.create_task(expire_recognition_cache())
+
+    @app.on_event("shutdown")
+    async def _stop_recognition_cache_cleanup():
+        import asyncio
+        from contextlib import suppress
+        task = _recognition_cache_cleanup["task"]
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
     # ─── Grading worker lifecycle (Task 7) ────────────────────────────────
     # One poller per process claims queued grading runs through the DB lease
     # predicate, so multiple processes are safe and shutdown simply stops

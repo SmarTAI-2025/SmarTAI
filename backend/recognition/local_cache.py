@@ -117,6 +117,11 @@ class RecognitionByteCache:
             self._now()
             return self._size_bytes
 
+    def expire(self) -> None:
+        """Release expired bytes even when recognition has no more lookups."""
+        with self._lock:
+            self._now()
+
     @property
     def entry_count(self) -> int:
         with self._lock:

@@ -608,7 +608,8 @@ async def test_fresh_memory_check_releases_slot_before_rate_admission(clock, hos
     samples = iter([450, after_lock])
     pressures = iter([True, still_quiet])
     scheduler = ModelScheduler(clock=clock, host_capacity=host, pressure_clear=lambda: next(pressures),
-                               memory_reader=lambda: (next(samples) * 1024**2, 1906 * 1024**2))
+                               memory_reader=lambda: (next(samples) * 1024**2, 1906 * 1024**2),
+                               memory_reclaimer=lambda: False)
     task = asyncio.create_task(scheduler.acquire(**call(memory=40 * 1024**2)))
     try:
         await turns()
