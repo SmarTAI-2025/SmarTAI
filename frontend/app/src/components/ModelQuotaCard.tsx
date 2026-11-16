@@ -12,7 +12,7 @@ export function ModelQuotaCard() {
   const q = quota.data;
   const limit = (v: number) => v < 0 ? (zh ? "无限制" : "Unlimited") : v.toLocaleString();
   const reached = q && ((q.shared.request_limit >= 0 && q.shared.requests >= q.shared.request_limit) || (q.shared.estimated_token_limit >= 0 && q.shared.estimated_input_tokens >= q.shared.estimated_token_limit));
-  if (q?.shared_quota_mode === "weekly_usd") return <WeeklyQuotaCard usage={q} zh={zh} busy={quota.isFetching} refresh={() => void quota.refetch()} />;
+  if (q?.shared_quota_mode === "weekly_usd") return <WeeklyQuotaCard usage={q} zh={zh} busy={quota.isFetching} failed={quota.isError} refresh={() => void quota.refetch()} />;
   return <section className="rounded-[10px] border bg-card p-5 space-y-3" aria-label={zh ? "模型日额度" : "Daily model allowance"}>
     <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">{zh ? "模型日额度 · UTC" : "Daily model allowance · UTC"}</h2><Button variant="secondary" disabled={quota.isFetching} onClick={() => void quota.refetch()}>{zh ? "刷新用量" : "Refresh usage"}</Button></div>
     {quota.isPending ? <p role="status">{zh ? "读取用量中…" : "Loading usage…"}</p> : quota.isError ? <p role="alert">{zh ? "暂时无法读取模型额度，请重试。" : "Allowance unavailable; please retry."}</p> : q && <>
@@ -26,11 +26,12 @@ export function ModelQuotaCard() {
   </section>;
 }
 
-function WeeklyQuotaCard({ usage: q, zh, busy, refresh }: { usage: Usage; zh: boolean; busy: boolean; refresh: () => void }) {
+function WeeklyQuotaCard({ usage: q, zh, busy, failed, refresh }: { usage: Usage; zh: boolean; busy: boolean; failed: boolean; refresh: () => void }) {
   const w = q.shared_weekly;
   const dollars = (n: number) => `$${n.toFixed(2)}`;
   return <section className="rounded-[10px] border bg-card p-5 space-y-3" aria-label={zh ? "共享模型周额度" : "Weekly shared allowance"}>
     <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">{zh ? "共享模型周额度" : "Weekly shared allowance"}</h2><Button variant="secondary" disabled={busy} onClick={refresh}>{zh ? "刷新用量" : "Refresh usage"}</Button></div>
+    {failed && w && <p role="alert" className="text-sm">{zh ? "刷新失败，显示的是上次读取的用量。请重试。" : "Refresh failed. Showing the last known usage; please retry."}</p>}
     {!w ? <p role="alert">{zh ? "暂时无法读取周额度，请重试。" : "Weekly allowance unavailable; please retry."}</p> : <>
       <p className="text-sm">{zh ? "本周已用" : "Spent this week"}：{dollars(w.spent_usd)} / {dollars(w.limit_usd)}</p>
       <p className="text-sm text-muted-foreground">{zh ? "三个共享模型共用，每周一新加坡时间 00:00 重置。" : "Shared by all three models. Resets Monday at 00:00 Singapore time."}</p>

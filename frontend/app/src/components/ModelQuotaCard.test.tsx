@@ -44,3 +44,15 @@ it("missing weekly data shows an error instead of falling back to daily", async 
   expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法读取周额度");
   expect(screen.queryByText(/估算输入/)).not.toBeInTheDocument();
 });
+
+it("reports a failed weekly refresh instead of presenting stale usage as refreshed", async () => {
+  vi.spyOn(apiClient,"get").mockResolvedValueOnce({data:{shared_quota_mode:"weekly_usd",shared_pool_enabled:true,
+    shared:{requests:0,request_limit:100,estimated_input_tokens:0,estimated_token_limit:100000},
+    shared_weekly:{limit_usd:5,spent_usd:1,reserved_usd:0,remaining_usd:4,unknown_requests:0,resets_at:"2026-11-23T00:00:00+08:00"},
+    history:{requests:0,request_limit:10}}}).mockRejectedValueOnce(new Error("synthetic refresh failure"));
+  mount();
+  await screen.findByText(/本周已用/);
+  await userEvent.click(screen.getByRole("button",{name:"刷新用量"}));
+  expect(await screen.findByRole("alert")).toHaveTextContent("刷新失败");
+  expect(screen.getByText(/本周已用/)).toHaveTextContent("$1.00 / $5.00");
+});
