@@ -1,7 +1,6 @@
 """One source-grounded route decision, then only mismatched experts reassess."""
 import ast
 import re
-import unicodedata
 from dataclasses import dataclass
 from typing import Literal
 
@@ -307,7 +306,7 @@ def _covered_fragments(answer, start, end):
 
 def validate_method_part_sources(decisions, answer, rules, *, require_scope=True, known_decisions=()):
     """Reject known foreign evidence even when route alignment is unavailable."""
-    from backend.services.math_source_evidence import SourceMatch, source_identity
+    from backend.services.math_source_evidence import SourceMatch, source_identity, source_has_content
     from backend.skills.part_scoring import _supporting_spans
     ranges = ({rules.parts[0].id: (0, len(answer))} if len(rules.parts) == 1
               else _labelled_ranges(answer, rules.parts))
@@ -318,7 +317,7 @@ def validate_method_part_sources(decisions, answer, rules, *, require_scope=True
                    if len(rules.parts) > 1 else None)
         body_start = start + heading.end() if heading else start
         text = answer[max(span.start, body_start):min(span.end, end)]
-        return any(char.isalnum() or unicodedata.category(char) in {'Sm', 'So'} for char in text)
+        return source_has_content(text)
 
     # A previously established result can be a premise, never a replacement
     # for this part's own work. Use only positively judged, scoped earlier

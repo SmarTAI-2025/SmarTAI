@@ -11,6 +11,7 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 import re
+import unicodedata
 from typing import Literal
 
 
@@ -24,6 +25,78 @@ _TOKEN = re.compile(
     r"[A-Za-z_\u0370-\u03ff][A-Za-z_0-9\u0370-\u03ff]*|[^\s]"
 )
 _LIMIT = 500_000
+
+# TeX presentation controls have syntax, but do not print their command names.
+# Keep this separate from source identity: citations still use original offsets.
+_TEX_LAYOUT = frozenset(r'''
+\quad \qquad \enspace \enskip \thinspace \medspace \thickspace
+\negthinspace \negmedspace \negthickspace \space \nobreakspace \nobreak \allowbreak
+\, \: \; \! \> \relax \strut \mathstrut \null \hfill \vfill \hfil \vfil \hss \vss
+\displaystyle \textstyle \scriptstyle \scriptscriptstyle \limits \nolimits
+\tiny \scriptsize \footnotesize \small \normalsize \large \Large \LARGE \huge \Huge
+\text \textrm \textsf \texttt \textnormal \textbf \textit \textup \textmd \textsl \textsc
+\mathrm \mathbf \mathit \mathsf \mathtt \mathnormal \mathbb \mathcal \mathfrak
+\boldsymbol \bm \rm \sf \tt \bf \it \cal \operatorname \mbox \hbox
+\left \right \big \Big \bigg \Bigg \bigl \bigr \Bigl \Bigr \biggl \biggr \Biggl \Biggr
+'''.split())
+_TEX_HIDDEN_ARGUMENT = frozenset(r'''
+\phantom \hphantom \vphantom \hspace \vspace \color \textcolor \label \tag \begin \end
+'''.split())
+_TEX_DIMENSION = re.compile(r'\s*[+-]?\s*(?:\d+(?:\.\d*)?|\.\d+)\s*(?:em|ex|mu|pt|pc|in|bp|cm|mm|dd|cc|sp)\b')
+
+
+def _tex_argument_end(text, start):
+    """Skip a layout argument, including nested groups and optional stars."""
+    tokens = _TOKEN.finditer(text, start)
+    first = next(tokens, None)
+    if first is not None and first.group() == '*':
+        first = next(tokens, None)
+    if first is None:
+        return len(text)
+    if first.group() != '{':
+        return first.end()
+    depth = 1
+    for token in tokens:
+        depth += (token.group() == '{') - (token.group() == '}')
+        if depth == 0:
+            return token.end()
+    return len(text)
+
+
+def source_has_content(text: str) -> bool:
+    """Distinguish written content from whitespace/layout, not correctness.
+
+    Formatting wrappers retain their children; spacing dimensions, phantom
+    bodies and environment/color metadata cannot become mathematical evidence.
+    Visible mathematical commands such as pi/emptyset still count as content.
+    """
+    skip_until = 0
+    for token in _TOKEN.finditer(text):
+        if token.start() < skip_until:
+            continue
+        value = token.group()
+        if value == '%':
+            end = re.search(r'[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]', text[token.end():])
+            skip_until = token.end() + end.end() if end else len(text)
+        elif value in _TEX_HIDDEN_ARGUMENT:
+            skip_until = _tex_argument_end(text, token.end())
+        elif value in {r'\kern', r'\mkern', r'\hskip', r'\mskip', r'\vskip'}:
+            size = _TEX_DIMENSION.match(text, token.end())
+            skip_until = size.end() if size else _tex_argument_end(text, token.end())
+        elif value in {r'\\', r'\cr', r'\newline'}:
+            size = re.match(r'\s*\[[^\[\]]*\]', text[token.end():])
+            skip_until = token.end() + size.end() if size else token.end()
+        elif value in _TEX_LAYOUT or value == '~':
+            continue
+        elif value.startswith('\\'):
+            # Other control words can be mathematical atoms (pi, emptyset,
+            # lnot, ...). Do not reject existing notation through a whitelist;
+            # its mathematical meaning remains the grader's responsibility.
+            if value[1:].isalpha():
+                return True
+        elif any(char.isalnum() or unicodedata.category(char) in {'Sm', 'So'} for char in value):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -89,21 +162,23 @@ def _part_headings(text):
     from backend.services.question_structure import _normalize_label
     candidates = []
     for _, line, start, _ in source_lines(text):
-        for match in re.finditer(r'(?:^[ \t]*|(?<=[，,；;。])[ \t]*|(?<=[ \t]))(?P<label>' + _PART_LABEL + ')', line):
+        for match in re.finditer(r'(?:^\s*|(?<=[，,；;。])\s*|(?<=\s))(?P<label>' + _PART_LABEL + ')', line):
             prefix = line[:match.start()].rstrip()
             raw_tail = line[match.end():]
             tail = raw_tail.strip()
             anchored = not prefix
             separated = bool(prefix and prefix[-1] in '，,；;。')
-            formula = bool(re.match(r'[A-Za-zα-ωΑ-Ω](?:[=+*/^−-]|$)', tail))
+            formula = bool(re.match(r'[A-Za-zα-ωΑ-Ω][A-Za-z0-9_α-ωΑ-Ω]*\s*(?:[=+*/^−-]|$)', tail))
             if not anchored and not separated and (not tail or tail[0] in '=+*/^<>，,；;。' or formula):
                 continue
             label = _normalize_label(match['label'].strip('（()）'))
-            # A tight parenthesized coefficient at line start is ambiguous.
+            # A parenthesized coefficient within a part is ambiguous, with or
+            # without spaces. The first heading cannot be displaced by a later
+            # inline mention merely because its answer starts with a formula.
             # Keep it as a boundary unless a clearer heading for that label
             # exists. A sentence separator supports a same-line formula title.
-            coefficient = (formula and raw_tail == raw_tail.lstrip()
-                           and match['label'].startswith(('(', '（')))
+            coefficient = (formula and match['label'].startswith(('(', '（'))
+                           and any(c[3] or c[4] >= 2 for c in candidates))
             priority = (3 if anchored and not coefficient else 2 if separated else 1 if anchored else 0)
             begin = match.start() if anchored else match.start('label')
             candidates.append((start + begin, start + match.end(), label, anchored, priority))

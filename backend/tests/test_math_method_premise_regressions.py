@@ -98,7 +98,7 @@ async def test_delimited_formula_heading_keeps_correct_initial_judgment(formula,
     plan = bind_draft(retarget_draft(draft, p), p)
     split = text.index('(2)')
     addresses = ([f'student:1:1-{split}', f'student:1:{split + 1}-{len(text)}']
-                 if separator in {'；', '; '} else ['student:1', 'student:2'])
+                 if len(text.splitlines()) == 1 else ['student:1', 'student:2'])
     decisions = [original.part_decisions[0], second]
     for i, address in enumerate(addresses):
         decisions[i] = decisions[i].model_copy(update={'student_quote': address, 'steps': tuple(
