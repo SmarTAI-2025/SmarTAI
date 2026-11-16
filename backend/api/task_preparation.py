@@ -170,7 +170,7 @@ def _provider_http_status_for_code(code: str) -> int:
         return 409
     if code.startswith("recognition_") or code.startswith("target_") or code == "visual_capability_unavailable":
         return 422
-    if code in {"provider_rate_limited", "media_inspection_busy"}:
+    if code in {"provider_rate_limited", "media_inspection_busy", "shared_pool_weekly_limit_reached", "shared_pool_budget_pending"}:
         return status.HTTP_429_TOO_MANY_REQUESTS
     if code in {
         "provider_timeout",
@@ -179,6 +179,8 @@ def _provider_http_status_for_code(code: str) -> int:
         "provider_submit_uncertain",
         "media_inspection_unavailable",
         "media_inspection_timeout",
+        "shared_pool_usage_unavailable",
+        "shared_pool_billing_unavailable",
     }:
         return status.HTTP_503_SERVICE_UNAVAILABLE
     if code in {
@@ -195,6 +197,7 @@ def _provider_http_status_for_code(code: str) -> int:
         "ocr_file_too_large",
         "ocr_image_dimension_limit_exceeded",
         "pdf_page_limit_exceeded",
+        "shared_pool_request_too_large",
     }:
         return status.HTTP_422_UNPROCESSABLE_ENTITY
     return status.HTTP_502_BAD_GATEWAY
@@ -3590,12 +3593,16 @@ async def confirm_ai_completion(
             requested_provider_id=(None if baidu_ocr_credential_id(task.get("question_recognition_provider_id"))
                                    else task.get("question_recognition_provider_id")),
         )
+        provider_fingerprint = stage_provider_configuration_fingerprint(
+            owner_id=current.id, registry=registry, route=route,
+        )
         input_hash = hashlib.sha256(json.dumps({
             "target_ids": sorted(requested_ids),
             **({"generation_language": generation_language} if generation_language else {}),
             "test_case_count": request.test_case_count,
             "base_revision": request.expected_workflow_revision,
             "provider_id": provider_id,
+            "provider_configuration_fingerprint": provider_fingerprint,
         }, sort_keys=True).encode()).hexdigest()
         replay = task_facade.find_task_operation(
             task_id=task_id, owner_id=current.id,
@@ -3643,6 +3650,7 @@ async def confirm_ai_completion(
                 "test_case_count": request.test_case_count,
                 "base_workflow_revision": claim_base_revision,
                 "provider_id": provider_id,
+                "provider_configuration_fingerprint": provider_fingerprint,
             }, expires_at=time.time() + task_facade._OPERATION_PUBLICATION_TTL_SECONDS,
             initial_status="preparing",
         )
@@ -3838,12 +3846,24 @@ async def run_durable_ai_completion(operation) -> None:
             AICompletionCandidateOutput.model_validate(item)
             for item in raw_candidates
         ]
-    registry = task_facade._registry_for_owner(operation.owner_id)
-    provider = registry.pick_default()
-    if provider is None and recovered_candidates is None:
-        raise ValidationError("No enabled provider is available.", code="no_provider_configured")
-    if provider is None and result_provider_id is None:
-        raise ValidationError("The durable AI result has no provider identity.", code="no_provider_configured")
+    payload = operation.payload or {}
+    selected_provider_id = payload.get("provider_id")
+    provider = None
+    if recovered_candidates is None:
+        if not selected_provider_id:
+            raise ValidationError("The AI completion has no saved provider.", code="no_provider_configured")
+        registry = task_facade._registry_for_owner(operation.owner_id)
+        route = resolve_stage_provider_route(
+            owner_id=operation.owner_id, registry=registry, requested_route_id=selected_provider_id,
+        )
+        if route.provider is None:
+            raise ValidationError("The selected provider cannot complete question materials.", code="no_provider_configured")
+        frozen = payload.get("provider_configuration_fingerprint")
+        if frozen and frozen != stage_provider_configuration_fingerprint(owner_id=operation.owner_id, registry=registry, route=route):
+            raise ValidationError("The selected model configuration changed.", code="recognition_route_changed")
+        provider = route.provider
+    elif not result_provider_id or (selected_provider_id and result_provider_id != selected_provider_id):
+        raise ValidationError("The saved AI result does not identify the selected provider.", code="recognition_route_changed")
     await _run_ai_completion(
         task_id=operation.assignment_id, owner_id=operation.owner_id,
         job_id=operation.operation_id, job_attempt=operation.attempt,

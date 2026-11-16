@@ -1555,6 +1555,11 @@ function safeExpertError(error: unknown, locale: "zh-CN" | "en-US") {
 function expertErrorMessage(code: string | null | undefined, locale: "zh-CN" | "en-US") {
   const zh = locale === "zh-CN";
   const messages: Record<string, [string, string]> = {
+    shared_pool_weekly_limit_reached: ["本周共享额度不足。请等待每周一新加坡时间 00:00 重置，或使用自己的 BYOK 模型。", "Insufficient weekly shared allowance. Wait until Monday 00:00 Singapore time or use your own BYOK model."],
+    shared_pool_budget_pending: ["共享额度正在被其他请求占用。请等待正在运行的请求完成后重试，或使用自己的 BYOK 模型。", "Other requests are using the shared allowance. Wait for running requests to finish, then retry, or use your own BYOK model."],
+    shared_pool_usage_unavailable: ["共享模型用量暂时无法结算，请使用自己的 BYOK 模型。", "Shared model usage could not be settled. Use your own BYOK model."],
+    shared_pool_billing_unavailable: ["共享模型计费配置暂不可用，请使用自己的 BYOK 模型。", "Shared model billing is unavailable. Use your own BYOK model."],
+    shared_pool_request_too_large: ["本次请求超过共享模型单次限制。请减少输入，或使用自己的 BYOK 模型。", "This request exceeds the shared model limit. Reduce the input or use your own BYOK model."],
     provider_api_key_invalid: ["API key 含有无法用于请求的字符（如中文、全角符号、换行或隐藏字符），请重新复制完整密钥后保存。", "The API key contains characters that cannot be sent in a request, such as non-ASCII or hidden characters. Copy the full key again and save."],
     expert_verification_encoding_error: ["验证请求包含无法编码的字符，请检查 API key 和配置内容。", "The verification request contains characters that cannot be encoded. Check the API key and configuration."],
     provider_model_access_denied: ["服务商或中转站以团队模型权限为由拒绝了本次请求。若该模型在其他调用中可用，请联系管理员核查本次请求。", "The provider or relay rejected this request due to team/model access. If the model works in other calls, ask the administrator to investigate this request."],

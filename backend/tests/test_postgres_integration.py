@@ -1596,3 +1596,24 @@ def test_weekly_shared_budget_reservations_and_settlements_are_atomic(pg_databas
     with session_scope() as session:
         assert session.scalar(select(func.sum(SharedModelChargeRecord.cost_nano_usd))) == 5_000_000_000
         assert session.scalar(select(ModelDailyUsageRecord)) is None
+
+
+def test_weekly_unknown_hold_does_not_block_waiting_for_live_reservations(pg_database, monkeypatch):
+    from backend.config import settings
+    from backend.db.model_quota_models import SharedModelChargeRecord
+    from backend.db.session import session_scope
+    from backend.services.shared_weekly_budget import reserve, finish
+    from backend.services.model_quota import ModelQuotaError
+    monkeypatch.setattr(settings, 'shared_pool_weekly_limit_cents', 500)
+    owner = _seed_user('teacher')
+    unknown, _ = reserve(owner, 'gpt-6-luna', 1000, max_output_tokens=16)
+    finish(owner, unknown)
+    held = [reserve(owner, 'gpt-6.1-sol', 0, max_output_tokens=100000)[0] for _ in range(5)]
+    with pytest.raises(ModelQuotaError, match='shared_pool_budget_pending'):
+        reserve(owner, 'gpt-6-luna', 1000)
+    finish(owner, held[0], usage={'input_tokens': 0, 'output_tokens': 100, 'total_tokens': 100,
+        'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0}})
+    reserve(owner, 'gpt-6-luna', 1000)
+    with session_scope() as session:
+        row = session.get(SharedModelChargeRecord, unknown)
+        assert row.state == 'unknown' and row.cost_nano_usd is None

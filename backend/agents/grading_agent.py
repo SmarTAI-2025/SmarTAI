@@ -65,6 +65,16 @@ def _grading_failure_feedback(
 ) -> str:
     """Return a stable, C-01-aware message for a deterministic failure path."""
 
+    from backend.llm.provider_limits import SHARED_WEEKLY_FAILURES
+    if kind in SHARED_WEEKLY_FAILURES:
+        zh, en, zh_next, en_next = SHARED_WEEKLY_FAILURES[kind]
+        return format_deterministic_feedback(
+            grading_setup,
+            zh_message="该题未完成批改：" + zh, en_message="This item remains ungraded: " + en,
+            zh_detail="本次失败未产生有效评分。", en_detail="This attempt did not produce a valid score.",
+            zh_suggestion=zh_next, en_suggestion=en_next,
+            legacy_message="该题未完成批改：" + zh + zh_next,
+        )
     messages = {
         "zero_quota": {
             "zh_message": "该题未完成批改，该模型当前无可用配额。",

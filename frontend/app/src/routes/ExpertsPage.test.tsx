@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n/I18nProvider";
 import { ExpertsPage } from "./ExpertsPage";
 import { APIError } from "@/api/client";
+import { toast } from "sonner";
 
 const addExpert = vi.fn();
 const updateExpert = vi.fn();
@@ -231,6 +232,21 @@ describe("ExpertsPage editable vendor Base URL", () => {
     expect(verifyImage).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Run image test" }));
     expect(verifyImage).toHaveBeenCalledWith("qwen:shared");
+  });
+
+  it.each(["zh-CN", "en-US"])("explains exhausted shared allowance during text verification in %s", async (locale) => {
+    window.localStorage.setItem("smartai_locale", locale);
+    const failureToast = vi.spyOn(toast, "error");
+    verifyExpert.mockRejectedValueOnce(new APIError(429, "safe", { error: { code: "shared_pool_weekly_limit_reached", message: "safe" } }));
+    hookState.experts = [{ provider_id: "openai:gpt-6-luna", provider_type: "openai", model: "gpt-6-luna", enabled: true, editable: false, is_shared: true, rpm: 0, max_concurrent: 1 }];
+    const user = userEvent.setup(); renderPage();
+    await user.click(screen.getAllByRole("button", { name: locale === "zh-CN" ? "验证（可选）" : "Verify (optional)" })[0]!);
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: locale === "zh-CN" ? "发起连通性验证" : "Run connectivity check" }));
+    await waitFor(() => expect(failureToast).toHaveBeenCalledWith(expect.any(String), {
+      description: expect.stringMatching(locale === "zh-CN" ? /每周一.*BYOK/ : /Monday.*BYOK/),
+    }));
+    failureToast.mockRestore();
   });
 
   it("shows three shared presets beside editable personal BYOK and one total with Sol's half allowance", async () => {

@@ -82,13 +82,14 @@ def _lock_owner(session, owner, *, require_active=True):
 
 
 def _totals(session, owner, week):
-    spent, pending, requests, unknown = session.execute(select(
+    spent, pending, requests, unknown, unknown_amount = session.execute(select(
         func.coalesce(func.sum(case((Charge.state == "settled", Charge.cost_nano_usd), else_=0)), 0),
         func.coalesce(func.sum(case((Charge.state.in_(("reserved", "unknown")), Charge.reserved_nano_usd), else_=0)), 0),
         func.count(Charge.id),
         func.coalesce(func.sum(case((Charge.state == "unknown", 1), else_=0)), 0),
+        func.coalesce(func.sum(case((Charge.state == "unknown", Charge.reserved_nano_usd), else_=0)), 0),
     ).where(Charge.owner_id == owner, Charge.week == week)).one()
-    return int(spent), int(pending), int(requests), int(unknown)
+    return int(spent), int(pending), int(requests), int(unknown), int(unknown_amount)
 
 
 def _limit(config):
@@ -108,12 +109,15 @@ def reserve(owner, model, input_tokens, *, max_output_tokens=128000, now=None):
         try:
             _lock_owner(session, owner)
             limit = _limit(read_business_config(session, owner))
-            spent, pending, _, unknown = _totals(session, owner, week)
+            spent, pending, _, _, unknown_amount = _totals(session, owner, week)
             remaining = limit - spent - pending
             maximum = min(maximum, (remaining - input_hold) // rate[3])
             if maximum < 16:
                 if pending and limit - spent >= input_hold + 16 * rate[3]:
-                    raise ModelQuotaError("shared_pool_usage_unavailable" if unknown else "shared_pool_budget_pending")
+                    # Unknown holds stay reserved. Wait if ordinary in-flight
+                    # calls could free enough balance without touching them.
+                    can_wait = limit - spent - unknown_amount >= input_hold + 16 * rate[3]
+                    raise ModelQuotaError("shared_pool_budget_pending" if can_wait else "shared_pool_usage_unavailable")
                 raise ModelQuotaError("shared_pool_weekly_limit_reached")
             charge_id = uuid4().hex
             session.add(Charge(id=charge_id, owner_id=owner, week=week, model=model,
@@ -165,7 +169,7 @@ def finish(owner, charge_id, *, usage=None, response_id=None, rejected=False, no
 def weekly_usage(session, owner, *, config=None, now=None):
     week, resets = week_window(now)
     limit = _limit(config or read_business_config(session, owner))
-    spent, pending, requests, unknown = _totals(session, owner, week)
+    spent, pending, requests, unknown, _ = _totals(session, owner, week)
     return {"week": week, "timezone": "Asia/Singapore", "resets_at": resets,
             "limit_usd": limit / NANO_USD, "spent_usd": spent / NANO_USD,
             "reserved_usd": pending / NANO_USD, "remaining_usd": max(0, limit-spent-pending) / NANO_USD,

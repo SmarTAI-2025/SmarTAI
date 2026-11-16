@@ -230,17 +230,43 @@ async def test_invalid_mode_and_kill_switch_never_generate_or_fall_back(metered,
 
 
 @pytest.mark.asyncio
-async def test_concurrent_calls_wait_for_settlement_instead_of_daily_fallback(metered):
+@pytest.mark.parametrize('unknown_hold', [False, True])
+async def test_concurrent_calls_wait_for_settlement_instead_of_daily_fallback(metered, monkeypatch, unknown_hold):
     provider,calls,state=metered
+    unknown = None
+    if unknown_hold:
+        unknown, _ = reserve('teacher', 'gpt-6-luna', 1000, max_output_tokens=16)
+        finish('teacher', unknown)
     # Hold the entire balance, then release it after the second caller waits.
     held=[]
     for _ in range(5):held.append(reserve("teacher","gpt-6.1-sol",0,max_output_tokens=100000)[0])
+    from backend.llm import shared_weekly
+    original_reserve = shared_weekly.reserve
+    waiting = asyncio.Event()
+    def observed_reserve(*args, **kwargs):
+        try:
+            return original_reserve(*args, **kwargs)
+        except ModelQuotaError:
+            waiting.set()
+            raise
+    monkeypatch.setattr(shared_weekly, 'reserve', observed_reserve)
     task=asyncio.create_task(provider.ainvoke([HumanMessage(content="test")]))
-    await asyncio.sleep(0.02)
+    await asyncio.wait_for(waiting.wait(), 1)
     assert [name for name,_ in calls] == ["count"]
     finish("teacher",held[0],usage=usage(0,100,0,0))
     await asyncio.wait_for(task,1)
     assert [name for name,_ in calls] == ["count","create"]
+    if unknown:
+        record = next(r for r in rows() if r.id == unknown)
+        assert record.state == 'unknown' and record.cost_nano_usd is None
+
+
+def test_unknown_hold_only_blocks_when_healthy_calls_cannot_free_enough(client):
+    for _ in range(5):
+        charge, _ = reserve('teacher', 'gpt-6.1-sol', 0, max_output_tokens=100000)
+        finish('teacher', charge)
+    with pytest.raises(ModelQuotaError, match='usage_unavailable'):
+        reserve('teacher', 'gpt-6-luna', 1000)
 
 
 def test_cache_split_long_context_and_malformed_usage():

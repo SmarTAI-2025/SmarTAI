@@ -126,6 +126,67 @@ async def test_ai_completion_freezes_selected_question_model_not_global_default(
     assert result['status'] == 'started', result
     operation = workflow_repository.get_operation(result['job_id'], owner_id=owner)
     assert operation.payload['provider_id'] == ('model-a' if ocr_only else 'model-b')
+    from backend.tests.test_auxiliary_operation_recovery import _claim_auxiliary_operation
+    run = AsyncMock()
+    monkeypatch.setattr(task_preparation, '_run_ai_completion', run)
+    # The account default changes while the durable job is queued.
+    registry.pick_default = lambda: providers['model-a']
+    await task_preparation.run_durable_ai_completion(_claim_auxiliary_operation(owner, result['job_id']))
+    assert run.await_args.kwargs['provider'] is providers[operation.payload['provider_id']]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('personal_default', [False, True])
+async def test_shared_completion_worker_never_switches_to_luna_or_personal_default(monkeypatch, personal_default):
+    from backend.api import task_preparation
+    from backend.tests.test_task_background_workflows import _seed_task, _BackgroundTasks
+    from backend.tests.test_auxiliary_operation_recovery import _claim_auxiliary_operation
+    owner, task = _seed_task(with_question=True, criterion='')
+    selected = 'openai:gpt-6.1-terra'
+    default = 'personal-byok' if personal_default else 'openai:gpt-6-luna'
+    providers = {key: SimpleNamespace(provider_id=key) for key in (selected, default)}
+    configs = [dict(provider_id=key, enabled=True, is_shared=key.startswith('openai:')) for key in providers]
+    registry = SimpleNamespace(list_configs=lambda: configs, get=providers.get, pick_default=lambda: providers[default])
+    monkeypatch.setattr(task_facade, '_registry_for_owner', lambda _: registry)
+    workflow_repository.update_workflow(task, owner_id=owner, question_recognition_provider_id=selected)
+    result = await task_preparation.confirm_ai_completion(task_id=task,
+        request=task_preparation.ConfirmAICompletionRequest(target_ids=['q1:criterion'],
+            expected_workflow_revision=workflow_repository.get_workflow(task, owner_id=owner).workflow_revision),
+        background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
+    context = _claim_auxiliary_operation(owner, result['job_id'])
+    run = AsyncMock()
+    monkeypatch.setattr(task_preparation, '_run_ai_completion', run)
+    await task_preparation.run_durable_ai_completion(context)
+    assert run.await_args.kwargs['provider'] is providers[selected]
+    run.reset_mock()
+    configs[0]['enabled'] = False
+    from backend.domain.errors import ValidationError
+    with pytest.raises(ValidationError, match='not enabled'):
+        await task_preparation.run_durable_ai_completion(context)
+    run.assert_not_awaited()
+    configs[0]['enabled'] = True
+    configs[0]['model'] = 'changed-after-confirmation'
+    with pytest.raises(ValidationError, match='configuration changed'):
+        await task_preparation.run_durable_ai_completion(context)
+    run.assert_not_awaited()
+    providers.pop(selected)
+    with pytest.raises(ValidationError, match='not enabled'):
+        await task_preparation.run_durable_ai_completion(context)
+    run.assert_not_awaited()
+    # A complete saved result needs no live key, but must belong to the
+    # confirmed model. Recovery must not attribute another model's work to it.
+    artifact = object()
+    saved = {'provider_id': selected, 'candidates': []}
+    monkeypatch.setattr(task_preparation, '_find_auxiliary_result_artifact', lambda **_: artifact)
+    monkeypatch.setattr(task_preparation, '_read_auxiliary_result', lambda _: saved)
+    await task_preparation.run_durable_ai_completion(context)
+    assert run.await_args.kwargs['provider'] is None
+    assert run.await_args.kwargs['result_provider_id'] == selected
+    run.reset_mock()
+    saved['provider_id'] = default
+    with pytest.raises(ValidationError, match='selected provider'):
+        await task_preparation.run_durable_ai_completion(context)
+    run.assert_not_awaited()
 
 
 def test_question_model_is_owner_scoped(monkeypatch):

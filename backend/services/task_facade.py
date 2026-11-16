@@ -838,6 +838,10 @@ def _grading_failure_code(run) -> str | None:
         return None
     kinds = [expert.get("error_kind") for result in missing
              for expert in (result.ai_expert_results or []) if isinstance(expert, dict)]
+    from backend.llm.provider_limits import SHARED_WEEKLY_FAILURES
+    for code in SHARED_WEEKLY_FAILURES:
+        if code in kinds:
+            return code
     if kinds and all(kind == "zero_quota" for kind in kinds):
         return "provider_zero_quota"
     if kinds and all(kind == "daily_quota_exhausted" for kind in kinds):

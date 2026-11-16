@@ -278,7 +278,9 @@ async def test_auxiliary_worker_discovers_result_saved_before_checkpoint(
         job_payload = {
             "target_ids": ["q1:criterion"], "test_case_count": 5,
             "base_workflow_revision": 0,
+            "provider_id": "test-provider",
         }
+        artifact_body = {"provider_id": "test-provider", "candidates": artifact_body}
     job, _ = workflow_repository.create_operation(
         assignment_id=task_id, owner_id=owner_id,
         operation_type=operation_type,
