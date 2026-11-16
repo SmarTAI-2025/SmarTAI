@@ -781,10 +781,9 @@ def _with_pending_advice(expert, language):
             steps[0] = steps[0].model_copy(update={"desc": steps[0].desc + "\n" + "\n".join(additions)})
     trace["review_advisory"] = True
     update = {"steps": steps, "raw_output": _json(trace)}
-    if trace.get("method_review_pending"):
-        additions = [text for label, text in advice if label not in expert.comment]
-        if additions:
-            update["comment"] = expert.comment + "\n" + "\n".join(additions)
+    additions = [text for label, text in advice if label not in expert.comment]
+    if additions:
+        update["comment"] = expert.comment + "\n\n" + "\n\n".join(additions)
     return expert.model_copy(update=update)
 
 
@@ -1424,13 +1423,16 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                 trace["targeted_review"]["part_ids"] = [d.part_id for d in revision.decisions]
             if isinstance(revision, PointRevision):
                 trace["targeted_review"]["item_ids"] = [award.item_id for award in revision.awards]
+            label = "定向复核依据：" if language == "zh" else "Targeted review: "
             if steps:
-                label = "定向复核依据：" if language == "zh" else "Targeted review: "
                 steps[0] = steps[0].model_copy(update={"desc": steps[0].desc + "\n" + label + revision.reason})
+            comment = candidate.comment
+            if revision.reason not in comment:
+                comment += "\n\n" + label + revision.reason
             # The original vote remains in the private trace. Make the review
             # reason visible; confidence/configured weights remain unchanged.
             revised[index] = experts[index].model_copy(update={
-                "score": score, "steps": steps, "comment": candidate.comment,
+                "score": score, "steps": steps, "comment": comment,
                 "raw_output": _json(trace),
             })
         if validation_issues or (not accepted and (disputed or other_dispute)):

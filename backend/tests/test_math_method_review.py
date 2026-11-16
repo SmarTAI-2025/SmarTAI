@@ -12,11 +12,15 @@ from backend.tests.test_alternative_route import ANSWER, alternate, error, mater
 from backend.tests.test_math_evidence_reliability import raw_provider
 from backend.tests.test_math_grading import expert_for
 from backend.tools.structured_llm import DailyQuotaError
+from backend.tests.test_task_grading_retry import case as db_case, start  # noqa: F401
 
 
-def case(*, same_total=False, proof=False):
-    row, draft = material(teacher="参考解配方得10分。", alternative={"deduct_per_error": 2})
+def case(*, same_total=False, proof=False, reference=None, teacher="参考解配方得10分。"):
+    row, draft = material(teacher=teacher, alternative={"deduct_per_error": 2})
     p = ProblemInfo(**row)
+    if reference is not None:
+        p = p.model_copy(update={"reference_answer": reference})
+        draft = retarget_draft(draft, p)
     if proof:
         p = p.model_copy(update={"type": "推理题"})
         draft = retarget_draft(draft, p)
@@ -255,3 +259,105 @@ async def test_progress_storage_failure_is_not_swallowed_as_model_failure():
     with pytest.raises(CheckpointWriteError):
         await run(p, a, plan, experts, main, {"a": main}, reporter=reporter)
     assert not calls and not reporter._progress.active
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("proof", [False, True])
+@pytest.mark.parametrize("reference", ["", "   "])
+async def test_missing_reference_uses_scoped_frozen_method_passage(proof, reference):
+    p, a, plan, experts, right = case(proof=proof, reference=reference)
+    main, calls = provider("primary", choice(reference_quote="参考解配方"), {"revisions": []})
+    regrader, regrade_calls = provider("a", revision(right))
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    assert [e.score for e in result] == [8, 8]
+    assert len(calls) == 2 and len(regrade_calls) == 1
+    assert grading.read_math_trace(result[0])["method_review"]["reference_source"] == "frozen_rubric"
+
+
+@pytest.mark.asyncio
+async def test_missing_reference_does_not_accept_an_invented_method_quote():
+    p, a, plan, experts, right = case(reference="")
+    main, calls = provider("primary", choice(reference_quote="使用韦达定理"), choice(reference_quote="参考解配方"), {"revisions": []})
+    regrader, _ = provider("a", revision(right))
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    assert [e.score for e in result] == [8, 8] and len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_missing_reference_with_undetermined_method_falls_back_to_joint_review():
+    p, a, plan, experts, right = case(reference="", teacher="正确作答得10分。")
+    main, calls = provider("primary", choice("undetermined", reference_quote="", reason="评分条款不足以确定参考策略。"),
+                           {"revisions": [revision(right)]})
+    untouched, untouched_calls = provider("a")
+    result = await run(p, a, plan, experts, main, {"a": untouched})
+    assert len(calls) == 2 and not untouched_calls
+    assert [e.score for e in result] == [8, 8]
+    trace = grading.read_math_trace(result[0])
+    assert trace["method_review"]["fallback"] == "joint_review"
+    assert trace["targeted_review"]["provider"] == "primary"
+    assert "selected_methods" not in json.loads(calls[1][1].content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("errors", [False, True])
+async def test_final_review_rationale_is_outside_score_rows_after_roundtrip(db_case, errors):
+    from sqlalchemy import select
+    from backend.db import grading_repository as grades
+    from backend.db.models import AssignmentQuestionRecord
+    from backend.db.session import session_scope
+    from backend.models import Correction
+    from backend.services import task_facade
+    from backend.services.math_grading_context import problem_from_question
+    from backend.tests.test_grading_checkpoints import prepare, stop
+
+    p, a, plan, experts, right = case()
+    row, draft = material(teacher="参考解配方得10分。", alternative={"deduct_per_error": 2})
+    with session_scope() as session:
+        question = session.scalar(select(AssignmentQuestionRecord).where(
+            AssignmentQuestionRecord.assignment_id == db_case[0], AssignmentQuestionRecord.q_id == p.q_id))
+        for key in ("number", "type", "stem", "criterion", "reference_answer", "max_score"):
+            setattr(question, key, row[key])
+        question.source = {"presentation": {"rubric_draft": draft.model_dump(mode="json")}}
+    run_id = start(db_case, f"method-review-feedback-{errors}")["job_id"]
+    checkpoints, questions, revisions, _ = prepare(db_case, run_id)
+    question, student = questions[0], revisions[0][1]
+    p = problem_from_question(question)
+    plan = bind_draft(retarget_draft(draft, p), p)
+    checkpoints.save_math_plan(p, plan)
+    for expert in experts:
+        trace = grading.read_math_trace(expert)
+        trace["plan_id"] = plan.plan_id
+        expert.raw_output = json.dumps(trace)
+    final = revision(right if errors else alternate("complete"))
+    final["reason"] = "代入第二个根仍违反原方程，因此保留此处扣分。" if errors else "原等价变换已覆盖两个方向，不要求重抄标答。"
+    main, _ = provider("primary", choice(), {"revisions": [final]})
+    regrader, _ = provider("a", revision(right))
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    expert = result[0]
+    checkpoints.save_correction(student, Correction(q_id=p.q_id, type=p.type, score=expert.score,
+        max_score=10, confidence=.9, comment=expert.comment, steps=expert.steps,
+        expert_results=[expert], synthesis_method="single"))
+    stop(db_case, run_id)
+    before = [r.model_dump() for r in grades.list_results_for_run(run_id)]
+    payload = task_facade.task_results(task_id=db_case[0], owner_id=db_case[1])
+    restored = next(c for s in payload["results"] for c in s["corrections"] if c["q_id"] == p.q_id)["expert_results"][0]
+    assert restored["score"] == (8 if errors else 10)
+    assert final["reason"] in restored["comment"]
+    assert len(restored["steps"]) == 1 and sum(s["score"] for s in restored["steps"]) == restored["score"]
+    assert restored["raw_output"] is None
+    assert [r.model_dump() for r in grades.list_results_for_run(run_id)] == before
+    assert task_facade.task_results(task_id=db_case[0], owner_id=db_case[1]) == payload
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_tool_and_proof_advice_are_visible_without_any_score_row(language):
+    p, a, plan, experts, _ = case()
+    trace = grading.read_math_trace(experts[0])
+    trace.update(review_pending=True, evidence=[{"status": "refuted", "reason": "x=2 fails the original equation."}],
+                 proof_audit={"review_concerns": [{"reason": "The reverse implication is missing."}]})
+    expert = experts[0].model_copy(update={"steps": [], "raw_output": json.dumps(trace)})
+    result = grading._with_pending_advice(expert, language)
+    assert "x=2 fails the original equation." in result.comment
+    assert "The reverse implication is missing." in result.comment
+    assert result.steps == [] and result.score == expert.score
+    assert grading._with_pending_advice(result, language).comment == result.comment

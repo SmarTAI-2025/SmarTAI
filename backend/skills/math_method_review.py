@@ -44,6 +44,14 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
                 if len({m.get(part.id) for m in methods}) > 1}
     if not disputed:
         return None
+    has_reference = bool((problem.reference_answer or "").strip())
+    # The optional answer is not the only source of a reference strategy.
+    # Only this part's frozen primary criteria/teacher clauses may substitute;
+    # alternative caps and another part's method are not reference evidence.
+    passages = {part.id: ([problem.reference_answer] if has_reference else list(dict.fromkeys(
+        text for item in (*part.steps, *part.deductions)
+        for text in (item.criterion, item.source_quote) if text.strip())))
+        for part in plan.part_rubric.parts if part.id in disputed}
     catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
     choices = {}
     revised = list(experts)
@@ -80,10 +88,13 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
                 if cm:
                     await report_math_progress(cm.__aexit__, None, None, None)
 
-    def record(index, status, *, candidate=None, revision=None, error=None):
+    def record(index, status, *, candidate=None, revision=None, error=None, fallback=False):
         trace = dict(traces[index])
         trace["method_review"] = {"provider": coordinator.provider_id, "status": status,
+                                  "reference_source": "reference_answer" if has_reference else "frozen_rubric",
                                   "choices": [choice.model_dump(mode="json") for choice in choices.values()]}
+        if fallback:
+            trace["method_review"]["fallback"] = "joint_review"
         if error:
             trace["method_review"]["error_type"] = type(error).__name__
         update = {}
@@ -103,6 +114,14 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             result.append(grading._with_pending_advice(expert.model_copy(update={"raw_output": grading._json(trace)}), language))
         return result, choices, False
 
+    def joint_review_fallback(status):
+        for index in range(len(experts)):
+            record(index, status, fallback=True)
+        return revised, {}, True  # No common route was established; retain the ordinary review.
+
+    if not all(passages.values()):
+        return joint_review_fallback("reference_unavailable")
+
     def validate_choices(result):
         ids = [choice.part_id for choice in result.choices]
         if len(ids) != len(set(ids)) or set(ids) != disputed:
@@ -111,12 +130,13 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             if any(key not in catalog or not key.startswith("student:") for key in choice.student_source_ids):
                 raise ValueError("Cite original student source IDs for the method decision.")
             if choice.method != "undetermined" and (not choice.student_source_ids or not choice.reference_quote.strip()
-                    or match_source_quote(problem.reference_answer or "", choice.reference_quote) is None):
-                raise ValueError("A determined method needs student evidence and a verbatim reference passage.")
+                    or not any(match_source_quote(text, choice.reference_quote) for text in passages[choice.part_id])):
+                raise ValueError("A determined method needs student evidence and a verbatim supplied method passage for this part.")
 
     payload = {"problem": problem.stem, "reference": problem.reference_answer, "answer": answer.content,
                "plan": grading._part_rule_projection(plan.part_rubric, disputed),
-               "source_catalog": grading._expert_sources(catalog, plan), "disputed_part_ids": sorted(disputed)}
+               "source_catalog": grading._expert_sources(catalog, plan), "disputed_part_ids": sorted(disputed),
+               "method_reference_passages": passages}
     try:
         selected = await call(coordinator, MethodReview,
             "Determine only which frozen scoring route applies to the student's actual mathematical strategy. "
@@ -124,9 +144,12 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             "writing length, notation or step count. A minor variant uses reference. An alternative uses only its "
             "frozen alternative policy, even if the problem requires the reference method; that requirement is "
             "already reflected in the alternative cap. Never choose the route giving the higher/lower score, "
-            "rewrite the rubric, or supply missing student work. Cite student source IDs and an exact reference "
-            "passage and explain the strategy comparison. Do not grade or give a score. Use undetermined if the "
-            "actual method cannot be established from the submitted sources.", payload, validate_choices)
+            "rewrite the rubric, or supply missing student work. Cite student source IDs and an exact passage "
+            "from this part's method_reference_passages and explain the strategy comparison. When the optional "
+            "reference answer is absent these passages are the frozen primary scoring criteria. They establish "
+            "a reference strategy only if they actually specify its mathematical method; a generic correctness "
+            "rule, deduction rate or target alone does not. Do not grade or give a score. Use undetermined if "
+            "either strategy cannot be established from these sources; never invent a reference answer.", payload, validate_choices)
         choices = {choice.part_id: choice for choice in selected.choices}
     except Exception as exc:
         if grading._critical_failure(exc):
@@ -136,6 +159,8 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
         return pending()
 
     if any(choice.method == "undetermined" for choice in choices.values()):
+        if not has_reference:
+            return joint_review_fallback("undetermined")
         for index in range(len(experts)):
             record(index, "undetermined")
         return pending()
