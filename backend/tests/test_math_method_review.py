@@ -197,8 +197,7 @@ async def test_primary_can_select_reference_and_regrade_only_alternative_vote():
     assert grading.read_math_trace(result[1])["method_review"]["reassessed_by"] == "b"
 
 
-@pytest.mark.asyncio
-async def test_reassessment_keeps_other_parts_and_rejects_out_of_scope_edits():
+def multipart_case():
     from backend.services.rubric_drafts import RubricDefinition, generated_rubric
     from backend.tests.test_frozen_part_rubric import question_row
     p, a, old_plan, old_experts, right = case()
@@ -206,7 +205,8 @@ async def test_reassessment_keeps_other_parts_and_rejects_out_of_scope_edits():
     second = first.model_copy(update={"id": "p2", "label": "(2)"})
     rules = old_plan.part_rubric.model_copy(update={"total_pts": 20, "parts": (first, second)})
     row = question_row(rules.model_dump(mode="json"))
-    row.update(criterion="每小问参考解配方得10分。", reference_answer=p.reference_answer)
+    row.update(criterion="每小问参考解配方得10分。",
+               reference_answer="(1) 用配方法解得 1 和 2。\n(2) 用因式分解解得 1 和 2。")
     row["criterion"], draft = generated_rubric(row, RubricDefinition(part_rubric=rules))
     p = ProblemInfo(**row)
     plan = bind_draft(retarget_draft(draft, p), p)
@@ -216,6 +216,12 @@ async def test_reassessment_keeps_other_parts_and_rejects_out_of_scope_edits():
         assessment = grading.MathAssessment.model_validate(grading.read_math_trace(expert)["assessment"])
         assessment.part_decisions.append(unchanged)
         experts.append(expert_for(assessment, plan, a.content).model_copy(update={"provider_id": expert.provider_id}))
+    return p, a, plan, experts, right, unchanged
+
+
+@pytest.mark.asyncio
+async def test_reassessment_keeps_other_parts_and_rejects_out_of_scope_edits():
+    p, a, plan, experts, right, unchanged = multipart_case()
     bad = revision(right)
     bad["decisions"].append(unchanged.model_dump(mode="json"))
     main, calls = provider("primary", choice(), {"revisions": []})
@@ -285,7 +291,7 @@ async def test_missing_reference_does_not_accept_an_invented_method_quote():
 
 @pytest.mark.asyncio
 async def test_missing_reference_with_undetermined_method_falls_back_to_joint_review():
-    p, a, plan, experts, right = case(reference="", teacher="正确作答得10分。")
+    p, a, plan, experts, right = case(reference="")
     main, calls = provider("primary", choice("undetermined", reference_quote="", reason="评分条款不足以确定参考策略。"),
                            {"revisions": [revision(right)]})
     untouched, untouched_calls = provider("a")
@@ -296,6 +302,114 @@ async def test_missing_reference_with_undetermined_method_falls_back_to_joint_re
     assert trace["method_review"]["fallback"] == "joint_review"
     assert trace["targeted_review"]["provider"] == "primary"
     assert "selected_methods" not in json.loads(calls[1][1].content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("proof", [False, True])
+async def test_generic_rubric_cannot_establish_a_reference_method(proof):
+    p, a, plan, experts, _ = case(proof=proof, reference="", teacher="正确作答得10分。")
+    # The old path would ask for arbitration and accept this literal but
+    # method-free quote. It must now go straight to ordinary joint review.
+    from backend.llm.providers import LLMResponse
+    calls = []
+    async def invoke(messages):
+        calls.append(messages)
+        payload = json.loads(messages[1].content)
+        output = choice(reference_quote="正确作答") if "disputed_part_ids" in payload else {"revisions": []}
+        return LLMResponse(content=json.dumps(output), provider="offline", model="fixed-json", duration_ms=1)
+    main = SimpleNamespace(provider_id="primary", ainvoke=invoke)
+    regrader, regrade_calls = provider("a")
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    assert [e.score for e in result] == [0, 8]
+    assert len(calls) == 1 and not regrade_calls
+    payload = json.loads(calls[0][1].content)
+    assert "disputed_part_ids" not in payload and "selected_methods" not in payload
+    for expert in result:
+        trace = grading.read_math_trace(expert)
+        assert trace["method_review"]["status"] == "reference_unavailable"
+        assert trace["method_review"]["fallback"] == "joint_review"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reference", ["", "用配方法解得 1 和 2。"])
+async def test_exhausted_invalid_citations_fall_back_without_locking_a_route(reference):
+    p, a, plan, experts, _ = case(reference=reference)
+    bad = choice(reference_quote="用不存在的代入步骤确定路线。")
+    main, calls = provider("primary", bad, bad, {"revisions": []})
+    regrader, regrade_calls = provider("a")
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    assert [e.score for e in result] == [0, 8]
+    assert len(calls) == 3 and not regrade_calls
+    assert "selected_methods" not in json.loads(calls[-1][1].content)
+    assert all(grading.read_math_trace(e)["method_review"]["status"] == "invalid_method_evidence" for e in result)
+    assert all(grading.read_math_trace(e)["method_review"]["fallback"] == "joint_review" for e in result)
+
+
+@pytest.mark.asyncio
+async def test_quota_failure_during_evidence_repair_does_not_start_another_review():
+    p, a, plan, experts, _ = case(reference="")
+    main, calls = provider("primary", choice(reference_quote="不存在的配方法"), DailyQuotaError())
+    result = await run(p, a, plan, experts, main, {})
+    assert len(calls) == 2 and [e.score for e in result] == [0, 8]
+    assert all(grading.read_math_trace(e)["method_review_pending"] for e in result)
+    assert all("fallback" not in grading.read_math_trace(e)["method_review"] for e in result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair", [False, True])
+async def test_another_subquestions_answer_cannot_lock_this_parts_method(repair):
+    p, a, plan, experts, right, _ = multipart_case()
+    bad = choice(reference_quote="用因式分解解得 1 和 2。")
+    main, calls = provider("primary", bad, choice() if repair else bad, {"revisions": []})
+    regrader, regrade_calls = provider("a", revision(right))
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    assert [e.score for e in result] == ([16, 16] if repair else [8, 16])
+    assert len(calls) == 3 and len(regrade_calls) == int(repair)
+    passages = json.loads(calls[0][1].content)["method_reference_passages"]["p"]
+    assert "用配方法解得 1 和 2。" in passages
+    assert not any("因式分解" in text for text in passages)
+    assert ("selected_methods" in json.loads(calls[-1][1].content)) == repair
+    for before, after in zip(experts, result):
+        assert (grading.read_math_trace(before)["assessment"]["part_decisions"][1]
+                == grading.read_math_trace(after)["assessment"]["part_decisions"][1])
+
+
+@pytest.mark.asyncio
+async def test_generic_fragment_of_a_method_passage_is_not_method_evidence():
+    p, a, plan, experts, right = case(reference="正确作答。用配方法解得 1 和 2。")
+    main, calls = provider("primary", choice(reference_quote="正确作答"), choice(), {"revisions": []})
+    regrader, regrade_calls = provider("a", revision(right))
+    result = await run(p, a, plan, experts, main, {"a": regrader})
+    assert [e.score for e in result] == [8, 8]
+    assert len(calls) == 3 and len(regrade_calls) == 1
+
+
+def test_unlabelled_answer_only_uses_explicit_frozen_part_links():
+    from backend.services.part_rubric import AnswerSegment
+    from backend.skills.math_method_review import _method_passages
+    p, _, plan, _, _, _ = multipart_case()
+    texts = ["用配方法解得 1 和 2。", "用因式分解解得 1 和 2。"]
+    parts = [part.model_copy(update={"answer_refs": (f"a{i}",), "steps": tuple(
+        step.model_copy(update={"criterion": "正确作答", "source_quote": "", "answer_refs": ()})
+        for step in part.steps)}) for i, part in enumerate(plan.part_rubric.parts)]
+    rules = plan.part_rubric.model_copy(update={"parts": tuple(parts), "answer_segments": tuple(
+        AnswerSegment(id=f"a{i}", text=text, origin="teacher") for i, text in enumerate(texts))})
+    p = p.model_copy(update={"reference_answer": "\n".join(texts)})
+    assert _method_passages(p, rules) == {"p": [texts[0]], "p2": [texts[1]]}
+    unlinked = rules.model_copy(update={"parts": tuple(part.model_copy(update={"answer_refs": ()}) for part in parts)})
+    assert _method_passages(p, unlinked) == {"p": [], "p2": []}
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("正确作答得10分", False), ("Answer correctly for 10 points", False),
+    ("目标 x=1 或 y=2", False), ("x=1, y=2", False), ("x=1 and y=2", False),
+    ("无需配方", False), ("Do not use substitution", False),
+    ("参考解配方得10分", True), ("Use proof by induction", True),
+    ("逐坐标比较两个有序对", True), ("x+2=3⇒x=1", True),
+])
+def test_method_evidence_requires_an_explicit_technique_or_transformation(text, expected):
+    from backend.skills.math_method_review import _has_method_evidence
+    assert _has_method_evidence(text) is expected
 
 
 @pytest.mark.asyncio

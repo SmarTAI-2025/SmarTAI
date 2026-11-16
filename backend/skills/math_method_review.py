@@ -1,4 +1,5 @@
 """One source-grounded route decision, then only mismatched experts reassess."""
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,6 +28,73 @@ def method_family(method):
     return "reference" if method in {"reference", "minor_variant"} else method
 
 
+class MethodEvidenceInvalid(StructuredOutputInvalidError):
+    """Grounding/scope repair was exhausted, not a provider or quota failure."""
+
+
+def _has_method_evidence(text):
+    # A deliberately conservative gate for locking a route. Unsupported prose
+    # still receives the ordinary joint review; it must not become a hard route
+    # constraint merely because the arbiter calls it a method. This recognizes
+    # explicit operations/techniques or an actual chain of transformations,
+    # not a correctness criterion, point amount, isolated answer or equation.
+    technique = (
+        r"配方|因式分解|消元|换元|代入|数学归纳|归纳法|反证|构造反例|逐坐标|逐分量|"
+        r"同态映射|单位元嵌入|对角化|分部积分|分离变量|泰勒展开|傅里叶变换|"
+        r"\b(?:complet\w*\s+the\s+square|factori[sz]\w*|eliminat\w*|substitut\w*|"
+        r"induction|contradiction|counterexample|coordinatewise|componentwise|"
+        r"diagonali[sz]\w*|integration\s+by\s+parts|separation\s+of\s+variables)\b")
+    for clause in re.split(r"[。；;\n]", text):
+        for match in re.finditer(technique, clause, re.I):
+            prefix = clause[:match.start()]
+            if not re.search(r"(?:不用|不使用|不采用|不要求|不要|不必|未用|无须|无需|禁止|"
+                             r"\b(?:not|no|without|avoid)\b)[^，,:：]{0,16}$", prefix, re.I):
+                return True
+    # Two connected mathematical relations, with a symbolic operand, provide
+    # a concrete transformation. Mere numbers/points and disconnected goals do not.
+    operand = r"(?:\\[A-Za-z]+|[A-Za-z0-9α-ωΑ-Ω_{}()[\]+*/^ .−-])+"
+    relation = r"(?:=|⇒|⇔|\\(?:implies|iff))"
+    pieces = re.split(relation, text)
+    for index in range(1, len(pieces) - 1):
+        middle = pieces[index]
+        if not middle.strip() or not re.fullmatch(operand, middle):
+            continue
+        # Bound context scans; long source prose must not cause a quadratic
+        # search for an unanchored expression chain.
+        left = re.search(operand + r"$", pieces[index - 1][-500:])
+        right = re.match(operand, pieces[index + 1][:500])
+        if not left or not right or not left[0].strip() or not right[0].strip():
+            continue
+        plain = re.sub(r"\\[A-Za-z]+", "", left[0] + "=" + middle + "=" + right[0])
+        if re.search(r"[A-Za-zα-ωΑ-Ω]", plain) and not re.search(r"[A-Za-z]{2,}", plain):
+            return True
+    return False
+
+
+def _method_passages(problem, rules):
+    from backend.services.question_structure import build_major_question_structure, _normalize_label
+
+    reference = problem.reference_answer or ""
+    labelled = build_major_question_structure({"stem": reference}, major_order=0).subparts if reference.strip() else []
+    by_label = {_normalize_label(part.label): part.stem for part in labelled}
+    segments = {segment.id: segment.text for segment in rules.answer_segments}
+    result = {}
+    for part in rules.parts:
+        # Frozen criteria belong to this part. Never offer the whole unscoped
+        # answer to every subquestion, even if the same model can read it.
+        texts = [text for item in (*part.steps, *part.deductions) for text in (item.criterion, item.source_quote)]
+        if len(rules.parts) == 1:
+            texts.append(reference)
+        elif by_label:
+            texts.append(by_label.get(_normalize_label(part.label), ""))
+        else:
+            refs = {*part.answer_refs, *(ref for step in part.steps for ref in step.answer_refs)}
+            texts.extend(segments[ref] for ref in refs if ref in segments
+                         and match_source_quote(reference, segments[ref]))
+        result[part.id] = list(dict.fromkeys(text for text in texts if text.strip() and _has_method_evidence(text)))
+    return result
+
+
 async def align_methods(problem, answer, experts, assessments, traces, plan, coordinator,
                         providers, *, language, grading_setup, reporter=None, student_id=""):
     """Return (votes, choices, ready); None means no route arbitration was needed.
@@ -48,10 +116,7 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
     # The optional answer is not the only source of a reference strategy.
     # Only this part's frozen primary criteria/teacher clauses may substitute;
     # alternative caps and another part's method are not reference evidence.
-    passages = {part.id: ([problem.reference_answer] if has_reference else list(dict.fromkeys(
-        text for item in (*part.steps, *part.deductions)
-        for text in (item.criterion, item.source_quote) if text.strip())))
-        for part in plan.part_rubric.parts if part.id in disputed}
+    passages = {key: value for key, value in _method_passages(problem, plan.part_rubric).items() if key in disputed}
     catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
     choices = {}
     revised = list(experts)
@@ -66,7 +131,8 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             except StructuredOutputInvalidError:
                 raise
             except ValueError as exc:
-                error = StructuredOutputInvalidError("Invalid method review evidence or scope.")
+                error_type = MethodEvidenceInvalid if output_model is MethodReview else StructuredOutputInvalidError
+                error = error_type("Invalid method review evidence or scope.")
                 error.repair_context = grading._json({"validation_error": str(exc),
                     "repair_scope": "Correct only the requested method decision or reassessment using the original sources and frozen rules."})
                 raise error from exc
@@ -91,7 +157,7 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
     def record(index, status, *, candidate=None, revision=None, error=None, fallback=False):
         trace = dict(traces[index])
         trace["method_review"] = {"provider": coordinator.provider_id, "status": status,
-                                  "reference_source": "reference_answer" if has_reference else "frozen_rubric",
+                                  "reference_source": "part_reference_and_rubric" if has_reference else "frozen_rubric",
                                   "choices": [choice.model_dump(mode="json") for choice in choices.values()]}
         if fallback:
             trace["method_review"]["fallback"] = "joint_review"
@@ -129,7 +195,7 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
         for choice in result.choices:
             if any(key not in catalog or not key.startswith("student:") for key in choice.student_source_ids):
                 raise ValueError("Cite original student source IDs for the method decision.")
-            if choice.method != "undetermined" and (not choice.student_source_ids or not choice.reference_quote.strip()
+            if choice.method != "undetermined" and (not choice.student_source_ids or not _has_method_evidence(choice.reference_quote)
                     or not any(match_source_quote(text, choice.reference_quote) for text in passages[choice.part_id])):
                 raise ValueError("A determined method needs student evidence and a verbatim supplied method passage for this part.")
 
@@ -145,8 +211,8 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             "frozen alternative policy, even if the problem requires the reference method; that requirement is "
             "already reflected in the alternative cap. Never choose the route giving the higher/lower score, "
             "rewrite the rubric, or supply missing student work. Cite student source IDs and an exact passage "
-            "from this part's method_reference_passages and explain the strategy comparison. When the optional "
-            "reference answer is absent these passages are the frozen primary scoring criteria. They establish "
+            "from this part's method_reference_passages and explain the strategy comparison. These passages "
+            "contain only this part's reference material and frozen primary scoring criteria. They establish "
             "a reference strategy only if they actually specify its mathematical method; a generic correctness "
             "rule, deduction rate or target alone does not. Do not grade or give a score. Use undetermined if "
             "either strategy cannot be established from these sources; never invent a reference answer.", payload, validate_choices)
@@ -154,6 +220,8 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
     except Exception as exc:
         if grading._critical_failure(exc):
             raise
+        if isinstance(exc, MethodEvidenceInvalid):
+            return joint_review_fallback("invalid_method_evidence")
         for index in range(len(experts)):
             record(index, "arbitration_failed", error=exc)
         return pending()
